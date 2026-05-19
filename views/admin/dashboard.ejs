@@ -1,0 +1,243 @@
+<h1>Admin Dashboard</h1>
+
+<section class="admin-block">
+  <h2>Accounts</h2>
+
+  <% if (accounts.length === 0) { %>
+    <p class="text-muted">No accounts found.</p>
+  <% } else { %>
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Name</th>
+          <th>Details</th>
+          <th>Groups</th>
+          <th>Created At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% accounts.forEach(function(account) { %>
+          <tr>
+            <td><%= account.type === 'agent' ? 'Agent' : 'User' %></td>
+            <td><strong><%= account.type === 'agent' ? account.name : account.username %></strong></td>
+            <td>
+              <% if (account.type === 'agent') { %>
+                <%= account.model %>
+              <% } else { %>
+                -
+              <% } %>
+            </td>
+            <td>
+              <% if (account.groups && account.groups.length > 0) { %>
+                <%= account.groups.map(function(group) { return group.name; }).join(', ') %>
+              <% } else { %>
+                -
+              <% } %>
+            </td>
+            <td><%= new Date(account.createdAt).toLocaleString() %></td>
+            <td class="actions">
+              <% if (userPermissions.includes('user:update')) { %>
+                <a href="/admin/users/<%= account.id %>/edit?type=<%= account.type %>" class="btn-small">Edit</a>
+              <% } %>
+              <% if (userPermissions.includes('user:delete') && (account.type === 'agent' || account.id !== user.id)) { %>
+                <form action="/admin/users/<%= account.id %>/delete" method="POST" class="inline-form" onsubmit="return confirm('Delete this <%= account.type %>?');">
+                  <input type="hidden" name="accountType" value="<%= account.type %>">
+                  <button type="submit" class="btn-small btn-danger">Delete</button>
+                </form>
+              <% } %>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  <% } %>
+</section>
+
+<section class="admin-block">
+  <h2>Create Account</h2>
+
+  <form action="/admin/users" method="POST" class="ticket-form">
+    <div class="form-group">
+      <label for="accountType">Account Type</label>
+      <select id="accountType" name="accountType">
+        <option value="user">User</option>
+        <option value="agent">Agent</option>
+      </select>
+    </div>
+
+    <div id="create-user-fields" class="account-fields">
+      <div class="form-group">
+        <label for="username">Username *</label>
+        <input type="text" id="username" name="username">
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password *</label>
+        <input type="password" id="password" name="password">
+      </div>
+    </div>
+
+    <div id="create-agent-fields" class="account-fields" hidden>
+      <div class="form-group">
+        <label for="agentName">Agent Name *</label>
+        <input type="text" id="agentName" name="agentName">
+      </div>
+
+      <div class="form-group">
+        <label for="model">OpenAI Model <%= hasOpenAIModelFallback ? '' : '*' %></label>
+        <select id="model" name="model">
+          <option value="">Select a model</option>
+          <% models.forEach(function(modelOption) { %>
+            <option value="<%= modelOption %>"><%= modelOption %></option>
+          <% }); %>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="apiKey">OpenAI API Key <%= hasOpenAIApiKeyFallback ? '' : '*' %></label>
+        <input type="password" id="apiKey" name="apiKey" placeholder="sk-...">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Group Membership</label>
+      <div class="checkbox-group">
+        <% membershipGroups.forEach(function(group) { %>
+          <label class="checkbox-label">
+            <input type="checkbox" name="groupIds" value="<%= group.id %>">
+            <%= group.name %>
+          </label>
+        <% }); %>
+      </div>
+      <% if (membershipGroups.length === 0) { %>
+        <p class="help-text">No groups available.</p>
+      <% } %>
+    </div>
+
+    <button type="submit" class="btn-submit">Create Account</button>
+  </form>
+</section>
+
+<section class="admin-block">
+  <h2>Groups</h2>
+
+  <% if (groupsWithPermissions.length === 0) { %>
+    <p class="text-muted">No groups found.</p>
+  <% } else { %>
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Ticket Assignment</th>
+          <th>Permissions</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% groupsWithPermissions.forEach(function(group) { %>
+          <tr>
+            <td><%= group.id %></td>
+            <td><%= group.name %></td>
+            <td><%= group.canReceiveTickets ? 'Can receive tickets' : '-' %></td>
+            <td>
+              <% if (group.permissions && group.permissions.length > 0) { %>
+                <%= group.permissions.join(', ') %>
+              <% } else { %>
+                -
+              <% } %>
+            </td>
+            <td class="actions">
+              <% if (userPermissions.includes('group:update')) { %>
+                <a href="/admin/groups/<%= group.id %>/edit" class="btn-small">Edit</a>
+              <% } %>
+              <% if (userPermissions.includes('group:delete') && group.id !== 1) { %>
+                <form action="/admin/groups/<%= group.id %>/delete" method="POST" class="inline-form" onsubmit="return confirm('Delete this group?');">
+                  <button type="submit" class="btn-small btn-danger">Delete</button>
+                </form>
+              <% } %>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  <% } %>
+</section>
+
+<section class="admin-block">
+  <h2>Create Group</h2>
+
+  <form action="/admin/groups" method="POST" class="ticket-form">
+    <div class="form-group">
+      <label for="name">Group Name *</label>
+      <input type="text" id="name" name="name" required>
+    </div>
+
+    <label class="checkbox-label">
+      <input type="checkbox" name="canReceiveTickets">
+      Can receive tickets
+    </label>
+
+    <div class="form-group" id="create-group-permissions">
+      <label>Permissions / Group Permission Assignment</label>
+      <div class="permission-grid">
+        <% permissions.forEach(function(permission) { %>
+          <label class="checkbox-label permission-checkbox">
+            <input type="checkbox" name="permissions" value="<%= permission %>">
+            <code><%= permission %></code>
+          </label>
+        <% }); %>
+      </div>
+    </div>
+
+    <button type="submit" class="btn-submit">Create Group</button>
+  </form>
+</section>
+
+<section class="admin-block" style="border-top: 2px solid #fecaca; padding-top: 22px;">
+  <h2>Debug Reset</h2>
+  <p class="text-muted">Destroys all local tickets, runs, logs, allocation plans, operation history, and workspace contents. Users, agents, groups, memberships, and permissions are preserved.</p>
+  <p class="text-muted"><strong>This action cannot be undone.</strong></p>
+
+  <form action="/admin/debug-reset" method="POST" class="ticket-form" onsubmit="return confirm('This will permanently destroy all ticket and run history. Continue?');">
+    <div class="form-group">
+      <label for="debug-reset-confirmation">Type <code>RESET DEBUG DATA</code> to confirm</label>
+      <input type="text" id="debug-reset-confirmation" name="confirmation" required placeholder="RESET DEBUG DATA" autocomplete="off">
+    </div>
+    <button type="submit" class="btn-submit btn-danger">Reset Debug Data</button>
+  </form>
+
+  <% if (resetError) { %>
+    <div class="error-message" style="margin-top: 12px;"><%= resetError %></div>
+  <% } %>
+  <% if (resetSuccess) { %>
+    <div class="error-message" style="margin-top: 12px; color: #065f46; background: #d1fae5; border-color: #a7f3d0;">Debug data reset successfully.</div>
+  <% } %>
+</section>
+
+<script>
+const accountType = document.getElementById('accountType');
+const createUserFields = document.getElementById('create-user-fields');
+const createAgentFields = document.getElementById('create-agent-fields');
+const username = document.getElementById('username');
+const password = document.getElementById('password');
+const agentName = document.getElementById('agentName');
+const model = document.getElementById('model');
+const apiKey = document.getElementById('apiKey');
+
+function updateAccountForm() {
+  const isAgent = accountType.value === 'agent';
+  createUserFields.hidden = isAgent;
+  createAgentFields.hidden = !isAgent;
+  username.required = !isAgent;
+  password.required = !isAgent;
+  agentName.required = isAgent;
+  model.required = isAgent && !<%= hasOpenAIModelFallback ? 'true' : 'false' %>;
+  apiKey.required = isAgent && !<%= hasOpenAIApiKeyFallback ? 'true' : 'false' %>;
+}
+
+accountType.addEventListener('change', updateAccountForm);
+updateAccountForm();
+</script>

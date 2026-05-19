@@ -1,0 +1,31 @@
+.env.test.local
+workpace-root/*
+node_modules/
+data-backup-*/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Vite/build
+dist
+dist-ssr
+*.local
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts

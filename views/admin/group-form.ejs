@@ -1,0 +1,35 @@
+<h1><%= editGroup ? 'Edit Group' : 'New Group' %></h1>
+
+<% if (error) { %>
+  <div class="error-message"><%= error %></div>
+<% } %>
+
+<form action="<%= editGroup ? '/admin/groups/' + editGroup.id : '/admin/groups' %>" method="POST" class="ticket-form">
+  <div class="form-group">
+    <label for="name">Group Name *</label>
+    <input type="text" id="name" name="name" value="<%= editGroup ? editGroup.name : '' %>" required>
+  </div>
+
+  <label class="checkbox-label">
+    <input type="checkbox" name="canReceiveTickets" <%= editGroup && editGroup.canReceiveTickets ? 'checked' : '' %>>
+    Can receive tickets
+  </label>
+
+  <div class="form-group">
+    <label>Permissions</label>
+    <div class="permission-grid">
+      <% allPermissions.forEach(function(permission) { %>
+        <label class="checkbox-label permission-checkbox">
+          <input type="checkbox" name="permissions" value="<%= permission %>" 
+            <%= groupPermissions.includes(permission) ? 'checked' : '' %>>
+          <code><%= permission %></code>
+        </label>
+      <% }); %>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn-submit"><%= editGroup ? 'Update Group' : 'Create Group' %></button>
+    <a href="/admin" class="btn-secondary">Cancel</a>
+  </div>
+</form>

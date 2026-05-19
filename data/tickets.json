@@ -1,0 +1,101 @@
+[
+  {
+    "id": 1,
+    "objective": "1. Small individual\r\nCreate test-small if missing.\r\nInside test-small, create 3 folders named Alpha, Beta, and Gamma.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "completed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T07:14:03.318Z",
+    "updatedAt": "2026-05-19T07:14:08.550Z"
+  },
+  {
+    "id": 2,
+    "objective": "2. Medium individual\r\nCreate test-medium if missing.\r\nInside test-medium, create folders for Monday through Sunday.\r\nInside each day folder, create subfolders named Invoices, Bills, and Cool Facts.\r\nIn each Cool Facts folder, add cool_facts.txt with 3 facts.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "failed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T07:14:38.101Z",
+    "updatedAt": "2026-05-19T07:14:56.591Z"
+  },
+  {
+    "id": 3,
+    "objective": "3. Large individual\r\nCreate test-large if missing.\r\nInside test-large, create folders for all 12 months.\r\nInside each month folder, create subfolders named Invoices, Bills, Cool Facts, and Notes.\r\nIn each Cool Facts folder, add cool_facts.txt with 3 facts.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "failed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T07:16:56.129Z",
+    "updatedAt": "2026-05-19T07:17:14.546Z"
+  },
+  {
+    "id": 4,
+    "objective": "4. Continuation\r\nContinue work inside test-medium only.\r\nInspect the existing structure first.\r\nCreate only the missing folders/files.\r\nDo not recreate existing items.\r\nComplete the remaining Invoices, Bills, Cool Facts folders and all missing cool_facts.txt files.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "failed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T07:17:39.520Z",
+    "updatedAt": "2026-05-19T07:17:59.788Z"
+  },
+  {
+    "id": 5,
+    "objective": "5. Allocated multi-agent\r\nInside each agent's owned output path, create folders for all 12 months.\r\nDo not write outside the owned output path.",
+    "assignmentTargetType": "group",
+    "assignmentTargetId": 2,
+    "assignmentMode": "allocated",
+    "status": "completed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T07:18:27.135Z",
+    "updatedAt": "2026-05-19T07:18:43.012Z"
+  },
+  {
+    "id": 6,
+    "objective": "6. Recovery flow\r\nCreate test-recovery if missing.\r\nInside test-recovery, create recovery-test.txt with content \"original\".\r\nThen overwrite recovery-test.txt with content \"changed\".",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "completed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T07:20:09.892Z",
+    "updatedAt": "2026-05-19T07:20:16.183Z"
+  },
+  {
+    "id": 7,
+    "objective": "7. Ownership violation\r\nAttempt to write ownership-violation.txt outside the owned output path.\r\nExpected result: the operation should be blocked and no unauthorized file should be created.",
+    "assignmentTargetType": "group",
+    "assignmentTargetId": 2,
+    "assignmentMode": "allocated",
+    "status": "failed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T07:23:19.512Z",
+    "updatedAt": "2026-05-19T07:23:21.918Z"
+  },
+  {
+    "id": 8,
+    "objective": "Remaining work in test-medium:\r\nMissing folders:\r\n- Saturday/Bills\r\n- Saturday/Cool Facts\r\n- Sunday/Invoices\r\n- Sunday/Bills\r\n- Sunday/Cool Facts\r\n\r\nMissing files:\r\n- cool_facts.txt in all 7 Cool Facts folders\r\n\r\nCreate only these missing items.\r\nDo not recreate existing folders/files.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "completed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T07:33:36.794Z",
+    "updatedAt": "2026-05-19T07:33:54.062Z"
+  },
+  {
+    "id": 9,
+    "objective": "Inside test-medium only, create exactly these missing folders:\r\n- test-medium/Saturday/Bills\r\n- test-medium/Saturday/Cool Facts\r\n- test-medium/Sunday/Invoices\r\n- test-medium/Sunday/Bills\r\n- test-medium/Sunday/Cool Facts\r\n\r\nCreate exactly these files with 3 short cool facts each:\r\n- test-medium/Monday/Cool Facts/cool_facts.txt\r\n- test-medium/Tuesday/Cool Facts/cool_facts.txt\r\n- test-medium/Wednesday/Cool Facts/cool_facts.txt\r\n- test-medium/Thursday/Cool Facts/cool_facts.txt\r\n- test-medium/Friday/Cool Facts/cool_facts.txt\r\n- test-medium/Saturday/Cool Facts/cool_facts.txt\r\n- test-medium/Sunday/Cool Facts/cool_facts.txt\r\n\r\nDo not create anything outside test-medium.\r\nDo not inspect first.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "completed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T07:36:02.245Z",
+    "updatedAt": "2026-05-19T07:36:23.430Z"
+  }
+]

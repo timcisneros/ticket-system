@@ -1,0 +1,2897 @@
+[
+  {
+    "id": 1,
+    "timestamp": "2026-05-19T07:14:08.537214830Z",
+    "ticketId": 1,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 1,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-small"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-small",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 2,
+    "timestamp": "2026-05-19T07:14:08.541310219Z",
+    "ticketId": 1,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 1,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-small/Alpha"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-small/Alpha",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 3,
+    "timestamp": "2026-05-19T07:14:08.544432985Z",
+    "ticketId": 1,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 1,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-small/Beta"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-small/Beta",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 4,
+    "timestamp": "2026-05-19T07:14:08.547071389Z",
+    "ticketId": 1,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 1,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-small/Gamma"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-small/Gamma",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 5,
+    "timestamp": "2026-05-19T07:14:43.764252643Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 6,
+    "timestamp": "2026-05-19T07:14:43.767194091Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Monday"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Monday",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 7,
+    "timestamp": "2026-05-19T07:14:43.768440318Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Tuesday"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Tuesday",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 8,
+    "timestamp": "2026-05-19T07:14:43.770071562Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Wednesday"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Wednesday",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 9,
+    "timestamp": "2026-05-19T07:14:43.771419507Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Thursday"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Thursday",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 10,
+    "timestamp": "2026-05-19T07:14:43.773737383Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Friday"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Friday",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 11,
+    "timestamp": "2026-05-19T07:14:43.774026405Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Saturday"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Saturday",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 12,
+    "timestamp": "2026-05-19T07:14:43.775302079Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Sunday"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Sunday",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 13,
+    "timestamp": "2026-05-19T07:14:51.552918810Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Monday/Invoices"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Monday/Invoices",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 14,
+    "timestamp": "2026-05-19T07:14:51.557139014Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Monday/Bills"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Monday/Bills",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 15,
+    "timestamp": "2026-05-19T07:14:51.561815083Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Monday/Cool Facts"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Monday/Cool Facts",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 16,
+    "timestamp": "2026-05-19T07:14:51.563325576Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Tuesday/Invoices"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Tuesday/Invoices",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 17,
+    "timestamp": "2026-05-19T07:14:51.565377496Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Tuesday/Bills"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Tuesday/Bills",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 18,
+    "timestamp": "2026-05-19T07:14:51.567913768Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Tuesday/Cool Facts"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Tuesday/Cool Facts",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 19,
+    "timestamp": "2026-05-19T07:14:51.568473234Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Wednesday/Invoices"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Wednesday/Invoices",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 20,
+    "timestamp": "2026-05-19T07:14:51.570085622Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Wednesday/Bills"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Wednesday/Bills",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 21,
+    "timestamp": "2026-05-19T07:14:56.568721520Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Wednesday/Cool Facts"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Wednesday/Cool Facts",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 22,
+    "timestamp": "2026-05-19T07:14:56.573133029Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Thursday/Invoices"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Thursday/Invoices",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 23,
+    "timestamp": "2026-05-19T07:14:56.576294630Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Thursday/Bills"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Thursday/Bills",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 24,
+    "timestamp": "2026-05-19T07:14:56.578677381Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Thursday/Cool Facts"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Thursday/Cool Facts",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 25,
+    "timestamp": "2026-05-19T07:14:56.581783147Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Friday/Invoices"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Friday/Invoices",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 26,
+    "timestamp": "2026-05-19T07:14:56.582577565Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Friday/Bills"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Friday/Bills",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 27,
+    "timestamp": "2026-05-19T07:14:56.584486489Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Friday/Cool Facts"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Friday/Cool Facts",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 28,
+    "timestamp": "2026-05-19T07:14:56.586460860Z",
+    "ticketId": 2,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 2,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Saturday/Invoices"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Saturday/Invoices",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 29,
+    "timestamp": "2026-05-19T07:17:04.290508974Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 30,
+    "timestamp": "2026-05-19T07:17:04.294539047Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/January"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/January",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 31,
+    "timestamp": "2026-05-19T07:17:04.297310980Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/February"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/February",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 32,
+    "timestamp": "2026-05-19T07:17:04.300403644Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/March"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/March",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 33,
+    "timestamp": "2026-05-19T07:17:04.305940464Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/April"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/April",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 34,
+    "timestamp": "2026-05-19T07:17:04.310759790Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/May"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/May",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 35,
+    "timestamp": "2026-05-19T07:17:04.314119350Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/June"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/June",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 36,
+    "timestamp": "2026-05-19T07:17:04.317108532Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/July"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/July",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 37,
+    "timestamp": "2026-05-19T07:17:10.821484913Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/August"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/August",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 38,
+    "timestamp": "2026-05-19T07:17:10.827892558Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/September"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/September",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 39,
+    "timestamp": "2026-05-19T07:17:10.830117723Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/October"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/October",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 40,
+    "timestamp": "2026-05-19T07:17:10.833348196Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/November"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/November",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 41,
+    "timestamp": "2026-05-19T07:17:10.836173545Z",
+    "ticketId": 3,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 3,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-large/December"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-large/December",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 42,
+    "timestamp": "2026-05-19T07:18:33.663700055Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/January"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/January",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 43,
+    "timestamp": "2026-05-19T07:18:33.669742753Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/February"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/February",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 44,
+    "timestamp": "2026-05-19T07:18:33.673890099Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/March"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/March",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 45,
+    "timestamp": "2026-05-19T07:18:33.677747020Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/April"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/April",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 46,
+    "timestamp": "2026-05-19T07:18:33.681102677Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/May"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/May",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 47,
+    "timestamp": "2026-05-19T07:18:33.686888564Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/June"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/June",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 48,
+    "timestamp": "2026-05-19T07:18:33.690309726Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/July"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/July",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 49,
+    "timestamp": "2026-05-19T07:18:33.695862314Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/August"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/August",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 50,
+    "timestamp": "2026-05-19T07:18:37.352348334Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/September"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/September",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 51,
+    "timestamp": "2026-05-19T07:18:37.357554428Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/October"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/October",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 52,
+    "timestamp": "2026-05-19T07:18:37.362241232Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/November"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/November",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 53,
+    "timestamp": "2026-05-19T07:18:37.367891880Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/December"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/December",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 54,
+    "timestamp": "2026-05-19T07:18:37.657294064Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/January"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/January",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 55,
+    "timestamp": "2026-05-19T07:18:37.662380688Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/February"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/February",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 56,
+    "timestamp": "2026-05-19T07:18:37.667072924Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/March"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/March",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 57,
+    "timestamp": "2026-05-19T07:18:37.671531277Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/April"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/April",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 58,
+    "timestamp": "2026-05-19T07:18:37.675679780Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/May"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/May",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 59,
+    "timestamp": "2026-05-19T07:18:37.680452053Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/June"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/June",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 60,
+    "timestamp": "2026-05-19T07:18:37.685483236Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/July"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/July",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 61,
+    "timestamp": "2026-05-19T07:18:37.690334326Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/August"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/August",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 62,
+    "timestamp": "2026-05-19T07:18:40.119771133Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/September"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/September",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 63,
+    "timestamp": "2026-05-19T07:18:40.125749756Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/October"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/October",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 64,
+    "timestamp": "2026-05-19T07:18:40.130351581Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/November"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/November",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 65,
+    "timestamp": "2026-05-19T07:18:40.135599814Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 2,
+    "runId": 6,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-5/December"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-5/December",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 66,
+    "timestamp": "2026-05-19T07:18:40.520738515Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/January"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/January",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 67,
+    "timestamp": "2026-05-19T07:18:40.524580330Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/February"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/February",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 68,
+    "timestamp": "2026-05-19T07:18:40.530012224Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/March"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/March",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 69,
+    "timestamp": "2026-05-19T07:18:40.535583414Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/April"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/April",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 70,
+    "timestamp": "2026-05-19T07:18:40.540522344Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/May"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/May",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 71,
+    "timestamp": "2026-05-19T07:18:40.546057309Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/June"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/June",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 72,
+    "timestamp": "2026-05-19T07:18:40.551246964Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/July"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/July",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 73,
+    "timestamp": "2026-05-19T07:18:40.557819522Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/August"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/August",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 74,
+    "timestamp": "2026-05-19T07:18:42.983571322Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/September"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/September",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 75,
+    "timestamp": "2026-05-19T07:18:42.990926855Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/October"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/October",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 76,
+    "timestamp": "2026-05-19T07:18:42.995211983Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/November"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/November",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 77,
+    "timestamp": "2026-05-19T07:18:43.001778523Z",
+    "ticketId": 5,
+    "allocationPlanId": 1,
+    "allocationItemId": 1,
+    "runId": 5,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-5/agent-1/December"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-5/agent-1/December",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 78,
+    "timestamp": "2026-05-19T07:20:14.456610665Z",
+    "ticketId": 6,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 7,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-recovery"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-recovery",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 79,
+    "timestamp": "2026-05-19T07:20:14.466360671Z",
+    "ticketId": 6,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 7,
+    "step": 1,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-recovery/recovery-test.txt",
+      "content": "original"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "0682c5f2076f099c34cfdd15a9e063849ed437a49677e6fcc5b4198c76575be5"
+    },
+    "result": {
+      "path": "test-recovery/recovery-test.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 80,
+    "timestamp": "2026-05-19T07:20:16.172960516Z",
+    "ticketId": 6,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 7,
+    "step": 2,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-recovery/recovery-test.txt",
+      "content": "changed"
+    },
+    "preState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "0682c5f2076f099c34cfdd15a9e063849ed437a49677e6fcc5b4198c76575be5",
+      "content": "original"
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "d67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed"
+    },
+    "result": {
+      "path": "test-recovery/recovery-test.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 81,
+    "timestamp": "2026-05-19T07:22:26.711916671Z",
+    "ticketId": 6,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 7,
+    "step": 2,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-recovery/recovery-test.txt",
+      "content": "original"
+    },
+    "preState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "d67e2e944994496c8d8ec76eed0cf9f09679448d584b532bebf941852a37f5ed"
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "0682c5f2076f099c34cfdd15a9e063849ed437a49677e6fcc5b4198c76575be5"
+    },
+    "result": {
+      "path": "test-recovery/recovery-test.txt"
+    },
+    "error": null,
+    "isRecovery": true,
+    "recoveredHistoryId": 80
+  },
+  {
+    "id": 82,
+    "timestamp": "2026-05-19T07:23:24.603481670Z",
+    "ticketId": 7,
+    "allocationPlanId": 2,
+    "allocationItemId": 3,
+    "runId": 8,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "allocated/ticket-7/agent-1"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "allocated/ticket-7/agent-1",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 83,
+    "timestamp": "2026-05-19T07:33:52.512914759Z",
+    "ticketId": 8,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 10,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "Saturday"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "Saturday",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 84,
+    "timestamp": "2026-05-19T07:33:52.519912414Z",
+    "ticketId": 8,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 10,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "Saturday/Bills"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "Saturday/Bills",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 85,
+    "timestamp": "2026-05-19T07:33:52.525385251Z",
+    "ticketId": 8,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 10,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "Saturday/Cool Facts"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "Saturday/Cool Facts",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 86,
+    "timestamp": "2026-05-19T07:33:52.532270275Z",
+    "ticketId": 8,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 10,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "Sunday"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "Sunday",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 87,
+    "timestamp": "2026-05-19T07:33:52.539924333Z",
+    "ticketId": 8,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 10,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "Sunday/Invoices"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "Sunday/Invoices",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 88,
+    "timestamp": "2026-05-19T07:33:52.546954902Z",
+    "ticketId": 8,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 10,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "Sunday/Bills"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "Sunday/Bills",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 89,
+    "timestamp": "2026-05-19T07:33:52.553816792Z",
+    "ticketId": 8,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 10,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "Sunday/Cool Facts"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "Sunday/Cool Facts",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 90,
+    "timestamp": "2026-05-19T07:33:52.559560320Z",
+    "ticketId": 8,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 10,
+    "step": 1,
+    "operation": "writeFile",
+    "args": {
+      "path": "Saturday/Cool Facts/cool_facts.txt",
+      "content": ""
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "result": {
+      "path": "Saturday/Cool Facts/cool_facts.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 91,
+    "timestamp": "2026-05-19T07:33:54.049546726Z",
+    "ticketId": 8,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 10,
+    "step": 2,
+    "operation": "writeFile",
+    "args": {
+      "path": "Sunday/Cool Facts/cool_facts.txt",
+      "content": ""
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "result": {
+      "path": "Sunday/Cool Facts/cool_facts.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 92,
+    "timestamp": "2026-05-19T07:36:15.669582697Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Saturday/Bills"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Saturday/Bills",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 93,
+    "timestamp": "2026-05-19T07:36:15.677866966Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Saturday/Cool Facts"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Saturday/Cool Facts",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 94,
+    "timestamp": "2026-05-19T07:36:15.683678465Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Sunday/Invoices"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Sunday/Invoices",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 95,
+    "timestamp": "2026-05-19T07:36:15.691795617Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Sunday/Bills"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Sunday/Bills",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 96,
+    "timestamp": "2026-05-19T07:36:15.699745540Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Sunday/Cool Facts"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Sunday/Cool Facts",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 97,
+    "timestamp": "2026-05-19T07:36:15.706375924Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Monday/Cool Facts"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Monday/Cool Facts",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 98,
+    "timestamp": "2026-05-19T07:36:15.714792624Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Tuesday/Cool Facts"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Tuesday/Cool Facts",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 99,
+    "timestamp": "2026-05-19T07:36:15.721633294Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "test-medium/Wednesday/Cool Facts"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "test-medium/Wednesday/Cool Facts",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 100,
+    "timestamp": "2026-05-19T07:36:23.347660954Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 1,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-medium/Monday/Cool Facts/cool_facts.txt",
+      "content": "1. Honey never spoils.\n2. Octopuses have three hearts.\n3. Bananas are berries, but strawberries aren't.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "1f094fe089227408816335641523704aae23d255b3edcfa5801bbd6ee3c750ff"
+    },
+    "result": {
+      "path": "test-medium/Monday/Cool Facts/cool_facts.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 101,
+    "timestamp": "2026-05-19T07:36:23.357850058Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 1,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-medium/Tuesday/Cool Facts/cool_facts.txt",
+      "content": "1. A day on Venus is longer than a year.\n2. Wombat poop is cube-shaped.\n3. Sea otters hold hands while sleeping.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "2ab93a6b207321f926219d68d8171ca998738c94f3db0b15fa4b5acb7e9ce886"
+    },
+    "result": {
+      "path": "test-medium/Tuesday/Cool Facts/cool_facts.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 102,
+    "timestamp": "2026-05-19T07:36:23.366614858Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 1,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-medium/Wednesday/Cool Facts/cool_facts.txt",
+      "content": "1. The Eiffel Tower can be 15 cm taller during summer.\n2. Butterflies taste with their feet.\n3. There are more stars in the universe than grains of sand on Earth.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "c4b32e92dca7f2a40da7a68b0f44e8377f4e0a6b762e2c891b9fedea28459917"
+    },
+    "result": {
+      "path": "test-medium/Wednesday/Cool Facts/cool_facts.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 103,
+    "timestamp": "2026-05-19T07:36:23.376094955Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 1,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-medium/Thursday/Cool Facts/cool_facts.txt",
+      "content": "1. Some frogs can freeze without dying.\n2. Humans share 60% DNA with bananas.\n3. An octopus can fit through any hole larger than its beak.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "367d14d95ab65293adcbb7dabc3cb2825e782aac7f720c48ae309dcbf611ec5e"
+    },
+    "result": {
+      "path": "test-medium/Thursday/Cool Facts/cool_facts.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 104,
+    "timestamp": "2026-05-19T07:36:23.385200473Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 1,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-medium/Friday/Cool Facts/cool_facts.txt",
+      "content": "1. Dolphins have names for each other.\n2. The longest time between two twins being born is 87 days.\n3. A jiffy is an actual unit of time.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "0c093affef7421f45cdc17c023c1f48873b8ae87fa817b94fcfb56e6d8e81c24"
+    },
+    "result": {
+      "path": "test-medium/Friday/Cool Facts/cool_facts.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 105,
+    "timestamp": "2026-05-19T07:36:23.395948608Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 1,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-medium/Saturday/Cool Facts/cool_facts.txt",
+      "content": "1. A group of flamingos is called a \"flamboyance.\"\n2. The moon has moonquakes.\n3. Sloths can hold their breath longer than dolphins.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "2c29b42eee0ca108c058bf00905e769ffe69a0f279b0a650da633bf301d5f3ca"
+    },
+    "result": {
+      "path": "test-medium/Saturday/Cool Facts/cool_facts.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 106,
+    "timestamp": "2026-05-19T07:36:23.405985598Z",
+    "ticketId": 9,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 11,
+    "step": 1,
+    "operation": "writeFile",
+    "args": {
+      "path": "test-medium/Sunday/Cool Facts/cool_facts.txt",
+      "content": "1. Scotland's national animal is the unicorn.\n2. Cows have best friends and get stressed when apart.\n3. The shortest war in history lasted 38 minutes.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "695d4f1def6091115dfe2de0658bf8c53fb343f9f935bc32c9e3a935e168fc3b"
+    },
+    "result": {
+      "path": "test-medium/Sunday/Cool Facts/cool_facts.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  }
+]

@@ -1,0 +1,74 @@
+<h1>Create New Ticket</h1>
+
+<% if (error) { %>
+  <div class="error-message"><%= error %></div>
+<% } %>
+
+<form action="/tickets" method="POST" class="ticket-form">
+  <div class="form-group">
+    <label for="objective">Objective *</label>
+    <textarea id="objective" name="objective" rows="5" required></textarea>
+  </div>
+
+  <div class="form-group">
+    <label for="assignmentTargetType">Assignment Target Type *</label>
+    <select id="assignmentTargetType" name="assignmentTargetType" required>
+      <option value="">Select target type</option>
+      <option value="agent">Agent</option>
+      <option value="group">Group</option>
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label for="assignmentTargetId">Assignment Target *</label>
+    <select id="assignmentTargetId" name="assignmentTargetId" required disabled>
+      <option value="">Select a target type first</option>
+      <% agents.forEach(agent => { %>
+        <option value="<%= agent.id %>" data-target-type="agent"><%= agent.name %></option>
+      <% }); %>
+      <% agentGroups.forEach(group => { %>
+        <option value="<%= group.id %>" data-target-type="group"><%= group.name %></option>
+      <% }); %>
+    </select>
+  </div>
+
+  <div class="form-group" id="assignmentModeGroup" hidden>
+    <label for="assignmentMode">Assignment Mode *</label>
+    <select id="assignmentMode" name="assignmentMode">
+      <option value="">Select assignment mode</option>
+      <option value="allocated">Allocated</option>
+      <option value="dynamic">Dynamic</option>
+    </select>
+  </div>
+
+  <button type="submit" class="btn-submit">Create Ticket</button>
+</form>
+
+<script>
+const targetTypeSelect = document.getElementById('assignmentTargetType');
+const targetSelect = document.getElementById('assignmentTargetId');
+const assignmentModeGroup = document.getElementById('assignmentModeGroup');
+const assignmentModeSelect = document.getElementById('assignmentMode');
+const targetOptions = Array.from(targetSelect.querySelectorAll('option[data-target-type]'));
+
+function updateAssignmentTargets() {
+  const selectedType = targetTypeSelect.value;
+  targetSelect.value = '';
+  targetSelect.disabled = !selectedType;
+  assignmentModeSelect.value = '';
+  assignmentModeGroup.hidden = selectedType !== 'group';
+  assignmentModeSelect.required = selectedType === 'group';
+  assignmentModeSelect.disabled = selectedType !== 'group';
+
+  targetOptions.forEach(option => {
+    option.hidden = option.dataset.targetType !== selectedType;
+  });
+
+  targetSelect.querySelector('option[value=""]').textContent = selectedType
+    ? 'Select ' + (selectedType === 'agent' ? 'an agent' : 'an agent group')
+    : 'Select a target type first';
+}
+
+targetTypeSelect.addEventListener('change', updateAssignmentTargets);
+updateAssignmentTargets();
+</script>

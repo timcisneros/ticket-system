@@ -1,0 +1,338 @@
+<h1>Workspace</h1>
+
+<div class="admin-section">
+  <div class="workspace-header">
+    <div>
+      <h2>Files</h2>
+      <p class="text-muted">Current path: <code id="workspace-path"><%= workspacePath ? '/' + workspacePath : '/' %></code></p>
+    </div>
+    <button type="button" class="btn-secondary" id="workspace-up" <%= workspacePath ? '' : 'disabled' %>>Go Up</button>
+  </div>
+
+  <div id="workspace-error" class="error-message" hidden></div>
+
+  <div class="workspace-actions">
+    <form id="create-file-form" class="workspace-inline-form">
+      <input type="text" name="name" placeholder="new-file.txt" required>
+      <button type="submit" class="btn-small">Create File</button>
+    </form>
+
+    <form id="create-folder-form" class="workspace-inline-form">
+      <input type="text" name="name" placeholder="new-folder" required>
+      <button type="submit" class="btn-small">Create Folder</button>
+    </form>
+  </div>
+
+  <table class="tickets-table workspace-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="workspace-entries">
+      <% if (workspaceEntries.length === 0) { %>
+        <tr>
+          <td colspan="3" class="text-muted">No files or folders.</td>
+        </tr>
+      <% } %>
+
+      <% workspaceEntries.forEach(entry => { %>
+        <tr>
+          <td><%= entry.name %></td>
+          <td><%= entry.type %></td>
+          <td class="actions">
+            <% if (entry.type === 'folder') { %>
+              <button type="button" class="btn-small" data-open-path="<%= entry.path %>">Open</button>
+            <% } else { %>
+              <button type="button" class="btn-small" data-edit-path="<%= entry.path %>">Edit</button>
+            <% } %>
+            <button type="button" class="btn-small" data-rename-path="<%= entry.path %>">Rename</button>
+            <button type="button" class="btn-small btn-danger" data-delete-path="<%= entry.path %>">Delete</button>
+          </td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</div>
+
+<% if (canResetWorkspaceFixtures) { %>
+  <div class="admin-section">
+    <h2>Workspace Fixtures</h2>
+    <form id="workspace-fixture-form" class="workspace-inline-form">
+      <select id="workspace-fixture" name="fixtureId" required>
+        <option value="">Choose fixture</option>
+        <% workspaceFixtures.forEach(fixture => { %>
+          <option value="<%= fixture.id %>"><%= fixture.name %></option>
+        <% }) %>
+      </select>
+      <button type="submit" class="btn-small btn-danger">Reset Workspace</button>
+    </form>
+  </div>
+<% } %>
+
+<div class="admin-section" id="file-editor" hidden>
+  <h2>Edit File</h2>
+  <p class="text-muted">File: <code id="editor-path"></code></p>
+  <form id="editor-form" class="ticket-form">
+    <div class="form-group">
+      <label for="editor-content">Content</label>
+      <textarea id="editor-content" name="content" rows="14"></textarea>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn-submit">Save File</button>
+      <button type="button" class="btn-secondary" id="editor-cancel">Cancel</button>
+    </div>
+  </form>
+</div>
+
+<script>
+let currentPath = '';
+let editingPath = '';
+
+const pathLabel = document.getElementById('workspace-path');
+const entriesBody = document.getElementById('workspace-entries');
+const errorBox = document.getElementById('workspace-error');
+const upButton = document.getElementById('workspace-up');
+const createFileForm = document.getElementById('create-file-form');
+const createFolderForm = document.getElementById('create-folder-form');
+const editor = document.getElementById('file-editor');
+const editorPath = document.getElementById('editor-path');
+const editorContent = document.getElementById('editor-content');
+const editorForm = document.getElementById('editor-form');
+const editorCancel = document.getElementById('editor-cancel');
+const fixtureForm = document.getElementById('workspace-fixture-form');
+const fixtureSelect = document.getElementById('workspace-fixture');
+
+currentPath = pathLabel.textContent.replace(/^\//, '');
+
+function showError(message) {
+  errorBox.textContent = message;
+  errorBox.hidden = !message;
+}
+
+function joinPath(basePath, name) {
+  return [basePath, name].filter(Boolean).join('/');
+}
+
+function parentPath(relativePath) {
+  const parts = relativePath.split('/').filter(Boolean);
+  parts.pop();
+  return parts.join('/');
+}
+
+async function workspaceRequest(url, options) {
+  const response = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Workspace operation failed');
+  }
+
+  return data;
+}
+
+function renderEntries(entries) {
+  entriesBody.replaceChildren();
+
+  if (entries.length === 0) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 3;
+    cell.className = 'text-muted';
+    cell.textContent = 'No files or folders.';
+    row.appendChild(cell);
+    entriesBody.appendChild(row);
+    return;
+  }
+
+  entries.forEach(entry => {
+    const row = document.createElement('tr');
+
+    const nameCell = document.createElement('td');
+    nameCell.textContent = entry.name;
+
+    const typeCell = document.createElement('td');
+    typeCell.textContent = entry.type;
+
+    const actionsCell = document.createElement('td');
+    actionsCell.className = 'actions';
+
+    if (entry.type === 'folder') {
+      const openButton = document.createElement('button');
+      openButton.type = 'button';
+      openButton.className = 'btn-small';
+      openButton.dataset.openPath = entry.path;
+      openButton.textContent = 'Open';
+      actionsCell.appendChild(openButton);
+    } else {
+      const editButton = document.createElement('button');
+      editButton.type = 'button';
+      editButton.className = 'btn-small';
+      editButton.dataset.editPath = entry.path;
+      editButton.textContent = 'Edit';
+      actionsCell.appendChild(editButton);
+    }
+
+    const renameButton = document.createElement('button');
+    renameButton.type = 'button';
+    renameButton.className = 'btn-small';
+    renameButton.dataset.renamePath = entry.path;
+    renameButton.textContent = 'Rename';
+    actionsCell.appendChild(renameButton);
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'btn-small btn-danger';
+    deleteButton.dataset.deletePath = entry.path;
+    deleteButton.textContent = 'Delete';
+    actionsCell.appendChild(deleteButton);
+
+    row.appendChild(nameCell);
+    row.appendChild(typeCell);
+    row.appendChild(actionsCell);
+    entriesBody.appendChild(row);
+  });
+}
+
+async function loadPath(relativePath = '') {
+  try {
+    showError('');
+    const data = await workspaceRequest('/api/workspace/list?path=' + encodeURIComponent(relativePath));
+    currentPath = data.path;
+    pathLabel.textContent = currentPath ? '/' + currentPath : '/';
+    upButton.disabled = !currentPath;
+    renderEntries(data.entries);
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function createEntry(type, name) {
+  const path = joinPath(currentPath, name);
+  const url = type === 'folder' ? '/api/workspace/folder' : '/api/workspace/file';
+  await workspaceRequest(url, {
+    method: 'POST',
+    body: JSON.stringify({ path })
+  });
+  await loadPath(currentPath);
+}
+
+async function editFile(path) {
+  try {
+    showError('');
+    const data = await workspaceRequest('/api/workspace/file?path=' + encodeURIComponent(path));
+    editingPath = path;
+    editorPath.textContent = path;
+    editorContent.value = data.content;
+    editor.hidden = false;
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function renameEntry(path) {
+  const nextName = window.prompt('Rename to:', path.split('/').pop());
+  if (!nextName) return;
+
+  try {
+    await workspaceRequest('/api/workspace/rename', {
+      method: 'PATCH',
+      body: JSON.stringify({ path, nextPath: joinPath(parentPath(path), nextName) })
+    });
+    await loadPath(currentPath);
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function deleteEntry(path) {
+  if (!window.confirm('Delete this item?')) return;
+
+  try {
+    await workspaceRequest('/api/workspace', {
+      method: 'DELETE',
+      body: JSON.stringify({ path })
+    });
+    await loadPath(currentPath);
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+upButton.addEventListener('click', () => loadPath(parentPath(currentPath)));
+
+createFileForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    await createEntry('file', new FormData(createFileForm).get('name'));
+    createFileForm.reset();
+  } catch (error) {
+    showError(error.message);
+  }
+});
+
+createFolderForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    await createEntry('folder', new FormData(createFolderForm).get('name'));
+    createFolderForm.reset();
+  } catch (error) {
+    showError(error.message);
+  }
+});
+
+editorForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    await workspaceRequest('/api/workspace/file', {
+      method: 'PATCH',
+      body: JSON.stringify({ path: editingPath, content: editorContent.value })
+    });
+    editor.hidden = true;
+    await loadPath(currentPath);
+  } catch (error) {
+    showError(error.message);
+  }
+});
+
+editorCancel.addEventListener('click', () => {
+  editor.hidden = true;
+});
+
+if (fixtureForm) {
+  fixtureForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const fixtureName = fixtureSelect.options[fixtureSelect.selectedIndex].textContent;
+
+    if (!window.confirm('Reset workspace to "' + fixtureName + '"? This deletes current workspace contents.')) return;
+
+    try {
+      showError('');
+      await workspaceRequest('/api/workspace/fixture', {
+        method: 'POST',
+        body: JSON.stringify({ fixtureId: fixtureSelect.value })
+      });
+      editor.hidden = true;
+      fixtureForm.reset();
+      await loadPath('');
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+}
+
+entriesBody.addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+
+  if (button.dataset.openPath) loadPath(button.dataset.openPath);
+  if (button.dataset.editPath) editFile(button.dataset.editPath);
+  if (button.dataset.renamePath) renameEntry(button.dataset.renamePath);
+  if (button.dataset.deletePath) deleteEntry(button.dataset.deletePath);
+});
+</script>

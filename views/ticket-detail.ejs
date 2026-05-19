@@ -1,0 +1,344 @@
+<div class="page-header">
+  <div>
+    <h1>Ticket #<%= ticket.id %></h1>
+    <p class="text-muted"><%= ticket.objective %></p>
+  </div>
+  <div class="actions">
+    <a class="btn-secondary" href="/tickets">Back to Tickets</a>
+    <% if (canUpdateTickets && ticket.status !== 'open') { %>
+      <button type="button" class="btn-secondary" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %></button>
+    <% } %>
+  </div>
+</div>
+
+<section class="detail-section">
+  <h2>Ticket Info</h2>
+  <dl class="detail-grid">
+    <div>
+      <dt>Status</dt>
+      <dd><span class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span></dd>
+    </div>
+    <div>
+      <dt>Assignment Target</dt>
+      <dd><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %></dd>
+    </div>
+    <div>
+      <dt>Assignment Mode</dt>
+      <dd><%= ticket.assignmentMode %></dd>
+    </div>
+    <div>
+      <dt>Created</dt>
+      <dd><%= ticket.createdAt ? new Date(ticket.createdAt).toLocaleString() : '-' %></dd>
+    </div>
+    <div>
+      <dt>Updated</dt>
+      <dd><%= ticket.updatedAt ? new Date(ticket.updatedAt).toLocaleString() : '-' %></dd>
+    </div>
+  </dl>
+</section>
+
+<% if (allocationPlan) { %>
+<section class="detail-section">
+  <h2>Allocation Plan #<%= allocationPlan.id %></h2>
+  <dl class="detail-grid">
+    <div>
+      <dt>Mode</dt>
+      <dd><%= allocationPlan.mode %></dd>
+    </div>
+    <div>
+      <dt>Plan Status</dt>
+      <dd><span class="status-badge status-<%= allocationPlan.status %>"><%= allocationPlan.status %></span></dd>
+    </div>
+    <div>
+      <dt>Created</dt>
+      <dd><%= allocationPlan.createdAt ? new Date(allocationPlan.createdAt).toLocaleString() : '-' %></dd>
+    </div>
+    <div>
+      <dt>Ticket Opened At</dt>
+      <dd><%= allocationPlan.ticketOpenedAt ? new Date(allocationPlan.ticketOpenedAt).toLocaleString() : '-' %></dd>
+    </div>
+  </dl>
+</section>
+
+<section class="detail-section">
+  <h2>Work Units</h2>
+  <% if (!allocationPlan.items || allocationPlan.items.length === 0) { %>
+    <p class="text-muted">No allocation items.</p>
+  <% } else { %>
+    <div class="allocation-items">
+      <% allocationPlan.items.forEach(item => { %>
+        <%
+          const itemRuns = ticketRuns.filter(run =>
+            run.allocationPlanId === allocationPlan.id &&
+            run.allocationItemId === item.allocationItemId
+          );
+          const assignedAgent = agents.find(agent => agent.id === item.assignedAgentId);
+        %>
+        <div class="allocation-item">
+          <div class="allocation-item-header">
+            <div class="allocation-item-id">Item #<%= item.allocationItemId %></div>
+            <div class="allocation-item-status">
+              <span class="status-badge status-<%= item.status %>"><%= item.status %></span>
+            </div>
+          </div>
+          <div class="allocation-item-body">
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Assigned Agent</span>
+              <span class="allocation-item-value">
+                <% if (assignedAgent) { %>
+                  <%= assignedAgent.name %> (Agent #<%= item.assignedAgentId %>)
+                <% } else { %>
+                  Agent #<%= item.assignedAgentId %>
+                <% } %>
+              </span>
+            </div>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Subtask</span>
+              <span class="allocation-item-value"><%= item.allocationSubtask || '-' %></span>
+            </div>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Owned Paths</span>
+              <span class="allocation-item-value">
+                <% if (item.ownedOutputPaths && item.ownedOutputPaths.length > 0) { %>
+                  <code class="owned-path"><%= item.ownedOutputPaths.join(', ') %></code>
+                <% } else { %>
+                  -
+                <% } %>
+              </span>
+            </div>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Linked Runs</span>
+              <span class="allocation-item-value">
+                <% if (itemRuns.length === 0) { %>
+                  -
+                <% } else { %>
+                  <span class="run-links">
+                    <% itemRuns.forEach((run, idx) => { %>
+                      <a href="/runs/<%= run.id %>" class="run-link run-status-<%= run.status %>">Run #<%= run.id %></a><% if (idx < itemRuns.length - 1) { %>, <% } %>
+                    <% }) %>
+                  </span>
+                <% } %>
+              </span>
+            </div>
+          </div>
+        </div>
+      <% }) %>
+    </div>
+  <% } %>
+</section>
+<% } %>
+
+<section class="detail-section">
+  <h2>Runs</h2>
+  <% if (ticketRuns.length === 0) { %>
+    <p class="text-muted">No runs yet.</p>
+  <% } else { %>
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>Run #</th>
+          <th>Agent</th>
+          <th>Status</th>
+          <th>Mutations</th>
+          <th>Workspace Type</th>
+          <th>Allocation Plan</th>
+          <th>Allocation Item</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% ticketRuns.forEach(run => { %>
+          <tr>
+            <td><a href="/runs/<%= run.id %>">Run #<%= run.id %></a></td>
+            <td><%= run.agentName %></td>
+            <td>
+              <span class="status-badge status-<%= run.status %>"><%= run.status %></span>
+            </td>
+            <td>
+              <% if (run.partialMutationCount > 0) { %>
+                <%= run.partialMutationCount %>
+              <% } else { %>
+                -
+              <% } %>
+            </td>
+            <td><%= run.executionWorkspaceType || 'main' %></td>
+            <td><%= run.allocationPlanId || '-' %></td>
+            <td><%= run.allocationItemId || '-' %></td>
+            <td><%= run.createdAt ? new Date(run.createdAt).toLocaleString() : '-' %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  <% } %>
+</section>
+
+<% if (operationHistory && operationHistory.length > 0) { %>
+<section class="detail-section">
+  <h2>Operation History</h2>
+  <div class="operation-history">
+    <% operationHistory.forEach((record, index) => { %>
+      <div class="operation-history-item <%= record.isRecovery ? 'is-recovery' : '' %>">
+        <div class="operation-history-header">
+          <span class="operation-history-number">#<%= record.id %></span>
+          <span class="operation-history-type"><%= record.operation %></span>
+          <span class="operation-history-step">run <%= record.runId %> · step <%= record.step %></span>
+          <% if (record.isRecovery) { %>
+            <span class="badge badge--recovery-action">RECOVERY</span>
+          <% } else if (record.recoveryStatus) { %>
+            <% if (record.recoveryStatus.status === 'recoverable') { %>
+              <span class="badge badge--recovery-recoverable">RECOVERABLE</span>
+            <% } else if (record.recoveryStatus.status === 'unrecoverable') { %>
+              <span class="badge badge--recovery-unrecoverable">UNRECOVERABLE</span>
+            <% } else if (record.recoveryStatus.status === 'recovery_available') { %>
+              <span class="badge badge--recovery-available">RECOVERY AVAILABLE</span>
+            <% } %>
+          <% } %>
+          <% if (record.error) { %>
+            <span class="badge badge--outcome-error">ERROR</span>
+          <% } else if (record.result && record.result.status === 'already_exists_noop') { %>
+            <span class="badge badge--outcome-noop">NO-OP</span>
+          <% } else { %>
+            <span class="badge badge--outcome-success">OK</span>
+          <% } %>
+        </div>
+        <div class="operation-history-body">
+          <div class="allocation-item-row">
+            <span class="allocation-item-label">Path</span>
+            <span class="allocation-item-value"><code class="owned-path"><%= record.args.path %></code></span>
+          </div>
+          <% if (record.args.nextPath) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Next Path</span>
+              <span class="allocation-item-value"><code class="owned-path"><%= record.args.nextPath %></code></span>
+            </div>
+          <% } %>
+          <% if (record.isRecovery && record.recoveredHistoryId) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Recovered</span>
+              <span class="allocation-item-value">History #<%= record.recoveredHistoryId %></span>
+            </div>
+          <% } %>
+          <% if (record.preState) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Pre-State</span>
+              <span class="allocation-item-value">
+                <details class="collapsible">
+                  <summary>View Pre-State</summary>
+                  <pre class="code-block"><%= JSON.stringify(record.preState, null, 2) %></pre>
+                </details>
+              </span>
+            </div>
+          <% } %>
+          <% if (record.postState) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Post-State</span>
+              <span class="allocation-item-value">
+                <details class="collapsible">
+                  <summary>View Post-State</summary>
+                  <pre class="code-block"><%= JSON.stringify(record.postState, null, 2) %></pre>
+                </details>
+              </span>
+            </div>
+          <% } %>
+          <% if (record.error) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Error</span>
+              <span class="allocation-item-value"><span class="failure-reason"><%= record.error %></span></span>
+            </div>
+          <% } %>
+          <% if (canUpdateTickets && !record.isRecovery && record.recoveryStatus && record.recoveryStatus.status === 'recoverable') { %>
+            <div class="recovery-controls">
+              <button type="button" class="btn-small btn-secondary" data-preview-recovery-id="<%= record.id %>">Preview Recovery</button>
+            </div>
+            <div class="recovery-preview-panel" id="recovery-preview-<%= record.id %>" style="display: none;"></div>
+          <% } %>
+        </div>
+      </div>
+    <% }) %>
+  </div>
+</section>
+<% } %>
+
+<% if (canUpdateTickets) { %>
+<script>
+document.addEventListener('click', event => {
+  const rerunButton = event.target.closest('[data-rerun-ticket-id]');
+  if (rerunButton) {
+    rerunButton.disabled = true;
+    fetch('/api/tickets/' + encodeURIComponent(rerunButton.dataset.rerunTicketId) + '/rerun', {
+      method: 'POST',
+      headers: { Accept: 'application/json' }
+    }).then(() => {
+      window.location.reload();
+    });
+    return;
+  }
+
+  const previewButton = event.target.closest('[data-preview-recovery-id]');
+  if (previewButton) {
+    previewButton.disabled = true;
+    const historyId = previewButton.dataset.previewRecoveryId;
+    const panel = document.getElementById('recovery-preview-' + historyId);
+    fetch('/api/operations/' + encodeURIComponent(historyId) + '/recovery-preview')
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          panel.className = 'recovery-preview-panel recovery-blocked';
+          panel.innerHTML = '<div class="recovery-reason">' + escapeHtml(data.error) + '</div>';
+        } else if (data.preview) {
+          const p = data.preview;
+          panel.className = p.canProceed ? 'recovery-preview-panel' : 'recovery-preview-panel recovery-blocked';
+          let html = '<div class="recovery-action-text">Proposed: ' + escapeHtml(p.proposedAction.operation) + '</div>';
+          if (p.proposedAction.args.path) html += '<div class="recovery-reason">Path: <code class="owned-path">' + escapeHtml(p.proposedAction.args.path) + '</code></div>';
+          if (p.proposedAction.args.nextPath) html += '<div class="recovery-reason">Next Path: <code class="owned-path">' + escapeHtml(p.proposedAction.args.nextPath) + '</code></div>';
+          if (p.validation && !p.validation.valid) html += '<div class="recovery-reason" style="color:#991b1b;margin-top:6px;">Blocked: ' + escapeHtml(p.validation.reason) + '</div>';
+          if (p.canProceed) {
+            html += '<div class="recovery-controls"><button type="button" class="btn-small btn-danger" data-confirm-recovery-id="' + historyId + '">Confirm Recovery</button></div>';
+          }
+          panel.innerHTML = html;
+        }
+        panel.style.display = 'block';
+        previewButton.disabled = false;
+      })
+      .catch(err => {
+        panel.className = 'recovery-preview-panel recovery-blocked';
+        panel.innerHTML = '<div class="recovery-reason">Preview failed: ' + escapeHtml(err.message) + '</div>';
+        panel.style.display = 'block';
+        previewButton.disabled = false;
+      });
+    return;
+  }
+
+  const confirmButton = event.target.closest('[data-confirm-recovery-id]');
+  if (confirmButton) {
+    confirmButton.disabled = true;
+    const historyId = confirmButton.dataset.confirmRecoveryId;
+    fetch('/api/operations/' + encodeURIComponent(historyId) + '/recover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ confirmed: true })
+    })
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          alert('Recovery failed: ' + data.error);
+          confirmButton.disabled = false;
+        } else {
+          window.location.reload();
+        }
+      })
+      .catch(err => {
+        alert('Recovery failed: ' + err.message);
+        confirmButton.disabled = false;
+      });
+    return;
+  }
+});
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+</script>
+<% } %>

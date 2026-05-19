@@ -1,0 +1,459 @@
+<div class="page-header">
+  <div>
+    <h1>Run #<%= run.id %></h1>
+    <p class="text-muted">Ticket <a href="/tickets/<%= run.ticketId %>">#<%= run.ticketId %></a> · <%= run.agentName %></p>
+  </div>
+  <div class="actions">
+    <% if (canUpdateRuns && ['pending', 'running'].includes(run.status)) { %>
+      <button type="button" class="btn-secondary btn-danger" data-stop-run-id="<%= run.id %>">Stop Run</button>
+    <% } %>
+    <% if (canUpdateRuns && ['failed', 'interrupted'].includes(run.status)) { %>
+      <button type="button" class="btn-secondary" data-retry-run-id="<%= run.id %>">Retry</button>
+    <% } %>
+    <a class="btn-secondary" href="/logs">Logs</a>
+  </div>
+</div>
+
+<% if (['failed', 'interrupted'].includes(run.status) && partialMutationCount > 0) { %>
+<section class="detail-section partial-execution-banner">
+  <div class="partial-execution-header">
+    <span class="partial-execution-icon">&#9888;</span>
+    <div>
+      <strong>Partial execution</strong>
+      <span class="text-muted">This run failed after performing <%= partialMutationCount %> workspace mutation<%= partialMutationCount === 1 ? '' : 's' %>.</span>
+    </div>
+  </div>
+  <% if (operationHistory && operationHistory.length > 0) { %>
+    <div class="partial-execution-recovery">
+      <span class="text-muted">Review Operation History below for recovery options.</span>
+    </div>
+  <% } %>
+</section>
+<% } %>
+
+<section class="detail-section">
+  <h2>Run Summary</h2>
+  <dl class="detail-grid">
+    <div>
+      <dt>Status</dt>
+      <dd><span class="status-badge status-<%= run.status %>"><%= run.status %></span></dd>
+    </div>
+    <div>
+      <dt>Agent</dt>
+      <dd><%= run.agentName %></dd>
+    </div>
+    <div>
+      <dt>Started</dt>
+      <dd><%= run.startedAt || '-' %></dd>
+    </div>
+    <div>
+      <dt>Completed</dt>
+      <dd><%= run.completedAt || '-' %></dd>
+    </div>
+    <div>
+      <dt>Duration</dt>
+      <dd>
+        <% if (run.startedAt && run.completedAt) { %>
+          <%= Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt))) %>ms
+        <% } else { %>
+          -
+        <% } %>
+      </dd>
+    </div>
+    <div>
+      <dt>Mutations</dt>
+      <dd><%= partialMutationCount || 0 %></dd>
+    </div>
+  </dl>
+
+  <% if (snapshot && snapshot.terminalStatus && snapshot.terminalStatus !== run.status) { %>
+    <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e7eb;">
+      <span class="text-muted">Terminal status:</span>
+      <span class="status-badge status-<%= snapshot.terminalStatus %>"><%= snapshot.terminalStatus %></span>
+    </div>
+  <% } %>
+
+  <% if (snapshot && (snapshot.failureReason || run.error)) { %>
+    <div style="margin-top: 12px;">
+      <span class="failure-reason"><%= snapshot.failureReason || run.error %></span>
+    </div>
+  <% } %>
+
+  <details class="collapsible" style="margin-top: 14px; margin-bottom: 0;">
+    <summary>Run Context</summary>
+    <div class="collapsible__content">
+      <dl class="detail-grid">
+        <div>
+          <dt>Created</dt>
+          <dd><%= run.createdAt || '-' %></dd>
+        </div>
+        <div>
+          <dt>Batch Marker</dt>
+          <dd><%= run.ticketOpenedAt || '-' %></dd>
+        </div>
+        <div>
+          <dt>Workspace Type</dt>
+          <dd><%= run.executionWorkspaceType || (snapshot && snapshot.executionWorkspaceType) || 'main' %></dd>
+        </div>
+        <div>
+          <dt>Allocation Plan</dt>
+          <dd><%= run.allocationPlanId || (snapshot && snapshot.allocationPlanId) || '-' %></dd>
+        </div>
+        <div>
+          <dt>Allocation Item</dt>
+          <dd><%= run.allocationItemId || (snapshot && snapshot.allocationItemId) || '-' %></dd>
+        </div>
+        <div>
+          <dt>Main Workspace</dt>
+          <dd><%= run.mainWorkspaceRoot || (snapshot && snapshot.mainWorkspaceRoot) || run.workspaceRoot || '-' %></dd>
+        </div>
+        <div>
+          <dt>Owned Paths</dt>
+          <dd>
+            <% const ownedPaths = (run.ownedOutputPaths && run.ownedOutputPaths.length ? run.ownedOutputPaths : (snapshot && snapshot.ownedOutputPaths) || []); %>
+            <% if (ownedPaths.length > 0) { %>
+              <code class="owned-path"><%= ownedPaths.join(', ') %></code>
+            <% } else { %>
+              -
+            <% } %>
+          </dd>
+        </div>
+        <div>
+          <dt>Allocation Subtask</dt>
+          <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
+        </div>
+        <% if (snapshot && snapshot.provider) { %>
+          <div>
+            <dt>Provider</dt>
+            <dd><%= snapshot.provider %></dd>
+          </div>
+        <% } %>
+        <% if (snapshot && snapshot.model) { %>
+          <div>
+            <dt>Model</dt>
+            <dd><%= snapshot.model %></dd>
+          </div>
+        <% } %>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<% if (!snapshot) { %>
+  <section class="detail-section">
+    <h2>Replay Snapshot</h2>
+    <p class="text-muted">No replay snapshot is available for this run.</p>
+  </section>
+<% } else { %>
+  <section class="detail-section">
+    <h2>Ticket Objective</h2>
+    <pre class="run-text"><%= snapshot.ticketObjectiveSnapshot || (ticket && ticket.objective) || '-' %></pre>
+  </section>
+
+  <section class="detail-section">
+    <details class="collapsible">
+      <summary>Runtime Envelope</summary>
+      <pre class="code-block"><%= JSON.stringify(snapshot.runtimeEnvelope || {}, null, 2) %></pre>
+    </details>
+  </section>
+
+  <section class="detail-section">
+    <details class="collapsible">
+      <summary>Primitive Contract</summary>
+      <pre class="code-block"><%= JSON.stringify(snapshot.primitiveContract || {}, null, 2) %></pre>
+    </details>
+  </section>
+
+  <section class="detail-section">
+    <h2>Instructions</h2>
+    <pre class="run-text"><%= snapshot.systemInstructionSnapshot || '-' %></pre>
+  </section>
+
+  <section class="detail-section">
+    <details class="collapsible">
+      <summary>Provider Requests (<%= (snapshot.providerRequests || []).length %>)</summary>
+      <div class="collapsible__content">
+        <% if (!snapshot.providerRequests || snapshot.providerRequests.length === 0) { %>
+          <p class="text-muted">No provider requests captured.</p>
+        <% } %>
+        <% (snapshot.providerRequests || []).forEach((requestPayload, index) => { %>
+          <h3>Request <%= index + 1 %></h3>
+          <pre class="code-block"><%= JSON.stringify(requestPayload, null, 2) %></pre>
+        <% }) %>
+      </div>
+    </details>
+  </section>
+
+  <section class="detail-section">
+    <details class="collapsible">
+      <summary>Model Responses (<%= (snapshot.modelResponses || []).length %>)</summary>
+      <div class="collapsible__content">
+        <% if (!snapshot.modelResponses || snapshot.modelResponses.length === 0) { %>
+          <p class="text-muted">No model responses captured.</p>
+        <% } %>
+        <% (snapshot.modelResponses || []).forEach((responsePayload, index) => { %>
+          <h3>Response <%= index + 1 %></h3>
+          <pre class="code-block"><%= JSON.stringify(responsePayload, null, 2) %></pre>
+        <% }) %>
+      </div>
+    </details>
+  </section>
+
+  <section class="detail-section">
+    <h2>Workspace Operations</h2>
+    <% if (!snapshot.workspaceOperations || snapshot.workspaceOperations.length === 0) { %>
+      <p class="text-muted">No workspace operations captured.</p>
+    <% } %>
+    <% (snapshot.workspaceOperations || []).forEach((op, index) => { %>
+      <%
+        let opStatusClass = 'op-neutral';
+        let opStatusLabel = '';
+        if (op.blocked) {
+          opStatusClass = 'op-blocked';
+          opStatusLabel = 'BLOCKED';
+        } else if (op.error) {
+          opStatusClass = 'op-error';
+          opStatusLabel = 'ERROR';
+        } else if (op.result && op.result.status === 'already_exists_noop') {
+          opStatusClass = 'op-noop';
+          opStatusLabel = 'NO-OP';
+        } else if (op.result && op.result.status === 'created') {
+          opStatusClass = 'op-created';
+          opStatusLabel = 'CREATED';
+        } else if (op.result) {
+          opStatusClass = 'op-success';
+          opStatusLabel = 'OK';
+        }
+        const opReason = op.reason || (op.error && op.error) || '';
+      %>
+      <div class="workspace-operation <%= opStatusClass %>">
+        <div class="workspace-operation-header">
+          <span class="workspace-operation-number">Op <%= index + 1 %></span>
+          <span class="workspace-operation-type"><%= op.operation && op.operation.operation || (typeof op.operation === 'string' ? op.operation : '-') %></span>
+          <span class="badge badge--outcome-<%= opStatusClass.replace(/^op-/, '') %>"><%= opStatusLabel %></span>
+        </div>
+        <% if (opReason) { %>
+          <div class="workspace-operation-reason"><%= opReason %></div>
+        <% } %>
+        <details class="collapsible">
+          <summary>Payload</summary>
+          <pre class="code-block"><%= JSON.stringify(op, null, 2) %></pre>
+        </details>
+      </div>
+    <% }) %>
+  </section>
+
+  <section class="detail-section">
+    <h2>Events</h2>
+    <% if (!snapshot.events || snapshot.events.length === 0) { %>
+      <p class="text-muted">No replay events captured.</p>
+    <% } %>
+    <% (snapshot.events || []).forEach((event, index) => { %>
+      <%
+        let eventClass = 'event-neutral';
+        if (event.type && event.type.includes('limit')) eventClass = 'event-limit';
+        else if (event.type && event.type.includes('fail')) eventClass = 'event-error';
+        else if (event.type && event.type.includes('stalled')) eventClass = 'event-warn';
+        else if (event.type && event.type.includes('no_progress')) eventClass = 'event-warn';
+        else if (event.type === 'run:completed_noop') eventClass = 'event-noop';
+      %>
+      <div class="replay-event <%= eventClass %>">
+        <div class="replay-event-header">
+          <span class="replay-event-number">#<%= index + 1 %></span>
+          <span class="replay-event-type"><%= event.type %></span>
+        </div>
+        <details class="collapsible">
+          <summary>Payload</summary>
+          <pre class="code-block"><%= JSON.stringify(event, null, 2) %></pre>
+        </details>
+      </div>
+    <% }) %>
+  </section>
+<% } %>
+
+<% if (operationHistory && operationHistory.length > 0) { %>
+<section class="detail-section">
+  <h2>Operation History</h2>
+  <div class="operation-history">
+    <% operationHistory.forEach((record, index) => { %>
+      <div class="operation-history-item <%= record.isRecovery ? 'is-recovery' : '' %>">
+        <div class="operation-history-header">
+          <span class="operation-history-number">#<%= record.id %></span>
+          <span class="operation-history-type"><%= record.operation %></span>
+          <span class="operation-history-step">step <%= record.step %></span>
+          <% if (record.isRecovery) { %>
+            <span class="badge badge--recovery-action">RECOVERY</span>
+          <% } else if (record.recoveryStatus) { %>
+            <% if (record.recoveryStatus.status === 'recoverable') { %>
+              <span class="badge badge--recovery-recoverable">RECOVERABLE</span>
+            <% } else if (record.recoveryStatus.status === 'unrecoverable') { %>
+              <span class="badge badge--recovery-unrecoverable">UNRECOVERABLE</span>
+            <% } else if (record.recoveryStatus.status === 'recovery_available') { %>
+              <span class="badge badge--recovery-available">RECOVERY AVAILABLE</span>
+            <% } %>
+          <% } %>
+          <% if (record.error) { %>
+            <span class="badge badge--outcome-error">ERROR</span>
+          <% } else if (record.result && record.result.status === 'already_exists_noop') { %>
+            <span class="badge badge--outcome-noop">NO-OP</span>
+          <% } else { %>
+            <span class="badge badge--outcome-success">OK</span>
+          <% } %>
+        </div>
+        <div class="operation-history-body">
+          <div class="allocation-item-row">
+            <span class="allocation-item-label">Path</span>
+            <span class="allocation-item-value"><code class="owned-path"><%= record.args.path %></code></span>
+          </div>
+          <% if (record.args.nextPath) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Next Path</span>
+              <span class="allocation-item-value"><code class="owned-path"><%= record.args.nextPath %></code></span>
+            </div>
+          <% } %>
+          <% if (record.isRecovery && record.recoveredHistoryId) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Recovered</span>
+              <span class="allocation-item-value">History #<%= record.recoveredHistoryId %></span>
+            </div>
+          <% } %>
+          <% if (record.error) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Error</span>
+              <span class="allocation-item-value"><span class="failure-reason"><%= record.error %></span></span>
+            </div>
+          <% } %>
+          <% if (record.preState) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Pre-State</span>
+              <span class="allocation-item-value">
+                <details class="collapsible">
+                  <summary>View Pre-State</summary>
+                  <pre class="code-block"><%= JSON.stringify(record.preState, null, 2) %></pre>
+                </details>
+              </span>
+            </div>
+          <% } %>
+          <% if (record.postState) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Post-State</span>
+              <span class="allocation-item-value">
+                <details class="collapsible">
+                  <summary>View Post-State</summary>
+                  <pre class="code-block"><%= JSON.stringify(record.postState, null, 2) %></pre>
+                </details>
+              </span>
+            </div>
+          <% } %>
+          <% if (canUpdateRuns && !record.isRecovery && record.recoveryStatus && record.recoveryStatus.status === 'recoverable') { %>
+            <div class="recovery-controls">
+              <button type="button" class="btn-small btn-secondary" data-preview-recovery-id="<%= record.id %>">Preview Recovery</button>
+            </div>
+            <div class="recovery-preview-panel" id="recovery-preview-<%= record.id %>" style="display: none;"></div>
+          <% } %>
+        </div>
+      </div>
+    <% }) %>
+  </div>
+</section>
+<% } %>
+
+<% if (canUpdateRuns) { %>
+<script>
+async function postRunControl(url, redirectUrl) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { Accept: 'application/json' }
+  });
+
+  if (response.ok && redirectUrl) {
+    window.location.href = redirectUrl;
+    return;
+  }
+
+  window.location.reload();
+}
+
+document.addEventListener('click', event => {
+  const stopButton = event.target.closest('[data-stop-run-id]');
+  if (stopButton) {
+    stopButton.disabled = true;
+    postRunControl('/api/runs/' + encodeURIComponent(stopButton.dataset.stopRunId) + '/stop');
+    return;
+  }
+
+  const retryButton = event.target.closest('[data-retry-run-id]');
+  if (retryButton) {
+    retryButton.disabled = true;
+    postRunControl('/api/runs/' + encodeURIComponent(retryButton.dataset.retryRunId) + '/retry', '/tickets');
+    return;
+  }
+
+  const previewButton = event.target.closest('[data-preview-recovery-id]');
+  if (previewButton) {
+    previewButton.disabled = true;
+    const historyId = previewButton.dataset.previewRecoveryId;
+    const panel = document.getElementById('recovery-preview-' + historyId);
+    fetch('/api/operations/' + encodeURIComponent(historyId) + '/recovery-preview')
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          panel.className = 'recovery-preview-panel recovery-blocked';
+          panel.innerHTML = '<div class="recovery-reason">' + escapeHtml(data.error) + '</div>';
+        } else if (data.preview) {
+          const p = data.preview;
+          panel.className = p.canProceed ? 'recovery-preview-panel' : 'recovery-preview-panel recovery-blocked';
+          let html = '<div class="recovery-action-text">Proposed: ' + escapeHtml(p.proposedAction.operation) + '</div>';
+          if (p.proposedAction.args.path) html += '<div class="recovery-reason">Path: <code class="owned-path">' + escapeHtml(p.proposedAction.args.path) + '</code></div>';
+          if (p.proposedAction.args.nextPath) html += '<div class="recovery-reason">Next Path: <code class="owned-path">' + escapeHtml(p.proposedAction.args.nextPath) + '</code></div>';
+          if (p.validation && !p.validation.valid) html += '<div class="recovery-reason" style="color:#991b1b;margin-top:6px;">Blocked: ' + escapeHtml(p.validation.reason) + '</div>';
+          if (p.canProceed) {
+            html += '<div class="recovery-controls"><button type="button" class="btn-small btn-danger" data-confirm-recovery-id="' + historyId + '">Confirm Recovery</button></div>';
+          }
+          panel.innerHTML = html;
+        }
+        panel.style.display = 'block';
+        previewButton.disabled = false;
+      })
+      .catch(err => {
+        panel.className = 'recovery-preview-panel recovery-blocked';
+        panel.innerHTML = '<div class="recovery-reason">Preview failed: ' + escapeHtml(err.message) + '</div>';
+        panel.style.display = 'block';
+        previewButton.disabled = false;
+      });
+    return;
+  }
+
+  const confirmButton = event.target.closest('[data-confirm-recovery-id]');
+  if (confirmButton) {
+    confirmButton.disabled = true;
+    const historyId = confirmButton.dataset.confirmRecoveryId;
+    fetch('/api/operations/' + encodeURIComponent(historyId) + '/recover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ confirmed: true })
+    })
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          alert('Recovery failed: ' + data.error);
+          confirmButton.disabled = false;
+        } else {
+          window.location.reload();
+        }
+      })
+      .catch(err => {
+        alert('Recovery failed: ' + err.message);
+        confirmButton.disabled = false;
+      });
+    return;
+  }
+});
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+</script>
+<% } %>

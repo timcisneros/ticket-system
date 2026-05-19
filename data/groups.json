@@ -1,0 +1,37 @@
+[
+  {
+    "id": 1,
+    "name": "Administrators",
+    "permissions": [
+      "ticket:create",
+      "ticket:read",
+      "ticket:update",
+      "ticket:delete",
+      "user:create",
+      "user:read",
+      "user:update",
+      "user:delete",
+      "group:create",
+      "group:read",
+      "group:update",
+      "group:delete",
+      "permission:assign",
+      "workspace:read",
+      "workspace:write",
+      "workspace:reset"
+    ],
+    "canReceiveTickets": false
+  },
+  {
+    "id": 2,
+    "name": "Agent Support",
+    "permissions": [],
+    "canReceiveTickets": true
+  },
+  {
+    "id": 3,
+    "name": "Allocated Regression 1779149143260",
+    "permissions": [],
+    "canReceiveTickets": true
+  }
+]

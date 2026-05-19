@@ -1,0 +1,176 @@
+<script>document.querySelector('main.container')?.classList.add('container--wide');</script>
+
+<h1>Logs</h1>
+
+<section class="admin-block">
+  <div class="table-container">
+    <table class="tickets-table logs-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Context</th>
+          <th>Agent</th>
+          <th>Type</th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody id="logs-body">
+        <% if (logs.length === 0) { %>
+          <tr id="logs-empty">
+            <td colspan="5" class="text-muted">No logs yet.</td>
+          </tr>
+        <% } %>
+
+        <% logs.forEach(log => { %>
+          <tr data-log-id="<%= log.id %>">
+            <td class="log-time-cell">
+              <time datetime="<%= log.timestamp %>" title="<%= log.timestamp %>" data-log-time="<%= log.timestamp %>"><%= log.timestamp %></time>
+            </td>
+            <td class="log-context-cell">
+              <% if (log.runId === null || log.runId === undefined) { %>
+                <% if (log.ticketId === null) { %>
+                  <span class="text-muted">System</span>
+                <% } else { %>
+                  Ticket #<%= log.ticketId %>
+                <% } %>
+              <% } else { %>
+                <a href="/runs/<%= log.runId %>">Run #<%= log.runId %></a>
+                <span class="text-muted">· Ticket #<%= log.ticketId %></span>
+              <% } %>
+            </td>
+            <td class="log-agent-cell">
+              <% if (log.agentId === null || log.agentId === undefined) { %>
+                <%= log.agentName %>
+              <% } else { %>
+                <%= log.agentName %> <span class="text-muted">#<%= log.agentId %></span>
+              <% } %>
+            </td>
+            <td class="log-type-cell"><%= log.type %></td>
+            <td class="log-message-cell">
+              <pre class="log-message"><%= log.message %></pre>
+              <% if (log.workspaceAction) { %>
+                <details class="log-details">
+                  <summary>Workspace Action</summary>
+                  <pre class="log-json"><%= JSON.stringify(log.workspaceAction, null, 2) %></pre>
+                </details>
+              <% } %>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+const logsBody = document.getElementById('logs-body');
+
+function formatLogTimestamp(timestamp) {
+  if (!timestamp) return '-';
+  const match = String(timestamp).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$/);
+
+  if (!match) return timestamp;
+
+  const [, year, month, day, hour, minute, second] = match;
+  return `${month}/${day}/${year} ${hour}:${minute}:${second}`;
+}
+
+document.querySelectorAll('[data-log-time]').forEach(time => {
+  time.textContent = formatLogTimestamp(time.dataset.logTime);
+});
+
+function appendLog(log) {
+  if (document.querySelector('[data-log-id="' + log.id + '"]')) return;
+
+  const emptyRow = document.getElementById('logs-empty');
+  if (emptyRow) emptyRow.remove();
+
+  const row = document.createElement('tr');
+  row.dataset.logId = log.id;
+
+  // Time
+  const timeCell = document.createElement('td');
+  timeCell.className = 'log-time-cell';
+  const time = document.createElement('time');
+  time.dateTime = log.timestamp || '';
+  time.title = log.timestamp || '';
+  time.textContent = formatLogTimestamp(log.timestamp);
+  timeCell.appendChild(time);
+  row.appendChild(timeCell);
+
+  // Context
+  const contextCell = document.createElement('td');
+  contextCell.className = 'log-context-cell';
+  if (log.runId === null || log.runId === undefined) {
+    if (log.ticketId === null) {
+      const systemSpan = document.createElement('span');
+      systemSpan.className = 'text-muted';
+      systemSpan.textContent = 'System';
+      contextCell.appendChild(systemSpan);
+    } else {
+      contextCell.appendChild(document.createTextNode('Ticket #' + log.ticketId));
+    }
+  } else {
+    const runLink = document.createElement('a');
+    runLink.href = '/runs/' + log.runId;
+    runLink.textContent = 'Run #' + log.runId;
+    contextCell.appendChild(runLink);
+    const sep = document.createElement('span');
+    sep.className = 'text-muted';
+    sep.textContent = ' \u00b7 Ticket #' + log.ticketId;
+    contextCell.appendChild(sep);
+  }
+  row.appendChild(contextCell);
+
+  // Agent
+  const agentCell = document.createElement('td');
+  agentCell.className = 'log-agent-cell';
+  if (log.agentId === null || log.agentId === undefined) {
+    agentCell.textContent = log.agentName;
+  } else {
+    agentCell.appendChild(document.createTextNode(log.agentName + ' '));
+    const idSpan = document.createElement('span');
+    idSpan.className = 'text-muted';
+    idSpan.textContent = '#' + log.agentId;
+    agentCell.appendChild(idSpan);
+  }
+  row.appendChild(agentCell);
+
+  // Type
+  const typeCell = document.createElement('td');
+  typeCell.className = 'log-type-cell';
+  typeCell.textContent = log.type;
+  row.appendChild(typeCell);
+
+  // Message + Workspace Action
+  const messageCell = document.createElement('td');
+  messageCell.className = 'log-message-cell';
+  const message = document.createElement('pre');
+  message.className = 'log-message';
+  message.textContent = log.message || '';
+  messageCell.appendChild(message);
+
+  if (log.workspaceAction) {
+    const details = document.createElement('details');
+    details.className = 'log-details';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Workspace Action';
+    details.appendChild(summary);
+    const actionPre = document.createElement('pre');
+    actionPre.className = 'log-json';
+    actionPre.textContent = JSON.stringify(log.workspaceAction, null, 2);
+    details.appendChild(actionPre);
+    messageCell.appendChild(details);
+  }
+  row.appendChild(messageCell);
+
+  logsBody.appendChild(row);
+}
+
+if (window.EventSource) {
+  const logEvents = new EventSource('/api/logs/events');
+  logEvents.addEventListener('log', event => {
+    appendLog(JSON.parse(event.data));
+  });
+}
+</script>

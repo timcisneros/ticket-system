@@ -1,0 +1,117 @@
+<h1><%= editAccount ? 'Edit Account' : 'New Account' %></h1>
+
+<% if (error) { %>
+  <div class="error-message"><%= error %></div>
+<% } %>
+
+<form action="<%= editAccount ? '/admin/users/' + editAccount.id : '/admin/users' %>" method="POST" class="ticket-form">
+
+  <% if (!editAccount) { %>
+    <div class="form-group">
+      <label>Account Type</label>
+      <div class="account-type-selector">
+        <label class="account-type-option <%= accountType === 'user' ? 'selected' : '' %>">
+          <input type="radio" name="accountType" value="user" <%= accountType === 'user' ? 'checked' : '' %> onchange="toggleAccountType('user', this)">
+          <span class="account-type-label">User</span>
+        </label>
+        <label class="account-type-option <%= accountType === 'agent' ? 'selected' : '' %>">
+          <input type="radio" name="accountType" value="agent" <%= accountType === 'agent' ? 'checked' : '' %> onchange="toggleAccountType('agent', this)">
+          <span class="account-type-label">Agent</span>
+        </label>
+      </div>
+    </div>
+  <% } else { %>
+    <input type="hidden" name="accountType" value="<%= editAccount.type %>">
+  <% } %>
+
+  <div id="user-fields" class="account-fields" style="<%= accountType === 'agent' ? 'display: none;' : '' %>">
+    <div class="form-group">
+      <label for="username">Username *</label>
+      <input type="text" id="username" name="username" value="<%= editAccount && editAccount.type === 'user' ? editAccount.username : '' %>" <%= accountType === 'user' ? 'required' : 'disabled' %>>
+    </div>
+
+    <div class="form-group">
+      <label for="password"><%= editAccount ? 'Password (leave blank to keep current)' : 'Password *' %></label>
+      <input type="password" id="password" name="password" <%= accountType === 'user' && !editAccount ? 'required' : '' %> <%= accountType === 'agent' ? 'disabled' : '' %>>
+    </div>
+  </div>
+
+  <div id="agent-fields" class="account-fields" style="<%= accountType === 'user' ? 'display: none;' : '' %>">
+    <div class="form-group">
+      <label for="agentName">Agent Name *</label>
+      <input type="text" id="agentName" name="agentName" value="<%= editAccount && editAccount.type === 'agent' ? editAccount.name : '' %>" <%= accountType === 'agent' ? 'required' : 'disabled' %>>
+    </div>
+
+    <div class="form-group">
+      <label for="model">OpenAI Model <%= hasOpenAIModelFallback ? '' : '*' %></label>
+      <select id="model" name="model" <%= accountType === 'agent' && !hasOpenAIModelFallback ? 'required' : '' %> <%= accountType === 'user' ? 'disabled' : '' %>>
+        <option value="">Select a model...</option>
+        <% models.forEach(function(modelOption) { %>
+          <option value="<%= modelOption %>" <%= editAccount && editAccount.model === modelOption ? 'selected' : '' %>>
+            <%= modelOption %>
+          </option>
+        <% }); %>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="apiKey">OpenAI API Key <%= editAccount && editAccount.type === 'agent' ? '(leave blank to keep current)' : (hasOpenAIApiKeyFallback ? '' : '*') %></label>
+      <input type="password" id="apiKey" name="apiKey" placeholder="sk-..." <%= accountType === 'agent' && !editAccount && !hasOpenAIApiKeyFallback ? 'required' : '' %> <%= accountType === 'user' ? 'disabled' : '' %>>
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label>Group Membership</label>
+    <div class="checkbox-group">
+      <% groups.forEach(function(group) { %>
+        <label class="checkbox-label">
+          <input type="checkbox" name="groupIds" value="<%= group.id %>"
+            <%= userGroups.includes(group.id) ? 'checked' : '' %>>
+          <%= group.name %>
+        </label>
+      <% }); %>
+    </div>
+    <% if (groups.length === 0) { %>
+      <p class="help-text">No groups available.</p>
+    <% } %>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn-submit"><%= editAccount ? 'Update Account' : 'Create Account' %></button>
+    <a href="/admin" class="btn-secondary">Cancel</a>
+  </div>
+</form>
+
+<script>
+function toggleAccountType(type, control) {
+  const userFields = document.getElementById('user-fields');
+  const agentFields = document.getElementById('agent-fields');
+  const editing = <%= editAccount ? 'true' : 'false' %>;
+
+  userFields.style.display = type === 'user' ? 'block' : 'none';
+  agentFields.style.display = type === 'agent' ? 'block' : 'none';
+
+  document.querySelectorAll('#user-fields input, #user-fields select, #user-fields textarea').forEach(field => {
+    field.disabled = type !== 'user';
+  });
+
+  document.querySelectorAll('#agent-fields input, #agent-fields select, #agent-fields textarea').forEach(field => {
+    field.disabled = type !== 'agent';
+  });
+
+  document.getElementById('username').required = type === 'user';
+  document.getElementById('password').required = type === 'user' && !editing;
+  document.getElementById('agentName').required = type === 'agent';
+  document.getElementById('model').required = type === 'agent' && !<%= hasOpenAIModelFallback ? 'true' : 'false' %>;
+  document.getElementById('apiKey').required = type === 'agent' && !editing && !<%= hasOpenAIApiKeyFallback ? 'true' : 'false' %>;
+
+  document.querySelectorAll('.account-type-option').forEach(option => {
+    option.classList.remove('selected');
+  });
+  if (control) {
+    control.closest('.account-type-option').classList.add('selected');
+  }
+}
+
+toggleAccountType('<%= accountType %>');
+</script>

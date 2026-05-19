@@ -1,0 +1,61 @@
+<h1>Agents</h1>
+
+<section class="admin-block">
+  <div class="agent-cards">
+    <% if (agentMetrics.length === 0) { %>
+      <div class="text-muted agent-cards__empty">No agents found.</div>
+    <% } %>
+
+    <% agentMetrics.forEach(metric => { %>
+      <%
+        const isTroubled = metric.failedRuns > metric.successfulRuns;
+      %>
+      <div class="agent-card <%= isTroubled ? 'is-troubled' : '' %>">
+        <div class="agent-card__header">
+          <div class="agent-card__name"><%= metric.agent.name %></div>
+          <div class="agent-card__model"><%= metric.agent.model || '-' %></div>
+        </div>
+        <div class="agent-card__metrics">
+          <div class="agent-metric">
+            <div class="agent-metric__label">Completed</div>
+            <div class="agent-metric__value"><%= metric.successfulRuns %></div>
+          </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Failed</div>
+            <div class="agent-metric__value <%= metric.failedRuns > 0 ? 'agent-metric__value--alert' : '' %>"><%= metric.failedRuns %></div>
+          </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Active</div>
+            <div class="agent-metric__value"><%= metric.activeRuns %></div>
+          </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Avg Duration</div>
+            <div class="agent-metric__value">
+              <% if (metric.averageDurationMs === null) { %>
+                -
+              <% } else { %>
+                <%= Math.round(metric.averageDurationMs) %>ms
+              <% } %>
+            </div>
+          </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Workspace</div>
+            <div class="agent-metric__value"><%= metric.totalWorkspaceActions %></div>
+          </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Last Active</div>
+            <div class="agent-metric__value">
+              <% if (metric.lastRunTimestamp) { %>
+                <% const d = new Date(metric.lastRunTimestamp); %>
+                <%= d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) %>
+                <%= d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) %>
+              <% } else { %>
+                -
+              <% } %>
+            </div>
+          </div>
+        </div>
+      </div>
+    <% }); %>
+  </div>
+</section>

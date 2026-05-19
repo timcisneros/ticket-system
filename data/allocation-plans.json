@@ -1,0 +1,62 @@
+[
+  {
+    "id": 1,
+    "ticketId": 5,
+    "ticketOpenedAt": "2026-05-19T07:18:27.135Z",
+    "mode": "owned_paths",
+    "status": "completed",
+    "createdAt": "2026-05-19T07:18:27.138Z",
+    "items": [
+      {
+        "allocationItemId": 1,
+        "allocationSubtask": "Produce your allocated output for ticket 5 inside your owned path only.",
+        "ownedOutputPaths": [
+          "allocated/ticket-5/agent-1/"
+        ],
+        "assignedAgentId": 1,
+        "status": "completed",
+        "createdAt": "2026-05-19T07:18:27.138Z"
+      },
+      {
+        "allocationItemId": 2,
+        "allocationSubtask": "Produce your allocated output for ticket 5 inside your owned path only.",
+        "ownedOutputPaths": [
+          "allocated/ticket-5/agent-5/"
+        ],
+        "assignedAgentId": 5,
+        "status": "completed",
+        "createdAt": "2026-05-19T07:18:27.138Z"
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "ticketId": 7,
+    "ticketOpenedAt": "2026-05-19T07:23:19.512Z",
+    "mode": "owned_paths",
+    "status": "failed",
+    "createdAt": "2026-05-19T07:23:19.514Z",
+    "items": [
+      {
+        "allocationItemId": 3,
+        "allocationSubtask": "Produce your allocated output for ticket 7 inside your owned path only.",
+        "ownedOutputPaths": [
+          "allocated/ticket-7/agent-1/"
+        ],
+        "assignedAgentId": 1,
+        "status": "failed",
+        "createdAt": "2026-05-19T07:23:19.514Z"
+      },
+      {
+        "allocationItemId": 4,
+        "allocationSubtask": "Produce your allocated output for ticket 7 inside your owned path only.",
+        "ownedOutputPaths": [
+          "allocated/ticket-7/agent-5/"
+        ],
+        "assignedAgentId": 5,
+        "status": "failed",
+        "createdAt": "2026-05-19T07:23:19.514Z"
+      }
+    ]
+  }
+]

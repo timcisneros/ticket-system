@@ -1,0 +1,415 @@
+<h1>Tickets</h1>
+
+<section class="admin-block">
+  <h2>Live Work</h2>
+  <div id="tickets-body" class="ticket-cards">
+    <% if (tickets.length === 0) { %>
+      <div class="text-muted ticket-cards__empty">No tickets yet.</div>
+    <% } %>
+
+    <% tickets.forEach(ticket => { %>
+      <%
+        const isFailed = ticket.status === 'failed';
+        const isInterrupted = ticket.lastRunStatus === 'interrupted';
+        const hasPartial = (isFailed || isInterrupted) && ticket.lastRunHadPartialMutations;
+        const accentClass = isFailed ? 'is-failed' : isInterrupted ? 'is-interrupted' : '';
+      %>
+      <div class="ticket-card <%= accentClass %>" data-ticket-id="<%= ticket.id %>">
+        <div class="ticket-card__header">
+          <a href="/tickets/<%= ticket.id %>" class="ticket-card__objective"><%= ticket.objective %></a>
+          <div class="ticket-card__status">
+            <% if (canUpdateTickets) { %>
+              <form class="status-form" data-ticket-id="<%= ticket.id %>">
+                <select name="status" class="status-select" aria-label="Ticket status">
+                  <% ticketStatuses.forEach(status => { %>
+                    <option value="<%= status %>" <%= ticket.status === status ? 'selected' : '' %>><%= status %></option>
+                  <% }) %>
+                </select>
+              </form>
+            <% } else { %>
+              <span class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span>
+            <% } %>
+            <% if (hasPartial) { %>
+              <span class="partial-run-indicator" title="Last run performed <%= ticket.lastRunPartialMutationCount %> workspace mutation<%= ticket.lastRunPartialMutationCount === 1 ? '' : 's' %> before failing">&#9888;</span>
+            <% } %>
+          </div>
+        </div>
+        <div class="ticket-card__meta">
+          <span><%= ticket.assignmentTargetName %></span>
+          <span><%= ticket.assignmentMode %></span>
+          <span><%= new Date(ticket.updatedAt).toLocaleString() %></span>
+        </div>
+        <% if (canUpdateTickets) { %>
+          <div class="ticket-card__actions">
+            <% if (ticket.status === 'open') { %>
+              <form class="assign-form" data-ticket-id="<%= ticket.id %>">
+                <select name="agentId" class="agent-assign-select" aria-label="Assign agent">
+                  <option value="">Select agent</option>
+                  <% agents.forEach(agent => { %>
+                    <option value="<%= agent.id %>" <%= ticket.assignmentTargetType === 'agent' && ticket.assignmentTargetId === agent.id ? 'selected' : '' %>><%= agent.name %></option>
+                  <% }) %>
+                </select>
+              </form>
+            <% } %>
+            <% if (ticket.activeRunIds && ticket.activeRunIds.length > 0) { %>
+              <% ticket.activeRunIds.forEach(runId => { %>
+                <button type="button" class="btn-small btn-danger" data-stop-run-id="<%= runId %>">Stop #<%= runId %></button>
+              <% }) %>
+            <% } %>
+            <% if (ticket.status !== 'open') { %>
+              <button type="button" class="btn-small" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' || ticket.lastRunStatus === 'interrupted' ? 'Retry' : 'Rerun' %></button>
+            <% } %>
+            <% if ((!ticket.activeRunIds || ticket.activeRunIds.length === 0) && ticket.status === 'open') { %>
+              <span class="text-muted">No actions</span>
+            <% } %>
+          </div>
+        <% } %>
+      </div>
+    <% }) %>
+  </div>
+</section>
+
+<script>
+const ticketsBody = document.getElementById('tickets-body');
+const canUpdateTickets = <%= canUpdateTickets ? 'true' : 'false' %>;
+const ticketStatuses = <%- JSON.stringify(ticketStatuses) %>;
+const agents = <%- JSON.stringify(agents.map(agent => ({ id: agent.id, name: agent.name }))) %>;
+let liveTicketsConnected = false;
+let ticketLoadPending = false;
+let ticketLoadQueued = false;
+
+function renderEmptyRow() {
+  const el = document.createElement('div');
+  el.className = 'text-muted ticket-cards__empty';
+  el.textContent = 'No tickets yet.';
+  ticketsBody.appendChild(el);
+}
+
+function ticketSignature(ticket) {
+  return [
+    ticket.objective,
+    ticket.assignmentTargetName,
+    ticket.assignmentMode,
+    ticket.status,
+    ticket.assignmentTargetId,
+    (ticket.activeRunIds || []).join(','),
+    ticket.lastRunStatus || '',
+    ticket.lastRunHadPartialMutations || false,
+    ticket.lastRunPartialMutationCount || 0,
+    ticket.updatedAt
+  ].join('|');
+}
+
+function createTicketCard(ticket) {
+  const card = document.createElement('div');
+  card.className = 'ticket-card';
+  const isFailed = ticket.status === 'failed';
+  const isInterrupted = ticket.lastRunStatus === 'interrupted';
+  if (isFailed) card.classList.add('is-failed');
+  if (isInterrupted) card.classList.add('is-interrupted');
+  card.dataset.ticketId = ticket.id;
+  card.dataset.ticketSignature = ticketSignature(ticket);
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'ticket-card__header';
+
+  const objectiveLink = document.createElement('a');
+  objectiveLink.href = '/tickets/' + ticket.id;
+  objectiveLink.className = 'ticket-card__objective';
+  objectiveLink.textContent = ticket.objective;
+  header.appendChild(objectiveLink);
+
+  const statusWrap = document.createElement('div');
+  statusWrap.className = 'ticket-card__status';
+
+  if (canUpdateTickets) {
+    const form = document.createElement('form');
+    form.className = 'status-form';
+    form.dataset.ticketId = ticket.id;
+
+    const select = document.createElement('select');
+    select.name = 'status';
+    select.className = 'status-select';
+    select.setAttribute('aria-label', 'Ticket status');
+
+    ticketStatuses.forEach(status => {
+      const option = document.createElement('option');
+      option.value = status;
+      option.textContent = status;
+      option.selected = ticket.status === status;
+      select.appendChild(option);
+    });
+
+    form.appendChild(select);
+    statusWrap.appendChild(form);
+  } else {
+    const badge = document.createElement('span');
+    badge.className = 'status-badge status-' + ticket.status;
+    badge.textContent = ticket.status;
+    statusWrap.appendChild(badge);
+  }
+
+  if ((isFailed || isInterrupted) && ticket.lastRunHadPartialMutations) {
+    const indicator = document.createElement('span');
+    indicator.className = 'partial-run-indicator';
+    indicator.title = 'Last run performed ' + ticket.lastRunPartialMutationCount + ' workspace mutation' + (ticket.lastRunPartialMutationCount === 1 ? '' : 's') + ' before failing';
+    indicator.innerHTML = '&#9888;';
+    statusWrap.appendChild(indicator);
+  }
+
+  header.appendChild(statusWrap);
+  card.appendChild(header);
+
+  // Meta
+  const meta = document.createElement('div');
+  meta.className = 'ticket-card__meta';
+
+  const targetSpan = document.createElement('span');
+  targetSpan.textContent = ticket.assignmentTargetName;
+  meta.appendChild(targetSpan);
+
+  const modeSpan = document.createElement('span');
+  modeSpan.textContent = ticket.assignmentMode;
+  meta.appendChild(modeSpan);
+
+  const updatedSpan = document.createElement('span');
+  updatedSpan.textContent = new Date(ticket.updatedAt).toLocaleString();
+  meta.appendChild(updatedSpan);
+
+  card.appendChild(meta);
+
+  // Actions
+  if (canUpdateTickets) {
+    const actions = document.createElement('div');
+    actions.className = 'ticket-card__actions';
+
+    if (ticket.status === 'open') {
+      const form = document.createElement('form');
+      form.className = 'assign-form';
+      form.dataset.ticketId = ticket.id;
+
+      const select = document.createElement('select');
+      select.name = 'agentId';
+      select.className = 'agent-assign-select';
+      select.setAttribute('aria-label', 'Assign agent');
+
+      const emptyOption = document.createElement('option');
+      emptyOption.value = '';
+      emptyOption.textContent = 'Select agent';
+      select.appendChild(emptyOption);
+
+      agents.forEach(agent => {
+        const option = document.createElement('option');
+        option.value = agent.id;
+        option.textContent = agent.name;
+        option.selected = ticket.assignmentTargetType === 'agent' && ticket.assignmentTargetId === agent.id;
+        select.appendChild(option);
+      });
+
+      form.appendChild(select);
+      actions.appendChild(form);
+    }
+
+    const activeRunIds = ticket.activeRunIds || [];
+    activeRunIds.forEach(runId => {
+      const stopButton = document.createElement('button');
+      stopButton.type = 'button';
+      stopButton.className = 'btn-small btn-danger';
+      stopButton.dataset.stopRunId = runId;
+      stopButton.textContent = 'Stop #' + runId;
+      actions.appendChild(stopButton);
+    });
+
+    if (ticket.status !== 'open') {
+      const rerunButton = document.createElement('button');
+      rerunButton.type = 'button';
+      rerunButton.className = 'btn-small';
+      rerunButton.dataset.rerunTicketId = ticket.id;
+      rerunButton.textContent = ticket.status === 'failed' || ticket.lastRunStatus === 'interrupted' ? 'Retry' : 'Rerun';
+      actions.appendChild(rerunButton);
+    }
+
+    if (activeRunIds.length === 0 && ticket.status === 'open') {
+      const noAction = document.createElement('span');
+      noAction.className = 'text-muted';
+      noAction.textContent = 'No actions';
+      actions.appendChild(noAction);
+    }
+
+    card.appendChild(actions);
+  }
+
+  return card;
+}
+
+function renderTickets(tickets) {
+  if (tickets.length === 0) {
+    ticketsBody.textContent = '';
+    renderEmptyRow();
+    return;
+  }
+
+  const existingCards = new Map(
+    Array.from(ticketsBody.querySelectorAll('.ticket-card[data-ticket-id]')).map(card => [card.dataset.ticketId, card])
+  );
+  const fragment = document.createDocumentFragment();
+
+  tickets.forEach(ticket => {
+    const ticketId = String(ticket.id);
+    const existingCard = existingCards.get(ticketId);
+    const nextSignature = ticketSignature(ticket);
+
+    if (existingCard && existingCard.dataset.ticketSignature === nextSignature) {
+      fragment.appendChild(existingCard);
+    } else {
+      fragment.appendChild(createTicketCard(ticket));
+    }
+
+    existingCards.delete(ticketId);
+  });
+
+  ticketsBody.replaceChildren(fragment);
+}
+
+async function loadTickets() {
+  if (ticketLoadPending) {
+    ticketLoadQueued = true;
+    return;
+  }
+
+  ticketLoadPending = true;
+
+  try {
+    const response = await fetch('/api/tickets', {
+      headers: { Accept: 'application/json' }
+    });
+
+    if (!response.ok) return;
+
+    const data = await response.json();
+    renderTickets(data.tickets);
+  } finally {
+    ticketLoadPending = false;
+
+    if (ticketLoadQueued) {
+      ticketLoadQueued = false;
+      loadTickets();
+    }
+  }
+}
+
+async function updateTicketStatus(ticketId, status, select) {
+  select.disabled = true;
+
+  try {
+    const response = await fetch('/api/tickets/' + encodeURIComponent(ticketId) + '/status', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({ status })
+    });
+
+    if (!response.ok) {
+      await loadTickets();
+      return;
+    }
+
+    if (!liveTicketsConnected) {
+      await loadTickets();
+    }
+  } finally {
+    select.disabled = false;
+  }
+}
+
+ticketsBody.addEventListener('change', event => {
+  if (event.target.matches('.status-select')) {
+    const form = event.target.closest('.status-form');
+    if (!form) return;
+
+    updateTicketStatus(form.dataset.ticketId, event.target.value, event.target);
+  }
+
+  if (event.target.matches('.agent-assign-select') && event.target.value) {
+    const form = event.target.closest('.assign-form');
+    if (!form) return;
+
+    assignTicketAgent(form.dataset.ticketId, event.target.value, event.target);
+  }
+});
+
+ticketsBody.addEventListener('click', event => {
+  const stopButton = event.target.closest('[data-stop-run-id]');
+  if (stopButton) {
+    stopRun(stopButton.dataset.stopRunId, stopButton);
+    return;
+  }
+
+  const rerunButton = event.target.closest('[data-rerun-ticket-id]');
+  if (rerunButton) {
+    rerunTicket(rerunButton.dataset.rerunTicketId, rerunButton);
+  }
+});
+
+async function assignTicketAgent(ticketId, agentId, select) {
+  select.disabled = true;
+
+  try {
+    const response = await fetch('/api/tickets/' + encodeURIComponent(ticketId) + '/assignment', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({ agentId })
+    });
+
+    if (!response.ok || !liveTicketsConnected) {
+      await loadTickets();
+    }
+  } finally {
+    select.disabled = false;
+  }
+}
+
+async function postControl(url, button) {
+  button.disabled = true;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Accept: 'application/json' }
+    });
+
+    if (!response.ok || !liveTicketsConnected) {
+      await loadTickets();
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function stopRun(runId, button) {
+  postControl('/api/runs/' + encodeURIComponent(runId) + '/stop', button);
+}
+
+function rerunTicket(ticketId, button) {
+  postControl('/api/tickets/' + encodeURIComponent(ticketId) + '/rerun', button);
+}
+
+if (window.EventSource) {
+  const ticketEvents = new EventSource('/api/tickets/events');
+  ticketEvents.addEventListener('open', () => {
+    liveTicketsConnected = true;
+  });
+  ticketEvents.addEventListener('tickets-changed', () => {
+    loadTickets();
+  });
+  ticketEvents.addEventListener('error', () => {
+    liveTicketsConnected = false;
+  });
+}
+</script>

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ticket System</title>
+  <% if (assets.css) { %>
+    <link rel="stylesheet" href="<%= assets.css %>">
+  <% } %>
+  <% if (assets.js) { %>
+    <script type="module" src="<%= assets.js %>"></script>
+  <% } %>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="/" class="nav-brand">Ticket System</a>
+      <ul class="nav-links">
+        <% if (typeof user !== 'undefined' && user) { %>
+          <li><a href="/">New Ticket</a></li>
+	          <li><a href="/tickets">Tickets</a></li>
+	          <% if (userPermissions.includes('ticket:read')) { %>
+	            <li><a href="/agents">Agents</a></li>
+	            <li><a href="/logs">Logs</a></li>
+	          <% } %>
+          <% if (userPermissions.includes('workspace:read')) { %>
+            <li><a href="/workspace">Workspace</a></li>
+          <% } %>
+          <% if (userPermissions.includes('user:read')) { %>
+            <li><a href="/admin">Admin</a></li>
+          <% } %>
+          <li><a href="/logout">Logout</a></li>
+        <% } else { %>
+          <li><a href="/login">Login</a></li>
+        <% } %>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="container">
+    <%- body %>
+  </main>
+</body>
+</html>
