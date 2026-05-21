@@ -2893,5 +2893,661 @@
     "error": null,
     "isRecovery": false,
     "recoveredHistoryId": null
+  },
+  {
+    "id": 107,
+    "timestamp": "2026-05-19T20:20:36.462050938Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "1"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "1",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 108,
+    "timestamp": "2026-05-19T20:20:36.474620153Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "2"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "2",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 109,
+    "timestamp": "2026-05-19T20:20:36.485661016Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "3"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "3",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 110,
+    "timestamp": "2026-05-19T20:20:36.495571135Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "4"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "4",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 111,
+    "timestamp": "2026-05-19T20:20:36.506311315Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "5"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "5",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 112,
+    "timestamp": "2026-05-19T20:20:36.516830660Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "6"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "6",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 113,
+    "timestamp": "2026-05-19T20:20:36.525175657Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "7"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "7",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 114,
+    "timestamp": "2026-05-19T20:20:36.534846140Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "8"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "8",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 115,
+    "timestamp": "2026-05-19T20:20:39.211486273Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "9"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "9",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 116,
+    "timestamp": "2026-05-19T20:20:39.219544361Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "10"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "10",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 117,
+    "timestamp": "2026-05-19T20:20:39.228901176Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "11"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "11",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 118,
+    "timestamp": "2026-05-19T20:20:39.236548553Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "12"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "12",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 119,
+    "timestamp": "2026-05-19T20:20:39.244612135Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "13"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "13",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 120,
+    "timestamp": "2026-05-19T20:20:39.253111409Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "14"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "14",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 121,
+    "timestamp": "2026-05-19T20:20:39.262848546Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "15"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "15",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 122,
+    "timestamp": "2026-05-19T20:20:39.270671937Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 1,
+    "operation": "createFolder",
+    "args": {
+      "path": "16"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "16",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 123,
+    "timestamp": "2026-05-19T20:20:56.835881454Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "1"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "1",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 124,
+    "timestamp": "2026-05-19T20:20:56.847094179Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "2"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "2",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 125,
+    "timestamp": "2026-05-19T20:20:56.856466406Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "3"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "3",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 126,
+    "timestamp": "2026-05-19T20:20:56.865555834Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "4"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "4",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 127,
+    "timestamp": "2026-05-19T20:20:56.874253590Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "5"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "5",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 128,
+    "timestamp": "2026-05-19T20:20:56.883566331Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "6"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "6",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 129,
+    "timestamp": "2026-05-19T20:20:56.893943502Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "7"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "7",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 130,
+    "timestamp": "2026-05-19T20:20:56.902143012Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 12,
+    "step": 2,
+    "operation": "createFolder",
+    "args": {
+      "path": "8"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "8",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
   }
 ]

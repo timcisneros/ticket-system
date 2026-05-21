@@ -97,5 +97,38 @@
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:36:02.245Z",
     "updatedAt": "2026-05-19T07:36:23.430Z"
+  },
+  {
+    "id": 10,
+    "objective": "Create 25 folders named 1-25",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "in_progress",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T20:20:33.035Z",
+    "updatedAt": "2026-05-19T21:32:23.288Z"
+  },
+  {
+    "id": 11,
+    "objective": "1. Read ops-demo/src/index.js, edit to add subtract(a,b) and divide(a,b) functions 2. Read ops-demo/tests/test.js, edit to add subtract and divide test cases 3. Read ops-demo/docs/README.md, update with subtract/divide usage examples 4. Read ops-demo/docs/api/API.md, add subtract and divide endpoint docs",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "failed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T21:31:10.639Z",
+    "updatedAt": "2026-05-19T21:31:26.812Z"
+  },
+  {
+    "id": 12,
+    "objective": "Test ticket",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 1,
+    "assignmentMode": "individual",
+    "status": "completed",
+    "createdBy": "admin",
+    "createdAt": "2026-05-19T21:32:10.604Z",
+    "updatedAt": "2026-05-19T21:32:15.250Z"
   }
 ]

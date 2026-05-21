@@ -4,7 +4,7 @@ const fs = require('fs');
 const argon2 = require('argon2');
 const crypto = require('crypto');
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3099;
 
 // Data file paths
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, 'data');
@@ -3348,6 +3348,10 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   }, request.session.userId));
 });
 
+fastify.get('/api/health', async (request, reply) => {
+   return { status: 'ok', dataDir: DATA_DIR, workspaceRoot: WORKSPACE_ROOT, port: PORT, uptime: Math.floor(process.uptime()) };
+});
+
 fastify.get('/api/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
@@ -3608,6 +3612,20 @@ fastify.get('/api/logs', { preHandler: fastify.requireAuth }, async (request, re
   }
 
   return { logs: readLogs() };
+});
+
+fastify.get('/api/export', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  return {
+    tickets: readTickets(),
+    runs: readRuns(),
+    logs: readLogs(),
+    history: readOperationHistory(),
+    plans: readAllocationPlans()
+  };
 });
 
 fastify.get('/api/logs/events', { preHandler: fastify.requireAuth }, async (request, reply) => {

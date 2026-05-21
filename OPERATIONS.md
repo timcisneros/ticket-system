@@ -27,6 +27,17 @@ the runtime:
 These are **infrastructure guarantees**. They are not negotiable through
 prompt changes and they do not need workarounds.
 
+**Important: All guarantees above describe recorded operations, not
+workspace materialization.** Replay, history, and mutation accounting
+tell you what the model *requested* and what the substrate *recorded*.
+They do not guarantee the file currently exists on disk. A writeFile
+recorded in run R7 means "the substrate accepted a writeFile request
+for path X in run R7." It does not mean "path X is on disk right now."
+The two layers can drift — across server instances, after workspace
+resets, or due to external filesystem changes. The substrate surfaces
+this drift honestly (ENOENT, stat mismatch). It does not silently
+reconcile.
+
 Everything below the line in this document is **operational authoring
 discipline** — practices that make tickets perform well within the bounded
 runtime. They are not infrastructure. They are operator skill.

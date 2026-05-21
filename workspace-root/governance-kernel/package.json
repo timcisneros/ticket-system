@@ -1,0 +1,11 @@
+{
+  "name": "governance-kernel",
+  "version": "0.2.0",
+  "description": "Lightweight framework for defining and enforcing project rules",
+  "main": "./src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/ tests/"
+  },
+  "license": "MIT"
+}
