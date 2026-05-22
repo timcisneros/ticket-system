@@ -25,6 +25,7 @@ const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
 const REPLAY_SNAPSHOTS_DIR = path.join(DATA_DIR, 'replay-snapshots');
 const PROTECTED_PATHS_FILE = path.join(__dirname, 'config', 'protected-paths.json');
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'closed'];
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, 'workspace-root'));
@@ -676,6 +677,7 @@ function normalizeAgents(agents) {
     seenAgentIds.add(agentId);
     agent.id = agentId;
     agent.type = 'agent';
+    agent.provider = PROVIDERS.includes(agent.provider) ? agent.provider : 'openai';
     return true;
   });
 }
@@ -1407,9 +1409,11 @@ function renderAdminUserForm(reply, request, options = {}) {
     accountType,
     groups: getMembershipGroups(),
     userGroups,
+    providers: PROVIDERS,
     models: MODELS,
     hasOpenAIApiKeyFallback: Boolean(String(process.env.OPENAI_API_KEY || '').trim()),
     hasOpenAIModelFallback: Boolean(String(process.env.OPENAI_MODEL || '').trim()),
+    hasOllamaModelFallback: Boolean(String(process.env.OLLAMA_MODEL || '').trim()),
     error: options.error || null
   }, request.session.userId));
 }
@@ -1479,15 +1483,15 @@ function updateRunReplaySnapshot(runId, updater) {
   return writeRunReplaySnapshot(runId, nextSnapshot);
 }
 
-function createRunReplaySnapshot(run, ticket, agent, openAIConfig, runtimeEnvelope, systemInstructionSnapshot) {
+function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, systemInstructionSnapshot) {
   updateRunReplaySnapshot(run.id, currentSnapshot => currentSnapshot || {
     version: 1,
     runId: run.id,
     ticketId: run.ticketId,
     assignedAgentId: run.agentId,
     agentNameSnapshot: run.agentName,
-    provider: agent.provider || 'openai',
-    model: openAIConfig.model,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
     runtimeEnvelope,
     ticketObjectiveSnapshot: ticket.objective,
     systemInstructionSnapshot,
@@ -1604,7 +1608,7 @@ function getRemainingRunTimeMs(startedAtMs, limits) {
   return Math.max(0, limits.maxRuntimeDurationMs - (Date.now() - startedAtMs));
 }
 
-async function callOpenAIWithRunTimeout(run, agent, input, startedAtMs, limits, options = {}) {
+async function callModelProviderWithRunTimeout(run, agent, input, startedAtMs, limits, options = {}) {
   const remainingMs = getRemainingRunTimeMs(startedAtMs, limits);
 
   if (remainingMs <= 0) {
@@ -1618,7 +1622,7 @@ async function callOpenAIWithRunTimeout(run, agent, input, startedAtMs, limits, 
   const timeout = setTimeout(() => controller.abort(), remainingMs);
 
   try {
-    return await callOpenAI(agent, input, {
+    return await callModelProvider(agent, input, {
       signal: controller.signal,
       onRequest: options.onRequest
     });
@@ -2509,6 +2513,112 @@ function countMutatingActions(actions) {
   ).length;
 }
 
+function parseTicketShapeSuggestion(text) {
+  try {
+    const parsed = JSON.parse(text);
+    const suggestedObjective = typeof parsed.suggestedObjective === 'string'
+      ? parsed.suggestedObjective.trim()
+      : '';
+    const expectedOutputs = Array.isArray(parsed.expectedOutputs)
+      ? parsed.expectedOutputs.map(item => String(item || '').trim()).filter(Boolean).slice(0, 8)
+      : [];
+    const decomposition = Array.isArray(parsed.decomposition)
+      ? parsed.decomposition.map(item => String(item || '').trim()).filter(Boolean).slice(0, 8)
+      : [];
+    const warnings = Array.isArray(parsed.warnings)
+      ? parsed.warnings.map(item => String(item || '').trim()).filter(Boolean).slice(0, 5)
+      : [];
+
+    return {
+      suggestedObjective,
+      expectedOutputs,
+      decomposition,
+      warnings,
+      tooBroadForOneRun: parsed.tooBroadForOneRun === true,
+      groupModeFit: typeof parsed.groupModeFit === 'string' ? parsed.groupModeFit.trim() : '',
+      parseError: null
+    };
+  } catch (error) {
+    return {
+      suggestedObjective: '',
+      expectedOutputs: [],
+      decomposition: [],
+      warnings: ['The suggestion response was not valid JSON.'],
+      tooBroadForOneRun: false,
+      groupModeFit: '',
+      parseError: error.message
+    };
+  }
+}
+
+function getTicketShapeAgent(body = {}) {
+  const assignmentTargetType = body.assignmentTargetType === 'agent' ? 'agent' : null;
+  const assignmentTargetId = parseInt(body.assignmentTargetId, 10);
+
+  if (assignmentTargetType === 'agent' && !Number.isNaN(assignmentTargetId)) {
+    const selectedAgent = readAgents().find(agent => agent.id === assignmentTargetId);
+    if (selectedAgent) return selectedAgent;
+  }
+
+  return {
+    id: null,
+    name: 'Ticket shaping assistant',
+    provider: process.env.OLLAMA_MODEL && !process.env.OPENAI_MODEL ? 'ollama' : 'openai',
+    apiKey: process.env.OPENAI_API_KEY || '',
+    model: process.env.OPENAI_MODEL || process.env.OLLAMA_MODEL || ''
+  };
+}
+
+async function suggestBoundedTicketObjective(body = {}) {
+  const objective = String(body.objective || '').trim();
+  if (!objective) {
+    const error = new Error('Objective is required for ticket shaping');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const agent = getTicketShapeAgent(body);
+  const input = [
+    {
+      role: 'system',
+      content: [
+        'You help an operator shape a ticket before execution.',
+        'The system works best with small concrete additive tasks that fit bounded execution.',
+        `A model response can perform at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} mutating workspace actions before verification.`,
+        'Do not create a plan for autonomous execution.',
+        'Do not spawn tickets.',
+        'Suggest wording only. The operator must decide whether to accept or edit it.',
+        'Prefer concrete expected files, paths, or outputs.',
+        'For group or dynamic mode, call out whether the work has independent outputs/scopes.',
+        'Respond only as JSON with this shape:',
+        '{"suggestedObjective":"clear bounded objective","expectedOutputs":["output path or result"],"decomposition":["smaller additive ticket if needed"],"warnings":["risk or vague wording"],"tooBroadForOneRun":true|false,"groupModeFit":"short assessment"}'
+      ].join('\n')
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        objective,
+        assignmentTargetType: body.assignmentTargetType || 'agent',
+        assignmentMode: body.assignmentMode || 'individual',
+        maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE
+      })
+    }
+  ];
+
+  const response = await callOpenAI(agent, input);
+  const suggestion = parseTicketShapeSuggestion(response.text);
+
+  if (!suggestion.suggestedObjective && !suggestion.parseError) {
+    suggestion.warnings.push('The suggestion did not include a clearer objective.');
+  }
+
+  return {
+    ...suggestion,
+    providerRequestId: response.responsePayload && response.responsePayload.requestId || null,
+    usage: response.usage || null
+  };
+}
+
 function createStructuredWorkspaceError(message, code, kind, detail = {}) {
   const error = new Error(message);
   error.code = code;
@@ -2566,6 +2676,40 @@ function getAgentOpenAIConfig(agent) {
   }
 
   return { apiKey, model };
+}
+
+function getAgentOllamaConfig(agent) {
+  const model = String(agent.model || process.env.OLLAMA_MODEL || '').trim();
+  const baseUrl = String(agent.baseUrl || process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').trim().replace(/\/+$/, '');
+
+  if (!model) {
+    throw new Error('Ollama model is missing');
+  }
+
+  return { provider: 'ollama', model, baseUrl };
+}
+
+function getAgentProviderConfig(agent) {
+  const provider = PROVIDERS.includes(agent && agent.provider) ? agent.provider : 'openai';
+
+  if (provider === 'ollama') {
+    return getAgentOllamaConfig(agent);
+  }
+
+  return {
+    provider: 'openai',
+    ...getAgentOpenAIConfig(agent)
+  };
+}
+
+function hasProviderModelFallback(provider) {
+  return provider === 'ollama'
+    ? Boolean(String(process.env.OLLAMA_MODEL || '').trim())
+    : Boolean(String(process.env.OPENAI_MODEL || '').trim());
+}
+
+function hasProviderApiKeyFallback(provider) {
+  return provider === 'ollama' || Boolean(String(process.env.OPENAI_API_KEY || '').trim());
 }
 
 function providerRequestId(headers) {
@@ -2719,6 +2863,8 @@ async function callOpenAI(agent, input, options = {}) {
   return {
     text,
     usage: data.usage,
+    provider: 'openai',
+    model: openAIConfig.model,
     requestPayload: requestSnapshot,
     responsePayload: {
       ok: response.ok,
@@ -2728,6 +2874,170 @@ async function callOpenAI(agent, input, options = {}) {
       body: data
     }
   };
+}
+
+async function callOllama(agent, input, options = {}) {
+  const ollamaConfig = getAgentOllamaConfig(agent);
+  const messages = input.map(item => ({
+    role: item.role || 'user',
+    content: String(item.content || '')
+  }));
+  const responseBody = {
+    model: ollamaConfig.model,
+    messages,
+    stream: false,
+    format: 'json'
+  };
+  const requestSnapshot = {
+    url: `${ollamaConfig.baseUrl}/api/chat`,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: responseBody
+  };
+
+  if (typeof options.onRequest === 'function') {
+    options.onRequest(requestSnapshot);
+  }
+
+  let response = null;
+  try {
+    response = await fetch(`${ollamaConfig.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      signal: options.signal,
+      body: JSON.stringify(responseBody)
+    });
+  } catch (fetchError) {
+    const error = createProviderError(fetchError.message || 'Ollama request failed before response', 'OLLAMA_TRANSPORT_ERROR', {
+      phase: 'request',
+      provider: 'ollama',
+      model: ollamaConfig.model,
+      baseUrl: ollamaConfig.baseUrl
+    });
+    error.providerRequestPayload = requestSnapshot;
+    throw error;
+  }
+
+  const responseHeaders = Object.fromEntries(response.headers.entries());
+  const requestId = providerRequestId(responseHeaders);
+  const responseText = await response.text();
+  let data = null;
+
+  if (responseText) {
+    try {
+      data = JSON.parse(responseText);
+    } catch (error) {
+      const providerError = createProviderError(!response.ok
+        ? `Ollama request failed with HTTP ${response.status}: ${responseText.slice(0, 240)}`
+        : 'Ollama response was not valid JSON', 'OLLAMA_MALFORMED_RESPONSE', {
+        phase: 'response_parse',
+        provider: 'ollama',
+        status: response.status,
+        requestId
+      });
+      providerError.providerRequestPayload = requestSnapshot;
+      providerError.providerResponsePayload = {
+        ok: response.ok,
+        status: response.status,
+        requestId,
+        headers: sanitizeSnapshotValue(responseHeaders),
+        body: responseText.slice(0, 2000)
+      };
+      throw providerError;
+    }
+  }
+
+  if (!response.ok) {
+    const errorMessage = data && data.error
+      ? String(data.error)
+      : `Ollama request failed with HTTP ${response.status}`;
+    const error = createProviderError(errorMessage, 'OLLAMA_HTTP_ERROR', {
+      phase: 'response_status',
+      provider: 'ollama',
+      status: response.status,
+      requestId
+    });
+    error.providerRequestPayload = requestSnapshot;
+    error.providerResponsePayload = {
+      ok: response.ok,
+      status: response.status,
+      requestId,
+      headers: sanitizeSnapshotValue(responseHeaders),
+      body: data || responseText
+    };
+    throw error;
+  }
+
+  if (!data || typeof data !== 'object') {
+    const error = createProviderError('Ollama response was empty', 'OLLAMA_EMPTY_RESPONSE', {
+      phase: 'response_body',
+      provider: 'ollama',
+      status: response.status,
+      requestId
+    });
+    error.providerRequestPayload = requestSnapshot;
+    error.providerResponsePayload = {
+      ok: response.ok,
+      status: response.status,
+      requestId,
+      headers: sanitizeSnapshotValue(responseHeaders),
+      body: data
+    };
+    throw error;
+  }
+
+  const text = data.message && typeof data.message.content === 'string'
+    ? data.message.content
+    : typeof data.response === 'string'
+      ? data.response
+      : '';
+
+  if (!String(text || '').trim()) {
+    const error = createProviderError('Ollama response did not include model output', 'OLLAMA_NO_OUTPUT', {
+      phase: 'model_output',
+      provider: 'ollama',
+      status: response.status,
+      requestId
+    });
+    error.providerRequestPayload = requestSnapshot;
+    error.providerResponsePayload = {
+      ok: response.ok,
+      status: response.status,
+      requestId,
+      headers: sanitizeSnapshotValue(responseHeaders),
+      body: data
+    };
+    throw error;
+  }
+
+  return {
+    text,
+    usage: {
+      prompt_eval_count: data.prompt_eval_count || null,
+      eval_count: data.eval_count || null,
+      total_duration: data.total_duration || null
+    },
+    provider: 'ollama',
+    model: ollamaConfig.model,
+    requestPayload: requestSnapshot,
+    responsePayload: {
+      ok: response.ok,
+      status: response.status,
+      requestId,
+      headers: sanitizeSnapshotValue(responseHeaders),
+      body: data
+    }
+  };
+}
+
+async function callModelProvider(agent, input, options = {}) {
+  const provider = PROVIDERS.includes(agent && agent.provider) ? agent.provider : 'openai';
+  if (provider === 'ollama') return callOllama(agent, input, options);
+  return callOpenAI(agent, input, options);
 }
 
 function assertOnlyKeys(value, allowedKeys, label) {
@@ -3162,6 +3472,7 @@ async function runAgentTicket(runId) {
   });
   updateTicketInProgressForRun(run);
   let currentProviderRequestPersisted = false;
+  let providerConfig = null;
 
   try {
     const ticket = readTickets().find(item => item.id === run.ticketId);
@@ -3169,10 +3480,10 @@ async function runAgentTicket(runId) {
 
     if (!ticket) throw new Error('Ticket not found');
     if (!agent) throw new Error('Agent not found');
-    const openAIConfig = getAgentOpenAIConfig(agent);
+    providerConfig = getAgentProviderConfig(agent);
     const runtimeEnvelope = buildRuntimeEnvelope(run);
     const initialInput = buildAgentPrompt(ticket, runtimeEnvelope, []);
-    createRunReplaySnapshot(run, ticket, agent, openAIConfig, runtimeEnvelope, initialInput[0].content);
+    createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
     appendRunLog(run, 'run:runtime', JSON.stringify(runtimeEnvelope));
 
     let actionResults = [];
@@ -3194,10 +3505,10 @@ async function runAgentTicket(runId) {
 
       const currentEnvelope = buildRuntimeEnvelope(run, step);
       const input = buildAgentPrompt(ticket, currentEnvelope, actionResults);
-      appendRunLog(run, 'model:request', `OpenAI request sent with model ${openAIConfig.model}`);
+      appendRunLog(run, 'model:request', `${providerConfig.provider} request sent with model ${providerConfig.model}`);
       modelRequestCount += 1;
       currentProviderRequestPersisted = false;
-      const modelResponse = await callOpenAIWithRunTimeout(run, agent, input, runStartedAtMs, limits, {
+      const modelResponse = await callModelProviderWithRunTimeout(run, agent, input, runStartedAtMs, limits, {
         onRequest: requestPayload => {
           appendRunReplaySnapshotItem(run.id, 'providerRequests', requestPayload);
           currentProviderRequestPersisted = true;
@@ -3218,6 +3529,8 @@ async function runAgentTicket(runId) {
       appendRunReplaySnapshotItem(run.id, 'modelResponses', {
         text: modelText,
         usage: modelResponse.usage || null,
+        provider: modelResponse.provider || providerConfig.provider,
+        model: modelResponse.model || providerConfig.model,
         providerResponsePayload: modelResponse.responsePayload
       });
 
@@ -3462,6 +3775,8 @@ async function runAgentTicket(runId) {
     if (error.providerResponsePayload) {
       appendRunReplaySnapshotItem(run.id, 'modelResponses', {
         error: error.message,
+        provider: providerConfig ? providerConfig.provider : null,
+        model: providerConfig ? providerConfig.model : null,
         providerResponsePayload: error.providerResponsePayload
       });
     }
@@ -4072,6 +4387,20 @@ fastify.get('/api/tickets', { preHandler: fastify.requireAuth }, async (request,
     agents: readAgents().map(agent => ({ id: agent.id, name: agent.name })),
     ticketStatuses: TICKET_STATUSES
   };
+});
+
+fastify.post('/api/tickets/shape-objective', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:create')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  try {
+    return await suggestBoundedTicketObjective(request.body || {});
+  } catch (error) {
+    reply.code(error.statusCode || 400);
+    return { error: error.message || 'Ticket shaping failed' };
+  }
 });
 
 fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -4830,9 +5159,11 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     groupsWithPermissions,
     tickets,
     permissions: allPermissions,
+    providers: PROVIDERS,
     models: MODELS,
     hasOpenAIApiKeyFallback: Boolean(String(process.env.OPENAI_API_KEY || '').trim()),
     hasOpenAIModelFallback: Boolean(String(process.env.OPENAI_MODEL || '').trim()),
+    hasOllamaModelFallback: Boolean(String(process.env.OLLAMA_MODEL || '').trim()),
     user: request.user,
     resetError: request.query.resetError || null,
     resetSuccess: request.query.resetSuccess || null
@@ -4874,13 +5205,16 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
   const { accountType, username, password, groupIds, agentName, apiKey, model } = request.body;
 
   if (accountType === 'agent') {
-    const hasApiKey = Boolean(apiKey && apiKey.trim()) || Boolean(String(process.env.OPENAI_API_KEY || '').trim());
-    const hasModel = Boolean(model && model.trim()) || Boolean(String(process.env.OPENAI_MODEL || '').trim());
+    const provider = PROVIDERS.includes(request.body.provider) ? request.body.provider : 'openai';
+    const hasApiKey = provider === 'ollama' || Boolean(apiKey && apiKey.trim()) || hasProviderApiKeyFallback(provider);
+    const hasModel = Boolean(model && model.trim()) || hasProviderModelFallback(provider);
 
     if (!agentName || !hasApiKey || !hasModel) {
       return renderAdminUserForm(reply, request, {
         accountType: 'agent',
-        error: 'Agent name, API key, and model are required unless OpenAI env fallbacks are configured'
+        error: provider === 'ollama'
+          ? 'Agent name and Ollama model are required unless OLLAMA_MODEL is configured'
+          : 'Agent name, API key, and model are required unless OpenAI env fallbacks are configured'
       });
     }
 
@@ -4907,7 +5241,7 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
       id: agents.length > 0 ? Math.max(...agents.map(a => a.id)) + 1 : 1,
       name: agentName.trim(),
       type: 'agent',
-      provider: 'openai',
+      provider,
       model: model ? model.trim() : '',
       apiKey: apiKey ? apiKey.trim() : '',
       createdAt: new Date().toISOString()
@@ -5002,7 +5336,8 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
   const { accountType, username, password, groupIds, agentName, apiKey, model } = request.body;
 
   if (accountType === 'agent') {
-    const hasModel = Boolean(model && model.trim()) || Boolean(String(process.env.OPENAI_MODEL || '').trim());
+    const provider = PROVIDERS.includes(request.body.provider) ? request.body.provider : 'openai';
+    const hasModel = Boolean(model && model.trim()) || hasProviderModelFallback(provider);
 
     if (!agentName || !hasModel) {
       const agents = readAgents();
@@ -5011,7 +5346,9 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
       return renderAdminUserForm(reply, request, {
         editAccount,
         accountType: 'agent',
-        error: 'Agent name and model are required unless OPENAI_MODEL is configured'
+        error: provider === 'ollama'
+          ? 'Agent name and Ollama model are required unless OLLAMA_MODEL is configured'
+          : 'Agent name and model are required unless OPENAI_MODEL is configured'
       });
     }
 
@@ -5042,6 +5379,7 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
     }
 
     agents[agentIndex].name = agentName.trim();
+    agents[agentIndex].provider = provider;
     agents[agentIndex].model = model ? model.trim() : '';
 
     if (apiKey && apiKey.trim()) {

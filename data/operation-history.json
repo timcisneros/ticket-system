@@ -3661,5 +3661,32 @@
     "error": null,
     "isRecovery": false,
     "recoveredHistoryId": null
+  },
+  {
+    "id": 135,
+    "timestamp": "2026-05-22T17:04:01.580909082Z",
+    "ticketId": 13,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 16,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "this_is_a_test"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "this_is_a_test",
+      "status": "created"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
   }
 ]

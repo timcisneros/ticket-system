@@ -24,7 +24,7 @@
             <td><strong><%= account.type === 'agent' ? account.name : account.username %></strong></td>
             <td>
               <% if (account.type === 'agent') { %>
-                <%= account.model %>
+                <%= account.provider || 'openai' %> · <%= account.model || '-' %>
               <% } else { %>
                 -
               <% } %>
@@ -86,18 +86,28 @@
       </div>
 
       <div class="form-group">
-        <label for="model">OpenAI Model <%= hasOpenAIModelFallback ? '' : '*' %></label>
-        <select id="model" name="model">
-          <option value="">Select a model</option>
-          <% models.forEach(function(modelOption) { %>
-            <option value="<%= modelOption %>"><%= modelOption %></option>
-          <% }); %>
+        <label for="provider">Provider</label>
+        <select id="provider" name="provider">
+          <option value="openai">OpenAI</option>
+          <option value="ollama">Ollama local server</option>
         </select>
+        <p class="form-hint">Ollama uses <code>OLLAMA_BASE_URL</code> or <code>http://127.0.0.1:11434</code>.</p>
+      </div>
+
+      <div class="form-group">
+        <label for="model">Model</label>
+        <input id="model" name="model" list="model-options" placeholder="gpt-4.1-mini or llama3.1">
+        <datalist id="model-options">
+          <% models.forEach(function(modelOption) { %>
+            <option value="<%= modelOption %>"></option>
+          <% }); %>
+        </datalist>
       </div>
 
       <div class="form-group">
         <label for="apiKey">OpenAI API Key <%= hasOpenAIApiKeyFallback ? '' : '*' %></label>
         <input type="password" id="apiKey" name="apiKey" placeholder="sk-...">
+        <p class="form-hint">Not used for Ollama.</p>
       </div>
     </div>
 
@@ -224,6 +234,7 @@ const createAgentFields = document.getElementById('create-agent-fields');
 const username = document.getElementById('username');
 const password = document.getElementById('password');
 const agentName = document.getElementById('agentName');
+const provider = document.getElementById('provider');
 const model = document.getElementById('model');
 const apiKey = document.getElementById('apiKey');
 
@@ -234,10 +245,12 @@ function updateAccountForm() {
   username.required = !isAgent;
   password.required = !isAgent;
   agentName.required = isAgent;
-  model.required = isAgent && !<%= hasOpenAIModelFallback ? 'true' : 'false' %>;
-  apiKey.required = isAgent && !<%= hasOpenAIApiKeyFallback ? 'true' : 'false' %>;
+  const isOllama = provider.value === 'ollama';
+  model.required = isAgent && !(isOllama ? <%= hasOllamaModelFallback ? 'true' : 'false' %> : <%= hasOpenAIModelFallback ? 'true' : 'false' %>);
+  apiKey.required = isAgent && !isOllama && !<%= hasOpenAIApiKeyFallback ? 'true' : 'false' %>;
 }
 
 accountType.addEventListener('change', updateAccountForm);
+provider.addEventListener('change', updateAccountForm);
 updateAccountForm();
 </script>

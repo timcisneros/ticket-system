@@ -592,5 +592,43 @@
     "error": "Agent run exceeded execution step limit of 4",
     "mutationCount": 0,
     "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 16,
+    "ticketId": 13,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-22T17:03:03.238Z",
+    "createdAt": "2026-05-22T17:03:03.239Z",
+    "updatedAt": "2026-05-22T17:04:01.617Z",
+    "replaySnapshotPath": "replay-snapshots/run-16.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-22T17:04:01.619Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 2,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false
+    },
+    "startedAt": "2026-05-22T17:03:03.243Z",
+    "completedAt": "2026-05-22T17:04:01.617Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
   }
 ]

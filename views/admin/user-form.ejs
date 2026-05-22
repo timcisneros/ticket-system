@@ -43,20 +43,29 @@
     </div>
 
     <div class="form-group">
-      <label for="model">OpenAI Model <%= hasOpenAIModelFallback ? '' : '*' %></label>
-      <select id="model" name="model" <%= accountType === 'agent' && !hasOpenAIModelFallback ? 'required' : '' %> <%= accountType === 'user' ? 'disabled' : '' %>>
-        <option value="">Select a model...</option>
-        <% models.forEach(function(modelOption) { %>
-          <option value="<%= modelOption %>" <%= editAccount && editAccount.model === modelOption ? 'selected' : '' %>>
-            <%= modelOption %>
-          </option>
-        <% }); %>
+      <label for="provider">Provider</label>
+      <% const selectedProvider = editAccount && editAccount.type === 'agent' ? (editAccount.provider || 'openai') : 'openai'; %>
+      <select id="provider" name="provider" <%= accountType === 'user' ? 'disabled' : '' %>>
+        <option value="openai" <%= selectedProvider === 'openai' ? 'selected' : '' %>>OpenAI</option>
+        <option value="ollama" <%= selectedProvider === 'ollama' ? 'selected' : '' %>>Ollama local server</option>
       </select>
+      <p class="form-hint">Ollama uses <code>OLLAMA_BASE_URL</code> or <code>http://127.0.0.1:11434</code>.</p>
+    </div>
+
+    <div class="form-group">
+      <label for="model">Model</label>
+      <input id="model" name="model" list="model-options" value="<%= editAccount && editAccount.type === 'agent' ? editAccount.model : '' %>" <%= accountType === 'agent' ? 'required' : 'disabled' %> placeholder="gpt-4.1-mini or llama3.1">
+      <datalist id="model-options">
+        <% models.forEach(function(modelOption) { %>
+          <option value="<%= modelOption %>"></option>
+        <% }); %>
+      </datalist>
     </div>
 
     <div class="form-group">
       <label for="apiKey">OpenAI API Key <%= editAccount && editAccount.type === 'agent' ? '(leave blank to keep current)' : (hasOpenAIApiKeyFallback ? '' : '*') %></label>
       <input type="password" id="apiKey" name="apiKey" placeholder="sk-..." <%= accountType === 'agent' && !editAccount && !hasOpenAIApiKeyFallback ? 'required' : '' %> <%= accountType === 'user' ? 'disabled' : '' %>>
+      <p class="form-hint">Not used for Ollama.</p>
     </div>
   </div>
 
@@ -102,8 +111,9 @@ function toggleAccountType(type, control) {
   document.getElementById('username').required = type === 'user';
   document.getElementById('password').required = type === 'user' && !editing;
   document.getElementById('agentName').required = type === 'agent';
-  document.getElementById('model').required = type === 'agent' && !<%= hasOpenAIModelFallback ? 'true' : 'false' %>;
-  document.getElementById('apiKey').required = type === 'agent' && !editing && !<%= hasOpenAIApiKeyFallback ? 'true' : 'false' %>;
+  const isOllama = document.getElementById('provider').value === 'ollama';
+  document.getElementById('model').required = type === 'agent' && !(isOllama ? <%= hasOllamaModelFallback ? 'true' : 'false' %> : <%= hasOpenAIModelFallback ? 'true' : 'false' %>);
+  document.getElementById('apiKey').required = type === 'agent' && !editing && !isOllama && !<%= hasOpenAIApiKeyFallback ? 'true' : 'false' %>;
 
   document.querySelectorAll('.account-type-option').forEach(option => {
     option.classList.remove('selected');
@@ -113,5 +123,6 @@ function toggleAccountType(type, control) {
   }
 }
 
+document.getElementById('provider').addEventListener('change', () => toggleAccountType('agent'));
 toggleAccountType('<%= accountType %>');
 </script>

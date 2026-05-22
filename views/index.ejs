@@ -24,6 +24,11 @@
         </ul>
       </details>
     </div>
+    <div class="ticket-shape-assist">
+      <button type="button" class="btn-small" id="shapeObjectiveButton">Suggest bounded version</button>
+      <span class="form-hint">Optional AI assist. Nothing changes unless you accept or edit the suggestion.</span>
+    </div>
+    <div class="ticket-shape-panel" id="ticketShapePanel" hidden aria-live="polite"></div>
   </div>
 
   <div class="form-group">
@@ -80,6 +85,9 @@ const targetOptions = Array.from(targetSelect.querySelectorAll('option[data-targ
 const ownedPathsGroup = document.getElementById('ownedPathsGroup');
 const ownedPathsContainer = document.getElementById('ownedPathsContainer');
 const ownedOutputPathsInput = document.getElementById('ownedOutputPathsInput');
+const objectiveInput = document.getElementById('objective');
+const shapeObjectiveButton = document.getElementById('shapeObjectiveButton');
+const ticketShapePanel = document.getElementById('ticketShapePanel');
 
 const agentGroupMembers = <%- JSON.stringify(typeof agentGroupMembers === 'undefined' ? {} : agentGroupMembers) %>;
 const initialAgents = <%- JSON.stringify((agents || []).map(agent => ({ id: agent.id, name: agent.name }))) %>;
@@ -132,9 +140,98 @@ function selectSingleAvailableWorker() {
   targetSelect.value = String(initialAgents[0].id);
 }
 
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function renderSuggestionList(title, items) {
+  if (!items || items.length === 0) return '';
+  return '<div class="ticket-shape-section"><strong>' + title + '</strong><ul>' +
+    items.map(item => '<li>' + escapeHtml(item) + '</li>').join('') +
+    '</ul></div>';
+}
+
+function renderTicketShapeSuggestion(data) {
+  const suggestedObjective = data.suggestedObjective || '';
+  const tooBroad = data.tooBroadForOneRun
+    ? '<span class="ticket-shape-badge ticket-shape-badge--warn">Likely too broad for one run</span>'
+    : '<span class="ticket-shape-badge">Likely bounded</span>';
+  let html = '<div class="ticket-shape-header"><strong>Suggested bounded ticket</strong>' + tooBroad + '</div>';
+
+  if (suggestedObjective) {
+    html += '<textarea id="ticketShapeSuggestedObjective" class="ticket-shape-objective" rows="4">' + escapeHtml(suggestedObjective) + '</textarea>';
+    html += '<button type="button" class="btn-small" id="acceptTicketShapeButton">Accept suggestion</button>';
+  }
+
+  html += renderSuggestionList('Expected outputs', data.expectedOutputs || []);
+  html += renderSuggestionList('Smaller additive tickets', data.decomposition || []);
+  html += renderSuggestionList('Warnings', data.warnings || []);
+
+  if (data.groupModeFit) {
+    html += '<div class="ticket-shape-section"><strong>Group/dynamic fit</strong><p>' + escapeHtml(data.groupModeFit) + '</p></div>';
+  }
+
+  ticketShapePanel.innerHTML = html;
+  ticketShapePanel.hidden = false;
+
+  const acceptButton = document.getElementById('acceptTicketShapeButton');
+  if (acceptButton) {
+    acceptButton.addEventListener('click', () => {
+      const suggested = document.getElementById('ticketShapeSuggestedObjective');
+      if (suggested) objectiveInput.value = suggested.value;
+      objectiveInput.focus();
+    });
+  }
+}
+
+async function suggestBoundedObjective() {
+  const objective = objectiveInput.value.trim();
+  if (!objective) {
+    ticketShapePanel.hidden = false;
+    ticketShapePanel.innerHTML = '<div class="ticket-shape-error">Enter an objective before requesting a suggestion.</div>';
+    objectiveInput.focus();
+    return;
+  }
+
+  shapeObjectiveButton.disabled = true;
+  ticketShapePanel.hidden = false;
+  ticketShapePanel.innerHTML = '<div class="text-muted">Suggesting a bounded version...</div>';
+
+  try {
+    const response = await fetch('/api/tickets/shape-objective', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({
+        objective,
+        assignmentTargetType: targetTypeSelect.value || 'agent',
+        assignmentTargetId: targetSelect.value || null,
+        assignmentMode: assignmentModeSelect.value || 'individual'
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      ticketShapePanel.innerHTML = '<div class="ticket-shape-error">' + escapeHtml(data.error || 'Ticket shaping failed') + '</div>';
+      return;
+    }
+
+    renderTicketShapeSuggestion(data);
+  } catch (error) {
+    ticketShapePanel.innerHTML = '<div class="ticket-shape-error">' + escapeHtml(error.message || 'Ticket shaping failed') + '</div>';
+  } finally {
+    shapeObjectiveButton.disabled = false;
+  }
+}
+
 targetTypeSelect.addEventListener('change', updateAssignmentTargets);
 targetSelect.addEventListener('change', updateOwnedPaths);
 assignmentModeSelect.addEventListener('change', updateOwnedPaths);
+shapeObjectiveButton.addEventListener('click', suggestBoundedObjective);
 
 document.querySelector('.ticket-form').addEventListener('submit', function() {
   const inputs = ownedPathsContainer.querySelectorAll('.owned-path-input');

@@ -1938,3 +1938,75 @@ code {
   margin: 8px 0 0;
   padding-left: 18px;
 }
+
+.ticket-shape-assist {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.ticket-shape-assist .form-hint {
+  margin: 0;
+}
+
+.ticket-shape-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #f9fafb;
+}
+
+.ticket-shape-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ticket-shape-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  color: #065f46;
+  background: #d1fae5;
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.ticket-shape-badge--warn {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fde68a;
+}
+
+.ticket-shape-objective {
+  margin-bottom: 10px;
+}
+
+.ticket-shape-section {
+  margin-top: 10px;
+  color: #374151;
+  font-size: 0.85rem;
+}
+
+.ticket-shape-section ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.ticket-shape-section p {
+  margin: 6px 0 0;
+}
+
+.ticket-shape-error {
+  color: #991b1b;
+  font-size: 0.86rem;
+  font-weight: 550;
+}

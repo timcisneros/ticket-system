@@ -236,6 +236,8 @@ async function assertMainFormRenders(cookie, label) {
   assert(response.body.includes('Write a small, concrete output'), `${label}: bounded objective guidance missing`);
   assert(response.body.includes('Avoid vague requests'), `${label}: vague objective warning missing`);
   assert(response.body.includes('independent additive output'), `${label}: group bounded output guidance missing`);
+  assert(response.body.includes('Suggest bounded version'), `${label}: ticket shaping button missing`);
+  assert(response.body.includes('/api/tickets/shape-objective'), `${label}: ticket shaping endpoint wiring missing`);
   assert(response.body.includes('Manual folder scopes'), `${label}: manual scope option missing`);
   assert(response.body.includes('Automatic folder scopes'), `${label}: dynamic scope option missing`);
   assert(response.body.includes('const agentGroupMembers = '), `${label}: agentGroupMembers script missing`);

@@ -35,6 +35,7 @@ function readJson(file) {
   if (file !== 'runs.json' || !Array.isArray(value)) return value;
   return value.map(run => {
     if (run.replaySnapshot || !run.replaySnapshotPath) return run;
+    if (!fs.existsSync(path.join(DATA_DIR, run.replaySnapshotPath))) return run;
     return { ...run, replaySnapshot: readJson(run.replaySnapshotPath) };
   });
 }
