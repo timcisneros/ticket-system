@@ -11,16 +11,16 @@
   </div>
 
   <div class="form-group">
-    <label for="assignmentTargetType">Assignment Target Type *</label>
+    <label for="assignmentTargetType">Who should work on this? *</label>
     <select id="assignmentTargetType" name="assignmentTargetType" required>
-      <option value="">Select target type</option>
-      <option value="agent">Agent</option>
-      <option value="group">Group</option>
+      <option value="">Select worker type</option>
+      <option value="agent">One agent</option>
+      <option value="group">Agent group</option>
     </select>
   </div>
 
   <div class="form-group">
-    <label for="assignmentTargetId">Assignment Target *</label>
+    <label for="assignmentTargetId">Worker *</label>
     <select id="assignmentTargetId" name="assignmentTargetId" required disabled>
       <option value="">Select a target type first</option>
       <% agents.forEach(agent => { %>
@@ -33,12 +33,22 @@
   </div>
 
   <div class="form-group" id="assignmentModeGroup" hidden>
-    <label for="assignmentMode">Assignment Mode *</label>
+    <label for="assignmentMode">How should the group split the work? *</label>
     <select id="assignmentMode" name="assignmentMode">
-      <option value="">Select assignment mode</option>
-      <option value="allocated">Allocated</option>
-      <option value="dynamic">Dynamic</option>
+      <option value="">Select work split</option>
+      <option value="allocated">Manual folder scopes</option>
+      <option value="dynamic">Automatic folder scopes</option>
     </select>
+    <p class="form-hint">
+      Manual scopes use folders you choose for each agent. Automatic scopes assign agents to existing top-level workspace folders.
+    </p>
+  </div>
+
+  <div class="form-group" id="ownedPathsGroup" hidden>
+    <label>Allowed Folders *</label>
+    <p class="form-hint">Enter one existing workspace directory per agent. The system will not create these folders for you.</p>
+    <div id="ownedPathsContainer"></div>
+    <input type="hidden" name="ownedOutputPaths" id="ownedOutputPathsInput" value="">
   </div>
 
   <button type="submit" class="btn-submit">Create Ticket</button>
@@ -50,6 +60,35 @@ const targetSelect = document.getElementById('assignmentTargetId');
 const assignmentModeGroup = document.getElementById('assignmentModeGroup');
 const assignmentModeSelect = document.getElementById('assignmentMode');
 const targetOptions = Array.from(targetSelect.querySelectorAll('option[data-target-type]'));
+const ownedPathsGroup = document.getElementById('ownedPathsGroup');
+const ownedPathsContainer = document.getElementById('ownedPathsContainer');
+const ownedOutputPathsInput = document.getElementById('ownedOutputPathsInput');
+
+const agentGroupMembers = <%- JSON.stringify(typeof agentGroupMembers === 'undefined' ? {} : agentGroupMembers) %>;
+
+function updateOwnedPaths() {
+  const selectedGroupId = parseInt(targetSelect.value);
+  const isAllocated = assignmentModeSelect.value === 'allocated';
+
+  if (!selectedGroupId || !isAllocated) {
+    ownedPathsGroup.hidden = true;
+    return;
+  }
+
+  const members = agentGroupMembers[String(selectedGroupId)] || [];
+  if (members.length === 0) {
+    ownedPathsGroup.hidden = true;
+    return;
+  }
+
+  ownedPathsGroup.hidden = false;
+  ownedPathsContainer.innerHTML = members.map(m =>
+    '<div class="owned-path-row">' +
+      '<span class="owned-path-agent-name">' + m.name + ':</span>' +
+      '<input type="text" class="owned-path-input" data-agent-id="' + m.id + '" placeholder="e.g. projects/feature-x/" value="">' +
+    '</div>'
+  ).join('');
+}
 
 function updateAssignmentTargets() {
   const selectedType = targetTypeSelect.value;
@@ -59,6 +98,7 @@ function updateAssignmentTargets() {
   assignmentModeGroup.hidden = selectedType !== 'group';
   assignmentModeSelect.required = selectedType === 'group';
   assignmentModeSelect.disabled = selectedType !== 'group';
+  ownedPathsGroup.hidden = true;
 
   targetOptions.forEach(option => {
     option.hidden = option.dataset.targetType !== selectedType;
@@ -70,5 +110,22 @@ function updateAssignmentTargets() {
 }
 
 targetTypeSelect.addEventListener('change', updateAssignmentTargets);
+targetSelect.addEventListener('change', updateOwnedPaths);
+assignmentModeSelect.addEventListener('change', updateOwnedPaths);
+
+document.querySelector('.ticket-form').addEventListener('submit', function() {
+  const inputs = ownedPathsContainer.querySelectorAll('.owned-path-input');
+  const paths = {};
+  let hasAny = false;
+  inputs.forEach(input => {
+    const val = input.value.trim();
+    if (val) {
+      paths[input.dataset.agentId] = val;
+      hasAny = true;
+    }
+  });
+  ownedOutputPathsInput.value = hasAny ? JSON.stringify(paths) : '';
+});
+
 updateAssignmentTargets();
 </script>

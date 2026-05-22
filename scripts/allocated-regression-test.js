@@ -43,6 +43,31 @@ function writeJson(file, value) {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
 }
 
+function nextTicketId() {
+  const tickets = readJson('tickets.json');
+  return Math.max(0, ...tickets.map(ticket => ticket.id)) + 1;
+}
+
+function agentsForGroup(groupId) {
+  const memberAgentIds = new Set(readJson('memberships.json')
+    .filter(membership => membership.principalType === 'agent' && membership.groupId === groupId)
+    .map(membership => membership.principalId));
+
+  return readJson('agents.json').filter(agent => memberAgentIds.has(agent.id));
+}
+
+function expectedOwnedPaths(ticketId, groupId) {
+  return agentsForGroup(groupId).map(agent => `test-output/agent-${agent.id}/`);
+}
+
+function createExistingOwnedPath(relativePath) {
+  fs.mkdirSync(path.join(WORKSPACE_ROOT, relativePath), { recursive: true });
+}
+
+function createExistingOwnedPaths(ticketId, groupId) {
+  expectedOwnedPaths(ticketId, groupId).forEach(createExistingOwnedPath);
+}
+
 function request(method, urlPath, options = {}) {
   const body = options.form
     ? new URLSearchParams(options.form).toString()
@@ -480,14 +505,27 @@ global.fetch = async function(url, options = {}) {
   return preloadPath;
 }
 
-async function createAllocatedTicket(cookie, groupId, objective) {
+async function createAllocatedTicket(cookie, groupId, objective, options = {}) {
+  const ticketId = nextTicketId();
+  const agents = agentsForGroup(groupId);
+
+  const ownedPathMap = {};
+  agents.forEach(agent => {
+    ownedPathMap[agent.id] = `test-output/agent-${agent.id}/`;
+  });
+
+  if (options.precreateOwnedPaths !== false) {
+    Object.values(ownedPathMap).forEach(createExistingOwnedPath);
+  }
+
   const response = await request('POST', '/tickets', {
     cookie,
     form: {
       objective,
       assignmentTargetType: 'group',
       assignmentTargetId: String(groupId),
-      assignmentMode: 'allocated'
+      assignmentMode: 'allocated',
+      ownedOutputPaths: JSON.stringify(ownedPathMap)
     }
   });
 
@@ -554,7 +592,7 @@ function verifyRunLogs(ticketId, runs) {
     assert(run.executionWorkspaceType === 'main_owned_paths', `Allocated run ${run.id} did not use owned path execution`);
     assert(run.mainWorkspaceRoot === WORKSPACE_ROOT, `Allocated run ${run.id} has wrong main workspace root`);
     assert(Array.isArray(run.ownedOutputPaths) && run.ownedOutputPaths.length === 1, `Allocated run ${run.id} missing owned output paths`);
-    assert(run.ownedOutputPaths[0] === `allocated/ticket-${run.ticketId}/agent-${run.agentId}/`, `Allocated run ${run.id} has wrong owned output path`);
+    assert(run.ownedOutputPaths[0] === `test-output/agent-${run.agentId}/`, `Allocated run ${run.id} has wrong owned output path`);
     assert(run.allocationSubtask, `Allocated run ${run.id} missing allocation subtask`);
     assert(snapshot.executionWorkspaceType === 'main_owned_paths', `Replay snapshot missing owned path execution type for run ${run.id}`);
     assert(snapshot.allocationPlanId === run.allocationPlanId, `Replay snapshot missing allocation plan id for run ${run.id}`);
@@ -630,6 +668,18 @@ function assertOwnedPathsDoNotOverlap(runs) {
   });
 }
 
+function assertNoScaffoldOperationHistory(ticketId) {
+  const plan = readJson('allocation-plans.json').find(item => item.ticketId === ticketId);
+  const ownedPaths = plan ? plan.items.flatMap(item => item.ownedOutputPaths || []) : [];
+  const histories = readJson('operation-history.json').filter(history => history.ticketId === ticketId);
+  const scaffoldHistory = histories.filter(history =>
+    history.operation === 'createFolder' &&
+    ownedPaths.some(ownedPath => history.args && history.args.path === ownedPath.slice(0, -1))
+  );
+
+  assert(scaffoldHistory.length === 0, `Allocation startup created scaffold operation history for ticket ${ticketId}`);
+}
+
 function verifyOwnershipFailure(ticketId, runs, expectedOperation) {
   const logs = readJson('logs.json').filter(log => log.ticketId === ticketId);
 
@@ -647,7 +697,7 @@ function verifyOwnershipFailure(ticketId, runs, expectedOperation) {
       item.blocked === true &&
       item.operation &&
       item.operation.operation === expectedOperation &&
-      item.reason === 'Allocated runs may only mutate owned output paths' &&
+      item.reason === 'Owned-scope runs may only mutate owned output paths' &&
       Array.isArray(item.ownedOutputPaths)
     ), `Ownership violation missing replay capture for ${expectedOperation} run ${run.id}`);
   });
@@ -657,7 +707,13 @@ function seedPendingAllocatedRun(group, agent) {
   const tickets = readJson('tickets.json');
   const runs = readJson('runs.json');
   const allocationPlans = readJson('allocation-plans.json');
+  const agentMembers = agentsForGroup(group.id);
   const now = new Date().toISOString();
+  const ownedPath = `test-output/agent-${agent.id}/`;
+
+  const ownedPathMap = {};
+  agentMembers.forEach(a => { ownedPathMap[a.id] = `test-output/agent-${a.id}/`; });
+
   const ticket = {
     id: Math.max(0, ...tickets.map(item => item.id)) + 1,
     objective: `allocated reports manual-stop ${STAMP}`,
@@ -665,6 +721,7 @@ function seedPendingAllocatedRun(group, agent) {
     assignmentTargetId: group.id,
     assignmentMode: 'allocated',
     status: 'in_progress',
+    ownedOutputPaths: ownedPathMap,
     createdBy: 'admin',
     createdAt: now,
     updatedAt: now
@@ -680,7 +737,7 @@ function seedPendingAllocatedRun(group, agent) {
     allocationPlanId: Math.max(0, ...allocationPlans.map(item => item.id)) + 1,
     allocationItemId: Math.max(0, ...allocationPlans.flatMap(plan => plan.items || []).map(item => item.allocationItemId)) + 1,
     allocationSubtask: `Produce your allocated output for ticket ${ticket.id} inside your owned path only.`,
-    ownedOutputPaths: [`allocated/ticket-${ticket.id}/agent-${agent.id}/`],
+    ownedOutputPaths: [ownedPath],
     status: 'pending',
     ticketOpenedAt: now,
     createdAt: now,
@@ -706,6 +763,7 @@ function seedPendingAllocatedRun(group, agent) {
   writeJson('tickets.json', [...tickets, ticket]);
   writeJson('runs.json', [...runs, run]);
   writeJson('allocation-plans.json', [...allocationPlans, allocationPlan]);
+  agentMembers.forEach(a => createExistingOwnedPath(`test-output/agent-${a.id}/`));
   return { ticket, run };
 }
 
@@ -754,6 +812,84 @@ async function main() {
     await waitForReady();
     const cookie = await login();
 
+    const noPathsResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: `allocated reports no-owned-paths ${STAMP}`,
+        assignmentTargetType: 'group',
+        assignmentTargetId: String(group.id),
+        assignmentMode: 'allocated'
+      }
+    });
+    assert(noPathsResponse.statusCode === 400, `No ownedOutputPaths was not rejected: HTTP ${noPathsResponse.statusCode}`);
+    assert(noPathsResponse.body.includes('ownedOutputPaths are required'), 'No ownedOutputPaths rejection was unclear');
+    assert(!readJson('tickets.json').some(ticket => ticket.objective === `allocated reports no-owned-paths ${STAMP}`), 'No-owned-paths ticket was persisted');
+
+    const missingScopeTicketId = nextTicketId();
+    const agents = agentsForGroup(group.id);
+    const missingScopePathMap = {};
+    agents.forEach(agent => { missingScopePathMap[agent.id] = `test-output/agent-${agent.id}/`; });
+    const missingScopeResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: `allocated reports missing-owned-scope ${STAMP}`,
+        assignmentTargetType: 'group',
+        assignmentTargetId: String(group.id),
+        assignmentMode: 'allocated',
+        ownedOutputPaths: JSON.stringify(missingScopePathMap)
+      }
+    });
+    assert(missingScopeResponse.statusCode === 400, `Missing owned scope was not rejected: HTTP ${missingScopeResponse.statusCode}`);
+    assert(missingScopeResponse.body.includes('Owned-scope path does not exist'), 'Missing owned scope rejection was unclear');
+    assert(!missingScopeResponse.body.includes('Allocated owned path'), 'Missing owned scope used stale allocated-only wording');
+    assert(!readJson('tickets.json').some(ticket => ticket.objective === `allocated reports missing-owned-scope ${STAMP}`), 'Missing-scope allocated ticket was persisted');
+    Object.values(missingScopePathMap).forEach(ownedPath => {
+      assert(!fs.existsSync(path.join(WORKSPACE_ROOT, ownedPath)), `Missing-scope validation created owned path ${ownedPath}`);
+    });
+
+    const nonDirectoryPathMap = {};
+    const nonDirectoryFile = 'test-output/not-a-directory-scope.txt';
+    fs.mkdirSync(path.join(WORKSPACE_ROOT, 'test-output'), { recursive: true });
+    fs.writeFileSync(path.join(WORKSPACE_ROOT, nonDirectoryFile), 'not a directory', 'utf8');
+    agents.forEach((agent, index) => {
+      const ownedPath = index === 0 ? nonDirectoryFile : `test-output/non-directory-agent-${agent.id}/`;
+      if (index !== 0) createExistingOwnedPath(ownedPath);
+      nonDirectoryPathMap[agent.id] = ownedPath;
+    });
+    const nonDirectoryResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: `allocated reports non-directory-scope ${STAMP}`,
+        assignmentTargetType: 'group',
+        assignmentTargetId: String(group.id),
+        assignmentMode: 'allocated',
+        ownedOutputPaths: JSON.stringify(nonDirectoryPathMap)
+      }
+    });
+    assert(nonDirectoryResponse.statusCode === 400, `Non-directory owned scope was not rejected: HTTP ${nonDirectoryResponse.statusCode}`);
+    assert(nonDirectoryResponse.body.includes('Owned-scope path is not a directory'), 'Non-directory owned scope rejection was unclear');
+    assert(!nonDirectoryResponse.body.includes('Allocated owned path'), 'Non-directory scope used stale allocated-only wording');
+    assert(!readJson('tickets.json').some(ticket => ticket.objective === `allocated reports non-directory-scope ${STAMP}`), 'Non-directory-scope ticket was persisted');
+
+    const overlappingPathMap = {};
+    agents.forEach((agent, index) => {
+      overlappingPathMap[agent.id] = index === 0 ? 'test-output/overlap/' : 'test-output/overlap/nested/';
+    });
+    const overlappingResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: `allocated reports overlapping-scopes ${STAMP}`,
+        assignmentTargetType: 'group',
+        assignmentTargetId: String(group.id),
+        assignmentMode: 'allocated',
+        ownedOutputPaths: JSON.stringify(overlappingPathMap)
+      }
+    });
+    assert(overlappingResponse.statusCode === 400, `Overlapping owned scopes were not rejected: HTTP ${overlappingResponse.statusCode}`);
+    assert(overlappingResponse.body.includes('Owned-scope paths overlap'), 'Overlapping owned scope rejection was unclear');
+    assert(!overlappingResponse.body.includes('Allocated ownership paths overlap'), 'Overlapping scope used stale allocated-only wording');
+    assert(!readJson('tickets.json').some(ticket => ticket.objective === `allocated reports overlapping-scopes ${STAMP}`), 'Overlapping-scope ticket was persisted');
+
     const completeTicket = await createAllocatedTicket(cookie, group.id, `allocated reports complete-all ${STAMP}`);
     const completeRuns = await waitForRuns(
       completeTicket.id,
@@ -769,6 +905,7 @@ async function main() {
     assert(completePlan && completePlan.status === 'completed', 'Completed allocated batch did not complete allocation plan');
     assert(completePlan.items.length === 2, 'Completed allocated plan did not create one item per agent');
     assertOwnedPathsDoNotOverlap(completeRuns);
+    assertNoScaffoldOperationHistory(completeTicket.id);
     verifyRunLogs(completeTicket.id, completeRuns);
     completeRuns.forEach(run => {
       const ownedFile = path.join(WORKSPACE_ROOT, run.ownedOutputPaths[0], `allocated-regression-output-${run.agentId}.txt`);
@@ -869,7 +1006,7 @@ async function main() {
     assertOwnedPathsDoNotOverlap(retriedRuns);
     retriedRuns.forEach(run => {
       assert(run.executionWorkspaceType === 'main_owned_paths', `Retry run ${run.id} did not preserve owned-path execution`);
-      assert(run.ownedOutputPaths[0] === `allocated/ticket-${run.ticketId}/agent-${run.agentId}/`, `Retry run ${run.id} did not preserve deterministic owned path`);
+      assert(run.ownedOutputPaths[0] === `test-output/agent-${run.agentId}/`, `Retry run ${run.id} did not preserve deterministic owned path`);
     });
 
     const rejectedTicket = await request('POST', '/tickets', {
@@ -916,12 +1053,14 @@ async function main() {
     assertOwnedPathsDoNotOverlap(freshBatchRuns);
     freshBatchRuns.forEach(run => {
       assert(run.executionWorkspaceType === 'main_owned_paths', `Rerun run ${run.id} did not preserve owned-path execution`);
-      assert(run.ownedOutputPaths[0] === `allocated/ticket-${run.ticketId}/agent-${run.agentId}/`, `Rerun run ${run.id} did not preserve deterministic owned path`);
+      assert(run.ownedOutputPaths[0] === `test-output/agent-${run.agentId}/`, `Rerun run ${run.id} did not preserve deterministic owned path`);
       assert(run.allocationSubtask, `Rerun run ${run.id} did not preserve allocation subtask`);
     });
 
     const duplicateTicketId = Math.max(0, ...readJson('tickets.json').map(ticket => ticket.id)) + 1;
     const openedAt = new Date().toISOString();
+    const duplicatePathMap = {};
+    agents.forEach(a => { duplicatePathMap[a.id] = `test-output/agent-${a.id}/`; });
     writeJson('tickets.json', [
       ...readJson('tickets.json'),
       {
@@ -930,6 +1069,7 @@ async function main() {
         assignmentTargetType: 'group',
         assignmentTargetId: group.id,
         assignmentMode: 'allocated',
+        ownedOutputPaths: duplicatePathMap,
         status: 'closed',
         createdBy: 'admin',
         createdAt: openedAt,
@@ -939,7 +1079,7 @@ async function main() {
     const nextRunId = Math.max(0, ...readJson('runs.json').map(run => run.id)) + 1;
     const duplicatePlanId = Math.max(0, ...readJson('allocation-plans.json').map(plan => plan.id)) + 1;
     const duplicateItemId = Math.max(0, ...readJson('allocation-plans.json').flatMap(plan => plan.items || []).map(item => item.allocationItemId)) + 1;
-    const duplicateOwnedPath = `allocated/ticket-${duplicateTicketId}/agent-${agents[0].id}/`;
+    const duplicateOwnedPath = `test-output/agent-${agents[0].id}/`;
     const duplicateSubtask = `Produce your allocated output for ticket ${duplicateTicketId} inside your owned path only.`;
     writeJson('allocation-plans.json', [
       ...readJson('allocation-plans.json'),
@@ -980,6 +1120,7 @@ async function main() {
         updatedAt: openedAt
       }
     ]);
+    createExistingOwnedPaths(duplicateTicketId, group.id);
     const duplicateReopen = await request('PATCH', `/api/tickets/${duplicateTicketId}/status`, {
       cookie,
       body: { status: 'open' }
@@ -1070,7 +1211,7 @@ async function main() {
     assert(new Set(allIdempotentHistory.map(h => h.runId)).size === 4, 'Idempotent history should span exactly 4 runs');
 
     const nextConcurrentTicketId = Math.max(0, ...readJson('tickets.json').map(t => t.id)) + 1;
-    const preexistingConcurrentPath = path.join(WORKSPACE_ROOT, `allocated/ticket-${nextConcurrentTicketId}/agent-${agents[0].id}/shared-folder`);
+    const preexistingConcurrentPath = path.join(WORKSPACE_ROOT, `test-output/agent-${agents[0].id}/shared-folder`);
     fs.mkdirSync(preexistingConcurrentPath, { recursive: true });
     const concurrentTicket = await createAllocatedTicket(cookie, group.id, `allocated reports concurrent-folders ${STAMP}`);
     const concurrentRuns = await waitForRuns(
@@ -1146,6 +1287,24 @@ async function main() {
       assert(run.replaySnapshot.mutationCount === 4, `Action-limit owned run ${run.id} mutation count should be 4, got ${run.replaySnapshot.mutationCount}`);
       assert(run.replaySnapshot.mutationOutcome === 'all_intended', `Action-limit owned run ${run.id} mutation outcome should be all_intended, got ${run.replaySnapshot.mutationOutcome}`);
     });
+
+    const staleScopeRunCount = readJson('runs.json').filter(run => run.ticketId === completeTicket.id).length;
+    const staleScopePath = path.join(WORKSPACE_ROOT, `test-output/agent-${agents[0].id}`);
+    fs.rmSync(staleScopePath, { recursive: true, force: true });
+    fs.writeFileSync(staleScopePath, 'not a directory anymore', 'utf8');
+    const staleScopeRerun = await request('POST', `/api/tickets/${completeTicket.id}/rerun`, { cookie });
+    assert(staleScopeRerun.statusCode === 400, `Stale non-directory owned scope rerun was not rejected: HTTP ${staleScopeRerun.statusCode}`);
+    assert(staleScopeRerun.body.includes('Owned-scope path is not a directory'), 'Stale non-directory owned scope rejection was unclear');
+    assert(
+      readJson('runs.json').filter(run => run.ticketId === completeTicket.id).length === staleScopeRunCount,
+      'Stale non-directory owned scope rerun created a new run'
+    );
+    assert(readJson('logs.json').some(log =>
+      log.type === 'allocation:setup_failed' &&
+      log.message.includes('Owned-scope path is not a directory') &&
+      log.code === 'WORKSPACE_ALLOCATION_NOT_DIRECTORY' &&
+      log.path === `test-output/agent-${agents[0].id}/`
+    ), 'Stale non-directory owned scope rerun did not log structured setup failure');
 
     const agentsPage = await request('GET', '/agents', { cookie });
     assert(agentsPage.statusCode === 200, `/agents returned HTTP ${agentsPage.statusCode}`);

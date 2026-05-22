@@ -1,4 +1,5 @@
 <div class="page-header">
+  <% const viewOperationalOutcome = typeof operationalOutcome === 'undefined' ? '-' : operationalOutcome; %>
   <div>
     <h1>Run #<%= run.id %></h1>
     <p class="text-muted">Ticket <a href="/tickets/<%= run.ticketId %>">#<%= run.ticketId %></a> · <%= run.agentName %></p>
@@ -10,7 +11,7 @@
     <% if (canUpdateRuns && ['failed', 'interrupted'].includes(run.status)) { %>
       <button type="button" class="btn-secondary" data-retry-run-id="<%= run.id %>">Retry</button>
     <% } %>
-    <a class="btn-secondary" href="/logs">Logs</a>
+    <a class="btn-secondary" href="/logs?runId=<%= run.id %>">Run Logs</a>
   </div>
 </div>
 
@@ -37,6 +38,10 @@
     <div>
       <dt>Status</dt>
       <dd><span class="status-badge status-<%= run.status %>"><%= run.status %></span></dd>
+    </div>
+    <div>
+      <dt>Run Outcome</dt>
+      <dd><code><%= viewOperationalOutcome || '-' %></code></dd>
     </div>
     <div>
       <dt>Agent</dt>
@@ -92,15 +97,15 @@
           <dd><%= run.ticketOpenedAt || '-' %></dd>
         </div>
         <div>
-          <dt>Workspace Type</dt>
+          <dt>Workspace</dt>
           <dd><%= run.executionWorkspaceType || (snapshot && snapshot.executionWorkspaceType) || 'main' %></dd>
         </div>
         <div>
-          <dt>Allocation Plan</dt>
+          <dt>Work Split</dt>
           <dd><%= run.allocationPlanId || (snapshot && snapshot.allocationPlanId) || '-' %></dd>
         </div>
         <div>
-          <dt>Allocation Item</dt>
+          <dt>Work Unit</dt>
           <dd><%= run.allocationItemId || (snapshot && snapshot.allocationItemId) || '-' %></dd>
         </div>
         <div>
@@ -108,7 +113,7 @@
           <dd><%= run.mainWorkspaceRoot || (snapshot && snapshot.mainWorkspaceRoot) || run.workspaceRoot || '-' %></dd>
         </div>
         <div>
-          <dt>Owned Paths</dt>
+          <dt>Allowed Folders</dt>
           <dd>
             <% const ownedPaths = (run.ownedOutputPaths && run.ownedOutputPaths.length ? run.ownedOutputPaths : (snapshot && snapshot.ownedOutputPaths) || []); %>
             <% if (ownedPaths.length > 0) { %>
@@ -119,7 +124,7 @@
           </dd>
         </div>
         <div>
-          <dt>Allocation Subtask</dt>
+          <dt>Subtask</dt>
           <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
         </div>
         <% if (snapshot && snapshot.provider) { %>
@@ -152,14 +157,14 @@
 
   <section class="detail-section">
     <details class="collapsible">
-      <summary>Runtime Envelope</summary>
+      <summary>Technical Runtime Details</summary>
       <pre class="code-block"><%= JSON.stringify(snapshot.runtimeEnvelope || {}, null, 2) %></pre>
     </details>
   </section>
 
   <section class="detail-section">
     <details class="collapsible">
-      <summary>Primitive Contract</summary>
+      <summary>Allowed Workspace Actions</summary>
       <pre class="code-block"><%= JSON.stringify(snapshot.primitiveContract || {}, null, 2) %></pre>
     </details>
   </section>
@@ -365,6 +370,13 @@ async function postRunControl(url, redirectUrl) {
     method: 'POST',
     headers: { Accept: 'application/json' }
   });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    window.alert(data.error || 'Run action failed');
+    window.location.reload();
+    return;
+  }
 
   if (response.ok && redirectUrl) {
     window.location.href = redirectUrl;

@@ -3,15 +3,30 @@
 ## Roles
 
 - **Operator** (Big Pickle or Codex): creates tickets, reads logs, inspects results, runs tests, reports issues.
-- **Coding agent** (OpAgent-*): all material code changes. Runs via the agent pipeline.
+- **Developer/Codex**: edits the ticket-system application source as normal privileged product work.
+- **Coding agent** (OpAgent-*): mutates only mounted workspace/user files inside `workspace-root` through the agent pipeline.
 
 ## Mutation Pipeline
 
-All material mutations must pass through:
+All agent filesystem mutations must pass through:
 
 ```
 ticket → agent run → recorded operations → replay/mutations
 ```
+
+## External Side-Effect Boundary
+
+OpAgent has no shell, process, webhook, plugin, SFTP, or arbitrary network
+operation surface. The agent runtime currently has only:
+
+- model provider calls, recorded in replay as provider requests/responses
+- mounted workspace-provider operations inside `workspace-root`
+
+If a future tool or provider can cause irreversible effects outside the
+workspace provider, its attempted request must be recorded before execution
+and its result/failure must be recorded separately. Until such a surface
+exists, external side effects beyond model calls are absent, not merely
+unmodeled.
 
 ## Allowed Surfaces
 
@@ -22,7 +37,8 @@ ticket → agent run → recorded operations → replay/mutations
 
 ## Forbidden
 
-- Direct edits to workspace files (linkcheck/, governance-kernel/, etc.)
+- Agent access to files outside `workspace-root`
+- Direct edits to workspace/user files (linkcheck/, governance-kernel/, etc.) when evaluating the agent pipeline
 - Direct edits to `/tmp/op-data/*.json` or any data store
 - Throwaway HTTP/ticket-creation scripts
 - Silently repairing bad agent output

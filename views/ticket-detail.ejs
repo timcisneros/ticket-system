@@ -5,6 +5,7 @@
   </div>
   <div class="actions">
     <a class="btn-secondary" href="/tickets">Back to Tickets</a>
+    <a class="btn-secondary" href="/logs?ticketId=<%= ticket.id %>">Ticket Logs</a>
     <% if (canUpdateTickets && ticket.status !== 'open') { %>
       <button type="button" class="btn-secondary" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %></button>
     <% } %>
@@ -19,12 +20,12 @@
       <dd><span class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span></dd>
     </div>
     <div>
-      <dt>Assignment Target</dt>
+      <dt>Worker</dt>
       <dd><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %></dd>
     </div>
     <div>
-      <dt>Assignment Mode</dt>
-      <dd><%= ticket.assignmentMode %></dd>
+      <dt>Work Split</dt>
+      <dd><%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></dd>
     </div>
     <div>
       <dt>Created</dt>
@@ -39,11 +40,11 @@
 
 <% if (allocationPlan) { %>
 <section class="detail-section">
-  <h2>Allocation Plan #<%= allocationPlan.id %></h2>
+  <h2>Work Split #<%= allocationPlan.id %></h2>
   <dl class="detail-grid">
     <div>
       <dt>Mode</dt>
-      <dd><%= allocationPlan.mode %></dd>
+      <dd>Folder-scoped work</dd>
     </div>
     <div>
       <dt>Plan Status</dt>
@@ -63,7 +64,7 @@
 <section class="detail-section">
   <h2>Work Units</h2>
   <% if (!allocationPlan.items || allocationPlan.items.length === 0) { %>
-    <p class="text-muted">No allocation items.</p>
+    <p class="text-muted">No work units.</p>
   <% } else { %>
     <div class="allocation-items">
       <% allocationPlan.items.forEach(item => { %>
@@ -76,14 +77,14 @@
         %>
         <div class="allocation-item">
           <div class="allocation-item-header">
-            <div class="allocation-item-id">Item #<%= item.allocationItemId %></div>
+            <div class="allocation-item-id">Work Unit #<%= item.allocationItemId %></div>
             <div class="allocation-item-status">
               <span class="status-badge status-<%= item.status %>"><%= item.status %></span>
             </div>
           </div>
           <div class="allocation-item-body">
             <div class="allocation-item-row">
-              <span class="allocation-item-label">Assigned Agent</span>
+              <span class="allocation-item-label">Agent</span>
               <span class="allocation-item-value">
                 <% if (assignedAgent) { %>
                   <%= assignedAgent.name %> (Agent #<%= item.assignedAgentId %>)
@@ -97,7 +98,7 @@
               <span class="allocation-item-value"><%= item.allocationSubtask || '-' %></span>
             </div>
             <div class="allocation-item-row">
-              <span class="allocation-item-label">Owned Paths</span>
+              <span class="allocation-item-label">Allowed Folders</span>
               <span class="allocation-item-value">
                 <% if (item.ownedOutputPaths && item.ownedOutputPaths.length > 0) { %>
                   <code class="owned-path"><%= item.ownedOutputPaths.join(', ') %></code>
@@ -107,7 +108,7 @@
               </span>
             </div>
             <div class="allocation-item-row">
-              <span class="allocation-item-label">Linked Runs</span>
+              <span class="allocation-item-label">Runs</span>
               <span class="allocation-item-value">
                 <% if (itemRuns.length === 0) { %>
                   -
@@ -139,10 +140,11 @@
           <th>Run #</th>
           <th>Agent</th>
           <th>Status</th>
+          <th>Run Outcome</th>
           <th>Mutations</th>
-          <th>Workspace Type</th>
-          <th>Allocation Plan</th>
-          <th>Allocation Item</th>
+          <th>Workspace</th>
+          <th>Work Split</th>
+          <th>Work Unit</th>
           <th>Created</th>
         </tr>
       </thead>
@@ -154,6 +156,7 @@
             <td>
               <span class="status-badge status-<%= run.status %>"><%= run.status %></span>
             </td>
+            <td><code><%= run.operationalOutcome || '-' %></code></td>
             <td>
               <% if (run.partialMutationCount > 0) { %>
                 <%= run.partialMutationCount %>
@@ -268,7 +271,13 @@ document.addEventListener('click', event => {
     fetch('/api/tickets/' + encodeURIComponent(rerunButton.dataset.rerunTicketId) + '/rerun', {
       method: 'POST',
       headers: { Accept: 'application/json' }
-    }).then(() => {
+    }).then(response => {
+      if (!response.ok) {
+        return response.json().catch(() => ({})).then(data => {
+          window.alert(data.error || 'Ticket rerun failed');
+          window.location.reload();
+        });
+      }
       window.location.reload();
     });
     return;

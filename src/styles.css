@@ -1603,6 +1603,21 @@ code {
   background: #ede9fe;
 }
 
+.log-filter-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  color: #374151;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
 .code-block {
   margin: 0;
   padding: 12px;
@@ -1798,4 +1813,42 @@ code {
   .ticket-card__actions .btn-small {
     width: 100%;
   }
+}
+
+.owned-path-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.owned-path-agent-name {
+  flex: 0 0 auto;
+  min-width: 110px;
+  color: #374151;
+  font-size: 0.88rem;
+  font-weight: 550;
+}
+
+.owned-path-input {
+  flex: 1 1 auto;
+  min-height: 40px;
+  padding: 8px 11px;
+  color: #111827;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.94rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.owned-path-input:focus {
+  outline: none;
+  border-color: #111827;
+}
+
+.form-hint {
+  margin-bottom: 10px;
+  color: #6b7280;
+  font-size: 0.82rem;
 }

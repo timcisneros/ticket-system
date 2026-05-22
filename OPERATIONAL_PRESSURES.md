@@ -49,12 +49,18 @@ architecture, planning, orchestration, or speculative fixes.
 
 - Direct CLI verification after T174 was necessary to establish observed behavior: `--failures-only` preserved full evaluation while displaying zero rule rows for an all-passing project.
 
-- T175 targeted ticketing-system source (`scripts/oquery.js`), but the agent workspace could not see the `scripts` directory and completed with zero mutations; product-source work through the ticket pipeline currently lacks a clear mutation surface.
+- T175 targeted ticketing-system source (`scripts/oquery.js`), but the agent workspace could not see the `scripts` directory and completed with zero mutations; this exposed the intended boundary that app source is outside agent authority and source changes are developer-side product work.
 
 - T175 produced `run:completed_noop` and `run:completed` rather than a failure, even though the requested product improvement was not executed; operators had to inspect raw logs to distinguish completed no-op from completed work.
 
-- R179's runtime envelope made the authority boundary explicit: `workspaceRoot` and `mainWorkspaceRoot` were `ticket-system/workspace-root`, so repository-root product files such as `scripts/oquery.js` were outside the agent's operational world.
+- R179's runtime envelope made the authority boundary explicit: `workspaceRoot` and `mainWorkspaceRoot` were `ticket-system/workspace-root`, so repository-root product files such as `scripts/oquery.js` were correctly outside the agent's operational world.
 
 - R179 replay exposed `mutation count 0` and `outcome no_mutations`, while ticket/run status still read `completed`; the canonical evidence existed, but the status surface compressed distinct outcomes together.
 
-- A task can be impossible within the current authority boundary even when the model can state that clearly and set `complete:true`; current completion semantics do not distinguish impossible-but-reported from successfully-executed.
+- A task can be impossible within the current authority boundary even when the model can state that clearly and set `complete:true`; `impossible_within_boundary` is expected security behavior for source-code attempts or other paths outside the mounted workspace, while current completion semantics still need to distinguish impossible-but-reported from successfully-executed.
+
+- In R92 and R133, replay displayed all model-proposed actions for the failing step, while mutation history showed only the actions actually recorded before the protected-path rejection stopped execution; operators had to compare replay with mutation history to avoid treating proposed later writes as executed.
+
+- The `failures` view uses `OK` in the "model response had action(s)" section to mean the model action was structurally valid, not that it executed successfully; in R6 and R34 this could be mistaken for successful execution even though the run failed before later proposed actions were recorded.
+
+- The term `outcome` currently refers to different semantic layers across views: runs/tickets use it for operational outcome, while replay uses it for mutation outcome; no evidence yet shows wrong operator decisions, but the shared term could compress meaning during interpretation.

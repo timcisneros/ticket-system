@@ -36,7 +36,10 @@
         </div>
         <div class="ticket-card__meta">
           <span><%= ticket.assignmentTargetName %></span>
-          <span><%= ticket.assignmentMode %></span>
+          <span><%= ticket.assignmentMode === 'allocated' ? 'manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'automatic folder scopes' : ticket.assignmentMode %></span>
+          <% if (ticket.lastRunOperationalOutcome) { %>
+            <span>latest run: <code><%= ticket.lastRunOperationalOutcome %></code></span>
+          <% } %>
           <span><%= new Date(ticket.updatedAt).toLocaleString() %></span>
         </div>
         <% if (canUpdateTickets) { %>
@@ -94,6 +97,7 @@ function ticketSignature(ticket) {
     ticket.assignmentTargetId,
     (ticket.activeRunIds || []).join(','),
     ticket.lastRunStatus || '',
+    ticket.lastRunOperationalOutcome || '',
     ticket.lastRunHadPartialMutations || false,
     ticket.lastRunPartialMutationCount || 0,
     ticket.updatedAt
@@ -170,8 +174,21 @@ function createTicketCard(ticket) {
   meta.appendChild(targetSpan);
 
   const modeSpan = document.createElement('span');
-  modeSpan.textContent = ticket.assignmentMode;
+  modeSpan.textContent = ticket.assignmentMode === 'allocated'
+    ? 'manual folder scopes'
+    : ticket.assignmentMode === 'dynamic'
+      ? 'automatic folder scopes'
+      : ticket.assignmentMode;
   meta.appendChild(modeSpan);
+
+  if (ticket.lastRunOperationalOutcome) {
+    const outcomeSpan = document.createElement('span');
+    outcomeSpan.textContent = 'latest run: ';
+    const outcomeCode = document.createElement('code');
+    outcomeCode.textContent = ticket.lastRunOperationalOutcome;
+    outcomeSpan.appendChild(outcomeCode);
+    meta.appendChild(outcomeSpan);
+  }
 
   const updatedSpan = document.createElement('span');
   updatedSpan.textContent = new Date(ticket.updatedAt).toLocaleString();
@@ -383,6 +400,11 @@ async function postControl(url, button) {
       method: 'POST',
       headers: { Accept: 'application/json' }
     });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      window.alert(data.error || 'Ticket action failed');
+    }
 
     if (!response.ok || !liveTicketsConnected) {
       await loadTickets();

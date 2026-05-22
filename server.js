@@ -116,6 +116,10 @@ function normalizeTickets(tickets) {
       ticket.assignmentMode = 'allocated';
     }
 
+    ticket.ownedOutputPaths = (typeof ticket.ownedOutputPaths === 'object' && ticket.ownedOutputPaths !== null && !Array.isArray(ticket.ownedOutputPaths))
+      ? ticket.ownedOutputPaths
+      : null;
+
     return true;
   });
 }
@@ -149,6 +153,7 @@ function getTicketsForDisplay() {
       assignmentTargetName: target ? target.name : 'Unknown target',
       activeRunIds: activeRuns.map(run => run.id),
       lastRunStatus: lastRun ? lastRun.status : null,
+      lastRunOperationalOutcome: lastRun ? classifyRunOperationalOutcome(lastRun) : null,
       lastRunPartialMutationCount,
       lastRunHadPartialMutations: lastRunPartialMutationCount > 0
     };
@@ -156,6 +161,35 @@ function getTicketsForDisplay() {
 
   tickets.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   return tickets;
+}
+
+function getRunMutationCount(run) {
+  if (run && run.mutationCount !== undefined) return run.mutationCount;
+  if (run && run.replaySnapshot && run.replaySnapshot.mutationCount !== undefined) return run.replaySnapshot.mutationCount;
+  return run ? countRunMutatingOperations(run.id) : 0;
+}
+
+function classifyRunOperationalOutcome(run) {
+  if (!run) return null;
+  const snapshot = run.replaySnapshot || {};
+  const workspaceOperations = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
+  const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+
+  if (workspaceOperations.some(item => item && (item.blocked || item.reason))) return 'blocked/rejected';
+  if (run.status === 'interrupted') return 'interrupted';
+
+  if (run.status === 'completed') {
+    if (getRunMutationCount(run) > 0) return 'completed_with_mutations';
+    if (workspaceOperations.some(item =>
+      (item.result && item.result.status === 'not_found') ||
+      (item.error && /not_found|enoent/i.test(item.error))
+    )) return 'impossible_within_boundary';
+    if (events.some(event => event && event.type === 'run:completed_noop')) return 'completed_noop';
+    return 'completed_noop';
+  }
+
+  if (run.status === 'failed') return 'failed_execution';
+  return run.status || 'unknown';
 }
 
 function broadcastTicketChange() {
@@ -261,6 +295,17 @@ function appendRunLog(run, type, message, workspaceAction = null, extraFields = 
 
 function appendSystemLog(type, message, workspaceAction = null, extraFields = {}) {
   const logs = readLogs();
+  const contextFields = { ...extraFields };
+  if (Object.prototype.hasOwnProperty.call(contextFields, 'ticketId')) {
+    contextFields.contextTicketId = contextFields.ticketId;
+    delete contextFields.ticketId;
+  }
+  if (Object.prototype.hasOwnProperty.call(contextFields, 'runId')) {
+    contextFields.contextRunId = contextFields.runId;
+    delete contextFields.runId;
+  }
+  delete contextFields.agentId;
+  delete contextFields.agentName;
   const log = {
     id: logs.length > 0 ? Math.max(...logs.map(item => item.id)) + 1 : 1,
     timestamp: createLogTimestamp(),
@@ -271,7 +316,7 @@ function appendSystemLog(type, message, workspaceAction = null, extraFields = {}
     type,
     message: sanitizeLogMessage(message),
     workspaceAction,
-    ...extraFields
+    ...contextFields
   };
 
   logs.push(log);
@@ -738,6 +783,29 @@ function getCurrentWorkspacePathInfo(relativePath) {
     return workspaceProvider.getPathInfo(relativePath);
   } catch (error) {
     return { exists: false, error: error.message || 'Workspace path access failed' };
+  }
+}
+
+function getOperatorWorkspacePathInfo(relativePath) {
+  try {
+    return workspaceProvider.getPathInfo(relativePath, { allowHidden: true });
+  } catch (error) {
+    return { exists: false, error: error.message || 'Workspace path access failed' };
+  }
+}
+
+function captureOperatorWorkspaceState(paths) {
+  return Array.from(new Set(paths.filter(pathValue => pathValue != null).map(pathValue => String(pathValue)))).map(pathValue => ({
+    path: pathValue,
+    info: getOperatorWorkspacePathInfo(pathValue)
+  }));
+}
+
+function captureWorkspaceRootListing() {
+  try {
+    return workspaceProvider.list('', { allowHidden: true });
+  } catch (error) {
+    return { error: error.message || 'Workspace root listing failed' };
   }
 }
 
@@ -1291,6 +1359,7 @@ function createRunLimitError(run, type, message, details) {
   const error = new Error(message);
   error.code = 'RUN_LIMIT_EXCEEDED';
   error.limitType = type;
+  error.details = details || {};
   return error;
 }
 
@@ -1309,7 +1378,7 @@ function getRemainingRunTimeMs(startedAtMs, limits) {
   return Math.max(0, limits.maxRuntimeDurationMs - (Date.now() - startedAtMs));
 }
 
-async function callOpenAIWithRunTimeout(run, agent, input, startedAtMs, limits) {
+async function callOpenAIWithRunTimeout(run, agent, input, startedAtMs, limits, options = {}) {
   const remainingMs = getRemainingRunTimeMs(startedAtMs, limits);
 
   if (remainingMs <= 0) {
@@ -1323,7 +1392,10 @@ async function callOpenAIWithRunTimeout(run, agent, input, startedAtMs, limits) 
   const timeout = setTimeout(() => controller.abort(), remainingMs);
 
   try {
-    return await callOpenAI(agent, input, { signal: controller.signal });
+    return await callOpenAI(agent, input, {
+      signal: controller.signal,
+      onRequest: options.onRequest
+    });
   } catch (error) {
     if (error && error.name === 'AbortError') {
       throw createRunLimitError(run, 'timeout', `Agent run exceeded runtime duration limit of ${limits.maxRuntimeDurationMs}ms`, {
@@ -1367,20 +1439,101 @@ function assertRunWorkspaceOperationAllowed(run, currentCount, incomingCount, li
   }
 }
 
+function buildFailureMetadata(error, status, failureReason = null, detail = {}) {
+  if (status === 'interrupted') {
+    return {
+      code: 'RUN_INTERRUPTED',
+      kind: 'interrupted',
+      detail: {
+        ...(failureReason ? { reason: sanitizeLogMessage(failureReason) } : {}),
+        ...sanitizeSnapshotValue(detail)
+      }
+    };
+  }
+
+  if (!error) return null;
+
+  if (error.failureKind) {
+    return {
+      code: error.code || error.failureCode || null,
+      kind: error.failureKind,
+      detail: sanitizeSnapshotValue(error.details || {})
+    };
+  }
+
+  if (error.code === 'RUN_LIMIT_EXCEEDED') {
+    return {
+      code: error.code,
+      kind: error.limitType === 'timeout' ? 'timeout' : 'budget_exhausted',
+      detail: sanitizeSnapshotValue({
+        limitType: error.limitType || null,
+        ...(error.details || {})
+      })
+    };
+  }
+
+  if (error.code === 'WORKSPACE_PROTECTED_PATH') {
+    return {
+      code: error.code,
+      kind: 'protected_path',
+      detail: sanitizeSnapshotValue({
+        operation: error.operation || null,
+        path: error.path || null,
+        reason: error.reason || null
+      })
+    };
+  }
+
+  if (error.code === 'WORKSPACE_OWNERSHIP_VIOLATION') {
+    return {
+      code: error.code,
+      kind: 'protected_path',
+      detail: sanitizeSnapshotValue({
+        operation: error.operation || null,
+        path: error.path || null,
+        reason: error.reason || null
+      })
+    };
+  }
+
+  return null;
+}
+
 // mutationCount parameter is reserved but never passed by callers; count is always derived.
-function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null) {
+function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
   const effectiveMutationCount = mutationCount !== null ? mutationCount : countRunMutatingOperations(run.id);
   updateRunReplaySnapshot(run.id, snapshot => snapshot ? {
     ...snapshot,
     terminalStatus: status,
     failureReason: failureReason ? sanitizeLogMessage(failureReason) : null,
+    failure: failure ? sanitizeSnapshotValue(failure) : null,
     mutationOutcome: effectiveMutationCount === 0 ? 'no_mutations' : status === 'completed' ? 'all_intended' : 'partial_mutations',
     mutationCount: effectiveMutationCount,
     finalizedAt: new Date().toISOString()
   } : snapshot);
 }
 
-function ensureInterruptedRunReplaySnapshot(run, reason) {
+function classifyInterruptionPhase(run) {
+  const latestRun = readRuns().find(item => item.id === run.id) || run;
+  const snapshot = latestRun.replaySnapshot || {};
+  const logs = readLogs().filter(log => log.runId === run.id);
+  const providerRequestLogs = logs.filter(log => log.type === 'model:request').length;
+  const providerResponseLogs = logs.filter(log => log.type === 'model:response').length;
+  const providerRequests = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests.length : 0;
+  const modelResponses = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses.length : 0;
+  const parsedPlans = Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans.length : 0;
+  const workspaceOperations = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations.length : 0;
+
+  if (workspaceOperations > 0) return 'after_workspace_operation';
+  if (parsedPlans > 0) return 'after_model_plan';
+  if (modelResponses > 0 || providerResponseLogs > 0) return 'after_provider_response';
+  if (providerRequestLogs > providerResponseLogs) return 'during_provider_call';
+  if (providerRequests > 0 || providerRequestLogs > 0) return 'after_provider_request';
+  if (latestRun.status === 'pending' || !latestRun.startedAt) return 'before_provider_call';
+  return 'unknown';
+}
+
+function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
   const ticket = readTickets().find(item => item.id === run.ticketId) || null;
   const agent = readAgents().find(item => item.id === run.agentId) || null;
 
@@ -1420,7 +1573,7 @@ function ensureInterruptedRunReplaySnapshot(run, reason) {
     note: 'Run was interrupted before execution snapshot capture completed'
   });
 
-  recordReplayEvent(run, 'run:interrupted', reason);
+  recordReplayEvent(run, 'run:interrupted', reason, phase ? { phase } : {});
 }
 
 function runExecutionKey(run) {
@@ -1439,10 +1592,57 @@ function getAgentsInGroup(groupId) {
   return readAgents().filter(agent => agentIds.has(agent.id));
 }
 
-function isAllocatedGroupTicket(ticket) {
+function getAgentGroupMembers() {
+  const memberships = readMemberships().filter(m => m.principalType === 'agent');
+  const agents = readAgents();
+  const agentMap = Object.fromEntries(agents.map(a => [a.id, a]));
+  const groupMap = {};
+
+  for (const m of memberships) {
+    if (!groupMap[m.groupId]) groupMap[m.groupId] = [];
+    const agent = agentMap[m.principalId];
+    if (agent) {
+      groupMap[m.groupId].push({ id: agent.id, name: agent.name });
+    }
+  }
+
+  return groupMap;
+}
+
+function deriveDynamicOwnedPaths(agents) {
+  if (agents.length === 0) {
+    throw new Error('Dynamic allocation rejected: selected group has no agents');
+  }
+
+  const rootListing = workspaceProvider.list('');
+
+  const candidates = rootListing.entries
+    .filter(e => e.type === 'folder')
+    .filter(e => e.name !== 'data')
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  if (candidates.length < agents.length) {
+    const error = new Error(
+      `Dynamic allocation rejected: only ${candidates.length} usable workspace director${candidates.length === 1 ? 'y' : 'ies'} found, need ${agents.length} for ${agents.length} agent${agents.length === 1 ? '' : 's'}`
+    );
+    error.code = 'DYNAMIC_ALLOCATION_INSUFFICIENT_SCOPES';
+    throw error;
+  }
+
+  const sortedAgents = [...agents].sort((a, b) => a.id - b.id);
+  const pathMap = {};
+
+  sortedAgents.forEach((agent, index) => {
+    pathMap[agent.id] = candidates[index].path;
+  });
+
+  return pathMap;
+}
+
+function usesOwnedScopeAllocation(ticket) {
   return ticket &&
     ticket.assignmentTargetType === 'group' &&
-    ticket.assignmentMode === 'allocated';
+    (ticket.assignmentMode === 'allocated' || ticket.assignmentMode === 'dynamic');
 }
 
 function getRunWorkspaceProvider(run) {
@@ -1472,7 +1672,7 @@ function createWorkspaceOwnershipError(run, operation, relativePath) {
   error.code = 'WORKSPACE_OWNERSHIP_VIOLATION';
   error.operation = operation;
   error.path = relativePath;
-  error.reason = 'Allocated runs may only mutate owned output paths';
+  error.reason = 'Owned-scope runs may only mutate owned output paths';
   error.ownedOutputPaths = getRunOwnedOutputPaths(run);
   return error;
 }
@@ -1523,10 +1723,41 @@ function assertNoOverlappingOwnedPaths(planItems) {
     ownedPaths.forEach((otherPath, otherIndex) => {
       if (index === otherIndex) return;
       if (ownedPath === otherPath || ownedPath.startsWith(otherPath) || otherPath.startsWith(ownedPath)) {
-        throw new Error(`Allocated ownership paths overlap: ${ownedPath} and ${otherPath}`);
+        throw new Error(`Owned-scope paths overlap: ${ownedPath} and ${otherPath}`);
       }
     });
   });
+}
+
+function assertAllocatedOwnedPathsExist(planItems) {
+  planItems.forEach(item => {
+    (item.ownedOutputPaths || []).forEach(ownedPath => {
+      const normalizedPath = normalizeWorkspaceOwnershipPath(ownedPath);
+      const info = workspaceProvider.getPathInfo(normalizedPath, { allowHidden: true });
+
+      if (!info.exists) {
+        const error = new Error(`Owned-scope path does not exist: ${normalizedPath}`);
+        error.code = 'WORKSPACE_ALLOCATION_PATH_MISSING';
+        error.path = normalizedPath;
+        error.assignedAgentId = item.assignedAgentId || null;
+        throw error;
+      }
+
+      if (info.type !== 'directory') {
+        const error = new Error(`Owned-scope path is not a directory: ${normalizedPath}`);
+        error.code = 'WORKSPACE_ALLOCATION_NOT_DIRECTORY';
+        error.path = normalizedPath;
+        error.assignedAgentId = item.assignedAgentId || null;
+        throw error;
+      }
+    });
+  });
+}
+
+function assertAllocatedTicketCanStart(ticket, agents) {
+  const planDraft = buildAllocatedOwnershipPlan(ticket, agents);
+  assertAllocatedOwnedPathsExist(planDraft.items);
+  return planDraft;
 }
 
 function assertAllocatedObjectiveSupported(objective) {
@@ -1535,11 +1766,11 @@ function assertAllocatedObjectiveSupported(objective) {
   const additivePattern = /\b(file|files|folder|folders|report|reports|proposal|proposals|doc|docs|document|documents|fixture|fixtures|variant|variants|draft|drafts|analysis|analyses|deliverable|deliverables)\b/;
 
   if (destructivePattern.test(normalizedObjective)) {
-    throw new Error('Allocated execution rejected: objective appears destructive or edits existing workspace state');
+    throw new Error('Owned-scope execution rejected: objective appears destructive or edits existing workspace state');
   }
 
   if (!additivePattern.test(normalizedObjective)) {
-    throw new Error('Allocated execution rejected: objective does not clearly describe additive independent outputs');
+    throw new Error('Owned-scope execution rejected: objective does not clearly describe additive independent outputs');
   }
 }
 
@@ -1547,13 +1778,26 @@ function buildAllocatedOwnershipPlan(ticket, agents) {
   assertAllocatedObjectiveSupported(ticket.objective);
 
   if (agents.length === 0) {
-    throw new Error('Allocated execution rejected: selected group has no agents');
+    throw new Error('Owned-scope execution rejected: selected group has no agents');
+  }
+
+  const userPaths = (typeof ticket.ownedOutputPaths === 'object' && ticket.ownedOutputPaths !== null && !Array.isArray(ticket.ownedOutputPaths))
+    ? ticket.ownedOutputPaths
+    : {};
+
+  if (Object.keys(userPaths).length === 0) {
+    throw new Error('Owned-scope execution rejected: ownedOutputPaths are required');
+  }
+
+  const missing = agents.filter(a => !userPaths[a.id]);
+  if (missing.length > 0) {
+    throw new Error(`Owned-scope execution rejected: missing owned output path for agent(s): ${missing.map(a => `${a.id} (${a.name})`).join(', ')}`);
   }
 
   const items = agents.map(agent => ({
     assignedAgentId: agent.id,
     allocationSubtask: `Produce your allocated output for ticket ${ticket.id} inside your owned path only.`,
-    ownedOutputPaths: [`allocated/ticket-${ticket.id}/agent-${agent.id}/`]
+    ownedOutputPaths: [normalizeWorkspaceOwnershipPath(userPaths[agent.id])]
   }));
 
   assertNoOverlappingOwnedPaths(items);
@@ -1569,6 +1813,7 @@ function buildAllocatedOwnershipPlan(ticket, agents) {
 function createAllocationPlan(ticket, agents) {
   const plans = readAllocationPlans();
   const planDraft = buildAllocatedOwnershipPlan(ticket, agents);
+  assertAllocatedOwnedPathsExist(planDraft.items);
   const now = new Date().toISOString();
   const nextPlanId = plans.length > 0 ? Math.max(...plans.map(plan => plan.id)) + 1 : 1;
   const maxItemId = plans.flatMap(plan => plan.items || []).reduce((maxId, item) => {
@@ -1632,7 +1877,8 @@ function getTicketRuns(ticketId) {
     return {
       ...run,
       agentName: agents.find(agent => agent.id === run.agentId)?.name || `Agent ${run.agentId}`,
-      partialMutationCount
+      partialMutationCount,
+      operationalOutcome: classifyRunOperationalOutcome(run)
     };
   });
 }
@@ -1656,18 +1902,6 @@ function updateAllocationItemStatus(run, status) {
   return allocationItem;
 }
 
-function ensureWorkspaceFolderPath(relativePath) {
-  const segments = normalizeWorkspaceOwnershipPath(relativePath).split('/').filter(Boolean);
-  let currentPath = '';
-
-  segments.forEach(segment => {
-    currentPath = currentPath ? `${currentPath}/${segment}` : segment;
-    if (!workspaceProvider.exists(currentPath, { allowHidden: true })) {
-      workspaceProvider.createFolder(currentPath, { allowHidden: true });
-    }
-  });
-}
-
 function updateTicketInProgressForRun(run) {
   const ticket = readTickets().find(item => item.id === run.ticketId);
 
@@ -1680,7 +1914,7 @@ function finalizeTicketForRun(run, terminalStatus) {
 
   if (!ticket) return null;
 
-  if (!isAllocatedGroupTicket(ticket)) {
+  if (!usesOwnedScopeAllocation(ticket)) {
     return updateTicketStatusById(run.ticketId, terminalStatus);
   }
 
@@ -1721,7 +1955,8 @@ function allocationLogSuffix(run) {
 }
 
 function interruptAgentRun(run, reason) {
-  ensureInterruptedRunReplaySnapshot(run, reason);
+  const phase = classifyInterruptionPhase(run);
+  ensureInterruptedRunReplaySnapshot(run, reason, phase);
   const interruptedRun = updateRunStatus(run.id, 'interrupted', reason) || {
     ...run,
     status: 'interrupted',
@@ -1730,10 +1965,13 @@ function interruptAgentRun(run, reason) {
     error: sanitizeLogMessage(reason)
   };
 
-  finalizeRunReplaySnapshot(interruptedRun, 'interrupted', reason);
+  const failure = buildFailureMetadata(null, 'interrupted', reason, { phase });
+  finalizeRunReplaySnapshot(interruptedRun, 'interrupted', reason, null, failure);
   appendRunLog(interruptedRun, 'run:interrupted', `${reason}${allocationLogSuffix(interruptedRun)}`, null, {
     allocationPlanId: interruptedRun.allocationPlanId || null,
-    allocationItemId: interruptedRun.allocationItemId || null
+    allocationItemId: interruptedRun.allocationItemId || null,
+    phase,
+    failure
   });
   runningRunKeys.delete(runExecutionKey(interruptedRun));
   updateTicketAfterRunInterrupted(interruptedRun);
@@ -1758,8 +1996,8 @@ function rerunTicketFromBeginning(ticketId, requestedBy = 'operator') {
 
   if (!ticket) return null;
 
-  if (isAllocatedGroupTicket(ticket)) {
-    buildAllocatedOwnershipPlan({
+  if (usesOwnedScopeAllocation(ticket)) {
+    assertAllocatedTicketCanStart({
       ...ticket,
       status: 'open',
       updatedAt: new Date().toISOString()
@@ -1793,6 +2031,7 @@ function interruptStaleRunsOnStartup() {
 
 function failAgentRun(run, error, workspaceAction = null) {
   let message = error && error.message ? error.message : String(error || 'Agent run failed');
+  const failure = buildFailureMetadata(error, 'failed', message);
 
   if (error && error.code === 'RUN_LIMIT_EXCEEDED' && error.limitType === 'step') {
     const mutationCount = countRunMutatingOperations(run.id);
@@ -1810,10 +2049,11 @@ function failAgentRun(run, error, workspaceAction = null) {
   };
 
   if (failedRun.status === 'interrupted') return failedRun;
-  finalizeRunReplaySnapshot(failedRun, 'failed', message);
+  finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
   appendRunLog(failedRun, 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
     allocationPlanId: failedRun.allocationPlanId || null,
-    allocationItemId: failedRun.allocationItemId || null
+    allocationItemId: failedRun.allocationItemId || null,
+    failure
   });
   finalizeTicketForRun(failedRun, 'failed');
   return failedRun;
@@ -1841,13 +2081,13 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
   const pendingRunKey = `${ticket.id}:${agent.id}`;
 
   if (activeRun || runningRunKeys.has(pendingRunKey)) return activeRun || null;
-  if (isAllocatedGroupTicket(ticket) && (!allocationPlanId || !allocationItem)) {
-    throw new Error('Allocated run creation requires an allocation plan item');
+  if (usesOwnedScopeAllocation(ticket) && (!allocationPlanId || !allocationItem)) {
+    throw new Error('Owned-scope run creation requires an allocation plan item');
   }
 
   const now = new Date().toISOString();
   const isRerun = runs.some(run => run.ticketId === ticket.id);
-  const isAllocatedRun = isAllocatedGroupTicket(ticket);
+  const usesOwnedScope = usesOwnedScopeAllocation(ticket);
   const nextRunId = runs.length > 0 ? Math.max(...runs.map(item => item.id)) + 1 : 1;
   const ownedOutputPaths = allocationItem ? allocationItem.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath) : [];
   const run = {
@@ -1857,7 +2097,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     agentName: agent.name,
     workspaceRoot: workspaceProvider.root,
     mainWorkspaceRoot: workspaceProvider.root,
-    executionWorkspaceType: isAllocatedRun ? 'main_owned_paths' : 'main',
+    executionWorkspaceType: usesOwnedScope ? 'main_owned_paths' : 'main',
     allocationPlanId: allocationPlanId || null,
     allocationItemId: allocationItem ? allocationItem.allocationItemId : null,
     allocationSubtask: allocationItem ? allocationItem.allocationSubtask : null,
@@ -1886,7 +2126,7 @@ function maybeStartTicketRuns(ticket) {
     return agent ? [createAgentRun(ticket, agent)].filter(Boolean) : [];
   }
 
-  if (isAllocatedGroupTicket(ticket)) {
+  if (usesOwnedScopeAllocation(ticket)) {
     const agents = getAgentsInGroup(ticket.assignmentTargetId);
     const existingRuns = readRuns();
     const agentsToRun = agents.filter(agent => {
@@ -1901,10 +2141,6 @@ function maybeStartTicketRuns(ticket) {
     if (agentsToRun.length === 0) return [];
 
     const allocationPlan = createAllocationPlan(ticket, agentsToRun);
-
-    allocationPlan.items.forEach(item => {
-      item.ownedOutputPaths.forEach(ensureWorkspaceFolderPath);
-    });
 
     return agentsToRun
       .map(agent => createAgentRun(
@@ -2018,6 +2254,27 @@ function buildRuntimeEnvelope(run, step = 0) {
   };
 }
 
+function createStructuredWorkspaceError(message, code, kind, detail = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.failureKind = kind;
+  error.details = detail;
+  return error;
+}
+
+function createStructuredWorkspaceFsError(error, operation, relativePath) {
+  if (error && error.code === 'ENOENT') {
+    const parentPath = path.posix.dirname(String(relativePath || ''));
+    return createStructuredWorkspaceError(error.message, 'WORKSPACE_FS_ENOENT', 'workspace_error', {
+      operation,
+      path: relativePath,
+      parentPath: parentPath === '.' ? '' : parentPath,
+      fsCode: error.code
+    });
+  }
+  return error;
+}
+
 function assertAgentWorkspacePathAllowed(relativePath) {
   const normalized = path.posix.normalize(String(relativePath || '').replace(/\\/g, '/'));
   const cleanPath = normalized === '.' ? '' : normalized;
@@ -2035,7 +2292,9 @@ function assertAgentWorkspacePathAllowed(relativePath) {
   ];
 
   if (sensitivePaths.some(sensitivePath => cleanPath === sensitivePath || cleanPath.startsWith(`${sensitivePath}/`))) {
-    throw new Error('Agent action blocked for sensitive application path');
+    throw createStructuredWorkspaceError('Agent action blocked for sensitive application path', 'WORKSPACE_SENSITIVE_PATH', 'protected_path', {
+      path: cleanPath
+    });
   }
 }
 
@@ -2052,6 +2311,19 @@ function getAgentOpenAIConfig(agent) {
   }
 
   return { apiKey, model };
+}
+
+function providerRequestId(headers) {
+  if (!headers || typeof headers !== 'object') return null;
+  return headers['x-request-id'] || headers['openai-request-id'] || headers['request-id'] || null;
+}
+
+function createProviderError(message, code, detail = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.failureKind = 'provider_error';
+  error.details = detail;
+  return error;
 }
 
 async function callOpenAI(agent, input, options = {}) {
@@ -2076,16 +2348,32 @@ async function callOpenAI(agent, input, options = {}) {
     body: responseBody
   };
 
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${openAIConfig.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    signal: options.signal,
-    body: JSON.stringify(responseBody)
-  });
+  if (typeof options.onRequest === 'function') {
+    options.onRequest(requestSnapshot);
+  }
+
+  let response = null;
+  try {
+    response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${openAIConfig.apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      signal: options.signal,
+      body: JSON.stringify(responseBody)
+    });
+  } catch (fetchError) {
+    const error = createProviderError(fetchError.message || 'OpenAI request failed before response', 'OPENAI_TRANSPORT_ERROR', {
+      phase: 'request',
+      provider: 'openai',
+      model: openAIConfig.model
+    });
+    error.providerRequestPayload = requestSnapshot;
+    throw error;
+  }
   const responseHeaders = Object.fromEntries(response.headers.entries());
+  const requestId = providerRequestId(responseHeaders);
 
   const responseText = await response.text();
   let data = null;
@@ -2094,13 +2382,19 @@ async function callOpenAI(agent, input, options = {}) {
     try {
       data = JSON.parse(responseText);
     } catch (error) {
-      const providerError = new Error(!response.ok
+      const providerError = createProviderError(!response.ok
         ? `OpenAI request failed with HTTP ${response.status}: ${responseText.slice(0, 240)}`
-        : 'OpenAI response was not valid JSON');
+        : 'OpenAI response was not valid JSON', 'OPENAI_MALFORMED_RESPONSE', {
+        phase: 'response_parse',
+        provider: 'openai',
+        status: response.status,
+        requestId
+      });
       providerError.providerRequestPayload = requestSnapshot;
       providerError.providerResponsePayload = {
         ok: response.ok,
         status: response.status,
+        requestId,
         headers: sanitizeSnapshotValue(responseHeaders),
         body: responseText.slice(0, 2000)
       };
@@ -2112,11 +2406,17 @@ async function callOpenAI(agent, input, options = {}) {
     const errorMessage = data && data.error && data.error.message
       ? data.error.message
       : `OpenAI request failed with HTTP ${response.status}`;
-    const error = new Error(errorMessage);
+    const error = createProviderError(errorMessage, 'OPENAI_HTTP_ERROR', {
+      phase: 'response_status',
+      provider: 'openai',
+      status: response.status,
+      requestId
+    });
     error.providerRequestPayload = requestSnapshot;
     error.providerResponsePayload = {
       ok: response.ok,
       status: response.status,
+      requestId,
       headers: sanitizeSnapshotValue(responseHeaders),
       body: data || responseText
     };
@@ -2124,11 +2424,17 @@ async function callOpenAI(agent, input, options = {}) {
   }
 
   if (!data || typeof data !== 'object') {
-    const error = new Error('OpenAI response was empty');
+    const error = createProviderError('OpenAI response was empty', 'OPENAI_EMPTY_RESPONSE', {
+      phase: 'response_body',
+      provider: 'openai',
+      status: response.status,
+      requestId
+    });
     error.providerRequestPayload = requestSnapshot;
     error.providerResponsePayload = {
       ok: response.ok,
       status: response.status,
+      requestId,
       headers: sanitizeSnapshotValue(responseHeaders),
       body: data
     };
@@ -2138,11 +2444,17 @@ async function callOpenAI(agent, input, options = {}) {
   const text = extractOpenAIText(data);
 
   if (!String(text || '').trim()) {
-    const error = new Error('OpenAI response did not include model output');
+    const error = createProviderError('OpenAI response did not include model output', 'OPENAI_NO_OUTPUT', {
+      phase: 'model_output',
+      provider: 'openai',
+      status: response.status,
+      requestId
+    });
     error.providerRequestPayload = requestSnapshot;
     error.providerResponsePayload = {
       ok: response.ok,
       status: response.status,
+      requestId,
       headers: sanitizeSnapshotValue(responseHeaders),
       body: data
     };
@@ -2156,6 +2468,7 @@ async function callOpenAI(agent, input, options = {}) {
     responsePayload: {
       ok: response.ok,
       status: response.status,
+      requestId,
       headers: sanitizeSnapshotValue(responseHeaders),
       body: data
     }
@@ -2590,6 +2903,7 @@ async function runAgentTicket(runId) {
     allocationItemId: run.allocationItemId || null
   });
   updateTicketInProgressForRun(run);
+  let currentProviderRequestPersisted = false;
 
   try {
     const ticket = readTickets().find(item => item.id === run.ticketId);
@@ -2622,16 +2936,24 @@ async function runAgentTicket(runId) {
       const input = buildAgentPrompt(ticket, currentEnvelope, actionResults);
       appendRunLog(run, 'model:request', `OpenAI request sent with model ${openAIConfig.model}`);
       modelRequestCount += 1;
-      const modelResponse = await callOpenAIWithRunTimeout(run, agent, input, runStartedAtMs, limits);
+      currentProviderRequestPersisted = false;
+      const modelResponse = await callOpenAIWithRunTimeout(run, agent, input, runStartedAtMs, limits, {
+        onRequest: requestPayload => {
+          appendRunReplaySnapshotItem(run.id, 'providerRequests', requestPayload);
+          currentProviderRequestPersisted = true;
+        }
+      });
       assertRunNotTimedOut(run, runStartedAtMs, limits);
-      appendRunReplaySnapshotItem(run.id, 'providerRequests', modelResponse.requestPayload);
       const modelText = modelResponse.text;
       appendRunLog(
         run,
         'model:response',
         modelText,
         null,
-        modelResponse.usage ? { usage: modelResponse.usage } : {}
+        {
+          ...(modelResponse.usage ? { usage: modelResponse.usage } : {}),
+          requestId: modelResponse.responsePayload ? modelResponse.responsePayload.requestId || null : null
+        }
       );
       appendRunReplaySnapshotItem(run.id, 'modelResponses', {
         text: modelText,
@@ -2646,7 +2968,11 @@ async function runAgentTicket(runId) {
           rawText: modelText,
           step
         });
-        throw new Error(`Model response was not valid execution JSON: ${modelPlan.parseError}`);
+        const error = new Error(`Model response was not valid execution JSON: ${modelPlan.parseError}`);
+        error.code = 'MODEL_MALFORMED_JSON';
+        error.failureKind = 'invalid_action';
+        error.details = { parseError: modelPlan.parseError, step };
+        throw error;
       }
 
       appendRunReplaySnapshotItem(run.id, 'parsedModelPlans', {
@@ -2761,7 +3087,7 @@ async function runAgentTicket(runId) {
             appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
               operation: error.workspaceAction || operation,
               error: error.message,
-              blocked: ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
+              blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
               reason: error.reason || null,
               historyId: error.historyId || null,
               ownedOutputPaths: error.ownedOutputPaths || getRunOwnedOutputPaths(run),
@@ -2792,11 +3118,14 @@ async function runAgentTicket(runId) {
         });
 
         if (noProgressResponses >= 2) {
-          throw createRunLimitError(run, 'step', 'Model repeated list-only non-progress twice', {
+          const error = createRunLimitError(run, 'step', 'Model repeated list-only non-progress twice', {
             currentValue: noProgressResponses,
             configuredLimit: 1,
-            step
+            step,
+            repeatedListPaths: uniqueRepeatedPaths
           });
+          error.failureKind = 'no_progress';
+          throw error;
         }
 
         const remainingSteps = limits.maxExecutionSteps - step - 1;
@@ -2820,7 +3149,7 @@ async function runAgentTicket(runId) {
 
     run = completeAgentRun(run);
   } catch (error) {
-    if (error.providerRequestPayload) {
+    if (error.providerRequestPayload && !currentProviderRequestPersisted) {
       appendRunReplaySnapshotItem(run.id, 'providerRequests', error.providerRequestPayload);
     }
 
@@ -2860,7 +3189,9 @@ function createLocalWorkspaceProvider(root) {
     const relativeRealPath = path.relative(realRoot, realProbe);
 
     if (relativeRealPath.startsWith('..') || path.isAbsolute(relativeRealPath)) {
-      throw new Error('Path is outside workspace root');
+      throw createStructuredWorkspaceError('Path is outside workspace root', 'WORKSPACE_OUTSIDE_ROOT', 'protected_path', {
+        path: path.relative(workspaceRoot, resolvedPath)
+      });
     }
   }
 
@@ -2868,7 +3199,9 @@ function createLocalWorkspaceProvider(root) {
     const rawPath = String(inputPath || '').trim();
 
     if (path.isAbsolute(rawPath)) {
-      throw new Error('Absolute paths are not allowed');
+      throw createStructuredWorkspaceError('Absolute paths are not allowed', 'WORKSPACE_ABSOLUTE_PATH', 'protected_path', {
+        path: rawPath
+      });
     }
 
     const normalized = path.posix.normalize(rawPath.replace(/\\/g, '/'));
@@ -2876,11 +3209,15 @@ function createLocalWorkspaceProvider(root) {
     const segments = relativePath.split('/').filter(Boolean);
 
     if (relativePath.startsWith('../') || relativePath === '..' || segments.includes('..')) {
-      throw new Error('Path traversal is not allowed');
+      throw createStructuredWorkspaceError('Path traversal is not allowed', 'WORKSPACE_PATH_TRAVERSAL', 'protected_path', {
+        path: rawPath
+      });
     }
 
     if (!options.allowHidden && segments.some(segment => segment.startsWith('.'))) {
-      throw new Error('Hidden and system paths are not allowed');
+      throw createStructuredWorkspaceError('Hidden and system paths are not allowed', 'WORKSPACE_HIDDEN_PATH', 'protected_path', {
+        path: rawPath
+      });
     }
 
     return relativePath;
@@ -2953,13 +3290,22 @@ function createLocalWorkspaceProvider(root) {
 
     readFile(relativePath, options = {}) {
       const resolved = resolveInside(relativePath, options);
-      const stat = fs.lstatSync(resolved.resolvedPath);
+      let stat;
+      try {
+        stat = fs.lstatSync(resolved.resolvedPath);
+      } catch (error) {
+        throw createStructuredWorkspaceFsError(error, 'readFile', resolved.relativePath);
+      }
 
       if (!stat.isFile()) {
         throw new Error('Path is not a file');
       }
 
-      return fs.readFileSync(resolved.resolvedPath, 'utf8');
+      try {
+        return fs.readFileSync(resolved.resolvedPath, 'utf8');
+      } catch (error) {
+        throw createStructuredWorkspaceFsError(error, 'readFile', resolved.relativePath);
+      }
     },
 
     writeFile(relativePath, content, options = {}) {
@@ -2970,7 +3316,11 @@ function createLocalWorkspaceProvider(root) {
         throw new Error('Path is not a file');
       }
 
-      fs.writeFileSync(resolved.resolvedPath, String(content || ''), 'utf8');
+      try {
+        fs.writeFileSync(resolved.resolvedPath, String(content || ''), 'utf8');
+      } catch (error) {
+        throw createStructuredWorkspaceFsError(error, 'writeFile', resolved.relativePath);
+      }
       return { path: resolved.relativePath };
     },
 
@@ -2994,10 +3344,19 @@ function createLocalWorkspaceProvider(root) {
         if (stat.isDirectory()) {
           return { path: resolved.relativePath, status: 'already_exists_noop' };
         }
-        throw new Error('Path already exists and is not a directory');
+        throw createStructuredWorkspaceError('Path already exists and is not a directory', 'WORKSPACE_PATH_TYPE_CONFLICT', 'workspace_error', {
+          operation: 'createFolder',
+          path: resolved.relativePath,
+          expectedType: 'directory',
+          actualType: stat.isFile() ? 'file' : 'other'
+        });
       }
 
-      fs.mkdirSync(resolved.resolvedPath, { recursive: false });
+      try {
+        fs.mkdirSync(resolved.resolvedPath, { recursive: false });
+      } catch (error) {
+        throw createStructuredWorkspaceFsError(error, 'createFolder', resolved.relativePath);
+      }
       return { path: resolved.relativePath, status: 'created' };
     },
 
@@ -3211,6 +3570,7 @@ fastify.get('/', { preHandler: fastify.requireAuth }, async (request, reply) => 
     user: request.user,
     agents: readAgents(),
     agentGroups: getTicketAssignableGroups(),
+    agentGroupMembers: getAgentGroupMembers(),
     error: null
   }, request.session.userId));
 });
@@ -3229,6 +3589,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
       user: request.user,
       agents: readAgents(),
       agentGroups: getTicketAssignableGroups(),
+      agentGroupMembers: getAgentGroupMembers(),
       error
     }, request.session.userId));
   }
@@ -3260,6 +3621,18 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
   const tickets = readTickets();
   const now = new Date().toISOString();
   const nextTicketId = tickets.length > 0 ? Math.max(...tickets.map(t => t.id)) + 1 : 1;
+
+  let parsedOwnedPaths = null;
+  if (request.body.ownedOutputPaths) {
+    try {
+      parsedOwnedPaths = JSON.parse(request.body.ownedOutputPaths);
+    } catch (e) {
+      return renderTicketForm('Owned output paths must be valid JSON');
+    }
+    if (typeof parsedOwnedPaths !== 'object' || parsedOwnedPaths === null || Array.isArray(parsedOwnedPaths)) {
+      return renderTicketForm('Owned output paths must be a mapping of agent ID to path');
+    }
+  }
   
   const newTicket = {
     id: nextTicketId,
@@ -3267,16 +3640,40 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     assignmentTargetType,
     assignmentTargetId: parsedAssignmentTargetId,
     assignmentMode: resolvedAssignmentMode,
+    ownedOutputPaths: parsedOwnedPaths,
     status: 'open',
     createdBy: request.user ? request.user.username : String(request.session.userId),
     createdAt: now,
     updatedAt: now
   };
 
-  if (isAllocatedGroupTicket(newTicket)) {
+  if (newTicket.assignmentMode === 'dynamic') {
     try {
-      buildAllocatedOwnershipPlan(newTicket, getAgentsInGroup(newTicket.assignmentTargetId));
+      const agents = getAgentsInGroup(newTicket.assignmentTargetId);
+      newTicket.ownedOutputPaths = deriveDynamicOwnedPaths(agents);
     } catch (error) {
+      appendSystemLog('allocation:setup_failed', error.message, null, {
+        code: error.code || 'DYNAMIC_ALLOCATION_ERROR',
+        ticketId: newTicket.id,
+        assignmentTargetId: newTicket.assignmentTargetId,
+        createdBy: newTicket.createdBy
+      });
+      return renderTicketForm(error.message);
+    }
+  }
+
+  if (usesOwnedScopeAllocation(newTicket)) {
+    try {
+      assertAllocatedTicketCanStart(newTicket, getAgentsInGroup(newTicket.assignmentTargetId));
+    } catch (error) {
+      appendSystemLog('allocation:setup_failed', error.message, null, {
+        code: error.code || 'VALIDATION_ERROR',
+        path: error.path || null,
+        assignedAgentId: error.assignedAgentId || null,
+        ticketId: newTicket.id,
+        assignmentTargetId: newTicket.assignmentTargetId,
+        createdBy: newTicket.createdBy
+      });
       return renderTicketForm(error.message);
     }
   }
@@ -3460,16 +3857,24 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
     return { ticket };
   }
 
-  if (status === 'open' && isAllocatedGroupTicket(ticket)) {
+  if (status === 'open' && usesOwnedScopeAllocation(ticket)) {
     try {
-      buildAllocatedOwnershipPlan({
+      assertAllocatedTicketCanStart({
         ...ticket,
         status,
         updatedAt: new Date().toISOString()
       }, getAgentsInGroup(ticket.assignmentTargetId));
     } catch (error) {
+      appendSystemLog('allocation:setup_failed', error.message, null, {
+        code: error.code || 'VALIDATION_ERROR',
+        path: error.path || null,
+        assignedAgentId: error.assignedAgentId || null,
+        ticketId: ticket.id,
+        assignmentTargetId: ticket.assignmentTargetId,
+        createdBy: request.user ? request.user.username : String(request.session.userId)
+      });
       reply.code(400);
-      return { error: error.message || 'Allocated execution rejected' };
+      return { error: error.message || 'Owned-scope execution rejected' };
     }
   }
 
@@ -3486,7 +3891,7 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
       writeTickets(tickets);
       broadcastTicketChange();
       reply.code(400);
-      return { error: error.message || 'Allocated execution rejected' };
+      return { error: error.message || 'Owned-scope execution rejected' };
     }
   }
 
@@ -3511,6 +3916,13 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
   try {
     ticket = rerunTicketFromBeginning(ticketId, request.user ? request.user.username : 'operator');
   } catch (error) {
+    appendSystemLog('allocation:setup_failed', error.message, null, {
+      code: error.code || 'VALIDATION_ERROR',
+      path: error.path || null,
+      assignedAgentId: error.assignedAgentId || null,
+      ticketId,
+      requestedBy: request.user ? request.user.username : 'operator'
+    });
     reply.code(400);
     return { error: error.message || 'Ticket rerun rejected' };
   }
@@ -3590,6 +4002,24 @@ fastify.post('/api/operations/:id/recover', { preHandler: fastify.requireAuth },
 
 // ==================== LOG ROUTES ====================
 
+function getLogFilters(query = {}) {
+  const runId = query.runId !== undefined ? parseInt(query.runId, 10) : null;
+  const ticketId = query.ticketId !== undefined ? parseInt(query.ticketId, 10) : null;
+  return {
+    runId: Number.isInteger(runId) ? runId : null,
+    ticketId: Number.isInteger(ticketId) ? ticketId : null
+  };
+}
+
+function filterLogsForQuery(logs, query = {}) {
+  const filters = getLogFilters(query);
+  return logs.filter(log => {
+    if (filters.runId !== null && log.runId !== filters.runId) return false;
+    if (filters.ticketId !== null && log.ticketId !== filters.ticketId) return false;
+    return true;
+  });
+}
+
 fastify.get('/logs', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
@@ -3599,9 +4029,11 @@ fastify.get('/logs', { preHandler: fastify.requireAuth }, async (request, reply)
     }, request.session.userId));
   }
 
+  const filters = getLogFilters(request.query || {});
   return reply.view('logs.ejs', viewData({
     user: request.user,
-    logs: readLogs()
+    logs: filterLogsForQuery(readLogs(), request.query || {}),
+    filters
   }, request.session.userId));
 });
 
@@ -3611,7 +4043,7 @@ fastify.get('/api/logs', { preHandler: fastify.requireAuth }, async (request, re
     return { error: 'Permission denied' };
   }
 
-  return { logs: readLogs() };
+  return { logs: filterLogsForQuery(readLogs(), request.query || {}) };
 });
 
 fastify.get('/api/export', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -3687,6 +4119,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     snapshot: run.replaySnapshot || null,
     operationHistory: enrichOperationHistoryForDisplay(getOperationHistoryForRun(runId)),
     partialMutationCount: runPartialMutationCount,
+    operationalOutcome: classifyRunOperationalOutcome(run),
     canUpdateRuns: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
 });
@@ -3801,6 +4234,40 @@ function workspaceApi(request, reply, permission, operation) {
   }
 }
 
+function operatorWorkspaceMutationApi(request, reply, operationName, args, affectedPaths, operation) {
+  if (!hasPermission(request.session.userId, 'workspace:write')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const requestedBy = request.user ? request.user.username : String(request.session.userId);
+  const preState = captureOperatorWorkspaceState(affectedPaths);
+  let result = null;
+  let error = null;
+
+  try {
+    result = operation();
+    return result;
+  } catch (operationError) {
+    error = operationError;
+    reply.code(400);
+    return { error: error.message || 'Workspace operation failed' };
+  } finally {
+    const postState = captureOperatorWorkspaceState(affectedPaths);
+    appendSystemLog('workspace:operator_mutation', `Operator workspace ${operationName} by ${requestedBy}`, {
+      operation: operationName,
+      args: sanitizeSnapshotValue(args)
+    }, {
+      source: 'operator_workspace_api',
+      requestedBy,
+      preState,
+      postState,
+      result: result ? sanitizeSnapshotValue(result) : null,
+      error: error ? (error.message || String(error)) : null
+    });
+  }
+}
+
 fastify.get('/workspace', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'workspace:read')) {
     reply.code(403);
@@ -3847,23 +4314,38 @@ fastify.get('/api/workspace/file', { preHandler: fastify.requireAuth }, async (r
 });
 
 fastify.post('/api/workspace/file', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  return workspaceApi(request, reply, 'workspace:write', () => workspaceProvider.createFile(request.body.path, { allowHidden: true }));
+  const args = { path: request.body.path };
+  return operatorWorkspaceMutationApi(request, reply, 'createFile', args, [request.body.path], () =>
+    workspaceProvider.createFile(request.body.path, { allowHidden: true })
+  );
 });
 
 fastify.post('/api/workspace/folder', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  return workspaceApi(request, reply, 'workspace:write', () => workspaceProvider.createFolder(request.body.path, { allowHidden: true }));
+  const args = { path: request.body.path };
+  return operatorWorkspaceMutationApi(request, reply, 'createFolder', args, [request.body.path], () =>
+    workspaceProvider.createFolder(request.body.path, { allowHidden: true })
+  );
 });
 
 fastify.patch('/api/workspace/file', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  return workspaceApi(request, reply, 'workspace:write', () => workspaceProvider.writeFile(request.body.path, request.body.content, { allowHidden: true }));
+  const args = { path: request.body.path };
+  return operatorWorkspaceMutationApi(request, reply, 'writeFile', args, [request.body.path], () =>
+    workspaceProvider.writeFile(request.body.path, request.body.content, { allowHidden: true })
+  );
 });
 
 fastify.patch('/api/workspace/rename', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  return workspaceApi(request, reply, 'workspace:write', () => workspaceProvider.rename(request.body.path, request.body.nextPath, { allowHidden: true }));
+  const args = { path: request.body.path, nextPath: request.body.nextPath };
+  return operatorWorkspaceMutationApi(request, reply, 'renamePath', args, [request.body.path, request.body.nextPath], () =>
+    workspaceProvider.rename(request.body.path, request.body.nextPath, { allowHidden: true })
+  );
 });
 
 fastify.delete('/api/workspace', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  return workspaceApi(request, reply, 'workspace:write', () => workspaceProvider.delete(request.body.path, { allowHidden: true }));
+  const args = { path: request.body.path };
+  return operatorWorkspaceMutationApi(request, reply, 'deletePath', args, [request.body.path], () =>
+    workspaceProvider.delete(request.body.path, { allowHidden: true })
+  );
 });
 
 fastify.post('/api/workspace/fixture', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -3881,10 +4363,18 @@ fastify.post('/api/workspace/fixture', { preHandler: fastify.requireAuth }, asyn
       return { error: 'Unknown workspace fixture' };
     }
 
+    const requestedBy = request.user ? request.user.username : String(request.session.userId);
+    const preState = captureWorkspaceRootListing();
     applyWorkspaceFixture(fixtureId);
+    const postState = captureWorkspaceRootListing();
     appendSystemLog('workspace:fixture', `Workspace fixture reset: ${fixture.name}`, {
       operation: 'resetWorkspaceFixture',
       args: { fixtureId, workspaceRoot: workspaceProvider.root }
+    }, {
+      source: 'operator_workspace_fixture',
+      requestedBy,
+      preState,
+      postState
     });
 
     return workspaceProvider.list('');

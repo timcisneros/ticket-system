@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -6,6 +6,7 @@ const path = require('path');
 const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
 
 const ROOT = path.resolve(__dirname, '..');
+const OQUERY = `node ${path.join(ROOT, 'scripts', 'oquery.js')}`;
 const REAL_DATA_DIR = path.join(ROOT, 'data');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-regression-data-'));
 const WORKSPACE_ROOT = createTempWorkspaceRoot('agent-regression');
@@ -185,6 +186,77 @@ function seedStaleRunningRun(agent) {
   return { ticket, run };
 }
 
+function seedStaleProviderCallRun(agent) {
+  const tickets = readJson('tickets.json');
+  const runs = readJson('runs.json');
+  const logs = readJson('logs.json');
+  const now = new Date().toISOString();
+  const ticket = {
+    id: Math.max(0, ...tickets.map(item => item.id)) + 1,
+    objective: `single-agent stale-provider-call ${STAMP}`,
+    assignmentTargetType: 'agent',
+    assignmentTargetId: agent.id,
+    assignmentMode: 'individual',
+    status: 'in_progress',
+    createdBy: 'admin',
+    createdAt: now,
+    updatedAt: now
+  };
+  const run = {
+    id: Math.max(0, ...runs.map(item => item.id)) + 1,
+    ticketId: ticket.id,
+    agentId: agent.id,
+    agentName: agent.name,
+    workspaceRoot: WORKSPACE_ROOT,
+    mainWorkspaceRoot: WORKSPACE_ROOT,
+    executionWorkspaceType: 'main',
+    status: 'running',
+    ticketOpenedAt: now,
+    createdAt: now,
+    updatedAt: now,
+    startedAt: now,
+    replaySnapshot: {
+      version: 1,
+      runId: Math.max(0, ...runs.map(item => item.id)) + 1,
+      ticketId: ticket.id,
+      assignedAgentId: agent.id,
+      agentNameSnapshot: agent.name,
+      provider: 'openai',
+      model: agent.model,
+      providerRequests: [{
+        url: 'https://api.openai.com/v1/responses',
+        method: 'POST',
+        headers: { Authorization: '[redacted]', 'Content-Type': 'application/json' },
+        body: { model: agent.model, input: [{ role: 'user', content: ticket.objective }] },
+        capturedAt: now
+      }],
+      modelResponses: [],
+      parsedModelPlans: [],
+      workspaceOperations: [],
+      events: [],
+      terminalStatus: null,
+      failureReason: null,
+      createdAt: now
+    }
+  };
+  const log = {
+    id: Math.max(0, ...logs.map(item => item.id)) + 1,
+    timestamp: now,
+    runId: run.id,
+    ticketId: ticket.id,
+    agentId: agent.id,
+    agentName: agent.name,
+    type: 'model:request',
+    message: `OpenAI request sent with model ${agent.model}`,
+    workspaceAction: null
+  };
+
+  writeJson('tickets.json', [...tickets, ticket]);
+  writeJson('runs.json', [...runs, run]);
+  writeJson('logs.json', [...logs, log]);
+  return { ticket, run };
+}
+
 function seedManualStopRun(agent) {
   const tickets = readJson('tickets.json');
   const runs = readJson('runs.json');
@@ -249,7 +321,11 @@ global.fetch = async function(url, options = {}) {
   const input = Array.isArray(body.input) ? body.input : [];
   const combined = input.map(item => item && item.content ? String(item.content) : '').join('\\n');
 
-  await new Promise(resolve => setTimeout(resolve, 150));
+  await new Promise(resolve => setTimeout(resolve, combined.includes('single-agent slow-provider') ? 1000 : 150));
+
+  if (combined.includes('single-agent transport-failure')) {
+    throw new Error('single-agent simulated transport failure');
+  }
 
   if (combined.includes('single-agent fail-one')) {
     return {
@@ -413,6 +489,53 @@ global.fetch = async function(url, options = {}) {
       actions: [{
         operation: 'readFile',
         args: { path: 'missing-workspace-error-${STAMP}.txt' }
+      }],
+      complete: false
+    });
+  }
+
+  if (combined.includes('single-agent write-missing-parent')) {
+    return okResponse({
+      message: 'Trying to write a file inside a missing parent directory.',
+      actions: [{
+        operation: 'writeFile',
+        args: {
+          path: 'missing-parent-${STAMP}/child.txt',
+          content: 'should not be written'
+        }
+      }],
+      complete: false
+    });
+  }
+
+  if (combined.includes('single-agent create-missing-parent')) {
+    return okResponse({
+      message: 'Trying to create a folder inside a missing parent directory.',
+      actions: [{
+        operation: 'createFolder',
+        args: { path: 'missing-folder-parent-${STAMP}/child' }
+      }],
+      complete: false
+    });
+  }
+
+  if (combined.includes('single-agent folder-file-conflict')) {
+    return okResponse({
+      message: 'Trying to create a folder where a file already exists.',
+      actions: [{
+        operation: 'createFolder',
+        args: { path: '${TEST_FILE}' }
+      }],
+      complete: false
+    });
+  }
+
+  if (combined.includes('single-agent path-traversal')) {
+    return okResponse({
+      message: 'Trying to read outside the mounted workspace.',
+      actions: [{
+        operation: 'readFile',
+        args: { path: '../outside-workspace.txt' }
       }],
       complete: false
     });
@@ -583,8 +706,67 @@ async function waitForRuns(ticketId, expectedCount, predicate) {
   })))}`);
 }
 
+async function waitForRunLog(runId, type) {
+  const started = Date.now();
+
+  while (Date.now() - started < 30000) {
+    const log = readJson('logs.json').find(item => item.runId === runId && item.type === type);
+    if (log) return log;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  throw new Error(`Timed out waiting for ${type} log for run ${runId}`);
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function verifyStructuredFailure(run, expected) {
+  const failure = run.replaySnapshot && run.replaySnapshot.failure;
+  assert(failure, `Replay snapshot missing structured failure for run ${run.id}`);
+  assert(failure.code === expected.code, `Run ${run.id} failure code ${failure.code} !== ${expected.code}`);
+  assert(failure.kind === expected.kind, `Run ${run.id} failure kind ${failure.kind} !== ${expected.kind}`);
+  if (expected.limitType) {
+    assert(failure.detail && failure.detail.limitType === expected.limitType, `Run ${run.id} failure detail missing limitType ${expected.limitType}`);
+  }
+  if (expected.pathIncludes) {
+    assert(failure.detail && String(failure.detail.path || '').includes(expected.pathIncludes), `Run ${run.id} failure detail missing path ${expected.pathIncludes}`);
+  }
+}
+
+function runOquery(args) {
+  return execSync(`${OQUERY} ${args}`, {
+    cwd: ROOT,
+    env: { ...process.env, DATA_DIR },
+    timeout: 15000,
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+}
+
+function verifyOqueryFailureSurface(run, expected) {
+  const failuresText = runOquery(`failures --run ${run.id}`);
+  assert(failuresText.includes(expected.displayTag), `oquery failures did not show ${expected.displayTag} for run ${run.id}: ${failuresText}`);
+
+  const failuresJsonText = runOquery(`failures --run ${run.id} --json`);
+  const failuresJson = JSON.parse(failuresJsonText);
+  assert(Array.isArray(failuresJson) && failuresJson.length === 1, `oquery failures JSON did not return one row for run ${run.id}`);
+  assert(failuresJson[0].failureType === expected.failureType, `oquery failures JSON type ${failuresJson[0].failureType} !== ${expected.failureType}`);
+
+  const runsText = runOquery(`runs --id ${run.id}`);
+  assert(runsText.includes(expected.runOutcome), `oquery runs did not show ${expected.runOutcome} for run ${run.id}: ${runsText}`);
+
+  const runsJsonText = runOquery(`runs --id ${run.id} --json`);
+  const runsJson = JSON.parse(runsJsonText);
+  assert(Array.isArray(runsJson) && runsJson.length === 1, `oquery runs JSON did not return one row for run ${run.id}`);
+  assert(runsJson[0].operationalOutcome === expected.runOutcome, `oquery runs JSON outcome ${runsJson[0].operationalOutcome} !== ${expected.runOutcome}`);
+
+  const replayText = runOquery(`replay ${run.id}`);
+  assert(replayText.includes(`Replay: Run #${run.id}`), `oquery replay did not render run ${run.id}`);
+  if (expected.replayIncludes) {
+    assert(replayText.includes(expected.replayIncludes), `oquery replay missing ${expected.replayIncludes} for run ${run.id}: ${replayText}`);
+  }
 }
 
 function verifyRunLogs(ticketId, runs, options = {}) {
@@ -613,7 +795,10 @@ function verifyRunLogs(ticketId, runs, options = {}) {
     assert(snapshot.runtimeEnvelope.executionWorkspaceType === 'main', `Single-agent runtime envelope ${run.id} should use main workspace type`);
     assert(snapshot.ticketOpenedAt === run.ticketOpenedAt, `Replay snapshot missing ticketOpenedAt for run ${run.id}`);
     assert(Array.isArray(snapshot.providerRequests) && snapshot.providerRequests.length > 0, `Replay snapshot missing provider request for run ${run.id}`);
-    assert(Array.isArray(snapshot.modelResponses) && snapshot.modelResponses.length > 0, `Replay snapshot missing model response for run ${run.id}`);
+    assert(Array.isArray(snapshot.modelResponses), `Replay snapshot model responses is not an array for run ${run.id}`);
+    if (!options.allowNoModelResponse) {
+      assert(snapshot.modelResponses.length > 0, `Replay snapshot missing model response for run ${run.id}`);
+    }
     assert(snapshot.terminalStatus === run.status, `Replay snapshot terminal status mismatch for run ${run.id}`);
     assert(JSON.stringify(snapshot).includes('[redacted]'), `Replay snapshot did not redact provider secrets for run ${run.id}`);
     assert(!JSON.stringify(snapshot).includes('test-key-single-agent'), `Replay snapshot exposed agent API key for run ${run.id}`);
@@ -650,11 +835,33 @@ function verifyRunLogs(ticketId, runs, options = {}) {
         snapshot.modelResponses.some(item => item.usage && item.usage.total_tokens === 2),
         `Replay snapshot did not preserve provider usage metadata for run ${run.id}`
       );
+      assert(
+        snapshot.modelResponses.some(item => item.providerResponsePayload && item.providerResponsePayload.requestId === 'fake-single-agent-request'),
+        `Replay snapshot did not preserve provider request id for run ${run.id}`
+      );
+      assert(
+        runLogs.some(log => log.type === 'model:response' && log.requestId === 'fake-single-agent-request'),
+        `Model response log did not preserve provider request id for run ${run.id}`
+      );
     }
 
     if (options.expectFailure) {
       assert(runLogs.some(log => log.type === 'run:failed'), `Missing run:failed log for run ${run.id}`);
       assert(snapshot.failureReason, `Replay snapshot missing failure reason for run ${run.id}`);
+    }
+
+    if (options.expectProviderFailure) {
+      verifyStructuredFailure(run, {
+        code: options.expectProviderFailure.code,
+        kind: 'provider_error'
+      });
+      assert(snapshot.providerRequests.length > 0, `Provider failure run ${run.id} missing provider request snapshot`);
+      if (options.expectProviderFailure.requestId) {
+        assert(snapshot.modelResponses.some(item =>
+          item.providerResponsePayload &&
+          item.providerResponsePayload.requestId === options.expectProviderFailure.requestId
+        ), `Provider failure run ${run.id} missing provider request id ${options.expectProviderFailure.requestId}`);
+      }
     }
 
     if (options.expectStalled) {
@@ -669,6 +876,14 @@ function verifyRunLogs(ticketId, runs, options = {}) {
 
     if (options.expectMaxStepFailure) {
       assert(snapshot.events.some(event => event.type === 'run:step_limit'), `Replay snapshot missing step-limit event for run ${run.id}`);
+    }
+
+    if (options.expectStructuredRunLimitFailure) {
+      verifyStructuredFailure(run, {
+        code: 'RUN_LIMIT_EXCEEDED',
+        kind: 'budget_exhausted',
+        limitType: 'step'
+      });
     }
 
     if (options.expectOperationLimit) {
@@ -734,6 +949,78 @@ function verifyRunLogs(ticketId, runs, options = {}) {
       ), `Replay snapshot missing workspace operation error for run ${run.id}`);
     }
 
+    if (options.expectStructuredEnoentFailure) {
+      verifyStructuredFailure(run, {
+        code: 'WORKSPACE_FS_ENOENT',
+        kind: 'workspace_error',
+        pathIncludes: `missing-workspace-error-${STAMP}.txt`
+      });
+    }
+
+    if (options.expectStructuredWriteMissingParentFailure) {
+      assert(snapshot.workspaceOperations.some(item =>
+        item.operation &&
+        item.operation.operation === 'writeFile' &&
+        item.error &&
+        item.error.includes('ENOENT') &&
+        item.historyId
+      ), `Replay snapshot missing writeFile missing-parent operation for run ${run.id}`);
+      verifyStructuredFailure(run, {
+        code: 'WORKSPACE_FS_ENOENT',
+        kind: 'workspace_error',
+        pathIncludes: `missing-parent-${STAMP}/child.txt`
+      });
+      assert(run.replaySnapshot.failure.detail.parentPath === `missing-parent-${STAMP}`, `Run ${run.id} failure detail missing parent path`);
+      assert(run.replaySnapshot.failure.detail.operation === 'writeFile', `Run ${run.id} failure detail missing writeFile operation`);
+      assert(run.replaySnapshot.failure.detail.fsCode === 'ENOENT', `Run ${run.id} failure detail missing ENOENT code`);
+    }
+
+    if (options.expectStructuredCreateMissingParentFailure) {
+      assert(snapshot.workspaceOperations.some(item =>
+        item.operation &&
+        item.operation.operation === 'createFolder' &&
+        item.error &&
+        item.error.includes('ENOENT') &&
+        item.historyId
+      ), `Replay snapshot missing createFolder missing-parent operation for run ${run.id}`);
+      verifyStructuredFailure(run, {
+        code: 'WORKSPACE_FS_ENOENT',
+        kind: 'workspace_error',
+        pathIncludes: `missing-folder-parent-${STAMP}/child`
+      });
+      assert(run.replaySnapshot.failure.detail.parentPath === `missing-folder-parent-${STAMP}`, `Run ${run.id} failure detail missing parent path`);
+      assert(run.replaySnapshot.failure.detail.operation === 'createFolder', `Run ${run.id} failure detail missing createFolder operation`);
+      assert(run.replaySnapshot.failure.detail.fsCode === 'ENOENT', `Run ${run.id} failure detail missing ENOENT code`);
+    }
+
+    if (options.expectStructuredPathConflictFailure) {
+      assert(snapshot.workspaceOperations.some(item =>
+        item.operation &&
+        item.operation.operation === 'createFolder' &&
+        item.error === 'Path already exists and is not a directory' &&
+        item.historyId
+      ), `Replay snapshot missing createFolder path conflict operation for run ${run.id}`);
+      verifyStructuredFailure(run, {
+        code: 'WORKSPACE_PATH_TYPE_CONFLICT',
+        kind: 'workspace_error',
+        pathIncludes: TEST_FILE
+      });
+    }
+
+    if (options.expectPathTraversalBlocked) {
+      assert(snapshot.workspaceOperations.some(item =>
+        item.operation &&
+        item.operation.operation === 'readFile' &&
+        item.blocked === true &&
+        item.error === 'Path traversal is not allowed'
+      ), `Replay snapshot missing blocked path traversal operation for run ${run.id}`);
+      verifyStructuredFailure(run, {
+        code: 'WORKSPACE_PATH_TRAVERSAL',
+        kind: 'protected_path',
+        pathIncludes: '../outside-workspace.txt'
+      });
+    }
+
     if (options.expectProtectedBlocked) {
       assert(runLogs.some(log => log.type === 'workspace:blocked'), `Missing workspace:blocked log for run ${run.id}`);
       assert(runLogs.some(log =>
@@ -749,6 +1036,11 @@ function verifyRunLogs(ticketId, runs, options = {}) {
         item.reason
       ), `Replay snapshot missing protected path blocked operation for run ${run.id}`);
       assert(snapshot.failureReason && snapshot.failureReason.includes('Blocked protected workspace path mutation'), `Protected path failure reason was not persisted for run ${run.id}`);
+      verifyStructuredFailure(run, {
+        code: 'WORKSPACE_PROTECTED_PATH',
+        kind: 'protected_path',
+        pathIncludes: PROTECTED_TEST_FILE
+      });
     }
 
     if (options.expectMalformedResponse) {
@@ -764,6 +1056,10 @@ function verifyRunLogs(ticketId, runs, options = {}) {
         item.providerResponsePayload.body &&
         item.providerResponsePayload.body.output_text === 'I will do this later.'
       ), `Replay snapshot missing raw malformed provider response for run ${run.id}`);
+      verifyStructuredFailure(run, {
+        code: 'MODEL_MALFORMED_JSON',
+        kind: 'invalid_action'
+      });
     }
 
     if (options.expectBulkDelete) {
@@ -863,11 +1159,35 @@ async function verifyRunDetailPage(cookie, run) {
 
   assert(response.statusCode === 200, `/runs/${run.id} returned HTTP ${response.statusCode}`);
   assert(response.body.includes(`Run #${run.id}`), 'Run detail page missing run heading');
-  assert(response.body.includes('Runtime Envelope'), 'Run detail page missing runtime envelope section');
+  assert(response.body.includes('Technical Runtime Details'), 'Run detail page missing runtime details section');
   assert(response.body.includes('Provider Requests'), 'Run detail page missing provider requests section');
   assert(response.body.includes('Workspace Operations'), 'Run detail page missing workspace operations section');
   assert(!response.body.includes('test-key-single-agent'), 'Run detail page exposed agent API key');
   assert(!response.body.includes('Bearer test-key-single-agent'), 'Run detail page exposed Authorization value');
+}
+
+async function verifyFilteredLogNavigation(cookie, run) {
+  const runLogsResponse = await request('GET', `/api/logs?runId=${run.id}`, { cookie });
+  assert(runLogsResponse.statusCode === 200, `Filtered run logs returned HTTP ${runLogsResponse.statusCode}`);
+  const runLogs = JSON.parse(runLogsResponse.body).logs;
+  assert(runLogs.length > 0, 'Filtered run logs returned no logs');
+  assert(runLogs.every(log => log.runId === run.id), 'Filtered run logs included another run');
+
+  const ticketLogsResponse = await request('GET', `/api/logs?ticketId=${run.ticketId}`, { cookie });
+  assert(ticketLogsResponse.statusCode === 200, `Filtered ticket logs returned HTTP ${ticketLogsResponse.statusCode}`);
+  const ticketLogs = JSON.parse(ticketLogsResponse.body).logs;
+  assert(ticketLogs.length > 0, 'Filtered ticket logs returned no logs');
+  assert(ticketLogs.every(log => log.ticketId === run.ticketId), 'Filtered ticket logs included another ticket');
+
+  const runLogsPage = await request('GET', `/logs?runId=${run.id}`, { cookie });
+  assert(runLogsPage.statusCode === 200, `Filtered run logs page returned HTTP ${runLogsPage.statusCode}`);
+  assert(runLogsPage.body.includes(`Showing logs for`) && runLogsPage.body.includes(`Run #${run.id}`), 'Filtered run logs page missing filter banner');
+
+  const runDetailPage = await request('GET', `/runs/${run.id}`, { cookie });
+  assert(runDetailPage.body.includes(`/logs?runId=${run.id}`), 'Run detail page does not link to filtered run logs');
+
+  const ticketDetailPage = await request('GET', `/tickets/${run.ticketId}`, { cookie });
+  assert(ticketDetailPage.body.includes(`/logs?ticketId=${run.ticketId}`), 'Ticket detail page does not link to filtered ticket logs');
 }
 
 async function verifyStartupInterruptedRun(cookie, staleRunId, staleTicketId) {
@@ -897,6 +1217,25 @@ async function verifyStartupInterruptedRun(cookie, staleRunId, staleTicketId) {
   return run;
 }
 
+async function verifyStartupProviderCallInterruptedRun(cookie, staleRunId, staleTicketId) {
+  const runs = readJson('runs.json');
+  const run = runs.find(item => item.id === staleRunId);
+  const logs = readJson('logs.json').filter(log => log.runId === staleRunId);
+  const ticket = readJson('tickets.json').find(item => item.id === staleTicketId);
+
+  assert(run, 'Seeded stale provider-call run is missing');
+  assert(run.status === 'interrupted', 'Stale provider-call run was not marked interrupted on startup');
+  assert(run.error === 'process restarted before run completed', 'Stale provider-call run missing restart reason');
+  assert(ticket && ticket.status === 'open', 'Interrupted stale provider-call ticket did not reopen');
+  assert(run.replaySnapshot.providerRequests.length === 1, 'Stale provider-call run did not preserve provider request payload');
+  assert(run.replaySnapshot.modelResponses.length === 0, 'Stale provider-call run unexpectedly gained a provider response');
+  assert(run.replaySnapshot.failure && run.replaySnapshot.failure.detail && run.replaySnapshot.failure.detail.phase === 'during_provider_call', 'Stale provider-call run missing during-provider interruption phase');
+  assert(run.replaySnapshot.events.some(event => event.type === 'run:interrupted' && event.phase === 'during_provider_call'), 'Stale provider-call replay event missing phase');
+  assert(logs.some(log => log.type === 'run:interrupted' && log.phase === 'during_provider_call'), 'Stale provider-call log missing interruption phase');
+
+  return run;
+}
+
 async function verifyManualStopAndRetry(cookie, agent) {
   const seeded = seedManualStopRun(agent);
   const stopResponse = await request('POST', `/api/runs/${seeded.run.id}/stop`, { cookie });
@@ -913,6 +1252,9 @@ async function verifyManualStopAndRetry(cookie, agent) {
   assert(stopLogs.some(log => log.type === 'run:interrupted' && log.message === 'manually stopped'), 'Manual stop did not log run:interrupted');
   assert(stoppedRun.replaySnapshot.terminalStatus === 'interrupted', 'Manual stop replay snapshot terminal status mismatch');
   assert(stoppedRun.replaySnapshot.failureReason === 'manually stopped', 'Manual stop replay snapshot missing reason');
+  assert(stoppedRun.replaySnapshot.failure && stoppedRun.replaySnapshot.failure.detail && stoppedRun.replaySnapshot.failure.detail.phase === 'before_provider_call', 'Manual stop before provider call missing interruption phase');
+  assert(stoppedRun.replaySnapshot.events.some(event => event.type === 'run:interrupted' && event.phase === 'before_provider_call'), 'Manual stop replay event missing before-provider phase');
+  assert(stopLogs.some(log => log.type === 'run:interrupted' && log.phase === 'before_provider_call'), 'Manual stop log missing before-provider phase');
 
   const retryResponse = await request('POST', `/api/runs/${seeded.run.id}/retry`, { cookie });
   assert(retryResponse.statusCode === 200, `Manual retry failed with HTTP ${retryResponse.statusCode}`);
@@ -932,9 +1274,39 @@ async function verifyManualStopAndRetry(cookie, agent) {
   return { stoppedRun, freshRun };
 }
 
+async function verifyManualStopDuringProviderCall(cookie, agent) {
+  const ticket = await createAssignedTicket(cookie, agent.id, `single-agent slow-provider ${STAMP}`);
+  await waitForTicketStatus(ticket.id, 'in_progress');
+  const [run] = await waitForRuns(ticket.id, 1, runs => runs.some(item => ['pending', 'running'].includes(item.status)));
+  await waitForRunLog(run.id, 'model:request');
+
+  const stopResponse = await request('POST', `/api/runs/${run.id}/stop`, { cookie });
+  assert(stopResponse.statusCode === 200, `Manual stop during provider call failed with HTTP ${stopResponse.statusCode}`);
+  const stoppedBeforeResponse = readJson('runs.json').find(item => item.id === run.id);
+  assert(stoppedBeforeResponse.replaySnapshot.providerRequests.length > 0, 'Provider-race interrupted run did not preserve provider request before response arrived');
+  assert(stoppedBeforeResponse.replaySnapshot.modelResponses.length === 0, 'Provider-race interrupted run recorded provider response before delayed response arrived');
+
+  await waitForRuns(ticket.id, 1, runs => runs.every(item => item.status === 'interrupted'));
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  const stoppedRun = readJson('runs.json').find(item => item.id === run.id);
+  const stopLogs = readJson('logs.json').filter(log => log.runId === run.id);
+
+  assert(stoppedRun.status === 'interrupted', 'Provider-race manual stop did not remain interrupted');
+  assert(stoppedRun.replaySnapshot.terminalStatus === 'interrupted', 'Provider-race manual stop terminal status mismatch');
+  assert(stoppedRun.replaySnapshot.failure && stoppedRun.replaySnapshot.failure.detail && stoppedRun.replaySnapshot.failure.detail.phase === 'during_provider_call', 'Provider-race manual stop missing interruption phase');
+  assert(stoppedRun.replaySnapshot.events.some(event => event.type === 'run:interrupted' && event.phase === 'during_provider_call'), 'Provider-race replay event missing during-provider phase');
+  assert(stopLogs.some(log => log.type === 'run:interrupted' && log.phase === 'during_provider_call'), 'Provider-race stop log missing during-provider phase');
+  assert(stoppedRun.replaySnapshot.providerRequests.length > 0, 'Provider-race interrupted run did not preserve provider request after response arrived');
+  assert(stoppedRun.replaySnapshot.modelResponses.length > 0, 'Provider-race interrupted run did not preserve provider response after response arrived');
+  assert(stoppedRun.replaySnapshot.workspaceOperations.length === 0, 'Provider-race interrupted run executed workspace operations after stop');
+
+  return stoppedRun;
+}
+
 async function main() {
   const agent = seedAgent();
   const stale = seedStaleRunningRun(agent);
+  const staleProviderCall = seedStaleProviderCallRun(agent);
   const preloadPath = createFakeOpenAIPreload();
   let server = null;
 
@@ -964,7 +1336,9 @@ async function main() {
     await waitForReady();
     const cookie = await login();
     const interruptedRun = await verifyStartupInterruptedRun(cookie, stale.run.id, stale.ticket.id);
+    const providerCallInterruptedRun = await verifyStartupProviderCallInterruptedRun(cookie, staleProviderCall.run.id, staleProviderCall.ticket.id);
     const manualControlRuns = await verifyManualStopAndRetry(cookie, agent);
+    const providerRaceStopRun = await verifyManualStopDuringProviderCall(cookie, agent);
 
     const completeTicket = await createAssignedTicket(cookie, agent.id, `single-agent complete-write ${STAMP}`);
     await waitForTicketStatus(completeTicket.id, 'in_progress');
@@ -979,6 +1353,7 @@ async function main() {
     assert(completeRuns[0].agentId === agent.id, 'Single-agent run used the wrong agent');
     verifyRunLogs(completeTicket.id, completeRuns, { expectWorkspaceWrite: true });
     await verifyRunDetailPage(cookie, completeRuns[0]);
+    await verifyFilteredLogNavigation(cookie, completeRuns[0]);
     assert(fs.existsSync(path.join(WORKSPACE_ROOT, TEST_FILE)), 'Expected workspace file was not created');
 
     const completeOpHistory = readJson('operation-history.json').filter(h => h.runId === completeRuns[0].id);
@@ -1031,7 +1406,39 @@ async function main() {
     );
     const failedTicket = await waitForTicketStatus(failTicket.id, 'failed');
     assert(failedTicket.status === 'failed', 'Single-agent ticket did not fail when OpenAI failed');
-    verifyRunLogs(failTicket.id, failedRuns, { expectFailure: true });
+    verifyRunLogs(failTicket.id, failedRuns, {
+      expectFailure: true,
+      expectProviderFailure: { code: 'OPENAI_HTTP_ERROR', requestId: 'fake-single-agent-failure' }
+    });
+    verifyOqueryFailureSurface(failedRuns[0], {
+      displayTag: 'PROVIDER',
+      failureType: 'provider_error',
+      runOutcome: 'failed_execution'
+    });
+
+    const transportFailureTicket = await createAssignedTicket(cookie, agent.id, `single-agent transport-failure ${STAMP}`);
+    await waitForTicketStatus(transportFailureTicket.id, 'in_progress');
+    const transportFailureRuns = await waitForRuns(
+      transportFailureTicket.id,
+      1,
+      runs => runs.every(run => run.status === 'failed')
+    );
+    const transportFailureTicketAfterRun = await waitForTicketStatus(transportFailureTicket.id, 'failed');
+    assert(transportFailureTicketAfterRun.status === 'failed', 'Single-agent ticket did not fail when provider transport failed');
+    verifyRunLogs(transportFailureTicket.id, transportFailureRuns, {
+      expectFailure: true,
+      expectProviderFailure: { code: 'OPENAI_TRANSPORT_ERROR' },
+      allowNoModelResponse: true
+    });
+    assert(
+      transportFailureRuns[0].replaySnapshot.modelResponses.length === 0,
+      'Transport failure before provider response should not create a model response snapshot'
+    );
+    verifyOqueryFailureSurface(transportFailureRuns[0], {
+      displayTag: 'PROVIDER',
+      failureType: 'provider_error',
+      runOutcome: 'failed_execution'
+    });
 
     const recoveredTicket = await createAssignedTicket(cookie, agent.id, `single-agent stall-recover ${STAMP}`);
     await waitForTicketStatus(recoveredTicket.id, 'in_progress');
@@ -1154,7 +1561,80 @@ async function main() {
     );
     const workspaceErrorTicketAfterRun = await waitForTicketStatus(workspaceErrorTicket.id, 'failed');
     assert(workspaceErrorTicketAfterRun.status === 'failed', 'Workspace error ticket did not fail');
-    verifyRunLogs(workspaceErrorTicket.id, workspaceErrorRuns, { expectFailure: true, expectWorkspaceError: true });
+    verifyRunLogs(workspaceErrorTicket.id, workspaceErrorRuns, { expectFailure: true, expectWorkspaceError: true, expectStructuredEnoentFailure: true });
+    verifyOqueryFailureSurface(workspaceErrorRuns[0], {
+      displayTag: 'FS ERROR',
+      failureType: 'workspace_error',
+      runOutcome: 'failed_execution'
+    });
+
+    const writeMissingParentTicket = await createAssignedTicket(cookie, agent.id, `single-agent write-missing-parent ${STAMP}`);
+    await waitForTicketStatus(writeMissingParentTicket.id, 'in_progress');
+    const writeMissingParentRuns = await waitForRuns(
+      writeMissingParentTicket.id,
+      1,
+      runs => runs.every(run => run.status === 'failed')
+    );
+    const writeMissingParentTicketAfterRun = await waitForTicketStatus(writeMissingParentTicket.id, 'failed');
+    assert(writeMissingParentTicketAfterRun.status === 'failed', 'Write missing-parent ticket did not fail');
+    verifyRunLogs(writeMissingParentTicket.id, writeMissingParentRuns, { expectFailure: true, expectStructuredWriteMissingParentFailure: true });
+    verifyOqueryFailureSurface(writeMissingParentRuns[0], {
+      displayTag: 'FS ERROR',
+      failureType: 'workspace_error',
+      runOutcome: 'failed_execution',
+      replayIncludes: 'WRITE'
+    });
+
+    const createMissingParentTicket = await createAssignedTicket(cookie, agent.id, `single-agent create-missing-parent ${STAMP}`);
+    await waitForTicketStatus(createMissingParentTicket.id, 'in_progress');
+    const createMissingParentRuns = await waitForRuns(
+      createMissingParentTicket.id,
+      1,
+      runs => runs.every(run => run.status === 'failed')
+    );
+    const createMissingParentTicketAfterRun = await waitForTicketStatus(createMissingParentTicket.id, 'failed');
+    assert(createMissingParentTicketAfterRun.status === 'failed', 'Create missing-parent ticket did not fail');
+    verifyRunLogs(createMissingParentTicket.id, createMissingParentRuns, { expectFailure: true, expectStructuredCreateMissingParentFailure: true });
+    verifyOqueryFailureSurface(createMissingParentRuns[0], {
+      displayTag: 'FS ERROR',
+      failureType: 'workspace_error',
+      runOutcome: 'failed_execution',
+      replayIncludes: 'CREATE'
+    });
+
+    const pathConflictTicket = await createAssignedTicket(cookie, agent.id, `single-agent folder-file-conflict ${STAMP}`);
+    await waitForTicketStatus(pathConflictTicket.id, 'in_progress');
+    const pathConflictRuns = await waitForRuns(
+      pathConflictTicket.id,
+      1,
+      runs => runs.every(run => run.status === 'failed')
+    );
+    const pathConflictTicketAfterRun = await waitForTicketStatus(pathConflictTicket.id, 'failed');
+    assert(pathConflictTicketAfterRun.status === 'failed', 'Path conflict ticket did not fail');
+    verifyRunLogs(pathConflictTicket.id, pathConflictRuns, { expectFailure: true, expectStructuredPathConflictFailure: true });
+    verifyOqueryFailureSurface(pathConflictRuns[0], {
+      displayTag: 'FS ERROR',
+      failureType: 'workspace_error',
+      runOutcome: 'failed_execution',
+      replayIncludes: 'CREATE'
+    });
+
+    const pathTraversalTicket = await createAssignedTicket(cookie, agent.id, `single-agent path-traversal ${STAMP}`);
+    await waitForTicketStatus(pathTraversalTicket.id, 'in_progress');
+    const pathTraversalRuns = await waitForRuns(
+      pathTraversalTicket.id,
+      1,
+      runs => runs.every(run => run.status === 'failed')
+    );
+    const pathTraversalTicketAfterRun = await waitForTicketStatus(pathTraversalTicket.id, 'failed');
+    assert(pathTraversalTicketAfterRun.status === 'failed', 'Path traversal ticket did not fail');
+    verifyRunLogs(pathTraversalTicket.id, pathTraversalRuns, { expectFailure: true, expectPathTraversalBlocked: true });
+    verifyOqueryFailureSurface(pathTraversalRuns[0], {
+      displayTag: 'PROTECTED_PATH',
+      failureType: 'protected_path',
+      runOutcome: 'blocked/rejected',
+      replayIncludes: 'BLOCKED'
+    });
 
     const maxStepsTicket = await createAssignedTicket(cookie, agent.id, `single-agent max-steps ${STAMP}`);
     await waitForTicketStatus(maxStepsTicket.id, 'in_progress');
@@ -1165,7 +1645,12 @@ async function main() {
     );
     const maxStepsTicketAfterRun = await waitForTicketStatus(maxStepsTicket.id, 'failed');
     assert(maxStepsTicketAfterRun.status === 'failed', 'Max-step ticket did not fail');
-    verifyRunLogs(maxStepsTicket.id, maxStepsRuns, { expectFailure: true, expectMaxStepFailure: true });
+    verifyRunLogs(maxStepsTicket.id, maxStepsRuns, { expectFailure: true, expectMaxStepFailure: true, expectStructuredRunLimitFailure: true });
+    verifyOqueryFailureSurface(maxStepsRuns[0], {
+      displayTag: 'BUDGET',
+      failureType: 'budget_exhausted',
+      runOutcome: 'failed_execution'
+    });
 
     const bulkDeleteTicket = await createAssignedTicket(cookie, agent.id, `single-agent bulk-delete ${STAMP}`);
     await waitForTicketStatus(bulkDeleteTicket.id, 'in_progress');
@@ -1268,6 +1753,12 @@ async function main() {
       'Agent overwrote protected workspace file'
     );
     verifyRunLogs(protectedTicket.id, protectedRuns, { expectFailure: true, expectProtectedBlocked: true });
+    verifyOqueryFailureSurface(protectedRuns[0], {
+      displayTag: 'PROTECTED_PATH',
+      failureType: 'protected_path',
+      runOutcome: 'blocked/rejected',
+      replayIncludes: 'BLOCKED'
+    });
     const protectedOpHistory = readJson('operation-history.json').filter(h => h.runId === protectedRuns[0].id);
     assert(protectedOpHistory.length === 0, 'Blocked protected path operation should not create history record');
     const protectedDelete = await request('DELETE', '/api/workspace', {
@@ -1276,6 +1767,33 @@ async function main() {
     });
     assert(protectedDelete.statusCode === 200, `Admin protected file delete failed with HTTP ${protectedDelete.statusCode}: ${protectedDelete.body}`);
     assert(!fs.existsSync(path.join(WORKSPACE_ROOT, PROTECTED_TEST_FILE)), 'Admin protected file delete did not remove the file');
+    const operatorMutationLogs = readJson('logs.json').filter(log =>
+      log.type === 'workspace:operator_mutation' &&
+      log.source === 'operator_workspace_api' &&
+      log.requestedBy === 'admin' &&
+      log.workspaceAction &&
+      [PROTECTED_TEST_FILE].includes(log.workspaceAction.args.path)
+    );
+    assert(operatorMutationLogs.some(log => log.workspaceAction.operation === 'createFile'), 'Admin createFile workspace mutation was not logged');
+    assert(operatorMutationLogs.some(log => log.workspaceAction.operation === 'writeFile'), 'Admin writeFile workspace mutation was not logged');
+    assert(operatorMutationLogs.some(log => log.workspaceAction.operation === 'deletePath'), 'Admin deletePath workspace mutation was not logged');
+    assert(operatorMutationLogs.every(log => Array.isArray(log.preState) && Array.isArray(log.postState)), 'Admin workspace mutation logs missing pre/post state');
+    assert(operatorMutationLogs.every(log => log.runId == null), 'Admin workspace mutation logs should not pretend to be agent run logs');
+
+    const fixtureResponse = await request('POST', '/api/workspace/fixture', {
+      cookie,
+      body: { fixtureId: 'empty' }
+    });
+    assert(fixtureResponse.statusCode === 200, `Workspace fixture reset failed with HTTP ${fixtureResponse.statusCode}: ${fixtureResponse.body}`);
+    const fixtureLogs = readJson('logs.json').filter(log => log.type === 'workspace:fixture' && log.source === 'operator_workspace_fixture');
+    assert(fixtureLogs.some(log =>
+      log.requestedBy === 'admin' &&
+      log.workspaceAction &&
+      log.workspaceAction.operation === 'resetWorkspaceFixture' &&
+      log.workspaceAction.args.fixtureId === 'empty' &&
+      log.preState &&
+      log.postState
+    ), 'Workspace fixture reset did not preserve operator provenance and pre/post state');
 
     const malformedTicket = await createAssignedTicket(cookie, agent.id, `single-agent malformed-response ${STAMP}`);
     await waitForTicketStatus(malformedTicket.id, 'in_progress');
@@ -1287,6 +1805,11 @@ async function main() {
     const malformedTicketAfterRun = await waitForTicketStatus(malformedTicket.id, 'failed');
     assert(malformedTicketAfterRun.status === 'failed', 'Malformed response ticket did not fail');
     verifyRunLogs(malformedTicket.id, malformedRuns, { expectFailure: true, expectMalformedResponse: true });
+    verifyOqueryFailureSurface(malformedRuns[0], {
+      displayTag: 'INVALID',
+      failureType: 'invalid_action',
+      runOutcome: 'failed_execution'
+    });
 
     const agentsPage = await request('GET', '/agents', { cookie });
     assert(agentsPage.statusCode === 200, `/agents returned HTTP ${agentsPage.statusCode}`);
@@ -1303,11 +1826,13 @@ async function main() {
       actionLimitRepeatRuns: actionLimitRepeatRuns.length,
       noopRuns: noopRuns.length,
       interruptedRuns: interruptedRun.status === 'interrupted' ? 1 : 0,
+      providerCallInterruptedRuns: providerCallInterruptedRun.status === 'interrupted' ? 1 : 0,
       manualStopRuns: manualControlRuns.stoppedRun.status === 'interrupted' ? 1 : 0,
+      providerRaceStopRuns: providerRaceStopRun.status === 'interrupted' ? 1 : 0,
       manualRetryRuns: manualControlRuns.freshRun.status === 'completed' ? 1 : 0,
       protectedBlockedRuns: protectedRuns.length,
       malformedRuns: malformedRuns.length,
-      failedRuns: failedRuns.length + stalledRuns.length + listLoopRuns.length + actionLimitRepeatRuns.length + workspaceErrorRuns.length + maxStepsRuns.length + protectedRuns.length + malformedRuns.length,
+      failedRuns: failedRuns.length + transportFailureRuns.length + stalledRuns.length + listLoopRuns.length + actionLimitRepeatRuns.length + workspaceErrorRuns.length + writeMissingParentRuns.length + createMissingParentRuns.length + pathConflictRuns.length + pathTraversalRuns.length + maxStepsRuns.length + protectedRuns.length + malformedRuns.length,
       duplicateActiveBlocked: true
     }));
   } finally {

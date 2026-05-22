@@ -39,6 +39,54 @@ function statusTag(s) {
   return yellow(s || 'unknown');
 }
 
+function outcomeTag(s) {
+  if (s === 'completed_with_mutations') return green(s);
+  if (s === 'completed_noop') return yellow(s);
+  if (s === 'impossible_within_boundary') return yellow(s);
+  if (s === 'blocked/rejected') return red(s);
+  if (s === 'failed_execution') return red(s);
+  if (s === 'interrupted') return yellow(s);
+  return dim(s || 'unknown');
+}
+
+function replayActionStateTag(state) {
+  if (state === 'COMMITTED') return green(state);
+  if (state === 'BLOCKED') return red(state);
+  if (state === 'SKIPPED') return yellow(state);
+  if (state === 'EXECUTED') return cyan(state);
+  return dim(state || 'PROPOSED');
+}
+
+const MUTATING_OPERATIONS = ['createFolder', 'writeFile', 'renamePath', 'deletePath'];
+
+function classifyProposedActions(actions, ops, consumedOps = new Set()) {
+  let stepBlocked = false;
+  return (actions || []).map(a => {
+    if (!a || typeof a !== 'object' || !a.operation) return { state: null, detail: '', opResult: null };
+    const actionPath = a.args ? a.args.path : undefined;
+    const opResult = (ops || []).find(o => {
+      if (consumedOps.has(o)) return false;
+      const match = o.operation && o.operation.operation === a.operation &&
+        o.operation.args && o.operation.args.path === actionPath;
+      if (match) consumedOps.add(o);
+      return match;
+    });
+    const mutating = MUTATING_OPERATIONS.includes(a.operation);
+    if (opResult) {
+      if (opResult.blocked || opResult.error) {
+        stepBlocked = true;
+        return { state: 'BLOCKED', detail: opResult.reason || opResult.error || '', opResult };
+      }
+      if (mutating && (opResult.historyId || (opResult.result && opResult.result.historyId))) {
+        return { state: 'COMMITTED', detail: '', opResult };
+      }
+      return { state: 'EXECUTED', detail: '', opResult };
+    }
+    if (stepBlocked) return { state: 'SKIPPED', detail: 'not executed after blocked/rejected operation', opResult: null };
+    return { state: 'PROPOSED', detail: '', opResult: null };
+  });
+}
+
 function opTypeTag(s) {
   if (!s) return '';
   if (s === 'createFolder') return cyan('CREATE');
@@ -64,6 +112,95 @@ function datetime(d) {
   if (!d) return '';
   const dt = new Date(d);
   return dt.toISOString().replace('T', ' ').substring(0, 19);
+}
+
+function runLogs(run, data) {
+  const logs = Array.isArray(data.logs) ? data.logs : [];
+  return logs.filter(l => l && l.runId === run.id);
+}
+
+function runHistory(run, data) {
+  const history = Array.isArray(data.history) ? data.history : [];
+  return history.filter(h => h && h.runId === run.id);
+}
+
+function replayEvents(run) {
+  return run && run.replaySnapshot && Array.isArray(run.replaySnapshot.events)
+    ? run.replaySnapshot.events
+    : [];
+}
+
+function replayWorkspaceOps(run) {
+  return run && run.replaySnapshot && Array.isArray(run.replaySnapshot.workspaceOperations)
+    ? run.replaySnapshot.workspaceOperations
+    : [];
+}
+
+function hasCompletedNoopEvent(run, data) {
+  return replayEvents(run).some(e => e && e.type === 'run:completed_noop') ||
+    runLogs(run, data).some(l => l && l.type === 'run:completed_noop');
+}
+
+function hasBlockedOrRejectedEvidence(run, data) {
+  return runLogs(run, data).some(l => l && l.type === 'workspace:blocked') ||
+    replayWorkspaceOps(run).some(o => o && (o.blocked || (o.operation && o.operation.blocked))) ||
+    runHistory(run, data).some(h => h && (
+      h.blocked ||
+      (h.error && /protected|ownership|blocked/i.test(h.error)) ||
+      (h.result && /protected|ownership|blocked/i.test(JSON.stringify(h.result)))
+    ));
+}
+
+function hasNotFoundEvidence(run, data) {
+  return runLogs(run, data).some(l => {
+    const action = l && l.workspaceAction;
+    return action && (
+      action.status === 'not_found' ||
+      (action.result && action.result.status === 'not_found') ||
+      (action.error && /not_found|enoent/i.test(action.error))
+    );
+  }) ||
+    replayWorkspaceOps(run).some(o => {
+      const result = o && o.result;
+      const error = o && o.error;
+      return (result && result.status === 'not_found') || (error && /not_found|enoent/i.test(error));
+    });
+}
+
+function mutationCountForRun(run) {
+  if (run && run.mutationCount !== undefined) return run.mutationCount;
+  if (run && run.replaySnapshot && run.replaySnapshot.mutationCount !== undefined) return run.replaySnapshot.mutationCount;
+  return 0;
+}
+
+function classifyOperationalOutcome(run, data) {
+  if (!run || typeof run !== 'object') return 'unknown';
+  if (hasBlockedOrRejectedEvidence(run, data)) return 'blocked/rejected';
+  if (run.status === 'interrupted') return 'interrupted';
+
+  if (run.status === 'completed') {
+    if (mutationCountForRun(run) > 0) return 'completed_with_mutations';
+    if (hasNotFoundEvidence(run, data)) return 'impossible_within_boundary';
+    if (hasCompletedNoopEvent(run, data)) return 'completed_noop';
+    return 'completed_noop';
+  }
+
+  if (run.status === 'failed') return 'failed_execution';
+  return run.status || 'unknown';
+}
+
+function runWithOperationalOutcome(run, data) {
+  return { ...run, operationalOutcome: classifyOperationalOutcome(run, data) };
+}
+
+function ticketWithOperationalOutcome(ticket, data) {
+  const runs = [...(Array.isArray(data.runs) ? data.runs : []).filter(r => r.ticketId === ticket.id)]
+    .sort((a, b) => (a.id || 0) - (b.id || 0));
+  const lastRun = runs.length > 0 ? runs[runs.length - 1] : null;
+  return {
+    ...ticket,
+    latestRunOutcome: lastRun ? classifyOperationalOutcome(lastRun, data) : null
+  };
 }
 
 function sourceLabel(args) {
@@ -184,7 +321,7 @@ async function cmdTickets(args) {
   }
   if (args.limit) list = list.slice(0, parseInt(args.limit));
 
-  if (args.json) return console.log(JSON.stringify(list, null, 2));
+  if (args.json) return console.log(JSON.stringify(list.map(t => ticketWithOperationalOutcome(t, data)), null, 2));
 
   if (list.length === 0) return console.log(dim('No tickets found.'));
 
@@ -200,7 +337,8 @@ async function cmdTickets(args) {
     if (runCount === 0) {
       console.log(`  ${bold(`#${t.id}`)} ${statusTag(t.status)} ${dim('no runs')} ${dim(created)}`);
     } else {
-      const runInfo = `runs: ${runCount} | latest: ${statusTag(lastRun.status)} | completed: ${completedRuns} | failed: ${failedRuns}`;
+      const latestOutcome = classifyOperationalOutcome(lastRun, data);
+      const runInfo = `runs: ${runCount} | latest: ${statusTag(lastRun.status)} | outcome: ${latestOutcome} | completed: ${completedRuns} | failed: ${failedRuns}`;
       console.log(`  ${bold(`#${t.id}`)} ticket: ${statusTag(t.status)} ${dim(runInfo)} ${dim(created)}`);
     }
     console.log(`       ${truncate((t.objective || '').replace(/\r?\n/g, '\\n'), 120)}`);
@@ -252,7 +390,7 @@ async function cmdRuns(args) {
     if (args.limit) list = list.slice(0, parseInt(args.limit));
     if (args.id) list = list.filter(r => r && r.id === parseInt(args.id));
 
-    if (args.json) return print(JSON.stringify(list, null, 2));
+    if (args.json) return print(JSON.stringify(list.map(r => runWithOperationalOutcome(r, data)), null, 2));
 
     if (list.length === 0) {
       const filtered = args.ticket || args.status || args.agent || args.id;
@@ -273,12 +411,13 @@ async function cmdRuns(args) {
       const initializing = !r.replaySnapshot || plans.length === 0;
       const ops = r.replaySnapshot ? (r.replaySnapshot.workspaceOperations || []).length : 0;
       const mutations = r.mutationCount !== undefined ? r.mutationCount : (r.replaySnapshot && r.replaySnapshot.mutationCount !== undefined ? r.replaySnapshot.mutationCount : '?');
+      const operationalOutcome = classifyOperationalOutcome(r, data);
       const steps = r.replaySnapshot ? plans.length : 0;
       const created = datetime(r.createdAt);
       const err = r.error ? red(r.error.substring(0, 80)) : '';
 
       print(`  ${bold(`R${r.id}`)} ${statusTag(r.status)} ${dim('ticket')} ${ticketLabel} ${dim('agent')} ${r.agentName || '?'}`);
-      print(`       ${dim('steps')} ${steps} ${dim('ops')} ${ops} ${dim('mutations')} ${mutations} ${dim('model')} ${r.replaySnapshot ? r.replaySnapshot.model : '?'} ${dim(created)}`);
+      print(`       ${dim('outcome')} ${outcomeTag(operationalOutcome)} ${dim('steps')} ${steps} ${dim('ops')} ${ops} ${dim('mutations')} ${mutations} ${dim('model')} ${r.replaySnapshot ? r.replaySnapshot.model : '?'} ${dim(created)}`);
       if (initializing) print(`       ${yellow('initializing')} ${dim('no steps recorded yet')}`);
       if (err) print(`       ${err}`);
       if (r.allocationSubtask) print(`       ${yellow('allocated')} ${dim(truncate(r.allocationSubtask, 100))}`);
@@ -364,8 +503,9 @@ async function cmdMutations(args) {
     const statusTag_ = status_ === 'created' ? green('created') : status_ === 'already_exists_noop' ? yellow('noop') : dim(status_);
     const runInfo = h.runId ? dim(`R${h.runId}`) : '';
     const ticketInfo = h.ticketId ? dim(`T${h.ticketId}`) : '';
+    const historyInfo = h.id ? yellow(`H${h.id}`) : dim('H?');
 
-    console.log(`  ${dim(time)} ${runInfo} ${ticketInfo} step=${h.step != null ? h.step : '?'}`);
+    console.log(`  ${historyInfo} ${dim(time)} ${runInfo} ${ticketInfo} step=${h.step != null ? h.step : '?'}`);
     console.log(`       ${op} ${path_} ${statusTag_}`);
     if (h.error) console.log(`       ${red('error')} ${h.error}`);
     console.log('');
@@ -408,22 +548,18 @@ async function cmdReplay(args) {
     const comp = p.complete ? green('complete:true') : dim('complete:false');
     const msg = truncate(p.message || '', 100);
     console.log(`  ${dim(`step ${i}:`)} ${comp} ${msg}`);
+    const actionStates = classifyProposedActions(p.actions || [], ops, consumedOps);
     (p.actions || []).forEach(a => {
       const op = opTypeTag(a.operation);
       const path_ = a.args ? (a.args.path || '') : '';
       const contentPreview = a.args && a.args.content ? dim(` content:${truncate(a.args.content, 40)}`) : '';
-      // Find the first unconsumed workspace operation for this action+path.
-      // This prevents later steps from inheriting earlier steps' statuses.
-      const opResult = ops.find(o => {
-        if (consumedOps.has(o)) return false;
-        const match = o.operation && o.operation.operation === a.operation &&
-          o.operation.args && o.operation.args.path === a.args.path;
-        if (match) consumedOps.add(o);
-        return match;
-      });
+      const actionState = actionStates.shift() || { state: 'PROPOSED', detail: '', opResult: null };
+      const opResult = actionState.opResult;
       const status_ = opResult && opResult.result ? (opResult.result.status || '') : '';
       const statusShow = status_ === 'created' ? green(' ✓') : status_ === 'already_exists_noop' ? yellow(' ⟲') : status_ ? dim(` ${status_}`) : '';
-      console.log(`    ${op} ${path_}${statusShow}${contentPreview}`);
+      const detail = actionState.detail || '';
+      const detailText = detail ? dim(` (${truncate(detail, 80)})`) : '';
+      console.log(`    [${dim('PROPOSED')}] [${replayActionStateTag(actionState.state)}] ${op} ${path_}${statusShow}${contentPreview}${detailText}`);
     });
   });
 
@@ -453,14 +589,17 @@ async function cmdReplay(args) {
 }
 
 function classifyFailure(run) {
-  const err = (run.error || '').toLowerCase();
-  const reason = (run.replaySnapshot ? run.replaySnapshot.failureReason || '' : '').toLowerCase();
-  const msg = err || reason;
-  if (msg.includes('exceeded execution step limit') || msg.includes('maxexecutionsteps')) return 'budget_exhausted';
-  if (msg.includes('must be an object') || msg.includes('invalid action')) return 'invalid_action';
-  if (msg.includes('enoent') || msg.includes('eacces') || msg.includes('blocked outside')) return 'workspace_error';
-  if (msg.includes('exceeded runtime duration limit') || msg.includes('timeout')) return 'timeout';
-  if (run.status === 'interrupted' || msg.includes('interrupted') || msg.includes('restarted')) return 'interrupted';
+  const failure = run && run.replaySnapshot ? run.replaySnapshot.failure : null;
+  if (failure && typeof failure === 'object') {
+    if (failure.kind) return failure.kind;
+    if (failure.code === 'RUN_INTERRUPTED') return 'interrupted';
+    if (failure.code === 'RUN_LIMIT_EXCEEDED') {
+      return failure.detail && failure.detail.limitType === 'timeout' ? 'timeout' : 'budget_exhausted';
+    }
+    if (failure.code === 'WORKSPACE_PROTECTED_PATH' || failure.code === 'WORKSPACE_OWNERSHIP_VIOLATION') return 'protected_path';
+    if (failure.code === 'MODEL_MALFORMED_JSON') return 'invalid_action';
+  }
+  if (run && run.status === 'interrupted') return 'interrupted';
   return 'unknown';
 }
 
@@ -483,8 +622,11 @@ async function cmdFailures(args) {
     const ctx = buildFailureContext(r, data);
     const typeTag = ctx.failureType === 'budget_exhausted' ? red('BUDGET') :
       ctx.failureType === 'invalid_action' ? yellow('INVALID') :
+      ctx.failureType === 'protected_path' ? red('PROTECTED_PATH') :
       ctx.failureType === 'workspace_error' ? red('FS ERROR') :
+      ctx.failureType === 'provider_error' ? red('PROVIDER') :
       ctx.failureType === 'timeout' ? yellow('TIMEOUT') :
+      ctx.failureType === 'no_progress' ? yellow('NO_PROGRESS') :
       ctx.failureType === 'interrupted' ? yellow('INTERRUPTED') : dim('UNKNOWN');
 
     console.log(`  ${bold(`R${r.id}`)} ${red('failed')} ticket ${bold(`T${r.ticketId}`)} [${typeTag}]`);
@@ -520,9 +662,13 @@ async function cmdFailures(args) {
 
     if (ctx.invalidActions && ctx.invalidActions.length > 0) {
       console.log(`  ${dim('model response had')} ${ctx.invalidActions.length} ${dim('action(s), last model response:')}`);
+      const displayActionStates = failureDisplayActionStates(r);
       ctx.invalidActions.forEach((a, i) => {
         if (a.valid) {
-          console.log(`    ${i + 1}. ${opTypeTag(a.operation)} ${a.path} ${green('OK')}`);
+          const actionState = displayActionStates[i] || { state: null, detail: '' };
+          const state = actionState.state ? ` [${replayActionStateTag(actionState.state)}]` : '';
+          const detail = actionState.detail ? dim(` (${truncate(actionState.detail, 80)})`) : '';
+          console.log(`    ${i + 1}. ${opTypeTag(a.operation)} ${a.path} ${green('PROPOSED_VALID')}${state}${detail}`);
         } else {
           const reason = a.error || 'malformed';
           console.log(`    ${i + 1}. ${red('<invalid>')} ${dim(reason)}`);
@@ -539,6 +685,24 @@ async function cmdFailures(args) {
     console.log(`  ${dim('replay:')} node scripts/oquery.js replay ${r.id}`);
     console.log('');
   });
+}
+
+function failureDisplayActionStates(run) {
+  const snap = run.replaySnapshot || {};
+  const modelResponses = snap.modelResponses || [];
+  if (modelResponses.length === 0) return [];
+  const lastResp = modelResponses[modelResponses.length - 1];
+  try {
+    const parsed = JSON.parse(lastResp.text || '{}');
+    const actions = parsed.actions || [];
+    if (!Array.isArray(actions)) return [];
+    const consumedOps = new Set();
+    const priorPlans = (snap.parsedModelPlans || []).slice(0, -1);
+    priorPlans.forEach(p => classifyProposedActions(p.actions || [], snap.workspaceOperations || [], consumedOps));
+    return classifyProposedActions(actions, snap.workspaceOperations || [], consumedOps);
+  } catch (e) {
+    return [];
+  }
 }
 
 function buildFailureContext(run, data) {
@@ -1136,7 +1300,7 @@ function help() {
      failures        Show failure context for failed runs
       --ticket <id>   Filter by ticket
       --run <id>      Specific run
-      --type <t>      Filter by type (budget_exhausted, invalid_action, workspace_error, timeout, interrupted)
+      --type <t>      Filter by type (budget_exhausted, invalid_action, workspace_error, provider_error, timeout, interrupted)
       --limit <n>     Max results
       --json          Raw JSON output (full context)
       --api           Query remote server substrate

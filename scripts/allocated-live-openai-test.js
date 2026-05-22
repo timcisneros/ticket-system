@@ -225,13 +225,25 @@ async function createAgent(cookie, groupId, name) {
 }
 
 async function createAllocatedTicket(cookie, groupId, objective) {
+  const agents = readJson('agents.json').filter(agent =>
+    readJson('memberships.json').some(m =>
+      m.principalType === 'agent' && m.principalId === agent.id && m.groupId === groupId
+    )
+  );
+  const ownedPathMap = {};
+  agents.forEach(agent => {
+    ownedPathMap[agent.id] = `test-output/agent-${agent.id}/`;
+  });
+  Object.values(ownedPathMap).forEach(p => fs.mkdirSync(path.join(WORKSPACE_ROOT, p), { recursive: true }));
+
   const response = await request('POST', '/tickets', {
     cookie,
     form: {
       objective,
       assignmentTargetType: 'group',
       assignmentTargetId: String(groupId),
-      assignmentMode: 'allocated'
+      assignmentMode: 'allocated',
+      ownedOutputPaths: JSON.stringify(ownedPathMap)
     }
   });
 

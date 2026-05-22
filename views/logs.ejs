@@ -2,7 +2,22 @@
 
 <h1>Logs</h1>
 
+<% const viewFilters = typeof filters === 'undefined' ? { runId: null, ticketId: null } : filters; %>
+
 <section class="admin-block">
+  <% if (viewFilters && (viewFilters.runId !== null || viewFilters.ticketId !== null)) { %>
+    <div class="log-filter-banner">
+      <span>
+        Showing logs for
+        <% if (viewFilters.runId !== null) { %>
+          Run #<%= viewFilters.runId %>
+        <% } else { %>
+          Ticket #<%= viewFilters.ticketId %>
+        <% } %>
+      </span>
+      <a href="/logs">Show all logs</a>
+    </div>
+  <% } %>
   <div class="table-container">
     <table class="tickets-table logs-table">
       <thead>
@@ -64,6 +79,7 @@
 
 <script>
 const logsBody = document.getElementById('logs-body');
+const activeLogFilters = <%- JSON.stringify(viewFilters || { runId: null, ticketId: null }) %>;
 
 function formatLogTimestamp(timestamp) {
   if (!timestamp) return '-';
@@ -80,6 +96,8 @@ document.querySelectorAll('[data-log-time]').forEach(time => {
 });
 
 function appendLog(log) {
+  if (activeLogFilters.runId !== null && log.runId !== activeLogFilters.runId) return;
+  if (activeLogFilters.ticketId !== null && log.ticketId !== activeLogFilters.ticketId) return;
   if (document.querySelector('[data-log-id="' + log.id + '"]')) return;
 
   const emptyRow = document.getElementById('logs-empty');
