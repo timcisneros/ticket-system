@@ -31,6 +31,7 @@ const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__di
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_MUTATING_OPERATIONS = ['createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const MAX_AGENT_ACTIONS_PER_RESPONSE = 8;
+const MAX_MUTATING_ACTIONS_PER_RESPONSE = parseInt(process.env.AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE || '2', 10) || 2;
 const DEFAULT_AGENT_RUNTIME_LIMITS = {
   maxExecutionSteps: 4,
   maxWorkspaceOperationsPerRun: 32,
@@ -53,6 +54,11 @@ const logEventClients = new Set();
 const runningRunKeys = new Set();
 let lastLogTimestampNs = 0n;
 let serverReady = false;
+let dataVersion = 0;
+const pageRenderCache = new Map();
+const pageRenderInFlight = new Map();
+const PAGE_RENDER_CACHE_TTL_MS = 10000;
+const PAGE_RENDER_CACHE_MAX_ENTRIES = 100;
 
 // Register Fastify plugins
 fastify.register(require('@fastify/cookie'));
@@ -100,12 +106,78 @@ fastify.addHook('onSend', async (request, reply, payload) => {
 
 // ==================== DATA HELPERS ====================
 
-function readTickets() {
+const jsonReadCache = new Map();
+
+function readJsonArrayCached(filePath) {
   try {
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const stat = fs.statSync(filePath);
+    const cached = jsonReadCache.get(filePath);
+    const mtimeNs = stat.mtimeNs !== undefined ? stat.mtimeNs.toString() : String(stat.mtimeMs);
+
+    if (cached && cached.size === stat.size && cached.mtimeNs === mtimeNs) {
+      return cached.value;
+    }
+
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const arrayValue = Array.isArray(value) ? value : [];
+    jsonReadCache.set(filePath, { size: stat.size, mtimeNs, value: arrayValue });
+    return arrayValue;
   } catch (error) {
+    jsonReadCache.delete(filePath);
     return [];
   }
+}
+
+function readTickets() {
+  return readJsonArrayCached(DATA_FILE);
+}
+
+function cachePageRender(key, html) {
+  pageRenderCache.set(key, {
+    html,
+    dataVersion,
+    expiresAt: Date.now() + PAGE_RENDER_CACHE_TTL_MS
+  });
+
+  if (pageRenderCache.size > PAGE_RENDER_CACHE_MAX_ENTRIES) {
+    const oldestKey = pageRenderCache.keys().next().value;
+    if (oldestKey) pageRenderCache.delete(oldestKey);
+  }
+}
+
+async function renderCachedView(request, reply, template, data) {
+  if (request.method !== 'GET' || !request.session || !request.session.userId) {
+    return reply.view(template, data);
+  }
+
+  const key = `${request.session.userId}:${template}:${request.url}`;
+  const cached = pageRenderCache.get(key);
+
+  if (cached && cached.dataVersion === dataVersion && cached.expiresAt > Date.now()) {
+    reply.header('X-Page-Cache', 'hit');
+    reply.type('text/html; charset=utf-8');
+    return reply.send(cached.html);
+  }
+
+  let renderPromise = pageRenderInFlight.get(key);
+
+  if (!renderPromise) {
+    const renderDataVersion = dataVersion;
+    renderPromise = reply.viewAsync(template, data)
+      .then(html => {
+        if (renderDataVersion === dataVersion) cachePageRender(key, html);
+        return html;
+      })
+      .finally(() => {
+        pageRenderInFlight.delete(key);
+      });
+    pageRenderInFlight.set(key, renderPromise);
+  }
+
+  const html = await renderPromise;
+  reply.header('X-Page-Cache', cached ? 'stale' : 'miss');
+  reply.type('text/html; charset=utf-8');
+  return reply.send(html);
 }
 
 function normalizeTickets(tickets) {
@@ -151,30 +223,37 @@ function getTicketsForDisplay() {
   const history = readOperationHistory();
   const runsByTicketId = groupBy(runs, run => run.ticketId);
   const mutationCountByRunId = buildMutationCountByRunId(history);
-  const tickets = readTickets().map(ticket => {
-    const target = ticket.assignmentTargetType === 'agent'
-      ? agents.find(agent => agent.id === ticket.assignmentTargetId)
-      : agentGroups.find(group => group.id === ticket.assignmentTargetId);
-    const ticketRuns = runsByTicketId.get(ticket.id) || [];
-    const activeRuns = ticketRuns.filter(run => ['pending', 'running'].includes(run.status));
-    const lastRun = ticketRuns
-      .slice()
-      .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
-    const lastRunPartialMutationCount = lastRun ? (mutationCountByRunId.get(lastRun.id) || 0) : 0;
-
-    return {
-      ...ticket,
-      assignmentTargetName: target ? target.name : 'Unknown target',
-      activeRunIds: activeRuns.map(run => run.id),
-      lastRunStatus: lastRun ? lastRun.status : null,
-      lastRunOperationalOutcome: lastRun ? classifyRunOperationalOutcome(lastRun) : null,
-      lastRunPartialMutationCount,
-      lastRunHadPartialMutations: lastRunPartialMutationCount > 0
-    };
-  });
+  const tickets = readTickets().map(ticket => enrichTicketForDisplay(ticket, {
+    agents,
+    agentGroups,
+    runsByTicketId,
+    mutationCountByRunId
+  }));
 
   tickets.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   return tickets;
+}
+
+function enrichTicketForDisplay(ticket, context) {
+  const target = ticket.assignmentTargetType === 'agent'
+    ? context.agents.find(agent => agent.id === ticket.assignmentTargetId)
+    : context.agentGroups.find(group => group.id === ticket.assignmentTargetId);
+  const ticketRuns = context.runsByTicketId.get(ticket.id) || [];
+  const activeRuns = ticketRuns.filter(run => ['pending', 'running'].includes(run.status));
+  const lastRun = ticketRuns
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
+  const lastRunPartialMutationCount = lastRun ? (context.mutationCountByRunId.get(lastRun.id) || 0) : 0;
+
+  return {
+    ...ticket,
+    assignmentTargetName: target ? target.name : 'Unknown target',
+    activeRunIds: activeRuns.map(run => run.id),
+    lastRunStatus: lastRun ? lastRun.status : null,
+    lastRunOperationalOutcome: lastRun ? classifyRunOperationalOutcome(lastRun) : null,
+    lastRunPartialMutationCount,
+    lastRunHadPartialMutations: lastRunPartialMutationCount > 0
+  };
 }
 
 function ticketsPageHref(page, limit) {
@@ -186,12 +265,27 @@ function ticketsPageHref(page, limit) {
 
 function getPaginatedTickets(query = {}) {
   const { page, limit } = getPagination(query, 25);
-  const tickets = getTicketsForDisplay();
-  const total = tickets.length;
+  const allTickets = readTickets()
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  const agents = readAgents();
+  const agentGroups = getTicketAssignableGroups();
+  const runs = readRuns();
+  const history = readOperationHistory();
+  const runsByTicketId = groupBy(runs, run => run.ticketId);
+  const mutationCountByRunId = buildMutationCountByRunId(history);
+  const total = allTickets.length;
   const pageCount = Math.max(1, Math.ceil(total / limit));
   const currentPage = Math.min(page, pageCount);
   const offset = (currentPage - 1) * limit;
-  const pageTickets = tickets.slice(offset, offset + limit);
+  const pageTickets = allTickets
+    .slice(offset, offset + limit)
+    .map(ticket => enrichTicketForDisplay(ticket, {
+      agents,
+      agentGroups,
+      runsByTicketId,
+      mutationCountByRunId
+    }));
 
   return {
     tickets: pageTickets,
@@ -387,11 +481,7 @@ function updateTicketStatusById(ticketId, status) {
 }
 
 function readUsers() {
-  try {
-    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-  } catch (error) {
-    return [];
-  }
+  return readJsonArrayCached(USERS_FILE);
 }
 
 function normalizeUsers(users) {
@@ -413,11 +503,7 @@ function writeUsers(users) {
 }
 
 function readGroups() {
-  try {
-    return JSON.parse(fs.readFileSync(GROUPS_FILE, 'utf8'));
-  } catch (error) {
-    return [];
-  }
+  return readJsonArrayCached(GROUPS_FILE);
 }
 
 function normalizeGroups(groups) {
@@ -456,19 +542,11 @@ function writeGroups(groups) {
 }
 
 function readPermissions() {
-  try {
-    return JSON.parse(fs.readFileSync(PERMISSIONS_FILE, 'utf8'));
-  } catch (error) {
-    return [];
-  }
+  return readJsonArrayCached(PERMISSIONS_FILE);
 }
 
 function readMemberships() {
-  try {
-    return JSON.parse(fs.readFileSync(MEMBERSHIPS_FILE, 'utf8'));
-  } catch (error) {
-    return [];
-  }
+  return readJsonArrayCached(MEMBERSHIPS_FILE);
 }
 
 function normalizeMemberships(memberships) {
@@ -585,11 +663,7 @@ function normalizeSubmittedPermissions(permissions) {
 }
 
 function readAgents() {
-  try {
-    return JSON.parse(fs.readFileSync(AGENTS_FILE, 'utf8'));
-  } catch (error) {
-    return [];
-  }
+  return readJsonArrayCached(AGENTS_FILE);
 }
 
 function normalizeAgents(agents) {
@@ -611,11 +685,7 @@ function writeAgents(agents) {
 }
 
 function readRuns() {
-  try {
-    return JSON.parse(fs.readFileSync(RUNS_FILE, 'utf8'));
-  } catch (error) {
-    return [];
-  }
+  return readJsonArrayCached(RUNS_FILE);
 }
 
 function replaySnapshotRelativePath(runId) {
@@ -750,11 +820,7 @@ function writeRuns(runs) {
 }
 
 function readAllocationPlans() {
-  try {
-    return JSON.parse(fs.readFileSync(ALLOCATION_PLANS_FILE, 'utf8'));
-  } catch (error) {
-    return [];
-  }
+  return readJsonArrayCached(ALLOCATION_PLANS_FILE);
 }
 
 function normalizeAllocationPlans(plans) {
@@ -801,11 +867,7 @@ function writeAllocationPlans(plans) {
 }
 
 function readLogs() {
-  try {
-    return JSON.parse(fs.readFileSync(LOGS_FILE, 'utf8'));
-  } catch (error) {
-    return [];
-  }
+  return readJsonArrayCached(LOGS_FILE);
 }
 
 function normalizeLogs(logs) {
@@ -840,11 +902,7 @@ function writeLogs(logs) {
 }
 
 function readOperationHistory() {
-  try {
-    return JSON.parse(fs.readFileSync(OPERATION_HISTORY_FILE, 'utf8'));
-  } catch (error) {
-    return [];
-  }
+  return readJsonArrayCached(OPERATION_HISTORY_FILE);
 }
 
 function normalizeOperationHistory(history) {
@@ -875,6 +933,10 @@ function writeFileAtomic(filePath, data) {
   const tempPath = `${filePath}.tmp`;
   fs.writeFileSync(tempPath, data);
   fs.renameSync(tempPath, filePath);
+  jsonReadCache.delete(filePath);
+  dataVersion += 1;
+  pageRenderCache.clear();
+  pageRenderInFlight.clear();
 }
 
 function writeOperationHistory(history) {
@@ -1510,6 +1572,7 @@ function createRunLimitError(run, type, message, details) {
     step: 'run:step_limit',
     operation: 'run:operation_limit',
     model_request: 'run:model_request_limit',
+    mutating_action: 'run:mutating_action_limit',
     timeout: 'run:timeout'
   };
   const eventType = eventTypeByLimitType[type];
@@ -2434,9 +2497,16 @@ function buildRuntimeEnvelope(run, step = 0) {
     ownedOutputPaths: getRunOwnedOutputPaths(run),
     allowedOperations: AGENT_ALLOWED_OPERATIONS,
     maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+    maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
     currentStep: step,
     maxExecutionSteps: limits.maxExecutionSteps
   };
+}
+
+function countMutatingActions(actions) {
+  return (actions || []).filter(action =>
+    action && typeof action === 'object' && AGENT_MUTATING_OPERATIONS.includes(action.operation)
+  ).length;
 }
 
 function createStructuredWorkspaceError(message, code, kind, detail = {}) {
@@ -3048,10 +3118,13 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
         'You have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.',
         `The per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (${MAX_AGENT_ACTIONS_PER_RESPONSE}).`,
         'Never emit more than that many workspace actions in a single response.',
-        'If a task requires more actions than the limit, split the work across multiple responses.',
-        'Emit up to the limit, set complete:false, and continue with the remaining items in the next response.',
+        `The per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (${MAX_MUTATING_ACTIONS_PER_RESPONSE}). Mutating actions are createFolder, writeFile, renamePath, and deletePath.`,
+        'Prefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.',
+        'Read/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.',
+        'If a task requires more mutations than the mutating limit, split the work across multiple responses.',
+        'Emit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.',
         'Do not fail or return an error just because the total task exceeds one response.',
-        'For bounded bulk work, perform up to the action limit, then continue with remaining items in later responses.',
+        'For bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.',
         'Use only the workspace operations listed in runtimeEnvelope.allowedOperations.',
         'If runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.',
         'If runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.',
@@ -3105,6 +3178,8 @@ async function runAgentTicket(runId) {
     let actionResults = [];
     let stalledResponses = 0;
     let noProgressResponses = 0;
+    let repeatedMutatingActionLimitViolations = 0;
+    let lastMutatingActionLimitSignature = null;
     let modelRequestCount = 0;
     let workspaceOperationCount = 0;
     const listedDirectoryPaths = new Set();
@@ -3184,6 +3259,52 @@ async function runAgentTicket(runId) {
         actionResults = [{
           warning: 'model:action_limit',
           message: `You returned ${actions.length} workspace actions, exceeding the per-response limit of ${MAX_AGENT_ACTIONS_PER_RESPONSE}. Retry with at most ${MAX_AGENT_ACTIONS_PER_RESPONSE} actions. If more work remains, emit up to the limit, set complete:false, and continue in the next response.`
+        }];
+        continue;
+      }
+
+      const mutatingActionCount = countMutatingActions(actions);
+      if (mutatingActionCount > MAX_MUTATING_ACTIONS_PER_RESPONSE) {
+        const message = `Model returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}`;
+        const mutatingActionLimitSignature = actions
+          .filter(action => action && typeof action === 'object' && AGENT_MUTATING_OPERATIONS.includes(action.operation))
+          .map(action => `${action.operation}:${action.args && action.args.path ? action.args.path : ''}:${action.args && action.args.nextPath ? action.args.nextPath : ''}`)
+          .join('|');
+
+        repeatedMutatingActionLimitViolations = mutatingActionLimitSignature === lastMutatingActionLimitSignature
+          ? repeatedMutatingActionLimitViolations + 1
+          : 1;
+        lastMutatingActionLimitSignature = mutatingActionLimitSignature;
+
+        recordRunEvent(run, 'model:mutating_action_limit', message, {
+          actionCount: actions.length,
+          mutatingActionCount,
+          maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+          maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+          repeatedViolationCount: repeatedMutatingActionLimitViolations,
+          step
+        });
+
+        if (repeatedMutatingActionLimitViolations >= 2) {
+          const error = createRunLimitError(
+            run,
+            'mutating_action',
+            'Model repeatedly proposed too many mutating actions; no workspace mutations were executed.',
+            {
+              currentValue: repeatedMutatingActionLimitViolations,
+              configuredLimit: 1,
+              mutatingActionCount,
+              maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+              step
+            }
+          );
+          error.failureKind = 'invalid_action';
+          throw error;
+        }
+
+        actionResults = [{
+          warning: 'model:mutating_action_limit',
+          message: `You returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Retry with at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} createFolder/writeFile/renamePath/deletePath action(s). You may include read/list actions if needed. If more work remains, set complete:false and continue in the next response.`
         }];
         continue;
       }
@@ -3879,7 +4000,7 @@ fastify.get('/tickets', { preHandler: fastify.requireAuth }, async (request, rep
 
   const ticketPage = getPaginatedTickets(request.query || {});
 
-  return reply.view('tickets.ejs', viewData({
+  return renderCachedView(request, reply, 'tickets.ejs', viewData({
     tickets: ticketPage.tickets,
     pagination: ticketPage.pagination,
     user: request.user,
@@ -3923,7 +4044,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   const ticketRuns = getTicketRuns(ticketId, history);
   const agents = readAgents();
 
-  return reply.view('ticket-detail.ejs', viewData({
+  return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
     ticket,
     allocationPlan,
@@ -4240,23 +4361,34 @@ function getPaginatedLogs(query = {}) {
   const filters = getLogFilters(query);
   const { page, limit } = getPagination(query);
   const logs = readLogs();
-  const filtered = [];
+  const matchesFilter = log => {
+    if (filters.runId !== null && log.runId !== filters.runId) return false;
+    if (filters.ticketId !== null && log.ticketId !== filters.ticketId) return false;
+    return true;
+  };
+  let total = 0;
 
   for (let index = logs.length - 1; index >= 0; index -= 1) {
-    const log = logs[index];
-    if (filters.runId !== null && log.runId !== filters.runId) continue;
-    if (filters.ticketId !== null && log.ticketId !== filters.ticketId) continue;
-    filtered.push(log);
+    if (matchesFilter(logs[index])) total += 1;
   }
 
-  const total = filtered.length;
   const pageCount = Math.max(1, Math.ceil(total / limit));
   const currentPage = Math.min(page, pageCount);
   const offset = (currentPage - 1) * limit;
-  const pageLogs = filtered.slice(offset, offset + limit).map(log => ({
-    ...log,
-    displayTimestamp: formatDisplayTimestamp(log.timestamp)
-  }));
+  const pageLogs = [];
+  let matched = 0;
+
+  for (let index = logs.length - 1; index >= 0 && pageLogs.length < limit; index -= 1) {
+    const log = logs[index];
+    if (!matchesFilter(log)) continue;
+    if (matched >= offset) {
+      pageLogs.push({
+        ...log,
+        displayTimestamp: formatDisplayTimestamp(log.timestamp)
+      });
+    }
+    matched += 1;
+  }
 
   return {
     logs: pageLogs,
@@ -4284,7 +4416,7 @@ fastify.get('/logs', { preHandler: fastify.requireAuth }, async (request, reply)
   }
 
   const logPage = getPaginatedLogs(request.query || {});
-  return reply.view('logs.ejs', viewData({
+  return renderCachedView(request, reply, 'logs.ejs', viewData({
     user: request.user,
     logs: logPage.logs,
     filters: logPage.filters,
@@ -4373,7 +4505,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const history = readOperationHistory();
   const runPartialMutationCount = countRunMutatingOperations(runId, history);
 
-  return reply.view('run-detail.ejs', viewData({
+  return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
     run,
     ticket: readTickets().find(item => item.id === run.ticketId) || null,

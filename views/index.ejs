@@ -8,6 +8,22 @@
   <div class="form-group">
     <label for="objective">Objective *</label>
     <textarea id="objective" name="objective" rows="5" required></textarea>
+    <div class="objective-guidance" aria-label="Bounded execution guidance">
+      <p class="form-hint">
+        Write a small, concrete output that can finish in one verified transition. One or two file changes usually complete fastest.
+      </p>
+      <p class="form-hint">
+        Avoid vague requests like "improve the project." For larger work, split the ticket into specific additive outputs.
+      </p>
+      <details class="objective-examples">
+        <summary>Examples</summary>
+        <ul>
+          <li>Good: Create <code>docs/setup.md</code> with install and test steps.</li>
+          <li>Good: Add <code>docs/api.md</code> and <code>docs/errors.md</code> with short reference notes.</li>
+          <li>Split up: Create 4-8 files as separate concrete tickets or expect multiple bounded transitions.</li>
+        </ul>
+      </details>
+    </div>
   </div>
 
   <div class="form-group">
@@ -41,6 +57,7 @@
     </select>
     <p class="form-hint">
       Manual scopes use folders you choose for each agent. Automatic scopes assign agents to existing top-level workspace folders.
+      Group tickets work best when each agent can produce an independent additive output inside its own scope.
     </p>
   </div>
 

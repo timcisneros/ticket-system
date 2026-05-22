@@ -443,15 +443,30 @@ function rerunTicket(ticketId, button) {
 }
 
 if (window.EventSource) {
-  const ticketEvents = new EventSource('/api/tickets/events');
-  ticketEvents.addEventListener('open', () => {
-    liveTicketsConnected = true;
-  });
-  ticketEvents.addEventListener('tickets-changed', () => {
-    loadTickets();
-  });
-  ticketEvents.addEventListener('error', () => {
+  let ticketEvents = null;
+  const connectTicketEvents = window.setTimeout(() => {
+    ticketEvents = new EventSource('/api/tickets/events');
+    ticketEvents.addEventListener('open', () => {
+      liveTicketsConnected = true;
+    });
+    ticketEvents.addEventListener('tickets-changed', () => {
+      loadTickets();
+    });
+    ticketEvents.addEventListener('error', () => {
+      liveTicketsConnected = false;
+    });
+  }, 300);
+
+  function closeTicketEvents() {
+    window.clearTimeout(connectTicketEvents);
     liveTicketsConnected = false;
-  });
+    if (ticketEvents) {
+      ticketEvents.close();
+      ticketEvents = null;
+    }
+  }
+
+  window.addEventListener('pagehide', closeTicketEvents);
+  window.addEventListener('beforeunload', closeTicketEvents);
 }
 </script>

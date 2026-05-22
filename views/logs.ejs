@@ -205,10 +205,24 @@ function appendLog(log) {
   rows.slice(maxRows).forEach(extraRow => extraRow.remove());
 }
 
-if (window.EventSource) {
-  const logEvents = new EventSource('/api/logs/events');
-  logEvents.addEventListener('log', event => {
-    appendLog(JSON.parse(event.data));
-  });
+if (window.EventSource && activeLogPagination.page === 1) {
+  let logEvents = null;
+  const connectLogEvents = window.setTimeout(() => {
+    logEvents = new EventSource('/api/logs/events');
+    logEvents.addEventListener('log', event => {
+      appendLog(JSON.parse(event.data));
+    });
+  }, 300);
+
+  function closeLogEvents() {
+    window.clearTimeout(connectLogEvents);
+    if (logEvents) {
+      logEvents.close();
+      logEvents = null;
+    }
+  }
+
+  window.addEventListener('pagehide', closeLogEvents);
+  window.addEventListener('beforeunload', closeLogEvents);
 }
 </script>

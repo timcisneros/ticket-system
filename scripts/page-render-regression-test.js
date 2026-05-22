@@ -233,6 +233,9 @@ async function assertMainFormRenders(cookie, label) {
   const response = await request('GET', '/', { cookie });
   assert(response.statusCode === 200, `${label}: GET / returned HTTP ${response.statusCode}: ${response.body.slice(0, 240)}`);
   assert(response.body.includes('Create New Ticket'), `${label}: main form heading missing`);
+  assert(response.body.includes('Write a small, concrete output'), `${label}: bounded objective guidance missing`);
+  assert(response.body.includes('Avoid vague requests'), `${label}: vague objective warning missing`);
+  assert(response.body.includes('independent additive output'), `${label}: group bounded output guidance missing`);
   assert(response.body.includes('Manual folder scopes'), `${label}: manual scope option missing`);
   assert(response.body.includes('Automatic folder scopes'), `${label}: dynamic scope option missing`);
   assert(response.body.includes('const agentGroupMembers = '), `${label}: agentGroupMembers script missing`);

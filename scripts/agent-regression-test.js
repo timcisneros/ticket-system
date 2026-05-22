@@ -1355,7 +1355,8 @@ async function main() {
         PORT,
         NODE_OPTIONS: `--require ${preloadPath}`,
         WORKSPACE_ROOT,
-        DATA_DIR
+        DATA_DIR,
+        AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE: '8'
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });

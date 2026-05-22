@@ -3549,5 +3549,117 @@
     "error": null,
     "isRecovery": false,
     "recoveredHistoryId": null
+  },
+  {
+    "id": 131,
+    "timestamp": "2026-05-22T16:35:28.085293594Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 15,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "1"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "1",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 132,
+    "timestamp": "2026-05-22T16:35:28.089248716Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 15,
+    "step": 0,
+    "operation": "createFolder",
+    "args": {
+      "path": "2"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "2",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 133,
+    "timestamp": "2026-05-22T16:35:39.753161993Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 15,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "1"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "1",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 134,
+    "timestamp": "2026-05-22T16:35:39.760042564Z",
+    "ticketId": 10,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 15,
+    "step": 3,
+    "operation": "createFolder",
+    "args": {
+      "path": "2"
+    },
+    "preState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "postState": {
+      "existed": true,
+      "type": "directory"
+    },
+    "result": {
+      "path": "2",
+      "status": "already_exists_noop"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
   }
 ]

@@ -113,10 +113,10 @@
     "assignmentTargetType": "agent",
     "assignmentTargetId": 1,
     "assignmentMode": "individual",
-    "status": "in_progress",
+    "status": "failed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T20:20:33.035Z",
-    "updatedAt": "2026-05-19T21:32:23.288Z",
+    "updatedAt": "2026-05-22T16:35:39.769Z",
     "ownedOutputPaths": null
   },
   {

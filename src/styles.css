@@ -1913,3 +1913,28 @@ code {
   color: #6b7280;
   font-size: 0.82rem;
 }
+
+.objective-guidance {
+  margin-top: 9px;
+}
+
+.objective-guidance .form-hint {
+  margin: 0 0 6px;
+}
+
+.objective-examples {
+  margin-top: 8px;
+  color: #4b5563;
+  font-size: 0.84rem;
+}
+
+.objective-examples summary {
+  cursor: pointer;
+  color: #374151;
+  font-weight: 550;
+}
+
+.objective-examples ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
