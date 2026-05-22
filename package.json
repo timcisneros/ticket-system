@@ -16,16 +16,20 @@
     "test:allocated-live": "NODE_ENV=test node --env-file=.env.test.local scripts/allocated-live-openai-test.js"
   },
   "dependencies": {
-    "fastify": "^5.8.5",
     "@fastify/cookie": "^11.0.2",
     "@fastify/formbody": "^8.0.2",
     "@fastify/session": "^11.1.1",
     "@fastify/view": "^11.1.1",
     "argon2": "^0.44.0",
-    "ejs": "^5.0.2"
+    "dotenv": "^17.4.2",
+    "ejs": "^5.0.2",
+    "fastify": "^5.8.5"
   },
-  "devDependencies": {},
-  "keywords": ["tickets", "fastify", "node"],
+  "keywords": [
+    "tickets",
+    "fastify",
+    "node"
+  ],
   "author": "",
   "license": "MIT"
 }

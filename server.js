@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const argon2 = require('argon2');
 const crypto = require('crypto');
+require('dotenv').config()
 
 const PORT = process.env.PORT || 3099;
 
@@ -21,6 +22,7 @@ const RUNS_FILE = path.join(DATA_DIR, 'runs.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 const ALLOCATION_PLANS_FILE = path.join(DATA_DIR, 'allocation-plans.json');
 const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
+const REPLAY_SNAPSHOTS_DIR = path.join(DATA_DIR, 'replay-snapshots');
 const PROTECTED_PATHS_FILE = path.join(__dirname, 'config', 'protected-paths.json');
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
@@ -208,6 +210,7 @@ function getPaginatedTickets(query = {}) {
 
 function getRunMutationCount(run) {
   if (run && run.mutationCount !== undefined) return run.mutationCount;
+  if (run && run.replaySummary && run.replaySummary.mutationCount !== undefined) return run.replaySummary.mutationCount;
   if (run && run.replaySnapshot && run.replaySnapshot.mutationCount !== undefined) return run.replaySnapshot.mutationCount;
   return run ? countRunMutatingOperations(run.id) : 0;
 }
@@ -215,10 +218,11 @@ function getRunMutationCount(run) {
 function classifyRunOperationalOutcome(run) {
   if (!run) return null;
   const snapshot = run.replaySnapshot || {};
+  const summary = run.replaySummary || extractReplaySummary(snapshot) || {};
   const workspaceOperations = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
   const events = Array.isArray(snapshot.events) ? snapshot.events : [];
 
-  if (workspaceOperations.some(item => item && (item.blocked || item.reason))) return 'blocked/rejected';
+  if (summary.hasBlockedOrRejected || workspaceOperations.some(item => item && (item.blocked || item.reason))) return 'blocked/rejected';
   if (run.status === 'interrupted') return 'interrupted';
 
   if (run.status === 'completed') {
@@ -227,7 +231,7 @@ function classifyRunOperationalOutcome(run) {
       (item.result && item.result.status === 'not_found') ||
       (item.error && /not_found|enoent/i.test(item.error))
     )) return 'impossible_within_boundary';
-    if (events.some(event => event && event.type === 'run:completed_noop')) return 'completed_noop';
+    if (summary.hasCompletedNoop || events.some(event => event && event.type === 'run:completed_noop')) return 'completed_noop';
     return 'completed_noop';
   }
 
@@ -614,6 +618,95 @@ function readRuns() {
   }
 }
 
+function replaySnapshotRelativePath(runId) {
+  return path.join('replay-snapshots', `run-${runId}.json`);
+}
+
+function replaySnapshotFilePath(runId) {
+  return path.join(DATA_DIR, replaySnapshotRelativePath(runId));
+}
+
+function extractReplaySummary(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  const workspaceOperations = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
+  const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+  const parsedModelPlans = Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
+  const providerRequests = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests : [];
+  const modelResponses = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses : [];
+
+  return {
+    model: snapshot.model || null,
+    terminalStatus: snapshot.terminalStatus || null,
+    failureReason: snapshot.failureReason || null,
+    failure: snapshot.failure || null,
+    mutationCount: snapshot.mutationCount,
+    mutationOutcome: snapshot.mutationOutcome || null,
+    finalizedAt: snapshot.finalizedAt || null,
+    continuationOf: snapshot.continuationOf || null,
+    steps: parsedModelPlans.length,
+    workspaceOperations: workspaceOperations.length,
+    providerRequests: providerRequests.length,
+    modelResponses: modelResponses.length,
+    hasBlockedOrRejected: workspaceOperations.some(item => item && (item.blocked || item.reason || (item.operation && item.operation.blocked))),
+    hasCompletedNoop: events.some(item => item && item.type === 'run:completed_noop')
+  };
+}
+
+function readRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return null;
+  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
+  if (!run.replaySnapshotPath) return null;
+
+  const snapshotPath = path.resolve(DATA_DIR, run.replaySnapshotPath);
+  if (!snapshotPath.startsWith(DATA_DIR + path.sep)) return null;
+  if (!fs.existsSync(snapshotPath)) return null;
+
+  try {
+    return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+  } catch (error) {
+    return null;
+  }
+}
+
+function hydrateRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return run;
+  const replaySnapshot = readRunReplaySnapshot(run);
+  return replaySnapshot ? { ...run, replaySnapshot } : { ...run };
+}
+
+function writeReplaySnapshotFile(runId, snapshot) {
+  if (!fs.existsSync(REPLAY_SNAPSHOTS_DIR)) {
+    fs.mkdirSync(REPLAY_SNAPSHOTS_DIR, { recursive: true });
+  }
+
+  const filePath = replaySnapshotFilePath(runId);
+  writeFileAtomic(filePath, JSON.stringify(snapshot, null, 2));
+  return replaySnapshotRelativePath(runId);
+}
+
+function attachReplayMetadata(run, snapshot) {
+  const summary = extractReplaySummary(snapshot);
+  run.replaySnapshotPath = replaySnapshotRelativePath(run.id);
+  run.replaySummary = summary;
+  if (summary && summary.mutationCount !== undefined) run.mutationCount = summary.mutationCount;
+  if (summary && summary.mutationOutcome) run.mutationOutcome = summary.mutationOutcome;
+  delete run.replaySnapshot;
+  return run;
+}
+
+function writeRunReplaySnapshot(runId, snapshot) {
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+
+  if (!run) return null;
+
+  const sanitizedSnapshot = sanitizeSnapshotValue(snapshot);
+  writeReplaySnapshotFile(runId, sanitizedSnapshot);
+  attachReplayMetadata(run, sanitizedSnapshot);
+  writeRuns(runs);
+  return sanitizedSnapshot;
+}
+
 function normalizeRuns(runs) {
   const seenRunIds = new Set();
 
@@ -640,6 +733,14 @@ function normalizeRuns(runs) {
     run.allocationItemId = Number.isNaN(run.allocationItemId) ? null : run.allocationItemId;
     run.ownedOutputPaths = Array.isArray(run.ownedOutputPaths) ? run.ownedOutputPaths : [];
     run.allocationSubtask = typeof run.allocationSubtask === 'string' ? run.allocationSubtask : null;
+    if (run.replaySnapshot && typeof run.replaySnapshot === 'object') {
+      const snapshot = sanitizeSnapshotValue(run.replaySnapshot);
+      writeReplaySnapshotFile(run.id, snapshot);
+      attachReplayMetadata(run, snapshot);
+    } else {
+      run.replaySnapshotPath = typeof run.replaySnapshotPath === 'string' ? run.replaySnapshotPath : null;
+      run.replaySummary = run.replaySummary && typeof run.replaySummary === 'object' ? run.replaySummary : null;
+    }
     return true;
   });
 }
@@ -1306,16 +1407,14 @@ function updateRunStatus(runId, status, error = null) {
 }
 
 function updateRunReplaySnapshot(runId, updater) {
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
+  const run = readRuns().find(item => item.id === runId);
 
   if (!run) return null;
 
-  const currentSnapshot = run.replaySnapshot || null;
+  const currentSnapshot = readRunReplaySnapshot(run);
   const nextSnapshot = updater(currentSnapshot);
-  run.replaySnapshot = sanitizeSnapshotValue(nextSnapshot);
-  writeRuns(runs);
-  return run.replaySnapshot;
+  if (!nextSnapshot) return null;
+  return writeRunReplaySnapshot(runId, nextSnapshot);
 }
 
 function createRunReplaySnapshot(run, ticket, agent, openAIConfig, runtimeEnvelope, systemInstructionSnapshot) {
@@ -1579,7 +1678,7 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
 
 function classifyInterruptionPhase(run) {
   const latestRun = readRuns().find(item => item.id === run.id) || run;
-  const snapshot = latestRun.replaySnapshot || {};
+  const snapshot = readRunReplaySnapshot(latestRun) || latestRun.replaySnapshot || {};
   const logs = readLogs().filter(log => log.runId === run.id);
   const providerRequestLogs = logs.filter(log => log.type === 'model:request').length;
   const providerResponseLogs = logs.filter(log => log.type === 'model:response').length;
@@ -4214,7 +4313,7 @@ fastify.get('/api/export', { preHandler: fastify.requireAuth }, async (request, 
   }
   return {
     tickets: readTickets(),
-    runs: readRuns(),
+    runs: readRuns().map(hydrateRunReplaySnapshot),
     logs: readLogs(),
     history: readOperationHistory(),
     plans: readAllocationPlans()
@@ -4261,7 +4360,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }, request.session.userId));
   }
 
-  const run = readRuns().find(item => item.id === runId);
+  const run = hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
 
   if (!run) {
     reply.code(404);

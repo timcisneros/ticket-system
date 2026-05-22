@@ -10,38 +10,11 @@
   },
   {
     "id": 2,
-    "name": "SingleAgentRegression-1779149142807",
-    "type": "agent",
-    "provider": "openai",
-    "model": "gpt-4.1-mini",
-    "apiKey": "test-key-single-agent",
-    "createdAt": "2026-05-19T00:05:42.807Z"
-  },
-  {
-    "id": 3,
-    "name": "AllocatedRegressionA-1779149143260",
-    "type": "agent",
-    "provider": "openai",
-    "model": "gpt-4.1-mini",
-    "apiKey": "test-key-a",
-    "createdAt": "2026-05-19T00:05:43.262Z"
-  },
-  {
-    "id": 4,
-    "name": "AllocatedRegressionB-1779149143260",
-    "type": "agent",
-    "provider": "openai",
-    "model": "gpt-4.1-mini",
-    "apiKey": "test-key-b",
-    "createdAt": "2026-05-19T00:05:43.262Z"
-  },
-  {
-    "id": 5,
     "name": "Agent 2",
     "type": "agent",
     "provider": "openai",
     "model": "gpt-4.1-mini",
     "apiKey": "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",
-    "createdAt": "2026-05-19T00:34:55.624Z"
+    "createdAt": "2026-05-22T07:16:24.124Z"
   }
 ]

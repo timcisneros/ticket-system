@@ -24,6 +24,28 @@ function loadAll() {
   };
 }
 
+function readRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return null;
+  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
+  if (!run.replaySnapshotPath) return null;
+
+  const snapshotPath = path.resolve(DATA_DIR, run.replaySnapshotPath);
+  if (!snapshotPath.startsWith(DATA_DIR + path.sep)) return null;
+  if (!fs.existsSync(snapshotPath)) return null;
+
+  try { return JSON.parse(fs.readFileSync(snapshotPath, 'utf8')); } catch (e) { return null; }
+}
+
+function hydrateRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return run;
+  const replaySnapshot = readRunReplaySnapshot(run);
+  return replaySnapshot ? { ...run, replaySnapshot } : run;
+}
+
+function replaySummary(run) {
+  return run && run.replaySummary && typeof run.replaySummary === 'object' ? run.replaySummary : {};
+}
+
 // ── Formatting helpers ──
 
 function dim(s) { return `\x1b[2m${s}\x1b[0m`; }
@@ -125,23 +147,29 @@ function runHistory(run, data) {
 }
 
 function replayEvents(run) {
-  return run && run.replaySnapshot && Array.isArray(run.replaySnapshot.events)
-    ? run.replaySnapshot.events
+  const snapshot = readRunReplaySnapshot(run);
+  return snapshot && Array.isArray(snapshot.events)
+    ? snapshot.events
     : [];
 }
 
 function replayWorkspaceOps(run) {
-  return run && run.replaySnapshot && Array.isArray(run.replaySnapshot.workspaceOperations)
-    ? run.replaySnapshot.workspaceOperations
+  const snapshot = readRunReplaySnapshot(run);
+  return snapshot && Array.isArray(snapshot.workspaceOperations)
+    ? snapshot.workspaceOperations
     : [];
 }
 
 function hasCompletedNoopEvent(run, data) {
-  return replayEvents(run).some(e => e && e.type === 'run:completed_noop') ||
+  const summary = replaySummary(run);
+  return summary.hasCompletedNoop ||
+    replayEvents(run).some(e => e && e.type === 'run:completed_noop') ||
     runLogs(run, data).some(l => l && l.type === 'run:completed_noop');
 }
 
 function hasBlockedOrRejectedEvidence(run, data) {
+  const summary = replaySummary(run);
+  if (summary.hasBlockedOrRejected) return true;
   return runLogs(run, data).some(l => l && l.type === 'workspace:blocked') ||
     replayWorkspaceOps(run).some(o => o && (o.blocked || (o.operation && o.operation.blocked))) ||
     runHistory(run, data).some(h => h && (
@@ -169,6 +197,7 @@ function hasNotFoundEvidence(run, data) {
 
 function mutationCountForRun(run) {
   if (run && run.mutationCount !== undefined) return run.mutationCount;
+  if (run && run.replaySummary && run.replaySummary.mutationCount !== undefined) return run.replaySummary.mutationCount;
   if (run && run.replaySnapshot && run.replaySnapshot.mutationCount !== undefined) return run.replaySnapshot.mutationCount;
   return 0;
 }
@@ -343,9 +372,9 @@ async function cmdTickets(args) {
     }
     console.log(`       ${truncate((t.objective || '').replace(/\r?\n/g, '\\n'), 120)}`);
     // Show continuation lineage
-    const contRuns = runs.filter(r => r.replaySnapshot && r.replaySnapshot.continuationOf);
+    const contRuns = runs.filter(r => (r.replaySnapshot && r.replaySnapshot.continuationOf) || replaySummary(r).continuationOf);
     if (contRuns.length > 0) {
-      contRuns.forEach(r => console.log(`       ${dim('↳ continuation of run #' + r.replaySnapshot.continuationOf)}`));
+      contRuns.forEach(r => console.log(`       ${dim('↳ continuation of run #' + (replaySummary(r).continuationOf || r.replaySnapshot.continuationOf))}`));
     }
     // Show allocation info
     if (t.assignmentMode === 'allocated' && runCount > 1) {
@@ -407,22 +436,23 @@ async function cmdRuns(args) {
       const tickets = Array.isArray(data.tickets) ? data.tickets : [];
       const ticket = tickets.find(t => t.id === r.ticketId);
       const ticketLabel = ticket ? `T${r.ticketId}` : dim(`T${r.ticketId} (deleted)`);
+      const summary = replaySummary(r);
       const plans = r.replaySnapshot ? (r.replaySnapshot.parsedModelPlans || []) : [];
-      const initializing = !r.replaySnapshot || plans.length === 0;
-      const ops = r.replaySnapshot ? (r.replaySnapshot.workspaceOperations || []).length : 0;
-      const mutations = r.mutationCount !== undefined ? r.mutationCount : (r.replaySnapshot && r.replaySnapshot.mutationCount !== undefined ? r.replaySnapshot.mutationCount : '?');
+      const steps = summary.steps !== undefined ? summary.steps : plans.length;
+      const initializing = !r.replaySnapshot && !r.replaySummary || steps === 0;
+      const ops = summary.workspaceOperations !== undefined ? summary.workspaceOperations : (r.replaySnapshot ? (r.replaySnapshot.workspaceOperations || []).length : 0);
+      const mutations = r.mutationCount !== undefined ? r.mutationCount : (summary.mutationCount !== undefined ? summary.mutationCount : (r.replaySnapshot && r.replaySnapshot.mutationCount !== undefined ? r.replaySnapshot.mutationCount : '?'));
       const operationalOutcome = classifyOperationalOutcome(r, data);
-      const steps = r.replaySnapshot ? plans.length : 0;
       const created = datetime(r.createdAt);
       const err = r.error ? red(r.error.substring(0, 80)) : '';
 
       print(`  ${bold(`R${r.id}`)} ${statusTag(r.status)} ${dim('ticket')} ${ticketLabel} ${dim('agent')} ${r.agentName || '?'}`);
-      print(`       ${dim('outcome')} ${outcomeTag(operationalOutcome)} ${dim('steps')} ${steps} ${dim('ops')} ${ops} ${dim('mutations')} ${mutations} ${dim('model')} ${r.replaySnapshot ? r.replaySnapshot.model : '?'} ${dim(created)}`);
+      print(`       ${dim('outcome')} ${outcomeTag(operationalOutcome)} ${dim('steps')} ${steps} ${dim('ops')} ${ops} ${dim('mutations')} ${mutations} ${dim('model')} ${summary.model || (r.replaySnapshot ? r.replaySnapshot.model : '?')} ${dim(created)}`);
       if (initializing) print(`       ${yellow('initializing')} ${dim('no steps recorded yet')}`);
       if (err) print(`       ${err}`);
       if (r.allocationSubtask) print(`       ${yellow('allocated')} ${dim(truncate(r.allocationSubtask, 100))}`);
-      if (r.replaySnapshot && r.replaySnapshot.continuationOf) {
-        print(`       ${dim('↳ continuation of run #' + r.replaySnapshot.continuationOf)}`);
+      if (summary.continuationOf || (r.replaySnapshot && r.replaySnapshot.continuationOf)) {
+        print(`       ${dim('↳ continuation of run #' + (summary.continuationOf || r.replaySnapshot.continuationOf))}`);
       }
       print('');
     });
@@ -517,7 +547,7 @@ async function cmdReplay(args) {
   if (!runId) return console.log(red('Usage: oquery replay <run-id>'));
 
   const data = args.api ? await fetchRemoteData(args) : loadAll();
-  const run = data.runs.find(r => r.id === runId);
+  const run = hydrateRunReplaySnapshot(data.runs.find(r => r.id === runId));
   if (!run) return console.log(red(`Run #${runId} not found.`));
   const snap = run.replaySnapshot;
   if (!snap) return console.log(red(`Run #${runId} has no replay snapshot.`));
@@ -569,7 +599,7 @@ async function cmdReplay(args) {
     console.log(`\n  ${bold('Continuation lineage:')}`);
     console.log(`  ${dim('↳ this run continues run #' + snap.continuationOf)}${parentRun ? ' (' + parentRun.status + ')' : ''}`);
   }
-  const childRuns = data.runs.filter(r => r.replaySnapshot && r.replaySnapshot.continuationOf === run.id);
+  const childRuns = data.runs.filter(r => (r.replaySnapshot && r.replaySnapshot.continuationOf === run.id) || replaySummary(r).continuationOf === run.id);
   if (childRuns.length > 0) {
     console.log(`  ${dim('↳ continued by:')}`);
     childRuns.forEach(r => console.log(`    run #${r.id} (${r.status})`));
@@ -589,7 +619,8 @@ async function cmdReplay(args) {
 }
 
 function classifyFailure(run) {
-  const failure = run && run.replaySnapshot ? run.replaySnapshot.failure : null;
+  const summary = replaySummary(run);
+  const failure = summary.failure || (run && run.replaySnapshot ? run.replaySnapshot.failure : null);
   if (failure && typeof failure === 'object') {
     if (failure.kind) return failure.kind;
     if (failure.code === 'RUN_INTERRUPTED') return 'interrupted';
@@ -688,7 +719,7 @@ async function cmdFailures(args) {
 }
 
 function failureDisplayActionStates(run) {
-  const snap = run.replaySnapshot || {};
+  const snap = readRunReplaySnapshot(run) || run.replaySnapshot || {};
   const modelResponses = snap.modelResponses || [];
   if (modelResponses.length === 0) return [];
   const lastResp = modelResponses[modelResponses.length - 1];
@@ -706,15 +737,17 @@ function failureDisplayActionStates(run) {
 }
 
 function buildFailureContext(run, data) {
-  const snap = run.replaySnapshot || {};
-  const failureReason = run.error || snap.failureReason || 'unknown';
-  const failureType = classifyFailure(run);
+  const hydratedRun = hydrateRunReplaySnapshot(run);
+  const summary = replaySummary(hydratedRun);
+  const snap = hydratedRun.replaySnapshot || {};
+  const failureReason = hydratedRun.error || summary.failureReason || snap.failureReason || 'unknown';
+  const failureType = classifyFailure(hydratedRun);
 
-  const stepsUsed = (snap.parsedModelPlans || []).length;
-  const opsUsed = (snap.workspaceOperations || []).length;
+  const stepsUsed = summary.steps !== undefined ? summary.steps : (snap.parsedModelPlans || []).length;
+  const opsUsed = summary.workspaceOperations !== undefined ? summary.workspaceOperations : (snap.workspaceOperations || []).length;
   const stepsBudget = snap.runtimeLimits ? snap.runtimeLimits.maxExecutionSteps : '?';
-  const mutationCount = snap.mutationCount !== undefined ? snap.mutationCount : (run.mutationCount !== undefined ? run.mutationCount : 0);
-  const mutationOutcome = snap.mutationOutcome || run.mutationOutcome || 'unknown';
+  const mutationCount = snap.mutationCount !== undefined ? snap.mutationCount : (hydratedRun.mutationCount !== undefined ? hydratedRun.mutationCount : 0);
+  const mutationOutcome = snap.mutationOutcome || hydratedRun.mutationOutcome || summary.mutationOutcome || 'unknown';
 
   // Last successful mutation
   const ops = snap.workspaceOperations || [];
@@ -785,8 +818,8 @@ function buildFailureContext(run, data) {
   });
 
   return {
-    runId: run.id,
-    ticketId: run.ticketId,
+    runId: hydratedRun.id,
+    ticketId: hydratedRun.ticketId,
     failureType,
     failureReason,
     mutationCount,
@@ -799,7 +832,7 @@ function buildFailureContext(run, data) {
     failedAction,
     invalidActions,
     lastModelResponseText,
-    allocationSubtask: run.allocationSubtask || null,
+    allocationSubtask: hydratedRun.allocationSubtask || null,
   };
 }
 
@@ -864,7 +897,8 @@ function buildCoverageMap(runs) {
   // path -> [{ runId, ticketId, operation, status }]
   const map = {};
   runs.forEach(r => {
-    const ops = (r.replaySnapshot && r.replaySnapshot.workspaceOperations) || [];
+    const snapshot = readRunReplaySnapshot(r) || r.replaySnapshot || {};
+    const ops = snapshot.workspaceOperations || [];
     ops.forEach(o => {
       const op = o.operation && o.operation.operation;
       if (op !== 'writeFile' && op !== 'createFolder') return;
@@ -1219,7 +1253,7 @@ async function cmdStats(args) {
       reads: totalReads,
       uniquePaths: uniquePaths.size,
       logEntries: data.logs.length,
-      continuations: data.runs.filter(r => r.replaySnapshot && r.replaySnapshot.continuationOf).length,
+      continuations: data.runs.filter(r => (r.replaySnapshot && r.replaySnapshot.continuationOf) || replaySummary(r).continuationOf).length,
       operationsBreakdown: opsBreakdown,
       uniquePathsByOperation: uniquePathsByOp,
     }, null, 2));
@@ -1233,7 +1267,7 @@ async function cmdStats(args) {
   console.log(`  ${'Reads (list+read)'.padEnd(20)} ${totalReads}`);
   console.log(`  ${'Unique paths touched'.padEnd(20)} ${uniquePaths.size}`);
   console.log(`  ${'Log entries'.padEnd(20)} ${data.logs.length}`);
-  console.log(`  ${'Continuations'.padEnd(20)} ${data.runs.filter(r => r.replaySnapshot && r.replaySnapshot.continuationOf).length}`);
+  console.log(`  ${'Continuations'.padEnd(20)} ${data.runs.filter(r => (r.replaySnapshot && r.replaySnapshot.continuationOf) || replaySummary(r).continuationOf).length}`);
   console.log('');
 
   console.log(`  ${bold('Tickets by status')}`);

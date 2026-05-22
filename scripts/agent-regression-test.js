@@ -44,8 +44,37 @@ for (const file of DATA_FILES) {
   }
 }
 
+const REAL_REPLAY_SNAPSHOT_DIR = path.join(REAL_DATA_DIR, 'replay-snapshots');
+const REPLAY_SNAPSHOT_DIR = path.join(DATA_DIR, 'replay-snapshots');
+if (fs.existsSync(REAL_REPLAY_SNAPSHOT_DIR)) {
+  fs.cpSync(REAL_REPLAY_SNAPSHOT_DIR, REPLAY_SNAPSHOT_DIR, { recursive: true });
+}
+
 function readJson(file) {
+  const value = JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
+  if (file !== 'runs.json' || !Array.isArray(value)) return value;
+  return value.map(hydrateRunReplaySnapshot);
+}
+
+function readRawJson(file) {
   return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
+}
+
+function readRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return null;
+  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
+  if (!run.replaySnapshotPath) return null;
+
+  const snapshotPath = path.resolve(DATA_DIR, run.replaySnapshotPath);
+  if (!snapshotPath.startsWith(DATA_DIR + path.sep)) return null;
+  if (!fs.existsSync(snapshotPath)) return null;
+  return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+}
+
+function hydrateRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return run;
+  const replaySnapshot = readRunReplaySnapshot(run);
+  return replaySnapshot ? { ...run, replaySnapshot } : run;
 }
 
 function writeJson(file, value) {
@@ -1351,6 +1380,11 @@ async function main() {
     assert(completedTicket.status === 'completed', 'Single-agent ticket did not complete');
     assert(completeRuns.length === 1, 'Single-agent ticket did not create exactly one run');
     assert(completeRuns[0].agentId === agent.id, 'Single-agent run used the wrong agent');
+    const rawCompleteRun = readRawJson('runs.json').find(run => run.id === completeRuns[0].id);
+    assert(rawCompleteRun && !rawCompleteRun.replaySnapshot, 'runs.json should not store inline replaySnapshot for new runs');
+    assert(rawCompleteRun.replaySnapshotPath === `replay-snapshots/run-${completeRuns[0].id}.json`, 'Run metadata should point at replay snapshot file');
+    assert(rawCompleteRun.replaySummary && rawCompleteRun.replaySummary.terminalStatus === 'completed', 'Run metadata should include replay summary');
+    assert(fs.existsSync(path.join(DATA_DIR, rawCompleteRun.replaySnapshotPath)), 'Replay snapshot file should exist for new run');
     verifyRunLogs(completeTicket.id, completeRuns, { expectWorkspaceWrite: true });
     await verifyRunDetailPage(cookie, completeRuns[0]);
     await verifyFilteredLogNavigation(cookie, completeRuns[0]);

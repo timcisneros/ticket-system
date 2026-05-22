@@ -8,25 +8,13 @@
   {
     "id": 2,
     "principalType": "agent",
-    "principalId": 3,
-    "groupId": 3
+    "principalId": 1,
+    "groupId": 2
   },
   {
     "id": 3,
     "principalType": "agent",
-    "principalId": 4,
-    "groupId": 3
-  },
-  {
-    "id": 4,
-    "principalType": "agent",
-    "principalId": 5,
-    "groupId": 2
-  },
-  {
-    "id": 5,
-    "principalType": "agent",
-    "principalId": 1,
+    "principalId": 2,
     "groupId": 2
   }
 ]

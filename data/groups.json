@@ -27,11 +27,5 @@
     "name": "Agent Support",
     "permissions": [],
     "canReceiveTickets": true
-  },
-  {
-    "id": 3,
-    "name": "Allocated Regression 1779149143260",
-    "permissions": [],
-    "canReceiveTickets": true
   }
 ]

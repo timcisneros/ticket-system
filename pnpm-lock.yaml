@@ -23,6 +23,9 @@ importers:
       argon2:
         specifier: ^0.44.0
         version: 0.44.0
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
       ejs:
         specifier: ^5.0.2
         version: 5.0.2
@@ -113,6 +116,10 @@ packages:
   dequal@2.0.3:
     resolution: {integrity: sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==}
     engines: {node: '>=6'}
+
+  dotenv@17.4.2:
+    resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
+    engines: {node: '>=12'}
 
   ejs@5.0.2:
     resolution: {integrity: sha512-IpbUaI/CAW86l3f+T8zN0iggSc0LmMZLcIW5eRVStLVNCoTXkE0YlncbbH50fp8Cl6zHIky0sW2uUbhBqGw0Jw==}
@@ -359,6 +366,8 @@ snapshots:
       which: 2.0.2
 
   dequal@2.0.3: {}
+
+  dotenv@17.4.2: {}
 
   ejs@5.0.2: {}
 

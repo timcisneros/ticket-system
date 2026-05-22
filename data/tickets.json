@@ -8,7 +8,8 @@
     "status": "completed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:14:03.318Z",
-    "updatedAt": "2026-05-19T07:14:08.550Z"
+    "updatedAt": "2026-05-19T07:14:08.550Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 2,
@@ -19,7 +20,8 @@
     "status": "failed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:14:38.101Z",
-    "updatedAt": "2026-05-19T07:14:56.591Z"
+    "updatedAt": "2026-05-19T07:14:56.591Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 3,
@@ -30,7 +32,8 @@
     "status": "failed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:16:56.129Z",
-    "updatedAt": "2026-05-19T07:17:14.546Z"
+    "updatedAt": "2026-05-19T07:17:14.546Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 4,
@@ -41,7 +44,8 @@
     "status": "failed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:17:39.520Z",
-    "updatedAt": "2026-05-19T07:17:59.788Z"
+    "updatedAt": "2026-05-19T07:17:59.788Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 5,
@@ -52,7 +56,8 @@
     "status": "completed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:18:27.135Z",
-    "updatedAt": "2026-05-19T07:18:43.012Z"
+    "updatedAt": "2026-05-19T07:18:43.012Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 6,
@@ -63,7 +68,8 @@
     "status": "completed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:20:09.892Z",
-    "updatedAt": "2026-05-19T07:20:16.183Z"
+    "updatedAt": "2026-05-19T07:20:16.183Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 7,
@@ -74,7 +80,8 @@
     "status": "failed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:23:19.512Z",
-    "updatedAt": "2026-05-19T07:23:21.918Z"
+    "updatedAt": "2026-05-19T07:23:21.918Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 8,
@@ -85,7 +92,8 @@
     "status": "completed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:33:36.794Z",
-    "updatedAt": "2026-05-19T07:33:54.062Z"
+    "updatedAt": "2026-05-19T07:33:54.062Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 9,
@@ -96,7 +104,8 @@
     "status": "completed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T07:36:02.245Z",
-    "updatedAt": "2026-05-19T07:36:23.430Z"
+    "updatedAt": "2026-05-19T07:36:23.430Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 10,
@@ -107,7 +116,8 @@
     "status": "in_progress",
     "createdBy": "admin",
     "createdAt": "2026-05-19T20:20:33.035Z",
-    "updatedAt": "2026-05-19T21:32:23.288Z"
+    "updatedAt": "2026-05-19T21:32:23.288Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 11,
@@ -118,7 +128,8 @@
     "status": "failed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T21:31:10.639Z",
-    "updatedAt": "2026-05-19T21:31:26.812Z"
+    "updatedAt": "2026-05-19T21:31:26.812Z",
+    "ownedOutputPaths": null
   },
   {
     "id": 12,
@@ -129,6 +140,7 @@
     "status": "completed",
     "createdBy": "admin",
     "createdAt": "2026-05-19T21:32:10.604Z",
-    "updatedAt": "2026-05-19T21:32:15.250Z"
+    "updatedAt": "2026-05-19T21:32:15.250Z",
+    "ownedOutputPaths": null
   }
 ]
