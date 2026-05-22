@@ -221,6 +221,7 @@ async function assertMainFormRenders(cookie, label) {
   assert(response.body.includes('Manual folder scopes'), `${label}: manual scope option missing`);
   assert(response.body.includes('Automatic folder scopes'), `${label}: dynamic scope option missing`);
   assert(response.body.includes('const agentGroupMembers = '), `${label}: agentGroupMembers script missing`);
+  assert(response.body.includes('value="agent" selected'), `${label}: one-agent path is not the default`);
 }
 
 async function assertPageRenders(cookie, pathValue, label, expectedText) {
@@ -259,8 +260,10 @@ async function main() {
     await assertPageRenders(cookie, `/logs?runId=${fixture.run.id}`, 'run-filtered logs', `Run #${fixture.run.id}`);
     await assertPageRenders(cookie, `/logs?ticketId=${fixture.ticket.id}`, 'ticket-filtered logs', `Ticket #${fixture.ticket.id}`);
     await assertPageRenders(cookie, '/tickets', 'tickets', 'Live Work');
-    await assertPageRenders(cookie, `/tickets/${fixture.ticket.id}`, 'ticket detail', 'Run Outcome');
-    await assertPageRenders(cookie, `/runs/${fixture.run.id}`, 'run detail', 'Run Outcome');
+    const ticketDetail = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id}`, 'ticket detail', 'Run Outcome');
+    assert(!ticketDetail.body.includes('<th>Work Unit</th>'), 'single-agent ticket detail should not show group-only work unit column');
+    const runDetail = await assertPageRenders(cookie, `/runs/${fixture.run.id}`, 'run detail', 'Run Outcome');
+    assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
 
     writeJson('groups.json', readJson('groups.json').map(group => ({ ...group, canReceiveTickets: false })));
     writeJson('memberships.json', readJson('memberships.json').filter(membership => membership.principalType !== 'agent'));

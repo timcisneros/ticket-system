@@ -170,8 +170,10 @@
   </section>
 
   <section class="detail-section">
-    <h2>Instructions</h2>
-    <pre class="run-text"><%= snapshot.systemInstructionSnapshot || '-' %></pre>
+    <details class="collapsible">
+      <summary>Prompt Instructions</summary>
+      <pre class="run-text"><%= snapshot.systemInstructionSnapshot || '-' %></pre>
+    </details>
   </section>
 
   <section class="detail-section">

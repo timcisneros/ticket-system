@@ -134,6 +134,7 @@
   <% if (ticketRuns.length === 0) { %>
     <p class="text-muted">No runs yet.</p>
   <% } else { %>
+    <% const hasScopedRuns = ticketRuns.some(run => run.allocationPlanId || run.allocationItemId); %>
     <table class="tickets-table">
       <thead>
         <tr>
@@ -142,9 +143,10 @@
           <th>Status</th>
           <th>Run Outcome</th>
           <th>Mutations</th>
-          <th>Workspace</th>
-          <th>Work Split</th>
-          <th>Work Unit</th>
+          <% if (hasScopedRuns) { %>
+            <th>Work Split</th>
+            <th>Work Unit</th>
+          <% } %>
           <th>Created</th>
         </tr>
       </thead>
@@ -164,9 +166,10 @@
                 -
               <% } %>
             </td>
-            <td><%= run.executionWorkspaceType || 'main' %></td>
-            <td><%= run.allocationPlanId || '-' %></td>
-            <td><%= run.allocationItemId || '-' %></td>
+            <% if (hasScopedRuns) { %>
+              <td><%= run.allocationPlanId || '-' %></td>
+              <td><%= run.allocationItemId || '-' %></td>
+            <% } %>
             <td><%= run.createdAt ? new Date(run.createdAt).toLocaleString() : '-' %></td>
           </tr>
         <% }) %>
