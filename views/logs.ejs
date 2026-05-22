@@ -3,6 +3,7 @@
 <h1>Logs</h1>
 
 <% const viewFilters = typeof filters === 'undefined' ? { runId: null, ticketId: null } : filters; %>
+<% const viewPagination = typeof pagination === 'undefined' ? { page: 1, limit: 50, total: logs.length, start: logs.length ? 1 : 0, end: logs.length, previousHref: null, nextHref: null } : pagination; %>
 
 <section class="admin-block">
   <% if (viewFilters && (viewFilters.runId !== null || viewFilters.ticketId !== null)) { %>
@@ -18,6 +19,24 @@
       <a href="/logs">Show all logs</a>
     </div>
   <% } %>
+  <div class="pagination-bar">
+    <span>
+      Showing <%= viewPagination.start %>-<%= viewPagination.end %> of <%= viewPagination.total %>
+    </span>
+    <div class="pagination-actions">
+      <% if (viewPagination.previousHref) { %>
+        <a class="btn-small" href="<%= viewPagination.previousHref %>">Previous</a>
+      <% } else { %>
+        <span class="btn-small btn-small--disabled">Previous</span>
+      <% } %>
+      <span class="text-muted">Page <%= viewPagination.page %> of <%= viewPagination.pageCount || 1 %></span>
+      <% if (viewPagination.nextHref) { %>
+        <a class="btn-small" href="<%= viewPagination.nextHref %>">Next</a>
+      <% } else { %>
+        <span class="btn-small btn-small--disabled">Next</span>
+      <% } %>
+    </div>
+  </div>
   <div class="table-container">
     <table class="tickets-table logs-table">
       <thead>
@@ -39,7 +58,7 @@
         <% logs.forEach(log => { %>
           <tr data-log-id="<%= log.id %>">
             <td class="log-time-cell">
-              <time datetime="<%= log.timestamp %>" title="<%= log.timestamp %>" data-log-time="<%= log.timestamp %>"><%= log.timestamp %></time>
+              <time datetime="<%= log.timestamp %>" title="<%= log.timestamp %>"><%= log.displayTimestamp || log.timestamp || '-' %></time>
             </td>
             <td class="log-context-cell">
               <% if (log.runId === null || log.runId === undefined) { %>
@@ -80,6 +99,7 @@
 <script>
 const logsBody = document.getElementById('logs-body');
 const activeLogFilters = <%- JSON.stringify(viewFilters || { runId: null, ticketId: null }) %>;
+const activeLogPagination = <%- JSON.stringify(viewPagination || { page: 1 }) %>;
 
 function formatLogTimestamp(timestamp) {
   if (!timestamp) return '-';
@@ -91,13 +111,10 @@ function formatLogTimestamp(timestamp) {
   return `${month}/${day}/${year} ${hour}:${minute}:${second}`;
 }
 
-document.querySelectorAll('[data-log-time]').forEach(time => {
-  time.textContent = formatLogTimestamp(time.dataset.logTime);
-});
-
 function appendLog(log) {
   if (activeLogFilters.runId !== null && log.runId !== activeLogFilters.runId) return;
   if (activeLogFilters.ticketId !== null && log.ticketId !== activeLogFilters.ticketId) return;
+  if (activeLogPagination.page !== 1) return;
   if (document.querySelector('[data-log-id="' + log.id + '"]')) return;
 
   const emptyRow = document.getElementById('logs-empty');
@@ -182,7 +199,10 @@ function appendLog(log) {
   }
   row.appendChild(messageCell);
 
-  logsBody.appendChild(row);
+  logsBody.insertBefore(row, logsBody.firstChild);
+  const maxRows = Number(activeLogPagination.limit || 50);
+  const rows = Array.from(logsBody.querySelectorAll('tr[data-log-id]'));
+  rows.slice(maxRows).forEach(extraRow => extraRow.remove());
 }
 
 if (window.EventSource) {

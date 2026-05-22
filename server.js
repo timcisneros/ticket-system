@@ -82,6 +82,20 @@ fastify.register(require('@fastify/view'), {
   layout: 'layout.ejs'
 });
 
+fastify.addHook('onRequest', async request => {
+  request.routeStartedAtNs = process.hrtime.bigint();
+});
+
+fastify.addHook('onSend', async (request, reply, payload) => {
+  if (request.routeStartedAtNs) {
+    const elapsedMs = Number(process.hrtime.bigint() - request.routeStartedAtNs) / 1e6;
+    reply.header('X-Route-Time-Ms', elapsedMs.toFixed(1));
+    reply.header('X-Heap-Used-Mb', (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1));
+  }
+
+  return payload;
+});
+
 // ==================== DATA HELPERS ====================
 
 function readTickets() {
@@ -133,20 +147,18 @@ function getTicketsForDisplay() {
   const agentGroups = getTicketAssignableGroups();
   const runs = readRuns();
   const history = readOperationHistory();
+  const runsByTicketId = groupBy(runs, run => run.ticketId);
+  const mutationCountByRunId = buildMutationCountByRunId(history);
   const tickets = readTickets().map(ticket => {
     const target = ticket.assignmentTargetType === 'agent'
       ? agents.find(agent => agent.id === ticket.assignmentTargetId)
       : agentGroups.find(group => group.id === ticket.assignmentTargetId);
-    const ticketRuns = runs.filter(run => run.ticketId === ticket.id);
+    const ticketRuns = runsByTicketId.get(ticket.id) || [];
     const activeRuns = ticketRuns.filter(run => ['pending', 'running'].includes(run.status));
     const lastRun = ticketRuns
       .slice()
       .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
-    const lastRunPartialMutationCount = lastRun
-      ? history.filter(record =>
-          record.runId === lastRun.id && isActualWorkspaceMutation(record)
-        ).length
-      : 0;
+    const lastRunPartialMutationCount = lastRun ? (mutationCountByRunId.get(lastRun.id) || 0) : 0;
 
     return {
       ...ticket,
@@ -161,6 +173,37 @@ function getTicketsForDisplay() {
 
   tickets.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   return tickets;
+}
+
+function ticketsPageHref(page, limit) {
+  const params = new URLSearchParams();
+  params.set('page', String(page));
+  params.set('limit', String(limit));
+  return `/tickets?${params.toString()}`;
+}
+
+function getPaginatedTickets(query = {}) {
+  const { page, limit } = getPagination(query, 25);
+  const tickets = getTicketsForDisplay();
+  const total = tickets.length;
+  const pageCount = Math.max(1, Math.ceil(total / limit));
+  const currentPage = Math.min(page, pageCount);
+  const offset = (currentPage - 1) * limit;
+  const pageTickets = tickets.slice(offset, offset + limit);
+
+  return {
+    tickets: pageTickets,
+    pagination: {
+      page: currentPage,
+      limit,
+      total,
+      pageCount,
+      start: total === 0 ? 0 : offset + 1,
+      end: Math.min(offset + pageTickets.length, total),
+      previousHref: currentPage > 1 ? ticketsPageHref(currentPage - 1, limit) : null,
+      nextHref: currentPage < pageCount ? ticketsPageHref(currentPage + 1, limit) : null
+    }
+  };
 }
 
 function getRunMutationCount(run) {
@@ -737,12 +780,12 @@ function writeOperationHistory(history) {
   writeFileAtomic(OPERATION_HISTORY_FILE, JSON.stringify(normalizeOperationHistory(history), null, 2));
 }
 
-function getOperationHistoryForRun(runId) {
-  return readOperationHistory().filter(record => record.runId === runId);
+function getOperationHistoryForRun(runId, history = readOperationHistory()) {
+  return history.filter(record => record.runId === runId);
 }
 
-function getOperationHistoryForTicket(ticketId) {
-  return readOperationHistory().filter(record => record.ticketId === ticketId);
+function getOperationHistoryForTicket(ticketId, history = readOperationHistory()) {
+  return history.filter(record => record.ticketId === ticketId);
 }
 
 function findOperationHistoryRecord(recordId) {
@@ -772,10 +815,30 @@ function isActualWorkspaceMutation(record) {
   return false;
 }
 
-function countRunMutatingOperations(runId) {
-  return readOperationHistory().filter(record =>
+function countRunMutatingOperations(runId, history = readOperationHistory()) {
+  return history.filter(record =>
     record.runId === runId && isActualWorkspaceMutation(record)
   ).length;
+}
+
+function groupBy(items, keyFn) {
+  const grouped = new Map();
+  items.forEach(item => {
+    const key = keyFn(item);
+    const existing = grouped.get(key) || [];
+    existing.push(item);
+    grouped.set(key, existing);
+  });
+  return grouped;
+}
+
+function buildMutationCountByRunId(history) {
+  const counts = new Map();
+  history.forEach(record => {
+    if (!isActualWorkspaceMutation(record)) return;
+    counts.set(record.runId, (counts.get(record.runId) || 0) + 1);
+  });
+  return counts;
 }
 
 function getCurrentWorkspacePathInfo(relativePath) {
@@ -1068,8 +1131,7 @@ function usageTokenTotal(usage) {
   return total > 0 ? total : null;
 }
 
-function buildRunMetrics(run, logs) {
-  const runLogs = logs.filter(log => log.runId === run.id);
+function buildRunMetrics(run, runLogs) {
   const startedAt = run.startedAt || null;
   const completedAt = run.completedAt || null;
   const durationMs = startedAt && completedAt
@@ -1110,24 +1172,26 @@ function average(values) {
 function getAgentPerformanceMetrics() {
   const runs = readRuns();
   const logs = readLogs();
+  const runsByAgentId = groupBy(runs, run => run.agentId);
+  const logsByRunId = groupBy(logs, log => log.runId);
+  const workspaceActionTypes = new Set([
+    'workspace:list',
+    'workspace:read',
+    'workspace:write',
+    'workspace:create',
+    'workspace:rename',
+    'workspace:delete'
+  ]);
 
   return readAgents().map(agent => {
-    const agentRuns = runs.filter(run => run.agentId === agent.id);
-    const runMetrics = agentRuns.map(run => buildRunMetrics(run, logs));
+    const agentRuns = runsByAgentId.get(agent.id) || [];
+    const runMetrics = agentRuns.map(run => buildRunMetrics(run, logsByRunId.get(run.id) || []));
     const completedRuns = runMetrics.filter(run => run.status === 'completed');
     const failedRuns = runMetrics.filter(run => run.status === 'failed');
     const activeRuns = runMetrics.filter(run => ['pending', 'running'].includes(run.status));
-    const workspaceActionTypes = new Set([
-      'workspace:list',
-      'workspace:read',
-      'workspace:write',
-      'workspace:create',
-      'workspace:rename',
-      'workspace:delete'
-    ]);
-    const totalWorkspaceActions = logs.filter(log =>
-      agentRuns.some(run => run.id === log.runId) && workspaceActionTypes.has(log.type)
-    ).length;
+    const totalWorkspaceActions = agentRuns.reduce((total, run) => {
+      return total + (logsByRunId.get(run.id) || []).filter(log => workspaceActionTypes.has(log.type)).length;
+    }, 0);
     const lastRun = agentRuns
       .slice()
       .sort((a, b) => new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0))[0];
@@ -1868,12 +1932,12 @@ function getTicketAllocationPlan(ticketId) {
   return readAllocationPlans().find(plan => plan.ticketId === ticketId) || null;
 }
 
-function getTicketRuns(ticketId) {
+function getTicketRuns(ticketId, history = readOperationHistory()) {
   const runs = readRuns().filter(run => run.ticketId === ticketId);
   const agents = readAgents();
-  const history = readOperationHistory();
+  const mutationCountByRunId = buildMutationCountByRunId(history);
   return runs.map(run => {
-    const partialMutationCount = countRunMutatingOperations(run.id);
+    const partialMutationCount = mutationCountByRunId.get(run.id) || 0;
     return {
       ...run,
       agentName: agents.find(agent => agent.id === run.agentId)?.name || `Agent ${run.agentId}`,
@@ -1881,6 +1945,28 @@ function getTicketRuns(ticketId) {
       operationalOutcome: classifyRunOperationalOutcome(run)
     };
   });
+}
+
+function getRecentLogsForTicket(ticketId, limit = 5) {
+  const logs = readLogs();
+  const recentLogs = [];
+
+  for (let index = logs.length - 1; index >= 0 && recentLogs.length < limit; index -= 1) {
+    if (logs[index].ticketId === ticketId) recentLogs.push(logs[index]);
+  }
+
+  return recentLogs.reverse();
+}
+
+function getRecentLogsForRun(runId, limit = 5) {
+  const logs = readLogs();
+  const recentLogs = [];
+
+  for (let index = logs.length - 1; index >= 0 && recentLogs.length < limit; index -= 1) {
+    if (logs[index].runId === runId) recentLogs.push(logs[index]);
+  }
+
+  return recentLogs.reverse();
 }
 
 function updateAllocationItemStatus(run, status) {
@@ -3692,8 +3778,11 @@ fastify.get('/tickets', { preHandler: fastify.requireAuth }, async (request, rep
     return 'Permission denied';
   }
 
+  const ticketPage = getPaginatedTickets(request.query || {});
+
   return reply.view('tickets.ejs', viewData({
-    tickets: getTicketsForDisplay(),
+    tickets: ticketPage.tickets,
+    pagination: ticketPage.pagination,
     user: request.user,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update'),
     agents: readAgents(),
@@ -3731,7 +3820,8 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   }
 
   const allocationPlan = getTicketAllocationPlan(ticketId);
-  const ticketRuns = getTicketRuns(ticketId);
+  const history = readOperationHistory();
+  const ticketRuns = getTicketRuns(ticketId, history);
   const agents = readAgents();
 
   return reply.view('ticket-detail.ejs', viewData({
@@ -3740,7 +3830,8 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     allocationPlan,
     ticketRuns,
     agents,
-    operationHistory: enrichOperationHistoryForDisplay(getOperationHistoryForTicket(ticketId)),
+    recentLogs: getRecentLogsForTicket(ticketId),
+    operationHistory: enrichOperationHistoryForDisplay(getOperationHistoryForTicket(ticketId, history)),
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
 });
@@ -3756,7 +3847,7 @@ fastify.get('/api/tickets', { preHandler: fastify.requireAuth }, async (request,
   }
 
   return {
-    tickets: getTicketsForDisplay(),
+    ...getPaginatedTickets(request.query || {}),
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update'),
     agents: readAgents().map(agent => ({ id: agent.id, name: agent.name })),
     ticketStatuses: TICKET_STATUSES
@@ -4020,6 +4111,70 @@ function filterLogsForQuery(logs, query = {}) {
   });
 }
 
+function formatDisplayTimestamp(timestamp) {
+  if (!timestamp) return '-';
+  const match = String(timestamp).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$/);
+  if (!match) return timestamp;
+  const [, year, month, day, hour, minute, second] = match;
+  return `${month}/${day}/${year} ${hour}:${minute}:${second}`;
+}
+
+function getPagination(query = {}, defaultLimit = 50) {
+  const page = parseInt(query.page || '1', 10);
+  const limit = parseInt(query.limit || String(defaultLimit), 10);
+  return {
+    page: Number.isInteger(page) && page > 0 ? page : 1,
+    limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : defaultLimit
+  };
+}
+
+function logsPageHref(filters, page, limit) {
+  const params = new URLSearchParams();
+  if (filters.runId !== null) params.set('runId', String(filters.runId));
+  if (filters.ticketId !== null) params.set('ticketId', String(filters.ticketId));
+  params.set('page', String(page));
+  params.set('limit', String(limit));
+  return `/logs?${params.toString()}`;
+}
+
+function getPaginatedLogs(query = {}) {
+  const filters = getLogFilters(query);
+  const { page, limit } = getPagination(query);
+  const logs = readLogs();
+  const filtered = [];
+
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const log = logs[index];
+    if (filters.runId !== null && log.runId !== filters.runId) continue;
+    if (filters.ticketId !== null && log.ticketId !== filters.ticketId) continue;
+    filtered.push(log);
+  }
+
+  const total = filtered.length;
+  const pageCount = Math.max(1, Math.ceil(total / limit));
+  const currentPage = Math.min(page, pageCount);
+  const offset = (currentPage - 1) * limit;
+  const pageLogs = filtered.slice(offset, offset + limit).map(log => ({
+    ...log,
+    displayTimestamp: formatDisplayTimestamp(log.timestamp)
+  }));
+
+  return {
+    logs: pageLogs,
+    filters,
+    pagination: {
+      page: currentPage,
+      limit,
+      total,
+      pageCount,
+      start: total === 0 ? 0 : offset + 1,
+      end: Math.min(offset + pageLogs.length, total),
+      previousHref: currentPage > 1 ? logsPageHref(filters, currentPage - 1, limit) : null,
+      nextHref: currentPage < pageCount ? logsPageHref(filters, currentPage + 1, limit) : null
+    }
+  };
+}
+
 fastify.get('/logs', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
@@ -4029,11 +4184,12 @@ fastify.get('/logs', { preHandler: fastify.requireAuth }, async (request, reply)
     }, request.session.userId));
   }
 
-  const filters = getLogFilters(request.query || {});
+  const logPage = getPaginatedLogs(request.query || {});
   return reply.view('logs.ejs', viewData({
     user: request.user,
-    logs: filterLogsForQuery(readLogs(), request.query || {}),
-    filters
+    logs: logPage.logs,
+    filters: logPage.filters,
+    pagination: logPage.pagination
   }, request.session.userId));
 });
 
@@ -4043,7 +4199,12 @@ fastify.get('/api/logs', { preHandler: fastify.requireAuth }, async (request, re
     return { error: 'Permission denied' };
   }
 
-  return { logs: filterLogsForQuery(readLogs(), request.query || {}) };
+  const logPage = getPaginatedLogs(request.query || {});
+  return {
+    logs: logPage.logs,
+    filters: logPage.filters,
+    pagination: logPage.pagination
+  };
 });
 
 fastify.get('/api/export', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -4110,14 +4271,16 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }, request.session.userId));
   }
 
-  const runPartialMutationCount = countRunMutatingOperations(runId);
+  const history = readOperationHistory();
+  const runPartialMutationCount = countRunMutatingOperations(runId, history);
 
   return reply.view('run-detail.ejs', viewData({
     user: request.user,
     run,
     ticket: readTickets().find(item => item.id === run.ticketId) || null,
     snapshot: run.replaySnapshot || null,
-    operationHistory: enrichOperationHistoryForDisplay(getOperationHistoryForRun(runId)),
+    recentLogs: getRecentLogsForRun(runId),
+    operationHistory: enrichOperationHistoryForDisplay(getOperationHistoryForRun(runId, history)),
     partialMutationCount: runPartialMutationCount,
     operationalOutcome: classifyRunOperationalOutcome(run),
     canUpdateRuns: hasPermission(request.session.userId, 'ticket:update')

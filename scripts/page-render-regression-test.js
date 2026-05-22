@@ -208,9 +208,24 @@ function seedNavigationFixture() {
     workspaceAction: null
   };
 
-  writeJson('tickets.json', [...tickets, ticket]);
+  const extraTickets = Array.from({ length: 3 }, (_, index) => ({
+    ...ticket,
+    id: ticketId + index + 1,
+    objective: `page render extra ticket ${index + 1}`,
+    updatedAt: new Date(Date.now() - index - 1000).toISOString()
+  }));
+
+  writeJson('tickets.json', [...tickets, ticket, ...extraTickets]);
   writeJson('runs.json', [...runs, run]);
-  writeJson('logs.json', [...logs, log]);
+  writeJson('logs.json', [
+    ...logs,
+    ...Array.from({ length: 6 }, (_, index) => ({
+      ...log,
+      id: log.id + index,
+      timestamp: new Date(Date.now() + index).toISOString(),
+      message: `Page render fixture log ${index + 1}`
+    }))
+  ]);
   return { ticket, run };
 }
 
@@ -256,13 +271,33 @@ async function main() {
     const fixture = seedNavigationFixture();
 
     await assertMainFormRenders(cookie, 'groups present');
-    await assertPageRenders(cookie, '/logs', 'logs', 'Logs');
-    await assertPageRenders(cookie, `/logs?runId=${fixture.run.id}`, 'run-filtered logs', `Run #${fixture.run.id}`);
-    await assertPageRenders(cookie, `/logs?ticketId=${fixture.ticket.id}`, 'ticket-filtered logs', `Ticket #${fixture.ticket.id}`);
+    const logsPage = await assertPageRenders(cookie, '/logs?limit=2', 'logs', 'Showing 1-2 of');
+    assert(!logsPage.body.includes('data-log-time'), 'logs page should not require client-side timestamp replacement');
+    assert(logsPage.body.includes('Next'), 'logs page should include next pagination');
+    assert((logsPage.body.match(/<tr data-log-id=/g) || []).length === 2, 'logs page should render only the requested page size');
+    assert(logsPage.body.includes('rows.slice(maxRows).forEach'), 'live log inserts should trim rows beyond the page size');
+    await assertPageRenders(cookie, `/logs?runId=${fixture.run.id}&limit=2`, 'run-filtered logs', `Run #${fixture.run.id}`);
+    await assertPageRenders(cookie, `/logs?ticketId=${fixture.ticket.id}&limit=2`, 'ticket-filtered logs', `Ticket #${fixture.ticket.id}`);
+    const logsApi = await request('GET', `/api/logs?runId=${fixture.run.id}&limit=2`, { cookie });
+    assert(logsApi.statusCode === 200, `logs API returned HTTP ${logsApi.statusCode}`);
+    const logsPayload = JSON.parse(logsApi.body);
+    assert(logsPayload.logs.length === 2, 'logs API should return requested page size');
+    assert(logsPayload.pagination && logsPayload.pagination.total >= 6, 'logs API should include pagination total');
     await assertPageRenders(cookie, '/tickets', 'tickets', 'Live Work');
+    const ticketsPage = await assertPageRenders(cookie, '/tickets?limit=1', 'paginated tickets', 'Showing 1-1 of');
+    assert((ticketsPage.body.match(/class="ticket-card /g) || []).length === 1, 'tickets page should render only the requested page size');
+    const ticketsApi = await request('GET', '/api/tickets?limit=1', { cookie });
+    assert(ticketsApi.statusCode === 200, `tickets API returned HTTP ${ticketsApi.statusCode}`);
+    const ticketsPayload = JSON.parse(ticketsApi.body);
+    assert(ticketsPayload.tickets.length === 1, 'tickets API should return requested page size');
+    assert(ticketsPayload.pagination && ticketsPayload.pagination.total >= 4, 'tickets API should include pagination total');
     const ticketDetail = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id}`, 'ticket detail', 'Run Outcome');
+    assert(ticketDetail.body.includes('<summary>Ticket Details</summary>'), 'ticket detail should collapse metadata');
+    assert(ticketDetail.body.includes('Recent Activity'), 'ticket detail should include inline recent activity');
     assert(!ticketDetail.body.includes('<th>Work Unit</th>'), 'single-agent ticket detail should not show group-only work unit column');
     const runDetail = await assertPageRenders(cookie, `/runs/${fixture.run.id}`, 'run detail', 'Run Outcome');
+    assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
+    assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
 
     writeJson('groups.json', readJson('groups.json').map(group => ({ ...group, canReceiveTickets: false })));

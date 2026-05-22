@@ -1,7 +1,10 @@
 <div class="page-header">
   <div>
     <h1>Ticket #<%= ticket.id %></h1>
-    <p class="text-muted"><%= ticket.objective %></p>
+    <p class="text-muted">
+      <span class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span>
+      <span><%= ticket.objective %></span>
+    </p>
   </div>
   <div class="actions">
     <a class="btn-secondary" href="/tickets">Back to Tickets</a>
@@ -13,52 +16,52 @@
 </div>
 
 <section class="detail-section">
-  <h2>Ticket Info</h2>
-  <dl class="detail-grid">
-    <div>
-      <dt>Status</dt>
-      <dd><span class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span></dd>
-    </div>
-    <div>
-      <dt>Worker</dt>
-      <dd><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %></dd>
-    </div>
-    <div>
-      <dt>Work Split</dt>
-      <dd><%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></dd>
-    </div>
-    <div>
-      <dt>Created</dt>
-      <dd><%= ticket.createdAt ? new Date(ticket.createdAt).toLocaleString() : '-' %></dd>
-    </div>
-    <div>
-      <dt>Updated</dt>
-      <dd><%= ticket.updatedAt ? new Date(ticket.updatedAt).toLocaleString() : '-' %></dd>
-    </div>
-  </dl>
+  <details class="collapsible">
+    <summary>Ticket Details</summary>
+    <dl class="detail-grid">
+      <div>
+        <dt>Worker</dt>
+        <dd><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %></dd>
+      </div>
+      <div>
+        <dt>Work Split</dt>
+        <dd><%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></dd>
+      </div>
+      <div>
+        <dt>Created</dt>
+        <dd><%= ticket.createdAt ? new Date(ticket.createdAt).toLocaleString() : '-' %></dd>
+      </div>
+      <div>
+        <dt>Updated</dt>
+        <dd><%= ticket.updatedAt ? new Date(ticket.updatedAt).toLocaleString() : '-' %></dd>
+      </div>
+    </dl>
+  </details>
 </section>
 
 <% if (allocationPlan) { %>
 <section class="detail-section">
-  <h2>Work Split #<%= allocationPlan.id %></h2>
-  <dl class="detail-grid">
-    <div>
-      <dt>Mode</dt>
-      <dd>Folder-scoped work</dd>
-    </div>
-    <div>
-      <dt>Plan Status</dt>
-      <dd><span class="status-badge status-<%= allocationPlan.status %>"><%= allocationPlan.status %></span></dd>
-    </div>
-    <div>
-      <dt>Created</dt>
-      <dd><%= allocationPlan.createdAt ? new Date(allocationPlan.createdAt).toLocaleString() : '-' %></dd>
-    </div>
-    <div>
-      <dt>Ticket Opened At</dt>
-      <dd><%= allocationPlan.ticketOpenedAt ? new Date(allocationPlan.ticketOpenedAt).toLocaleString() : '-' %></dd>
-    </div>
-  </dl>
+  <details class="collapsible">
+    <summary>Work Split Details</summary>
+    <dl class="detail-grid">
+      <div>
+        <dt>Plan</dt>
+        <dd>#<%= allocationPlan.id %></dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd><span class="status-badge status-<%= allocationPlan.status %>"><%= allocationPlan.status %></span></dd>
+      </div>
+      <div>
+        <dt>Created</dt>
+        <dd><%= allocationPlan.createdAt ? new Date(allocationPlan.createdAt).toLocaleString() : '-' %></dd>
+      </div>
+      <div>
+        <dt>Ticket Opened At</dt>
+        <dd><%= allocationPlan.ticketOpenedAt ? new Date(allocationPlan.ticketOpenedAt).toLocaleString() : '-' %></dd>
+      </div>
+    </dl>
+  </details>
 </section>
 
 <section class="detail-section">
@@ -177,6 +180,24 @@
     </table>
   <% } %>
 </section>
+
+<% const ticketRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
+<% if (ticketRecentLogs.length > 0) { %>
+<section class="detail-section">
+  <h2>Recent Activity</h2>
+  <div class="inline-log-list">
+    <% ticketRecentLogs.forEach(log => { %>
+      <div class="inline-log-item">
+        <span class="inline-log-type"><%= log.type %></span>
+        <span class="inline-log-message"><%= log.message %></span>
+        <% if (log.runId !== null && log.runId !== undefined) { %>
+          <a href="/runs/<%= log.runId %>">Run #<%= log.runId %></a>
+        <% } %>
+      </div>
+    <% }) %>
+  </div>
+</section>
+<% } %>
 
 <% if (operationHistory && operationHistory.length > 0) { %>
 <section class="detail-section">

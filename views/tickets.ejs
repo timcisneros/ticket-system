@@ -1,7 +1,26 @@
 <h1>Tickets</h1>
+<% const viewPagination = typeof pagination === 'undefined' ? null : pagination; %>
 
 <section class="admin-block">
   <h2>Live Work</h2>
+  <% if (viewPagination && viewPagination.total > 0) { %>
+    <div class="pagination-bar">
+      <span>Showing <%= viewPagination.start %>-<%= viewPagination.end %> of <%= viewPagination.total %> tickets</span>
+      <div class="pagination-actions">
+        <% if (viewPagination.previousHref) { %>
+          <a class="btn-small" href="<%= viewPagination.previousHref %>">Previous</a>
+        <% } else { %>
+          <span class="btn-small btn-small--disabled">Previous</span>
+        <% } %>
+        <span class="text-muted">Page <%= viewPagination.page %> of <%= viewPagination.pageCount %></span>
+        <% if (viewPagination.nextHref) { %>
+          <a class="btn-small" href="<%= viewPagination.nextHref %>">Next</a>
+        <% } else { %>
+          <span class="btn-small btn-small--disabled">Next</span>
+        <% } %>
+      </div>
+    </div>
+  <% } %>
   <div id="tickets-body" class="ticket-cards">
     <% if (tickets.length === 0) { %>
       <div class="text-muted ticket-cards__empty">No tickets yet.</div>
@@ -77,6 +96,7 @@ const ticketsBody = document.getElementById('tickets-body');
 const canUpdateTickets = <%= canUpdateTickets ? 'true' : 'false' %>;
 const ticketStatuses = <%- JSON.stringify(ticketStatuses) %>;
 const agents = <%- JSON.stringify(agents.map(agent => ({ id: agent.id, name: agent.name }))) %>;
+const ticketsApiUrl = '/api/tickets' + window.location.search;
 let liveTicketsConnected = false;
 let ticketLoadPending = false;
 let ticketLoadQueued = false;
@@ -298,7 +318,7 @@ async function loadTickets() {
   ticketLoadPending = true;
 
   try {
-    const response = await fetch('/api/tickets', {
+    const response = await fetch(ticketsApiUrl, {
       headers: { Accept: 'application/json' }
     });
 

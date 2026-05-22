@@ -1618,6 +1618,67 @@ code {
   font-size: 0.9rem;
 }
 
+.pagination-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  color: #4b5563;
+  font-size: 0.88rem;
+}
+
+.pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-small--disabled {
+  color: #9ca3af;
+  background: #f9fafb;
+  border-color: #e5e7eb;
+  cursor: default;
+}
+
+.inline-log-list {
+  display: grid;
+  gap: 8px;
+}
+
+.inline-log-item {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 0.88rem;
+}
+
+.inline-log-item:last-child {
+  border-bottom: 0;
+}
+
+.inline-log-type {
+  color: #374151;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.inline-log-message {
+  color: #4b5563;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .inline-log-item {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
 .code-block {
   margin: 0;
   padding: 12px;

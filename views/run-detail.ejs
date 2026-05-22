@@ -144,6 +144,21 @@
   </details>
 </section>
 
+<% const runRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
+<% if (runRecentLogs.length > 0) { %>
+<section class="detail-section">
+  <h2>Recent Activity</h2>
+  <div class="inline-log-list">
+    <% runRecentLogs.forEach(log => { %>
+      <div class="inline-log-item">
+        <span class="inline-log-type"><%= log.type %></span>
+        <span class="inline-log-message"><%= log.message %></span>
+      </div>
+    <% }) %>
+  </div>
+</section>
+<% } %>
+
 <% if (!snapshot) { %>
   <section class="detail-section">
     <h2>Replay Snapshot</h2>
@@ -151,8 +166,10 @@
   </section>
 <% } else { %>
   <section class="detail-section">
-    <h2>Ticket Objective</h2>
-    <pre class="run-text"><%= snapshot.ticketObjectiveSnapshot || (ticket && ticket.objective) || '-' %></pre>
+    <details class="collapsible">
+      <summary>Ticket Objective</summary>
+      <pre class="run-text"><%= snapshot.ticketObjectiveSnapshot || (ticket && ticket.objective) || '-' %></pre>
+    </details>
   </section>
 
   <section class="detail-section">
