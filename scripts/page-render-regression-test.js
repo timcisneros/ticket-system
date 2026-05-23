@@ -304,6 +304,27 @@ async function main() {
     assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
+    await assertPageRenders(cookie, '/admin', 'admin dashboard', 'Admin Dashboard');
+    const actionsPage = await assertPageRenders(cookie, '/admin/actions', 'actions catalog', 'Actions Catalog');
+    assert(actionsPage.body.includes('listDirectory'), 'actions catalog should list listDirectory');
+    assert(actionsPage.body.includes('writeFile'), 'actions catalog should list writeFile');
+    assert(actionsPage.body.includes('Provider/Model Call'), 'actions catalog should list provider/model call');
+    assert(actionsPage.body.includes('Stop / Interruption'), 'actions catalog should list stop/interruption');
+    assert(actionsPage.body.includes('Ticket Shaping'), 'actions catalog should list ticket shaping');
+    assert(actionsPage.body.includes('Retry / Rerun'), 'actions catalog should list retry/rerun');
+    assert(actionsPage.body.includes('Recovery'), 'actions catalog should list recovery');
+    assert(actionsPage.body.includes('Actions Catalog'), 'actions catalog page heading should render');
+    assert(actionsPage.body.includes('workspace'), 'actions catalog should include workspace category');
+    assert(actionsPage.body.includes('provider'), 'actions catalog should include provider category');
+    assert(actionsPage.body.includes('operator'), 'actions catalog should include operator category');
+    assert(actionsPage.body.includes('system'), 'actions catalog should include system category');
+    assert(actionsPage.body.includes('agent'), 'actions catalog should include agent invoker');
+    assert(actionsPage.body.includes('Show contract'), 'actions catalog should have expandable contract');
+    assert(actionsPage.body.includes('Request'), 'actions catalog should label request shape');
+    assert(actionsPage.body.includes('Response'), 'actions catalog should label response shape');
+    assert(actionsPage.body.includes('Error'), 'actions catalog should label error shape');
+    assert(actionsPage.body.includes('Authority:'), 'actions catalog should show authority constraint');
+    assert(actionsPage.body.includes('Provenance:'), 'actions catalog should show provenance surface');
 
     writeJson('groups.json', readJson('groups.json').map(group => ({ ...group, canReceiveTickets: false })));
     writeJson('memberships.json', readJson('memberships.json').filter(membership => membership.principalType !== 'agent'));

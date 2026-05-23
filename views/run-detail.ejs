@@ -32,6 +32,50 @@
 </section>
 <% } %>
 
+<% if (typeof failureSummary !== 'undefined' && failureSummary) { %>
+<section class="detail-section failure-summary">
+  <h2>Failure Summary</h2>
+  <dl class="detail-grid">
+    <div>
+      <dt>Run Ended As</dt>
+      <dd><span class="status-badge status-<%= failureSummary.status %>"><%= failureSummary.status %></span></dd>
+    </div>
+    <div>
+      <dt>Root Cause</dt>
+      <dd><span class="failure-reason"><%= failureSummary.rootCause %></span></dd>
+    </div>
+    <div>
+      <dt>Blocking Code</dt>
+      <dd><code><%= failureSummary.blockingErrorCode %></code></dd>
+    </div>
+    <div>
+      <dt>Code Meaning</dt>
+      <dd><%= failureSummary.blockingErrorExplanation %></dd>
+    </div>
+    <div>
+      <dt>First Failed Operation</dt>
+      <dd><code class="owned-path"><%= failureSummary.firstFailedOperation %></code></dd>
+    </div>
+    <div>
+      <dt>Mutation Count</dt>
+      <dd><%= failureSummary.mutationCount %></dd>
+    </div>
+    <div>
+      <dt>Mutated Before Failure</dt>
+      <dd><span class="badge badge--<%= failureSummary.mutationsBeforeFailure ? 'outcome-error' : 'outcome-noop' %>"><%= failureSummary.mutationsBeforeFailure ? 'Yes' : 'No' %></span></dd>
+    </div>
+    <div>
+      <dt>Recovery Available</dt>
+      <dd><span class="badge badge--<%= failureSummary.recoveryAvailable ? 'recovery-recoverable' : 'outcome-noop' %>"><%= failureSummary.recoveryAvailable ? 'Yes' : 'No' %></span></dd>
+    </div>
+    <div>
+      <dt>Bounded Rejections</dt>
+      <dd><%= failureSummary.boundedTransitionRejectionCount %></dd>
+    </div>
+  </dl>
+</section>
+<% } %>
+
 <section class="detail-section">
   <h2>Run Summary</h2>
   <dl class="detail-grid">
@@ -110,7 +154,7 @@
         </div>
         <div>
           <dt>Main Workspace</dt>
-          <dd><%= run.mainWorkspaceRoot || (snapshot && snapshot.mainWorkspaceRoot) || run.workspaceRoot || '-' %></dd>
+          <dd><%= authorityContext && authorityContext.authority ? authorityContext.authority.workspaceRoot : ((snapshot && snapshot.mainWorkspaceRoot) || '-') %></dd>
         </div>
         <div>
           <dt>Allowed Folders</dt>
@@ -144,6 +188,141 @@
   </details>
 </section>
 
+<section class="detail-section">
+  <details class="collapsible" open>
+    <summary>Authority &amp; Scope</summary>
+    <div class="collapsible__content">
+      <% const ac = typeof authorityContext === 'undefined' ? null : authorityContext; %>
+      <% if (ac) { %>
+
+      <div class="authority-grid">
+        <div class="authority-column">
+          <h3 class="authority-column-title">Principal</h3>
+          <dl class="authority-dl">
+            <div class="authority-row">
+              <dt>Agent</dt>
+              <dd><%= ac.principal.agentName %></dd>
+            </div>
+            <% if (ac.principal.allocationPlanId) { %>
+              <div class="authority-row">
+                <dt>Allocation Plan</dt>
+                <dd>#<%= ac.principal.allocationPlanId %></dd>
+              </div>
+              <div class="authority-row">
+                <dt>Allocation Item</dt>
+                <dd>#<%= ac.principal.allocationItemId %><% if (ac.principal.allocationSubtask) { %> · <%= ac.principal.allocationSubtask %><% } %></dd>
+              </div>
+            <% } %>
+            <% if (ac.principal.ownedOutputPaths.length > 0) { %>
+              <div class="authority-row">
+                <dt>Owned Paths</dt>
+                <dd>
+                  <% ac.principal.ownedOutputPaths.forEach(function(p) { %>
+                    <code class="owned-path"><%= p %></code>
+                  <% }) %>
+                </dd>
+              </div>
+            <% } else { %>
+              <div class="authority-row">
+                <dt>Owned Paths</dt>
+                <dd><span class="text-muted">None (full workspace)</span></dd>
+              </div>
+            <% } %>
+          </dl>
+        </div>
+
+        <div class="authority-column">
+          <h3 class="authority-column-title">Authority</h3>
+          <dl class="authority-dl">
+            <div class="authority-row">
+              <dt>Allowed Ops</dt>
+              <dd><code class="auth-code"><%= ac.authority.allowedOperations.join(', ') %></code></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Mutating Ops</dt>
+              <dd><code class="auth-code"><%= ac.authority.mutatingOperations.join(', ') %></code></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Max Actions</dt>
+              <dd><%= ac.authority.maxActionsPerResponse %> per response · <%= ac.authority.maxMutatingActionsPerResponse %> mutating</dd>
+            </div>
+            <div class="authority-row">
+              <dt>Max Steps</dt>
+              <dd><%= ac.authority.maxSteps %></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Max Ops</dt>
+              <dd><%= ac.authority.maxWorkspaceOperations %> workspace · <%= ac.authority.maxModelRequests %> model requests</dd>
+            </div>
+            <div class="authority-row">
+              <dt>Max Runtime</dt>
+              <dd><%= ac.authority.maxRuntimeDurationMs %>ms</dd>
+            </div>
+            <div class="authority-row">
+              <dt>Provider/Model</dt>
+              <dd><%= ac.authority.provider %> / <%= ac.authority.model %></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Workspace Type</dt>
+              <dd><%= ac.authority.executionWorkspaceType %></dd>
+            </div>
+            <% if (ac.authority.workspaceRoot !== '-') { %>
+              <div class="authority-row">
+                <dt>Workspace Root</dt>
+                <dd><code class="auth-code"><%= ac.authority.workspaceRoot %></code></dd>
+              </div>
+            <% } %>
+            <% if (ac.provenance) { %>
+              <div class="authority-row">
+                <dt>Granted By</dt>
+                <dd><%= ac.provenance.assignment %></dd>
+              </div>
+              <div class="authority-row">
+                <dt>Agent Groups</dt>
+                <dd><%= ac.provenance.groups %></dd>
+              </div>
+              <div class="authority-row">
+                <dt>Runtime Policy</dt>
+                <dd><%= ac.provenance.runtimePolicy %></dd>
+              </div>
+              <div class="authority-row">
+                <dt>Scope Source</dt>
+                <dd><%= ac.provenance.scope %></dd>
+              </div>
+            <% } %>
+          </dl>
+        </div>
+
+        <div class="authority-column">
+          <h3 class="authority-column-title">Runtime Controls</h3>
+          <dl class="authority-dl">
+            <div class="authority-row">
+              <dt>Interruptible</dt>
+              <dd><span class="badge badge--<%= ac.controls.interruptible ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.interruptible ? 'Yes' : 'No' %></span></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Recoverable</dt>
+              <dd><span class="badge badge--<%= ac.controls.recoverable ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.recoverable ? 'Yes' : 'No' %></span></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Replay Available</dt>
+              <dd><span class="badge badge--<%= ac.controls.replayAvailable ? 'outcome-success' : 'outcome-error' %>"><%= ac.controls.replayAvailable ? 'Yes' : 'No' %></span></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Recovery Available</dt>
+              <dd><% if (ac.controls.recoveryAvailable === true) { %><span class="badge badge--recovery-recoverable">Yes</span><% } else if (ac.controls.recoveryAvailable === false) { %><span class="badge badge--outcome-noop">No</span><% } else { %><span class="badge badge--outcome-noop">N/A</span><% } %></dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+
+      <% } else { %>
+        <p class="text-muted">Authority context not available for this run.</p>
+      <% } %>
+    </div>
+  </details>
+</section>
+
 <% const runRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
 <% if (runRecentLogs.length > 0) { %>
 <section class="detail-section">
@@ -153,6 +332,9 @@
       <div class="inline-log-item">
         <span class="inline-log-type"><%= log.type %></span>
         <span class="inline-log-message"><%= log.message %></span>
+        <% if (log.changedBy || log.requestedBy) { %>
+          <span class="audit-meta">Changed by <%= log.changedBy || log.requestedBy %> at <%= log.changedAt || log.timestamp || '-' %></span>
+        <% } %>
       </div>
     <% }) %>
   </div>
@@ -165,6 +347,18 @@
     <p class="text-muted">No replay snapshot is available for this run.</p>
   </section>
 <% } else { %>
+  <div class="replay-nav">
+    <span class="replay-nav-label">Replay navigation:</span>
+    <button type="button" class="btn-small btn-secondary" data-replay-toggle-all>Toggle all</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-filter="all">Show all</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-filter="workspaceOperations">Ops</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-filter="providerRequests">Requests</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-filter="modelResponses">Responses</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-filter="events">Events</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-jump="failure">Jump to failures</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-jump="mutation">Jump to mutations</button>
+  </div>
+
   <section class="detail-section">
     <details class="collapsible">
       <summary>Ticket Objective</summary>
@@ -193,7 +387,7 @@
     </details>
   </section>
 
-  <section class="detail-section">
+  <section class="detail-section replay-section" data-replay-section="providerRequests">
     <details class="collapsible">
       <summary>Provider Requests (<%= (snapshot.providerRequests || []).length %>)</summary>
       <div class="collapsible__content">
@@ -201,14 +395,21 @@
           <p class="text-muted">No provider requests captured.</p>
         <% } %>
         <% (snapshot.providerRequests || []).forEach((requestPayload, index) => { %>
-          <h3>Request <%= index + 1 %></h3>
-          <pre class="code-block"><%= JSON.stringify(requestPayload, null, 2) %></pre>
+          <div class="replay-sub-item">
+            <div class="replay-sub-item-header">
+              <span class="replay-sub-item-label">Request <%= index + 1 %></span>
+              <% if (requestPayload.durationMs !== undefined) { %>
+                <span class="badge badge--timing"><%= requestPayload.durationMs %>ms</span>
+              <% } %>
+            </div>
+            <pre class="code-block"><%= JSON.stringify(requestPayload, null, 2) %></pre>
+          </div>
         <% }) %>
       </div>
     </details>
   </section>
 
-  <section class="detail-section">
+  <section class="detail-section replay-section" data-replay-section="modelResponses">
     <details class="collapsible">
       <summary>Model Responses (<%= (snapshot.modelResponses || []).length %>)</summary>
       <div class="collapsible__content">
@@ -216,14 +417,21 @@
           <p class="text-muted">No model responses captured.</p>
         <% } %>
         <% (snapshot.modelResponses || []).forEach((responsePayload, index) => { %>
-          <h3>Response <%= index + 1 %></h3>
-          <pre class="code-block"><%= JSON.stringify(responsePayload, null, 2) %></pre>
+          <div class="replay-sub-item">
+            <div class="replay-sub-item-header">
+              <span class="replay-sub-item-label">Response <%= index + 1 %></span>
+              <% if (responsePayload.durationMs !== undefined) { %>
+                <span class="badge badge--timing"><%= responsePayload.durationMs %>ms</span>
+              <% } %>
+            </div>
+            <pre class="code-block"><%= JSON.stringify(responsePayload, null, 2) %></pre>
+          </div>
         <% }) %>
       </div>
     </details>
   </section>
 
-  <section class="detail-section">
+  <section class="detail-section replay-section" data-replay-section="workspaceOperations">
     <h2>Workspace Operations</h2>
     <% if (!snapshot.workspaceOperations || snapshot.workspaceOperations.length === 0) { %>
       <p class="text-muted">No workspace operations captured.</p>
@@ -232,6 +440,8 @@
       <%
         let opStatusClass = 'op-neutral';
         let opStatusLabel = '';
+        const opIsFailure = op.blocked || op.error;
+        const opIsMutation = op.operation && ['createFolder','writeFile','renamePath','deletePath'].includes(op.operation.operation);
         if (op.blocked) {
           opStatusClass = 'op-blocked';
           opStatusLabel = 'BLOCKED';
@@ -250,12 +460,32 @@
         }
         const opReason = op.reason || (op.error && op.error) || '';
       %>
-      <div class="workspace-operation <%= opStatusClass %>">
+      <div class="workspace-operation <%= opStatusClass %>" data-op-failure="<%= opIsFailure %>" data-op-mutation="<%= opIsMutation %>">
         <div class="workspace-operation-header">
           <span class="workspace-operation-number">Op <%= index + 1 %></span>
           <span class="workspace-operation-type"><%= op.operation && op.operation.operation || (typeof op.operation === 'string' ? op.operation : '-') %></span>
           <span class="badge badge--outcome-<%= opStatusClass.replace(/^op-/, '') %>"><%= opStatusLabel %></span>
+          <% if (op.durationMs !== undefined) { %>
+            <span class="badge badge--timing"><%= op.durationMs %>ms</span>
+          <% } %>
+          <% if (typeof opAllowance !== 'undefined') { %>
+            <% const allowKey = op.historyId != null ? 'h:' + op.historyId : 's:' + index; %>
+            <% const allow = opAllowance[allowKey]; %>
+            <% if (allow) { %>
+              <span class="badge badge--allowance badge--allowance-<%= allow.type %>"><%= allow.label %></span>
+            <% } %>
+          <% } %>
         </div>
+        <% if (typeof opErrorInfo !== 'undefined') { %>
+          <% const errorKey = op.historyId != null ? 'h:' + op.historyId : 's:' + index; %>
+          <% const errorInfo = opErrorInfo[errorKey]; %>
+          <% if (errorInfo) { %>
+            <div class="operation-error-info">
+              <code><%= errorInfo.code %></code>
+              <span><%= errorInfo.explanation %></span>
+            </div>
+          <% } %>
+        <% } %>
         <% if (opReason) { %>
           <div class="workspace-operation-reason"><%= opReason %></div>
         <% } %>
@@ -267,7 +497,7 @@
     <% }) %>
   </section>
 
-  <section class="detail-section">
+  <section class="detail-section replay-section" data-replay-section="events">
     <h2>Events</h2>
     <% if (!snapshot.events || snapshot.events.length === 0) { %>
       <p class="text-muted">No replay events captured.</p>
@@ -275,13 +505,14 @@
     <% (snapshot.events || []).forEach((event, index) => { %>
       <%
         let eventClass = 'event-neutral';
+        const eventIsFailure = event.type && (event.type.includes('fail') || event.type.includes('error') || event.type.includes('limit'));
         if (event.type && event.type.includes('limit')) eventClass = 'event-limit';
         else if (event.type && event.type.includes('fail')) eventClass = 'event-error';
         else if (event.type && event.type.includes('stalled')) eventClass = 'event-warn';
         else if (event.type && event.type.includes('no_progress')) eventClass = 'event-warn';
         else if (event.type === 'run:completed_noop') eventClass = 'event-noop';
       %>
-      <div class="replay-event <%= eventClass %>">
+      <div class="replay-event <%= eventClass %>" data-event-failure="<%= eventIsFailure %>">
         <div class="replay-event-header">
           <span class="replay-event-number">#<%= index + 1 %></span>
           <span class="replay-event-type"><%= event.type %></span>
@@ -323,6 +554,12 @@
           <% } else { %>
             <span class="badge badge--outcome-success">OK</span>
           <% } %>
+          <% if (record.allowance) { %>
+            <span class="badge badge--allowance badge--allowance-<%= record.allowance.type %>"><%= record.allowance.label %></span>
+          <% } %>
+          <% if (record.errorInfo) { %>
+            <span class="badge badge--outcome-error"><%= record.errorInfo.code %></span>
+          <% } %>
         </div>
         <div class="operation-history-body">
           <div class="allocation-item-row">
@@ -346,19 +583,33 @@
               <span class="allocation-item-label">Error</span>
               <span class="allocation-item-value"><span class="failure-reason"><%= record.error %></span></span>
             </div>
+            <% if (record.errorInfo) { %>
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Error Code</span>
+                <span class="allocation-item-value"><code><%= record.errorInfo.code %></code> · <%= record.errorInfo.explanation %></span>
+              </div>
+            <% } %>
           <% } %>
           <% if (record.preState) { %>
             <div class="allocation-item-row">
-              <span class="allocation-item-label">Pre-State</span>
+              <span class="allocation-item-label">State diff</span>
               <span class="allocation-item-value">
                 <details class="collapsible">
-                  <summary>View Pre-State</summary>
-                  <pre class="code-block"><%= JSON.stringify(record.preState, null, 2) %></pre>
+                  <summary>View diff</summary>
+                  <div class="diff-container">
+                    <div class="diff-panel">
+                      <div class="diff-panel-label">Before</div>
+                      <pre class="code-block code-block--diff"><%= JSON.stringify(record.preState, null, 2) %></pre>
+                    </div>
+                    <div class="diff-panel">
+                      <div class="diff-panel-label">After</div>
+                      <pre class="code-block code-block--diff"><%= JSON.stringify(record.postState, null, 2) %></pre>
+                    </div>
+                  </div>
                 </details>
               </span>
             </div>
-          <% } %>
-          <% if (record.postState) { %>
+          <% } else if (record.postState) { %>
             <div class="allocation-item-row">
               <span class="allocation-item-label">Post-State</span>
               <span class="allocation-item-value">
@@ -381,6 +632,48 @@
   </div>
 </section>
 <% } %>
+
+<script>
+(function() {
+  var toggleAllBtn = document.querySelector('[data-replay-toggle-all]');
+  if (toggleAllBtn) {
+    var allExpanded = false;
+    toggleAllBtn.addEventListener('click', function() {
+      allExpanded = !allExpanded;
+      document.querySelectorAll('.replay-section details.collapsible').forEach(function(d) {
+        d.open = allExpanded;
+      });
+      toggleAllBtn.textContent = allExpanded ? 'Collapse all' : 'Toggle all';
+    });
+  }
+
+  document.querySelectorAll('[data-replay-filter]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var target = btn.getAttribute('data-replay-filter');
+      document.querySelectorAll('.replay-section').forEach(function(section) {
+        if (target === 'all') {
+          section.style.display = '';
+        } else {
+          section.style.display = section.getAttribute('data-replay-section') === target ? '' : 'none';
+        }
+      });
+    });
+  });
+
+  document.querySelectorAll('[data-replay-jump]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var jump = btn.getAttribute('data-replay-jump');
+      var target = null;
+      if (jump === 'failure') {
+        target = document.querySelector('[data-op-failure="true"], [data-event-failure="true"]');
+      } else if (jump === 'mutation') {
+        target = document.querySelector('[data-op-mutation="true"]');
+      }
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  });
+})();
+</script>
 
 <% if (canUpdateRuns) { %>
 <script>

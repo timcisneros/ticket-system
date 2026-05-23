@@ -79,15 +79,29 @@
                 <%= log.agentName %> <span class="text-muted">#<%= log.agentId %></span>
               <% } %>
             </td>
-            <td class="log-type-cell"><%= log.type %></td>
+            <td class="log-type-cell">
+              <% const logIsMutation = log.type && (log.type.includes('workspace:create') || log.type.includes('workspace:write') || log.type.includes('workspace:delete') || log.type.includes('workspace:rename')); %>
+              <% const logIsFailure = log.type && (log.type.includes('fail') || log.type.includes('error') || log.type.includes('blocked') || log.type.includes('interrupted')); %>
+              <% const logIsModelCall = log.type && (log.type.includes('model:request') || log.type.includes('model:response')); %>
+              <span class="log-type-badge"><%= log.type %></span>
+              <% if (logIsMutation) { %><span class="badge badge--log-mutation">MUTATION</span><% } %>
+              <% if (logIsFailure) { %><span class="badge badge--log-failure">FAILURE</span><% } %>
+              <% if (logIsModelCall) { %><span class="badge badge--log-model">MODEL</span><% } %>
+              <% if (log.workspaceAction) { %><span class="badge badge--log-action">ACTION</span><% } %>
+            </td>
             <td class="log-message-cell">
-              <pre class="log-message"><%= log.message %></pre>
-              <% if (log.workspaceAction) { %>
-                <details class="log-details">
-                  <summary>Workspace Action</summary>
-                  <pre class="log-json"><%= JSON.stringify(log.workspaceAction, null, 2) %></pre>
-                </details>
-              <% } %>
+              <div class="log-message-row">
+                <pre class="log-message"><%= log.message %></pre>
+                <% if (log.changedBy || log.requestedBy) { %>
+                  <div class="audit-meta">Changed by <strong><%= log.changedBy || log.requestedBy %></strong> at <%= log.changedAt || log.timestamp || '-' %></div>
+                <% } %>
+                <% if (log.workspaceAction) { %>
+                  <details class="log-details">
+                    <summary>Workspace Action</summary>
+                    <pre class="log-json"><%= JSON.stringify(log.workspaceAction, null, 2) %></pre>
+                  </details>
+                <% } %>
+              </div>
             </td>
           </tr>
         <% }) %>
@@ -174,16 +188,55 @@ function appendLog(log) {
   // Type
   const typeCell = document.createElement('td');
   typeCell.className = 'log-type-cell';
-  typeCell.textContent = log.type;
+  const typeBadge = document.createElement('span');
+  typeBadge.className = 'log-type-badge';
+  typeBadge.textContent = log.type;
+  typeCell.appendChild(typeBadge);
+  const logType = log.type || '';
+  if (logType.includes('workspace:create') || logType.includes('workspace:write') || logType.includes('workspace:delete') || logType.includes('workspace:rename')) {
+    const mutationBadge = document.createElement('span');
+    mutationBadge.className = 'badge badge--log-mutation';
+    mutationBadge.textContent = 'MUTATION';
+    typeCell.appendChild(mutationBadge);
+  }
+  if (logType.includes('fail') || logType.includes('error') || logType.includes('blocked') || logType.includes('interrupted')) {
+    const failureBadge = document.createElement('span');
+    failureBadge.className = 'badge badge--log-failure';
+    failureBadge.textContent = 'FAILURE';
+    typeCell.appendChild(failureBadge);
+  }
+  if (logType.includes('model:request') || logType.includes('model:response')) {
+    const modelBadge = document.createElement('span');
+    modelBadge.className = 'badge badge--log-model';
+    modelBadge.textContent = 'MODEL';
+    typeCell.appendChild(modelBadge);
+  }
+  if (log.workspaceAction) {
+    const actionBadge = document.createElement('span');
+    actionBadge.className = 'badge badge--log-action';
+    actionBadge.textContent = 'ACTION';
+    typeCell.appendChild(actionBadge);
+  }
   row.appendChild(typeCell);
 
   // Message + Workspace Action
   const messageCell = document.createElement('td');
   messageCell.className = 'log-message-cell';
+  const messageRow = document.createElement('div');
+  messageRow.className = 'log-message-row';
   const message = document.createElement('pre');
   message.className = 'log-message';
   message.textContent = log.message || '';
-  messageCell.appendChild(message);
+  messageRow.appendChild(message);
+
+  if (log.changedBy || log.requestedBy) {
+    const auditMeta = document.createElement('div');
+    auditMeta.className = 'audit-meta';
+    const actor = log.changedBy || log.requestedBy;
+    const at = log.changedAt || log.timestamp || '-';
+    auditMeta.textContent = `Changed by ${actor} at ${at}`;
+    messageRow.appendChild(auditMeta);
+  }
 
   if (log.workspaceAction) {
     const details = document.createElement('details');
@@ -195,8 +248,9 @@ function appendLog(log) {
     actionPre.className = 'log-json';
     actionPre.textContent = JSON.stringify(log.workspaceAction, null, 2);
     details.appendChild(actionPre);
-    messageCell.appendChild(details);
+    messageRow.appendChild(details);
   }
+  messageCell.appendChild(messageRow);
   row.appendChild(messageCell);
 
   logsBody.insertBefore(row, logsBody.firstChild);

@@ -31,6 +31,14 @@ const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'closed']
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, 'workspace-root'));
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_MUTATING_OPERATIONS = ['createFolder', 'writeFile', 'renamePath', 'deletePath'];
+const AGENT_OPERATION_ARGS = {
+  listDirectory: ['path'],
+  readFile: ['path'],
+  createFolder: ['path'],
+  writeFile: ['path', 'content'],
+  renamePath: ['path', 'nextPath'],
+  deletePath: ['path']
+};
 const MAX_AGENT_ACTIONS_PER_RESPONSE = 8;
 const MAX_MUTATING_ACTIONS_PER_RESPONSE = parseInt(process.env.AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE || '2', 10) || 2;
 const DEFAULT_AGENT_RUNTIME_LIMITS = {
@@ -50,6 +58,236 @@ const WORKSPACE_FIXTURES = [
   { id: 'large-file', name: 'Large-ish file scenario' },
   { id: 'many-small-files', name: 'Many small files scenario' }
 ];
+const AGENT_PRIMITIVE_METADATA = {
+  listDirectory: {
+    responseShape: { path: 'string', entries: [{ name: 'string', type: 'file', size: 'number', modifiedAt: 'string' }] },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent workspace scope; protected/sensitive paths blocked',
+    provenanceSurface: 'Run replay snapshot workspaceOperations; run log workspace:list'
+  },
+  readFile: {
+    responseShape: { path: 'string', content: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent workspace scope; sensitive application paths blocked',
+    provenanceSurface: 'Run replay snapshot workspaceOperations; run log workspace:read'
+  },
+  createFolder: {
+    responseShape: { path: 'string', status: 'created' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent workspace scope; allocated ownership required; protected paths blocked',
+    provenanceSurface: 'Run replay snapshot workspaceOperations; operation-history; run log workspace:create; recovery preview'
+  },
+  writeFile: {
+    responseShape: { path: 'string', size: 'number' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent workspace scope; allocated ownership required; existing protected files blocked',
+    provenanceSurface: 'Run replay snapshot workspaceOperations; operation-history; run log workspace:write; recovery preview'
+  },
+  renamePath: {
+    responseShape: { path: 'string', status: 'renamed' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent workspace scope; allocated ownership on both source and dest; protected paths blocked',
+    provenanceSurface: 'Run replay snapshot workspaceOperations; operation-history; run log workspace:rename; recovery preview'
+  },
+  deletePath: {
+    responseShape: { path: 'string', status: 'deleted' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent workspace scope; allocated ownership required; protected paths blocked',
+    provenanceSurface: 'Run replay snapshot workspaceOperations; operation-history; run log workspace:delete; recovery preview'
+  }
+};
+const GENERATED_AGENT_ACTIONS = AGENT_ALLOWED_OPERATIONS.map(op => ({
+  name: op, category: 'workspace', invoker: 'agent', mutating: AGENT_MUTATING_OPERATIONS.includes(op),
+  requestShape: { operation: op, args: Object.fromEntries(AGENT_OPERATION_ARGS[op].map(k => [k, 'string'])) },
+  optionalShape: null,
+  ...AGENT_PRIMITIVE_METADATA[op]
+}));
+const ACTIONS_CATALOG = [
+  ...GENERATED_AGENT_ACTIONS,
+  {
+    name: 'providerModelCall', displayName: 'Provider/Model Call', category: 'provider', invoker: 'agent', mutating: false,
+    requestShape: { model: 'string', input: [{ role: 'system', content: 'string' }], text: { format: { type: 'json_object' } } },
+    optionalShape: null,
+    responseShape: { text: 'string', usage: { promptTokens: 'number', completionTokens: 'number' }, provider: 'string', model: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent-scoped API key; OpenAI or Ollama provider; model constrained by agent config; no shell/network access outside LLM API',
+    provenanceSurface: 'Run replay snapshot providerRequests and modelResponses; run log model:request'
+  },
+  {
+    name: 'ticketShaping', displayName: 'Ticket Shaping', category: 'provider', invoker: 'operator', mutating: false,
+    requestShape: { objective: 'string', assignmentTargetType: 'string', assignmentMode: 'string' },
+    optionalShape: null,
+    responseShape: { suggestedObjective: 'string', expectedOutputs: ['string'], decomposition: ['string'], warnings: ['string'], tooBroadForOneRun: 'boolean', groupModeFit: 'string', providerRequestId: 'string', usage: {} },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires ticket:create permission; uses agent-scoped OpenAI call; no execution side effects',
+    provenanceSurface: 'HTTP response; system log ticket:shaped; no replay snapshot (pre-execution)'
+  },
+  {
+    name: 'retryRerun', displayName: 'Retry / Rerun', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: null, optionalShape: null,
+    responseShape: { ticket: {} },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires ticket:update permission; only failed/interrupted runs; allocation constraints re-checked',
+    provenanceSurface: 'System log ticket:rerun; run log run:interrupted; old run replay snapshot finalized as interrupted'
+  },
+  {
+    name: 'stopInterruption', displayName: 'Stop / Interruption', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: null, optionalShape: null,
+    responseShape: { run: {} },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires ticket:update permission; only pending or running runs; triggers replay snapshot finalization',
+    provenanceSurface: 'Run replay snapshot finalized as interrupted; run log run:interrupted; system log'
+  },
+  {
+    name: 'operatorWorkspaceCreateFile', displayName: 'Operator: Create File', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { path: 'string' }, optionalShape: null,
+    responseShape: { path: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
+    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+  },
+  {
+    name: 'operatorWorkspaceCreateFolder', displayName: 'Operator: Create Folder', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { path: 'string' }, optionalShape: null,
+    responseShape: { path: 'string', status: 'created' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
+    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+  },
+  {
+    name: 'operatorWorkspaceWriteFile', displayName: 'Operator: Write File', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { path: 'string', content: 'string' }, optionalShape: null,
+    responseShape: { path: 'string', size: 'number' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
+    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+  },
+  {
+    name: 'operatorWorkspaceRenamePath', displayName: 'Operator: Rename', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { path: 'string', nextPath: 'string' }, optionalShape: null,
+    responseShape: { path: 'string', status: 'renamed' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
+    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+  },
+  {
+    name: 'operatorWorkspaceDeletePath', displayName: 'Operator: Delete', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { path: 'string' }, optionalShape: null,
+    responseShape: { path: 'string', status: 'deleted' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
+    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+  },
+  {
+    name: 'workspaceFixtureReset', displayName: 'Workspace Fixture Reset', category: 'workspace', invoker: 'operator', mutating: true,
+    requestShape: { fixtureId: 'string' }, optionalShape: null,
+    responseShape: { path: 'string', entries: [] },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires workspace:reset permission; destructive; clears entire workspace root and applies fixture',
+    provenanceSurface: 'System log workspace:fixture with pre/post workspace listing'
+  },
+  {
+    name: 'recovery', displayName: 'Recovery', category: 'workspace', invoker: 'operator', mutating: true,
+    requestShape: { confirmed: true }, optionalShape: null,
+    responseShape: { recovery: { id: 'number', originalId: 'number', operation: 'string', args: {}, preState: {}, restoredState: {} } },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires ticket:update permission; only recovers failed/interrupted operations; undoes previous mutation',
+    provenanceSurface: 'Operation-history record with original and recovery pair; system log workspace:recovery'
+  },
+  {
+    name: 'ticketAssignment', displayName: 'Ticket Assignment', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { agentId: 'number' }, optionalShape: null,
+    responseShape: { ticket: {} },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires ticket:update permission; only open tickets; triggers maybeStartTicketRuns',
+    provenanceSurface: 'Ticket record updated (assignmentTargetType, assignmentTargetId); broadcastTicketChange; system log'
+  },
+  {
+    name: 'ticketStatusUpdate', displayName: 'Ticket Status Update', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { status: 'string' }, optionalShape: null,
+    responseShape: { ticket: {} },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires ticket:update permission; triggers maybeStartTicketRuns',
+    provenanceSurface: 'Ticket record updated; broadcastTicketChange; system log'
+  },
+  {
+    name: 'adminCreateAccount', displayName: 'Admin: Create User/Agent', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { accountType: 'string', username: 'string', password: 'string', agentName: 'string', model: 'string', apiKey: 'string' },
+    optionalShape: { provider: 'string', groupIds: 'string' },
+    responseShape: { redirect: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires user:create permission; admin only',
+    provenanceSurface: 'Data file updated (users.json / agents.json); system log (user:created / agent:created)'
+  },
+  {
+    name: 'adminUpdateAccount', displayName: 'Admin: Update User/Agent', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { accountType: 'string' },
+    optionalShape: { username: 'string', password: 'string', agentName: 'string', provider: 'string', model: 'string', apiKey: 'string', groupIds: 'string' },
+    responseShape: { redirect: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires user:update permission; admin only',
+    provenanceSurface: 'Data file updated (users.json / agents.json / memberships.json); system log'
+  },
+  {
+    name: 'adminDeleteAccount', displayName: 'Admin: Delete User/Agent', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { accountType: 'string' }, optionalShape: null,
+    responseShape: { redirect: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires user:delete permission; cannot delete self if user type; admin only',
+    provenanceSurface: 'Data file updated (users.json / agents.json); memberships cleaned up; system log'
+  },
+  {
+    name: 'adminCreateGroup', displayName: 'Admin: Create Group', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: { name: 'string' },
+    optionalShape: { canReceiveTickets: 'boolean', permissions: ['string'] },
+    responseShape: { redirect: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires group:create permission; admin only',
+    provenanceSurface: 'Data file updated (groups.json); system log'
+  },
+  {
+    name: 'adminUpdateGroup', displayName: 'Admin: Update Group', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: {},
+    optionalShape: { name: 'string', canReceiveTickets: 'boolean', permissions: ['string'] },
+    responseShape: { redirect: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires group:update permission; admin only',
+    provenanceSurface: 'Data file updated (groups.json); system log'
+  },
+  {
+    name: 'adminDeleteGroup', displayName: 'Admin: Delete Group', category: 'operator', invoker: 'operator', mutating: true,
+    requestShape: null, optionalShape: null,
+    responseShape: { redirect: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires group:delete permission; group id 1 (Administrators) protected; admin only',
+    provenanceSurface: 'Data file updated (groups.json); memberships cleaned up; system log'
+  },
+  {
+    name: 'debugReset', displayName: 'Debug Reset', category: 'system', invoker: 'operator', mutating: true,
+    requestShape: { confirmation: 'RESET DEBUG DATA' }, optionalShape: null,
+    responseShape: { redirect: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Requires user:update permission; disabled in NODE_ENV=production; destroys all ticket/run/log/history/workspace data',
+    provenanceSurface: 'System log system:reset; all volatile data files emptied; workspace cleared'
+  },
+  {
+    name: 'systemInterruptStaleRuns', displayName: 'System: Interrupt Stale Runs', category: 'system', invoker: 'system', mutating: true,
+    requestShape: null, optionalShape: null,
+    responseShape: { status: 'interrupted', runs: ['number'] },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Automatic on server start; only affects pending/running runs; invokes interruptAgentRun per stale run',
+    provenanceSurface: 'Run replay snapshots finalized as interrupted; run logs run:interrupted'
+  },
+  {
+    name: 'systemAutoStartRuns', displayName: 'System: Auto-Start Ticket Runs', category: 'system', invoker: 'system', mutating: true,
+    requestShape: null, optionalShape: null,
+    responseShape: { runs: [{}] },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Triggered by ticket creation, assignment, or status change to open; respects agent group canReceiveTickets; enforces allocation constraints',
+    provenanceSurface: 'Run record created; runs.json updated; replay snapshot initialized; run log run:started'
+  }
+];
+
 const ticketEventClients = new Set();
 const logEventClients = new Set();
 const runningRunKeys = new Set();
@@ -108,6 +346,10 @@ fastify.addHook('onSend', async (request, reply, payload) => {
 // ==================== DATA HELPERS ====================
 
 const jsonReadCache = new Map();
+
+function nextId(items) {
+  return items.length > 0 ? Math.max(...items.map(item => item.id)) + 1 : 1;
+}
 
 function readJsonArrayCached(filePath) {
   try {
@@ -334,6 +576,221 @@ function classifyRunOperationalOutcome(run) {
   return run.status || 'unknown';
 }
 
+const ALLOWANCE_MAP = {
+  allowed_by_op: { allowed: true, type: 'allow', label: 'Operation permitted' },
+  allowed_by_budget: { allowed: true, type: 'allow', label: 'Mutating budget available' },
+  allowed_noop: { allowed: true, type: 'noop', label: 'No-op (already in desired state)' },
+  blocked_sensitive_path: { allowed: false, type: 'block', label: 'Sensitive application path' },
+  blocked_protected_path: { allowed: false, type: 'block', label: 'Protected path' },
+  blocked_ownership: { allowed: false, type: 'block', label: 'Outside owned scope' },
+  blocked_budget: { allowed: false, type: 'block', label: 'Budget exhausted' },
+  blocked_unsupported_op: { allowed: false, type: 'block', label: 'Operation not permitted' },
+  blocked_malformed: { allowed: false, type: 'block', label: 'Malformed action' },
+  blocked_ownership_no_mutation: { allowed: false, type: 'block', label: 'Outside owned scope' },
+  blocked_run_interrupted: { allowed: false, type: 'block', label: 'Run interrupted' }
+};
+
+function classifyOperationAllowance(source) {
+  if (!source) return ALLOWANCE_MAP.blocked_malformed;
+
+  // Snapshot workspace operation shape: { operation: { operation, args }, result, error, ... }
+  // History record shape: { operation, args, result, error, ... }
+  const opName = source.operation && typeof source.operation === 'object' ? source.operation.operation : source.operation;
+  const err = source.error;
+  const result = source.result;
+
+  if (err) {
+    const code = typeof err === 'string' ? err : (err.code || '');
+    const msg = typeof err === 'string' ? err : (err.message || '');
+
+    // Classify by error code (preferred path)
+    if (code === 'WORKSPACE_SENSITIVE_PATH') return ALLOWANCE_MAP.blocked_sensitive_path;
+    if (code === 'WORKSPACE_PROTECTED_PATH') return ALLOWANCE_MAP.blocked_protected_path;
+    if (code === 'WORKSPACE_OWNERSHIP_VIOLATION') return ALLOWANCE_MAP.blocked_ownership;
+    if (code === 'RUN_LIMIT_EXCEEDED') return ALLOWANCE_MAP.blocked_budget;
+    if (code === 'WORKSPACE_MALFORMED_ACTION') return ALLOWANCE_MAP.blocked_malformed;
+    if (code === 'WORKSPACE_UNSUPPORTED_OPERATION') return ALLOWANCE_MAP.blocked_unsupported_op;
+    if (code === 'RUN_INTERRUPTED') return ALLOWANCE_MAP.blocked_run_interrupted;
+
+    // Backward-compatible message fallback for legacy records
+    // stored before error codes were added
+    if (msg.includes('sensitive application path')) return ALLOWANCE_MAP.blocked_sensitive_path;
+    if (msg.includes('protected workspace path')) return ALLOWANCE_MAP.blocked_protected_path;
+    if (msg.includes('outside owned output paths')) return ALLOWANCE_MAP.blocked_ownership;
+    if (msg.includes('limit')) return ALLOWANCE_MAP.blocked_budget;
+    if (msg.includes('Unsupported workspace operation') || msg.includes('unsupported field') || msg.includes('must be an object') || msg.includes('is required') || msg.includes('must be a string') || msg.includes('cannot be blank')) return ALLOWANCE_MAP.blocked_malformed;
+    if (msg.includes('Run interrupted')) return ALLOWANCE_MAP.blocked_run_interrupted;
+    return { allowed: false, type: 'block', label: 'Operation error' };
+  }
+
+  if (result && result.status) {
+    if (result.status === 'already_exists_noop' || result.status === 'already_missing_noop') return ALLOWANCE_MAP.allowed_noop;
+    if (result.status === 'not_found') return { allowed: true, type: 'noop', label: 'Target not found' };
+  }
+
+  if (opName && AGENT_MUTATING_OPERATIONS.includes(opName)) return ALLOWANCE_MAP.allowed_by_budget;
+  return ALLOWANCE_MAP.allowed_by_op;
+}
+
+const ERROR_CODE_EXPLANATIONS = {
+  WORKSPACE_SENSITIVE_PATH: 'Blocked because the path is a sensitive application file or directory.',
+  WORKSPACE_PROTECTED_PATH: 'Blocked because the path is protected from agent mutation.',
+  WORKSPACE_OWNERSHIP_VIOLATION: 'Blocked because the operation is outside the run owned scope.',
+  RUN_LIMIT_EXCEEDED: 'Stopped because a bounded runtime limit was exceeded.',
+  WORKSPACE_MALFORMED_ACTION: 'Rejected because the workspace action contract was malformed.',
+  WORKSPACE_UNSUPPORTED_OPERATION: 'Rejected because the operation is not in the allowed action vocabulary.',
+  WORKSPACE_ACTION_INTERRUPTED: 'Stopped because the run was interrupted during workspace execution.',
+  RUN_INTERRUPTED: 'Stopped because an operator or runtime interruption ended the run.'
+};
+
+function explainErrorCode(code) {
+  return ERROR_CODE_EXPLANATIONS[code] || 'The operation failed; inspect the payload for full details.';
+}
+
+function getErrorCodeFromSource(source) {
+  if (!source) return null;
+  const err = source.error || source.failure || null;
+  if (err && typeof err === 'object' && err.code) return err.code;
+  if (typeof err === 'string' && ERROR_CODE_EXPLANATIONS[err]) return err;
+  if (source.code) return source.code;
+  return null;
+}
+
+function getErrorMessageFromSource(source) {
+  if (!source) return null;
+  const err = source.error || source.failure || null;
+  if (typeof err === 'string') return err;
+  if (err && typeof err === 'object') return err.message || err.reason || null;
+  return source.reason || source.failureReason || null;
+}
+
+function buildOperationErrorInfo(source) {
+  const code = getErrorCodeFromSource(source);
+  const message = getErrorMessageFromSource(source);
+  if (!code && !message) return null;
+  return {
+    code: code || 'OPERATION_ERROR',
+    explanation: code ? explainErrorCode(code) : 'The operation failed; inspect the payload for full details.',
+    message
+  };
+}
+
+function displayWorkspaceRootLabel(executionWorkspaceType) {
+  return executionWorkspaceType === 'scoped' ? 'scoped workspace' : 'workspace-root';
+}
+
+function sanitizeWorkspaceDisplayValue(value, executionWorkspaceType = 'main') {
+  if (typeof value === 'string') {
+    return value.split(WORKSPACE_ROOT).join(displayWorkspaceRootLabel(executionWorkspaceType));
+  }
+  if (Array.isArray(value)) return value.map(item => sanitizeWorkspaceDisplayValue(item, executionWorkspaceType));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeWorkspaceDisplayValue(item, executionWorkspaceType)]));
+  }
+  return value;
+}
+
+function createDisplaySnapshot(snapshot) {
+  if (!snapshot) return null;
+  return sanitizeWorkspaceDisplayValue(snapshot, snapshot.executionWorkspaceType || 'main');
+}
+
+function countBoundedTransitionRejections(snapshot) {
+  const events = snapshot && Array.isArray(snapshot.events) ? snapshot.events : [];
+  return events.filter(event => {
+    const type = event && event.type ? event.type : '';
+    return type.includes('limit') || type.includes('stalled') || type.includes('no_progress') || type.includes('blocked');
+  }).length;
+}
+
+function describeFirstFailedOperation(source) {
+  if (!source) return '-';
+  const operation = source.operation && typeof source.operation === 'object' ? source.operation.operation : source.operation;
+  const args = source.operation && typeof source.operation === 'object' ? source.operation.args : source.args;
+  const pathValue = args && args.path ? ` ${args.path}` : '';
+  return `${operation || 'operation'}${pathValue}`;
+}
+
+function buildRunFailureSummary(run, snapshot, operationHistory, mutationCount, recoveryAvailable) {
+  if (!['failed', 'interrupted'].includes(run.status)) return null;
+
+  const workspaceOps = snapshot && Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
+  const firstFailedOperation = workspaceOps.find(op => op && (op.error || op.blocked || op.reason))
+    || (operationHistory || []).find(record => record && record.error)
+    || null;
+  const snapshotFailure = snapshot && snapshot.failure ? snapshot.failure : null;
+  const code = getErrorCodeFromSource(firstFailedOperation) || getErrorCodeFromSource(snapshotFailure) || (run.status === 'interrupted' ? 'RUN_INTERRUPTED' : null);
+  const rootCause = (snapshot && snapshot.failureReason) || run.error || getErrorMessageFromSource(firstFailedOperation) || (code ? explainErrorCode(code) : 'Run ended without a structured failure reason.');
+
+  return {
+    status: run.status,
+    rootCause,
+    blockingErrorCode: code || '-',
+    blockingErrorExplanation: code ? explainErrorCode(code) : '-',
+    firstFailedOperation: describeFirstFailedOperation(firstFailedOperation),
+    mutationCount: mutationCount || 0,
+    mutationsBeforeFailure: (mutationCount || 0) > 0,
+    recoveryAvailable: recoveryAvailable === true,
+    boundedTransitionRejectionCount: countBoundedTransitionRejections(snapshot)
+  };
+}
+
+function buildRunAuthorityContext(run, ticket, agent, snapshot) {
+  const s = snapshot || {};
+  const allocationItem = getRunAllocationItem(run);
+  const allocationPlanId = run.allocationPlanId || s.allocationPlanId || null;
+  const allocationItemId = run.allocationItemId || s.allocationItemId || null;
+  const ownedOutputPaths = getRunOwnedOutputPaths(run);
+  const limits = getAgentRuntimeLimits();
+  const groups = readGroups();
+  const agentGroupNames = agent
+    ? getPrincipalGroupIds('agent', agent.id).map(groupId => (groups.find(group => group.id === groupId) || {}).name).filter(Boolean)
+    : [];
+  const assignmentGroup = ticket && ticket.assignmentTargetType === 'group'
+    ? groups.find(group => group.id === ticket.assignmentTargetId)
+    : null;
+  const executionWorkspaceType = run.executionWorkspaceType || s.executionWorkspaceType || 'main';
+
+  return {
+    principal: {
+      agentId: run.agentId,
+      agentName: agent ? agent.name : (run.agentName || s.agentNameSnapshot || 'Unknown'),
+      allocationPlanId,
+      allocationItemId,
+      allocationSubtask: run.allocationSubtask || s.allocationSubtask || null,
+      ownedOutputPaths: ownedOutputPaths.length > 0 ? ownedOutputPaths : (Array.isArray(s.ownedOutputPaths) ? s.ownedOutputPaths : [])
+    },
+    authority: {
+      allowedOperations: (s.primitiveContract && s.primitiveContract.allowedOperations) || AGENT_ALLOWED_OPERATIONS,
+      mutatingOperations: (s.primitiveContract && s.primitiveContract.mutatingOperations) || AGENT_MUTATING_OPERATIONS,
+      maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+      maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+      maxSteps: limits.maxExecutionSteps,
+      maxWorkspaceOperations: limits.maxWorkspaceOperationsPerRun,
+      maxModelRequests: limits.maxModelRequestsPerRun,
+      maxRuntimeDurationMs: limits.maxRuntimeDurationMs,
+      provider: s.provider || (agent ? agent.provider : null) || '-',
+      model: s.model || (agent ? agent.model : null) || '-',
+      executionWorkspaceType,
+      workspaceRoot: displayWorkspaceRootLabel(executionWorkspaceType)
+    },
+    provenance: {
+      assignment: assignmentGroup
+        ? `Granted via ticket assignment group "${assignmentGroup.name}"`
+        : 'Granted via direct ticket assignment',
+      groups: agentGroupNames.length > 0 ? agentGroupNames.join(', ') : 'No agent group grant recorded',
+      runtimePolicy: 'Default bounded workspace runtime policy',
+      scope: allocationPlanId ? 'Owned-scope allocation plan' : 'Direct assignment workspace scope'
+    },
+    controls: {
+      interruptible: ['pending', 'running'].includes(run.status),
+      recoverable: run.status === 'failed' || run.status === 'interrupted',
+      replayAvailable: !!snapshot,
+      recoveryAvailable: null
+    }
+  };
+}
+
 function broadcastTicketChange() {
   const event = `event: tickets-changed\ndata: ${JSON.stringify({ updatedAt: new Date().toISOString() })}\n\n`;
   ticketEventClients.forEach(client => {
@@ -346,7 +803,7 @@ function broadcastTicketChange() {
 }
 
 function broadcastLogEntry(log) {
-  const event = `event: log\ndata: ${JSON.stringify(log)}\n\n`;
+  const event = `event: log\ndata: ${JSON.stringify(sanitizeWorkspaceDisplayValue(log))}\n\n`;
   logEventClients.forEach(client => {
     try {
       client.write(event);
@@ -417,7 +874,7 @@ function isValidIsoTimestamp(value) {
 function appendRunLog(run, type, message, workspaceAction = null, extraFields = {}) {
   const logs = readLogs();
   const log = {
-    id: logs.length > 0 ? Math.max(...logs.map(item => item.id)) + 1 : 1,
+    id: nextId(logs),
     timestamp: createLogTimestamp(),
     runId: run.id,
     ticketId: run.ticketId,
@@ -449,7 +906,7 @@ function appendSystemLog(type, message, workspaceAction = null, extraFields = {}
   delete contextFields.agentId;
   delete contextFields.agentName;
   const log = {
-    id: logs.length > 0 ? Math.max(...logs.map(item => item.id)) + 1 : 1,
+    id: nextId(logs),
     timestamp: createLogTimestamp(),
     runId: null,
     ticketId: null,
@@ -1176,9 +1633,9 @@ function previewRecovery(record) {
 
 function persistRecoveryOperationHistory(originalRecord, recoveryAction, preState, postState, result, error) {
   const histories = readOperationHistory();
-  const nextId = histories.length > 0 ? Math.max(...histories.map(h => h.id)) + 1 : 1;
+  const newId = nextId(histories);
   const record = {
-    id: nextId,
+    id: newId,
     timestamp: createLogTimestamp(),
     ticketId: originalRecord.ticketId,
     allocationPlanId: originalRecord.allocationPlanId || null,
@@ -1483,29 +1940,17 @@ function updateRunReplaySnapshot(runId, updater) {
   return writeRunReplaySnapshot(runId, nextSnapshot);
 }
 
-function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, systemInstructionSnapshot) {
-  updateRunReplaySnapshot(run.id, currentSnapshot => currentSnapshot || {
+function createReplaySnapshotBase(run, overrides = {}) {
+  return {
     version: 1,
     runId: run.id,
     ticketId: run.ticketId,
     assignedAgentId: run.agentId,
     agentNameSnapshot: run.agentName,
-    provider: providerConfig.provider,
-    model: providerConfig.model,
-    runtimeEnvelope,
-    ticketObjectiveSnapshot: ticket.objective,
-    systemInstructionSnapshot,
     primitiveContract: {
       allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
       mutatingOperations: [...AGENT_MUTATING_OPERATIONS],
-      requiredArgs: {
-        listDirectory: ['path'],
-        readFile: ['path'],
-        createFolder: ['path'],
-        writeFile: ['path', 'content'],
-        renamePath: ['path', 'nextPath'],
-        deletePath: ['path']
-      }
+      requiredArgs: AGENT_OPERATION_ARGS
     },
     workspaceRoot: run.workspaceRoot || workspaceProvider.root,
     mainWorkspaceRoot: run.mainWorkspaceRoot || workspaceProvider.root,
@@ -1524,8 +1969,19 @@ function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnve
     events: [],
     terminalStatus: null,
     failureReason: null,
-    createdAt: new Date().toISOString()
-  });
+    createdAt: new Date().toISOString(),
+    ...overrides
+  };
+}
+
+function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, systemInstructionSnapshot) {
+  updateRunReplaySnapshot(run.id, currentSnapshot => currentSnapshot || createReplaySnapshotBase(run, {
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    runtimeEnvelope,
+    ticketObjectiveSnapshot: ticket.objective,
+    systemInstructionSnapshot
+  }));
 }
 
 function appendRunReplaySnapshotItem(runId, key, item) {
@@ -1767,11 +2223,7 @@ function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
   const ticket = readTickets().find(item => item.id === run.ticketId) || null;
   const agent = readAgents().find(item => item.id === run.agentId) || null;
 
-  updateRunReplaySnapshot(run.id, snapshot => snapshot || {
-    version: 1,
-    runId: run.id,
-    ticketId: run.ticketId,
-    assignedAgentId: run.agentId,
+  updateRunReplaySnapshot(run.id, snapshot => snapshot || createReplaySnapshotBase(run, {
     agentNameSnapshot: run.agentName || (agent ? agent.name : 'Unknown agent'),
     provider: agent ? (agent.provider || 'openai') : null,
     model: agent ? (agent.model || null) : null,
@@ -1782,26 +2234,8 @@ function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
       allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
       mutatingOperations: [...AGENT_MUTATING_OPERATIONS]
     },
-    workspaceRoot: run.workspaceRoot || workspaceProvider.root,
-    mainWorkspaceRoot: run.mainWorkspaceRoot || workspaceProvider.root,
-    executionWorkspaceType: run.executionWorkspaceType || 'main',
-    allocationPlanId: run.allocationPlanId || null,
-    allocationItemId: run.allocationItemId || null,
-    allocationItem: getRunAllocationItem(run),
-    allocationSubtask: run.allocationSubtask || null,
-    ownedOutputPaths: getRunOwnedOutputPaths(run),
-    ticketOpenedAt: run.ticketOpenedAt || null,
-    runtimeLimits: getAgentRuntimeLimits(),
-    providerRequests: [],
-    modelResponses: [],
-    parsedModelPlans: [],
-    workspaceOperations: [],
-    events: [],
-    terminalStatus: null,
-    failureReason: null,
-    createdAt: new Date().toISOString(),
     note: 'Run was interrupted before execution snapshot capture completed'
-  });
+  }));
 
   recordReplayEvent(run, 'run:interrupted', reason, phase ? { phase } : {});
 }
@@ -2045,7 +2479,7 @@ function createAllocationPlan(ticket, agents) {
   const planDraft = buildAllocatedOwnershipPlan(ticket, agents);
   assertAllocatedOwnedPathsExist(planDraft.items);
   const now = new Date().toISOString();
-  const nextPlanId = plans.length > 0 ? Math.max(...plans.map(plan => plan.id)) + 1 : 1;
+  const nextPlanId = nextId(plans);
   const maxItemId = plans.flatMap(plan => plan.items || []).reduce((maxId, item) => {
     return Math.max(maxId, parseInt(item.allocationItemId, 10) || 0);
   }, 0);
@@ -2121,7 +2555,7 @@ function getRecentLogsForTicket(ticketId, limit = 5) {
     if (logs[index].ticketId === ticketId) recentLogs.push(logs[index]);
   }
 
-  return recentLogs.reverse();
+  return sanitizeWorkspaceDisplayValue(recentLogs.reverse());
 }
 
 function getRecentLogsForRun(runId, limit = 5) {
@@ -2132,7 +2566,7 @@ function getRecentLogsForRun(runId, limit = 5) {
     if (logs[index].runId === runId) recentLogs.push(logs[index]);
   }
 
-  return recentLogs.reverse();
+  return sanitizeWorkspaceDisplayValue(recentLogs.reverse());
 }
 
 function updateAllocationItemStatus(run, status) {
@@ -2243,7 +2677,7 @@ function forceTicketOpenForRerun(ticketId) {
   return ticket;
 }
 
-function rerunTicketFromBeginning(ticketId, requestedBy = 'operator') {
+function rerunTicketFromBeginning(ticketId, changedBy = 'operator') {
   const ticket = readTickets().find(item => item.id === ticketId);
 
   if (!ticket) return null;
@@ -2258,12 +2692,13 @@ function rerunTicketFromBeginning(ticketId, requestedBy = 'operator') {
 
   readRuns()
     .filter(run => run.ticketId === ticketId && ['pending', 'running'].includes(run.status))
-    .forEach(run => interruptAgentRun(run, `${requestedBy} rerun requested`));
+    .forEach(run => interruptAgentRun(run, `${changedBy} rerun requested`));
 
   const reopenedTicket = forceTicketOpenForRerun(ticketId);
-  appendSystemLog('ticket:rerun', `Ticket rerun requested by ${requestedBy}`, null, {
+  appendSystemLog('ticket:rerun', `Ticket #${ticketId} rerun requested by ${changedBy}`, null, {
     ticketId,
-    requestedBy
+    changedBy,
+    changedAt: new Date().toISOString()
   });
   maybeStartTicketRuns(reopenedTicket);
   return reopenedTicket;
@@ -2340,7 +2775,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
   const now = new Date().toISOString();
   const isRerun = runs.some(run => run.ticketId === ticket.id);
   const usesOwnedScope = usesOwnedScopeAllocation(ticket);
-  const nextRunId = runs.length > 0 ? Math.max(...runs.map(item => item.id)) + 1 : 1;
+  const nextRunId = nextId(runs);
   const ownedOutputPaths = allocationItem ? allocationItem.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath) : [];
   const run = {
     id: nextRunId,
@@ -3045,21 +3480,29 @@ function assertOnlyKeys(value, allowedKeys, label) {
   const unexpectedKey = keys.find(key => !allowedKeys.includes(key));
 
   if (unexpectedKey) {
-    throw new Error(`${label} includes unsupported field: ${unexpectedKey}`);
+    const error = new Error(`${label} includes unsupported field: ${unexpectedKey}`);
+    error.code = 'WORKSPACE_MALFORMED_ACTION';
+    throw error;
   }
 }
 
 function requireStringArg(args, name, options = {}) {
   if (!Object.prototype.hasOwnProperty.call(args, name)) {
-    throw new Error(`Workspace operation missing required arg: ${name}`);
+    const error = new Error(`Workspace operation missing required arg: ${name}`);
+    error.code = 'WORKSPACE_MALFORMED_ACTION';
+    throw error;
   }
 
   if (typeof args[name] !== 'string') {
-    throw new Error(`Workspace operation arg must be a string: ${name}`);
+    const error = new Error(`Workspace operation arg must be a string: ${name}`);
+    error.code = 'WORKSPACE_MALFORMED_ACTION';
+    throw error;
   }
 
   if (options.nonEmpty && !args[name].trim()) {
-    throw new Error(`Workspace operation arg cannot be blank: ${name}`);
+    const error = new Error(`Workspace operation arg cannot be blank: ${name}`);
+    error.code = 'WORKSPACE_MALFORMED_ACTION';
+    throw error;
   }
 
   return args[name];
@@ -3196,9 +3639,9 @@ function captureWorkspacePostState(runWorkspaceProvider, operation, args) {
 
 function persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, error) {
   const histories = readOperationHistory();
-  const nextId = histories.length > 0 ? Math.max(...histories.map(h => h.id)) + 1 : 1;
+  const newId = nextId(histories);
   const record = {
-    id: nextId,
+    id: newId,
     timestamp: createLogTimestamp(),
     ticketId: run.ticketId,
     allocationPlanId: run.allocationPlanId || null,
@@ -3219,21 +3662,29 @@ function persistWorkspaceOperationHistory(run, step, operation, args, preState, 
 
 function parseWorkspaceOperation(action) {
   if (!action || typeof action !== 'object' || Array.isArray(action)) {
-    throw new Error('Workspace action must be an object');
+    const error = new Error('Workspace action must be an object');
+    error.code = 'WORKSPACE_MALFORMED_ACTION';
+    throw error;
   }
 
   assertOnlyKeys(action, ['operation', 'args'], 'Workspace action');
 
   if (typeof action.operation !== 'string' || !action.operation.trim()) {
-    throw new Error('Workspace action operation is required');
+    const error = new Error('Workspace action operation is required');
+    error.code = 'WORKSPACE_MALFORMED_ACTION';
+    throw error;
   }
 
   if (!AGENT_ALLOWED_OPERATIONS.includes(action.operation)) {
-    throw new Error(`Unsupported workspace operation: ${action.operation}`);
+    const error = new Error(`Unsupported workspace operation: ${action.operation}`);
+    error.code = 'WORKSPACE_UNSUPPORTED_OPERATION';
+    throw error;
   }
 
   if (!action.args || typeof action.args !== 'object' || Array.isArray(action.args)) {
-    throw new Error('Workspace action args must be an object');
+    const error = new Error('Workspace action args must be an object');
+    error.code = 'WORKSPACE_MALFORMED_ACTION';
+    throw error;
   }
 
   return {
@@ -3248,7 +3699,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   let result;
 
   if (operation === 'listDirectory') {
-    assertOnlyKeys(args, ['path'], 'listDirectory args');
+    assertOnlyKeys(args, AGENT_OPERATION_ARGS.listDirectory, 'listDirectory args');
     const pathValue = requireStringArg(args, 'path');
     assertAgentWorkspacePathAllowed(pathValue);
     try {
@@ -3273,7 +3724,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   }
 
   if (operation === 'readFile') {
-    assertOnlyKeys(args, ['path'], 'readFile args');
+    assertOnlyKeys(args, AGENT_OPERATION_ARGS.readFile, 'readFile args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     assertAgentWorkspacePathAllowed(pathValue);
     result = { path: pathValue, content: runWorkspaceProvider.readFile(pathValue) };
@@ -3286,7 +3737,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   }
 
   if (operation === 'createFolder') {
-    assertOnlyKeys(args, ['path'], 'createFolder args');
+    assertOnlyKeys(args, AGENT_OPERATION_ARGS.createFolder, 'createFolder args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
@@ -3316,7 +3767,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   }
 
   if (operation === 'writeFile') {
-    assertOnlyKeys(args, ['path', 'content'], 'writeFile args');
+    assertOnlyKeys(args, AGENT_OPERATION_ARGS.writeFile, 'writeFile args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const content = requireStringArg(args, 'content');
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
@@ -3345,7 +3796,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   }
 
   if (operation === 'renamePath') {
-    assertOnlyKeys(args, ['path', 'nextPath'], 'renamePath args');
+    assertOnlyKeys(args, AGENT_OPERATION_ARGS.renamePath, 'renamePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const nextPath = requireStringArg(args, 'nextPath', { nonEmpty: true });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue, nextPath }, pathValue, runWorkspaceProvider);
@@ -3375,7 +3826,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   }
 
   if (operation === 'deletePath') {
-    assertOnlyKeys(args, ['path'], 'deletePath args');
+    assertOnlyKeys(args, AGENT_OPERATION_ARGS.deletePath, 'deletePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
@@ -3508,12 +3959,19 @@ async function runAgentTicket(runId) {
       appendRunLog(run, 'model:request', `${providerConfig.provider} request sent with model ${providerConfig.model}`);
       modelRequestCount += 1;
       currentProviderRequestPersisted = false;
+      const modelRequestStartedAt = Date.now();
       const modelResponse = await callModelProviderWithRunTimeout(run, agent, input, runStartedAtMs, limits, {
         onRequest: requestPayload => {
-          appendRunReplaySnapshotItem(run.id, 'providerRequests', requestPayload);
+          appendRunReplaySnapshotItem(run.id, 'providerRequests', {
+            ...requestPayload,
+            startedAt: new Date(modelRequestStartedAt).toISOString(),
+            durationMs: Date.now() - modelRequestStartedAt
+          });
           currentProviderRequestPersisted = true;
         }
       });
+      const modelResponseCompletedAt = Date.now();
+      const modelCallDurationMs = modelResponseCompletedAt - modelRequestStartedAt;
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       const modelText = modelResponse.text;
       appendRunLog(
@@ -3531,7 +3989,10 @@ async function runAgentTicket(runId) {
         usage: modelResponse.usage || null,
         provider: modelResponse.provider || providerConfig.provider,
         model: modelResponse.model || providerConfig.model,
-        providerResponsePayload: modelResponse.responsePayload
+        providerResponsePayload: modelResponse.responsePayload,
+        startedAt: new Date(modelRequestStartedAt).toISOString(),
+        completedAt: new Date(modelResponseCompletedAt).toISOString(),
+        durationMs: modelCallDurationMs
       });
 
       const modelPlan = parseModelActions(modelText);
@@ -3558,7 +4019,9 @@ async function runAgentTicket(runId) {
       const actions = modelPlan.actions;
 
       if (isRunInterrupted(run.id)) {
-        throw new Error('Run interrupted');
+        const error = new Error('Run interrupted');
+        error.code = 'RUN_INTERRUPTED';
+        throw error;
       }
 
       if (actions.length > MAX_AGENT_ACTIONS_PER_RESPONSE) {
@@ -3650,14 +4113,18 @@ async function runAgentTicket(runId) {
 
       for (const action of actions) {
         let operation = null;
+        const actionStartedAt = Date.now();
         try {
           if (isRunInterrupted(run.id)) {
-            throw new Error('Run interrupted');
+            const error = new Error('Run interrupted');
+            error.code = 'RUN_INTERRUPTED';
+            throw error;
           }
 
           assertRunNotTimedOut(run, runStartedAtMs, limits);
           operation = parseWorkspaceOperation(action);
           const result = executeWorkspaceOperation(run, action, step);
+          const opDurationMs = Date.now() - actionStartedAt;
           workspaceOperationCount += 1;
 
           actionResults.push({ action, result });
@@ -3671,6 +4138,8 @@ async function runAgentTicket(runId) {
           appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
             operation,
             result,
+            startedAt: new Date(actionStartedAt).toISOString(),
+            durationMs: opDurationMs,
             historyId: result && result.historyId ? result.historyId : null,
             workspaceRoot: getRunWorkspaceProvider(run).root,
             executionWorkspaceType: run.executionWorkspaceType || 'main',
@@ -3693,6 +4162,7 @@ async function runAgentTicket(runId) {
             listPathsThisStep.add(listedPath);
           }
         } catch (error) {
+          const opDurationMs = Date.now() - actionStartedAt;
           actionResults.push({ action, error: error.message });
           if (operation || error.workspaceAction) {
             // INVARIANT: Error replay entry shape must remain structurally
@@ -3708,6 +4178,7 @@ async function runAgentTicket(runId) {
               error: error.message,
               blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
               reason: error.reason || null,
+              durationMs: opDurationMs,
               historyId: error.historyId || null,
               ownedOutputPaths: error.ownedOutputPaths || getRunOwnedOutputPaths(run),
               workspaceRoot: getRunWorkspaceProvider(run).root,
@@ -4102,7 +4573,7 @@ function applyWorkspaceFixture(fixtureId) {
   }
 }
 
-function resetDebugData() {
+function resetDebugData(changedBy = 'system') {
   writeFileAtomic(DATA_FILE, '[]');
   writeFileAtomic(RUNS_FILE, '[]');
   writeFileAtomic(LOGS_FILE, '[]');
@@ -4112,7 +4583,10 @@ function resetDebugData() {
   clearWorkspaceRoot();
   runningRunKeys.clear();
 
-  appendSystemLog('system:reset', 'Debug data reset completed');
+  appendSystemLog('system:reset', `Debug data reset completed by ${changedBy}`, null, {
+    changedBy,
+    changedAt: new Date().toISOString()
+  });
 }
 
 function viewData(data, userId = null) {
@@ -4141,6 +4615,21 @@ fastify.addHook('preHandler', async (request, reply) => {
     request.user = user || null;
   }
 });
+
+function setupSSEConnection(reply, request, clientSet) {
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  reply.raw.write('retry: 5000\n\n');
+  clientSet.add(reply.raw);
+  request.raw.on('close', () => {
+    clientSet.delete(reply.raw);
+  });
+}
 
 // ==================== PUBLIC ROUTES ====================
 
@@ -4241,7 +4730,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
 
   const tickets = readTickets();
   const now = new Date().toISOString();
-  const nextTicketId = tickets.length > 0 ? Math.max(...tickets.map(t => t.id)) + 1 : 1;
+  const nextTicketId = nextId(tickets);
 
   let parsedOwnedPaths = null;
   if (request.body.ownedOutputPaths) {
@@ -4264,6 +4753,8 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     ownedOutputPaths: parsedOwnedPaths,
     status: 'open',
     createdBy: request.user ? request.user.username : String(request.session.userId),
+    changedBy: request.user ? request.user.username : String(request.session.userId),
+    changedAt: now,
     createdAt: now,
     updatedAt: now
   };
@@ -4372,7 +4863,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
 });
 
 fastify.get('/api/health', async (request, reply) => {
-   return { status: 'ok', dataDir: DATA_DIR, workspaceRoot: WORKSPACE_ROOT, port: PORT, uptime: Math.floor(process.uptime()) };
+   return { status: 'ok', dataDir: 'data', workspaceRoot: 'workspace-root', port: PORT, uptime: Math.floor(process.uptime()) };
 });
 
 fastify.get('/api/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -4456,19 +4947,7 @@ fastify.get('/api/tickets/events', { preHandler: fastify.requireAuth }, async (r
     return { error: 'Permission denied' };
   }
 
-  reply.hijack();
-  reply.raw.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no'
-  });
-  reply.raw.write('retry: 5000\n\n');
-
-  ticketEventClients.add(reply.raw);
-  request.raw.on('close', () => {
-    ticketEventClients.delete(reply.raw);
-  });
+  setupSSEConnection(reply, request, ticketEventClients);
 });
 
 fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -4497,12 +4976,15 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
     return { ticket };
   }
 
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  const changedAt = new Date().toISOString();
+
   if (status === 'open' && usesOwnedScopeAllocation(ticket)) {
     try {
       assertAllocatedTicketCanStart({
         ...ticket,
         status,
-        updatedAt: new Date().toISOString()
+        updatedAt: changedAt
       }, getAgentsInGroup(ticket.assignmentTargetId));
     } catch (error) {
       appendSystemLog('allocation:setup_failed', error.message, null, {
@@ -4511,23 +4993,36 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
         assignedAgentId: error.assignedAgentId || null,
         ticketId: ticket.id,
         assignmentTargetId: ticket.assignmentTargetId,
-        createdBy: request.user ? request.user.username : String(request.session.userId)
+        changedBy,
+        changedAt
       });
       reply.code(400);
       return { error: error.message || 'Owned-scope execution rejected' };
     }
   }
 
+  const previousStatus = ticket.status;
   ticket.status = status;
-  ticket.updatedAt = new Date().toISOString();
+  ticket.updatedAt = changedAt;
+  ticket.changedBy = changedBy;
+  ticket.changedAt = changedAt;
   writeTickets(tickets);
   broadcastTicketChange();
+
+  appendSystemLog('ticket:status_change', `Ticket #${ticketId} status changed from ${previousStatus} to ${status} by ${changedBy}`, null, {
+    ticketId,
+    changedBy,
+    changedAt,
+    fromStatus: previousStatus,
+    toStatus: status
+  });
+
   if (status === 'open') {
     try {
       maybeStartTicketRuns(ticket);
     } catch (error) {
       ticket.status = 'failed';
-      ticket.updatedAt = new Date().toISOString();
+      ticket.updatedAt = changedAt;
       writeTickets(tickets);
       broadcastTicketChange();
       reply.code(400);
@@ -4551,17 +5046,19 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
     return { error: 'Invalid ticket id' };
   }
 
+  const changedBy = request.user ? request.user.username : 'operator';
   let ticket = null;
 
   try {
-    ticket = rerunTicketFromBeginning(ticketId, request.user ? request.user.username : 'operator');
+    ticket = rerunTicketFromBeginning(ticketId, changedBy);
   } catch (error) {
     appendSystemLog('allocation:setup_failed', error.message, null, {
       code: error.code || 'VALIDATION_ERROR',
       path: error.path || null,
       assignedAgentId: error.assignedAgentId || null,
       ticketId,
-      requestedBy: request.user ? request.user.username : 'operator'
+      changedBy,
+      changedAt: new Date().toISOString()
     });
     reply.code(400);
     return { error: error.message || 'Ticket rerun rejected' };
@@ -4629,9 +5126,13 @@ fastify.post('/api/operations/:id/recover', { preHandler: fastify.requireAuth },
 
   try {
     const recoveryRecord = executeRecovery(record, confirmed === true);
-    appendSystemLog('workspace:recovery', `Recovered operation history #${recordId} as #${recoveryRecord.id}`, {
+    const changedBy = request.user ? request.user.username : String(request.session.userId);
+    appendSystemLog('workspace:recovery', `Recovered operation history #${recordId} as #${recoveryRecord.id} by ${changedBy}`, {
       operation: 'recovery',
       args: { originalHistoryId: recordId, recoveryHistoryId: recoveryRecord.id }
+    }, {
+      changedBy,
+      changedAt: new Date().toISOString()
     });
     return { recovery: recoveryRecord };
   } catch (error) {
@@ -4720,7 +5221,7 @@ function getPaginatedLogs(query = {}) {
   }
 
   return {
-    logs: pageLogs,
+    logs: sanitizeWorkspaceDisplayValue(pageLogs),
     filters,
     pagination: {
       page: currentPage,
@@ -4774,10 +5275,10 @@ fastify.get('/api/export', { preHandler: fastify.requireAuth }, async (request, 
   }
   return {
     tickets: readTickets(),
-    runs: readRuns().map(hydrateRunReplaySnapshot),
-    logs: readLogs(),
-    history: readOperationHistory(),
-    plans: readAllocationPlans()
+    runs: sanitizeWorkspaceDisplayValue(readRuns().map(hydrateRunReplaySnapshot)),
+    logs: sanitizeWorkspaceDisplayValue(readLogs()),
+    history: sanitizeWorkspaceDisplayValue(readOperationHistory()),
+    plans: sanitizeWorkspaceDisplayValue(readAllocationPlans())
   };
 });
 
@@ -4787,19 +5288,7 @@ fastify.get('/api/logs/events', { preHandler: fastify.requireAuth }, async (requ
     return { error: 'Permission denied' };
   }
 
-  reply.hijack();
-  reply.raw.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no'
-  });
-  reply.raw.write('retry: 5000\n\n');
-
-  logEventClients.add(reply.raw);
-  request.raw.on('close', () => {
-    logEventClients.delete(reply.raw);
-  });
+  setupSSEConnection(reply, request, logEventClients);
 });
 
 fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -4833,14 +5322,44 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
 
   const history = readOperationHistory();
   const runPartialMutationCount = countRunMutatingOperations(runId, history);
+  const agent = readAgents().find(a => a.id === run.agentId) || null;
+  const ticket = readTickets().find(item => item.id === run.ticketId) || null;
+  const snapshot = run.replaySnapshot || null;
+  const authorityContext = buildRunAuthorityContext(run, ticket, agent, snapshot);
+
+  if (authorityContext.controls.recoverable && history.some(h => h.runId === runId && h.error && h.operation !== 'recovery')) {
+    authorityContext.controls.recoveryAvailable = true;
+  }
+
+  const opAllowance = {};
+  const opErrorInfo = {};
+  if (snapshot && Array.isArray(snapshot.workspaceOperations)) {
+    snapshot.workspaceOperations.forEach((op, i) => {
+      const key = op.historyId != null ? 'h:' + op.historyId : 's:' + i;
+      opAllowance[key] = classifyOperationAllowance(op);
+      opErrorInfo[key] = buildOperationErrorInfo(op);
+    });
+  }
+  const enrichedHistory = enrichOperationHistoryForDisplay(getOperationHistoryForRun(runId, history));
+  enrichedHistory.forEach(record => {
+    record.allowance = classifyOperationAllowance(record);
+    record.errorInfo = buildOperationErrorInfo(record);
+  });
+  const failureSummary = buildRunFailureSummary(run, snapshot, enrichedHistory, runPartialMutationCount, authorityContext.controls.recoveryAvailable);
+  const displaySnapshot = createDisplaySnapshot(snapshot);
 
   return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
     run,
-    ticket: readTickets().find(item => item.id === run.ticketId) || null,
-    snapshot: run.replaySnapshot || null,
+    ticket,
+    snapshot: displaySnapshot,
+    agent,
+    authorityContext,
+    opAllowance,
+    opErrorInfo,
+    failureSummary,
     recentLogs: getRecentLogsForRun(runId),
-    operationHistory: enrichOperationHistoryForDisplay(getOperationHistoryForRun(runId, history)),
+    operationHistory: enrichedHistory,
     partialMutationCount: runPartialMutationCount,
     operationalOutcome: classifyRunOperationalOutcome(run),
     canUpdateRuns: hasPermission(request.session.userId, 'ticket:update')
@@ -5124,6 +5643,25 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
   const memberships = readMemberships();
   const tickets = readTickets();
   const allPermissions = readPermissions();
+  const adminMutationTypes = new Set([
+    'ticket:status_change',
+    'ticket:rerun',
+    'workspace:recovery',
+    'admin:user_create',
+    'admin:user_edit',
+    'admin:user_delete',
+    'admin:agent_create',
+    'admin:agent_edit',
+    'admin:agent_delete',
+    'admin:group_create',
+    'admin:group_edit',
+    'admin:group_delete',
+    'system:reset'
+  ]);
+  const recentAdminActivity = readLogs()
+    .filter(log => adminMutationTypes.has(log.type))
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 12);
 
   const usersWithGroups = users.map(account => {
     const accountGroupIds = Array.from(new Set(memberships
@@ -5157,6 +5695,7 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     membershipGroups: groups,
     accounts,
     groupsWithPermissions,
+    recentAdminActivity,
     tickets,
     permissions: allPermissions,
     providers: PROVIDERS,
@@ -5187,7 +5726,7 @@ fastify.post('/admin/debug-reset', { preHandler: fastify.requireAuth }, async (r
   }
 
   try {
-    resetDebugData();
+    resetDebugData(request.user ? request.user.username : String(request.session.userId));
     return reply.redirect('/admin?resetSuccess=1');
   } catch (error) {
     return reply.redirect('/admin?resetError=' + encodeURIComponent(error.message || 'Reset failed'));
@@ -5238,18 +5777,31 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
     }
 
     const newAgent = {
-      id: agents.length > 0 ? Math.max(...agents.map(a => a.id)) + 1 : 1,
+      id: nextId(agents),
       name: agentName.trim(),
       type: 'agent',
       provider,
       model: model ? model.trim() : '',
       apiKey: apiKey ? apiKey.trim() : '',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      changedBy: request.user ? request.user.username : String(request.session.userId),
+      changedAt: new Date().toISOString()
     };
+
+    const changedBy = request.user ? request.user.username : String(request.session.userId);
+    const changedAt = new Date().toISOString();
 
     agents.push(newAgent);
     writeAgents(agents);
     setPrincipalGroupMemberships('agent', newAgent.id, normalizedGroupIds);
+
+    appendSystemLog('admin:agent_create', `Agent "${agentName.trim()}" created by ${changedBy}`, null, {
+      changedBy,
+      changedAt,
+      targetAgentId: newAgent.id,
+      targetAgentName: agentName.trim(),
+      provider
+    });
 
     return reply.redirect('/admin');
   }
@@ -5283,17 +5835,28 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
   const passwordHash = await argon2.hash(password);
 
   const newUser = {
-    id: users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1,
+    id: nextId(users),
     username: username.trim(),
     type: 'user',
     passwordHash,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    changedBy: request.user ? request.user.username : String(request.session.userId),
+    changedAt: new Date().toISOString()
   };
 
   users.push(newUser);
   writeUsers(users);
 
   setPrincipalGroupMemberships('user', newUser.id, normalizedGroupIds);
+
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  const changedAt = new Date().toISOString();
+  appendSystemLog('admin:user_create', `User "${username.trim()}" created by ${changedBy}`, null, {
+    changedBy,
+    changedAt,
+    userId: newUser.id,
+    username: username.trim()
+  });
 
   return reply.redirect('/admin');
 });
@@ -5381,6 +5944,8 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
     agents[agentIndex].name = agentName.trim();
     agents[agentIndex].provider = provider;
     agents[agentIndex].model = model ? model.trim() : '';
+    agents[agentIndex].changedBy = request.user ? request.user.username : String(request.session.userId);
+    agents[agentIndex].changedAt = new Date().toISOString();
 
     if (apiKey && apiKey.trim()) {
       agents[agentIndex].apiKey = apiKey.trim();
@@ -5388,6 +5953,15 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
 
     writeAgents(agents);
     setPrincipalGroupMemberships('agent', accountId, normalizedGroupIds);
+
+    const changedBy = request.user ? request.user.username : String(request.session.userId);
+    appendSystemLog('admin:agent_edit', `Agent "${agentName.trim()}" (#${accountId}) edited by ${changedBy}`, null, {
+      changedBy,
+      changedAt: new Date().toISOString(),
+      targetAgentId: accountId,
+      targetAgentName: agentName.trim()
+    });
+
     return reply.redirect('/admin');
   }
   
@@ -5434,6 +6008,8 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
 
   users[userIndex].username = username.trim();
   users[userIndex].type = 'user';
+  users[userIndex].changedBy = request.user ? request.user.username : String(request.session.userId);
+  users[userIndex].changedAt = new Date().toISOString();
   
   if (password) {
     users[userIndex].passwordHash = await argon2.hash(password);
@@ -5441,6 +6017,14 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
 	  
   writeUsers(users);
   setPrincipalGroupMemberships('user', accountId, normalizedGroupIds);
+
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  appendSystemLog('admin:user_edit', `User "${username.trim()}" (#${accountId}) edited by ${changedBy}`, null, {
+    changedBy,
+    changedAt: new Date().toISOString(),
+    userId: accountId,
+    username: username.trim()
+  });
 
   return reply.redirect('/admin');
 });
@@ -5454,9 +6038,13 @@ fastify.post('/admin/users/:id/delete', { preHandler: fastify.requireAuth }, asy
   const accountId = parseInt(request.params.id);
   const { accountType } = request.body;
 
+    const changedBy = request.user ? request.user.username : String(request.session.userId);
+    const changedAt = new Date().toISOString();
+
 	  if (accountType === 'agent') {
 	    // Delete agent
 	    let agents = readAgents();
+	    const deletedAgent = agents.find(a => a.id === accountId);
 	    agents = agents.filter(a => a.id !== accountId);
 	    writeAgents(agents);
 	    let memberships = readMemberships();
@@ -5464,6 +6052,13 @@ fastify.post('/admin/users/:id/delete', { preHandler: fastify.requireAuth }, asy
 	      membership.principalType !== 'agent' || membership.principalId !== accountId
 	    );
 	    writeMemberships(memberships);
+
+      appendSystemLog('admin:agent_delete', `Agent "${deletedAgent ? deletedAgent.name : '#' + accountId}" deleted by ${changedBy}`, null, {
+        changedBy,
+        changedAt,
+        targetAgentId: accountId,
+        targetAgentName: deletedAgent ? deletedAgent.name : null
+      });
 	  } else {
     // Delete user
     // Don't allow deleting yourself
@@ -5472,6 +6067,7 @@ fastify.post('/admin/users/:id/delete', { preHandler: fastify.requireAuth }, asy
     }
 
     let users = readUsers();
+    const deletedUser = users.find(u => u.id === accountId);
     users = users.filter(u => u.id !== accountId);
     writeUsers(users);
 
@@ -5480,6 +6076,13 @@ fastify.post('/admin/users/:id/delete', { preHandler: fastify.requireAuth }, asy
 	      membership.principalType !== 'user' || membership.principalId !== accountId
 	    );
 	    writeMemberships(memberships);
+
+    appendSystemLog('admin:user_delete', `User "${deletedUser ? deletedUser.username : '#' + accountId}" deleted by ${changedBy}`, null, {
+      changedBy,
+      changedAt,
+      userId: accountId,
+      username: deletedUser ? deletedUser.username : null
+    });
 	  }
 
   return reply.redirect('/admin');
@@ -5520,14 +6123,24 @@ fastify.post('/admin/groups', { preHandler: fastify.requireAuth }, async (reques
   }
 	  
   const newGroup = {
-    id: groups.length > 0 ? Math.max(...groups.map(g => g.id)) + 1 : 1,
+    id: nextId(groups),
     name: name.trim(),
     permissions: normalizedPermissions,
-    canReceiveTickets: ticketAssignable
+    canReceiveTickets: ticketAssignable,
+    changedBy: request.user ? request.user.username : String(request.session.userId),
+    changedAt: new Date().toISOString()
   };
   
   groups.push(newGroup);
   writeGroups(groups);
+
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  appendSystemLog('admin:group_create', `Group "${name.trim()}" created by ${changedBy}`, null, {
+    changedBy,
+    changedAt: new Date().toISOString(),
+    groupId: newGroup.id,
+    groupName: name.trim()
+  });
 
   return reply.redirect('/admin');
 });
@@ -5616,7 +6229,17 @@ fastify.post('/admin/groups/:id', { preHandler: fastify.requireAuth }, async (re
   groups[groupIndex].name = name.trim();
   groups[groupIndex].permissions = normalizedPermissions;
   groups[groupIndex].canReceiveTickets = ticketAssignable;
+  groups[groupIndex].changedBy = request.user ? request.user.username : String(request.session.userId);
+  groups[groupIndex].changedAt = new Date().toISOString();
   writeGroups(groups);
+
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  appendSystemLog('admin:group_edit', `Group "${name.trim()}" (#${groupId}) edited by ${changedBy}`, null, {
+    changedBy,
+    changedAt: new Date().toISOString(),
+    groupId,
+    groupName: name.trim()
+  });
 
   return reply.redirect('/admin');
 });
@@ -5638,14 +6261,45 @@ fastify.post('/admin/groups/:id/delete', { preHandler: fastify.requireAuth }, as
   }
 	  
   let groups = readGroups();
+  const deletedGroup = groups.find(g => g.id === groupId);
   groups = groups.filter(g => g.id !== groupId);
   writeGroups(groups);
   
   let memberships = readMemberships();
   memberships = memberships.filter(membership => membership.groupId !== groupId);
   writeMemberships(memberships);
+
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  appendSystemLog('admin:group_delete', `Group "${deletedGroup ? deletedGroup.name : '#' + groupId}" deleted by ${changedBy}`, null, {
+    changedBy,
+    changedAt: new Date().toISOString(),
+    groupId,
+    groupName: deletedGroup ? deletedGroup.name : null
+  });
   
   return reply.redirect('/admin');
+});
+
+// ==================== ACTIONS CATALOG ====================
+
+fastify.get('/admin/actions', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'user:read')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({
+      message: 'Access denied',
+      user: request.user
+    }, request.session.userId));
+  }
+
+  const categories = [...new Set(ACTIONS_CATALOG.map(a => a.category))];
+  const invokers = [...new Set(ACTIONS_CATALOG.map(a => a.invoker))];
+
+  return reply.view('admin/actions.ejs', viewData({
+    user: request.user,
+    actions: ACTIONS_CATALOG,
+    categories,
+    invokers
+  }, request.session.userId));
 });
 
 // ==================== INITIALIZATION ====================
@@ -5669,7 +6323,8 @@ async function createDefaultData() {
   let adminUser = users.find(user => user.username === 'admin');
 
   if (users.length === 0) {
-    const passwordHash = await argon2.hash('admin123');
+    const bootstrapPassword = String(process.env.ADMIN_BOOTSTRAP_PASSWORD || 'admin123');
+    const passwordHash = await argon2.hash(bootstrapPassword);
     adminUser = {
       id: 1,
       username: 'admin',
@@ -5678,7 +6333,7 @@ async function createDefaultData() {
     };
     users.push(adminUser);
     writeUsers(users);
-    console.log('Default admin user created: username=admin, password=admin123');
+    console.log(`Default admin user created: username=admin, password=${bootstrapPassword}`);
   }
 
   const groups = readGroups();
@@ -5686,7 +6341,7 @@ async function createDefaultData() {
 
   if (!adminGroup) {
     adminGroup = {
-      id: groups.length > 0 ? Math.max(...groups.map(group => group.id)) + 1 : 1,
+      id: nextId(groups),
       name: 'Administrators',
       permissions: readPermissions(),
       canReceiveTickets: false
@@ -5700,7 +6355,7 @@ async function createDefaultData() {
 
   if (!groups.some(group => group.canReceiveTickets)) {
     groups.push({
-      id: groups.length > 0 ? Math.max(...groups.map(group => group.id)) + 1 : 1,
+      id: nextId(groups),
       name: 'Agent Support',
       permissions: [],
       canReceiveTickets: true
@@ -5720,7 +6375,7 @@ async function createDefaultData() {
 
     if (!hasAdminMembership) {
       memberships.push({
-        id: memberships.length > 0 ? Math.max(...memberships.map(membership => membership.id)) + 1 : 1,
+        id: nextId(memberships),
         principalType: 'user',
         principalId: adminUser.id,
         groupId: adminGroup.id
@@ -5739,7 +6394,6 @@ async function start() {
     serverReady = true;
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`Login with: admin / admin123`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

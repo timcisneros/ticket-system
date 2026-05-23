@@ -1,7 +1,0 @@
-{
-  "name": "linkcheck",
-  "private": true,
-  "scripts": {
-    "test": "node --test"
-  }
-}

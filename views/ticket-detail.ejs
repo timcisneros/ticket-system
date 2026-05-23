@@ -35,6 +35,14 @@
         <dt>Updated</dt>
         <dd><%= ticket.updatedAt ? new Date(ticket.updatedAt).toLocaleString() : '-' %></dd>
       </div>
+      <div>
+        <dt>Changed By</dt>
+        <dd><%= ticket.changedBy || '-' %></dd>
+      </div>
+      <div>
+        <dt>Changed At</dt>
+        <dd><%= ticket.changedAt ? new Date(ticket.changedAt).toLocaleString() : '-' %></dd>
+      </div>
     </dl>
   </details>
 </section>
@@ -190,6 +198,9 @@
       <div class="inline-log-item">
         <span class="inline-log-type"><%= log.type %></span>
         <span class="inline-log-message"><%= log.message %></span>
+        <% if (log.changedBy || log.requestedBy) { %>
+          <span class="audit-meta">Changed by <%= log.changedBy || log.requestedBy %> at <%= log.changedAt || log.timestamp || '-' %></span>
+        <% } %>
         <% if (log.runId !== null && log.runId !== undefined) { %>
           <a href="/runs/<%= log.runId %>">Run #<%= log.runId %></a>
         <% } %>
@@ -247,16 +258,24 @@
           <% } %>
           <% if (record.preState) { %>
             <div class="allocation-item-row">
-              <span class="allocation-item-label">Pre-State</span>
+              <span class="allocation-item-label">State diff</span>
               <span class="allocation-item-value">
                 <details class="collapsible">
-                  <summary>View Pre-State</summary>
-                  <pre class="code-block"><%= JSON.stringify(record.preState, null, 2) %></pre>
+                  <summary>View diff</summary>
+                  <div class="diff-container">
+                    <div class="diff-panel">
+                      <div class="diff-panel-label">Before</div>
+                      <pre class="code-block code-block--diff"><%= JSON.stringify(record.preState, null, 2) %></pre>
+                    </div>
+                    <div class="diff-panel">
+                      <div class="diff-panel-label">After</div>
+                      <pre class="code-block code-block--diff"><%= JSON.stringify(record.postState, null, 2) %></pre>
+                    </div>
+                  </div>
                 </details>
               </span>
             </div>
-          <% } %>
-          <% if (record.postState) { %>
+          <% } else if (record.postState) { %>
             <div class="allocation-item-row">
               <span class="allocation-item-label">Post-State</span>
               <span class="allocation-item-value">

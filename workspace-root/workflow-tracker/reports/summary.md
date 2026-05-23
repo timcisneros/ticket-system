@@ -1,2 +1,0 @@
-# Summary
-All phases complete

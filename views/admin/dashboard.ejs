@@ -1,6 +1,34 @@
 <h1>Admin Dashboard</h1>
 
 <section class="admin-block">
+  <h2>Recent Admin Activity</h2>
+  <% if (!recentAdminActivity || recentAdminActivity.length === 0) { %>
+    <p class="text-muted">No admin mutations recorded yet.</p>
+  <% } else { %>
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>Action</th>
+          <th>Changed By</th>
+          <th>Changed At</th>
+          <th>Summary</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% recentAdminActivity.forEach(function(log) { %>
+          <tr>
+            <td><code><%= log.type %></code></td>
+            <td><%= log.changedBy || log.requestedBy || '-' %></td>
+            <td><%= new Date(log.changedAt || log.timestamp).toLocaleString() %></td>
+            <td><%= log.message %></td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  <% } %>
+</section>
+
+<section class="admin-block">
   <h2>Accounts</h2>
 
   <% if (accounts.length === 0) { %>
@@ -14,6 +42,7 @@
           <th>Details</th>
           <th>Groups</th>
           <th>Created At</th>
+          <th>Last Changed</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -37,6 +66,14 @@
               <% } %>
             </td>
             <td><%= new Date(account.createdAt).toLocaleString() %></td>
+            <td>
+              <% if (account.changedBy || account.changedAt) { %>
+                <span><%= account.changedBy || '-' %></span><br>
+                <span class="text-muted"><%= account.changedAt ? new Date(account.changedAt).toLocaleString() : '-' %></span>
+              <% } else { %>
+                -
+              <% } %>
+            </td>
             <td class="actions">
               <% if (userPermissions.includes('user:update')) { %>
                 <a href="/admin/users/<%= account.id %>/edit?type=<%= account.type %>" class="btn-small">Edit</a>
@@ -143,6 +180,7 @@
           <th>Name</th>
           <th>Ticket Assignment</th>
           <th>Permissions</th>
+          <th>Last Changed</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -155,6 +193,14 @@
             <td>
               <% if (group.permissions && group.permissions.length > 0) { %>
                 <%= group.permissions.join(', ') %>
+              <% } else { %>
+                -
+              <% } %>
+            </td>
+            <td>
+              <% if (group.changedBy || group.changedAt) { %>
+                <span><%= group.changedBy || '-' %></span><br>
+                <span class="text-muted"><%= group.changedAt ? new Date(group.changedAt).toLocaleString() : '-' %></span>
               <% } else { %>
                 -
               <% } %>
