@@ -1,7 +1,7 @@
 {
   "version": 1,
   "runId": 15,
-  "ticketId": 8,
+  "ticketId": 12,
   "assignedAgentId": 3,
   "agentNameSnapshot": "Mike",
   "primitiveContract": {
@@ -50,269 +50,139 @@
   "allocationItem": null,
   "allocationSubtask": null,
   "ownedOutputPaths": [],
-  "ticketOpenedAt": "2026-05-24T04:31:37.458Z",
+  "ticketOpenedAt": "2026-05-25T01:40:12.665Z",
   "runtimeLimits": {
     "maxExecutionSteps": 4,
     "maxWorkspaceOperationsPerRun": 32,
     "maxModelRequestsPerRun": 4,
     "maxRuntimeDurationMs": 120000
   },
-  "providerRequests": [
+  "providerRequests": [],
+  "modelResponses": [],
+  "parsedModelPlans": [],
+  "capabilitySelection": [
     {
-      "url": "http://127.0.0.1:11434/api/chat",
-      "method": "POST",
-      "headers": {
-        "Content-Type": "application/json"
+      "selectedBy": "agent",
+      "capability": {
+        "type": "workflow",
+        "id": "verify-mike-write-file",
+        "name": "Verify Mike write file",
+        "input": {
+          "path": "mike-workflow-deterministic-2.txt",
+          "content": "Mike deterministic workflow verification after wording patch.\n"
+        }
       },
-      "body": {
-        "model": "gemma3:latest",
-        "messages": [
-          {
-            "role": "system",
-            "content": "You are an agent working inside a contained workspace.\nYou may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.\nUse runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.\nInspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.\nIf the ticket requires creating or changing files, request the necessary workspace actions.\nDo not say you will do work later. Do not describe future work instead of performing it.\nIf no workspace operation is needed and the task is truly done, set complete to true.\nIf the task cannot be completed, explain the failure reason clearly in the message.\nNever return complete false with an empty actions array.\nBefore setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.\nIf the target path is clear or can be overwritten or created safely, emit the create or write operation.\nYou have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.\nThe per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (8).\nNever emit more than that many workspace actions in a single response.\nThe per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (2). Mutating actions are createFolder, writeFile, renamePath, and deletePath.\nPrefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.\nRead/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.\nIf a task requires more mutations than the mutating limit, split the work across multiple responses.\nEmit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.\nDo not fail or return an error just because the total task exceeds one response.\nFor bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.\nUse only the workspace operations listed in runtimeEnvelope.allowedOperations.\nIf runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.\nIf runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.\nEach action must be exactly {\"operation\":\"operationName\",\"args\":{...}} with no extra fields.\nRequired args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path \"\" only for the workspace root in listDirectory.\nRespond only as JSON with this shape:\n{\"message\":\"short summary\",\"actions\":[{\"operation\":\"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath\",\"args\":{\"path\":\"relative/path\",\"content\":\"for writeFile only\",\"nextPath\":\"for renamePath only\"}}],\"complete\":true|false}"
-          },
-          {
-            "role": "user",
-            "content": "{\"runtimeEnvelope\":{\"runId\":15,\"ticketId\":8,\"assignedAgentId\":3,\"currentDateTime\":\"2026-05-23T21:31:37-07:00\",\"timezone\":\"America/Los_Angeles\",\"workspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"mainWorkspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"executionWorkspaceType\":\"main\",\"allocationPlanId\":null,\"allocationItemId\":null,\"allocationItem\":null,\"allocationSubtask\":null,\"ownedOutputPaths\":[],\"allowedOperations\":[\"listDirectory\",\"readFile\",\"createFolder\",\"writeFile\",\"renamePath\",\"deletePath\"],\"maxActionsPerResponse\":8,\"maxMutatingActionsPerResponse\":2,\"currentStep\":0,\"maxExecutionSteps\":4}}"
-          },
-          {
-            "role": "user",
-            "content": "{\"ticketObjective\":\"create folder A and folder B\",\"previousActionResults\":[]}"
-          }
-        ],
-        "stream": false,
-        "format": "json"
+      "bounded": true,
+      "deterministic": true,
+      "capturedAt": "2026-05-25T01:40:12.696Z"
+    }
+  ],
+  "capabilityOutputs": [
+    {
+      "capabilityType": "workflow",
+      "capabilityId": "verify-mike-write-file",
+      "output": {
+        "written": true,
+        "path": "mike-workflow-deterministic-2.txt"
       },
-      "startedAt": "2026-05-24T04:31:37.483Z",
-      "durationMs": 1,
-      "capturedAt": "2026-05-24T04:31:37.485Z"
+      "counters": {
+        "transitions": 2,
+        "workspaceOperations": 1,
+        "modelRequests": 0,
+        "mutations": 1
+      },
+      "capturedAt": "2026-05-25T01:40:12.709Z"
+    }
+  ],
+  "workflowInvocation": [
+    {
+      "workflowId": "verify-mike-write-file",
+      "workflowName": "Verify Mike write file",
+      "input": {
+        "path": "mike-workflow-deterministic-2.txt",
+        "content": "Mike deterministic workflow verification after wording patch.\n"
+      },
+      "capturedAt": "2026-05-25T01:40:12.699Z"
+    }
+  ],
+  "workflowActions": [
+    {
+      "workflowId": "verify-mike-write-file",
+      "stepId": "write",
+      "action": "writeFile",
+      "input": {
+        "path": "mike-workflow-deterministic-2.txt",
+        "content": "Mike deterministic workflow verification after wording patch.\n"
+      },
+      "result": {
+        "path": "mike-workflow-deterministic-2.txt",
+        "size": 62,
+        "historyId": 11
+      },
+      "startedAt": "2026-05-25T01:40:12.701Z",
+      "durationMs": 5,
+      "capturedAt": "2026-05-25T01:40:12.706Z"
     },
     {
-      "url": "http://127.0.0.1:11434/api/chat",
-      "method": "POST",
-      "headers": {
-        "Content-Type": "application/json"
+      "workflowId": "verify-mike-write-file",
+      "stepId": "done",
+      "action": "stop",
+      "input": {
+        "result": {
+          "written": true,
+          "path": "mike-workflow-deterministic-2.txt"
+        }
       },
-      "body": {
-        "model": "gemma3:latest",
-        "messages": [
-          {
-            "role": "system",
-            "content": "You are an agent working inside a contained workspace.\nYou may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.\nUse runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.\nInspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.\nIf the ticket requires creating or changing files, request the necessary workspace actions.\nDo not say you will do work later. Do not describe future work instead of performing it.\nIf no workspace operation is needed and the task is truly done, set complete to true.\nIf the task cannot be completed, explain the failure reason clearly in the message.\nNever return complete false with an empty actions array.\nBefore setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.\nIf the target path is clear or can be overwritten or created safely, emit the create or write operation.\nYou have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.\nThe per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (8).\nNever emit more than that many workspace actions in a single response.\nThe per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (2). Mutating actions are createFolder, writeFile, renamePath, and deletePath.\nPrefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.\nRead/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.\nIf a task requires more mutations than the mutating limit, split the work across multiple responses.\nEmit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.\nDo not fail or return an error just because the total task exceeds one response.\nFor bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.\nUse only the workspace operations listed in runtimeEnvelope.allowedOperations.\nIf runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.\nIf runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.\nEach action must be exactly {\"operation\":\"operationName\",\"args\":{...}} with no extra fields.\nRequired args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path \"\" only for the workspace root in listDirectory.\nRespond only as JSON with this shape:\n{\"message\":\"short summary\",\"actions\":[{\"operation\":\"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath\",\"args\":{\"path\":\"relative/path\",\"content\":\"for writeFile only\",\"nextPath\":\"for renamePath only\"}}],\"complete\":true|false}"
-          },
-          {
-            "role": "user",
-            "content": "{\"runtimeEnvelope\":{\"runId\":15,\"ticketId\":8,\"assignedAgentId\":3,\"currentDateTime\":\"2026-05-23T21:32:28-07:00\",\"timezone\":\"America/Los_Angeles\",\"workspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"mainWorkspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"executionWorkspaceType\":\"main\",\"allocationPlanId\":null,\"allocationItemId\":null,\"allocationItem\":null,\"allocationSubtask\":null,\"ownedOutputPaths\":[],\"allowedOperations\":[\"listDirectory\",\"readFile\",\"createFolder\",\"writeFile\",\"renamePath\",\"deletePath\"],\"maxActionsPerResponse\":8,\"maxMutatingActionsPerResponse\":2,\"currentStep\":1,\"maxExecutionSteps\":4}}"
-          },
-          {
-            "role": "user",
-            "content": "{\"ticketObjective\":\"create folder A and folder B\",\"previousActionResults\":[{\"action\":{\"operation\":\"createFolder\",\"args\":{\"path\":\"A\"}},\"result\":{\"path\":\"A\",\"status\":\"created\",\"historyId\":32}},{\"action\":{\"operation\":\"createFolder\",\"args\":{\"path\":\"B\"}},\"result\":{\"path\":\"B\",\"status\":\"created\",\"historyId\":33}}]}"
-          }
-        ],
-        "stream": false,
-        "format": "json"
+      "result": {
+        "stopped": true,
+        "result": {
+          "written": true,
+          "path": "mike-workflow-deterministic-2.txt"
+        }
       },
-      "startedAt": "2026-05-24T04:32:28.605Z",
+      "startedAt": "2026-05-25T01:40:12.707Z",
       "durationMs": 0,
-      "capturedAt": "2026-05-24T04:32:28.605Z"
+      "capturedAt": "2026-05-25T01:40:12.707Z"
     }
   ],
-  "modelResponses": [
-    {
-      "text": "{\"message\":\"Creating folder A and folder B\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"A\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"B\"}}],\"complete\":false}",
-      "usage": {
-        "prompt_eval_count": 887,
-        "eval_count": 42,
-        "total_duration": 51075133328
-      },
-      "provider": "ollama",
-      "model": "gemma3:latest",
-      "providerResponsePayload": {
-        "ok": true,
-        "status": 200,
-        "requestId": null,
-        "headers": {
-          "content-length": "505",
-          "content-type": "application/json; charset=utf-8",
-          "date": "Sun, 24 May 2026 04:32:28 GMT"
-        },
-        "body": {
-          "model": "gemma3:latest",
-          "created_at": "2026-05-24T04:32:28.569102417Z",
-          "message": {
-            "role": "assistant",
-            "content": "{\"message\":\"Creating folder A and folder B\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"A\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"B\"}}],\"complete\":false}"
-          },
-          "done": true,
-          "done_reason": "stop",
-          "total_duration": 51075133328,
-          "load_duration": 3741041091,
-          "prompt_eval_count": 887,
-          "prompt_eval_duration": 41307288270,
-          "eval_count": 42,
-          "eval_duration": 5593851468
-        }
-      },
-      "startedAt": "2026-05-24T04:31:37.483Z",
-      "completedAt": "2026-05-24T04:32:28.571Z",
-      "durationMs": 51088,
-      "capturedAt": "2026-05-24T04:32:28.581Z"
-    },
-    {
-      "text": "{\"message\":\"Folders A and B created successfully.\",\"actions\":[{\"operation\":\"listDirectory\",\"args\":{\"path\":\"/\"}}],\"complete\":true}",
-      "usage": {
-        "prompt_eval_count": 950,
-        "eval_count": 30,
-        "total_duration": 17950223348
-      },
-      "provider": "ollama",
-      "model": "gemma3:latest",
-      "providerResponsePayload": {
-        "ok": true,
-        "status": 200,
-        "requestId": null,
-        "headers": {
-          "content-length": "452",
-          "content-type": "application/json; charset=utf-8",
-          "date": "Sun, 24 May 2026 04:32:46 GMT"
-        },
-        "body": {
-          "model": "gemma3:latest",
-          "created_at": "2026-05-24T04:32:46.560160317Z",
-          "message": {
-            "role": "assistant",
-            "content": "{\"message\":\"Folders A and B created successfully.\",\"actions\":[{\"operation\":\"listDirectory\",\"args\":{\"path\":\"/\"}}],\"complete\":true}"
-          },
-          "done": true,
-          "done_reason": "stop",
-          "total_duration": 17950223348,
-          "load_duration": 369681838,
-          "prompt_eval_count": 950,
-          "prompt_eval_duration": 13307505360,
-          "eval_count": 30,
-          "eval_duration": 3953074082
-        }
-      },
-      "startedAt": "2026-05-24T04:32:28.605Z",
-      "completedAt": "2026-05-24T04:32:46.561Z",
-      "durationMs": 17956,
-      "capturedAt": "2026-05-24T04:32:46.563Z"
-    }
-  ],
-  "parsedModelPlans": [
-    {
-      "message": "Creating folder A and folder B",
-      "actions": [
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "A"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "B"
-          }
-        }
-      ],
-      "complete": false,
-      "step": 0,
-      "capturedAt": "2026-05-24T04:32:28.583Z"
-    },
-    {
-      "message": "Folders A and B created successfully.",
-      "actions": [
-        {
-          "operation": "listDirectory",
-          "args": {
-            "path": "/"
-          }
-        }
-      ],
-      "complete": true,
-      "step": 1,
-      "capturedAt": "2026-05-24T04:32:46.564Z"
-    }
-  ],
-  "workflowInvocation": [],
-  "workflowActions": [],
   "workspaceOperations": [
     {
       "operation": {
-        "operation": "createFolder",
+        "operation": "writeFile",
         "args": {
-          "path": "A"
+          "path": "mike-workflow-deterministic-2.txt",
+          "content": "Mike deterministic workflow verification after wording patch.\n"
         }
       },
       "result": {
-        "path": "A",
-        "status": "created",
-        "historyId": 32
+        "path": "mike-workflow-deterministic-2.txt",
+        "size": 62,
+        "historyId": 11
       },
-      "startedAt": "2026-05-24T04:32:28.584Z",
-      "durationMs": 9,
-      "historyId": 32,
-      "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
-      "executionWorkspaceType": "main",
-      "allocationPlanId": null,
-      "allocationItemId": null,
-      "ownedOutputPaths": [],
-      "capturedAt": "2026-05-24T04:32:28.593Z"
-    },
-    {
-      "operation": {
-        "operation": "createFolder",
-        "args": {
-          "path": "B"
-        }
-      },
-      "result": {
-        "path": "B",
-        "status": "created",
-        "historyId": 33
-      },
-      "startedAt": "2026-05-24T04:32:28.594Z",
+      "startedAt": "2026-05-25T01:40:12.701Z",
       "durationMs": 4,
-      "historyId": 33,
+      "historyId": 11,
       "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
       "executionWorkspaceType": "main",
       "allocationPlanId": null,
       "allocationItemId": null,
       "ownedOutputPaths": [],
-      "capturedAt": "2026-05-24T04:32:28.599Z"
-    },
-    {
-      "operation": {
-        "operation": "listDirectory",
-        "args": {
-          "path": "/"
-        }
-      },
-      "error": "Absolute paths are not allowed",
-      "blocked": true,
-      "reason": null,
-      "durationMs": 1,
-      "historyId": null,
-      "ownedOutputPaths": [],
-      "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
-      "executionWorkspaceType": "main",
-      "allocationPlanId": null,
-      "allocationItemId": null,
-      "capturedAt": "2026-05-24T04:32:46.566Z"
+      "workflowId": "verify-mike-write-file",
+      "workflowStepId": "write",
+      "capturedAt": "2026-05-25T01:40:12.705Z"
     }
   ],
   "events": [],
-  "terminalStatus": "failed",
-  "failureReason": "Absolute paths are not allowed",
-  "createdAt": "2026-05-24T04:31:37.476Z",
+  "terminalStatus": "completed",
+  "failureReason": null,
+  "createdAt": "2026-05-25T01:40:12.692Z",
   "provider": "ollama",
   "model": "gemma3:latest",
   "runtimeEnvelope": {
     "runId": 15,
-    "ticketId": 8,
+    "ticketId": 12,
     "assignedAgentId": 3,
-    "currentDateTime": "2026-05-23T21:31:37-07:00",
+    "currentDateTime": "2026-05-24T18:40:12-07:00",
     "timezone": "America/Los_Angeles",
     "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
     "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
@@ -335,16 +205,10 @@
     "currentStep": 0,
     "maxExecutionSteps": 4
   },
-  "ticketObjectiveSnapshot": "create folder A and folder B",
+  "ticketObjectiveSnapshot": "Run deterministic workflow with Mike to write one verification file after wording patch.",
   "systemInstructionSnapshot": "You are an agent working inside a contained workspace.\nYou may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.\nUse runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.\nInspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.\nIf the ticket requires creating or changing files, request the necessary workspace actions.\nDo not say you will do work later. Do not describe future work instead of performing it.\nIf no workspace operation is needed and the task is truly done, set complete to true.\nIf the task cannot be completed, explain the failure reason clearly in the message.\nNever return complete false with an empty actions array.\nBefore setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.\nIf the target path is clear or can be overwritten or created safely, emit the create or write operation.\nYou have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.\nThe per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (8).\nNever emit more than that many workspace actions in a single response.\nThe per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (2). Mutating actions are createFolder, writeFile, renamePath, and deletePath.\nPrefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.\nRead/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.\nIf a task requires more mutations than the mutating limit, split the work across multiple responses.\nEmit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.\nDo not fail or return an error just because the total task exceeds one response.\nFor bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.\nUse only the workspace operations listed in runtimeEnvelope.allowedOperations.\nIf runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.\nIf runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.\nEach action must be exactly {\"operation\":\"operationName\",\"args\":{...}} with no extra fields.\nRequired args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path \"\" only for the workspace root in listDirectory.\nRespond only as JSON with this shape:\n{\"message\":\"short summary\",\"actions\":[{\"operation\":\"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath\",\"args\":{\"path\":\"relative/path\",\"content\":\"for writeFile only\",\"nextPath\":\"for renamePath only\"}}],\"complete\":true|false}",
-  "failure": {
-    "code": "WORKSPACE_ABSOLUTE_PATH",
-    "kind": "protected_path",
-    "detail": {
-      "path": "/"
-    }
-  },
-  "mutationOutcome": "partial_mutations",
-  "mutationCount": 2,
-  "finalizedAt": "2026-05-24T04:32:46.568Z"
+  "failure": null,
+  "mutationOutcome": "all_intended",
+  "mutationCount": 1,
+  "finalizedAt": "2026-05-25T01:40:12.713Z"
 }

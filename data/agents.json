@@ -24,6 +24,19 @@
     "provider": "ollama",
     "model": "gemma3:latest",
     "apiKey": "",
-    "createdAt": "2026-05-22T17:02:20.768Z"
+    "createdAt": "2026-05-22T17:02:20.768Z",
+    "changedBy": "admin",
+    "changedAt": "2026-05-25T02:18:57.319Z"
+  },
+  {
+    "id": 4,
+    "name": "John",
+    "type": "agent",
+    "provider": "ollama",
+    "model": "gemma3:latest",
+    "apiKey": "",
+    "createdAt": "2026-05-25T02:17:58.957Z",
+    "changedBy": "admin",
+    "changedAt": "2026-05-25T02:18:51.010Z"
   }
 ]

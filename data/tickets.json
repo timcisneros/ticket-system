@@ -14,7 +14,10 @@
     "updatedAt": "2026-05-24T05:00:29.912Z",
     "executionMode": "agent",
     "workflowId": null,
-    "workflowInput": null
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null
   },
   {
     "id": 2,
@@ -31,7 +34,10 @@
     "updatedAt": "2026-05-24T05:03:24.073Z",
     "executionMode": "agent",
     "workflowId": null,
-    "workflowInput": null
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null
   },
   {
     "id": 3,
@@ -48,7 +54,10 @@
     "updatedAt": "2026-05-24T05:03:24.077Z",
     "executionMode": "agent",
     "workflowId": null,
-    "workflowInput": null
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null
   },
   {
     "id": 4,
@@ -65,7 +74,10 @@
     "updatedAt": "2026-05-24T05:03:24.089Z",
     "executionMode": "agent",
     "workflowId": null,
-    "workflowInput": null
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null
   },
   {
     "id": 5,
@@ -82,7 +94,10 @@
     "updatedAt": "2026-05-24T05:53:37.968Z",
     "executionMode": "agent",
     "workflowId": null,
-    "workflowInput": null
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null
   },
   {
     "id": 6,
@@ -99,7 +114,10 @@
     "updatedAt": "2026-05-24T05:55:37.980Z",
     "executionMode": "agent",
     "workflowId": null,
-    "workflowInput": null
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null
   },
   {
     "id": 7,
@@ -116,7 +134,10 @@
     "updatedAt": "2026-05-24T05:57:37.993Z",
     "executionMode": "agent",
     "workflowId": null,
-    "workflowInput": null
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null
   },
   {
     "id": 8,
@@ -133,7 +154,10 @@
     "updatedAt": "2026-05-24T16:12:00.534Z",
     "executionMode": "agent",
     "workflowId": null,
-    "workflowInput": null
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null
   },
   {
     "id": 9,
@@ -150,6 +174,185 @@
     "updatedAt": "2026-05-24T06:22:54.368Z",
     "executionMode": "agent",
     "workflowId": null,
-    "workflowInput": null
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null
+  },
+  {
+    "id": 10,
+    "objective": "Run the demo workflow to create a verification note from Mike.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 3,
+    "assignmentMode": "individual",
+    "ownedOutputPaths": null,
+    "executionMode": "workflow",
+    "workflowId": "demo-agent-write-if-approved",
+    "workflowInput": {
+      "instruction": "Return JSON with shouldWrite true and content exactly: Mike workflow verification from real Ollama run.",
+      "path": "mike-workflow-verification.txt"
+    },
+    "capabilityType": "workflow",
+    "capabilityId": "demo-agent-write-if-approved",
+    "capabilityInput": {
+      "instruction": "Return JSON with shouldWrite true and content exactly: Mike workflow verification from real Ollama run.",
+      "path": "mike-workflow-verification.txt"
+    },
+    "status": "failed",
+    "createdBy": "admin",
+    "changedBy": "admin",
+    "changedAt": "2026-05-25T01:35:45.104Z",
+    "createdAt": "2026-05-25T01:35:45.104Z",
+    "updatedAt": "2026-05-25T01:35:46.383Z"
+  },
+  {
+    "id": 11,
+    "objective": "Run deterministic workflow with Mike to write one verification file.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 3,
+    "assignmentMode": "individual",
+    "ownedOutputPaths": null,
+    "executionMode": "workflow",
+    "workflowId": "verify-mike-write-file",
+    "workflowInput": {
+      "path": "mike-workflow-deterministic.txt",
+      "content": "Mike deterministic workflow verification.\n"
+    },
+    "capabilityType": "workflow",
+    "capabilityId": "verify-mike-write-file",
+    "capabilityInput": {
+      "path": "mike-workflow-deterministic.txt",
+      "content": "Mike deterministic workflow verification.\n"
+    },
+    "status": "completed",
+    "createdBy": "admin",
+    "changedBy": "admin",
+    "changedAt": "2026-05-25T01:38:05.623Z",
+    "createdAt": "2026-05-25T01:38:05.623Z",
+    "updatedAt": "2026-05-25T01:38:05.654Z"
+  },
+  {
+    "id": 12,
+    "objective": "Run deterministic workflow with Mike to write one verification file after wording patch.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 3,
+    "assignmentMode": "individual",
+    "ownedOutputPaths": null,
+    "executionMode": "workflow",
+    "workflowId": "verify-mike-write-file",
+    "workflowInput": {
+      "path": "mike-workflow-deterministic-2.txt",
+      "content": "Mike deterministic workflow verification after wording patch.\n"
+    },
+    "capabilityType": "workflow",
+    "capabilityId": "verify-mike-write-file",
+    "capabilityInput": {
+      "path": "mike-workflow-deterministic-2.txt",
+      "content": "Mike deterministic workflow verification after wording patch.\n"
+    },
+    "status": "completed",
+    "createdBy": "admin",
+    "changedBy": "admin",
+    "changedAt": "2026-05-25T01:40:12.665Z",
+    "createdAt": "2026-05-25T01:40:12.665Z",
+    "updatedAt": "2026-05-25T01:40:12.714Z"
+  },
+  {
+    "id": 13,
+    "objective": "Run the Verify Mike write file workflow to create workflow-real-mike-verify.txt",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 3,
+    "assignmentMode": "individual",
+    "ownedOutputPaths": null,
+    "executionMode": "workflow",
+    "workflowId": "verify-mike-write-file",
+    "workflowInput": {
+      "path": "workflow-real-mike-verify.txt",
+      "content": "Real Mike workflow verification completed.\n"
+    },
+    "capabilityType": "workflow",
+    "capabilityId": "verify-mike-write-file",
+    "capabilityInput": {
+      "path": "workflow-real-mike-verify.txt",
+      "content": "Real Mike workflow verification completed.\n"
+    },
+    "status": "completed",
+    "createdBy": "admin",
+    "changedBy": "admin",
+    "changedAt": "2026-05-25T01:49:41.159Z",
+    "createdAt": "2026-05-25T01:49:41.159Z",
+    "updatedAt": "2026-05-25T01:49:41.201Z"
+  },
+  {
+    "id": 14,
+    "objective": "Run legal intake workflow for urgent eviction intake",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 3,
+    "assignmentMode": "individual",
+    "ownedOutputPaths": null,
+    "executionMode": "workflow",
+    "workflowId": "legal-intake-summary",
+    "workflowInput": {
+      "intakeText": "Client Maria Alvarez reports receiving an eviction lockout notice effective tomorrow morning. She has a court hearing at 9 AM and needs emergency help preparing a response today. She wants to know what to file and who can appear with her."
+    },
+    "capabilityType": "workflow",
+    "capabilityId": "legal-intake-summary",
+    "capabilityInput": {
+      "intakeText": "Client Maria Alvarez reports receiving an eviction lockout notice effective tomorrow morning. She has a court hearing at 9 AM and needs emergency help preparing a response today. She wants to know what to file and who can appear with her."
+    },
+    "status": "failed",
+    "createdBy": "admin",
+    "changedBy": "admin",
+    "changedAt": "2026-05-25T01:56:17.009Z",
+    "createdAt": "2026-05-25T01:56:17.009Z",
+    "updatedAt": "2026-05-25T01:56:17.776Z"
+  },
+  {
+    "id": 15,
+    "objective": "Run the Legal intake summary workflow for a high-urgency intake and write the case summary.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 3,
+    "assignmentMode": "individual",
+    "ownedOutputPaths": null,
+    "executionMode": "workflow",
+    "workflowId": "legal-intake-summary",
+    "workflowInput": {
+      "intakeText": "Client name: Jordan Lee. Matter type: landlord tenant emergency. Jordan received a lockout notice and says the landlord changed the locks this morning. There is a court filing deadline tomorrow at 9 AM and Jordan needs urgent help getting access restored. Please summarize the matter and recommend the next step."
+    },
+    "capabilityType": "workflow",
+    "capabilityId": "legal-intake-summary",
+    "capabilityInput": {
+      "intakeText": "Client name: Jordan Lee. Matter type: landlord tenant emergency. Jordan received a lockout notice and says the landlord changed the locks this morning. There is a court filing deadline tomorrow at 9 AM and Jordan needs urgent help getting access restored. Please summarize the matter and recommend the next step."
+    },
+    "status": "completed",
+    "createdBy": "admin",
+    "changedBy": "admin",
+    "changedAt": "2026-05-25T02:04:11.066Z",
+    "createdAt": "2026-05-25T02:04:11.066Z",
+    "updatedAt": "2026-05-25T02:04:33.484Z"
+  },
+  {
+    "id": 16,
+    "objective": "Run the Legal intake summary workflow for a high-urgency intake and write the case summary.",
+    "assignmentTargetType": "agent",
+    "assignmentTargetId": 3,
+    "assignmentMode": "individual",
+    "ownedOutputPaths": null,
+    "executionMode": "workflow",
+    "workflowId": "legal-intake-summary",
+    "workflowInput": {
+      "intakeText": "Client name: Jordan Lee. Matter type: landlord tenant emergency. Jordan received a lockout notice and says the landlord changed the locks this morning. There is a court filing deadline tomorrow at 9 AM and Jordan needs urgent help getting access restored. Please summarize the matter and recommend the next step."
+    },
+    "capabilityType": "workflow",
+    "capabilityId": "legal-intake-summary",
+    "capabilityInput": {
+      "intakeText": "Client name: Jordan Lee. Matter type: landlord tenant emergency. Jordan received a lockout notice and says the landlord changed the locks this morning. There is a court filing deadline tomorrow at 9 AM and Jordan needs urgent help getting access restored. Please summarize the matter and recommend the next step."
+    },
+    "status": "completed",
+    "createdBy": "admin",
+    "changedBy": "admin",
+    "changedAt": "2026-05-25T02:21:29.863Z",
+    "createdAt": "2026-05-25T02:21:29.863Z",
+    "updatedAt": "2026-05-25T02:21:51.798Z"
   }
 ]

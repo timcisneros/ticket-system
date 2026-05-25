@@ -255,5 +255,148 @@
     "error": null,
     "isRecovery": false,
     "recoveredHistoryId": null
+  },
+  {
+    "id": 10,
+    "timestamp": "2026-05-25T01:38:05.639567764Z",
+    "ticketId": 11,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 14,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "mike-workflow-deterministic.txt",
+      "content": "Mike deterministic workflow verification.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "adc1b44a75fd321e4f71bbb4e4a5c408d857df0e31ec23bd346edecd08c3dbdb"
+    },
+    "result": {
+      "path": "mike-workflow-deterministic.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 11,
+    "timestamp": "2026-05-25T01:40:12.703466939Z",
+    "ticketId": 12,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 15,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "mike-workflow-deterministic-2.txt",
+      "content": "Mike deterministic workflow verification after wording patch.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "0214566a26abec5883fd65a0f8928ae8cc4a6559bc26d212a73a063999add025"
+    },
+    "result": {
+      "path": "mike-workflow-deterministic-2.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 12,
+    "timestamp": "2026-05-25T01:49:41.191227224Z",
+    "ticketId": 13,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 16,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "workflow-real-mike-verify.txt",
+      "content": "Real Mike workflow verification completed.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "9e6e44457663124ec32e0bd3a043df6c4b11a676321872bebed1e15d44ee51d6"
+    },
+    "result": {
+      "path": "workflow-real-mike-verify.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 13,
+    "timestamp": "2026-05-25T02:04:33.467114245Z",
+    "ticketId": 15,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 18,
+    "step": 2,
+    "operation": "writeFile",
+    "args": {
+      "path": "urgent-case-summary.md",
+      "content": "# Urgent Case Summary\n\nClient: Jordan Lee\nMatter Type: landlord tenant emergency\nUrgency: high\n\nSummary:\nClient received a lockout notice and a court filing deadline is tomorrow at 9 AM, requiring urgent assistance to restore access.\n\nRecommended Next Step:\nImmediately file an emergency order to regain access and address the court deadline.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "eadefba3af872829a1724f4a2d61bb586a6bacdd08a16e8ec7eab4dd52b96b81"
+    },
+    "result": {
+      "path": "urgent-case-summary.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 14,
+    "timestamp": "2026-05-25T02:21:51.782258318Z",
+    "ticketId": 16,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 19,
+    "step": 2,
+    "operation": "writeFile",
+    "args": {
+      "path": "urgent-case-summary.md",
+      "content": "# Urgent Case Summary\n\nClient: Jordan Lee\nMatter Type: landlord tenant emergency\nUrgency: high\n\nSummary:\nClient received a lockout notice and needs urgent assistance restoring access to their property due to a court filing deadline tomorrow.\n\nRecommended Next Step:\nImmediately file an emergency motion for a temporary restraining order to regain access and address the court deadline.\n"
+    },
+    "preState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "eadefba3af872829a1724f4a2d61bb586a6bacdd08a16e8ec7eab4dd52b96b81",
+      "content": "# Urgent Case Summary\n\nClient: Jordan Lee\nMatter Type: landlord tenant emergency\nUrgency: high\n\nSummary:\nClient received a lockout notice and a court filing deadline is tomorrow at 9 AM, requiring urgent assistance to restore access.\n\nRecommended Next Step:\nImmediately file an emergency order to regain access and address the court deadline.\n"
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "b544768ba735d824fba7b1197b1a0606b9c078910cc37c3c3635a94f69b20130"
+    },
+    "result": {
+      "path": "urgent-case-summary.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
   }
 ]

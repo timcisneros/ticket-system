@@ -66,6 +66,130 @@
       }
     ],
     "createdAt": "2026-05-24T00:00:00.000Z",
-    "updatedAt": "2026-05-24T00:00:00.000Z"
+    "updatedAt": "2026-05-24T00:00:00.000Z",
+    "postconditions": []
+  },
+  {
+    "id": "verify-mike-write-file",
+    "name": "Verify Mike write file",
+    "enabled": true,
+    "inputSchema": {
+      "path": "string",
+      "content": "string"
+    },
+    "actions": [
+      {
+        "id": "write",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.path}}",
+          "content": "{{workflow.input.content}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "written": true,
+            "path": "{{workflow.input.path}}"
+          }
+        }
+      }
+    ],
+    "createdAt": "2026-05-25T01:37:31.753Z",
+    "updatedAt": "2026-05-25T01:37:31.753Z",
+    "description": "",
+    "postconditions": []
+  },
+  {
+    "id": "legal-intake-summary",
+    "name": "Legal intake summary",
+    "description": "Extract legal intake fields, branch on urgency, write a case summary, and stop with the extracted fields.",
+    "enabled": true,
+    "inputSchema": {
+      "intakeText": "string"
+    },
+    "actions": [
+      {
+        "id": "extract",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "Extract legal intake fields from the provided intake text. Return only JSON. Use urgency value exactly high or normal. Use high when there is an immediate deadline, active court date, lockout, arrest, restraining order, or urgent filing risk; otherwise use normal.",
+          "input": {
+            "intakeText": "{{workflow.input.intakeText}}"
+          },
+          "outputSchema": {
+            "clientName": "string",
+            "matterType": "string",
+            "urgency": "string",
+            "summary": "string",
+            "recommendedNextStep": "string"
+          }
+        },
+        "saveAs": "intake",
+        "next": "urgency_check"
+      },
+      {
+        "id": "urgency_check",
+        "action": "condition",
+        "input": {
+          "value": "{{intake.urgency}}",
+          "equals": "high"
+        },
+        "trueNext": "write_urgent",
+        "falseNext": "write_standard"
+      },
+      {
+        "id": "write_urgent",
+        "action": "writeFile",
+        "input": {
+          "path": "urgent-case-summary.md",
+          "content": "# Urgent Case Summary\n\nClient: {{intake.clientName}}\nMatter Type: {{intake.matterType}}\nUrgency: {{intake.urgency}}\n\nSummary:\n{{intake.summary}}\n\nRecommended Next Step:\n{{intake.recommendedNextStep}}\n"
+        },
+        "next": "stop_urgent"
+      },
+      {
+        "id": "write_standard",
+        "action": "writeFile",
+        "input": {
+          "path": "case-summary.md",
+          "content": "# Case Summary\n\nClient: {{intake.clientName}}\nMatter Type: {{intake.matterType}}\nUrgency: {{intake.urgency}}\n\nSummary:\n{{intake.summary}}\n\nRecommended Next Step:\n{{intake.recommendedNextStep}}\n"
+        },
+        "next": "stop_standard"
+      },
+      {
+        "id": "stop_urgent",
+        "action": "stop",
+        "input": {
+          "result": {
+            "path": "urgent-case-summary.md",
+            "clientName": "{{intake.clientName}}",
+            "matterType": "{{intake.matterType}}",
+            "urgency": "{{intake.urgency}}",
+            "summary": "{{intake.summary}}",
+            "recommendedNextStep": "{{intake.recommendedNextStep}}"
+          }
+        }
+      },
+      {
+        "id": "stop_standard",
+        "action": "stop",
+        "input": {
+          "result": {
+            "path": "case-summary.md",
+            "clientName": "{{intake.clientName}}",
+            "matterType": "{{intake.matterType}}",
+            "urgency": "{{intake.urgency}}",
+            "summary": "{{intake.summary}}",
+            "recommendedNextStep": "{{intake.recommendedNextStep}}"
+          }
+        }
+      }
+    ],
+    "createdAt": "2026-05-25T01:56:04.368Z",
+    "updatedAt": "2026-05-25T02:21:29.861Z",
+    "postconditions": []
   }
 ]

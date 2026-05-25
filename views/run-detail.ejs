@@ -153,6 +153,40 @@
       <dt>Mutations</dt>
       <dd><%= partialMutationCount || 0 %></dd>
     </div>
+    <% if (typeof eventSummary !== 'undefined' && eventSummary) { %>
+      <div>
+        <dt>Event Status</dt>
+        <dd><%= eventSummary.latestStatus ? eventSummary.latestStatus.status : '-' %></dd>
+      </div>
+      <div>
+        <dt>Latest Workflow Step</dt>
+        <dd>
+          <% if (eventSummary.currentStep) { %>
+            <code><%= eventSummary.currentStep.stepId %></code>
+            <span class="text-muted"><%= eventSummary.currentStep.action || '' %> <%= eventSummary.currentStep.status || '' %></span>
+          <% } else { %>
+            -
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Latest Workspace Mutation</dt>
+        <dd>
+          <% if (eventSummary.latestWorkspaceMutation) { %>
+            <code><%= eventSummary.latestWorkspaceMutation.operation %></code>
+            <% if (eventSummary.latestWorkspaceMutation.path) { %>
+              <code class="owned-path"><%= eventSummary.latestWorkspaceMutation.path %></code>
+            <% } %>
+          <% } else { %>
+            -
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Latest Event Error</dt>
+        <dd><%= eventSummary.latestError && eventSummary.latestError.message ? eventSummary.latestError.message : '-' %></dd>
+      </div>
+    <% } %>
   </dl>
 
   <% if (snapshot && snapshot.terminalStatus && snapshot.terminalStatus !== run.status) { %>
@@ -226,6 +260,15 @@
       </dl>
     </div>
   </details>
+
+  <% if (typeof runEvents !== 'undefined' && runEvents && runEvents.length > 0) { %>
+    <details class="collapsible" style="margin-top: 14px; margin-bottom: 0;">
+      <summary>Operational Events</summary>
+      <div class="collapsible__content">
+        <pre class="json-block"><%= JSON.stringify(runEvents, null, 2) %></pre>
+      </div>
+    </details>
+  <% } %>
 </section>
 
 <section class="detail-section">

@@ -357,7 +357,7 @@ async function main() {
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
     await assertPageRenders(cookie, '/admin', 'admin dashboard', 'Admin Dashboard');
-    const workflowsPage = await assertPageRenders(cookie, '/admin/workflows', 'workflows admin', 'Workflows');
+    const workflowsPage = await assertPageRenders(cookie, '/admin/workflows', 'workflow capabilities admin', 'Workflow Capabilities');
     assert(workflowsPage.body.includes('demo-agent-write-if-approved'), 'workflows admin should list demo workflow');
     assert(workflowsPage.body.includes('Edit JSON'), 'workflows admin should expose JSON editing');
     const workflowFormPage = await assertPageRenders(cookie, '/admin/workflows/demo-agent-write-if-approved/edit', 'workflow edit', 'Edit Workflow');

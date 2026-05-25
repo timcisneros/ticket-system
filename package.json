@@ -8,6 +8,7 @@
     "dev": "NODE_ENV=development node server.js",
     "build": "node --check server.js",
     "preview": "NODE_ENV=production node server.js",
+    "demo:legal-workflow": "node scripts/demo-legal-workflow.js",
     "test:agent": "NODE_ENV=test node scripts/agent-regression-test.js",
     "test:runtime-budget": "NODE_ENV=test node scripts/runtime-budget-test.js",
     "test:allocated": "NODE_ENV=test node scripts/allocated-regression-test.js",
@@ -15,7 +16,10 @@
     "test:live-openai": "NODE_ENV=test node --env-file=.env.test.local scripts/live-openai-test.js",
     "test:allocated-live": "NODE_ENV=test node --env-file=.env.test.local scripts/allocated-live-openai-test.js",
     "test:postcondition": "NODE_ENV=test node scripts/postcondition-completion-test.js",
-    "test:workflow": "NODE_ENV=test node scripts/workflow-composition-test.js"
+    "test:workflow": "NODE_ENV=test node scripts/workflow-composition-test.js",
+    "benchmark:workflow-drafts": "NODE_ENV=test node scripts/workflow-draft-quality-benchmark.js",
+    "benchmark:workflow-repair": "NODE_ENV=test node scripts/workflow-repair-benchmark.js",
+    "harvest:benchmark-cases": "node scripts/harvest-benchmark-cases.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

@@ -196,8 +196,8 @@
   <div class="inline-log-list">
     <% ticketRecentLogs.forEach(log => { %>
       <div class="inline-log-item">
-        <span class="inline-log-type"><%= log.type %></span>
-        <span class="inline-log-message"><%= log.message %></span>
+        <span class="inline-log-type"><%= log.displayType || log.type %></span>
+        <span class="inline-log-message"><%= log.displayMessage || log.message %></span>
         <% if (log.changedBy || log.requestedBy) { %>
           <span class="audit-meta">Changed by <%= log.changedBy || log.requestedBy %> at <%= log.changedAt || log.timestamp || '-' %></span>
         <% } %>

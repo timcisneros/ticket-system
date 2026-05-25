@@ -27,5 +27,11 @@
     "name": "Agent Support",
     "permissions": [],
     "canReceiveTickets": true
+  },
+  {
+    "id": 3,
+    "name": "Local Agent Support",
+    "permissions": [],
+    "canReceiveTickets": true
   }
 ]

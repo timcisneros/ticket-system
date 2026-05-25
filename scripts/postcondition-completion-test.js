@@ -12,7 +12,7 @@ const WORKSPACE_ROOT = createTempWorkspaceRoot('postcondition');
 const PORT = process.env.PORT || '3441';
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const STAMP = Date.now();
-const DATA_FILES = ['agents.json', 'allocation-plans.json', 'groups.json', 'logs.json', 'memberships.json', 'operation-history.json', 'permissions.json', 'runs.json', 'tickets.json', 'users.json'];
+const DATA_FILES = ['agents.json', 'allocation-plans.json', 'events.jsonl', 'groups.json', 'logs.json', 'memberships.json', 'operation-history.json', 'permissions.json', 'runs.json', 'tickets.json', 'users.json', 'workflows.json'];
 
 for (const file of DATA_FILES) {
   const src = path.join(REAL_DATA_DIR, file);
@@ -259,6 +259,45 @@ function createFakeOpenAIPreload() {
     "    });",
     "  }",
     "",
+    "  if (combined.includes('workflow-draft-valid')) {",
+    "    return okResponse({",
+    "      message: 'Creating workflow draft.',",
+    "      actions: [",
+    "        { operation: 'createWorkflowDraft', args: { workflow: {",
+    "          id: 'agent-draft-valid',",
+    "          name: 'Agent draft valid',",
+    "          inputSchema: { path: 'string', content: 'string' },",
+    "          actions: [",
+    "            { id: 'write', action: 'writeFile', input: { path: '{{workflow.input.path}}', content: '{{workflow.input.content}}' }, next: 'done' },",
+    "            { id: 'done', action: 'stop', input: { result: { path: '{{workflow.input.path}}' } } }",
+    "          ],",
+    "          postconditions: [",
+    "            { id: 'file-exists', type: 'fileExists', path: '{{workflow.input.path}}' }",
+    "          ]",
+    "        } } }",
+    "      ],",
+    "      complete: true",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('workflow-draft-invalid')) {",
+    "    return okResponse({",
+    "      message: 'Creating invalid workflow draft.',",
+    "      actions: [",
+    "        { operation: 'createWorkflowDraft', args: { workflow: {",
+    "          id: 'agent-draft-invalid',",
+    "          name: 'Agent draft invalid',",
+    "          inputSchema: { path: 'string' },",
+    "          actions: [",
+    "            { id: 'write', action: 'writeFile', input: { path: '{{workflow.input.path}}', content: 'x' }, next: 'done' },",
+    "            { id: 'done', action: 'stop', input: {} }",
+    "          ]",
+    "        } } }",
+    "      ],",
+    "      complete: true",
+    "    });",
+    "  }",
+    "",
     "  return okResponse({ message: 'default', actions: [], complete: true });",
     "};",
     ""
@@ -349,6 +388,10 @@ async function runScenario(preloadPath, agent, objective, envOverrides, expectat
 
     if (expectations.expectStepsAtLeast !== undefined) {
       assert(snapshot.parsedModelPlans.length >= expectations.expectStepsAtLeast, `Run ${run.id} used ${snapshot.parsedModelPlans.length} steps, expected at least ${expectations.expectStepsAtLeast}`);
+    }
+
+    if (typeof expectations.verify === 'function') {
+      await expectations.verify({ run, ticket, snapshot, cookie });
     }
 
     return run;
@@ -472,13 +515,81 @@ async function main() {
       }
     );
 
+    // 7. agent-created workflow drafts are saved disabled and exposed in workflow data
+    await runScenario(
+      preloadPath,
+      agent,
+      `workflow-draft-valid ${STAMP}`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+      },
+      {
+        expectedStatus: 'completed',
+        expectNoPostcondition: true,
+        verify: async ({ run, snapshot, cookie }) => {
+          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-valid');
+          assert(draft, 'Agent-created workflow draft was not saved');
+          assert(draft.enabled === false, 'Agent-created workflow draft should be disabled');
+          assert(draft.createdByType === 'agent', 'Agent-created workflow draft should persist createdByType');
+          assert(draft.createdByAgentId === agent.id, 'Agent-created workflow draft should persist createdByAgentId');
+          assert(draft.createdByRunId === run.id, 'Agent-created workflow draft should persist createdByRunId');
+          assert(Array.isArray(draft.postconditions) && draft.postconditions.length === 1, 'Agent-created mutating workflow draft should persist postconditions');
+          assert(snapshot.workflowDrafts.some(item => item.workflowId === 'agent-draft-valid' && item.enabled === false), 'Replay should record workflow draft creation');
+          const events = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8')
+            .split('\n')
+            .filter(Boolean)
+            .map(line => JSON.parse(line));
+          assert(events.some(event => event.type === 'workflow.draft_created' && event.runId === run.id), 'workflow.draft_created event missing');
+          const enableResponse = await request('POST', '/admin/workflows/agent-draft-valid', {
+            cookie,
+            form: {
+              definition: JSON.stringify({
+                ...draft,
+                enabled: true,
+                updatedAt: new Date().toISOString()
+              }, null, 2)
+            }
+          });
+          assert(enableResponse.statusCode === 302, `Operator enable workflow draft returned HTTP ${enableResponse.statusCode}`);
+          const enabledDraft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-valid');
+          assert(enabledDraft.enabled === true, 'Operator should be able to enable agent-created draft through admin workflow path');
+        }
+      }
+    );
+
+    // 8. invalid agent-created mutating workflow without postconditions is rejected
+    await runScenario(
+      preloadPath,
+      agent,
+      `workflow-draft-invalid ${STAMP}`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+      },
+      {
+        expectedStatus: 'failed',
+        expectNoPostcondition: true,
+        verify: async () => {
+          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-invalid');
+          assert(!draft, 'Invalid workflow draft should not be saved');
+        }
+      }
+    );
+
     console.log(JSON.stringify({
       folderFileAutoComplete: true,
       repeatedWriteAutoComplete: true,
       timeoutAvoided: true,
       failedOpNoAutoComplete: true,
       mixedReadNoAutoComplete: true,
-      partialMutationHandled: true
+      partialMutationHandled: true,
+      workflowDraftCreated: true,
+      invalidWorkflowDraftRejected: true
     }));
   } finally {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });

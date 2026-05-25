@@ -21,10 +21,10 @@
   </div>
 
   <div class="form-group">
-    <label for="executionMode">Execution *</label>
-    <select id="executionMode" name="executionMode" required>
-      <option value="agent" selected>Direct agent action</option>
-      <option value="workflow">Approved workflow</option>
+    <label for="capabilityType">Execution Path *</label>
+    <select id="capabilityType" name="capabilityType" required>
+      <option value="directAction" selected>Direct agent action</option>
+      <option value="workflow">Workflow</option>
     </select>
   </div>
 
@@ -36,11 +36,11 @@
         <option value="<%= workflow.id %>" data-input-schema="<%= JSON.stringify(workflow.inputSchema || {}) %>"><%= workflow.name %></option>
       <% }); %>
     </select>
-    <p class="form-hint">Workflow inputs are JSON. File and folder steps are recorded for replay and recovery.</p>
+    <p class="form-hint">Inputs are JSON. File and folder actions are recorded for replay and recovery.</p>
   </div>
 
   <div class="form-group" id="workflowInputGroup" hidden>
-    <label for="workflowInput">Workflow input JSON</label>
+    <label for="workflowInput">Input JSON</label>
     <textarea id="workflowInput" name="workflowInput" rows="7" spellcheck="false" placeholder="{&quot;path&quot;:&quot;notes/demo.txt&quot;,&quot;instruction&quot;:&quot;Write a short note.&quot;}"></textarea>
   </div>
 
@@ -95,7 +95,7 @@ const targetSelect = document.getElementById('assignmentTargetId');
 const assignmentModeGroup = document.getElementById('assignmentModeGroup');
 const assignmentModeSelect = document.getElementById('assignmentMode');
 const targetOptions = Array.from(targetSelect.querySelectorAll('option[data-target-type]'));
-const executionModeSelect = document.getElementById('executionMode');
+const capabilityTypeSelect = document.getElementById('capabilityType');
 const workflowGroup = document.getElementById('workflowGroup');
 const workflowInputGroup = document.getElementById('workflowInputGroup');
 const workflowSelect = document.getElementById('workflowId');
@@ -151,7 +151,7 @@ function workflowInputExample(schema) {
 }
 
 function updateWorkflowControls() {
-  const isWorkflow = executionModeSelect.value === 'workflow';
+  const isWorkflow = capabilityTypeSelect.value === 'workflow';
   workflowGroup.hidden = !isWorkflow;
   workflowInputGroup.hidden = !isWorkflow;
   workflowSelect.required = isWorkflow;
@@ -277,7 +277,7 @@ async function suggestBoundedObjective() {
 targetTypeSelect.addEventListener('change', updateAssignmentTargets);
 targetSelect.addEventListener('change', updateOwnedPaths);
 assignmentModeSelect.addEventListener('change', updateOwnedPaths);
-executionModeSelect.addEventListener('change', updateWorkflowControls);
+capabilityTypeSelect.addEventListener('change', updateWorkflowControls);
 workflowSelect.addEventListener('change', function() {
   workflowInput.value = workflowSelect.value ? workflowInputExample(workflowSchemas[workflowSelect.value]) : '';
   updateWorkflowControls();

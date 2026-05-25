@@ -3,6 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const argon2 = require('argon2');
 const crypto = require('crypto');
+const { createRuntimeRunner } = require('./runtime/runner');
+const { createRuntimeScheduler } = require('./runtime/scheduler');
 require('dotenv').config()
 
 const PORT = process.env.PORT || 3099;
@@ -20,6 +22,7 @@ const PERMISSIONS_FILE = path.join(DATA_DIR, 'permissions.json');
 const MEMBERSHIPS_FILE = path.join(DATA_DIR, 'memberships.json');
 const RUNS_FILE = path.join(DATA_DIR, 'runs.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
+const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
 const ALLOCATION_PLANS_FILE = path.join(DATA_DIR, 'allocation-plans.json');
 const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
 const WORKFLOWS_FILE = path.join(DATA_DIR, 'workflows.json');
@@ -31,6 +34,7 @@ const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'closed'];
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, 'workspace-root'));
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
+const AGENT_DIRECT_OPERATIONS = [...AGENT_ALLOWED_OPERATIONS, 'createWorkflowDraft'];
 const AGENT_MUTATING_OPERATIONS = ['createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_OPERATION_ARGS = {
   listDirectory: ['path'],
@@ -145,6 +149,16 @@ const ACTIONS_CATALOG = [
     provenanceSurface: 'Run replay snapshot workflowInvocation and workflowActions'
   },
   {
+    name: 'createWorkflowDraft', displayName: 'Create Workflow Draft', category: 'workflow', type: 'workflowAction', invoker: 'agent', mutating: false,
+    requestShape: { workflow: {} },
+    inputSchema: { workflow: {} },
+    optionalShape: null,
+    responseShape: { workflowId: 'string', enabled: 'boolean', status: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent may save disabled workflow drafts only; existing action contracts only; mutating workflows require postconditions',
+    provenanceSurface: 'data/workflows.json disabled draft; workflow.draft_created event; run replay snapshot workflowDrafts'
+  },
+  {
     name: 'providerModelCall', displayName: 'Provider/Model Call', category: 'provider', invoker: 'agent', mutating: false,
     requestShape: { model: 'string', input: [{ role: 'system', content: 'string' }], text: { format: { type: 'json_object' } } },
     optionalShape: null,
@@ -239,7 +253,7 @@ const ACTIONS_CATALOG = [
     requestShape: { agentId: 'number' }, optionalShape: null,
     responseShape: { ticket: {} },
     errorShape: { error: 'string' },
-    authorityConstraints: 'Requires ticket:update permission; only open tickets; triggers maybeStartTicketRuns',
+    authorityConstraints: 'Requires ticket:update permission; only open tickets; creates pending runs for the runtime scheduler',
     provenanceSurface: 'Ticket record updated (assignmentTargetType, assignmentTargetId); broadcastTicketChange; system log'
   },
   {
@@ -247,7 +261,7 @@ const ACTIONS_CATALOG = [
     requestShape: { status: 'string' }, optionalShape: null,
     responseShape: { ticket: {} },
     errorShape: { error: 'string' },
-    authorityConstraints: 'Requires ticket:update permission; triggers maybeStartTicketRuns',
+    authorityConstraints: 'Requires ticket:update permission; creates pending runs for the runtime scheduler',
     provenanceSurface: 'Ticket record updated; broadcastTicketChange; system log'
   },
   {
@@ -371,7 +385,10 @@ function isWorkflowUsableAction(action) {
 const ticketEventClients = new Set();
 const logEventClients = new Set();
 const runningRunKeys = new Set();
+const startingRunIds = new Set();
 const startingLocalModelRunIds = new Set();
+const RUN_LEASE_OWNER = `${process.pid}:${crypto.randomUUID()}`;
+const DEFAULT_RUN_LEASE_DURATION_MS = 180000;
 let lastLogTimestampNs = 0n;
 let serverReady = false;
 let dataVersion = 0;
@@ -528,6 +545,97 @@ function createDemoWorkflowDefinition(now = new Date().toISOString()) {
   };
 }
 
+function createLegalIntakeWorkflowDefinition(now = new Date().toISOString()) {
+  return {
+    id: 'legal-intake-summary',
+    name: 'Legal intake summary',
+    description: 'Extract legal intake fields, branch on urgency, write a case summary, and stop with the extracted fields.',
+    enabled: true,
+    inputSchema: {
+      intakeText: 'string'
+    },
+    actions: [
+      {
+        id: 'extract',
+        action: 'agentStructuredOutput',
+        input: {
+          instruction: 'Extract legal intake fields from the provided intake text. Return only JSON. Use urgency value exactly high or normal. Use high when there is an immediate deadline, active court date, lockout, arrest, restraining order, or urgent filing risk; otherwise use normal.',
+          input: {
+            intakeText: '{{workflow.input.intakeText}}'
+          },
+          outputSchema: {
+            clientName: 'string',
+            matterType: 'string',
+            urgency: 'string',
+            summary: 'string',
+            recommendedNextStep: 'string'
+          }
+        },
+        saveAs: 'intake',
+        next: 'urgency_check'
+      },
+      {
+        id: 'urgency_check',
+        action: 'condition',
+        input: {
+          value: '{{intake.urgency}}',
+          equals: 'high'
+        },
+        trueNext: 'write_urgent',
+        falseNext: 'write_standard'
+      },
+      {
+        id: 'write_urgent',
+        action: 'writeFile',
+        input: {
+          path: 'urgent-case-summary.md',
+          content: '# Urgent Case Summary\n\nClient: {{intake.clientName}}\nMatter Type: {{intake.matterType}}\nUrgency: {{intake.urgency}}\n\nSummary:\n{{intake.summary}}\n\nRecommended Next Step:\n{{intake.recommendedNextStep}}\n'
+        },
+        next: 'stop_urgent'
+      },
+      {
+        id: 'write_standard',
+        action: 'writeFile',
+        input: {
+          path: 'case-summary.md',
+          content: '# Case Summary\n\nClient: {{intake.clientName}}\nMatter Type: {{intake.matterType}}\nUrgency: {{intake.urgency}}\n\nSummary:\n{{intake.summary}}\n\nRecommended Next Step:\n{{intake.recommendedNextStep}}\n'
+        },
+        next: 'stop_standard'
+      },
+      {
+        id: 'stop_urgent',
+        action: 'stop',
+        input: {
+          result: {
+            path: 'urgent-case-summary.md',
+            clientName: '{{intake.clientName}}',
+            matterType: '{{intake.matterType}}',
+            urgency: '{{intake.urgency}}',
+            summary: '{{intake.summary}}',
+            recommendedNextStep: '{{intake.recommendedNextStep}}'
+          }
+        }
+      },
+      {
+        id: 'stop_standard',
+        action: 'stop',
+        input: {
+          result: {
+            path: 'case-summary.md',
+            clientName: '{{intake.clientName}}',
+            matterType: '{{intake.matterType}}',
+            urgency: '{{intake.urgency}}',
+            summary: '{{intake.summary}}',
+            recommendedNextStep: '{{intake.recommendedNextStep}}'
+          }
+        }
+      }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 function readWorkflows() {
   return readJsonArrayCached(WORKFLOWS_FILE);
 }
@@ -612,6 +720,9 @@ function normalizeTickets(tickets) {
     ticket.workflowInput = ticket.executionMode === 'workflow' && ticket.workflowInput && typeof ticket.workflowInput === 'object' && !Array.isArray(ticket.workflowInput)
       ? ticket.workflowInput
       : null;
+    ticket.capabilityType = ticket.executionMode === 'workflow' ? 'workflow' : 'directAction';
+    ticket.capabilityId = ticket.capabilityType === 'workflow' ? ticket.workflowId : 'agent-selected-actions';
+    ticket.capabilityInput = ticket.capabilityType === 'workflow' ? ticket.workflowInput : null;
 
     return true;
   });
@@ -640,6 +751,13 @@ function normalizeWorkflows(workflows) {
       ? workflow.inputSchema
       : {};
     workflow.actions = Array.isArray(workflow.actions) ? workflow.actions : [];
+    workflow.postconditions = Array.isArray(workflow.postconditions)
+      ? workflow.postconditions.filter(item => item && typeof item === 'object' && !Array.isArray(item)).map((item, index) => ({
+        ...item,
+        id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `postcondition-${index + 1}`,
+        type: typeof item.type === 'string' ? item.type.trim() : ''
+      }))
+      : [];
     workflow.createdAt = typeof workflow.createdAt === 'string' ? workflow.createdAt : now;
     workflow.updatedAt = typeof workflow.updatedAt === 'string' ? workflow.updatedAt : now;
     return true;
@@ -656,6 +774,12 @@ function getWorkflowById(workflowId) {
 
 function getEnabledWorkflows() {
   return readWorkflows().filter(workflow => workflow.enabled !== false);
+}
+
+function workflowHasMutatingActions(workflow) {
+  return Boolean(workflow && Array.isArray(workflow.actions) && workflow.actions.some(step =>
+    step && AGENT_MUTATING_OPERATIONS.includes(step.action)
+  ));
 }
 
 function getTicketsForDisplay() {
@@ -795,6 +919,18 @@ function getRunDisplayState(run, logsByRunId) {
 
 function getRunCurrentMessage(run, logsByRunId) {
   if (!run) return null;
+
+  const eventSummary = recentEventSummary(run.id);
+  if (eventSummary.latestError && eventSummary.latestError.message) return eventSummary.latestError.message;
+  if (eventSummary.currentStep && run.status === 'running') {
+    const action = eventSummary.currentStep.action || eventSummary.currentStep.stepId;
+    if (eventSummary.currentStep.status === 'started') return `workflow step started: ${action}`;
+    if (eventSummary.currentStep.status === 'completed') return `workflow step completed: ${action}`;
+    if (eventSummary.currentStep.status === 'failed') return `workflow step failed: ${action}`;
+  }
+  if (eventSummary.latestWorkspaceMutation && eventSummary.latestWorkspaceMutation.operation && run.status === 'running') {
+    return `workspace action: ${eventSummary.latestWorkspaceMutation.operation}`;
+  }
 
   const parsedPlanMessage = getRunLatestParsedPlanMessage(run);
   if (parsedPlanMessage) return parsedPlanMessage;
@@ -1272,6 +1408,8 @@ function displayLogType(type) {
     'run:timeout': 'timed out',
     'run:failed': 'failed',
     'run:completed': 'completed',
+    'run:capability_started': 'workflow started',
+    'run:capability_completed': 'workflow completed',
     'run:postcondition_completed': 'already satisfied',
     'model:request': 'waiting on model',
     'model:response': 'model response',
@@ -1293,6 +1431,8 @@ function displayLogMessage(log) {
   if (log.type === 'model:request') return 'Waiting for local model response';
   if (log.type === 'model:no_progress') return 'The model repeated an inspection without making progress';
   if (log.type === 'run:queued') return 'Waiting for local model capacity';
+  if (log.type === 'run:capability_started') return String(log.message || '').replace(/^Capability started:/, 'Workflow started:');
+  if (log.type === 'run:capability_completed') return String(log.message || '').replace(/^Capability completed:/, 'Workflow completed:');
   return log.message || '';
 }
 
@@ -1342,6 +1482,143 @@ function createLogTimestamp() {
   const baseIso = new Date(Number(timestampMs)).toISOString().replace(/\.\d{3}Z$/, '');
 
   return `${baseIso}.${fractionalNs.toString().padStart(9, '0')}Z`;
+}
+
+let eventAppendChain = Promise.resolve();
+let pendingEventBuffer = [];
+
+function normalizeEventId(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : crypto.randomUUID();
+}
+
+function normalizeNullableInteger(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function appendEvent(event = {}) {
+  const normalized = {
+    id: normalizeEventId(event.id),
+    ts: typeof event.ts === 'string' && event.ts.trim() ? event.ts : createLogTimestamp(),
+    type: typeof event.type === 'string' && event.type.trim() ? event.type.trim() : 'event',
+    ticketId: normalizeNullableInteger(event.ticketId),
+    runId: normalizeNullableInteger(event.runId),
+    stepId: event.stepId === undefined || event.stepId === null ? null : String(event.stepId),
+    payload: sanitizeSnapshotValue(event.payload && typeof event.payload === 'object' ? event.payload : {})
+  };
+  const line = `${JSON.stringify(normalized)}\n`;
+
+  pendingEventBuffer.push(normalized);
+  eventAppendChain = eventAppendChain
+    .then(() => new Promise((resolve, reject) => {
+      fs.appendFile(EVENTS_FILE, line, 'utf8', error => {
+        if (error) reject(error);
+        else resolve();
+      });
+    }))
+    .then(() => {
+      pendingEventBuffer = pendingEventBuffer.filter(event => event.id !== normalized.id);
+    })
+    .catch(error => {
+      console.error(`Failed to append event ${normalized.type}: ${error.message}`);
+    });
+
+  return normalized;
+}
+
+function readEvents() {
+  let persistedEvents = [];
+  if (!fs.existsSync(EVENTS_FILE)) return pendingEventBuffer.slice();
+
+  try {
+    persistedEvents = fs.readFileSync(EVENTS_FILE, 'utf8')
+      .split('\n')
+      .filter(line => line.trim())
+      .map(line => {
+        try {
+          const event = JSON.parse(line);
+          return event && typeof event === 'object' ? event : null;
+        } catch (error) {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch (error) {
+    persistedEvents = [];
+  }
+
+  const persistedIds = new Set(persistedEvents.map(event => event.id));
+  return [
+    ...persistedEvents,
+    ...pendingEventBuffer.filter(event => !persistedIds.has(event.id))
+  ];
+}
+
+function getRunEvents(runId) {
+  const parsedRunId = parseInt(runId, 10);
+  if (Number.isNaN(parsedRunId)) return [];
+  const run = readRuns().find(item => item.id === parsedRunId) || null;
+  return readEvents().filter(event =>
+    event.runId === parsedRunId ||
+    (run && event.runId === null && event.ticketId === run.ticketId)
+  );
+}
+
+function recentEventSummary(runId) {
+  const events = getRunEvents(runId);
+  const summary = {
+    currentStep: null,
+    latestStatus: null,
+    latestError: null,
+    latestWorkspaceMutation: null
+  };
+  const statusTypes = new Set(['run.created', 'run.queued', 'run.started', 'run.completed', 'run.failed']);
+
+  events.forEach(event => {
+    const payload = event.payload || {};
+
+    if (statusTypes.has(event.type)) {
+      summary.latestStatus = {
+        type: event.type,
+        status: payload.status || event.type.replace('run.', ''),
+        ts: event.ts,
+        message: payload.message || null
+      };
+    }
+
+    if (event.type === 'workflow.step.started' || event.type === 'workflow.step.completed' || event.type === 'workflow.step.failed') {
+      summary.currentStep = {
+        stepId: event.stepId,
+        action: payload.action || null,
+        status: event.type.replace('workflow.step.', ''),
+        workflowId: payload.workflowId || null,
+        ts: event.ts
+      };
+    }
+
+    if (event.type === 'run.failed' || event.type === 'workflow.step.failed') {
+      summary.latestError = {
+        message: payload.error || payload.message || null,
+        code: payload.code || null,
+        stepId: event.stepId,
+        ts: event.ts
+      };
+    }
+
+    if (event.type === 'workspace.operation' && payload.mutating === true) {
+      summary.latestWorkspaceMutation = {
+        operation: payload.operation || null,
+        path: payload.path || null,
+        result: payload.result || null,
+        error: payload.error || null,
+        stepId: event.stepId,
+        ts: event.ts
+      };
+    }
+  });
+
+  return summary;
 }
 
 function isValidIsoTimestamp(value) {
@@ -1414,6 +1691,14 @@ function updateTicketStatusById(ticketId, status) {
   ticket.status = status;
   ticket.updatedAt = new Date().toISOString();
   writeTickets(tickets);
+  appendEvent({
+    type: 'ticket.updated',
+    ticketId: ticket.id,
+    payload: {
+      status: ticket.status,
+      updatedAt: ticket.updatedAt
+    }
+  });
   broadcastTicketChange();
   return ticket;
 }
@@ -1748,6 +2033,20 @@ function normalizeRuns(runs) {
     run.workflowInput = run.executionMode === 'workflow' && run.workflowInput && typeof run.workflowInput === 'object' && !Array.isArray(run.workflowInput)
       ? run.workflowInput
       : null;
+    run.capabilityType = run.executionMode === 'workflow' ? 'workflow' : 'directAction';
+    run.capabilityId = run.capabilityType === 'workflow' ? run.workflowId : 'agent-selected-actions';
+    run.capabilityInput = run.capabilityType === 'workflow' ? run.workflowInput : null;
+    run.leaseOwner = typeof run.leaseOwner === 'string' && run.leaseOwner.trim() ? run.leaseOwner : null;
+    run.leaseExpiresAt = typeof run.leaseExpiresAt === 'string' && isValidIsoTimestamp(run.leaseExpiresAt) ? run.leaseExpiresAt : null;
+    run.currentStepId = typeof run.currentStepId === 'string' && run.currentStepId.trim() ? run.currentStepId : null;
+    run.currentWorkflowAction = typeof run.currentWorkflowAction === 'string' && run.currentWorkflowAction.trim() ? run.currentWorkflowAction : null;
+    run.lastHeartbeatAt = typeof run.lastHeartbeatAt === 'string' && isValidIsoTimestamp(run.lastHeartbeatAt) ? run.lastHeartbeatAt : null;
+    run.runEvaluation = run.runEvaluation && typeof run.runEvaluation === 'object' && !Array.isArray(run.runEvaluation)
+      ? sanitizeSnapshotValue(run.runEvaluation)
+      : null;
+    run.runConsequence = run.runConsequence && typeof run.runConsequence === 'object' && !Array.isArray(run.runConsequence)
+      ? sanitizeSnapshotValue(run.runConsequence)
+      : null;
     if (run.replaySnapshot && typeof run.replaySnapshot === 'object') {
       const snapshot = sanitizeSnapshotValue(run.replaySnapshot);
       writeReplaySnapshotFile(run.id, snapshot);
@@ -1762,6 +2061,844 @@ function normalizeRuns(runs) {
 
 function writeRuns(runs) {
   writeFileAtomic(RUNS_FILE, JSON.stringify(normalizeRuns(runs), null, 2));
+}
+
+function getRunLeaseDurationMs() {
+  const configured = parseInt(process.env.RUN_LEASE_DURATION_MS || '', 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_RUN_LEASE_DURATION_MS;
+}
+
+function buildRunLease(now = new Date()) {
+  const nowMs = now.getTime();
+  return {
+    leaseOwner: RUN_LEASE_OWNER,
+    leaseExpiresAt: new Date(nowMs + getRunLeaseDurationMs()).toISOString(),
+    lastHeartbeatAt: now.toISOString()
+  };
+}
+
+function isRunLeaseExpired(run, nowMs = Date.now()) {
+  if (!run || !run.leaseExpiresAt) return false;
+  const expiresAtMs = Date.parse(run.leaseExpiresAt);
+  return !Number.isNaN(expiresAtMs) && expiresAtMs <= nowMs;
+}
+
+function isRunLeaseHeldByCurrentProcess(run) {
+  return Boolean(run && run.leaseOwner === RUN_LEASE_OWNER && !isRunLeaseExpired(run));
+}
+
+function acquireRunLease(runId) {
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+  if (!run || run.status !== 'pending') return null;
+  if (run.leaseOwner && run.leaseOwner !== RUN_LEASE_OWNER && !isRunLeaseExpired(run)) return null;
+
+  Object.assign(run, buildRunLease());
+  writeRuns(runs);
+  appendEvent({
+    type: 'run.lease_acquired',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      leaseOwner: run.leaseOwner,
+      leaseExpiresAt: run.leaseExpiresAt,
+      lastHeartbeatAt: run.lastHeartbeatAt
+    }
+  });
+  return run;
+}
+
+function heartbeatRunLease(runId, payload = {}) {
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+  if (!run || run.leaseOwner !== RUN_LEASE_OWNER) return null;
+
+  Object.assign(run, buildRunLease());
+  writeRuns(runs);
+  appendEvent({
+    type: 'run.heartbeat',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      leaseOwner: run.leaseOwner,
+      leaseExpiresAt: run.leaseExpiresAt,
+      lastHeartbeatAt: run.lastHeartbeatAt,
+      currentStepId: run.currentStepId || null,
+      currentWorkflowAction: run.currentWorkflowAction || null,
+      ...sanitizeSnapshotValue(payload)
+    }
+  });
+  return run;
+}
+
+function countRunRetryAttempts(run) {
+  if (!run) return 0;
+  const runCreatedAt = run.createdAt ? Date.parse(run.createdAt) : null;
+
+  return readRuns().filter(item => {
+    if (item.id === run.id || item.ticketId !== run.ticketId) return false;
+    if (runCreatedAt === null || Number.isNaN(runCreatedAt)) return item.id < run.id;
+    const itemCreatedAt = item.createdAt ? Date.parse(item.createdAt) : null;
+    if (itemCreatedAt === null || Number.isNaN(itemCreatedAt)) return item.id < run.id;
+    return itemCreatedAt < runCreatedAt;
+  }).length;
+}
+
+function buildRunEvaluation(run) {
+  if (!run) return null;
+
+  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const replaySummary = run.replaySummary || extractReplaySummary(snapshot) || {};
+  const events = getRunEvents(run.id);
+  const runLogs = readLogs().filter(log => log.runId === run.id);
+  const snapshotEvents = Array.isArray(snapshot.events) ? snapshot.events : [];
+  const workflowActions = Array.isArray(snapshot.workflowActions) ? snapshot.workflowActions : [];
+  const providerRequests = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests : [];
+  const modelResponses = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses : [];
+  const legacyPostconditionPassedEvents = snapshotEvents.filter(event => event && event.type === 'run:postcondition_completed');
+  const postconditionsCheckedEvents = events.filter(event => event.type === 'run.postconditions_checked');
+  const postconditionFailedEvents = events.filter(event => event.type === 'run.postcondition_failed');
+  const latestPostconditionsChecked = postconditionsCheckedEvents[postconditionsCheckedEvents.length - 1] || null;
+  const latestPostconditionsPayload = latestPostconditionsChecked && latestPostconditionsChecked.payload
+    ? latestPostconditionsChecked.payload
+    : null;
+  const errorMessages = [];
+
+  if (run.error) errorMessages.push(sanitizeLogMessage(run.error));
+  if (replaySummary.failureReason) errorMessages.push(sanitizeLogMessage(replaySummary.failureReason));
+  runLogs
+    .filter(log => log.type === 'run:failed' || log.type === 'workspace:error' || log.type === 'workspace:ownership_blocked')
+    .forEach(log => {
+      if (log.message) errorMessages.push(sanitizeLogMessage(log.message));
+    });
+  events
+    .filter(event => event.type === 'run.failed' || event.type === 'workflow.step.failed')
+    .forEach(event => {
+      const payload = event.payload || {};
+      const message = payload.error || payload.message;
+      if (message) errorMessages.push(sanitizeLogMessage(message));
+    });
+
+  const uniqueErrors = [...new Set(errorMessages.filter(Boolean))];
+  const durationMs = run.startedAt && run.completedAt
+    ? Math.max(0, Date.parse(run.completedAt) - Date.parse(run.startedAt))
+    : 0;
+  const formalViolationEvents = events.filter(event =>
+    event.type === 'run.violation_detected' ||
+    event.type === 'runtime.violation_detected' ||
+    event.type === 'workspace.violation_detected'
+  );
+  const formalViolationCheckEvents = events.filter(event => event.type === 'run.violations_checked');
+  const mutationCount = getRunMutationCount({ ...run, replaySnapshot: snapshot, replaySummary });
+  const violationItems = formalViolationEvents.map(event => ({
+    id: event.id || null,
+    ts: event.ts || null,
+    type: event.type,
+    ticketId: event.ticketId || null,
+    runId: event.runId || null,
+    stepId: event.stepId || null,
+    payload: sanitizeSnapshotValue(event.payload || {})
+  }));
+  const latestViolationCheck = formalViolationCheckEvents[formalViolationCheckEvents.length - 1] || null;
+  const violationStatus = violationItems.length > 0
+    ? 'present'
+    : latestViolationCheck && latestViolationCheck.payload && latestViolationCheck.payload.status === 'none'
+      ? 'none'
+      : 'unknown';
+
+  return {
+    effectiveness: {
+      status: postconditionFailedEvents.length > 0
+        ? 'failed'
+        : run.status === 'completed' && latestPostconditionsPayload && latestPostconditionsPayload.status === 'passed'
+          ? 'passed'
+          : 'unknown',
+      postconditionsPassed: latestPostconditionsPayload && Number.isInteger(latestPostconditionsPayload.passed)
+        ? latestPostconditionsPayload.passed
+        : legacyPostconditionPassedEvents.length,
+      postconditionsFailed: latestPostconditionsPayload && Number.isInteger(latestPostconditionsPayload.failed)
+        ? latestPostconditionsPayload.failed
+        : postconditionFailedEvents.length,
+      errors: uniqueErrors
+    },
+    efficiency: {
+      durationMs: Number.isFinite(durationMs) ? durationMs : 0,
+      workflowSteps: workflowActions.length,
+      providerRequests: replaySummary.providerRequests !== undefined ? replaySummary.providerRequests : providerRequests.length,
+      modelResponses: replaySummary.modelResponses !== undefined ? replaySummary.modelResponses : modelResponses.length,
+      workspaceOperations: replaySummary.workspaceOperations !== undefined ? replaySummary.workspaceOperations : workspaceOperations.length,
+      mutationCount,
+      retryCount: countRunRetryAttempts(run)
+    },
+    violations: {
+      status: violationStatus,
+      items: violationItems
+    }
+  };
+}
+
+function getWorkspaceOperationNameFromEvidence(evidence) {
+  if (!evidence || typeof evidence !== 'object') return null;
+  if (typeof evidence.operation === 'string') return evidence.operation;
+  if (evidence.operation && typeof evidence.operation.operation === 'string') return evidence.operation.operation;
+  return null;
+}
+
+function getWorkspaceOperationArgsFromEvidence(evidence) {
+  if (!evidence || typeof evidence !== 'object') return {};
+  if (evidence.operation && evidence.operation.args && typeof evidence.operation.args === 'object') return evidence.operation.args;
+  if (evidence.input && typeof evidence.input === 'object') return evidence.input;
+  if (evidence.args && typeof evidence.args === 'object') return evidence.args;
+  return {};
+}
+
+function collectWorkspaceMutationPaths(operation, evidence) {
+  const args = getWorkspaceOperationArgsFromEvidence(evidence);
+  const paths = [];
+  const primaryPath = args.path || evidence.path || null;
+  const nextPath = args.nextPath || evidence.nextPath || null;
+
+  if (primaryPath) paths.push({ role: 'path', path: primaryPath });
+  if (operation === 'renamePath' && nextPath) paths.push({ role: 'nextPath', path: nextPath });
+  return paths;
+}
+
+function createWorkspaceViolationItem(run, evidence, source) {
+  const operation = getWorkspaceOperationNameFromEvidence(evidence);
+  if (!operation || !AGENT_MUTATING_OPERATIONS.includes(operation)) return null;
+
+  const paths = collectWorkspaceMutationPaths(operation, evidence);
+  for (const pathItem of paths) {
+    const matchedProtectedPattern = getProtectedWorkspacePathMatch(pathItem.path);
+    if (matchedProtectedPattern) {
+      return {
+        rule: 'protected_path',
+        operation,
+        path: pathItem.path,
+        pathRole: pathItem.role,
+        matchedPattern: matchedProtectedPattern,
+        source
+      };
+    }
+  }
+
+  if (run.executionWorkspaceType === 'main_owned_paths') {
+    const ownedOutputPaths = getRunOwnedOutputPaths(run);
+    const outsideOwnedPath = paths.find(pathItem => !isPathInsideOwnedOutputPaths(pathItem.path, ownedOutputPaths));
+    if (outsideOwnedPath) {
+      return {
+        rule: 'owned_output_path',
+        operation,
+        path: outsideOwnedPath.path,
+        pathRole: outsideOwnedPath.role,
+        ownedOutputPaths,
+        source
+      };
+    }
+  }
+
+  if (evidence.blocked === true || (evidence.operation && evidence.operation.blocked === true)) {
+    return {
+      rule: 'authority_blocked',
+      operation,
+      path: paths[0] ? paths[0].path : null,
+      pathRole: paths[0] ? paths[0].role : null,
+      source
+    };
+  }
+
+  return null;
+}
+
+function collectFormalWorkspaceViolations(run) {
+  if (!run) return [];
+
+  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const workspaceOperations = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
+  const workspaceOperationEvents = getRunEvents(run.id).filter(event => event.type === 'workspace.operation');
+  const violations = [];
+  const seen = new Set();
+
+  function addViolation(evidence, source) {
+    const violation = createWorkspaceViolationItem(run, evidence, source);
+    if (!violation) return;
+
+    const key = [
+      violation.rule,
+      violation.operation,
+      violation.path || '',
+      violation.pathRole || ''
+    ].join(':');
+    if (seen.has(key)) return;
+    seen.add(key);
+    violations.push(violation);
+  }
+
+  workspaceOperations.forEach((operation, index) => {
+    addViolation(operation, {
+      type: 'replay.workspaceOperations',
+      index,
+      historyId: operation && operation.historyId ? operation.historyId : null
+    });
+  });
+  workspaceOperationEvents.forEach(event => {
+    addViolation(event.payload || {}, {
+      type: 'event.workspace.operation',
+      eventId: event.id || null,
+      stepId: event.stepId || null
+    });
+  });
+
+  return violations;
+}
+
+function completeRunViolationCheck(runId) {
+  const run = readRuns().find(item => item.id === runId);
+  if (!run) return [];
+
+  const existingEvents = getRunEvents(run.id);
+  if (existingEvents.some(event => event.type === 'run.violation_detected' || event.type === 'run.violations_checked')) {
+    return existingEvents.filter(event => event.type === 'run.violation_detected').map(event => event.payload || {});
+  }
+
+  const violations = collectFormalWorkspaceViolations(run);
+  if (violations.length > 0) {
+    violations.forEach(violation => {
+      appendEvent({
+        type: 'run.violation_detected',
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: sanitizeSnapshotValue(violation)
+      });
+    });
+    return violations;
+  }
+
+  appendEvent({
+    type: 'run.violations_checked',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: { status: 'none', checked: 'workspace_mutations' }
+  });
+  return [];
+}
+
+function getValueAtPath(source, pathExpression) {
+  if (!pathExpression) return undefined;
+  const parts = String(pathExpression).split('.').filter(Boolean);
+  let value = source;
+
+  for (const part of parts) {
+    if (!value || typeof value !== 'object' || !(part in value)) return undefined;
+    value = value[part];
+  }
+
+  return value;
+}
+
+function valuesStrictlyEqual(actual, expected) {
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function getRunWorkflowOutput(run) {
+  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const outputs = Array.isArray(snapshot.capabilityOutputs) ? snapshot.capabilityOutputs : [];
+  const matchingOutput = outputs
+    .slice()
+    .reverse()
+    .find(item => item && item.capabilityType === 'workflow' && item.capabilityId === run.workflowId);
+
+  return matchingOutput ? matchingOutput.output || {} : {};
+}
+
+function resolveWorkflowPostconditionTemplates(postcondition, run, output) {
+  return resolveWorkflowInputTemplates(postcondition, {
+    workflow: { input: run.workflowInput || {} },
+    output,
+    result: output
+  });
+}
+
+function evaluateWorkflowPostcondition(run, workflow, postcondition, output) {
+  const resolved = resolveWorkflowPostconditionTemplates(postcondition, run, output);
+  const id = resolved.id || postcondition.id || null;
+
+  if (resolved.type === 'fileExists') {
+    const info = workspaceProvider.getPathInfo(resolved.path);
+    const passed = info.exists && info.type === 'file';
+    return {
+      id,
+      type: resolved.type,
+      passed,
+      expected: { path: resolved.path, exists: true, type: 'file' },
+      actual: { exists: info.exists, type: info.type || null }
+    };
+  }
+
+  if (resolved.type === 'fileContains') {
+    const content = readWorkspaceFileIfExists(resolved.path);
+    const passed = typeof content === 'string' && content.includes(String(resolved.contains ?? ''));
+    return {
+      id,
+      type: resolved.type,
+      passed,
+      expected: { path: resolved.path, contains: String(resolved.contains ?? '') },
+      actual: { exists: content !== null }
+    };
+  }
+
+  if (resolved.type === 'jsonPathEquals') {
+    const content = readWorkspaceFileIfExists(resolved.path);
+    let actual;
+    let parseError = null;
+    if (content !== null) {
+      try {
+        actual = getValueAtPath(JSON.parse(content), resolved.jsonPath);
+      } catch (error) {
+        parseError = error.message;
+      }
+    }
+    const passed = content !== null && !parseError && valuesStrictlyEqual(actual, resolved.equals);
+    return {
+      id,
+      type: resolved.type,
+      passed,
+      expected: { path: resolved.path, jsonPath: resolved.jsonPath, equals: resolved.equals },
+      actual: { exists: content !== null, value: actual, parseError }
+    };
+  }
+
+  if (resolved.type === 'outputFieldEquals') {
+    const actual = getValueAtPath(output, resolved.field);
+    const passed = valuesStrictlyEqual(actual, resolved.equals);
+    return {
+      id,
+      type: resolved.type,
+      passed,
+      expected: { field: resolved.field, equals: resolved.equals },
+      actual: { value: actual }
+    };
+  }
+
+  return {
+    id,
+    type: resolved.type || null,
+    passed: false,
+    expected: sanitizeSnapshotValue(resolved),
+    actual: { error: 'Unsupported postcondition type' }
+  };
+}
+
+function completeRunPostconditionCheck(runId) {
+  const run = readRuns().find(item => item.id === runId);
+  if (!run || run.executionMode !== 'workflow' || !run.workflowId || run.status !== 'completed') return null;
+
+  const existingEvents = getRunEvents(run.id);
+  if (existingEvents.some(event => event.type === 'run.postconditions_checked')) {
+    return existingEvents.filter(event => event.type === 'run.postcondition_failed').map(event => event.payload || {});
+  }
+
+  const workflow = getWorkflowById(run.workflowId);
+  const postconditions = workflow && Array.isArray(workflow.postconditions) ? workflow.postconditions : [];
+  if (postconditions.length === 0) return null;
+
+  const output = getRunWorkflowOutput(run);
+  const results = postconditions.map(postcondition => evaluateWorkflowPostcondition(run, workflow, postcondition, output));
+  const failedResults = results.filter(result => !result.passed);
+
+  failedResults.forEach(result => {
+    appendEvent({
+      type: 'run.postcondition_failed',
+      ticketId: run.ticketId,
+      runId: run.id,
+      payload: sanitizeSnapshotValue({
+        workflowId: workflow.id,
+        postcondition: result
+      })
+    });
+  });
+  appendEvent({
+    type: 'run.postconditions_checked',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      workflowId: workflow.id,
+      status: failedResults.length > 0 ? 'failed' : 'passed',
+      passed: results.length - failedResults.length,
+      failed: failedResults.length,
+      total: results.length,
+      results: sanitizeSnapshotValue(results)
+    }
+  });
+
+  return failedResults;
+}
+
+function persistRunEvaluation(runId) {
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+  if (!run) return null;
+
+  const runEvaluation = buildRunEvaluation(run);
+  if (!runEvaluation) return null;
+
+  run.runEvaluation = runEvaluation;
+  writeRuns(runs);
+  appendEvent({
+    type: 'run.evaluation_completed',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      evaluation: runEvaluation
+    }
+  });
+  return runEvaluation;
+}
+
+function buildMutationConsequenceFromHistory(record) {
+  if (!record || record.error || !AGENT_MUTATING_OPERATIONS.includes(record.operation)) return null;
+
+  const base = {
+    operation: record.operation,
+    path: record.args && record.args.path ? record.args.path : null,
+    nextPath: record.args && record.args.nextPath ? record.args.nextPath : null,
+    historyId: record.id,
+    step: record.step,
+    timestamp: record.timestamp,
+    result: sanitizeSnapshotValue(record.result || {})
+  };
+
+  if (record.operation === 'createFolder') {
+    if (record.result && record.result.status === 'created') return { category: 'created', item: { ...base, type: 'folder' } };
+    return null;
+  }
+
+  if (record.operation === 'writeFile') {
+    if (record.preState && record.preState.existed === false) return { category: 'created', item: { ...base, type: 'file' } };
+    if (record.preState && record.preState.existed === true) return { category: 'updated', item: { ...base, type: 'file' } };
+    return { category: 'mutations', item: { ...base, type: 'file' } };
+  }
+
+  if (record.operation === 'deletePath') {
+    if (record.result && record.result.status === 'deleted') return { category: 'deleted', item: base };
+    return null;
+  }
+
+  if (record.operation === 'renamePath') {
+    return { category: 'renamed', item: base };
+  }
+
+  return { category: 'mutations', item: base };
+}
+
+function collectAttemptedMutationConsequences(run, snapshot) {
+  const attempts = [];
+  const seen = new Set();
+
+  function addAttempt(operation, pathValue, evidence) {
+    if (!operation || !AGENT_MUTATING_OPERATIONS.includes(operation)) return;
+    const key = `${operation}:${pathValue || ''}:${evidence.type}:${evidence.id || evidence.index || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    attempts.push({
+      operation,
+      path: pathValue || null,
+      evidence: sanitizeSnapshotValue(evidence)
+    });
+  }
+
+  (Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : []).forEach((item, index) => {
+    const operation = getWorkspaceOperationNameFromEvidence(item);
+    if (!operation || !AGENT_MUTATING_OPERATIONS.includes(operation)) return;
+    if (!item.error && !item.blocked && !(item.operation && item.operation.blocked)) return;
+    const paths = collectWorkspaceMutationPaths(operation, item);
+    addAttempt(operation, paths[0] ? paths[0].path : null, {
+      type: 'replay.workspaceOperations',
+      index,
+      blocked: item.blocked === true || Boolean(item.operation && item.operation.blocked),
+      error: item.error || null
+    });
+  });
+
+  getRunEvents(run.id).filter(event => event.type === 'workspace.operation').forEach(event => {
+    const payload = event.payload || {};
+    const operation = getWorkspaceOperationNameFromEvidence(payload);
+    if (!operation || !AGENT_MUTATING_OPERATIONS.includes(operation)) return;
+    if (!payload.error && !payload.blocked) return;
+    const paths = collectWorkspaceMutationPaths(operation, payload);
+    addAttempt(operation, paths[0] ? paths[0].path : null, {
+      type: 'event.workspace.operation',
+      id: event.id,
+      stepId: event.stepId,
+      blocked: payload.blocked === true,
+      error: payload.error || null
+    });
+  });
+
+  return attempts;
+}
+
+function collectExplicitExternalEffects(run) {
+  return getRunEvents(run.id)
+    .filter(event => event.type === 'external.effect')
+    .map(event => ({
+      id: event.id || null,
+      ts: event.ts || null,
+      payload: sanitizeSnapshotValue(event.payload || {})
+    }));
+}
+
+function collectExplicitNotifications(run) {
+  return getRunEvents(run.id)
+    .filter(event => event.type === 'notification.sent')
+    .map(event => ({
+      id: event.id || null,
+      ts: event.ts || null,
+      payload: sanitizeSnapshotValue(event.payload || {})
+    }));
+}
+
+function buildRunConsequence(run) {
+  if (!run) return null;
+
+  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const evaluation = run.runEvaluation || buildRunEvaluation(run) || {};
+  const consequence = {
+    mutations: [],
+    created: [],
+    updated: [],
+    deleted: [],
+    renamed: [],
+    notifications: collectExplicitNotifications(run),
+    externalEffects: collectExplicitExternalEffects(run),
+    verification: {
+      postconditionsStatus: evaluation.effectiveness ? evaluation.effectiveness.status || 'unknown' : 'unknown',
+      violationsStatus: evaluation.violations ? evaluation.violations.status || 'unknown' : 'unknown'
+    }
+  };
+
+  getOperationHistoryForRun(run.id).forEach(record => {
+    const mutation = buildMutationConsequenceFromHistory(record);
+    if (!mutation) return;
+    consequence.mutations.push(mutation.item);
+    consequence[mutation.category].push(mutation.item);
+  });
+
+  collectAttemptedMutationConsequences(run, snapshot).forEach(attempt => {
+    consequence.mutations.push({
+      ...attempt,
+      attempted: true
+    });
+  });
+
+  return consequence;
+}
+
+function persistRunConsequence(runId) {
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+  if (!run) return null;
+
+  const runConsequence = buildRunConsequence(run);
+  if (!runConsequence) return null;
+
+  run.runConsequence = runConsequence;
+  writeRuns(runs);
+  appendEvent({
+    type: 'run.consequence_recorded',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      consequence: runConsequence
+    }
+  });
+  return runConsequence;
+}
+
+function expireStaleRunLeases() {
+  const expiredRuns = readRuns().filter(run => run.status === 'running' && isRunLeaseExpired(run));
+
+  expiredRuns.forEach(run => {
+    appendEvent({
+      type: 'run.lease_expired',
+      ticketId: run.ticketId,
+      runId: run.id,
+      payload: {
+        leaseOwner: run.leaseOwner || null,
+        leaseExpiresAt: run.leaseExpiresAt || null,
+        currentStepId: run.currentStepId || null,
+        currentWorkflowAction: run.currentWorkflowAction || null,
+        lastHeartbeatAt: run.lastHeartbeatAt || null
+      }
+    });
+    interruptAgentRun(run, `Run lease expired for owner ${run.leaseOwner || 'unknown'}`);
+  });
+
+  return expiredRuns;
+}
+
+function persistRunWorkflowStep(runId, step, status = 'started') {
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+  if (!run || run.leaseOwner !== RUN_LEASE_OWNER) return null;
+
+  run.currentStepId = step && step.id ? step.id : null;
+  run.currentWorkflowAction = step && step.action ? step.action : null;
+  Object.assign(run, buildRunLease());
+  writeRuns(runs);
+  appendEvent({
+    type: 'workflow.step.persisted',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: run.currentStepId,
+    payload: {
+      status,
+      action: run.currentWorkflowAction,
+      leaseOwner: run.leaseOwner,
+      leaseExpiresAt: run.leaseExpiresAt,
+      lastHeartbeatAt: run.lastHeartbeatAt
+    }
+  });
+  return run;
+}
+
+function serializeRunLease(run) {
+  if (!run) return null;
+  return {
+    leaseOwner: run.leaseOwner || null,
+    leaseExpiresAt: run.leaseExpiresAt || null,
+    lastHeartbeatAt: run.lastHeartbeatAt || null,
+    expired: isRunLeaseExpired(run),
+    heldByCurrentProcess: isRunLeaseHeldByCurrentProcess(run)
+  };
+}
+
+function getRunAuthorityEvidence(run) {
+  if (!run) return [];
+  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const replayChecks = Array.isArray(snapshot.authorityChecks) ? snapshot.authorityChecks : [];
+  const eventChecks = getRunEvents(run.id)
+    .filter(event => event.type === 'authority.allowed' || event.type === 'authority.denied')
+    .map(event => ({
+      id: event.id || null,
+      ts: event.ts || null,
+      type: event.type,
+      ...(event.payload || {})
+    }));
+  const seen = new Set();
+
+  return [...replayChecks, ...eventChecks].filter(item => {
+    const key = `${item.status}:${item.rule}:${item.operation}:${item.path}:${item.ts || ''}:${item.id || ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function serializeRunRuntimeState(run, logsByRunId = null) {
+  if (!run) return null;
+  const summary = recentEventSummary(run.id);
+  const replaySummary = run.replaySummary || extractReplaySummary(readRunReplaySnapshot(run)) || null;
+  const effectiveLogsByRunId = logsByRunId || groupBy(readLogs(), log => log.runId);
+
+  return {
+    id: run.id,
+    ticketId: run.ticketId,
+    agentId: run.agentId,
+    agentName: run.agentName,
+    status: run.status,
+    executionMode: run.executionMode || 'agent',
+    capabilityType: run.capabilityType || null,
+    capabilityId: run.capabilityId || null,
+    workflowId: run.workflowId || null,
+    lease: serializeRunLease(run),
+    leaseOwner: run.leaseOwner || null,
+    leaseExpiresAt: run.leaseExpiresAt || null,
+    currentStepId: run.currentStepId || null,
+    currentWorkflowAction: run.currentWorkflowAction || null,
+    lastHeartbeatAt: run.lastHeartbeatAt || null,
+    eventSummary: summary,
+    latestEventSummary: summary,
+    replaySummary,
+    authorityEvidence: getRunAuthorityEvidence(run),
+    runEvaluation: run.runEvaluation || buildRunEvaluation(run),
+    runConsequence: run.runConsequence || buildRunConsequence(run),
+    currentMessage: getRunCurrentMessage(run, effectiveLogsByRunId),
+    outcome: classifyRunOperationalOutcome(run),
+    outcomeLabel: displayOperationalOutcome(classifyRunOperationalOutcome(run), countRunMutatingOperations(run.id)),
+    createdAt: run.createdAt || null,
+    startedAt: run.startedAt || null,
+    completedAt: run.completedAt || null,
+    updatedAt: run.updatedAt || null,
+    error: run.error || null
+  };
+}
+
+function getRuntimeStatusSnapshot() {
+  const runs = readRuns();
+  const activeRuns = runs.filter(run => ['pending', 'running'].includes(run.status));
+  const pendingRuns = runs.filter(run => run.status === 'pending');
+  const runningRuns = runs.filter(run => run.status === 'running');
+  const expiredLeases = runs.filter(run => run.status === 'running' && isRunLeaseExpired(run));
+  const localAgentIds = new Set(readAgents().filter(isLocalModelAgent).map(agent => agent.id));
+
+  return {
+    scheduler: {
+      running: Boolean(runtimeScheduler && runtimeScheduler.isRunning()),
+      intervalMs: getPositiveIntegerEnv('RUNTIME_SCHEDULER_INTERVAL_MS', 500)
+    },
+    leaseOwner: RUN_LEASE_OWNER,
+    concurrencyLimits: {
+      localModel: getLocalModelConcurrencyLimit(),
+      activeLocalModelRuns: runningRuns.filter(run => localAgentIds.has(run.agentId)).length,
+      startingLocalModelRuns: startingLocalModelRunIds.size
+    },
+    activeRuns: activeRuns.map(run => serializeRunRuntimeState(run)),
+    pendingRuns: pendingRuns.map(run => serializeRunRuntimeState(run)),
+    runningRuns: runningRuns.map(run => serializeRunRuntimeState(run)),
+    expiredLeases: expiredLeases.map(run => serializeRunRuntimeState(run)),
+    counts: {
+      active: activeRuns.length,
+      pending: pendingRuns.length,
+      running: runningRuns.length,
+      expiredLeases: expiredLeases.length
+    },
+    runtimeLimits: getAgentRuntimeLimits()
+  };
+}
+
+function compareRunsNewestFirst(a, b) {
+  return new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) -
+    new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0);
+}
+
+function serializeTicketRuntimeState(ticketId) {
+  const parsedTicketId = parseInt(ticketId, 10);
+  if (Number.isNaN(parsedTicketId)) return null;
+
+  const ticket = readTickets().find(item => item.id === parsedTicketId);
+  if (!ticket) return null;
+
+  const logsByRunId = groupBy(readLogs(), log => log.runId);
+  const ticketRuns = readRuns()
+    .filter(run => run.ticketId === parsedTicketId)
+    .sort(compareRunsNewestFirst);
+  const currentRun = ticketRuns.find(run => ['pending', 'running'].includes(run.status)) || null;
+  const latestRun = ticketRuns[0] || null;
+  const visibleRun = currentRun || latestRun;
+  const eventSummary = visibleRun ? recentEventSummary(visibleRun.id) : null;
+  const outcome = latestRun ? classifyRunOperationalOutcome(latestRun) : null;
+
+  return {
+    ticket,
+    currentRun: currentRun ? serializeRunRuntimeState(currentRun, logsByRunId) : null,
+    latestRun: latestRun ? serializeRunRuntimeState(latestRun, logsByRunId) : null,
+    currentMessage: visibleRun ? getRunCurrentMessage(visibleRun, logsByRunId) : null,
+    currentStep: eventSummary ? eventSummary.currentStep : null,
+    leaseState: visibleRun ? serializeRunLease(visibleRun) : null,
+    outcome,
+    outcomeLabel: latestRun ? displayOperationalOutcome(outcome, countRunMutatingOperations(latestRun.id)) : null
+  };
 }
 
 function readAllocationPlans() {
@@ -2451,7 +3588,11 @@ function createReplaySnapshotBase(run, overrides = {}) {
     providerRequests: [],
     modelResponses: [],
     parsedModelPlans: [],
+    capabilitySelection: [],
+    capabilityOutputs: [],
     workflowInvocation: [],
+    authorityChecks: [],
+    workflowDrafts: [],
     workflowActions: [],
     workspaceOperations: [],
     events: [],
@@ -2817,6 +3958,7 @@ function buildFailureMetadata(error, status, failureReason = null, detail = {}) 
 // mutationCount parameter is reserved but never passed by callers; count is always derived.
 function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
   const effectiveMutationCount = mutationCount !== null ? mutationCount : countRunMutatingOperations(run.id);
+  const finalizedAt = new Date().toISOString();
   updateRunReplaySnapshot(run.id, snapshot => snapshot ? {
     ...snapshot,
     terminalStatus: status,
@@ -2824,8 +3966,19 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
     failure: failure ? sanitizeSnapshotValue(failure) : null,
     mutationOutcome: effectiveMutationCount === 0 ? 'no_mutations' : status === 'completed' ? 'all_intended' : 'partial_mutations',
     mutationCount: effectiveMutationCount,
-    finalizedAt: new Date().toISOString()
+    finalizedAt
   } : snapshot);
+  appendEvent({
+    type: 'replay.snapshot.finalized',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      status,
+      failureReason: failureReason ? sanitizeLogMessage(failureReason) : null,
+      mutationCount: effectiveMutationCount,
+      finalizedAt
+    }
+  });
 }
 
 function classifyInterruptionPhase(run) {
@@ -2895,35 +4048,6 @@ function canStartRunNow(run) {
   const agent = readAgents().find(item => item.id === run.agentId);
   if (!isLocalModelAgent(agent)) return true;
   return countActiveLocalModelRuns() < getLocalModelConcurrencyLimit();
-}
-
-function startRunWhenCapacityAvailable(run) {
-  if (!run || run.status !== 'pending') return false;
-
-  if (!canStartRunNow(run)) {
-    const alreadyLogged = readLogs().some(log => log.runId === run.id && log.type === 'run:queued');
-    if (!alreadyLogged) {
-      appendRunLog(run, 'run:queued', 'Queued for local model capacity', null, {
-        concurrencyLimit: getLocalModelConcurrencyLimit()
-      });
-    }
-    return false;
-  }
-
-  const agent = readAgents().find(item => item.id === run.agentId);
-  if (isLocalModelAgent(agent)) startingLocalModelRunIds.add(run.id);
-  setImmediate(() => runAgentTicket(run.id));
-  return true;
-}
-
-function scheduleQueuedRuns() {
-  const pendingRuns = readRuns()
-    .filter(run => run.status === 'pending')
-    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
-
-  for (const pendingRun of pendingRuns) {
-    if (!startRunWhenCapacityAvailable(pendingRun)) break;
-  }
 }
 
 function isRunInterrupted(runId) {
@@ -3060,6 +4184,101 @@ function assertAllocatedOwnershipAllowsMutation(run, operation, args, relativePa
   if (!isPathInsideOwnedOutputPaths(relativePath, getRunOwnedOutputPaths(run))) {
     blockWorkspaceOwnershipViolation(run, operation, args, relativePath, runWorkspaceProvider);
   }
+}
+
+function buildAuthorityEvidence(run, operation, pathValue, status, rule, reason) {
+  return {
+    rule,
+    operation,
+    path: pathValue || null,
+    actor: run && run.agentId ? `agent:${run.agentId}` : 'unknown',
+    workspaceType: run ? run.executionWorkspaceType || 'main' : 'unknown',
+    status,
+    reason: reason || ''
+  };
+}
+
+function recordAuthorityEvidence(run, evidence) {
+  const normalized = sanitizeSnapshotValue(evidence);
+  appendRunReplaySnapshotItem(run.id, 'authorityChecks', normalized);
+  appendEvent({
+    type: evidence.status === 'denied' ? 'authority.denied' : 'authority.allowed',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: normalized
+  });
+  return normalized;
+}
+
+function createAuthorityDeniedError(evidence, operation, args) {
+  if (evidence.rule === 'protected_path') {
+    return createProtectedWorkspaceError(operation, evidence.path, evidence.reason || 'protected path');
+  }
+
+  if (evidence.rule === 'owned_output_path') {
+    const error = createWorkspaceOwnershipError({ ownedOutputPaths: evidence.ownedOutputPaths || [] }, operation, evidence.path);
+    error.reason = evidence.reason || error.reason;
+    return error;
+  }
+
+  if (evidence.rule === 'lease_owner') {
+    const error = new Error('Workspace mutation denied because the run lease is not held by this process');
+    error.code = 'RUN_LEASE_REQUIRED';
+    error.operation = operation;
+    error.path = evidence.path;
+    error.reason = evidence.reason;
+    return error;
+  }
+
+  const error = new Error(evidence.reason || `Workspace mutation denied by authority rule: ${evidence.rule}`);
+  error.code = 'WORKSPACE_AUTHORITY_DENIED';
+  error.operation = operation;
+  error.path = evidence.path;
+  error.reason = evidence.reason;
+  error.workspaceAction = { operation, args, path: evidence.path, blocked: true, reason: evidence.reason };
+  return error;
+}
+
+function checkWorkspaceMutationAuthority(run, operation, args) {
+  if (!AGENT_MUTATING_OPERATIONS.includes(operation)) return null;
+
+  const paths = [];
+  if (args && args.path) paths.push({ role: 'path', path: args.path });
+  if (operation === 'renamePath' && args && args.nextPath) paths.push({ role: 'nextPath', path: args.nextPath });
+  const primaryPath = paths[0] ? paths[0].path : null;
+
+  if (!isRunLeaseHeldByCurrentProcess(run)) {
+    const evidence = buildAuthorityEvidence(run, operation, primaryPath, 'denied', 'lease_owner', 'Current process does not hold the run lease');
+    recordAuthorityEvidence(run, evidence);
+    throw createAuthorityDeniedError(evidence, operation, args);
+  }
+
+  for (const pathItem of paths) {
+    const matchedProtectedPattern = getProtectedWorkspacePathMatch(pathItem.path);
+    if (matchedProtectedPattern) {
+      const evidence = buildAuthorityEvidence(run, operation, pathItem.path, 'denied', 'protected_path', matchedProtectedPattern);
+      recordAuthorityEvidence(run, evidence);
+      throw createAuthorityDeniedError(evidence, operation, args);
+    }
+  }
+
+  if (run.executionWorkspaceType === 'main_owned_paths') {
+    const ownedOutputPaths = getRunOwnedOutputPaths(run);
+    const outsideOwnedPath = paths.find(pathItem => !isPathInsideOwnedOutputPaths(pathItem.path, ownedOutputPaths));
+    if (outsideOwnedPath) {
+      const evidence = {
+        ...buildAuthorityEvidence(run, operation, outsideOwnedPath.path, 'denied', 'owned_output_path', 'Mutation path is outside owned output paths'),
+        ownedOutputPaths
+      };
+      recordAuthorityEvidence(run, evidence);
+      throw createAuthorityDeniedError(evidence, operation, args);
+    }
+  }
+
+  return recordAuthorityEvidence(
+    run,
+    buildAuthorityEvidence(run, operation, primaryPath, 'allowed', 'workspace_mutation', 'Runtime authority checks passed')
+  );
 }
 
 function assertNoOverlappingOwnedPaths(planItems) {
@@ -3237,7 +4456,11 @@ function getRecentLogsForTicket(ticketId, limit = 5) {
     if (logs[index].ticketId === ticketId) recentLogs.push(logs[index]);
   }
 
-  return sanitizeWorkspaceDisplayValue(recentLogs.reverse());
+  return sanitizeWorkspaceDisplayValue(recentLogs.reverse()).map(log => ({
+    ...log,
+    displayType: displayLogType(log.type),
+    displayMessage: displayLogMessage(log)
+  }));
 }
 
 function getRecentLogsForRun(runId, limit = 5) {
@@ -3339,6 +4562,9 @@ function interruptAgentRun(run, reason) {
 
   const failure = buildFailureMetadata(null, 'interrupted', reason, { phase });
   finalizeRunReplaySnapshot(interruptedRun, 'interrupted', reason, null, failure);
+  completeRunViolationCheck(interruptedRun.id);
+  persistRunEvaluation(interruptedRun.id);
+  persistRunConsequence(interruptedRun.id);
   appendRunLog(interruptedRun, 'run:interrupted', `${reason}${allocationLogSuffix(interruptedRun)}`, null, {
     allocationPlanId: interruptedRun.allocationPlanId || null,
     allocationItemId: interruptedRun.allocationItemId || null,
@@ -3346,6 +4572,8 @@ function interruptAgentRun(run, reason) {
     failure
   });
   runningRunKeys.delete(runExecutionKey(interruptedRun));
+  startingRunIds.delete(interruptedRun.id);
+  startingLocalModelRunIds.delete(interruptedRun.id);
   updateTicketAfterRunInterrupted(interruptedRun);
   return interruptedRun;
 }
@@ -3359,6 +4587,14 @@ function forceTicketOpenForRerun(ticketId) {
   ticket.status = 'open';
   ticket.updatedAt = new Date().toISOString();
   writeTickets(tickets);
+  appendEvent({
+    type: 'ticket.updated',
+    ticketId: ticket.id,
+    payload: {
+      status: ticket.status,
+      updatedAt: ticket.updatedAt
+    }
+  });
   broadcastTicketChange();
   return ticket;
 }
@@ -3386,7 +4622,7 @@ function rerunTicketFromBeginning(ticketId, changedBy = 'operator') {
     changedBy,
     changedAt: new Date().toISOString()
   });
-  maybeStartTicketRuns(reopenedTicket);
+  createRunsForTicket(reopenedTicket);
   return reopenedTicket;
 }
 
@@ -3423,11 +4659,27 @@ function failAgentRun(run, error, workspaceAction = null) {
 
   if (failedRun.status === 'interrupted') return failedRun;
   finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
+  appendEvent({
+    type: 'run.failed',
+    ticketId: failedRun.ticketId,
+    runId: failedRun.id,
+    payload: {
+      status: 'failed',
+      error: message,
+      failure,
+      mutationCount: countRunMutatingOperations(failedRun.id),
+      completedAt: failedRun.completedAt || failedRun.updatedAt
+    }
+  });
   appendRunLog(failedRun, 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
     allocationPlanId: failedRun.allocationPlanId || null,
     allocationItemId: failedRun.allocationItemId || null,
     failure
   });
+  completeRunPostconditionCheck(failedRun.id);
+  completeRunViolationCheck(failedRun.id);
+  persistRunEvaluation(failedRun.id);
+  persistRunConsequence(failedRun.id);
   finalizeTicketForRun(failedRun, 'failed');
   return failedRun;
 }
@@ -3436,10 +4688,24 @@ function completeAgentRun(run) {
   const completedRun = updateRunStatus(run.id, 'completed');
   if (completedRun.status === 'interrupted') return completedRun;
   finalizeRunReplaySnapshot(completedRun, 'completed');
+  appendEvent({
+    type: 'run.completed',
+    ticketId: completedRun.ticketId,
+    runId: completedRun.id,
+    payload: {
+      status: 'completed',
+      mutationCount: countRunMutatingOperations(completedRun.id),
+      completedAt: completedRun.completedAt || completedRun.updatedAt
+    }
+  });
   appendRunLog(completedRun, 'run:completed', `Agent run completed${allocationLogSuffix(completedRun)}`, null, {
     allocationPlanId: completedRun.allocationPlanId || null,
     allocationItemId: completedRun.allocationItemId || null
   });
+  completeRunPostconditionCheck(completedRun.id);
+  completeRunViolationCheck(completedRun.id);
+  persistRunEvaluation(completedRun.id);
+  persistRunConsequence(completedRun.id);
   finalizeTicketForRun(completedRun, 'completed');
   return completedRun;
 }
@@ -3478,6 +4744,14 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     executionMode: ticket.executionMode === 'workflow' ? 'workflow' : 'agent',
     workflowId: ticket.executionMode === 'workflow' ? ticket.workflowId : null,
     workflowInput: ticket.executionMode === 'workflow' ? (ticket.workflowInput || {}) : null,
+    capabilityType: ticket.executionMode === 'workflow' ? 'workflow' : 'directAction',
+    capabilityId: ticket.executionMode === 'workflow' ? ticket.workflowId : 'agent-selected-actions',
+    capabilityInput: ticket.executionMode === 'workflow' ? (ticket.workflowInput || {}) : null,
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    currentStepId: null,
+    currentWorkflowAction: null,
+    lastHeartbeatAt: null,
     status: 'pending',
     ticketOpenedAt: ticket.updatedAt,
     createdAt: now,
@@ -3486,16 +4760,30 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
 
   runs.push(run);
   writeRuns(runs);
+  appendEvent({
+    type: 'run.created',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      agentId: run.agentId,
+      agentName: run.agentName,
+      status: run.status,
+      executionMode: run.executionMode,
+      capabilityType: run.capabilityType,
+      capabilityId: run.capabilityId,
+      workflowId: run.workflowId,
+      createdAt: run.createdAt
+    }
+  });
   appendRunLog(run, 'run:created', `${isRerun ? 'Agent rerun created' : 'Agent run created'}${allocationLogSuffix(run)}`, null, {
     allocationPlanId: run.allocationPlanId,
     allocationItemId: run.allocationItemId
   });
   updateTicketInProgressForRun(run);
-  startRunWhenCapacityAvailable(run);
   return run;
 }
 
-function maybeStartTicketRuns(ticket) {
+function createRunsForTicket(ticket) {
   if (!ticket || ticket.status !== 'open') return [];
 
   if (ticket.assignmentTargetType === 'agent') {
@@ -3624,7 +4912,7 @@ function buildRuntimeEnvelope(run, step = 0) {
     allocationItem: getRunAllocationItem(run),
     allocationSubtask: run.allocationSubtask || null,
     ownedOutputPaths: getRunOwnedOutputPaths(run),
-    allowedOperations: AGENT_ALLOWED_OPERATIONS,
+    allowedOperations: AGENT_DIRECT_OPERATIONS,
     maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
     maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
     currentStep: step,
@@ -4389,6 +5677,48 @@ function parseWorkspaceOperation(action) {
   };
 }
 
+function parseAgentDirectAction(action) {
+  if (!action || typeof action !== 'object' || Array.isArray(action)) {
+    const error = new Error('Agent action must be an object');
+    error.code = 'AGENT_ACTION_MALFORMED';
+    throw error;
+  }
+
+  assertOnlyKeys(action, ['operation', 'args'], 'Agent action');
+
+  if (typeof action.operation !== 'string' || !action.operation.trim()) {
+    const error = new Error('Agent action operation is required');
+    error.code = 'AGENT_ACTION_MALFORMED';
+    throw error;
+  }
+
+  const operation = action.operation.trim();
+  if (!AGENT_DIRECT_OPERATIONS.includes(operation)) {
+    const error = new Error(`Unsupported agent operation: ${operation}`);
+    error.code = 'AGENT_ACTION_UNSUPPORTED';
+    throw error;
+  }
+
+  if (!action.args || typeof action.args !== 'object' || Array.isArray(action.args)) {
+    const error = new Error(`Agent operation args must be an object: ${operation}`);
+    error.code = 'AGENT_ACTION_MALFORMED';
+    throw error;
+  }
+
+  if (AGENT_ALLOWED_OPERATIONS.includes(operation)) return parseWorkspaceOperation(action);
+
+  if (operation === 'createWorkflowDraft') {
+    assertOnlyKeys(action.args, ['workflow'], 'createWorkflowDraft args');
+    if (!action.args.workflow || typeof action.args.workflow !== 'object' || Array.isArray(action.args.workflow)) {
+      const error = new Error('createWorkflowDraft args.workflow must be an object');
+      error.code = 'WORKFLOW_DRAFT_INVALID';
+      throw error;
+    }
+  }
+
+  return { operation, args: action.args };
+}
+
 function getActionContract(name) {
   return ACTION_CONTRACTS_BY_NAME.get(name) || null;
 }
@@ -4475,6 +5805,9 @@ function validateWorkflowDefinition(workflow) {
     errors.push('workflow.actions must contain at least one action');
     return errors;
   }
+  if (workflow.postconditions !== undefined && !Array.isArray(workflow.postconditions)) {
+    errors.push('workflow.postconditions must be an array when provided');
+  }
 
   const stepIds = new Set();
   workflow.actions.forEach((step, index) => {
@@ -4504,6 +5837,35 @@ function validateWorkflowDefinition(workflow) {
     errors.push(...validateActionInput(step.action, step.input || {}, { allowTemplates: true }));
   });
 
+  (Array.isArray(workflow.postconditions) ? workflow.postconditions : []).forEach((postcondition, index) => {
+    if (!postcondition || typeof postcondition !== 'object' || Array.isArray(postcondition)) {
+      errors.push(`workflow.postconditions[${index}] must be an object`);
+      return;
+    }
+
+    const type = postcondition.type;
+    if (!['fileExists', 'fileContains', 'jsonPathEquals', 'outputFieldEquals'].includes(type)) {
+      errors.push(`workflow.postconditions[${index}].type is unsupported: ${type}`);
+      return;
+    }
+
+    if ((type === 'fileExists' || type === 'fileContains' || type === 'jsonPathEquals') && typeof postcondition.path !== 'string') {
+      errors.push(`workflow.postconditions[${index}].path is required`);
+    }
+    if (type === 'fileContains' && typeof postcondition.contains !== 'string') {
+      errors.push(`workflow.postconditions[${index}].contains is required`);
+    }
+    if (type === 'jsonPathEquals' && typeof postcondition.jsonPath !== 'string') {
+      errors.push(`workflow.postconditions[${index}].jsonPath is required`);
+    }
+    if (type === 'outputFieldEquals' && typeof postcondition.field !== 'string') {
+      errors.push(`workflow.postconditions[${index}].field is required`);
+    }
+    if ((type === 'jsonPathEquals' || type === 'outputFieldEquals') && !Object.prototype.hasOwnProperty.call(postcondition, 'equals')) {
+      errors.push(`workflow.postconditions[${index}].equals is required`);
+    }
+  });
+
   workflow.actions.forEach((step, index) => {
     if (!step || typeof step !== 'object') return;
     const nextValues = [step.next, step.trueNext, step.falseNext].filter(Boolean);
@@ -4515,6 +5877,77 @@ function validateWorkflowDefinition(workflow) {
   });
 
   return errors;
+}
+
+function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
+  const submittedWorkflow = workflowInput && typeof workflowInput === 'object' && !Array.isArray(workflowInput)
+    ? workflowInput
+    : null;
+
+  if (!submittedWorkflow) {
+    const error = new Error('Workflow draft must be an object');
+    error.code = 'WORKFLOW_DRAFT_INVALID';
+    throw error;
+  }
+
+  const now = new Date().toISOString();
+  const draft = {
+    ...sanitizeSnapshotValue(submittedWorkflow),
+    enabled: false,
+    createdByType: 'agent',
+    createdByAgentId: run.agentId,
+    createdByRunId: run.id,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  const validationErrors = validateWorkflowDefinition(draft);
+  if (workflowHasMutatingActions(draft) && (!Array.isArray(draft.postconditions) || draft.postconditions.length === 0)) {
+    validationErrors.push('Agent-created workflows with mutating actions must include postconditions');
+  }
+  if (validationErrors.length > 0) {
+    const error = new Error(`Workflow draft invalid: ${validationErrors.join('; ')}`);
+    error.code = 'WORKFLOW_DRAFT_INVALID';
+    error.details = { validationErrors };
+    throw error;
+  }
+  if (getWorkflowById(draft.id)) {
+    const error = new Error(`Workflow draft id already exists: ${draft.id}`);
+    error.code = 'WORKFLOW_DRAFT_DUPLICATE';
+    throw error;
+  }
+
+  const workflows = readWorkflows();
+  workflows.push(draft);
+  writeWorkflows(workflows);
+  appendRunReplaySnapshotItem(run.id, 'workflowDrafts', {
+    workflowId: draft.id,
+    name: draft.name,
+    enabled: false,
+    createdByAgentId: run.agentId,
+    createdByRunId: run.id,
+    step
+  });
+  appendEvent({
+    type: 'workflow.draft_created',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      workflowId: draft.id,
+      name: draft.name,
+      enabled: false,
+      createdByType: 'agent',
+      createdByAgentId: run.agentId,
+      createdByRunId: run.id,
+      createdAt: now
+    }
+  });
+  appendRunLog(run, 'workflow:draft_created', `Workflow draft created: ${draft.name}`, null, {
+    workflowId: draft.id,
+    enabled: false
+  });
+
+  return { workflowId: draft.id, enabled: false, status: 'draft_created' };
 }
 
 function executeWorkspaceOperation(run, action, step = 0) {
@@ -4563,6 +5996,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   if (operation === 'createFolder') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.createFolder, 'createFolder args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
+    checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
@@ -4594,6 +6028,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.writeFile, 'writeFile args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const content = requireStringArg(args, 'content');
+    checkWorkspaceMutationAuthority(run, operation, { path: pathValue, content });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     if (runWorkspaceProvider.exists(pathValue, { allowHidden: true })) {
       blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
@@ -4623,6 +6058,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.renamePath, 'renamePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const nextPath = requireStringArg(args, 'nextPath', { nonEmpty: true });
+    checkWorkspaceMutationAuthority(run, operation, { path: pathValue, nextPath });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue, nextPath }, pathValue, runWorkspaceProvider);
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue, nextPath }, nextPath, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue, nextPath }, pathValue, runWorkspaceProvider);
@@ -4652,6 +6088,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   if (operation === 'deletePath') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.deletePath, 'deletePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
+    checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
@@ -4817,6 +6254,17 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
 
   const startedAt = Date.now();
   let result;
+  appendEvent({
+    type: 'workflow.step.started',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: step.id,
+    payload: {
+      workflowId: workflow.id,
+      action: step.action,
+      input: sanitizeSnapshotValue(input)
+    }
+  });
 
   try {
     const inputErrors = validateActionInput(step.action, input);
@@ -4846,6 +6294,20 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
         ownedOutputPaths: getRunOwnedOutputPaths(run),
         workflowId: workflow.id,
         workflowStepId: step.id
+      });
+      appendEvent({
+        type: 'workspace.operation',
+        ticketId: run.ticketId,
+        runId: run.id,
+        stepId: step.id,
+        payload: {
+          workflowId: workflow.id,
+          operation: step.action,
+          path: input.path || null,
+          mutating: contract.mutating === true,
+          input: sanitizeSnapshotValue(input),
+          result: sanitizeSnapshotValue(result)
+        }
       });
     } else if (step.action === 'agentStructuredOutput') {
       result = await executeAgentStructuredOutputAction(run, agent, input, counters, startedAtMs, limits);
@@ -4878,6 +6340,18 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
       startedAt: new Date(startedAt).toISOString(),
       durationMs: Date.now() - startedAt
     });
+    appendEvent({
+      type: 'workflow.step.completed',
+      ticketId: run.ticketId,
+      runId: run.id,
+      stepId: step.id,
+      payload: {
+        workflowId: workflow.id,
+        action: step.action,
+        durationMs: Date.now() - startedAt,
+        result: sanitizeSnapshotValue(result)
+      }
+    });
 
     return result;
   } catch (error) {
@@ -4897,6 +6371,22 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
         workflowId: workflow.id,
         workflowStepId: step.id
       });
+  appendEvent({
+    type: 'workspace.operation',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: step.id,
+    payload: {
+      workflowId: workflow.id,
+      operation: step.action,
+      path: input && input.path ? input.path : null,
+      mutating: contract.mutating === true,
+      input: sanitizeSnapshotValue(input),
+      blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
+      reason: error.reason || null,
+      error: error.message
+    }
+  });
     }
 
     appendRunReplaySnapshotItem(run.id, 'workflowActions', {
@@ -4907,6 +6397,19 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
       error: error.message,
       startedAt: new Date(startedAt).toISOString(),
       durationMs: Date.now() - startedAt
+    });
+    appendEvent({
+      type: 'workflow.step.failed',
+      ticketId: run.ticketId,
+      runId: run.id,
+      stepId: step.id,
+      payload: {
+        workflowId: workflow.id,
+        action: step.action,
+        error: error.message,
+        code: error.code || null,
+        durationMs: Date.now() - startedAt
+      }
     });
     throw error;
   }
@@ -4979,9 +6482,21 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
       });
     }
 
+    persistRunWorkflowStep(run.id, currentStep, 'started');
+    heartbeatRunLease(run.id, {
+      phase: 'workflow_step_started',
+      currentStepId: currentStep.id,
+      currentWorkflowAction: currentStep.action
+    });
     const input = resolveWorkflowInputTemplates(currentStep.input || {}, context);
     const result = await executeWorkflowAction(run, workflow, currentStep, input, context, counters, startedAtMs, limits, agent);
     counters.transitions += 1;
+    persistRunWorkflowStep(run.id, currentStep, 'completed');
+    heartbeatRunLease(run.id, {
+      phase: 'workflow_step_completed',
+      currentStepId: currentStep.id,
+      currentWorkflowAction: currentStep.action
+    });
 
     if (currentStep.saveAs) {
       context[currentStep.saveAs] = currentStep.action === 'agentStructuredOutput' ? result.output : result;
@@ -5034,13 +6549,15 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
         'Emit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.',
         'Do not fail or return an error just because the total task exceeds one response.',
         'For bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.',
-        'Use only the workspace operations listed in runtimeEnvelope.allowedOperations.',
+        'Use only the operations listed in runtimeEnvelope.allowedOperations.',
+        'To propose a reusable workflow, emit createWorkflowDraft with args.workflow containing a complete workflow JSON definition. Drafts are saved disabled and must include postconditions when they contain mutating actions.',
         'If runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.',
         'If runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.',
         'Each action must be exactly {"operation":"operationName","args":{...}} with no extra fields.',
         'Required args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path "" only for the workspace root in listDirectory.',
+        'createWorkflowDraft args: { "workflow": { "id":"string", "name":"string", "inputSchema":{}, "actions":[], "postconditions":[] } }.',
         'Respond only as JSON with this shape:',
-        '{"message":"short summary","actions":[{"operation":"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath","args":{"path":"relative/path","content":"for writeFile only","nextPath":"for renamePath only"}}],"complete":true|false}'
+        '{"message":"short summary","actions":[{"operation":"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath|createWorkflowDraft","args":{"path":"relative/path","content":"for writeFile only","nextPath":"for renamePath only","workflow":"for createWorkflowDraft only"}}],"complete":true|false}'
       ].join('\n')
     },
     {
@@ -5060,18 +6577,41 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
 }
 
 async function runAgentTicket(runId) {
+  startingRunIds.delete(runId);
   startingLocalModelRunIds.delete(runId);
-  const queuedRun = readRuns().find(item => item.id === runId);
-  if (queuedRun && queuedRun.status === 'pending' && !canStartRunNow(queuedRun)) {
-    startRunWhenCapacityAvailable(queuedRun);
+
+  const leasedRun = readRuns().find(item => item.id === runId);
+  if (!isRunLeaseHeldByCurrentProcess(leasedRun)) {
+    appendEvent({
+      type: 'scheduler.run_skipped',
+      ticketId: leasedRun ? leasedRun.ticketId : null,
+      runId,
+      payload: {
+        reason: 'lease_required',
+        leaseOwner: leasedRun ? leasedRun.leaseOwner || null : null,
+        leaseExpiresAt: leasedRun ? leasedRun.leaseExpiresAt || null : null
+      }
+    });
     return;
   }
 
   let run = updateRunStatus(runId, 'running');
   if (!run) return;
   if (run.status !== 'running') return;
+  heartbeatRunLease(run.id, { phase: 'run_started' });
 
   runningRunKeys.add(runExecutionKey(run));
+  appendEvent({
+    type: 'run.started',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      status: 'running',
+      agentId: run.agentId,
+      agentName: run.agentName,
+      startedAt: run.startedAt || run.updatedAt
+    }
+  });
   appendRunLog(run, 'run:started', `Agent run started${allocationLogSuffix(run)}`, null, {
     allocationPlanId: run.allocationPlanId || null,
     allocationItemId: run.allocationItemId || null
@@ -5103,12 +6643,32 @@ async function runAgentTicket(runId) {
       }
 
       const workflowInput = run.workflowInput || ticket.workflowInput || {};
-      appendRunLog(run, 'run:workflow_started', `Workflow run started: ${workflow.name}`, null, {
-        workflowId: workflow.id
+      const capability = {
+        type: 'workflow',
+        id: workflow.id,
+        name: workflow.name,
+        input: sanitizeSnapshotValue(workflowInput)
+      };
+      appendRunReplaySnapshotItem(run.id, 'capabilitySelection', {
+        selectedBy: 'agent',
+        capability,
+        bounded: true,
+        deterministic: true
+      });
+      appendRunLog(run, 'run:capability_started', `Capability started: ${workflow.name}`, null, {
+        capabilityType: capability.type,
+        capabilityId: capability.id
       });
       const workflowResult = await executeWorkflowDefinition(run, workflow, workflowInput, agent);
-      appendRunLog(run, 'run:workflow_completed', `Workflow run completed: ${workflow.name}`, null, {
-        workflowId: workflow.id,
+      appendRunReplaySnapshotItem(run.id, 'capabilityOutputs', {
+        capabilityType: capability.type,
+        capabilityId: capability.id,
+        output: sanitizeSnapshotValue(workflowResult.result || {}),
+        counters: workflowResult.counters || null
+      });
+      appendRunLog(run, 'run:capability_completed', `Capability completed: ${workflow.name}`, null, {
+        capabilityType: capability.type,
+        capabilityId: capability.id,
         counters: workflowResult.counters || null
       });
       completeAgentRun(run);
@@ -5128,6 +6688,7 @@ async function runAgentTicket(runId) {
     const runStartedAtMs = Date.now();
 
     for (let step = 0; !completed; step += 1) {
+      heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       assertRunStepAllowed(run, step, limits);
       assertRunModelRequestAllowed(run, modelRequestCount, limits);
@@ -5313,10 +6874,12 @@ async function runAgentTicket(runId) {
           }
 
           assertRunNotTimedOut(run, runStartedAtMs, limits);
-          operation = parseWorkspaceOperation(action);
-          const result = executeWorkspaceOperation(run, action, step);
+          operation = parseAgentDirectAction(action);
+          const result = operation.operation === 'createWorkflowDraft'
+            ? createWorkflowDraftFromAgent(run, operation.args.workflow, step)
+            : executeWorkspaceOperation(run, action, step);
           const opDurationMs = Date.now() - actionStartedAt;
-          workspaceOperationCount += 1;
+          if (AGENT_ALLOWED_OPERATIONS.includes(operation.operation)) workspaceOperationCount += 1;
 
           actionResults.push({ action, result });
           // INVARIANT: Success replay entry shape must remain structurally
@@ -5326,18 +6889,34 @@ async function runAgentTicket(runId) {
           // Downstream consumers (EJS template, test assertions) access
           // item.operation.operation and item.result — any shape change
           // here must be mirrored in the error entry and all consumers.
-          appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
-            operation,
-            result,
-            startedAt: new Date(actionStartedAt).toISOString(),
-            durationMs: opDurationMs,
-            historyId: result && result.historyId ? result.historyId : null,
-            workspaceRoot: getRunWorkspaceProvider(run).root,
-            executionWorkspaceType: run.executionWorkspaceType || 'main',
-            allocationPlanId: run.allocationPlanId || null,
-            allocationItemId: run.allocationItemId || null,
-            ownedOutputPaths: getRunOwnedOutputPaths(run)
-          });
+          if (AGENT_ALLOWED_OPERATIONS.includes(operation.operation)) {
+            appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+              operation,
+              result,
+              startedAt: new Date(actionStartedAt).toISOString(),
+              durationMs: opDurationMs,
+              historyId: result && result.historyId ? result.historyId : null,
+              workspaceRoot: getRunWorkspaceProvider(run).root,
+              executionWorkspaceType: run.executionWorkspaceType || 'main',
+              allocationPlanId: run.allocationPlanId || null,
+              allocationItemId: run.allocationItemId || null,
+              ownedOutputPaths: getRunOwnedOutputPaths(run)
+            });
+            appendEvent({
+              type: 'workspace.operation',
+              ticketId: run.ticketId,
+              runId: run.id,
+              stepId: String(step),
+              payload: {
+                operation: operation.operation,
+                path: operation.args ? operation.args.path || null : null,
+                nextPath: operation.args ? operation.args.nextPath || null : null,
+                mutating: AGENT_MUTATING_OPERATIONS.includes(operation.operation),
+                input: sanitizeSnapshotValue(operation.args || {}),
+                result: sanitizeSnapshotValue(result)
+              }
+            });
+          }
 
           if (AGENT_MUTATING_OPERATIONS.includes(operation.operation)) {
             hasMutatingAction = true;
@@ -5355,7 +6934,7 @@ async function runAgentTicket(runId) {
         } catch (error) {
           const opDurationMs = Date.now() - actionStartedAt;
           actionResults.push({ action, error: error.message });
-          if (operation || error.workspaceAction) {
+          if (error.workspaceAction || (operation && AGENT_ALLOWED_OPERATIONS.includes(operation.operation))) {
             // INVARIANT: Error replay entry shape must remain structurally
             // compatible with the success replay entry above (line ~2717).
             // operation may be either the parseWorkspaceOperation object
@@ -5377,6 +6956,23 @@ async function runAgentTicket(runId) {
               allocationPlanId: run.allocationPlanId || null,
               allocationItemId: run.allocationItemId || null
             });
+            const eventOperation = error.workspaceAction || operation;
+            appendEvent({
+              type: 'workspace.operation',
+              ticketId: run.ticketId,
+              runId: run.id,
+              stepId: String(step),
+            payload: {
+              operation: eventOperation ? eventOperation.operation : null,
+              path: eventOperation && eventOperation.args ? eventOperation.args.path || null : eventOperation && eventOperation.path ? eventOperation.path : null,
+              nextPath: eventOperation && eventOperation.args ? eventOperation.args.nextPath || null : null,
+              mutating: eventOperation ? AGENT_MUTATING_OPERATIONS.includes(eventOperation.operation) : false,
+              input: sanitizeSnapshotValue(eventOperation && eventOperation.args ? eventOperation.args : {}),
+              blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
+              reason: error.reason || null,
+              error: error.message
+            }
+          });
           }
           error.workspaceAction = error.workspaceAction || action;
           throw error;
@@ -5455,9 +7051,9 @@ async function runAgentTicket(runId) {
 
     run = failAgentRun(run, error, error.workspaceAction || null);
   } finally {
+    startingRunIds.delete(runId);
     startingLocalModelRunIds.delete(runId);
     runningRunKeys.delete(runExecutionKey(run));
-    scheduleQueuedRuns();
   }
 }
 
@@ -5785,6 +7381,8 @@ function resetDebugData(changedBy = 'system') {
 
   clearWorkspaceRoot();
   runningRunKeys.clear();
+  startingRunIds.clear();
+  startingLocalModelRunIds.clear();
 
   appendSystemLog('system:reset', `Debug data reset completed by ${changedBy}`, null, {
     changedBy,
@@ -5895,7 +7493,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return 'Permission denied';
   }
 
-  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, executionMode, workflowId, workflowInput } = request.body;
+  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput } = request.body;
 
   function renderTicketForm(error) {
     reply.code(400);
@@ -5933,11 +7531,12 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return renderTicketForm('Selected ticket-capable group does not exist');
   }
 
-  const resolvedExecutionMode = executionMode === 'workflow' ? 'workflow' : 'agent';
+  const resolvedCapabilityType = capabilityType === 'workflow' || executionMode === 'workflow' ? 'workflow' : 'directAction';
+  const resolvedExecutionMode = resolvedCapabilityType === 'workflow' ? 'workflow' : 'agent';
   let selectedWorkflow = null;
   let parsedWorkflowInput = null;
 
-  if (resolvedExecutionMode === 'workflow') {
+  if (resolvedCapabilityType === 'workflow') {
     if (assignmentTargetType !== 'agent') {
       return renderTicketForm('Workflow tickets must be assigned to one agent');
     }
@@ -5989,6 +7588,9 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     executionMode: resolvedExecutionMode,
     workflowId: selectedWorkflow ? selectedWorkflow.id : null,
     workflowInput: selectedWorkflow ? parsedWorkflowInput : null,
+    capabilityType: resolvedCapabilityType,
+    capabilityId: selectedWorkflow ? selectedWorkflow.id : 'agent-selected-actions',
+    capabilityInput: selectedWorkflow ? parsedWorkflowInput : null,
     status: 'open',
     createdBy: request.user ? request.user.username : String(request.session.userId),
     changedBy: request.user ? request.user.username : String(request.session.userId),
@@ -6030,8 +7632,24 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
 
   tickets.push(newTicket);
   writeTickets(tickets);
+  appendEvent({
+    type: 'ticket.created',
+    ticketId: newTicket.id,
+    payload: {
+      status: newTicket.status,
+      assignmentTargetType: newTicket.assignmentTargetType,
+      assignmentTargetId: newTicket.assignmentTargetId,
+      assignmentMode: newTicket.assignmentMode,
+      executionMode: newTicket.executionMode,
+      capabilityType: newTicket.capabilityType,
+      capabilityId: newTicket.capabilityId,
+      workflowId: newTicket.workflowId,
+      createdBy: newTicket.createdBy,
+      createdAt: newTicket.createdAt
+    }
+  });
   broadcastTicketChange();
-  maybeStartTicketRuns(newTicket);
+  createRunsForTicket(newTicket);
 
   return reply.redirect('/tickets');
 });
@@ -6104,6 +7722,15 @@ fastify.get('/api/health', async (request, reply) => {
    return { status: 'ok', dataDir: 'data', workspaceRoot: 'workspace-root', port: PORT, uptime: Math.floor(process.uptime()) };
 });
 
+fastify.get('/api/runtime/status', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  return getRuntimeStatusSnapshot();
+});
+
 fastify.get('/api/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
@@ -6116,6 +7743,29 @@ fastify.get('/api/tickets', { preHandler: fastify.requireAuth }, async (request,
     agents: readAgents().map(agent => ({ id: agent.id, name: agent.name })),
     ticketStatuses: TICKET_STATUSES
   };
+});
+
+fastify.get('/api/tickets/:id/runtime', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const ticketId = parseInt(request.params.id, 10);
+
+  if (Number.isNaN(ticketId)) {
+    reply.code(400);
+    return { error: 'Invalid ticket id' };
+  }
+
+  const runtimeState = serializeTicketRuntimeState(ticketId);
+
+  if (!runtimeState) {
+    reply.code(404);
+    return { error: 'Ticket not found' };
+  }
+
+  return runtimeState;
 });
 
 fastify.post('/api/tickets/shape-objective', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -6171,10 +7821,21 @@ fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }
     ticket.assignmentMode = 'individual';
     ticket.updatedAt = new Date().toISOString();
     writeTickets(tickets);
+    appendEvent({
+      type: 'ticket.updated',
+      ticketId: ticket.id,
+      payload: {
+        status: ticket.status,
+        assignmentTargetType: ticket.assignmentTargetType,
+        assignmentTargetId: ticket.assignmentTargetId,
+        assignmentMode: ticket.assignmentMode,
+        updatedAt: ticket.updatedAt
+      }
+    });
     broadcastTicketChange();
   }
 
-  maybeStartTicketRuns(ticket);
+  createRunsForTicket(ticket);
 
   return { ticket };
 });
@@ -6263,7 +7924,7 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
 
   if (status === 'open') {
     try {
-      maybeStartTicketRuns(ticket);
+      createRunsForTicket(ticket);
     } catch (error) {
       ticket.status = 'failed';
       ticket.updatedAt = changedAt;
@@ -6592,6 +8253,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const failureSummary = buildRunFailureSummary(run, snapshot, enrichedHistory, runPartialMutationCount, authorityContext.controls.recoveryAvailable);
   const displaySnapshot = createDisplaySnapshot(snapshot);
   const operationalOutcome = classifyRunOperationalOutcome(run);
+  const runEvents = getRunEvents(runId);
+  const eventSummary = recentEventSummary(runId);
 
   return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
@@ -6609,9 +8272,60 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     operationalOutcome,
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
     runStatusLabel: displayRunStatus(run.status),
+    runEvents,
+    eventSummary,
     formatDurationHuman,
     canUpdateRuns: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
+});
+
+fastify.get('/api/runs/:id/events', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const runId = parseInt(request.params.id, 10);
+
+  if (Number.isNaN(runId)) {
+    reply.code(400);
+    return { error: 'Invalid run id' };
+  }
+
+  const run = readRuns().find(item => item.id === runId);
+
+  if (!run) {
+    reply.code(404);
+    return { error: 'Run not found' };
+  }
+
+  return {
+    events: getRunEvents(runId),
+    summary: recentEventSummary(runId)
+  };
+});
+
+fastify.get('/api/runs/:id/state', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const runId = parseInt(request.params.id, 10);
+
+  if (Number.isNaN(runId)) {
+    reply.code(400);
+    return { error: 'Invalid run id' };
+  }
+
+  const run = readRuns().find(item => item.id === runId);
+
+  if (!run) {
+    reply.code(404);
+    return { error: 'Run not found' };
+  }
+
+  return serializeRunRuntimeState(run);
 });
 
 fastify.get('/api/runs/:id/operations', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -7703,6 +9417,48 @@ fastify.get('/admin/actions', { preHandler: fastify.requireAuth }, async (reques
 
 // ==================== INITIALIZATION ====================
 
+let runtimeScheduler = null;
+
+function markRunStarting(run) {
+  if (!run || !run.id) return;
+  startingRunIds.add(run.id);
+  const agent = readAgents().find(item => item.id === run.agentId);
+  if (isLocalModelAgent(agent)) startingLocalModelRunIds.add(run.id);
+}
+
+function isRunStarting(run) {
+  return Boolean(run && (startingRunIds.has(run.id) || startingLocalModelRunIds.has(run.id)));
+}
+
+function isRunActiveInMemory(run) {
+  return Boolean(run && runningRunKeys.has(runExecutionKey(run)));
+}
+
+function startRuntimeScheduler() {
+  if (runtimeScheduler && runtimeScheduler.isRunning()) return runtimeScheduler;
+
+  const runner = createRuntimeRunner({
+    runAgentTicket,
+    markRunStarting
+  });
+
+  runtimeScheduler = createRuntimeScheduler({
+    intervalMs: getPositiveIntegerEnv('RUNTIME_SCHEDULER_INTERVAL_MS', 500),
+    readRuns,
+    readLogs,
+    appendRunLog,
+    appendEvent,
+    canStartRunNow,
+    acquireRunLease,
+    expireStaleRunLeases,
+    isRunStarting,
+    isRunActiveInMemory,
+    runner
+  });
+  runtimeScheduler.start();
+  return runtimeScheduler;
+}
+
 // Note: this does not validate integrity. It rewrites all data files through
 // their normalize functions to ensure clean serialization on startup.
 function normalizeDataIntegrity() {
@@ -7791,6 +9547,12 @@ async function createDefaultData() {
     writeWorkflows(workflows);
     console.log('Created demo workflow: demo-agent-write-if-approved');
   }
+
+  if (!workflows.some(workflow => workflow.id === 'legal-intake-summary')) {
+    workflows.push(createLegalIntakeWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created demo workflow: legal-intake-summary');
+  }
 }
 
 // Start server
@@ -7798,6 +9560,7 @@ async function start() {
   try {
     await createDefaultData();
     interruptStaleRunsOnStartup();
+    startRuntimeScheduler();
     serverReady = true;
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`Server running on http://localhost:${PORT}`);
