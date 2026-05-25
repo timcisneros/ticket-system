@@ -13,7 +13,9 @@
     "test:allocated": "NODE_ENV=test node scripts/allocated-regression-test.js",
     "test:recovery": "NODE_ENV=test node scripts/recovery-regression-test.js",
     "test:live-openai": "NODE_ENV=test node --env-file=.env.test.local scripts/live-openai-test.js",
-    "test:allocated-live": "NODE_ENV=test node --env-file=.env.test.local scripts/allocated-live-openai-test.js"
+    "test:allocated-live": "NODE_ENV=test node --env-file=.env.test.local scripts/allocated-live-openai-test.js",
+    "test:postcondition": "NODE_ENV=test node scripts/postcondition-completion-test.js",
+    "test:workflow": "NODE_ENV=test node scripts/workflow-composition-test.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

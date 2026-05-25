@@ -22,6 +22,7 @@ const RUNS_FILE = path.join(DATA_DIR, 'runs.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 const ALLOCATION_PLANS_FILE = path.join(DATA_DIR, 'allocation-plans.json');
 const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
+const WORKFLOWS_FILE = path.join(DATA_DIR, 'workflows.json');
 const REPLAY_SNAPSHOTS_DIR = path.join(DATA_DIR, 'replay-snapshots');
 const PROTECTED_PATHS_FILE = path.join(__dirname, 'config', 'protected-paths.json');
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
@@ -39,6 +40,7 @@ const AGENT_OPERATION_ARGS = {
   renamePath: ['path', 'nextPath'],
   deletePath: ['path']
 };
+const ACTION_TYPES = ['workspaceAction', 'agentAction', 'conditionAction', 'systemAction', 'stopAction', 'workflowAction'];
 const MAX_AGENT_ACTIONS_PER_RESPONSE = 8;
 const MAX_MUTATING_ACTIONS_PER_RESPONSE = parseInt(process.env.AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE || '2', 10) || 2;
 const DEFAULT_AGENT_RUNTIME_LIMITS = {
@@ -47,6 +49,7 @@ const DEFAULT_AGENT_RUNTIME_LIMITS = {
   maxModelRequestsPerRun: 4,
   maxRuntimeDurationMs: 120000
 };
+const DEFAULT_LOCAL_MODEL_CONCURRENCY = 1;
 const DEFAULT_PROTECTED_WORKSPACE_PATHS = ['.git', '.env', '.env.*', 'node_modules', 'package.json', 'pnpm-lock.yaml'];
 const WORKSPACE_FIXTURES = [
   { id: 'empty', name: 'Empty workspace' },
@@ -97,13 +100,50 @@ const AGENT_PRIMITIVE_METADATA = {
   }
 };
 const GENERATED_AGENT_ACTIONS = AGENT_ALLOWED_OPERATIONS.map(op => ({
-  name: op, category: 'workspace', invoker: 'agent', mutating: AGENT_MUTATING_OPERATIONS.includes(op),
+  name: op, category: 'workspace', type: 'workspaceAction', invoker: 'agent', mutating: AGENT_MUTATING_OPERATIONS.includes(op),
   requestShape: { operation: op, args: Object.fromEntries(AGENT_OPERATION_ARGS[op].map(k => [k, 'string'])) },
+  inputSchema: Object.fromEntries(AGENT_OPERATION_ARGS[op].map(k => [k, 'string'])),
   optionalShape: null,
   ...AGENT_PRIMITIVE_METADATA[op]
 }));
 const ACTIONS_CATALOG = [
   ...GENERATED_AGENT_ACTIONS,
+  {
+    name: 'agentStructuredOutput', displayName: 'Agent Structured Output', category: 'agent', type: 'agentAction', invoker: 'workflow', mutating: false,
+    requestShape: { instruction: 'string', input: {}, outputSchema: {} },
+    optionalShape: { context: {}, temperature: 'number' },
+    responseShape: { output: {}, text: 'string', usage: {}, provider: 'string', model: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Workflow runner model budget; agent-scoped provider/model config; no direct workspace mutation',
+    provenanceSurface: 'Run replay snapshot workflowActions, providerRequests, and modelResponses'
+  },
+  {
+    name: 'condition', displayName: 'Condition', category: 'condition', type: 'conditionAction', invoker: 'workflow', mutating: false,
+    requestShape: { value: 'any', equals: 'any' },
+    optionalShape: { exists: 'boolean' },
+    responseShape: { matched: 'boolean', next: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Declarative comparison only; no user code, JavaScript, shell, network, or filesystem access',
+    provenanceSurface: 'Run replay snapshot workflowActions'
+  },
+  {
+    name: 'stop', displayName: 'Stop', category: 'stop', type: 'stopAction', invoker: 'workflow', mutating: false,
+    requestShape: {},
+    optionalShape: { result: {} },
+    responseShape: { stopped: 'boolean', result: {} },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Terminates the current workflow run; no side effects',
+    provenanceSurface: 'Run replay snapshot workflowActions'
+  },
+  {
+    name: 'invokeWorkflow', displayName: 'Invoke Workflow', category: 'workflow', type: 'workflowAction', invoker: 'agent', mutating: false,
+    requestShape: { workflowId: 'string', input: {} },
+    optionalShape: null,
+    responseShape: { workflowId: 'string', status: 'string', result: {} },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent may invoke one approved workflow with structured inputs; workflow internals execute through the bounded runtime',
+    provenanceSurface: 'Run replay snapshot workflowInvocation and workflowActions'
+  },
   {
     name: 'providerModelCall', displayName: 'Provider/Model Call', category: 'provider', invoker: 'agent', mutating: false,
     requestShape: { model: 'string', input: [{ role: 'system', content: 'string' }], text: { format: { type: 'json_object' } } },
@@ -263,7 +303,7 @@ const ACTIONS_CATALOG = [
     provenanceSurface: 'Data file updated (groups.json); memberships cleaned up; system log'
   },
   {
-    name: 'debugReset', displayName: 'Debug Reset', category: 'system', invoker: 'operator', mutating: true,
+    name: 'debugReset', displayName: 'Debug Reset', category: 'system', type: 'systemAction', invoker: 'operator', mutating: true,
     requestShape: { confirmation: 'RESET DEBUG DATA' }, optionalShape: null,
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
@@ -271,7 +311,7 @@ const ACTIONS_CATALOG = [
     provenanceSurface: 'System log system:reset; all volatile data files emptied; workspace cleared'
   },
   {
-    name: 'systemInterruptStaleRuns', displayName: 'System: Interrupt Stale Runs', category: 'system', invoker: 'system', mutating: true,
+    name: 'systemInterruptStaleRuns', displayName: 'System: Interrupt Stale Runs', category: 'system', type: 'systemAction', invoker: 'system', mutating: true,
     requestShape: null, optionalShape: null,
     responseShape: { status: 'interrupted', runs: ['number'] },
     errorShape: { error: 'string' },
@@ -279,7 +319,7 @@ const ACTIONS_CATALOG = [
     provenanceSurface: 'Run replay snapshots finalized as interrupted; run logs run:interrupted'
   },
   {
-    name: 'systemAutoStartRuns', displayName: 'System: Auto-Start Ticket Runs', category: 'system', invoker: 'system', mutating: true,
+    name: 'systemAutoStartRuns', displayName: 'System: Auto-Start Ticket Runs', category: 'system', type: 'systemAction', invoker: 'system', mutating: true,
     requestShape: null, optionalShape: null,
     responseShape: { runs: [{}] },
     errorShape: { error: 'string' },
@@ -288,9 +328,50 @@ const ACTIONS_CATALOG = [
   }
 ];
 
+function inferActionType(action) {
+  if (action.type) return action.type;
+  if (action.category === 'workspace' && action.invoker === 'agent') return 'workspaceAction';
+  if (action.category === 'provider' && action.invoker === 'agent') return 'agentAction';
+  if (action.category === 'system') return 'systemAction';
+  return 'systemAction';
+}
+
+function normalizeActionContract(action) {
+  const type = inferActionType(action);
+  if (!ACTION_TYPES.includes(type)) {
+    throw new Error(`Unknown action type for ${action.name}: ${type}`);
+  }
+
+  action.type = type;
+  action.inputSchema = action.inputSchema || action.requestShape || {};
+  action.outputSchema = action.outputSchema || action.responseShape || {};
+  action.errorSchema = action.errorSchema || action.errorShape || { error: 'string' };
+  action.authority = action.authority || { summary: action.authorityConstraints || 'Runtime authority checks apply' };
+  action.provenance = action.provenance || { surface: action.provenanceSurface || 'Runtime replay/log surfaces apply' };
+  action.executable = action.executable !== false;
+  return action;
+}
+
+ACTIONS_CATALOG.forEach(normalizeActionContract);
+const ACTION_CONTRACTS_BY_NAME = new Map(ACTIONS_CATALOG.map(action => [action.name, action]));
+
+function isWorkflowUsableAction(action) {
+  if (!action || action.executable === false) return false;
+  if (typeof action.name !== 'string' || !action.name.trim()) return false;
+  if (!action.inputSchema || typeof action.inputSchema !== 'object' || Array.isArray(action.inputSchema)) return false;
+  if (!action.errorSchema || typeof action.errorSchema !== 'object' || Array.isArray(action.errorSchema)) return false;
+  if (!action.outputSchema || typeof action.outputSchema !== 'object' || Array.isArray(action.outputSchema)) return false;
+
+  return action.type === 'workspaceAction' ||
+    action.name === 'agentStructuredOutput' ||
+    action.name === 'condition' ||
+    action.name === 'stop';
+}
+
 const ticketEventClients = new Set();
 const logEventClients = new Set();
 const runningRunKeys = new Set();
+const startingLocalModelRunIds = new Set();
 let lastLogTimestampNs = 0n;
 let serverReady = false;
 let dataVersion = 0;
@@ -375,6 +456,82 @@ function readTickets() {
   return readJsonArrayCached(DATA_FILE);
 }
 
+function createDemoWorkflowDefinition(now = new Date().toISOString()) {
+  return {
+    id: 'demo-agent-write-if-approved',
+    name: 'Demo: agent output gated write',
+    description: 'Asks the selected agent for structured content, gates it with a condition, writes a file, then stops.',
+    enabled: true,
+    inputSchema: {
+      instruction: 'string',
+      path: 'string'
+    },
+    actions: [
+      {
+        id: 'draft',
+        action: 'agentStructuredOutput',
+        input: {
+          instruction: '{{workflow.input.instruction}}',
+          input: {
+            path: '{{workflow.input.path}}'
+          },
+          outputSchema: {
+            shouldWrite: 'boolean',
+            content: 'string'
+          }
+        },
+        saveAs: 'draft',
+        next: 'should_write'
+      },
+      {
+        id: 'should_write',
+        action: 'condition',
+        input: {
+          value: '{{draft.shouldWrite}}',
+          equals: true
+        },
+        trueNext: 'write_note',
+        falseNext: 'stop_without_write'
+      },
+      {
+        id: 'write_note',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.path}}',
+          content: '{{draft.content}}'
+        },
+        next: 'stop_after_write'
+      },
+      {
+        id: 'stop_without_write',
+        action: 'stop',
+        input: {
+          result: {
+            written: false,
+            reason: 'condition did not match'
+          }
+        }
+      },
+      {
+        id: 'stop_after_write',
+        action: 'stop',
+        input: {
+          result: {
+            written: true,
+            path: '{{workflow.input.path}}'
+          }
+        }
+      }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function readWorkflows() {
+  return readJsonArrayCached(WORKFLOWS_FILE);
+}
+
 function cachePageRender(key, html) {
   pageRenderCache.set(key, {
     html,
@@ -450,6 +607,11 @@ function normalizeTickets(tickets) {
     ticket.ownedOutputPaths = (typeof ticket.ownedOutputPaths === 'object' && ticket.ownedOutputPaths !== null && !Array.isArray(ticket.ownedOutputPaths))
       ? ticket.ownedOutputPaths
       : null;
+    ticket.executionMode = ticket.executionMode === 'workflow' ? 'workflow' : 'agent';
+    ticket.workflowId = ticket.executionMode === 'workflow' && typeof ticket.workflowId === 'string' ? ticket.workflowId : null;
+    ticket.workflowInput = ticket.executionMode === 'workflow' && ticket.workflowInput && typeof ticket.workflowInput === 'object' && !Array.isArray(ticket.workflowInput)
+      ? ticket.workflowInput
+      : null;
 
     return true;
   });
@@ -459,22 +621,191 @@ function writeTickets(tickets) {
   writeFileAtomic(DATA_FILE, JSON.stringify(normalizeTickets(tickets), null, 2));
 }
 
+function normalizeWorkflows(workflows) {
+  const seenWorkflowIds = new Set();
+  const now = new Date().toISOString();
+
+  return workflows.filter(workflow => {
+    if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) return false;
+    if (typeof workflow.id !== 'string' || !workflow.id.trim()) return false;
+    const workflowId = workflow.id.trim();
+    if (seenWorkflowIds.has(workflowId)) return false;
+    seenWorkflowIds.add(workflowId);
+
+    workflow.id = workflowId;
+    workflow.name = typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim() : workflow.id;
+    workflow.description = typeof workflow.description === 'string' ? workflow.description : '';
+    workflow.enabled = workflow.enabled !== false;
+    workflow.inputSchema = workflow.inputSchema && typeof workflow.inputSchema === 'object' && !Array.isArray(workflow.inputSchema)
+      ? workflow.inputSchema
+      : {};
+    workflow.actions = Array.isArray(workflow.actions) ? workflow.actions : [];
+    workflow.createdAt = typeof workflow.createdAt === 'string' ? workflow.createdAt : now;
+    workflow.updatedAt = typeof workflow.updatedAt === 'string' ? workflow.updatedAt : now;
+    return true;
+  });
+}
+
+function writeWorkflows(workflows) {
+  writeFileAtomic(WORKFLOWS_FILE, JSON.stringify(normalizeWorkflows(workflows), null, 2));
+}
+
+function getWorkflowById(workflowId) {
+  return readWorkflows().find(workflow => workflow.id === workflowId) || null;
+}
+
+function getEnabledWorkflows() {
+  return readWorkflows().filter(workflow => workflow.enabled !== false);
+}
+
 function getTicketsForDisplay() {
   const agents = readAgents();
   const agentGroups = getTicketAssignableGroups();
   const runs = readRuns();
+  const logs = readLogs();
   const history = readOperationHistory();
   const runsByTicketId = groupBy(runs, run => run.ticketId);
+  const logsByRunId = groupBy(logs, log => log.runId);
   const mutationCountByRunId = buildMutationCountByRunId(history);
   const tickets = readTickets().map(ticket => enrichTicketForDisplay(ticket, {
     agents,
     agentGroups,
     runsByTicketId,
+    logsByRunId,
     mutationCountByRunId
   }));
 
   tickets.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   return tickets;
+}
+
+function getRunLatestParsedPlanMessage(run) {
+  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || null;
+  const plans = snapshot && Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
+
+  for (let index = plans.length - 1; index >= 0; index -= 1) {
+    const message = plans[index] && typeof plans[index].message === 'string' ? plans[index].message.trim() : '';
+    if (message) return sanitizeLogMessage(message);
+  }
+
+  return null;
+}
+
+function getDisplayMessageFromRunLog(log) {
+  if (!log || typeof log.message !== 'string') return null;
+  if (log.type === 'run:runtime') return null;
+  if (log.type === 'run:queued') return 'queued';
+  if (log.type === 'model:request') return 'waiting on local model';
+  if (log.type && log.type.startsWith('workspace:')) return 'running actions';
+  if (log.type === 'run:timeout') return 'timed out';
+
+  const message = log.message.trim();
+  if (!message) return null;
+
+  if (log.type === 'model:response') {
+    try {
+      const parsed = JSON.parse(message);
+      return typeof parsed.message === 'string' && parsed.message.trim()
+        ? sanitizeLogMessage(parsed.message.trim())
+        : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  return message;
+}
+
+function getRunDisplayState(run, logsByRunId) {
+  if (!run) return null;
+  const limits = getAgentRuntimeLimits();
+
+  if (run.status === 'pending') {
+    return {
+      state: 'queued',
+      label: 'queued',
+      detail: 'waiting for local model capacity',
+      elapsedMs: Math.max(0, Date.now() - new Date(run.createdAt || Date.now()).getTime()),
+      timeoutLimit: formatDurationHuman(limits.maxRuntimeDurationMs)
+    };
+  }
+
+  if (run.status === 'failed' && run.error && /runtime duration limit/i.test(run.error)) {
+    return {
+      state: 'timed_out',
+      label: 'timed out',
+      detail: `timed out after ${formatDurationHuman(limits.maxRuntimeDurationMs)}`,
+      elapsedMs: run.startedAt ? Math.max(0, Date.now() - new Date(run.startedAt).getTime()) : 0,
+      timeoutLimit: formatDurationHuman(limits.maxRuntimeDurationMs)
+    };
+  }
+
+  if (run.status !== 'running') {
+    return {
+      state: run.status || 'unknown',
+      label: displayRunStatus(run.status),
+      detail: null,
+      elapsedMs: 0,
+      timeoutLimit: formatDurationHuman(limits.maxRuntimeDurationMs)
+    };
+  }
+
+  const runLogs = logsByRunId.get(run.id) || [];
+  const latestModelRequestIndex = runLogs.map(log => log.type).lastIndexOf('model:request');
+  const latestModelResponseIndex = runLogs.map(log => log.type).lastIndexOf('model:response');
+  const latestWorkspaceIndex = runLogs.findLastIndex
+    ? runLogs.findLastIndex(log => log.type && log.type.startsWith('workspace:'))
+    : (() => {
+      for (let i = runLogs.length - 1; i >= 0; i -= 1) {
+        if (runLogs[i].type && runLogs[i].type.startsWith('workspace:')) return i;
+      }
+      return -1;
+    })();
+  const startedAt = run.startedAt ? new Date(run.startedAt).getTime() : Date.now();
+  const elapsedMs = Math.max(0, Date.now() - startedAt);
+
+  if (latestModelRequestIndex > latestModelResponseIndex) {
+    return {
+      state: 'waiting_on_local_model',
+      label: 'waiting on local model',
+      detail: `waiting ${formatDurationHuman(elapsedMs)} of ${formatDurationHuman(limits.maxRuntimeDurationMs)}`,
+      elapsedMs,
+      timeoutLimit: formatDurationHuman(limits.maxRuntimeDurationMs)
+    };
+  }
+
+  if (latestWorkspaceIndex > latestModelResponseIndex - 1) {
+    return {
+      state: 'running_actions',
+      label: 'running actions',
+      detail: `working for ${formatDurationHuman(elapsedMs)}`,
+      elapsedMs,
+      timeoutLimit: formatDurationHuman(limits.maxRuntimeDurationMs)
+    };
+  }
+
+  return {
+    state: 'running',
+    label: 'running',
+    detail: `running for ${formatDurationHuman(elapsedMs)}`,
+    elapsedMs,
+    timeoutLimit: formatDurationHuman(limits.maxRuntimeDurationMs)
+  };
+}
+
+function getRunCurrentMessage(run, logsByRunId) {
+  if (!run) return null;
+
+  const parsedPlanMessage = getRunLatestParsedPlanMessage(run);
+  if (parsedPlanMessage) return parsedPlanMessage;
+
+  const runLogs = logsByRunId.get(run.id) || [];
+  for (let index = runLogs.length - 1; index >= 0; index -= 1) {
+    const message = getDisplayMessageFromRunLog(runLogs[index]);
+    if (message) return message;
+  }
+
+  return null;
 }
 
 function enrichTicketForDisplay(ticket, context) {
@@ -487,13 +818,30 @@ function enrichTicketForDisplay(ticket, context) {
     .slice()
     .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
   const lastRunPartialMutationCount = lastRun ? (context.mutationCountByRunId.get(lastRun.id) || 0) : 0;
+  const primaryActiveRun = activeRuns
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
+  const currentRunDisplayState = primaryActiveRun ? getRunDisplayState(primaryActiveRun, context.logsByRunId) : null;
+  const currentMessage = primaryActiveRun ? getRunCurrentMessage(primaryActiveRun, context.logsByRunId) : null;
+  const lastRunOperationalOutcome = lastRun ? classifyRunOperationalOutcome(lastRun) : null;
 
   return {
     ...ticket,
-    assignmentTargetName: target ? target.name : 'Unknown target',
+    assignmentTargetName: target ? target.name : null,
     activeRunIds: activeRuns.map(run => run.id),
+    currentRunId: primaryActiveRun ? primaryActiveRun.id : null,
+    currentRunDisplayState,
+    currentRunDisplayLabel: currentRunDisplayState ? currentRunDisplayState.label : null,
+    currentRunElapsedMs: currentRunDisplayState ? currentRunDisplayState.elapsedMs : null,
+    currentRunTimeoutLimit: currentRunDisplayState ? currentRunDisplayState.timeoutLimit : formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs),
+    currentRunState: currentRunDisplayState ? currentRunDisplayState.state : null,
+    currentRunStartedAt: primaryActiveRun ? primaryActiveRun.startedAt || null : null,
+    currentRunCreatedAt: primaryActiveRun ? primaryActiveRun.createdAt || null : null,
+    currentMessage,
+    lastOutputMessage: currentMessage,
     lastRunStatus: lastRun ? lastRun.status : null,
-    lastRunOperationalOutcome: lastRun ? classifyRunOperationalOutcome(lastRun) : null,
+    lastRunOperationalOutcome,
+    lastRunOperationalOutcomeLabel: displayOperationalOutcome(lastRunOperationalOutcome, lastRunPartialMutationCount),
     lastRunPartialMutationCount,
     lastRunHadPartialMutations: lastRunPartialMutationCount > 0
   };
@@ -514,8 +862,10 @@ function getPaginatedTickets(query = {}) {
   const agents = readAgents();
   const agentGroups = getTicketAssignableGroups();
   const runs = readRuns();
+  const logs = readLogs();
   const history = readOperationHistory();
   const runsByTicketId = groupBy(runs, run => run.ticketId);
+  const logsByRunId = groupBy(logs, log => log.runId);
   const mutationCountByRunId = buildMutationCountByRunId(history);
   const total = allTickets.length;
   const pageCount = Math.max(1, Math.ceil(total / limit));
@@ -527,6 +877,7 @@ function getPaginatedTickets(query = {}) {
       agents,
       agentGroups,
       runsByTicketId,
+      logsByRunId,
       mutationCountByRunId
     }));
 
@@ -563,6 +914,7 @@ function classifyRunOperationalOutcome(run) {
   if (run.status === 'interrupted') return 'interrupted';
 
   if (run.status === 'completed') {
+    if (events.some(event => event && event.type === 'run:postcondition_completed')) return 'completed_with_verified_postcondition';
     if (getRunMutationCount(run) > 0) return 'completed_with_mutations';
     if (workspaceOperations.some(item =>
       (item.result && item.result.status === 'not_found') ||
@@ -711,27 +1063,86 @@ function describeFirstFailedOperation(source) {
   return `${operation || 'operation'}${pathValue}`;
 }
 
+function describeWorkspaceAction(action) {
+  if (!action || typeof action !== 'object') return null;
+  const op = action.operation || 'action';
+  const args = action.args || {};
+  const target = args.nextPath ? `${args.path || ''} -> ${args.nextPath}` : args.path;
+  return target ? `${op} ${target}` : op;
+}
+
+function buildMutationSummary(operationHistory) {
+  return (operationHistory || [])
+    .filter(record => record && AGENT_MUTATING_OPERATIONS.includes(record.operation))
+    .map(record => describeWorkspaceAction({ operation: record.operation, args: record.args }))
+    .filter(Boolean);
+}
+
+function buildOutputSatisfactionSummary(ticket) {
+  const checks = buildObviousPostconditionChecks(ticket && ticket.objective);
+  if (checks.length === 0) {
+    return {
+      label: 'not automatically checkable',
+      satisfiedCount: 0,
+      totalCount: 0,
+      items: []
+    };
+  }
+
+  const items = checks.map(check => ({
+    type: check.type,
+    path: check.path,
+    satisfied: check.satisfied()
+  }));
+  const satisfiedCount = items.filter(item => item.satisfied).length;
+  const totalCount = items.length;
+
+  return {
+    label: satisfiedCount === totalCount
+      ? 'yes'
+      : satisfiedCount > 0
+        ? `partially (${satisfiedCount}/${totalCount})`
+        : 'no',
+    satisfiedCount,
+    totalCount,
+    items
+  };
+}
+
 function buildRunFailureSummary(run, snapshot, operationHistory, mutationCount, recoveryAvailable) {
   if (!['failed', 'interrupted'].includes(run.status)) return null;
 
   const workspaceOps = snapshot && Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
+  const parsedPlans = snapshot && Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
+  const lastPlan = parsedPlans.length > 0 ? parsedPlans[parsedPlans.length - 1] : null;
   const firstFailedOperation = workspaceOps.find(op => op && (op.error || op.blocked || op.reason))
     || (operationHistory || []).find(record => record && record.error)
     || null;
   const snapshotFailure = snapshot && snapshot.failure ? snapshot.failure : null;
   const code = getErrorCodeFromSource(firstFailedOperation) || getErrorCodeFromSource(snapshotFailure) || (run.status === 'interrupted' ? 'RUN_INTERRUPTED' : null);
   const rootCause = (snapshot && snapshot.failureReason) || run.error || getErrorMessageFromSource(firstFailedOperation) || (code ? explainErrorCode(code) : 'Run ended without a structured failure reason.');
+  const timedOut = code === 'RUN_LIMIT_EXCEEDED' && snapshotFailure && snapshotFailure.kind === 'timeout' || /runtime duration limit/i.test(rootCause);
+  const finalBlockingReason = timedOut ? `timed out after ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}` : rootCause;
+  const ticket = run && run.ticketId ? readTickets().find(item => item.id === run.ticketId) : null;
 
   return {
     status: run.status,
-    rootCause,
+    statusLabel: displayRunStatus(run.status),
+    rootCause: timedOut ? 'timed out' : rootCause,
     blockingErrorCode: code || '-',
     blockingErrorExplanation: code ? explainErrorCode(code) : '-',
+    finalBlockingReason,
     firstFailedOperation: describeFirstFailedOperation(firstFailedOperation),
     mutationCount: mutationCount || 0,
+    mutationSummary: buildMutationSummary(operationHistory),
     mutationsBeforeFailure: (mutationCount || 0) > 0,
     recoveryAvailable: recoveryAvailable === true,
-    boundedTransitionRejectionCount: countBoundedTransitionRejections(snapshot)
+    boundedTransitionRejectionCount: countBoundedTransitionRejections(snapshot),
+    lastModelMessage: lastPlan && lastPlan.message ? lastPlan.message : '-',
+    lastProposedActions: lastPlan && Array.isArray(lastPlan.actions)
+      ? lastPlan.actions.map(describeWorkspaceAction).filter(Boolean)
+      : [],
+    outputSatisfaction: buildOutputSatisfactionSummary(ticket)
   };
 }
 
@@ -817,6 +1228,74 @@ function sanitizeLogMessage(message) {
   return String(message || '').replace(/sk-[A-Za-z0-9_*\-]+/g, '[redacted-api-key]');
 }
 
+function formatDurationHuman(ms) {
+  const value = Math.max(0, parseInt(ms, 10) || 0);
+  const totalSeconds = Math.round(value / 1000);
+  if (totalSeconds < 1) return 'under 1 second';
+  if (totalSeconds < 60) return `${totalSeconds} second${totalSeconds === 1 ? '' : 's'}`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (seconds === 0) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  return `${minutes} minute${minutes === 1 ? '' : 's'} ${seconds} second${seconds === 1 ? '' : 's'}`;
+}
+
+function displayRunStatus(status) {
+  if (status === 'pending') return 'queued';
+  if (status === 'running') return 'running';
+  if (status === 'failed') return 'failed';
+  if (status === 'completed') return 'completed';
+  if (status === 'interrupted') return 'stopped';
+  return status || 'unknown';
+}
+
+function displayOperationalOutcome(outcome, mutationCount = 0) {
+  if (!outcome) return null;
+  const labels = {
+    'blocked/rejected': 'blocked',
+    interrupted: 'stopped',
+    completed_with_verified_postcondition: 'completed: already satisfied',
+    completed_with_mutations: 'completed with changes',
+    completed_noop: 'completed: no changes needed',
+    impossible_within_boundary: 'could not complete in workspace',
+    failed_execution: mutationCount > 0 ? 'failed after partial work' : 'failed',
+    running: 'running',
+    pending: 'queued'
+  };
+  return labels[outcome] || outcome;
+}
+
+function displayLogType(type) {
+  const labels = {
+    'run:created': 'run created',
+    'run:queued': 'queued',
+    'run:started': 'started',
+    'run:timeout': 'timed out',
+    'run:failed': 'failed',
+    'run:completed': 'completed',
+    'run:postcondition_completed': 'already satisfied',
+    'model:request': 'waiting on model',
+    'model:response': 'model response',
+    'model:no_progress': 'no progress',
+    'workspace:list': 'workspace action',
+    'workspace:read': 'workspace action',
+    'workspace:create': 'workspace action',
+    'workspace:write': 'workspace action',
+    'workspace:delete': 'workspace action',
+    'workspace:rename': 'workspace action'
+  };
+  return labels[type] || String(type || '').replace(/:/g, ' ');
+}
+
+function displayLogMessage(log) {
+  if (!log) return '';
+  if (log.type === 'run:timeout') return `Timed out after ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}`;
+  if (log.type === 'run:failed' && /runtime duration limit/i.test(log.message || '')) return `Failed after timing out at ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}`;
+  if (log.type === 'model:request') return 'Waiting for local model response';
+  if (log.type === 'model:no_progress') return 'The model repeated an inspection without making progress';
+  if (log.type === 'run:queued') return 'Waiting for local model capacity';
+  return log.message || '';
+}
+
 function isSensitiveSnapshotKey(key) {
   const lowerKey = String(key || '').toLowerCase();
 
@@ -889,6 +1368,7 @@ function appendRunLog(run, type, message, workspaceAction = null, extraFields = 
   logs.push(log);
   writeLogs(logs);
   broadcastLogEntry(log);
+  broadcastTicketChange();
   return log;
 }
 
@@ -1177,7 +1657,8 @@ function extractReplaySummary(snapshot) {
     providerRequests: providerRequests.length,
     modelResponses: modelResponses.length,
     hasBlockedOrRejected: workspaceOperations.some(item => item && (item.blocked || item.reason || (item.operation && item.operation.blocked))),
-    hasCompletedNoop: events.some(item => item && item.type === 'run:completed_noop')
+    hasCompletedNoop: events.some(item => item && item.type === 'run:completed_noop'),
+    hasPostconditionCompleted: events.some(item => item && item.type === 'run:postcondition_completed')
   };
 }
 
@@ -1262,6 +1743,11 @@ function normalizeRuns(runs) {
     run.allocationItemId = Number.isNaN(run.allocationItemId) ? null : run.allocationItemId;
     run.ownedOutputPaths = Array.isArray(run.ownedOutputPaths) ? run.ownedOutputPaths : [];
     run.allocationSubtask = typeof run.allocationSubtask === 'string' ? run.allocationSubtask : null;
+    run.executionMode = run.executionMode === 'workflow' ? 'workflow' : 'agent';
+    run.workflowId = run.executionMode === 'workflow' && typeof run.workflowId === 'string' ? run.workflowId : null;
+    run.workflowInput = run.executionMode === 'workflow' && run.workflowInput && typeof run.workflowInput === 'object' && !Array.isArray(run.workflowInput)
+      ? run.workflowInput
+      : null;
     if (run.replaySnapshot && typeof run.replaySnapshot === 'object') {
       const snapshot = sanitizeSnapshotValue(run.replaySnapshot);
       writeReplaySnapshotFile(run.id, snapshot);
@@ -1965,6 +2451,8 @@ function createReplaySnapshotBase(run, overrides = {}) {
     providerRequests: [],
     modelResponses: [],
     parsedModelPlans: [],
+    workflowInvocation: [],
+    workflowActions: [],
     workspaceOperations: [],
     events: [],
     terminalStatus: null,
@@ -2125,6 +2613,147 @@ function assertRunWorkspaceOperationAllowed(run, currentCount, incomingCount, li
   }
 }
 
+function checkPostconditionCompletion(run, actions, actionResults, step) {
+  if (!actions || actions.length === 0) return null;
+
+  const mutatingIndices = actions
+    .map((action, i) => ({ action, i }))
+    .filter(({ action }) => action && typeof action === 'object' && AGENT_MUTATING_OPERATIONS.includes(action.operation));
+
+  if (mutatingIndices.length === 0) return null;
+
+  if (actionResults.some(r => r.error)) return null;
+
+  const hasNonMutating = actions.some((action, i) =>
+    action && typeof action === 'object' && !AGENT_MUTATING_OPERATIONS.includes(action.operation)
+  );
+  if (hasNonMutating) return null;
+
+  const histories = readOperationHistory();
+
+  for (const { action, i } of mutatingIndices) {
+    const ar = actionResults[i];
+    if (!ar || !ar.result) return null;
+
+    if (action.operation === 'createFolder') {
+      if (ar.result.status !== 'already_exists_noop') return null;
+    } else if (action.operation === 'deletePath') {
+      if (ar.result.status !== 'already_missing_noop') return null;
+    } else if (action.operation === 'writeFile') {
+      const historyRecord = histories.find(h => h.id === ar.result.historyId);
+      if (!historyRecord || !historyRecord.preState) return null;
+      if (!historyRecord.preState.existed) return null;
+      if (historyRecord.preState.content !== action.args.content) return null;
+    } else if (action.operation === 'renamePath') {
+      return null;
+    }
+  }
+
+  return {
+    reason: `All ${mutatingIndices.length} proposed workspace mutation(s) are redundant relative to current state`,
+    mutatingActionCount: mutatingIndices.length
+  };
+}
+
+function cleanObjectivePath(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^["'`]+|["'`,.]+$/g, '')
+    .replace(/^\/+/, '');
+}
+
+function cleanObjectiveContent(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/\s+once\b[\s\S]*$/i, '')
+    .trim();
+}
+
+function readWorkspaceFileIfExists(relativePath) {
+  const info = workspaceProvider.getPathInfo(relativePath);
+  if (!info.exists || info.type !== 'file') return null;
+  return workspaceProvider.readFile(relativePath);
+}
+
+function buildObviousPostconditionChecks(objective) {
+  const text = String(objective || '').replace(/\s+/g, ' ').trim();
+  const checks = [];
+  let match = null;
+
+  match = text.match(/\bensure folder\s+([A-Za-z0-9._/-]+)\s+exists\b/i);
+  if (match) {
+    const folderPath = cleanObjectivePath(match[1]);
+    checks.push({
+      type: 'folder',
+      path: folderPath,
+      satisfied: () => {
+        const info = workspaceProvider.getPathInfo(folderPath);
+        return info.exists && info.type === 'directory';
+      }
+    });
+  }
+
+  match = text.match(/\bcreate folder\s+([A-Za-z0-9._/-]+)\b/i);
+  if (match) {
+    const folderPath = cleanObjectivePath(match[1]);
+    checks.push({
+      type: 'folder',
+      path: folderPath,
+      satisfied: () => {
+        const info = workspaceProvider.getPathInfo(folderPath);
+        return info.exists && info.type === 'directory';
+      }
+    });
+  }
+
+  match = text.match(/\binside it create file\s+([A-Za-z0-9._/-]+)\s+containing exactly\s+(.+?)(?:\.\s+Once\b|$)/i);
+  if (match) {
+    const folderCheck = checks.find(check => check.type === 'folder');
+    if (folderCheck) {
+      const filePath = cleanObjectivePath(path.posix.join(folderCheck.path, cleanObjectivePath(match[1])));
+      const expectedContent = cleanObjectiveContent(match[2]);
+      checks.push({
+        type: 'file',
+        path: filePath,
+        expectedContent,
+        satisfied: () => readWorkspaceFileIfExists(filePath) === expectedContent
+      });
+    }
+  }
+
+  match = text.match(/(?:^|(?<!inside it )\b)create file\s+([A-Za-z0-9._/-]+)\s+containing exactly\s+(.+?)(?:\.\s+Once\b|$)/i);
+  if (match) {
+    const filePath = cleanObjectivePath(match[1]);
+    const expectedContent = cleanObjectiveContent(match[2]);
+    checks.push({
+      type: 'file',
+      path: filePath,
+      expectedContent,
+      satisfied: () => readWorkspaceFileIfExists(filePath) === expectedContent
+    });
+  }
+
+  return checks.filter((check, index, list) =>
+    check.path && list.findIndex(item => item.type === check.type && item.path === check.path) === index
+  );
+}
+
+function checkObviousTicketPostcondition(ticket) {
+  const checks = buildObviousPostconditionChecks(ticket && ticket.objective);
+  if (checks.length === 0) return null;
+  if (!checks.every(check => check.satisfied())) return null;
+
+  return {
+    reason: 'Requested workspace state is already satisfied',
+    checkedPaths: checks.map(check => ({
+      type: check.type,
+      path: check.path,
+      ...(check.expectedContent !== undefined ? { expectedContent: check.expectedContent } : {})
+    }))
+  };
+}
+
 function buildFailureMetadata(error, status, failureReason = null, detail = {}) {
   if (status === 'interrupted') {
     return {
@@ -2242,6 +2871,59 @@ function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
 
 function runExecutionKey(run) {
   return `${run.ticketId}:${run.agentId}`;
+}
+
+function isLocalModelAgent(agent) {
+  return agent && agent.provider === 'ollama';
+}
+
+function getLocalModelConcurrencyLimit() {
+  return getPositiveIntegerEnv('LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY);
+}
+
+function countActiveLocalModelRuns() {
+  const localAgentIds = new Set(readAgents().filter(isLocalModelAgent).map(agent => agent.id));
+  const persistedRunningCount = readRuns().filter(run =>
+    run.status === 'running' &&
+    localAgentIds.has(run.agentId)
+  ).length;
+
+  return persistedRunningCount + startingLocalModelRunIds.size;
+}
+
+function canStartRunNow(run) {
+  const agent = readAgents().find(item => item.id === run.agentId);
+  if (!isLocalModelAgent(agent)) return true;
+  return countActiveLocalModelRuns() < getLocalModelConcurrencyLimit();
+}
+
+function startRunWhenCapacityAvailable(run) {
+  if (!run || run.status !== 'pending') return false;
+
+  if (!canStartRunNow(run)) {
+    const alreadyLogged = readLogs().some(log => log.runId === run.id && log.type === 'run:queued');
+    if (!alreadyLogged) {
+      appendRunLog(run, 'run:queued', 'Queued for local model capacity', null, {
+        concurrencyLimit: getLocalModelConcurrencyLimit()
+      });
+    }
+    return false;
+  }
+
+  const agent = readAgents().find(item => item.id === run.agentId);
+  if (isLocalModelAgent(agent)) startingLocalModelRunIds.add(run.id);
+  setImmediate(() => runAgentTicket(run.id));
+  return true;
+}
+
+function scheduleQueuedRuns() {
+  const pendingRuns = readRuns()
+    .filter(run => run.status === 'pending')
+    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+
+  for (const pendingRun of pendingRuns) {
+    if (!startRunWhenCapacityAvailable(pendingRun)) break;
+  }
 }
 
 function isRunInterrupted(runId) {
@@ -2563,10 +3245,14 @@ function getRecentLogsForRun(runId, limit = 5) {
   const recentLogs = [];
 
   for (let index = logs.length - 1; index >= 0 && recentLogs.length < limit; index -= 1) {
-    if (logs[index].runId === runId) recentLogs.push(logs[index]);
+    if (logs[index].runId === runId && logs[index].type !== 'run:runtime') recentLogs.push(logs[index]);
   }
 
-  return sanitizeWorkspaceDisplayValue(recentLogs.reverse());
+  return sanitizeWorkspaceDisplayValue(recentLogs.reverse()).map(log => ({
+    ...log,
+    displayType: displayLogType(log.type),
+    displayMessage: displayLogMessage(log)
+  }));
 }
 
 function updateAllocationItemStatus(run, status) {
@@ -2789,6 +3475,9 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     allocationItemId: allocationItem ? allocationItem.allocationItemId : null,
     allocationSubtask: allocationItem ? allocationItem.allocationSubtask : null,
     ownedOutputPaths,
+    executionMode: ticket.executionMode === 'workflow' ? 'workflow' : 'agent',
+    workflowId: ticket.executionMode === 'workflow' ? ticket.workflowId : null,
+    workflowInput: ticket.executionMode === 'workflow' ? (ticket.workflowInput || {}) : null,
     status: 'pending',
     ticketOpenedAt: ticket.updatedAt,
     createdAt: now,
@@ -2801,7 +3490,8 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     allocationPlanId: run.allocationPlanId,
     allocationItemId: run.allocationItemId
   });
-  setImmediate(() => runAgentTicket(run.id));
+  updateTicketInProgressForRun(run);
+  startRunWhenCapacityAvailable(run);
   return run;
 }
 
@@ -3198,6 +3888,9 @@ async function callOpenAI(agent, input, options = {}) {
       body: JSON.stringify(responseBody)
     });
   } catch (fetchError) {
+    if (fetchError && fetchError.name === 'AbortError') {
+      throw fetchError;
+    }
     const error = createProviderError(fetchError.message || 'OpenAI request failed before response', 'OPENAI_TRANSPORT_ERROR', {
       phase: 'request',
       provider: 'openai',
@@ -3347,6 +4040,9 @@ async function callOllama(agent, input, options = {}) {
       body: JSON.stringify(responseBody)
     });
   } catch (fetchError) {
+    if (fetchError && fetchError.name === 'AbortError') {
+      throw fetchError;
+    }
     const error = createProviderError(fetchError.message || 'Ollama request failed before response', 'OLLAMA_TRANSPORT_ERROR', {
       phase: 'request',
       provider: 'ollama',
@@ -3693,6 +4389,134 @@ function parseWorkspaceOperation(action) {
   };
 }
 
+function getActionContract(name) {
+  return ACTION_CONTRACTS_BY_NAME.get(name) || null;
+}
+
+function isWorkflowTemplateValue(value) {
+  return typeof value === 'string' && /\{\{[^}]+\}\}/.test(value);
+}
+
+function validateSchemaValue(schema, value, pathLabel = 'input', options = {}) {
+  const errors = [];
+  const allowTemplates = options.allowTemplates === true;
+
+  if (allowTemplates && isWorkflowTemplateValue(value)) {
+    return errors;
+  }
+
+  if (schema === 'any') {
+    return errors;
+  }
+
+  if (typeof schema === 'string') {
+    if (schema === 'string' && typeof value !== 'string') errors.push(`${pathLabel} must be a string`);
+    if (schema === 'number' && typeof value !== 'number') errors.push(`${pathLabel} must be a number`);
+    if (schema === 'boolean' && typeof value !== 'boolean') errors.push(`${pathLabel} must be a boolean`);
+    return errors;
+  }
+
+  if (Array.isArray(schema)) {
+    if (!Array.isArray(value)) {
+      errors.push(`${pathLabel} must be an array`);
+      return errors;
+    }
+
+    if (schema.length > 0) {
+      value.forEach((item, index) => {
+        errors.push(...validateSchemaValue(schema[0], item, `${pathLabel}[${index}]`, options));
+      });
+    }
+
+    return errors;
+  }
+
+  if (schema && typeof schema === 'object') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      errors.push(`${pathLabel} must be an object`);
+      return errors;
+    }
+
+    Object.keys(schema).forEach(key => {
+      if (!(key in value)) {
+        errors.push(`${pathLabel}.${key} is required`);
+        return;
+      }
+
+      errors.push(...validateSchemaValue(schema[key], value[key], `${pathLabel}.${key}`, options));
+    });
+  }
+
+  return errors;
+}
+
+function validateActionInput(actionName, input, options = {}) {
+  const contract = getActionContract(actionName);
+  if (!contract) {
+    return [`Unknown action: ${actionName}`];
+  }
+
+  return validateSchemaValue(contract.inputSchema, input || {}, `${actionName}.input`, options);
+}
+
+function validateWorkflowDefinition(workflow) {
+  const errors = [];
+
+  if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) {
+    return ['Workflow definition must be an object'];
+  }
+
+  if (typeof workflow.id !== 'string' || !workflow.id.trim()) errors.push('workflow.id is required');
+  if (typeof workflow.name !== 'string' || !workflow.name.trim()) errors.push('workflow.name is required');
+  if (!workflow.inputSchema || typeof workflow.inputSchema !== 'object' || Array.isArray(workflow.inputSchema)) {
+    errors.push('workflow.inputSchema must be an object');
+  }
+  if (!Array.isArray(workflow.actions) || workflow.actions.length === 0) {
+    errors.push('workflow.actions must contain at least one action');
+    return errors;
+  }
+
+  const stepIds = new Set();
+  workflow.actions.forEach((step, index) => {
+    if (!step || typeof step !== 'object' || Array.isArray(step)) {
+      errors.push(`workflow.actions[${index}] must be an object`);
+      return;
+    }
+
+    if (typeof step.id !== 'string' || !step.id.trim()) {
+      errors.push(`workflow.actions[${index}].id is required`);
+    } else if (stepIds.has(step.id)) {
+      errors.push(`workflow action id must be unique: ${step.id}`);
+    } else {
+      stepIds.add(step.id);
+    }
+
+    const contract = getActionContract(step.action);
+    if (!contract) {
+      errors.push(`workflow action ${step.id || index} references unknown action: ${step.action}`);
+      return;
+    }
+
+    if (!isWorkflowUsableAction(contract)) {
+      errors.push(`workflow action ${step.id || index} cannot invoke non-workflow action: ${step.action}`);
+    }
+
+    errors.push(...validateActionInput(step.action, step.input || {}, { allowTemplates: true }));
+  });
+
+  workflow.actions.forEach((step, index) => {
+    if (!step || typeof step !== 'object') return;
+    const nextValues = [step.next, step.trueNext, step.falseNext].filter(Boolean);
+    nextValues.forEach(next => {
+      if (next !== 'stop' && !stepIds.has(next)) {
+        errors.push(`workflow action ${step.id || index} points to unknown next action: ${next}`);
+      }
+    });
+  });
+
+  return errors;
+}
+
 function executeWorkspaceOperation(run, action, step = 0) {
   const { operation, args } = parseWorkspaceOperation(action);
   const runWorkspaceProvider = getRunWorkspaceProvider(run);
@@ -3792,7 +4616,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
       args: { path: result.path },
       ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
     });
-    return { ...result, historyId: historyRecord ? historyRecord.id : null };
+    return { ...result, size: Buffer.byteLength(content, 'utf8'), historyId: historyRecord ? historyRecord.id : null };
   }
 
   if (operation === 'renamePath') {
@@ -3860,6 +4684,330 @@ function executeWorkspaceOperation(run, action, step = 0) {
   throw new Error(`Unsupported workspace operation: ${operation}`);
 }
 
+function resolveWorkflowReference(expression, context) {
+  const parts = String(expression).trim().split('.');
+  let value = context;
+
+  for (const part of parts) {
+    if (!value || typeof value !== 'object' || !(part in value)) return undefined;
+    value = value[part];
+  }
+
+  return value;
+}
+
+function resolveWorkflowInputTemplates(value, context) {
+  if (typeof value === 'string') {
+    const exact = value.match(/^\{\{\s*([^}]+)\s*\}\}$/);
+    if (exact) return resolveWorkflowReference(exact[1], context);
+
+    return value.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_match, expression) => {
+      const resolved = resolveWorkflowReference(expression, context);
+      return resolved === undefined || resolved === null ? '' : String(resolved);
+    });
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => resolveWorkflowInputTemplates(item, context));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      resolveWorkflowInputTemplates(item, context)
+    ]));
+  }
+
+  return value;
+}
+
+function evaluateConditionAction(input, step) {
+  let matched;
+
+  if (Object.prototype.hasOwnProperty.call(input, 'exists')) {
+    const exists = input.value !== undefined && input.value !== null && input.value !== '';
+    matched = Boolean(input.exists) === exists;
+  } else {
+    matched = JSON.stringify(input.value) === JSON.stringify(input.equals);
+  }
+
+  return {
+    matched,
+    next: matched ? (step.trueNext || step.next || 'stop') : (step.falseNext || 'stop')
+  };
+}
+
+async function executeAgentStructuredOutputAction(run, agent, input, counters, startedAtMs, limits) {
+  assertRunModelRequestAllowed(run, counters.modelRequests, limits);
+  const requestStartedAt = Date.now();
+  const messages = [
+    {
+      role: 'system',
+      content: [
+        'Return only JSON that conforms to the requested output schema.',
+        'Do not request workspace actions. Do not include markdown.'
+      ].join('\n')
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        instruction: input.instruction,
+        input: input.input || {},
+        outputSchema: input.outputSchema || {}
+      })
+    }
+  ];
+
+  counters.modelRequests += 1;
+  const modelResponse = await callModelProviderWithRunTimeout(run, agent, messages, startedAtMs, limits, {
+    onRequest: requestPayload => {
+      appendRunReplaySnapshotItem(run.id, 'providerRequests', {
+        ...requestPayload,
+        startedAt: new Date(requestStartedAt).toISOString(),
+        durationMs: Date.now() - requestStartedAt,
+        workflowAction: 'agentStructuredOutput'
+      });
+    }
+  });
+  const completedAt = Date.now();
+  let output;
+
+  try {
+    output = JSON.parse(modelResponse.text);
+  } catch (error) {
+    const parseError = new Error(`agentStructuredOutput returned invalid JSON: ${error.message}`);
+    parseError.code = 'MODEL_MALFORMED_JSON';
+    parseError.failureKind = 'invalid_action';
+    throw parseError;
+  }
+
+  const schemaErrors = validateSchemaValue(input.outputSchema || {}, output, 'agentStructuredOutput.output');
+  if (schemaErrors.length > 0) {
+    const schemaError = new Error(`agentStructuredOutput output failed schema validation: ${schemaErrors.join('; ')}`);
+    schemaError.code = 'WORKFLOW_ACTION_OUTPUT_INVALID';
+    schemaError.failureKind = 'invalid_action';
+    schemaError.details = { schemaErrors };
+    throw schemaError;
+  }
+
+  appendRunReplaySnapshotItem(run.id, 'modelResponses', {
+    text: modelResponse.text,
+    usage: modelResponse.usage || null,
+    provider: modelResponse.provider || null,
+    model: modelResponse.model || null,
+    providerResponsePayload: modelResponse.responsePayload,
+    startedAt: new Date(requestStartedAt).toISOString(),
+    completedAt: new Date(completedAt).toISOString(),
+    durationMs: completedAt - requestStartedAt,
+    workflowAction: 'agentStructuredOutput'
+  });
+
+  return {
+    output,
+    text: modelResponse.text,
+    usage: modelResponse.usage || {},
+    provider: modelResponse.provider || null,
+    model: modelResponse.model || null
+  };
+}
+
+async function executeWorkflowAction(run, workflow, step, input, context, counters, startedAtMs, limits, agent) {
+  const contract = getActionContract(step.action);
+  if (!contract) throw new Error(`Unknown workflow action: ${step.action}`);
+
+  const startedAt = Date.now();
+  let result;
+
+  try {
+    const inputErrors = validateActionInput(step.action, input);
+    if (inputErrors.length > 0) {
+      const error = new Error(`Workflow action input failed schema validation: ${inputErrors.join('; ')}`);
+      error.code = 'WORKFLOW_ACTION_INPUT_INVALID';
+      error.failureKind = 'invalid_action';
+      error.details = { workflowId: workflow.id, stepId: step.id, inputErrors };
+      throw error;
+    }
+
+    if (contract.type === 'workspaceAction') {
+      assertRunWorkspaceOperationAllowed(run, counters.workspaceOperations, 1, limits);
+      result = executeWorkspaceOperation(run, { operation: step.action, args: input }, counters.transitions);
+      counters.workspaceOperations += 1;
+      if (contract.mutating) counters.mutations += 1;
+      appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+        operation: { operation: step.action, args: input },
+        result,
+        startedAt: new Date(startedAt).toISOString(),
+        durationMs: Date.now() - startedAt,
+        historyId: result && result.historyId ? result.historyId : null,
+        workspaceRoot: getRunWorkspaceProvider(run).root,
+        executionWorkspaceType: run.executionWorkspaceType || 'main',
+        allocationPlanId: run.allocationPlanId || null,
+        allocationItemId: run.allocationItemId || null,
+        ownedOutputPaths: getRunOwnedOutputPaths(run),
+        workflowId: workflow.id,
+        workflowStepId: step.id
+      });
+    } else if (step.action === 'agentStructuredOutput') {
+      result = await executeAgentStructuredOutputAction(run, agent, input, counters, startedAtMs, limits);
+    } else if (step.action === 'condition') {
+      result = evaluateConditionAction(input, step);
+    } else if (step.action === 'stop') {
+      result = { stopped: true, result: input.result || context };
+    } else {
+      const error = new Error(`Action ${step.action} is not executable inside workflows`);
+      error.code = 'WORKFLOW_ACTION_NOT_ALLOWED';
+      error.failureKind = 'invalid_action';
+      throw error;
+    }
+
+    const outputErrors = validateSchemaValue(contract.outputSchema, result || {}, `${step.action}.output`);
+    if (outputErrors.length > 0) {
+      const error = new Error(`Workflow action output failed schema validation: ${outputErrors.join('; ')}`);
+      error.code = 'WORKFLOW_ACTION_OUTPUT_INVALID';
+      error.failureKind = 'invalid_action';
+      error.details = { workflowId: workflow.id, stepId: step.id, outputErrors };
+      throw error;
+    }
+
+    appendRunReplaySnapshotItem(run.id, 'workflowActions', {
+      workflowId: workflow.id,
+      stepId: step.id,
+      action: step.action,
+      input: sanitizeSnapshotValue(input),
+      result: sanitizeSnapshotValue(result),
+      startedAt: new Date(startedAt).toISOString(),
+      durationMs: Date.now() - startedAt
+    });
+
+    return result;
+  } catch (error) {
+    if (contract && contract.type === 'workspaceAction') {
+      appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+        operation: error.workspaceAction || { operation: step.action, args: input },
+        error: error.message,
+        blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
+        reason: error.reason || null,
+        durationMs: Date.now() - startedAt,
+        historyId: error.historyId || null,
+        ownedOutputPaths: error.ownedOutputPaths || getRunOwnedOutputPaths(run),
+        workspaceRoot: getRunWorkspaceProvider(run).root,
+        executionWorkspaceType: run.executionWorkspaceType || 'main',
+        allocationPlanId: run.allocationPlanId || null,
+        allocationItemId: run.allocationItemId || null,
+        workflowId: workflow.id,
+        workflowStepId: step.id
+      });
+    }
+
+    appendRunReplaySnapshotItem(run.id, 'workflowActions', {
+      workflowId: workflow.id,
+      stepId: step.id,
+      action: step.action,
+      input: sanitizeSnapshotValue(input),
+      error: error.message,
+      startedAt: new Date(startedAt).toISOString(),
+      durationMs: Date.now() - startedAt
+    });
+    throw error;
+  }
+}
+
+async function executeWorkflowDefinition(run, workflow, workflowInput, agent, options = {}) {
+  const definitionErrors = validateWorkflowDefinition(workflow);
+  if (definitionErrors.length > 0) {
+    const error = new Error(`Workflow definition invalid: ${definitionErrors.join('; ')}`);
+    error.code = 'WORKFLOW_DEFINITION_INVALID';
+    error.failureKind = 'invalid_action';
+    error.details = { definitionErrors };
+    throw error;
+  }
+
+  const inputErrors = validateSchemaValue(workflow.inputSchema, workflowInput || {}, 'workflow.input');
+  if (inputErrors.length > 0) {
+    const error = new Error(`Workflow input invalid: ${inputErrors.join('; ')}`);
+    error.code = 'WORKFLOW_INPUT_INVALID';
+    error.failureKind = 'invalid_action';
+    error.details = { inputErrors };
+    throw error;
+  }
+
+  const limits = {
+    ...getAgentRuntimeLimits(),
+    maxTransitions: options.maxTransitions || getPositiveIntegerEnv('WORKFLOW_MAX_TRANSITIONS', 16),
+    maxLoopIterations: options.maxLoopIterations || getPositiveIntegerEnv('WORKFLOW_MAX_LOOP_ITERATIONS', 3),
+    maxMutations: options.maxMutations || getPositiveIntegerEnv('WORKFLOW_MAX_MUTATIONS', MAX_MUTATING_ACTIONS_PER_RESPONSE)
+  };
+  const counters = { transitions: 0, workspaceOperations: 0, modelRequests: 0, mutations: 0 };
+  const context = { workflow: { input: workflowInput || {} } };
+  const stepsById = new Map(workflow.actions.map(step => [step.id, step]));
+  const visitsByStepId = new Map();
+  let currentStep = workflow.actions[0];
+  const startedAtMs = Date.now();
+
+  appendRunReplaySnapshotItem(run.id, 'workflowInvocation', {
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    input: sanitizeSnapshotValue(workflowInput || {})
+  });
+
+  while (currentStep) {
+    assertRunNotTimedOut(run, startedAtMs, limits);
+    if (counters.transitions >= limits.maxTransitions) {
+      throw createRunLimitError(run, 'step', `Workflow exceeded transition limit of ${limits.maxTransitions}`, {
+        currentValue: counters.transitions,
+        configuredLimit: limits.maxTransitions,
+        workflowId: workflow.id
+      });
+    }
+
+    const visits = (visitsByStepId.get(currentStep.id) || 0) + 1;
+    visitsByStepId.set(currentStep.id, visits);
+    if (visits > limits.maxLoopIterations) {
+      throw createRunLimitError(run, 'step', `Workflow exceeded loop iteration limit of ${limits.maxLoopIterations} for ${currentStep.id}`, {
+        currentValue: visits,
+        configuredLimit: limits.maxLoopIterations,
+        workflowId: workflow.id,
+        stepId: currentStep.id
+      });
+    }
+
+    if (counters.mutations >= limits.maxMutations) {
+      throw createRunLimitError(run, 'mutating_action', `Workflow exceeded mutation limit of ${limits.maxMutations}`, {
+        currentValue: counters.mutations,
+        configuredLimit: limits.maxMutations,
+        workflowId: workflow.id
+      });
+    }
+
+    const input = resolveWorkflowInputTemplates(currentStep.input || {}, context);
+    const result = await executeWorkflowAction(run, workflow, currentStep, input, context, counters, startedAtMs, limits, agent);
+    counters.transitions += 1;
+
+    if (currentStep.saveAs) {
+      context[currentStep.saveAs] = currentStep.action === 'agentStructuredOutput' ? result.output : result;
+    }
+
+    if (currentStep.action === 'stop' || result.stopped) {
+      return { status: 'completed', result: result.result || context, counters };
+    }
+
+    const next = currentStep.action === 'condition' ? result.next : currentStep.next;
+    if (!next || next === 'stop') {
+      return { status: 'completed', result: context, counters };
+    }
+
+    currentStep = stepsById.get(next);
+    if (!currentStep) {
+      const error = new Error(`Workflow transition points to unknown action: ${next}`);
+      error.code = 'WORKFLOW_TRANSITION_INVALID';
+      error.failureKind = 'invalid_action';
+      throw error;
+    }
+  }
+
+  return { status: 'completed', result: context, counters };
+}
+
 function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
   return [
     {
@@ -3912,6 +5060,13 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
 }
 
 async function runAgentTicket(runId) {
+  startingLocalModelRunIds.delete(runId);
+  const queuedRun = readRuns().find(item => item.id === runId);
+  if (queuedRun && queuedRun.status === 'pending' && !canStartRunNow(queuedRun)) {
+    startRunWhenCapacityAvailable(queuedRun);
+    return;
+  }
+
   let run = updateRunStatus(runId, 'running');
   if (!run) return;
   if (run.status !== 'running') return;
@@ -3937,6 +5092,29 @@ async function runAgentTicket(runId) {
     createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
     appendRunLog(run, 'run:runtime', JSON.stringify(runtimeEnvelope));
 
+    if (ticket.executionMode === 'workflow' || run.executionMode === 'workflow') {
+      const workflowId = run.workflowId || ticket.workflowId;
+      const workflow = getWorkflowById(workflowId);
+      if (!workflow || workflow.enabled === false) {
+        const error = new Error(`Workflow not found or disabled: ${workflowId || 'none'}`);
+        error.code = 'WORKFLOW_NOT_AVAILABLE';
+        error.failureKind = 'invalid_action';
+        throw error;
+      }
+
+      const workflowInput = run.workflowInput || ticket.workflowInput || {};
+      appendRunLog(run, 'run:workflow_started', `Workflow run started: ${workflow.name}`, null, {
+        workflowId: workflow.id
+      });
+      const workflowResult = await executeWorkflowDefinition(run, workflow, workflowInput, agent);
+      appendRunLog(run, 'run:workflow_completed', `Workflow run completed: ${workflow.name}`, null, {
+        workflowId: workflow.id,
+        counters: workflowResult.counters || null
+      });
+      completeAgentRun(run);
+      return;
+    }
+
     let actionResults = [];
     let stalledResponses = 0;
     let noProgressResponses = 0;
@@ -3953,6 +5131,18 @@ async function runAgentTicket(runId) {
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       assertRunStepAllowed(run, step, limits);
       assertRunModelRequestAllowed(run, modelRequestCount, limits);
+
+      const obviousPostcondition = checkObviousTicketPostcondition(ticket);
+      if (obviousPostcondition) {
+        recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
+          step,
+          mutatingActionCount: 0,
+          checkedPaths: obviousPostcondition.checkedPaths,
+          source: 'pre_model'
+        });
+        completed = true;
+        break;
+      }
 
       const currentEnvelope = buildRuntimeEnvelope(run, step);
       const input = buildAgentPrompt(ticket, currentEnvelope, actionResults);
@@ -4015,6 +5205,7 @@ async function runAgentTicket(runId) {
         complete: modelPlan.complete,
         step
       });
+      broadcastTicketChange();
       actionResults = [];
       const actions = modelPlan.actions;
 
@@ -4227,6 +5418,16 @@ async function runAgentTicket(runId) {
         continue;
       }
 
+      const postcondition = checkPostconditionCompletion(run, actions, actionResults, step);
+      if (postcondition) {
+        recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
+          step,
+          mutatingActionCount: postcondition.mutatingActionCount
+        });
+        completed = true;
+        break;
+      }
+
       if (modelPlan.complete) {
         if (actions.length === 0) {
           recordRunEvent(run, 'run:completed_noop', 'Agent run completed with no workspace changes', { step });
@@ -4254,7 +5455,9 @@ async function runAgentTicket(runId) {
 
     run = failAgentRun(run, error, error.workspaceAction || null);
   } finally {
+    startingLocalModelRunIds.delete(runId);
     runningRunKeys.delete(runExecutionKey(run));
+    scheduleQueuedRuns();
   }
 }
 
@@ -4681,6 +5884,7 @@ fastify.get('/', { preHandler: fastify.requireAuth }, async (request, reply) => 
     agents: readAgents(),
     agentGroups: getTicketAssignableGroups(),
     agentGroupMembers: getAgentGroupMembers(),
+    workflows: getEnabledWorkflows(),
     error: null
   }, request.session.userId));
 });
@@ -4691,7 +5895,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return 'Permission denied';
   }
 
-  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode } = request.body;
+  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, executionMode, workflowId, workflowInput } = request.body;
 
   function renderTicketForm(error) {
     reply.code(400);
@@ -4700,6 +5904,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
       agents: readAgents(),
       agentGroups: getTicketAssignableGroups(),
       agentGroupMembers: getAgentGroupMembers(),
+      workflows: getEnabledWorkflows(),
       error
     }, request.session.userId));
   }
@@ -4728,6 +5933,36 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return renderTicketForm('Selected ticket-capable group does not exist');
   }
 
+  const resolvedExecutionMode = executionMode === 'workflow' ? 'workflow' : 'agent';
+  let selectedWorkflow = null;
+  let parsedWorkflowInput = null;
+
+  if (resolvedExecutionMode === 'workflow') {
+    if (assignmentTargetType !== 'agent') {
+      return renderTicketForm('Workflow tickets must be assigned to one agent');
+    }
+
+    selectedWorkflow = getWorkflowById(workflowId);
+    if (!selectedWorkflow || selectedWorkflow.enabled === false) {
+      return renderTicketForm('Selected workflow does not exist or is disabled');
+    }
+
+    try {
+      parsedWorkflowInput = workflowInput && workflowInput.trim() ? JSON.parse(workflowInput) : {};
+    } catch (error) {
+      return renderTicketForm('Workflow input must be valid JSON');
+    }
+
+    if (!parsedWorkflowInput || typeof parsedWorkflowInput !== 'object' || Array.isArray(parsedWorkflowInput)) {
+      return renderTicketForm('Workflow input must be a JSON object');
+    }
+
+    const inputErrors = validateSchemaValue(selectedWorkflow.inputSchema || {}, parsedWorkflowInput, 'workflow.input');
+    if (inputErrors.length > 0) {
+      return renderTicketForm(`Workflow input invalid: ${inputErrors.join('; ')}`);
+    }
+  }
+
   const tickets = readTickets();
   const now = new Date().toISOString();
   const nextTicketId = nextId(tickets);
@@ -4751,6 +5986,9 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     assignmentTargetId: parsedAssignmentTargetId,
     assignmentMode: resolvedAssignmentMode,
     ownedOutputPaths: parsedOwnedPaths,
+    executionMode: resolvedExecutionMode,
+    workflowId: selectedWorkflow ? selectedWorkflow.id : null,
+    workflowInput: selectedWorkflow ? parsedWorkflowInput : null,
     status: 'open',
     createdBy: request.user ? request.user.username : String(request.session.userId),
     changedBy: request.user ? request.user.username : String(request.session.userId),
@@ -5008,6 +6246,12 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
   ticket.changedAt = changedAt;
   writeTickets(tickets);
   broadcastTicketChange();
+
+  if (status === 'closed') {
+    readRuns()
+      .filter(run => run.ticketId === ticketId && ['pending', 'running'].includes(run.status))
+      .forEach(run => interruptAgentRun(run, `${changedBy} closed ticket #${ticketId}`));
+  }
 
   appendSystemLog('ticket:status_change', `Ticket #${ticketId} status changed from ${previousStatus} to ${status} by ${changedBy}`, null, {
     ticketId,
@@ -5347,6 +6591,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   });
   const failureSummary = buildRunFailureSummary(run, snapshot, enrichedHistory, runPartialMutationCount, authorityContext.controls.recoveryAvailable);
   const displaySnapshot = createDisplaySnapshot(snapshot);
+  const operationalOutcome = classifyRunOperationalOutcome(run);
 
   return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
@@ -5361,7 +6606,10 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     recentLogs: getRecentLogsForRun(runId),
     operationHistory: enrichedHistory,
     partialMutationCount: runPartialMutationCount,
-    operationalOutcome: classifyRunOperationalOutcome(run),
+    operationalOutcome,
+    operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
+    runStatusLabel: displayRunStatus(run.status),
+    formatDurationHuman,
     canUpdateRuns: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
 });
@@ -6280,6 +7528,158 @@ fastify.post('/admin/groups/:id/delete', { preHandler: fastify.requireAuth }, as
   return reply.redirect('/admin');
 });
 
+// ==================== WORKFLOWS ====================
+
+function parseWorkflowDefinitionJson(rawDefinition) {
+  if (!rawDefinition || !String(rawDefinition).trim()) {
+    return { error: 'Workflow JSON is required' };
+  }
+
+  try {
+    const workflow = JSON.parse(rawDefinition);
+    return { workflow };
+  } catch (error) {
+    return { error: `Workflow JSON is invalid: ${error.message}` };
+  }
+}
+
+function renderWorkflowForm(reply, request, { workflow = null, definition = null, errors = [] } = {}) {
+  const isEdit = Boolean(workflow);
+  reply.code(errors.length > 0 ? 400 : 200);
+  return reply.view('admin/workflow-form.ejs', viewData({
+    user: request.user,
+    isEdit,
+    workflow,
+    definition: definition || JSON.stringify(workflow || createDemoWorkflowDefinition(), null, 2),
+    errors
+  }, request.session.userId));
+}
+
+fastify.get('/admin/workflows', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'user:read')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({
+      message: 'Access denied',
+      user: request.user
+    }, request.session.userId));
+  }
+
+  return reply.view('admin/workflows.ejs', viewData({
+    user: request.user,
+    workflows: readWorkflows()
+  }, request.session.userId));
+});
+
+fastify.get('/admin/workflows/new', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'user:read')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({
+      message: 'Access denied',
+      user: request.user
+    }, request.session.userId));
+  }
+
+  return renderWorkflowForm(reply, request);
+});
+
+fastify.post('/admin/workflows', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'user:read')) {
+    reply.code(403);
+    return 'Permission denied';
+  }
+
+  const rawDefinition = request.body.definition || '';
+  const parsed = parseWorkflowDefinitionJson(rawDefinition);
+  if (parsed.error) return renderWorkflowForm(reply, request, { definition: rawDefinition, errors: [parsed.error] });
+
+  const errors = validateWorkflowDefinition(parsed.workflow);
+  if (errors.length > 0) return renderWorkflowForm(reply, request, { definition: rawDefinition, errors });
+
+  const workflows = readWorkflows();
+  if (workflows.some(workflow => workflow.id === parsed.workflow.id)) {
+    return renderWorkflowForm(reply, request, { definition: rawDefinition, errors: [`Workflow id already exists: ${parsed.workflow.id}`] });
+  }
+
+  const now = new Date().toISOString();
+  workflows.push({
+    ...parsed.workflow,
+    enabled: parsed.workflow.enabled !== false,
+    createdAt: parsed.workflow.createdAt || now,
+    updatedAt: now
+  });
+  writeWorkflows(workflows);
+  appendSystemLog('admin:workflow_create', `Workflow "${parsed.workflow.name}" created`, null, {
+    workflowId: parsed.workflow.id,
+    changedBy: request.user ? request.user.username : String(request.session.userId)
+  });
+
+  return reply.redirect('/admin/workflows');
+});
+
+fastify.get('/admin/workflows/:id/edit', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'user:read')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({
+      message: 'Access denied',
+      user: request.user
+    }, request.session.userId));
+  }
+
+  const workflow = getWorkflowById(request.params.id);
+  if (!workflow) {
+    reply.code(404);
+    return reply.view('error.ejs', viewData({
+      message: 'Workflow not found',
+      user: request.user
+    }, request.session.userId));
+  }
+
+  return renderWorkflowForm(reply, request, { workflow });
+});
+
+fastify.post('/admin/workflows/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'user:read')) {
+    reply.code(403);
+    return 'Permission denied';
+  }
+
+  const workflow = getWorkflowById(request.params.id);
+  if (!workflow) {
+    reply.code(404);
+    return reply.view('error.ejs', viewData({
+      message: 'Workflow not found',
+      user: request.user
+    }, request.session.userId));
+  }
+
+  const rawDefinition = request.body.definition || '';
+  const parsed = parseWorkflowDefinitionJson(rawDefinition);
+  if (parsed.error) return renderWorkflowForm(reply, request, { workflow, definition: rawDefinition, errors: [parsed.error] });
+
+  if (parsed.workflow.id !== workflow.id) {
+    return renderWorkflowForm(reply, request, { workflow, definition: rawDefinition, errors: ['Workflow id cannot be changed'] });
+  }
+
+  const errors = validateWorkflowDefinition(parsed.workflow);
+  if (errors.length > 0) return renderWorkflowForm(reply, request, { workflow, definition: rawDefinition, errors });
+
+  const workflows = readWorkflows();
+  const index = workflows.findIndex(item => item.id === workflow.id);
+  workflows[index] = {
+    ...parsed.workflow,
+    enabled: parsed.workflow.enabled !== false,
+    createdAt: workflow.createdAt || parsed.workflow.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  writeWorkflows(workflows);
+  appendSystemLog('admin:workflow_update', `Workflow "${parsed.workflow.name}" updated`, null, {
+    workflowId: parsed.workflow.id,
+    changedBy: request.user ? request.user.username : String(request.session.userId)
+  });
+
+  return reply.redirect('/admin/workflows');
+});
+
 // ==================== ACTIONS CATALOG ====================
 
 fastify.get('/admin/actions', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -6291,13 +7691,12 @@ fastify.get('/admin/actions', { preHandler: fastify.requireAuth }, async (reques
     }, request.session.userId));
   }
 
-  const categories = [...new Set(ACTIONS_CATALOG.map(a => a.category))];
-  const invokers = [...new Set(ACTIONS_CATALOG.map(a => a.invoker))];
+  const actions = ACTIONS_CATALOG.filter(isWorkflowUsableAction);
+  const invokers = [...new Set(actions.map(a => a.invoker))];
 
   return reply.view('admin/actions.ejs', viewData({
     user: request.user,
-    actions: ACTIONS_CATALOG,
-    categories,
+    actions,
     invokers
   }, request.session.userId));
 });
@@ -6314,6 +7713,7 @@ function normalizeDataIntegrity() {
   writeTickets(readTickets());
   writeRuns(readRuns());
   writeLogs(readLogs());
+  writeWorkflows(readWorkflows());
 }
 
 async function createDefaultData() {
@@ -6383,6 +7783,13 @@ async function createDefaultData() {
       writeMemberships(memberships);
       console.log('Assigned admin user to Administrators group');
     }
+  }
+
+  const workflows = readWorkflows();
+  if (!workflows.some(workflow => workflow.id === 'demo-agent-write-if-approved')) {
+    workflows.push(createDemoWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created demo workflow: demo-agent-write-if-approved');
   }
 }
 

@@ -21,7 +21,8 @@ const DATA_FILES = [
   'permissions.json',
   'runs.json',
   'tickets.json',
-  'users.json'
+  'users.json',
+  'workflows.json'
 ];
 
 for (const file of DATA_FILES) {
@@ -207,18 +208,54 @@ function seedNavigationFixture() {
     message: 'Page render fixture completed',
     workspaceAction: null
   };
+  const activeTicket = {
+    ...ticket,
+    id: ticketId + 1,
+    objective: 'page render active ticket',
+    status: 'in_progress',
+    updatedAt: new Date(Date.now() + 1000).toISOString()
+  };
+  const activeRun = {
+    ...run,
+    id: runId + 1,
+    ticketId: activeTicket.id,
+    status: 'running',
+    ticketOpenedAt: activeTicket.updatedAt,
+    updatedAt: activeTicket.updatedAt,
+    completedAt: null,
+    replaySnapshot: {
+      ...run.replaySnapshot,
+      runId: runId + 1,
+      ticketId: activeTicket.id,
+      ticketObjectiveSnapshot: activeTicket.objective,
+      parsedModelPlans: [{ message: 'Writing file...', actions: [], complete: false, step: 0 }],
+      events: [],
+      terminalStatus: null,
+      finalizedAt: null
+    }
+  };
+  const activeLog = {
+    ...log,
+    id: log.id + 100,
+    timestamp: activeTicket.updatedAt,
+    runId: activeRun.id,
+    ticketId: activeTicket.id,
+    type: 'workspace:write',
+    message: 'Writing file...'
+  };
 
   const extraTickets = Array.from({ length: 3 }, (_, index) => ({
     ...ticket,
-    id: ticketId + index + 1,
+    id: ticketId + index + 2,
     objective: `page render extra ticket ${index + 1}`,
     updatedAt: new Date(Date.now() - index - 1000).toISOString()
   }));
 
-  writeJson('tickets.json', [...tickets, ticket, ...extraTickets]);
-  writeJson('runs.json', [...runs, run]);
+  writeJson('tickets.json', [...tickets, ticket, activeTicket, ...extraTickets]);
+  writeJson('runs.json', [...runs, run, activeRun]);
   writeJson('logs.json', [
     ...logs,
+    activeLog,
     ...Array.from({ length: 6 }, (_, index) => ({
       ...log,
       id: log.id + index,
@@ -226,15 +263,14 @@ function seedNavigationFixture() {
       message: `Page render fixture log ${index + 1}`
     }))
   ]);
-  return { ticket, run };
+  return { ticket, run, activeTicket, activeRun };
 }
 
 async function assertMainFormRenders(cookie, label) {
   const response = await request('GET', '/', { cookie });
   assert(response.statusCode === 200, `${label}: GET / returned HTTP ${response.statusCode}: ${response.body.slice(0, 240)}`);
   assert(response.body.includes('Create New Ticket'), `${label}: main form heading missing`);
-  assert(response.body.includes('Write a small, concrete output'), `${label}: bounded objective guidance missing`);
-  assert(response.body.includes('Avoid vague requests'), `${label}: vague objective warning missing`);
+  assert(response.body.includes('Describe the concrete result you want. Avoid vague requests like: &quot;improve the project&quot;'), `${label}: objective guidance missing`);
   assert(response.body.includes('independent additive output'), `${label}: group bounded output guidance missing`);
   assert(response.body.includes('Suggest bounded version'), `${label}: ticket shaping button missing`);
   assert(response.body.includes('/api/tickets/shape-objective'), `${label}: ticket shaping endpoint wiring missing`);
@@ -288,7 +324,23 @@ async function main() {
     const logsPayload = JSON.parse(logsApi.body);
     assert(logsPayload.logs.length === 2, 'logs API should return requested page size');
     assert(logsPayload.pagination && logsPayload.pagination.total >= 6, 'logs API should include pagination total');
-    await assertPageRenders(cookie, '/tickets', 'tickets', 'Live Work');
+    const ticketsIndex = await assertPageRenders(cookie, '/tickets', 'tickets', 'Tickets');
+    assert(ticketsIndex.body.includes('Writing file...'), 'tickets page should show real current run output');
+    assert(!ticketsIndex.body.includes('ticket-card__output'), 'tickets page should render current output inline with metadata');
+    assert(!ticketsIndex.body.includes('>Rerun</button>'), 'tickets page should not show rerun control');
+    assert(!ticketsIndex.body.includes('>Retry</button>'), 'tickets page should not show retry control');
+    assert(!ticketsIndex.body.includes('data-stop-run-id'), 'tickets page should not show stop controls');
+    const activeCardStart = ticketsIndex.body.indexOf('page render active ticket');
+    const activeCardEnd = activeCardStart === -1 ? -1 : ticketsIndex.body.indexOf('</div>', ticketsIndex.body.indexOf('ticket-card__meta', activeCardStart));
+    const activeCardSnippet = activeCardStart === -1 || activeCardEnd === -1 ? '' : ticketsIndex.body.slice(activeCardStart, activeCardEnd + 6);
+    assert(activeCardSnippet && !activeCardSnippet.includes('ticket-card__actions'), 'running ticket card should not render an empty action footer');
+    const closeActive = await request('PATCH', `/api/tickets/${fixture.activeTicket.id}/status`, {
+      cookie,
+      body: { status: 'closed' }
+    });
+    assert(closeActive.statusCode === 200, `closing active ticket returned HTTP ${closeActive.statusCode}`);
+    const interruptedRun = readJson('runs.json').find(run => run.id === fixture.activeRun.id);
+    assert(interruptedRun && interruptedRun.status === 'interrupted', 'closing ticket from dropdown should interrupt active run');
     const ticketsPage = await assertPageRenders(cookie, '/tickets?limit=1', 'paginated tickets', 'Showing 1-1 of');
     assert((ticketsPage.body.match(/class="ticket-card /g) || []).length === 1, 'tickets page should render only the requested page size');
     const ticketsApi = await request('GET', '/api/tickets?limit=1', { cookie });
@@ -305,26 +357,37 @@ async function main() {
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
     await assertPageRenders(cookie, '/admin', 'admin dashboard', 'Admin Dashboard');
+    const workflowsPage = await assertPageRenders(cookie, '/admin/workflows', 'workflows admin', 'Workflows');
+    assert(workflowsPage.body.includes('demo-agent-write-if-approved'), 'workflows admin should list demo workflow');
+    assert(workflowsPage.body.includes('Edit JSON'), 'workflows admin should expose JSON editing');
+    const workflowFormPage = await assertPageRenders(cookie, '/admin/workflows/demo-agent-write-if-approved/edit', 'workflow edit', 'Edit Workflow');
+    assert(workflowFormPage.body.includes('agentStructuredOutput'), 'workflow edit should render workflow JSON');
     const actionsPage = await assertPageRenders(cookie, '/admin/actions', 'actions catalog', 'Actions Catalog');
     assert(actionsPage.body.includes('listDirectory'), 'actions catalog should list listDirectory');
     assert(actionsPage.body.includes('writeFile'), 'actions catalog should list writeFile');
-    assert(actionsPage.body.includes('Provider/Model Call'), 'actions catalog should list provider/model call');
-    assert(actionsPage.body.includes('Stop / Interruption'), 'actions catalog should list stop/interruption');
-    assert(actionsPage.body.includes('Ticket Shaping'), 'actions catalog should list ticket shaping');
-    assert(actionsPage.body.includes('Retry / Rerun'), 'actions catalog should list retry/rerun');
-    assert(actionsPage.body.includes('Recovery'), 'actions catalog should list recovery');
+    assert(actionsPage.body.includes('Agent Structured Output'), 'actions catalog should list structured output');
+    assert(actionsPage.body.includes('Condition'), 'actions catalog should list condition');
+    assert(actionsPage.body.includes('Stop'), 'actions catalog should list workflow stop');
+    assert(!actionsPage.body.includes('Provider/Model Call'), 'actions catalog should not list provider/model capability');
+    assert(!actionsPage.body.includes('Stop / Interruption'), 'actions catalog should not list operator interruption');
+    assert(!actionsPage.body.includes('Ticket Shaping'), 'actions catalog should not list ticket shaping');
+    assert(!actionsPage.body.includes('Retry / Rerun'), 'actions catalog should not list retry/rerun');
+    assert(!actionsPage.body.includes('Recovery'), 'actions catalog should not list recovery');
+    assert(!actionsPage.body.includes('Operator: Write File'), 'actions catalog should not list operator write file');
+    assert(!actionsPage.body.includes('Invoke Workflow'), 'actions catalog should not list agent workflow invocation');
     assert(actionsPage.body.includes('Actions Catalog'), 'actions catalog page heading should render');
-    assert(actionsPage.body.includes('workspace'), 'actions catalog should include workspace category');
-    assert(actionsPage.body.includes('provider'), 'actions catalog should include provider category');
-    assert(actionsPage.body.includes('operator'), 'actions catalog should include operator category');
-    assert(actionsPage.body.includes('system'), 'actions catalog should include system category');
     assert(actionsPage.body.includes('agent'), 'actions catalog should include agent invoker');
     assert(actionsPage.body.includes('Show contract'), 'actions catalog should have expandable contract');
-    assert(actionsPage.body.includes('Request'), 'actions catalog should label request shape');
-    assert(actionsPage.body.includes('Response'), 'actions catalog should label response shape');
+    assert(actionsPage.body.includes('Input'), 'actions catalog should label input shape');
+    assert(actionsPage.body.includes('Output'), 'actions catalog should label output shape');
     assert(actionsPage.body.includes('Error'), 'actions catalog should label error shape');
-    assert(actionsPage.body.includes('Authority:'), 'actions catalog should show authority constraint');
-    assert(actionsPage.body.includes('Provenance:'), 'actions catalog should show provenance surface');
+    assert(!actionsPage.body.includes('<th>Category</th>'), 'actions catalog should not show category column');
+    assert(!actionsPage.body.includes('<th>Type</th>'), 'actions catalog should not show type column');
+    assert(!actionsPage.body.includes('>Request</div>'), 'actions catalog should not show request envelope');
+    assert(!actionsPage.body.includes('Normalized input schema'), 'actions catalog should not expose normalized input label');
+    assert(!actionsPage.body.includes('Authority:'), 'actions catalog should not show authority constraint');
+    assert(!actionsPage.body.includes('Provenance:'), 'actions catalog should not show provenance surface');
+    assert(!actionsPage.body.includes('Executable:'), 'actions catalog should not show executable flag');
 
     writeJson('groups.json', readJson('groups.json').map(group => ({ ...group, canReceiveTickets: false })));
     writeJson('memberships.json', readJson('memberships.json').filter(membership => membership.principalType !== 'agent'));

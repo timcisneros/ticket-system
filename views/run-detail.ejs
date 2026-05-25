@@ -1,5 +1,5 @@
 <div class="page-header">
-  <% const viewOperationalOutcome = typeof operationalOutcome === 'undefined' ? '-' : operationalOutcome; %>
+  <% const viewOperationalOutcome = typeof operationalOutcomeLabel === 'undefined' ? '-' : operationalOutcomeLabel; %>
   <div>
     <h1>Run #<%= run.id %></h1>
     <p class="text-muted">Ticket <a href="/tickets/<%= run.ticketId %>">#<%= run.ticketId %></a> · <%= run.agentName %></p>
@@ -38,39 +38,79 @@
   <dl class="detail-grid">
     <div>
       <dt>Run Ended As</dt>
-      <dd><span class="status-badge status-<%= failureSummary.status %>"><%= failureSummary.status %></span></dd>
+      <dd><span class="status-badge status-<%= failureSummary.status %>"><%= failureSummary.statusLabel %></span></dd>
     </div>
     <div>
       <dt>Root Cause</dt>
       <dd><span class="failure-reason"><%= failureSummary.rootCause %></span></dd>
     </div>
     <div>
-      <dt>Blocking Code</dt>
-      <dd><code><%= failureSummary.blockingErrorCode %></code></dd>
+      <dt>Final Blocking Reason</dt>
+      <dd><%= failureSummary.finalBlockingReason %></dd>
     </div>
     <div>
-      <dt>Code Meaning</dt>
-      <dd><%= failureSummary.blockingErrorExplanation %></dd>
+      <dt>Last Model Message</dt>
+      <dd><%= failureSummary.lastModelMessage %></dd>
     </div>
     <div>
-      <dt>First Failed Operation</dt>
-      <dd><code class="owned-path"><%= failureSummary.firstFailedOperation %></code></dd>
+      <dt>Last Proposed Actions</dt>
+      <dd>
+        <% if (failureSummary.lastProposedActions.length > 0) { %>
+          <% failureSummary.lastProposedActions.forEach(action => { %>
+            <code class="owned-path"><%= action %></code>
+          <% }) %>
+        <% } else { %>
+          -
+        <% } %>
+      </dd>
     </div>
     <div>
-      <dt>Mutation Count</dt>
-      <dd><%= failureSummary.mutationCount %></dd>
+      <dt>Mutations Performed</dt>
+      <dd>
+        <% if (failureSummary.mutationSummary.length > 0) { %>
+          <% failureSummary.mutationSummary.forEach(action => { %>
+            <code class="owned-path"><%= action %></code>
+          <% }) %>
+        <% } else { %>
+          none
+        <% } %>
+      </dd>
     </div>
     <div>
-      <dt>Mutated Before Failure</dt>
-      <dd><span class="badge badge--<%= failureSummary.mutationsBeforeFailure ? 'outcome-error' : 'outcome-noop' %>"><%= failureSummary.mutationsBeforeFailure ? 'Yes' : 'No' %></span></dd>
+      <dt>Output State</dt>
+      <dd><%= failureSummary.outputSatisfaction.label %></dd>
     </div>
     <div>
       <dt>Recovery Available</dt>
       <dd><span class="badge badge--<%= failureSummary.recoveryAvailable ? 'recovery-recoverable' : 'outcome-noop' %>"><%= failureSummary.recoveryAvailable ? 'Yes' : 'No' %></span></dd>
     </div>
     <div>
-      <dt>Bounded Rejections</dt>
-      <dd><%= failureSummary.boundedTransitionRejectionCount %></dd>
+      <dt>Debug Details</dt>
+      <dd>
+        <details class="collapsible">
+          <summary>Raw failure details</summary>
+          <div class="collapsible__content">
+            <dl class="detail-grid">
+              <div>
+                <dt>Blocking Code</dt>
+                <dd><code><%= failureSummary.blockingErrorCode %></code></dd>
+              </div>
+              <div>
+                <dt>Code Meaning</dt>
+                <dd><%= failureSummary.blockingErrorExplanation %></dd>
+              </div>
+              <div>
+                <dt>First Failed Operation</dt>
+                <dd><code class="owned-path"><%= failureSummary.firstFailedOperation %></code></dd>
+              </div>
+              <div>
+                <dt>Bounded Rejections</dt>
+                <dd><%= failureSummary.boundedTransitionRejectionCount %></dd>
+              </div>
+            </dl>
+          </div>
+        </details>
+      </dd>
     </div>
   </dl>
 </section>
@@ -81,11 +121,11 @@
   <dl class="detail-grid">
     <div>
       <dt>Status</dt>
-      <dd><span class="status-badge status-<%= run.status %>"><%= run.status %></span></dd>
+      <dd><span class="status-badge status-<%= run.status %>"><%= typeof runStatusLabel === 'undefined' ? run.status : runStatusLabel %></span></dd>
     </div>
     <div>
       <dt>Run Outcome</dt>
-      <dd><code><%= viewOperationalOutcome || '-' %></code></dd>
+      <dd><%= viewOperationalOutcome || '-' %></dd>
     </div>
     <div>
       <dt>Agent</dt>
@@ -103,7 +143,7 @@
       <dt>Duration</dt>
       <dd>
         <% if (run.startedAt && run.completedAt) { %>
-          <%= Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt))) %>ms
+          <%= typeof formatDurationHuman === 'function' ? formatDurationHuman(Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt)))) : Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt))) + 'ms' %>
         <% } else { %>
           -
         <% } %>
@@ -124,7 +164,7 @@
 
   <% if (snapshot && (snapshot.failureReason || run.error)) { %>
     <div style="margin-top: 12px;">
-      <span class="failure-reason"><%= snapshot.failureReason || run.error %></span>
+      <span class="failure-reason"><%= failureSummary && failureSummary.finalBlockingReason ? failureSummary.finalBlockingReason : (snapshot.failureReason || run.error) %></span>
     </div>
   <% } %>
 
@@ -256,7 +296,7 @@
             </div>
             <div class="authority-row">
               <dt>Max Runtime</dt>
-              <dd><%= ac.authority.maxRuntimeDurationMs %>ms</dd>
+              <dd><%= typeof formatDurationHuman === 'function' ? formatDurationHuman(ac.authority.maxRuntimeDurationMs) : ac.authority.maxRuntimeDurationMs + 'ms' %></dd>
             </div>
             <div class="authority-row">
               <dt>Provider/Model</dt>
@@ -330,8 +370,8 @@
   <div class="inline-log-list">
     <% runRecentLogs.forEach(log => { %>
       <div class="inline-log-item">
-        <span class="inline-log-type"><%= log.type %></span>
-        <span class="inline-log-message"><%= log.message %></span>
+        <span class="inline-log-type"><%= log.displayType || log.type %></span>
+        <span class="inline-log-message"><%= log.displayMessage || log.message %></span>
         <% if (log.changedBy || log.requestedBy) { %>
           <span class="audit-meta">Changed by <%= log.changedBy || log.requestedBy %> at <%= log.changedAt || log.timestamp || '-' %></span>
         <% } %>
@@ -351,7 +391,7 @@
     <span class="replay-nav-label">Replay navigation:</span>
     <button type="button" class="btn-small btn-secondary" data-replay-toggle-all>Toggle all</button>
     <button type="button" class="btn-small btn-secondary" data-replay-filter="all">Show all</button>
-    <button type="button" class="btn-small btn-secondary" data-replay-filter="workspaceOperations">Ops</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-filter="workspaceOperations">Workspace actions</button>
     <button type="button" class="btn-small btn-secondary" data-replay-filter="providerRequests">Requests</button>
     <button type="button" class="btn-small btn-secondary" data-replay-filter="modelResponses">Responses</button>
     <button type="button" class="btn-small btn-secondary" data-replay-filter="events">Events</button>
@@ -432,7 +472,7 @@
   </section>
 
   <section class="detail-section replay-section" data-replay-section="workspaceOperations">
-    <h2>Workspace Operations</h2>
+    <h2>Workspace Actions</h2>
     <% if (!snapshot.workspaceOperations || snapshot.workspaceOperations.length === 0) { %>
       <p class="text-muted">No workspace operations captured.</p>
     <% } %>

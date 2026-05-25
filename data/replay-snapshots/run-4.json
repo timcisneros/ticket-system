@@ -1,40 +1,9 @@
 {
   "version": 1,
   "runId": 4,
-  "ticketId": 1,
-  "assignedAgentId": 1,
-  "agentNameSnapshot": "Agent 1",
-  "provider": "openai",
-  "model": "gpt-4.1-mini",
-  "runtimeEnvelope": {
-    "runId": 4,
-    "ticketId": 1,
-    "assignedAgentId": 1,
-    "currentDateTime": "2026-05-22T11:54:03-07:00",
-    "timezone": "America/Los_Angeles",
-    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
-    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
-    "executionWorkspaceType": "main",
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "allocationItem": null,
-    "allocationSubtask": null,
-    "ownedOutputPaths": [],
-    "allowedOperations": [
-      "listDirectory",
-      "readFile",
-      "createFolder",
-      "writeFile",
-      "renamePath",
-      "deletePath"
-    ],
-    "maxActionsPerResponse": 8,
-    "maxMutatingActionsPerResponse": 2,
-    "currentStep": 0,
-    "maxExecutionSteps": 4
-  },
-  "ticketObjectiveSnapshot": "Create a standard legal workspace structure by adding folders: intake, summaries, reviews, contracts, notes, outputs, and audit, under the project root directory.",
-  "systemInstructionSnapshot": "You are an agent working inside a contained workspace.\nYou may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.\nUse runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.\nInspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.\nIf the ticket requires creating or changing files, request the necessary workspace actions.\nDo not say you will do work later. Do not describe future work instead of performing it.\nIf no workspace operation is needed and the task is truly done, set complete to true.\nIf the task cannot be completed, explain the failure reason clearly in the message.\nNever return complete false with an empty actions array.\nBefore setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.\nIf the target path is clear or can be overwritten or created safely, emit the create or write operation.\nYou have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.\nThe per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (8).\nNever emit more than that many workspace actions in a single response.\nThe per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (2). Mutating actions are createFolder, writeFile, renamePath, and deletePath.\nPrefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.\nRead/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.\nIf a task requires more mutations than the mutating limit, split the work across multiple responses.\nEmit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.\nDo not fail or return an error just because the total task exceeds one response.\nFor bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.\nUse only the workspace operations listed in runtimeEnvelope.allowedOperations.\nIf runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.\nIf runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.\nEach action must be exactly {\"operation\":\"operationName\",\"args\":{...}} with no extra fields.\nRequired args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path \"\" only for the workspace root in listDirectory.\nRespond only as JSON with this shape:\n{\"message\":\"short summary\",\"actions\":[{\"operation\":\"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath\",\"args\":{\"path\":\"relative/path\",\"content\":\"for writeFile only\",\"nextPath\":\"for renamePath only\"}}],\"complete\":true|false}",
+  "ticketId": 4,
+  "assignedAgentId": 3,
+  "agentNameSnapshot": "Mike",
   "primitiveContract": {
     "allowedOperations": [
       "listDirectory",
@@ -81,7 +50,7 @@
   "allocationItem": null,
   "allocationSubtask": null,
   "ownedOutputPaths": [],
-  "ticketOpenedAt": "2026-05-22T18:54:03.496Z",
+  "ticketOpenedAt": "2026-05-24T05:01:24.075Z",
   "runtimeLimits": {
     "maxExecutionSteps": 4,
     "maxWorkspaceOperationsPerRun": 32,
@@ -90,869 +59,94 @@
   },
   "providerRequests": [
     {
-      "url": "https://api.openai.com/v1/responses",
+      "url": "http://127.0.0.1:11434/api/chat",
       "method": "POST",
       "headers": {
-        "Authorization": "[redacted]",
         "Content-Type": "application/json"
       },
       "body": {
-        "model": "gpt-4.1-mini",
-        "input": [
+        "model": "gemma3:latest",
+        "messages": [
           {
             "role": "system",
             "content": "You are an agent working inside a contained workspace.\nYou may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.\nUse runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.\nInspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.\nIf the ticket requires creating or changing files, request the necessary workspace actions.\nDo not say you will do work later. Do not describe future work instead of performing it.\nIf no workspace operation is needed and the task is truly done, set complete to true.\nIf the task cannot be completed, explain the failure reason clearly in the message.\nNever return complete false with an empty actions array.\nBefore setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.\nIf the target path is clear or can be overwritten or created safely, emit the create or write operation.\nYou have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.\nThe per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (8).\nNever emit more than that many workspace actions in a single response.\nThe per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (2). Mutating actions are createFolder, writeFile, renamePath, and deletePath.\nPrefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.\nRead/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.\nIf a task requires more mutations than the mutating limit, split the work across multiple responses.\nEmit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.\nDo not fail or return an error just because the total task exceeds one response.\nFor bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.\nUse only the workspace operations listed in runtimeEnvelope.allowedOperations.\nIf runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.\nIf runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.\nEach action must be exactly {\"operation\":\"operationName\",\"args\":{...}} with no extra fields.\nRequired args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path \"\" only for the workspace root in listDirectory.\nRespond only as JSON with this shape:\n{\"message\":\"short summary\",\"actions\":[{\"operation\":\"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath\",\"args\":{\"path\":\"relative/path\",\"content\":\"for writeFile only\",\"nextPath\":\"for renamePath only\"}}],\"complete\":true|false}"
           },
           {
             "role": "user",
-            "content": "{\"runtimeEnvelope\":{\"runId\":4,\"ticketId\":1,\"assignedAgentId\":1,\"currentDateTime\":\"2026-05-22T11:54:03-07:00\",\"timezone\":\"America/Los_Angeles\",\"workspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"mainWorkspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"executionWorkspaceType\":\"main\",\"allocationPlanId\":null,\"allocationItemId\":null,\"allocationItem\":null,\"allocationSubtask\":null,\"ownedOutputPaths\":[],\"allowedOperations\":[\"listDirectory\",\"readFile\",\"createFolder\",\"writeFile\",\"renamePath\",\"deletePath\"],\"maxActionsPerResponse\":8,\"maxMutatingActionsPerResponse\":2,\"currentStep\":0,\"maxExecutionSteps\":4}}"
+            "content": "{\"runtimeEnvelope\":{\"runId\":4,\"ticketId\":4,\"assignedAgentId\":3,\"currentDateTime\":\"2026-05-23T22:01:24-07:00\",\"timezone\":\"America/Los_Angeles\",\"workspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"mainWorkspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"executionWorkspaceType\":\"main\",\"allocationPlanId\":null,\"allocationItemId\":null,\"allocationItem\":null,\"allocationSubtask\":null,\"ownedOutputPaths\":[],\"allowedOperations\":[\"listDirectory\",\"readFile\",\"createFolder\",\"writeFile\",\"renamePath\",\"deletePath\"],\"maxActionsPerResponse\":8,\"maxMutatingActionsPerResponse\":2,\"currentStep\":0,\"maxExecutionSteps\":4}}"
           },
           {
             "role": "user",
-            "content": "{\"ticketObjective\":\"Create a standard legal workspace structure by adding folders: intake, summaries, reviews, contracts, notes, outputs, and audit, under the project root directory.\",\"previousActionResults\":[]}"
+            "content": "{\"ticketObjective\":\"Ticket friction 20260524-0457 C: ensure folder mike-simple exists. It already exists if present. Once mike-simple exists, set complete:true.\",\"previousActionResults\":[]}"
           }
         ],
-        "text": {
-          "format": {
-            "type": "json_object"
-          }
-        }
+        "stream": false,
+        "format": "json"
       },
-      "capturedAt": "2026-05-22T18:54:03.511Z"
-    },
-    {
-      "url": "https://api.openai.com/v1/responses",
-      "method": "POST",
-      "headers": {
-        "Authorization": "[redacted]",
-        "Content-Type": "application/json"
-      },
-      "body": {
-        "model": "gpt-4.1-mini",
-        "input": [
-          {
-            "role": "system",
-            "content": "You are an agent working inside a contained workspace.\nYou may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.\nUse runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.\nInspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.\nIf the ticket requires creating or changing files, request the necessary workspace actions.\nDo not say you will do work later. Do not describe future work instead of performing it.\nIf no workspace operation is needed and the task is truly done, set complete to true.\nIf the task cannot be completed, explain the failure reason clearly in the message.\nNever return complete false with an empty actions array.\nBefore setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.\nIf the target path is clear or can be overwritten or created safely, emit the create or write operation.\nYou have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.\nThe per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (8).\nNever emit more than that many workspace actions in a single response.\nThe per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (2). Mutating actions are createFolder, writeFile, renamePath, and deletePath.\nPrefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.\nRead/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.\nIf a task requires more mutations than the mutating limit, split the work across multiple responses.\nEmit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.\nDo not fail or return an error just because the total task exceeds one response.\nFor bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.\nUse only the workspace operations listed in runtimeEnvelope.allowedOperations.\nIf runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.\nIf runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.\nEach action must be exactly {\"operation\":\"operationName\",\"args\":{...}} with no extra fields.\nRequired args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path \"\" only for the workspace root in listDirectory.\nRespond only as JSON with this shape:\n{\"message\":\"short summary\",\"actions\":[{\"operation\":\"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath\",\"args\":{\"path\":\"relative/path\",\"content\":\"for writeFile only\",\"nextPath\":\"for renamePath only\"}}],\"complete\":true|false}"
-          },
-          {
-            "role": "user",
-            "content": "{\"runtimeEnvelope\":{\"runId\":4,\"ticketId\":1,\"assignedAgentId\":1,\"currentDateTime\":\"2026-05-22T11:54:05-07:00\",\"timezone\":\"America/Los_Angeles\",\"workspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"mainWorkspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"executionWorkspaceType\":\"main\",\"allocationPlanId\":null,\"allocationItemId\":null,\"allocationItem\":null,\"allocationSubtask\":null,\"ownedOutputPaths\":[],\"allowedOperations\":[\"listDirectory\",\"readFile\",\"createFolder\",\"writeFile\",\"renamePath\",\"deletePath\"],\"maxActionsPerResponse\":8,\"maxMutatingActionsPerResponse\":2,\"currentStep\":1,\"maxExecutionSteps\":4}}"
-          },
-          {
-            "role": "user",
-            "content": "{\"ticketObjective\":\"Create a standard legal workspace structure by adding folders: intake, summaries, reviews, contracts, notes, outputs, and audit, under the project root directory.\",\"previousActionResults\":[{\"warning\":\"model:mutating_action_limit\",\"message\":\"You returned 7 mutating workspace actions, exceeding the per-response mutating limit of 2. Retry with at most 2 createFolder/writeFile/renamePath/deletePath action(s). You may include read/list actions if needed. If more work remains, set complete:false and continue in the next response.\"}]}"
-          }
-        ],
-        "text": {
-          "format": {
-            "type": "json_object"
-          }
-        }
-      },
-      "capturedAt": "2026-05-22T18:54:05.799Z"
-    },
-    {
-      "url": "https://api.openai.com/v1/responses",
-      "method": "POST",
-      "headers": {
-        "Authorization": "[redacted]",
-        "Content-Type": "application/json"
-      },
-      "body": {
-        "model": "gpt-4.1-mini",
-        "input": [
-          {
-            "role": "system",
-            "content": "You are an agent working inside a contained workspace.\nYou may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.\nUse runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.\nInspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.\nIf the ticket requires creating or changing files, request the necessary workspace actions.\nDo not say you will do work later. Do not describe future work instead of performing it.\nIf no workspace operation is needed and the task is truly done, set complete to true.\nIf the task cannot be completed, explain the failure reason clearly in the message.\nNever return complete false with an empty actions array.\nBefore setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.\nIf the target path is clear or can be overwritten or created safely, emit the create or write operation.\nYou have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.\nThe per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (8).\nNever emit more than that many workspace actions in a single response.\nThe per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (2). Mutating actions are createFolder, writeFile, renamePath, and deletePath.\nPrefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.\nRead/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.\nIf a task requires more mutations than the mutating limit, split the work across multiple responses.\nEmit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.\nDo not fail or return an error just because the total task exceeds one response.\nFor bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.\nUse only the workspace operations listed in runtimeEnvelope.allowedOperations.\nIf runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.\nIf runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.\nEach action must be exactly {\"operation\":\"operationName\",\"args\":{...}} with no extra fields.\nRequired args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path \"\" only for the workspace root in listDirectory.\nRespond only as JSON with this shape:\n{\"message\":\"short summary\",\"actions\":[{\"operation\":\"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath\",\"args\":{\"path\":\"relative/path\",\"content\":\"for writeFile only\",\"nextPath\":\"for renamePath only\"}}],\"complete\":true|false}"
-          },
-          {
-            "role": "user",
-            "content": "{\"runtimeEnvelope\":{\"runId\":4,\"ticketId\":1,\"assignedAgentId\":1,\"currentDateTime\":\"2026-05-22T11:54:07-07:00\",\"timezone\":\"America/Los_Angeles\",\"workspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"mainWorkspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"executionWorkspaceType\":\"main\",\"allocationPlanId\":null,\"allocationItemId\":null,\"allocationItem\":null,\"allocationSubtask\":null,\"ownedOutputPaths\":[],\"allowedOperations\":[\"listDirectory\",\"readFile\",\"createFolder\",\"writeFile\",\"renamePath\",\"deletePath\"],\"maxActionsPerResponse\":8,\"maxMutatingActionsPerResponse\":2,\"currentStep\":2,\"maxExecutionSteps\":4}}"
-          },
-          {
-            "role": "user",
-            "content": "{\"ticketObjective\":\"Create a standard legal workspace structure by adding folders: intake, summaries, reviews, contracts, notes, outputs, and audit, under the project root directory.\",\"previousActionResults\":[{\"action\":{\"operation\":\"createFolder\",\"args\":{\"path\":\"intake\"}},\"result\":{\"path\":\"intake\",\"status\":\"already_exists_noop\",\"historyId\":8}},{\"action\":{\"operation\":\"createFolder\",\"args\":{\"path\":\"summaries\"}},\"result\":{\"path\":\"summaries\",\"status\":\"already_exists_noop\",\"historyId\":9}}]}"
-          }
-        ],
-        "text": {
-          "format": {
-            "type": "json_object"
-          }
-        }
-      },
-      "capturedAt": "2026-05-22T18:54:07.433Z"
-    },
-    {
-      "url": "https://api.openai.com/v1/responses",
-      "method": "POST",
-      "headers": {
-        "Authorization": "[redacted]",
-        "Content-Type": "application/json"
-      },
-      "body": {
-        "model": "gpt-4.1-mini",
-        "input": [
-          {
-            "role": "system",
-            "content": "You are an agent working inside a contained workspace.\nYou may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.\nUse runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.\nInspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.\nIf the ticket requires creating or changing files, request the necessary workspace actions.\nDo not say you will do work later. Do not describe future work instead of performing it.\nIf no workspace operation is needed and the task is truly done, set complete to true.\nIf the task cannot be completed, explain the failure reason clearly in the message.\nNever return complete false with an empty actions array.\nBefore setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.\nIf the target path is clear or can be overwritten or created safely, emit the create or write operation.\nYou have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.\nThe per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (8).\nNever emit more than that many workspace actions in a single response.\nThe per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (2). Mutating actions are createFolder, writeFile, renamePath, and deletePath.\nPrefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.\nRead/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.\nIf a task requires more mutations than the mutating limit, split the work across multiple responses.\nEmit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.\nDo not fail or return an error just because the total task exceeds one response.\nFor bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.\nUse only the workspace operations listed in runtimeEnvelope.allowedOperations.\nIf runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.\nIf runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.\nEach action must be exactly {\"operation\":\"operationName\",\"args\":{...}} with no extra fields.\nRequired args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path \"\" only for the workspace root in listDirectory.\nRespond only as JSON with this shape:\n{\"message\":\"short summary\",\"actions\":[{\"operation\":\"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath\",\"args\":{\"path\":\"relative/path\",\"content\":\"for writeFile only\",\"nextPath\":\"for renamePath only\"}}],\"complete\":true|false}"
-          },
-          {
-            "role": "user",
-            "content": "{\"runtimeEnvelope\":{\"runId\":4,\"ticketId\":1,\"assignedAgentId\":1,\"currentDateTime\":\"2026-05-22T11:54:08-07:00\",\"timezone\":\"America/Los_Angeles\",\"workspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"mainWorkspaceRoot\":\"/home/timcis/Desktop/Codex/ticket-system/workspace-root\",\"executionWorkspaceType\":\"main\",\"allocationPlanId\":null,\"allocationItemId\":null,\"allocationItem\":null,\"allocationSubtask\":null,\"ownedOutputPaths\":[],\"allowedOperations\":[\"listDirectory\",\"readFile\",\"createFolder\",\"writeFile\",\"renamePath\",\"deletePath\"],\"maxActionsPerResponse\":8,\"maxMutatingActionsPerResponse\":2,\"currentStep\":3,\"maxExecutionSteps\":4}}"
-          },
-          {
-            "role": "user",
-            "content": "{\"ticketObjective\":\"Create a standard legal workspace structure by adding folders: intake, summaries, reviews, contracts, notes, outputs, and audit, under the project root directory.\",\"previousActionResults\":[{\"action\":{\"operation\":\"createFolder\",\"args\":{\"path\":\"reviews\"}},\"result\":{\"path\":\"reviews\",\"status\":\"already_exists_noop\",\"historyId\":10}},{\"action\":{\"operation\":\"createFolder\",\"args\":{\"path\":\"contracts\"}},\"result\":{\"path\":\"contracts\",\"status\":\"already_exists_noop\",\"historyId\":11}}]}"
-          }
-        ],
-        "text": {
-          "format": {
-            "type": "json_object"
-          }
-        }
-      },
-      "capturedAt": "2026-05-22T18:54:08.877Z"
+      "startedAt": "2026-05-24T05:01:24.082Z",
+      "durationMs": 2,
+      "capturedAt": "2026-05-24T05:01:24.084Z"
     }
   ],
-  "modelResponses": [
-    {
-      "text": "{\"message\":\"Creating the standard legal workspace structure with the specified folders.\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"intake\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"summaries\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"reviews\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"contracts\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"notes\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"outputs\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"audit\"}}],\"complete\":true}",
-      "usage": {
-        "input_tokens": 871,
-        "input_tokens_details": {
-          "cached_tokens": 0
-        },
-        "output_tokens": 108,
-        "output_tokens_details": {
-          "reasoning_tokens": 0
-        },
-        "total_tokens": 979
-      },
-      "provider": "openai",
-      "model": "gpt-4.1-mini",
-      "providerResponsePayload": {
-        "ok": true,
-        "status": 200,
-        "requestId": "req_beabc2acff524cf4bc2e0ed68a2c8e41",
-        "headers": {
-          "access-control-expose-headers": "X-Request-ID, CF-Ray, CF-Ray",
-          "alt-svc": "h3=\":443\"; ma=86400",
-          "cf-cache-status": "DYNAMIC",
-          "cf-ray": "9ffe06f8cda175a3-LAX",
-          "connection": "keep-alive",
-          "content-encoding": "br",
-          "content-type": "application/json",
-          "date": "Fri, 22 May 2026 18:54:05 GMT",
-          "openai-organization": "user-uapfolhaqosrcuogogt9wmbx",
-          "openai-processing-ms": "1933",
-          "openai-project": "proj_yQQhVbNzTxeGGHiDoV5tBSex",
-          "openai-version": "2020-10-01",
-          "server": "cloudflare",
-          "set-cookie": "__cf_bm=vDcijyPwKiUd6Uaz3bDvGYHq6nrk5z0vduTja06G.50-1779476043.641841-1.0.1.1-FfaRgXFF9HZQLLXGVnsbrSQtgAS2M4L4B8.._o2AUntJxwZry1wUBuocIQSxS3UwqeGqWimbH5J49wwDX7HtXNMRKNg0Fe8ItQF3egO81Uqqdw7RnF6gH5jojmqUnhQA; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Fri, 22 May 2026 19:24:05 GMT",
-          "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
-          "transfer-encoding": "chunked",
-          "x-content-type-options": "nosniff",
-          "x-ratelimit-limit-requests": "500",
-          "x-ratelimit-limit-tokens": "200000",
-          "x-ratelimit-remaining-requests": "499",
-          "x-ratelimit-remaining-tokens": "199110",
-          "x-ratelimit-reset-requests": "120ms",
-          "x-ratelimit-reset-tokens": "267ms",
-          "x-request-id": "req_beabc2acff524cf4bc2e0ed68a2c8e41"
-        },
-        "body": {
-          "id": "resp_048502cddee804ea006a10a64bd67c819ab2fac3ae23579c62",
-          "object": "response",
-          "created_at": 1779476043,
-          "status": "completed",
-          "background": false,
-          "billing": {
-            "payer": "developer"
-          },
-          "completed_at": 1779476045,
-          "error": null,
-          "frequency_penalty": 0,
-          "incomplete_details": null,
-          "instructions": null,
-          "max_output_tokens": null,
-          "max_tool_calls": null,
-          "model": "gpt-4.1-mini-2025-04-14",
-          "moderation": null,
-          "output": [
-            {
-              "id": "msg_048502cddee804ea006a10a64c5218819ab7108d7a7071b01a",
-              "type": "message",
-              "status": "completed",
-              "content": [
-                {
-                  "type": "output_text",
-                  "annotations": [],
-                  "logprobs": [],
-                  "text": "{\"message\":\"Creating the standard legal workspace structure with the specified folders.\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"intake\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"summaries\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"reviews\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"contracts\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"notes\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"outputs\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"audit\"}}],\"complete\":true}"
-                }
-              ],
-              "role": "assistant"
-            }
-          ],
-          "parallel_tool_calls": true,
-          "presence_penalty": 0,
-          "previous_response_id": null,
-          "prompt_cache_key": null,
-          "prompt_cache_retention": "in_memory",
-          "reasoning": {
-            "effort": null,
-            "summary": null
-          },
-          "safety_identifier": null,
-          "service_tier": "default",
-          "store": true,
-          "temperature": 1,
-          "text": {
-            "format": {
-              "type": "json_object"
-            },
-            "verbosity": "medium"
-          },
-          "tool_choice": "auto",
-          "tools": [],
-          "top_logprobs": 0,
-          "top_p": 1,
-          "truncation": "disabled",
-          "usage": {
-            "input_tokens": 871,
-            "input_tokens_details": {
-              "cached_tokens": 0
-            },
-            "output_tokens": 108,
-            "output_tokens_details": {
-              "reasoning_tokens": 0
-            },
-            "total_tokens": 979
-          },
-          "user": null,
-          "metadata": {}
-        }
-      },
-      "capturedAt": "2026-05-22T18:54:05.783Z"
-    },
-    {
-      "text": "{\"message\":\"Creating the 'intake' and 'summaries' folders under the project root directory.\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"intake\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"summaries\"}}],\"complete\":false}",
-      "usage": {
-        "input_tokens": 946,
-        "input_tokens_details": {
-          "cached_tokens": 0
-        },
-        "output_tokens": 55,
-        "output_tokens_details": {
-          "reasoning_tokens": 0
-        },
-        "total_tokens": 1001
-      },
-      "provider": "openai",
-      "model": "gpt-4.1-mini",
-      "providerResponsePayload": {
-        "ok": true,
-        "status": 200,
-        "requestId": "req_0cf4967a234a4829ba25f5139da42a41",
-        "headers": {
-          "access-control-expose-headers": "X-Request-ID, CF-Ray, CF-Ray",
-          "alt-svc": "h3=\":443\"; ma=86400",
-          "cf-cache-status": "DYNAMIC",
-          "cf-ray": "9ffe0706aa3775a3-LAX",
-          "connection": "keep-alive",
-          "content-encoding": "br",
-          "content-type": "application/json",
-          "date": "Fri, 22 May 2026 18:54:07 GMT",
-          "openai-organization": "user-uapfolhaqosrcuogogt9wmbx",
-          "openai-processing-ms": "1471",
-          "openai-project": "proj_yQQhVbNzTxeGGHiDoV5tBSex",
-          "openai-version": "2020-10-01",
-          "server": "cloudflare",
-          "set-cookie": "__cf_bm=5Qv0rvgkJXqs3hKsKD3kOpc2ciO1qxiIVMyYWx8coCU-1779476045.8619382-1.0.1.1-Nf2SvyxBa.uPWANxNww13P8pdJuIRow2L7HWIoNw1iqZzRsxJjjux3fBYQ5Fxo7OD7KFI0AMzFZpYMXY3tI.1mVlvzxV5qX64YfDA6mYB3i_npZIM8SQU19N_E..acAH; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Fri, 22 May 2026 19:24:07 GMT",
-          "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
-          "transfer-encoding": "chunked",
-          "x-content-type-options": "nosniff",
-          "x-ratelimit-limit-requests": "500",
-          "x-ratelimit-limit-tokens": "200000",
-          "x-ratelimit-remaining-requests": "499",
-          "x-ratelimit-remaining-tokens": "199035",
-          "x-ratelimit-reset-requests": "120ms",
-          "x-ratelimit-reset-tokens": "289ms",
-          "x-request-id": "req_0cf4967a234a4829ba25f5139da42a41"
-        },
-        "body": {
-          "id": "resp_0fca02c3b48a1a76006a10a64e1134819a81375d75814afeb6",
-          "object": "response",
-          "created_at": 1779476046,
-          "status": "completed",
-          "background": false,
-          "billing": {
-            "payer": "developer"
-          },
-          "completed_at": 1779476047,
-          "error": null,
-          "frequency_penalty": 0,
-          "incomplete_details": null,
-          "instructions": null,
-          "max_output_tokens": null,
-          "max_tool_calls": null,
-          "model": "gpt-4.1-mini-2025-04-14",
-          "moderation": null,
-          "output": [
-            {
-              "id": "msg_0fca02c3b48a1a76006a10a64eb258819a9f98d33782b35868",
-              "type": "message",
-              "status": "completed",
-              "content": [
-                {
-                  "type": "output_text",
-                  "annotations": [],
-                  "logprobs": [],
-                  "text": "{\"message\":\"Creating the 'intake' and 'summaries' folders under the project root directory.\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"intake\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"summaries\"}}],\"complete\":false}"
-                }
-              ],
-              "role": "assistant"
-            }
-          ],
-          "parallel_tool_calls": true,
-          "presence_penalty": 0,
-          "previous_response_id": null,
-          "prompt_cache_key": null,
-          "prompt_cache_retention": "in_memory",
-          "reasoning": {
-            "effort": null,
-            "summary": null
-          },
-          "safety_identifier": null,
-          "service_tier": "default",
-          "store": true,
-          "temperature": 1,
-          "text": {
-            "format": {
-              "type": "json_object"
-            },
-            "verbosity": "medium"
-          },
-          "tool_choice": "auto",
-          "tools": [],
-          "top_logprobs": 0,
-          "top_p": 1,
-          "truncation": "disabled",
-          "usage": {
-            "input_tokens": 946,
-            "input_tokens_details": {
-              "cached_tokens": 0
-            },
-            "output_tokens": 55,
-            "output_tokens_details": {
-              "reasoning_tokens": 0
-            },
-            "total_tokens": 1001
-          },
-          "user": null,
-          "metadata": {}
-        }
-      },
-      "capturedAt": "2026-05-22T18:54:07.418Z"
-    },
-    {
-      "text": "{\"message\":\"Creating the remaining required folders: reviews, contracts, notes, outputs, and audit under the project root directory.\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"reviews\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"contracts\"}}],\"complete\":false}",
-      "usage": {
-        "input_tokens": 941,
-        "input_tokens_details": {
-          "cached_tokens": 0
-        },
-        "output_tokens": 57,
-        "output_tokens_details": {
-          "reasoning_tokens": 0
-        },
-        "total_tokens": 998
-      },
-      "provider": "openai",
-      "model": "gpt-4.1-mini",
-      "providerResponsePayload": {
-        "ok": true,
-        "status": 200,
-        "requestId": "req_85dfd19eb61e4b549d0fa800b805dd0e",
-        "headers": {
-          "access-control-expose-headers": "X-Request-ID, CF-Ray, CF-Ray",
-          "alt-svc": "h3=\":443\"; ma=86400",
-          "cf-cache-status": "DYNAMIC",
-          "cf-ray": "9ffe0710df8c75a3-LAX",
-          "connection": "keep-alive",
-          "content-encoding": "br",
-          "content-type": "application/json",
-          "date": "Fri, 22 May 2026 18:54:08 GMT",
-          "openai-organization": "user-uapfolhaqosrcuogogt9wmbx",
-          "openai-processing-ms": "1217",
-          "openai-project": "proj_yQQhVbNzTxeGGHiDoV5tBSex",
-          "openai-version": "2020-10-01",
-          "server": "cloudflare",
-          "set-cookie": "__cf_bm=2y1XL5j.6T2oaO8k_Ezgp_aR5aePpe.uqg8fi9qCFXg-1779476047.495052-1.0.1.1-NIPODOkmSJepeqT3R5ln9LUnAkPkG.PVFdouda5wnhQECTd_4O5oSO0SVtM__aKwGXn7nm1D6mMKTGj4lQd_26IQE4.SaE2VdfSZceCc_RbY3COj3bo8eGyL8HrsXUI9; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Fri, 22 May 2026 19:24:08 GMT",
-          "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
-          "transfer-encoding": "chunked",
-          "x-content-type-options": "nosniff",
-          "x-ratelimit-limit-requests": "500",
-          "x-ratelimit-limit-tokens": "200000",
-          "x-ratelimit-remaining-requests": "499",
-          "x-ratelimit-remaining-tokens": "199040",
-          "x-ratelimit-reset-requests": "120ms",
-          "x-ratelimit-reset-tokens": "288ms",
-          "x-request-id": "req_85dfd19eb61e4b549d0fa800b805dd0e"
-        },
-        "body": {
-          "id": "resp_0226e01f00bf86a0006a10a64f8df0819b955f79b653d2b7e0",
-          "object": "response",
-          "created_at": 1779476047,
-          "status": "completed",
-          "background": false,
-          "billing": {
-            "payer": "developer"
-          },
-          "completed_at": 1779476048,
-          "error": null,
-          "frequency_penalty": 0,
-          "incomplete_details": null,
-          "instructions": null,
-          "max_output_tokens": null,
-          "max_tool_calls": null,
-          "model": "gpt-4.1-mini-2025-04-14",
-          "moderation": null,
-          "output": [
-            {
-              "id": "msg_0226e01f00bf86a0006a10a6500154819b8114cfe2950fb2b7",
-              "type": "message",
-              "status": "completed",
-              "content": [
-                {
-                  "type": "output_text",
-                  "annotations": [],
-                  "logprobs": [],
-                  "text": "{\"message\":\"Creating the remaining required folders: reviews, contracts, notes, outputs, and audit under the project root directory.\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"reviews\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"contracts\"}}],\"complete\":false}"
-                }
-              ],
-              "role": "assistant"
-            }
-          ],
-          "parallel_tool_calls": true,
-          "presence_penalty": 0,
-          "previous_response_id": null,
-          "prompt_cache_key": null,
-          "prompt_cache_retention": "in_memory",
-          "reasoning": {
-            "effort": null,
-            "summary": null
-          },
-          "safety_identifier": null,
-          "service_tier": "default",
-          "store": true,
-          "temperature": 1,
-          "text": {
-            "format": {
-              "type": "json_object"
-            },
-            "verbosity": "medium"
-          },
-          "tool_choice": "auto",
-          "tools": [],
-          "top_logprobs": 0,
-          "top_p": 1,
-          "truncation": "disabled",
-          "usage": {
-            "input_tokens": 941,
-            "input_tokens_details": {
-              "cached_tokens": 0
-            },
-            "output_tokens": 57,
-            "output_tokens_details": {
-              "reasoning_tokens": 0
-            },
-            "total_tokens": 998
-          },
-          "user": null,
-          "metadata": {}
-        }
-      },
-      "capturedAt": "2026-05-22T18:54:08.854Z"
-    },
-    {
-      "text": "{\"message\":\"Create remaining folders for the legal workspace under the project root directory.\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"intake\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"summaries\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"notes\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"outputs\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"audit\"}}],\"complete\":true}",
-      "usage": {
-        "input_tokens": 937,
-        "input_tokens_details": {
-          "cached_tokens": 0
-        },
-        "output_tokens": 86,
-        "output_tokens_details": {
-          "reasoning_tokens": 0
-        },
-        "total_tokens": 1023
-      },
-      "provider": "openai",
-      "model": "gpt-4.1-mini",
-      "providerResponsePayload": {
-        "ok": true,
-        "status": 200,
-        "requestId": "req_b8b58bbd379c460fba80edddc56860c7",
-        "headers": {
-          "access-control-expose-headers": "X-Request-ID, CF-Ray, CF-Ray",
-          "alt-svc": "h3=\":443\"; ma=86400",
-          "cf-cache-status": "DYNAMIC",
-          "cf-ray": "9ffe0719ea6575a3-LAX",
-          "connection": "keep-alive",
-          "content-encoding": "br",
-          "content-type": "application/json",
-          "date": "Fri, 22 May 2026 18:54:10 GMT",
-          "openai-organization": "user-uapfolhaqosrcuogogt9wmbx",
-          "openai-processing-ms": "1777",
-          "openai-project": "proj_yQQhVbNzTxeGGHiDoV5tBSex",
-          "openai-version": "2020-10-01",
-          "server": "cloudflare",
-          "set-cookie": "__cf_bm=9gV0an3vtymKLatKh121hKtFtljrmJ9w6NqCIAbUneE-1779476048.9437068-1.0.1.1-k7VwwbIP63uffxnhdKAUqTcyuWCMIf8ViLhAyBUVjBWjCPF7gP.k9WFhOnIEEf21P8lnO_BpmDZGAhz3DjcD_V.w1zDDY.Bdd7Menea1C9AOOzOAneRKsp1RI_fHzvVb; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Fri, 22 May 2026 19:24:10 GMT",
-          "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
-          "transfer-encoding": "chunked",
-          "x-content-type-options": "nosniff",
-          "x-ratelimit-limit-requests": "500",
-          "x-ratelimit-limit-tokens": "200000",
-          "x-ratelimit-remaining-requests": "499",
-          "x-ratelimit-remaining-tokens": "199044",
-          "x-ratelimit-reset-requests": "120ms",
-          "x-ratelimit-reset-tokens": "286ms",
-          "x-request-id": "req_b8b58bbd379c460fba80edddc56860c7"
-        },
-        "body": {
-          "id": "resp_0ffbc62d7e999a9e006a10a650fd1c819ba04e88121db8631b",
-          "object": "response",
-          "created_at": 1779476049,
-          "status": "completed",
-          "background": false,
-          "billing": {
-            "payer": "developer"
-          },
-          "completed_at": 1779476050,
-          "error": null,
-          "frequency_penalty": 0,
-          "incomplete_details": null,
-          "instructions": null,
-          "max_output_tokens": null,
-          "max_tool_calls": null,
-          "model": "gpt-4.1-mini-2025-04-14",
-          "moderation": null,
-          "output": [
-            {
-              "id": "msg_0ffbc62d7e999a9e006a10a65172f0819ba95a9f20b8a60e66",
-              "type": "message",
-              "status": "completed",
-              "content": [
-                {
-                  "type": "output_text",
-                  "annotations": [],
-                  "logprobs": [],
-                  "text": "{\"message\":\"Create remaining folders for the legal workspace under the project root directory.\",\"actions\":[{\"operation\":\"createFolder\",\"args\":{\"path\":\"intake\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"summaries\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"notes\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"outputs\"}},{\"operation\":\"createFolder\",\"args\":{\"path\":\"audit\"}}],\"complete\":true}"
-                }
-              ],
-              "role": "assistant"
-            }
-          ],
-          "parallel_tool_calls": true,
-          "presence_penalty": 0,
-          "previous_response_id": null,
-          "prompt_cache_key": null,
-          "prompt_cache_retention": "in_memory",
-          "reasoning": {
-            "effort": null,
-            "summary": null
-          },
-          "safety_identifier": null,
-          "service_tier": "default",
-          "store": true,
-          "temperature": 1,
-          "text": {
-            "format": {
-              "type": "json_object"
-            },
-            "verbosity": "medium"
-          },
-          "tool_choice": "auto",
-          "tools": [],
-          "top_logprobs": 0,
-          "top_p": 1,
-          "truncation": "disabled",
-          "usage": {
-            "input_tokens": 937,
-            "input_tokens_details": {
-              "cached_tokens": 0
-            },
-            "output_tokens": 86,
-            "output_tokens_details": {
-              "reasoning_tokens": 0
-            },
-            "total_tokens": 1023
-          },
-          "user": null,
-          "metadata": {}
-        }
-      },
-      "capturedAt": "2026-05-22T18:54:10.801Z"
-    }
-  ],
-  "parsedModelPlans": [
-    {
-      "message": "Creating the standard legal workspace structure with the specified folders.",
-      "actions": [
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "intake"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "summaries"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "reviews"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "contracts"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "notes"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "outputs"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "audit"
-          }
-        }
-      ],
-      "complete": true,
-      "step": 0,
-      "capturedAt": "2026-05-22T18:54:05.784Z"
-    },
-    {
-      "message": "Creating the 'intake' and 'summaries' folders under the project root directory.",
-      "actions": [
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "intake"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "summaries"
-          }
-        }
-      ],
-      "complete": false,
-      "step": 1,
-      "capturedAt": "2026-05-22T18:54:07.419Z"
-    },
-    {
-      "message": "Creating the remaining required folders: reviews, contracts, notes, outputs, and audit under the project root directory.",
-      "actions": [
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "reviews"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "contracts"
-          }
-        }
-      ],
-      "complete": false,
-      "step": 2,
-      "capturedAt": "2026-05-22T18:54:08.857Z"
-    },
-    {
-      "message": "Create remaining folders for the legal workspace under the project root directory.",
-      "actions": [
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "intake"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "summaries"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "notes"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "outputs"
-          }
-        },
-        {
-          "operation": "createFolder",
-          "args": {
-            "path": "audit"
-          }
-        }
-      ],
-      "complete": true,
-      "step": 3,
-      "capturedAt": "2026-05-22T18:54:10.804Z"
-    }
-  ],
-  "workspaceOperations": [
-    {
-      "operation": {
-        "operation": "createFolder",
-        "args": {
-          "path": "intake"
-        }
-      },
-      "result": {
-        "path": "intake",
-        "status": "already_exists_noop",
-        "historyId": 8
-      },
-      "historyId": 8,
-      "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
-      "executionWorkspaceType": "main",
-      "allocationPlanId": null,
-      "allocationItemId": null,
-      "ownedOutputPaths": [],
-      "capturedAt": "2026-05-22T18:54:07.429Z"
-    },
-    {
-      "operation": {
-        "operation": "createFolder",
-        "args": {
-          "path": "summaries"
-        }
-      },
-      "result": {
-        "path": "summaries",
-        "status": "already_exists_noop",
-        "historyId": 9
-      },
-      "historyId": 9,
-      "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
-      "executionWorkspaceType": "main",
-      "allocationPlanId": null,
-      "allocationItemId": null,
-      "ownedOutputPaths": [],
-      "capturedAt": "2026-05-22T18:54:07.431Z"
-    },
-    {
-      "operation": {
-        "operation": "createFolder",
-        "args": {
-          "path": "reviews"
-        }
-      },
-      "result": {
-        "path": "reviews",
-        "status": "already_exists_noop",
-        "historyId": 10
-      },
-      "historyId": 10,
-      "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
-      "executionWorkspaceType": "main",
-      "allocationPlanId": null,
-      "allocationItemId": null,
-      "ownedOutputPaths": [],
-      "capturedAt": "2026-05-22T18:54:08.868Z"
-    },
-    {
-      "operation": {
-        "operation": "createFolder",
-        "args": {
-          "path": "contracts"
-        }
-      },
-      "result": {
-        "path": "contracts",
-        "status": "already_exists_noop",
-        "historyId": 11
-      },
-      "historyId": 11,
-      "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
-      "executionWorkspaceType": "main",
-      "allocationPlanId": null,
-      "allocationItemId": null,
-      "ownedOutputPaths": [],
-      "capturedAt": "2026-05-22T18:54:08.874Z"
-    }
-  ],
+  "modelResponses": [],
+  "parsedModelPlans": [],
+  "workflowInvocation": [],
+  "workflowActions": [],
+  "workspaceOperations": [],
   "events": [
     {
-      "type": "model:mutating_action_limit",
-      "message": "Model returned 7 mutating workspace actions, exceeding the per-response mutating limit of 2",
-      "actionCount": 7,
-      "mutatingActionCount": 7,
-      "maxActionsPerResponse": 8,
-      "maxMutatingActionsPerResponse": 2,
-      "repeatedViolationCount": 1,
-      "step": 0,
-      "capturedAt": "2026-05-22T18:54:05.796Z"
-    },
-    {
-      "type": "model:mutating_action_limit",
-      "message": "Model returned 5 mutating workspace actions, exceeding the per-response mutating limit of 2",
-      "actionCount": 5,
-      "mutatingActionCount": 5,
-      "maxActionsPerResponse": 8,
-      "maxMutatingActionsPerResponse": 2,
-      "repeatedViolationCount": 1,
-      "step": 3,
-      "capturedAt": "2026-05-22T18:54:10.814Z"
-    },
-    {
-      "type": "run:step_limit",
-      "message": "Agent run exceeded execution step limit of 4",
-      "limitType": "step",
-      "currentValue": 4,
-      "configuredLimit": 4,
-      "capturedAt": "2026-05-22T18:54:10.818Z"
+      "type": "run:timeout",
+      "message": "Agent run exceeded runtime duration limit of 120000ms",
+      "limitType": "timeout",
+      "currentValue": 120003,
+      "configuredLimit": 120000,
+      "capturedAt": "2026-05-24T05:03:24.085Z"
     }
   ],
   "terminalStatus": "failed",
-  "failureReason": "Agent run exceeded execution step limit of 4",
-  "createdAt": "2026-05-22T18:54:03.509Z",
+  "failureReason": "Agent run exceeded runtime duration limit of 120000ms",
+  "createdAt": "2026-05-24T05:01:24.080Z",
+  "provider": "ollama",
+  "model": "gemma3:latest",
+  "runtimeEnvelope": {
+    "runId": 4,
+    "ticketId": 4,
+    "assignedAgentId": 3,
+    "currentDateTime": "2026-05-23T22:01:24-07:00",
+    "timezone": "America/Los_Angeles",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationItem": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "allowedOperations": [
+      "listDirectory",
+      "readFile",
+      "createFolder",
+      "writeFile",
+      "renamePath",
+      "deletePath"
+    ],
+    "maxActionsPerResponse": 8,
+    "maxMutatingActionsPerResponse": 2,
+    "currentStep": 0,
+    "maxExecutionSteps": 4
+  },
+  "ticketObjectiveSnapshot": "Ticket friction 20260524-0457 C: ensure folder mike-simple exists. It already exists if present. Once mike-simple exists, set complete:true.",
+  "systemInstructionSnapshot": "You are an agent working inside a contained workspace.\nYou may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.\nUse runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.\nInspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.\nIf the ticket requires creating or changing files, request the necessary workspace actions.\nDo not say you will do work later. Do not describe future work instead of performing it.\nIf no workspace operation is needed and the task is truly done, set complete to true.\nIf the task cannot be completed, explain the failure reason clearly in the message.\nNever return complete false with an empty actions array.\nBefore setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.\nIf the target path is clear or can be overwritten or created safely, emit the create or write operation.\nYou have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.\nThe per-response workspace action limit is runtimeEnvelope.maxActionsPerResponse (8).\nNever emit more than that many workspace actions in a single response.\nThe per-response mutating action limit is runtimeEnvelope.maxMutatingActionsPerResponse (2). Mutating actions are createFolder, writeFile, renamePath, and deletePath.\nPrefer one small verified transition per response. Usually emit only 1-2 mutating actions, then inspect the returned results before continuing.\nRead/list actions may share a response with up to the mutating limit, but do not batch a large set of workspace mutations.\nIf a task requires more mutations than the mutating limit, split the work across multiple responses.\nEmit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.\nDo not fail or return an error just because the total task exceeds one response.\nFor bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.\nUse only the workspace operations listed in runtimeEnvelope.allowedOperations.\nIf runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.\nIf runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.\nEach action must be exactly {\"operation\":\"operationName\",\"args\":{...}} with no extra fields.\nRequired args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path \"\" only for the workspace root in listDirectory.\nRespond only as JSON with this shape:\n{\"message\":\"short summary\",\"actions\":[{\"operation\":\"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath\",\"args\":{\"path\":\"relative/path\",\"content\":\"for writeFile only\",\"nextPath\":\"for renamePath only\"}}],\"complete\":true|false}",
   "failure": {
     "code": "RUN_LIMIT_EXCEEDED",
-    "kind": "budget_exhausted",
+    "kind": "timeout",
     "detail": {
-      "limitType": "step",
-      "currentValue": 4,
-      "configuredLimit": 4
+      "limitType": "timeout",
+      "currentValue": 120003,
+      "configuredLimit": 120000
     }
   },
   "mutationOutcome": "no_mutations",
   "mutationCount": 0,
-  "finalizedAt": "2026-05-22T18:54:10.821Z"
+  "finalizedAt": "2026-05-24T05:03:24.087Z"
 }

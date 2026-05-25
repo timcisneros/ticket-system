@@ -62,6 +62,7 @@ function statusTag(s) {
 }
 
 function outcomeTag(s) {
+  if (s === 'completed_with_verified_postcondition') return green(s);
   if (s === 'completed_with_mutations') return green(s);
   if (s === 'completed_noop') return yellow(s);
   if (s === 'impossible_within_boundary') return yellow(s);
@@ -167,6 +168,13 @@ function hasCompletedNoopEvent(run, data) {
     runLogs(run, data).some(l => l && l.type === 'run:completed_noop');
 }
 
+function hasPostconditionCompletedEvent(run, data) {
+  const summary = replaySummary(run);
+  return summary.hasPostconditionCompleted ||
+    replayEvents(run).some(e => e && e.type === 'run:postcondition_completed') ||
+    runLogs(run, data).some(l => l && l.type === 'run:postcondition_completed');
+}
+
 function hasBlockedOrRejectedEvidence(run, data) {
   const summary = replaySummary(run);
   if (summary.hasBlockedOrRejected) return true;
@@ -208,6 +216,7 @@ function classifyOperationalOutcome(run, data) {
   if (run.status === 'interrupted') return 'interrupted';
 
   if (run.status === 'completed') {
+    if (hasPostconditionCompletedEvent(run, data)) return 'completed_with_verified_postcondition';
     if (mutationCountForRun(run) > 0) return 'completed_with_mutations';
     if (hasNotFoundEvidence(run, data)) return 'impossible_within_boundary';
     if (hasCompletedNoopEvent(run, data)) return 'completed_noop';

@@ -1,15 +1,15 @@
 [
   {
     "id": 1,
-    "timestamp": "2026-05-22T18:50:24.305757079Z",
+    "timestamp": "2026-05-24T04:59:32.333131622Z",
     "ticketId": 1,
     "allocationPlanId": null,
     "allocationItemId": null,
     "runId": 1,
-    "step": 1,
+    "step": 0,
     "operation": "createFolder",
     "args": {
-      "path": "intake"
+      "path": "mike-simple"
     },
     "preState": {
       "existed": false
@@ -19,7 +19,7 @@
       "type": "directory"
     },
     "result": {
-      "path": "intake",
+      "path": "mike-simple",
       "status": "created"
     },
     "error": null,
@@ -28,26 +28,27 @@
   },
   {
     "id": 2,
-    "timestamp": "2026-05-22T18:50:24.308744142Z",
+    "timestamp": "2026-05-24T04:59:32.337658332Z",
     "ticketId": 1,
     "allocationPlanId": null,
     "allocationItemId": null,
     "runId": 1,
-    "step": 1,
-    "operation": "createFolder",
+    "step": 0,
+    "operation": "writeFile",
     "args": {
-      "path": "summaries"
+      "path": "mike-simple/mike-simple-20260524.txt",
+      "content": "hello from Mike."
     },
     "preState": {
       "existed": false
     },
     "postState": {
       "existed": true,
-      "type": "directory"
+      "type": "file",
+      "contentHash": "c777fb8546dfba4520a86169125937de571fa456a4956f7ebaff865e32cad953"
     },
     "result": {
-      "path": "summaries",
-      "status": "created"
+      "path": "mike-simple/mike-simple-20260524.txt"
     },
     "error": null,
     "isRecovery": false,
@@ -55,26 +56,28 @@
   },
   {
     "id": 3,
-    "timestamp": "2026-05-22T18:50:26.455089247Z",
+    "timestamp": "2026-05-24T05:00:03.814461002Z",
     "ticketId": 1,
     "allocationPlanId": null,
     "allocationItemId": null,
     "runId": 1,
-    "step": 2,
-    "operation": "createFolder",
+    "step": 1,
+    "operation": "deletePath",
     "args": {
-      "path": "reviews"
+      "path": "mike-simple/mike-simple-20260524.txt"
     },
     "preState": {
-      "existed": false
+      "existed": true,
+      "type": "file",
+      "contentHash": "c777fb8546dfba4520a86169125937de571fa456a4956f7ebaff865e32cad953",
+      "content": "hello from Mike."
     },
     "postState": {
-      "existed": true,
-      "type": "directory"
+      "existed": false
     },
     "result": {
-      "path": "reviews",
-      "status": "created"
+      "path": "mike-simple/mike-simple-20260524.txt",
+      "status": "deleted"
     },
     "error": null,
     "isRecovery": false,
@@ -82,42 +85,15 @@
   },
   {
     "id": 4,
-    "timestamp": "2026-05-22T18:50:26.458912070Z",
-    "ticketId": 1,
+    "timestamp": "2026-05-24T05:52:47.840581612Z",
+    "ticketId": 5,
     "allocationPlanId": null,
     "allocationItemId": null,
-    "runId": 1,
-    "step": 2,
+    "runId": 5,
+    "step": 0,
     "operation": "createFolder",
     "args": {
-      "path": "contracts"
-    },
-    "preState": {
-      "existed": false
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "contracts",
-      "status": "created"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 5,
-    "timestamp": "2026-05-22T18:52:52.579058645Z",
-    "ticketId": 2,
-    "allocationPlanId": 1,
-    "allocationItemId": 2,
-    "runId": 3,
-    "step": 1,
-    "operation": "createFolder",
-    "args": {
-      "path": "intake"
+      "path": "recheck-satisfied-20260524-0551"
     },
     "preState": {
       "existed": true,
@@ -128,7 +104,7 @@
       "type": "directory"
     },
     "result": {
-      "path": "intake",
+      "path": "recheck-satisfied-20260524-0551",
       "status": "already_exists_noop"
     },
     "error": null,
@@ -136,16 +112,47 @@
     "recoveredHistoryId": null
   },
   {
+    "id": 5,
+    "timestamp": "2026-05-24T05:52:47.844981198Z",
+    "ticketId": 5,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 5,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "recheck-satisfied-20260524-0551/note.txt",
+      "content": "folder note"
+    },
+    "preState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "content": ""
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "5bb839ed39dea24f2864ef8975b47597cd5c5073974cc617741cb03c11497a0f"
+    },
+    "result": {
+      "path": "recheck-satisfied-20260524-0551/note.txt"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
     "id": 6,
-    "timestamp": "2026-05-22T18:52:55.650535464Z",
-    "ticketId": 2,
-    "allocationPlanId": 1,
-    "allocationItemId": 1,
-    "runId": 2,
-    "step": 1,
+    "timestamp": "2026-05-24T05:55:29.315040084Z",
+    "ticketId": 6,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 6,
+    "step": 0,
     "operation": "createFolder",
     "args": {
-      "path": "contracts/intake"
+      "path": "recheck-queue-two-20260524"
     },
     "preState": {
       "existed": false
@@ -155,7 +162,7 @@
       "type": "directory"
     },
     "result": {
-      "path": "contracts/intake",
+      "path": "recheck-queue-two-20260524",
       "status": "created"
     },
     "error": null,
@@ -164,26 +171,27 @@
   },
   {
     "id": 7,
-    "timestamp": "2026-05-22T18:52:55.654333846Z",
-    "ticketId": 2,
-    "allocationPlanId": 1,
-    "allocationItemId": 1,
-    "runId": 2,
-    "step": 1,
-    "operation": "createFolder",
+    "timestamp": "2026-05-24T05:55:29.318482372Z",
+    "ticketId": 6,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 6,
+    "step": 0,
+    "operation": "writeFile",
     "args": {
-      "path": "contracts/summaries"
+      "path": "recheck-queue-two-20260524/note.txt",
+      "content": "queue two"
     },
     "preState": {
       "existed": false
     },
     "postState": {
       "existed": true,
-      "type": "directory"
+      "type": "file",
+      "contentHash": "0a3303b35f573a8b2ca49cd75ca955428d29685d87f06e5505c457eb674cac78"
     },
     "result": {
-      "path": "contracts/summaries",
-      "status": "created"
+      "path": "recheck-queue-two-20260524/note.txt"
     },
     "error": null,
     "isRecovery": false,
@@ -191,15 +199,15 @@
   },
   {
     "id": 8,
-    "timestamp": "2026-05-22T18:54:07.429117560Z",
-    "ticketId": 1,
+    "timestamp": "2026-05-24T06:21:42.954277575Z",
+    "ticketId": 8,
     "allocationPlanId": null,
     "allocationItemId": null,
-    "runId": 4,
-    "step": 1,
+    "runId": 8,
+    "step": 0,
     "operation": "createFolder",
     "args": {
-      "path": "intake"
+      "path": "postcondition-patch-20260524-0620"
     },
     "preState": {
       "existed": true,
@@ -210,7 +218,7 @@
       "type": "directory"
     },
     "result": {
-      "path": "intake",
+      "path": "postcondition-patch-20260524-0620",
       "status": "already_exists_noop"
     },
     "error": null,
@@ -219,276 +227,30 @@
   },
   {
     "id": 9,
-    "timestamp": "2026-05-22T18:54:07.430777593Z",
-    "ticketId": 1,
+    "timestamp": "2026-05-24T06:21:42.961449669Z",
+    "ticketId": 8,
     "allocationPlanId": null,
     "allocationItemId": null,
-    "runId": 4,
-    "step": 1,
-    "operation": "createFolder",
+    "runId": 8,
+    "step": 0,
+    "operation": "writeFile",
     "args": {
-      "path": "summaries"
+      "path": "postcondition-patch-20260524-0620/note.txt",
+      "content": "note"
     },
     "preState": {
       "existed": true,
-      "type": "directory"
+      "type": "file",
+      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "content": ""
     },
     "postState": {
       "existed": true,
-      "type": "directory"
+      "type": "file",
+      "contentHash": "edb465624291e4053c6c5ea4b7eb320dec773e10a57d26b95dcf0564f8e310f8"
     },
     "result": {
-      "path": "summaries",
-      "status": "already_exists_noop"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 10,
-    "timestamp": "2026-05-22T18:54:08.866579877Z",
-    "ticketId": 1,
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "runId": 4,
-    "step": 2,
-    "operation": "createFolder",
-    "args": {
-      "path": "reviews"
-    },
-    "preState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "reviews",
-      "status": "already_exists_noop"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 11,
-    "timestamp": "2026-05-22T18:54:08.871051232Z",
-    "ticketId": 1,
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "runId": 4,
-    "step": 2,
-    "operation": "createFolder",
-    "args": {
-      "path": "contracts"
-    },
-    "preState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "contracts",
-      "status": "already_exists_noop"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 12,
-    "timestamp": "2026-05-22T18:54:18.492508281Z",
-    "ticketId": 1,
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "runId": 5,
-    "step": 1,
-    "operation": "createFolder",
-    "args": {
-      "path": "intake"
-    },
-    "preState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "intake",
-      "status": "already_exists_noop"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 13,
-    "timestamp": "2026-05-22T18:54:18.497103555Z",
-    "ticketId": 1,
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "runId": 5,
-    "step": 1,
-    "operation": "createFolder",
-    "args": {
-      "path": "summaries"
-    },
-    "preState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "summaries",
-      "status": "already_exists_noop"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 14,
-    "timestamp": "2026-05-22T18:54:19.821693128Z",
-    "ticketId": 1,
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "runId": 5,
-    "step": 2,
-    "operation": "createFolder",
-    "args": {
-      "path": "reviews"
-    },
-    "preState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "reviews",
-      "status": "already_exists_noop"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 15,
-    "timestamp": "2026-05-22T18:54:19.826808505Z",
-    "ticketId": 1,
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "runId": 5,
-    "step": 2,
-    "operation": "createFolder",
-    "args": {
-      "path": "contracts"
-    },
-    "preState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "contracts",
-      "status": "already_exists_noop"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 16,
-    "timestamp": "2026-05-22T18:56:14.819099113Z",
-    "ticketId": 3,
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "runId": 6,
-    "step": 1,
-    "operation": "createFolder",
-    "args": {
-      "path": "notes"
-    },
-    "preState": {
-      "existed": false
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "notes",
-      "status": "created"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 17,
-    "timestamp": "2026-05-22T18:56:14.824219527Z",
-    "ticketId": 3,
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "runId": 6,
-    "step": 1,
-    "operation": "createFolder",
-    "args": {
-      "path": "outputs"
-    },
-    "preState": {
-      "existed": false
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "outputs",
-      "status": "created"
-    },
-    "error": null,
-    "isRecovery": false,
-    "recoveredHistoryId": null
-  },
-  {
-    "id": 18,
-    "timestamp": "2026-05-22T18:56:16.260554578Z",
-    "ticketId": 3,
-    "allocationPlanId": null,
-    "allocationItemId": null,
-    "runId": 6,
-    "step": 2,
-    "operation": "createFolder",
-    "args": {
-      "path": "audit"
-    },
-    "preState": {
-      "existed": false
-    },
-    "postState": {
-      "existed": true,
-      "type": "directory"
-    },
-    "result": {
-      "path": "audit",
-      "status": "created"
+      "path": "postcondition-patch-20260524-0620/note.txt"
     },
     "error": null,
     "isRecovery": false,

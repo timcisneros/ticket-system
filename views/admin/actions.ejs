@@ -1,16 +1,7 @@
 <h1>Actions Catalog</h1>
-<p class="text-muted">Runtime workflow-step vocabulary &mdash; every constrained action available in the system.</p>
+<p class="text-muted">Workflow-usable actions with concrete inputs, outputs, and errors.</p>
 
 <div style="margin-bottom: 16px; display: flex; gap: 12px; flex-wrap: wrap;">
-  <label style="display: flex; align-items: center; gap: 6px; font-size: 0.88rem;">
-    Category:
-    <select id="filter-category" onchange="applyFilters()" style="padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px;">
-      <option value="">All</option>
-      <% categories.forEach(function(cat) { %>
-        <option value="<%= cat %>"><%= cat %></option>
-      <% }); %>
-    </select>
-  </label>
   <label style="display: flex; align-items: center; gap: 6px; font-size: 0.88rem;">
     Invoker:
     <select id="filter-invoker" onchange="applyFilters()" style="padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px;">
@@ -31,7 +22,6 @@
   <thead>
     <tr>
       <th style="min-width: 160px;">Action</th>
-      <th>Category</th>
       <th>Invoker</th>
       <th>Mutating</th>
       <th style="width: 100%;">Contract</th>
@@ -44,11 +34,9 @@
     } %>
     <% actions.forEach(function(action) { %>
       <tr class="action-row"
-          data-category="<%= action.category %>"
           data-invoker="<%= action.invoker %>"
           data-mutating="<%= action.mutating %>">
         <td style="white-space: nowrap;"><strong><%= action.displayName || action.name %></strong></td>
-        <td><span class="status-badge" style="background: #eef2ff; color: #4338ca; border-color: #c7d2fe;"><%= action.category %></span></td>
         <td><span class="status-badge" style="background: #f0fdf4; color: #166534; border-color: #bbf7d0;"><%= action.invoker %></span></td>
         <td>
           <% if (action.mutating) { %>
@@ -63,29 +51,18 @@
             <div class="collapsible__content" style="border-top: none; padding: 8px 0;">
 
               <div style="margin-bottom: 10px;">
-                <div style="font-size: 0.78rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Request</div>
-                <%- renderShape(action.requestShape) %>
-                <% if (action.optionalShape) { %>
-                  <div style="margin-top: 6px;">
-                    <div style="font-size: 0.78rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px;">Optional shape</div>
-                    <%- renderShape(action.optionalShape) %>
-                  </div>
-                <% } %>
+                <div style="font-size: 0.78rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Input</div>
+                <%- renderShape(action.inputSchema) %>
               </div>
 
               <div style="margin-bottom: 10px;">
-                <div style="font-size: 0.78rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Response</div>
-                <%- renderShape(action.responseShape) %>
+                <div style="font-size: 0.78rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Output</div>
+                <%- renderShape(action.outputSchema) %>
               </div>
 
               <div style="margin-bottom: 10px;">
                 <div style="font-size: 0.78rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Error</div>
-                <%- renderShape(action.errorShape) %>
-              </div>
-
-              <div style="font-size: 0.78rem; color: #6b7280; border-top: 1px solid #e5e7eb; padding-top: 6px; margin-top: 6px;">
-                <div><strong>Authority:</strong> <%= action.authorityConstraints %></div>
-                <div style="margin-top: 2px;"><strong>Provenance:</strong> <%= action.provenanceSurface %></div>
+                <%- renderShape(action.errorSchema) %>
               </div>
 
             </div>
@@ -98,23 +75,20 @@
 
 <script>
 function applyFilters() {
-  const catFilter = (document.getElementById('filter-category').value || '').toLowerCase();
   const invFilter = (document.getElementById('filter-invoker').value || '').toLowerCase();
   const mutOnly = document.getElementById('filter-mutating-only').checked;
   const rows = document.querySelectorAll('.action-row');
   let visible = 0;
 
   rows.forEach(function(row) {
-    const cat = (row.getAttribute('data-category') || '').toLowerCase();
     const inv = (row.getAttribute('data-invoker') || '').toLowerCase();
     const mut = row.getAttribute('data-mutating') === 'true';
 
-    const catMatch = !catFilter || cat === catFilter;
     const invMatch = !invFilter || inv === invFilter;
     const mutMatch = !mutOnly || mut;
 
-    row.style.display = catMatch && invMatch && mutMatch ? '' : 'none';
-    if (catMatch && invMatch && mutMatch) visible++;
+    row.style.display = invMatch && mutMatch ? '' : 'none';
+    if (invMatch && mutMatch) visible++;
   });
 
   document.getElementById('action-count').textContent = visible;

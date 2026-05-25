@@ -7,28 +7,41 @@
 <form action="/tickets" method="POST" class="ticket-form">
   <div class="form-group">
     <label for="objective">Objective *</label>
-    <textarea id="objective" name="objective" rows="5" required></textarea>
-    <div class="objective-guidance" aria-label="Bounded execution guidance">
-      <p class="form-hint">
-        Write a small, concrete output that can finish in one verified transition. One or two file changes usually complete fastest.
-      </p>
-      <p class="form-hint">
-        Avoid vague requests like "improve the project." For larger work, split the ticket into specific additive outputs.
-      </p>
-      <details class="objective-examples">
-        <summary>Examples</summary>
-        <ul>
-          <li>Good: Create <code>docs/setup.md</code> with install and test steps.</li>
-          <li>Good: Add <code>docs/api.md</code> and <code>docs/errors.md</code> with short reference notes.</li>
-          <li>Split up: Create 4-8 files as separate concrete tickets or expect multiple bounded transitions.</li>
-        </ul>
-      </details>
-    </div>
+    <textarea
+      id="objective"
+      name="objective"
+      rows="5"
+      placeholder="Describe the concrete result you want. Avoid vague requests like: &quot;improve the project&quot;"
+      required
+    ></textarea>
     <div class="ticket-shape-assist">
       <button type="button" class="btn-small" id="shapeObjectiveButton">Suggest bounded version</button>
-      <span class="form-hint">Optional AI assist. Nothing changes unless you accept or edit the suggestion.</span>
     </div>
     <div class="ticket-shape-panel" id="ticketShapePanel" hidden aria-live="polite"></div>
+  </div>
+
+  <div class="form-group">
+    <label for="executionMode">Execution *</label>
+    <select id="executionMode" name="executionMode" required>
+      <option value="agent" selected>Direct agent action</option>
+      <option value="workflow">Approved workflow</option>
+    </select>
+  </div>
+
+  <div class="form-group" id="workflowGroup" hidden>
+    <label for="workflowId">Workflow *</label>
+    <select id="workflowId" name="workflowId">
+      <option value="">Select workflow</option>
+      <% (typeof workflows === 'undefined' ? [] : workflows).forEach(workflow => { %>
+        <option value="<%= workflow.id %>" data-input-schema="<%= JSON.stringify(workflow.inputSchema || {}) %>"><%= workflow.name %></option>
+      <% }); %>
+    </select>
+    <p class="form-hint">Workflow inputs are JSON. File and folder steps are recorded for replay and recovery.</p>
+  </div>
+
+  <div class="form-group" id="workflowInputGroup" hidden>
+    <label for="workflowInput">Workflow input JSON</label>
+    <textarea id="workflowInput" name="workflowInput" rows="7" spellcheck="false" placeholder="{&quot;path&quot;:&quot;notes/demo.txt&quot;,&quot;instruction&quot;:&quot;Write a short note.&quot;}"></textarea>
   </div>
 
   <div class="form-group">
@@ -82,6 +95,11 @@ const targetSelect = document.getElementById('assignmentTargetId');
 const assignmentModeGroup = document.getElementById('assignmentModeGroup');
 const assignmentModeSelect = document.getElementById('assignmentMode');
 const targetOptions = Array.from(targetSelect.querySelectorAll('option[data-target-type]'));
+const executionModeSelect = document.getElementById('executionMode');
+const workflowGroup = document.getElementById('workflowGroup');
+const workflowInputGroup = document.getElementById('workflowInputGroup');
+const workflowSelect = document.getElementById('workflowId');
+const workflowInput = document.getElementById('workflowInput');
 const ownedPathsGroup = document.getElementById('ownedPathsGroup');
 const ownedPathsContainer = document.getElementById('ownedPathsContainer');
 const ownedOutputPathsInput = document.getElementById('ownedOutputPathsInput');
@@ -91,6 +109,10 @@ const ticketShapePanel = document.getElementById('ticketShapePanel');
 
 const agentGroupMembers = <%- JSON.stringify(typeof agentGroupMembers === 'undefined' ? {} : agentGroupMembers) %>;
 const initialAgents = <%- JSON.stringify((agents || []).map(agent => ({ id: agent.id, name: agent.name }))) %>;
+const workflowSchemas = <%- JSON.stringify((typeof workflows === 'undefined' ? [] : workflows).reduce((acc, workflow) => {
+  acc[workflow.id] = workflow.inputSchema || {};
+  return acc;
+}, {})) %>;
 
 function updateOwnedPaths() {
   const selectedGroupId = parseInt(targetSelect.value);
@@ -114,6 +136,30 @@ function updateOwnedPaths() {
       '<input type="text" class="owned-path-input" data-agent-id="' + m.id + '" placeholder="e.g. projects/feature-x/" value="">' +
     '</div>'
   ).join('');
+}
+
+function workflowInputExample(schema) {
+  const example = {};
+  Object.entries(schema || {}).forEach(([key, type]) => {
+    if (type === 'number') example[key] = 0;
+    else if (type === 'boolean') example[key] = false;
+    else if (Array.isArray(type)) example[key] = [];
+    else if (type && typeof type === 'object') example[key] = {};
+    else example[key] = '';
+  });
+  return JSON.stringify(example, null, 2);
+}
+
+function updateWorkflowControls() {
+  const isWorkflow = executionModeSelect.value === 'workflow';
+  workflowGroup.hidden = !isWorkflow;
+  workflowInputGroup.hidden = !isWorkflow;
+  workflowSelect.required = isWorkflow;
+  workflowInput.required = isWorkflow;
+
+  if (isWorkflow && workflowSelect.value && !workflowInput.value.trim()) {
+    workflowInput.value = workflowInputExample(workflowSchemas[workflowSelect.value]);
+  }
 }
 
 function updateAssignmentTargets() {
@@ -231,6 +277,11 @@ async function suggestBoundedObjective() {
 targetTypeSelect.addEventListener('change', updateAssignmentTargets);
 targetSelect.addEventListener('change', updateOwnedPaths);
 assignmentModeSelect.addEventListener('change', updateOwnedPaths);
+executionModeSelect.addEventListener('change', updateWorkflowControls);
+workflowSelect.addEventListener('change', function() {
+  workflowInput.value = workflowSelect.value ? workflowInputExample(workflowSchemas[workflowSelect.value]) : '';
+  updateWorkflowControls();
+});
 shapeObjectiveButton.addEventListener('click', suggestBoundedObjective);
 
 document.querySelector('.ticket-form').addEventListener('submit', function() {
@@ -248,5 +299,6 @@ document.querySelector('.ticket-form').addEventListener('submit', function() {
 });
 
 updateAssignmentTargets();
+updateWorkflowControls();
 selectSingleAvailableWorker();
 </script>

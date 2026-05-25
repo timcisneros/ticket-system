@@ -1,0 +1,45 @@
+<h1>Workflows</h1>
+<p class="text-muted">Persisted JSON workflows composed from the approved actions catalog.</p>
+
+<div class="actions" style="margin-bottom: 16px;">
+  <a href="/admin/workflows/new" class="btn-small">Create workflow</a>
+  <a href="/admin/actions" class="btn-small btn-secondary">View actions</a>
+</div>
+
+<% if (!workflows || workflows.length === 0) { %>
+  <section class="admin-block">
+    <p class="text-muted">No workflows have been created yet.</p>
+  </section>
+<% } else { %>
+  <table class="tickets-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>ID</th>
+        <th>Status</th>
+        <th>Steps</th>
+        <th>Updated</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% workflows.forEach(function(workflow) { %>
+        <tr>
+          <td>
+            <strong><%= workflow.name %></strong>
+            <% if (workflow.description) { %>
+              <div class="text-muted"><%= workflow.description %></div>
+            <% } %>
+          </td>
+          <td><code><%= workflow.id %></code></td>
+          <td><%= workflow.enabled === false ? 'disabled' : 'enabled' %></td>
+          <td><%= Array.isArray(workflow.actions) ? workflow.actions.length : 0 %></td>
+          <td><%= workflow.updatedAt || workflow.createdAt || 'Unknown' %></td>
+          <td class="actions">
+            <a href="/admin/workflows/<%= workflow.id %>/edit" class="btn-small">Edit JSON</a>
+          </td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>

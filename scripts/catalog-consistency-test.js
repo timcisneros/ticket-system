@@ -60,7 +60,7 @@ assert(source.includes('requiredArgs: AGENT_OPERATION_ARGS'), 'requiredArgs refe
 // --- Build the catalog by extracting from source ---
 // Find the ACTIONS_CATALOG definition
 const catStart = source.indexOf('const ACTIONS_CATALOG = [\n');
-const catEnd = source.indexOf('\n];\n\nconst ticketEventClients');
+const catEnd = source.indexOf('\n];', catStart);
 assert(catStart !== -1 && catEnd !== -1, 'ACTIONS_CATALOG found in source');
 
 const catSource = source.slice(catStart, catEnd + 3);
@@ -79,7 +79,7 @@ while ((m = nameRegex.exec(catSource)) !== null) {
 
 const allNames = [...genNames, ...handNames];
 const allNameSet = new Set(allNames);
-assert(allNameSet.size === 28, 'ACTIONS_CATALOG has 28 unique entries (got ' + allNameSet.size + ')');
+assert(allNameSet.size === 32, 'ACTIONS_CATALOG has 32 unique entries (got ' + allNameSet.size + ')');
 
 // Verify all agent primitives are present
 allowedOps.forEach(op => {
@@ -137,19 +137,24 @@ assert(source.includes('...GENERATED_AGENT_ACTIONS'), 'ACTIONS_CATALOG spreads G
 
 // --- Verify entry key completeness ---
 const requiredKeys = ['name', 'category', 'invoker', 'mutating', 'requestShape', 'optionalShape', 'responseShape', 'errorShape', 'authorityConstraints', 'provenanceSurface'];
-// Scan hand-authored entries for completeness
-const handEntryCount = catSource.split('{').length - catSource.split('}').length < 0 ? 0 : 1;
-// Just verify that the hand-authored entries have all required keys
-// by looking at a few representative entries
-const firstHandEntry = catSource.indexOf("  {\n    name: 'providerModelCall");
-if (firstHandEntry !== -1) {
-  const handSection = catSource.slice(firstHandEntry);
-  requiredKeys.forEach(key => {
-    const regex = new RegExp(`\\b${key}:`, 'g');
-    const matches = handSection.match(regex);
-    assert(matches && matches.length >= 22, `Key "${key}" present in all hand-authored entries`);
-  });
-}
+const normalizedKeys = ['inputSchema', 'outputSchema', 'errorSchema', 'authority', 'provenance', 'executable'];
+// Generated workspace actions carry their common keys in GENERATED_AGENT_ACTIONS.
+// Hand-authored entries should still expose the legacy catalog fields.
+requiredKeys.forEach(key => {
+  const regex = new RegExp(`\\b${key}:`, 'g');
+  const matches = catSource.match(regex);
+  assert(matches && matches.length >= 26, `Key "${key}" present in all hand-authored entries`);
+});
+
+normalizedKeys.forEach(key => {
+  assert(source.includes(`${key} = action.${key}`) || source.includes(`action.${key} =`), `Normalized contract key "${key}" is assigned`);
+});
+
+['workspaceAction', 'agentAction', 'conditionAction', 'systemAction', 'stopAction', 'workflowAction'].forEach(type => {
+  assert(source.includes(`'${type}'`), `Action type "${type}" is classified`);
+});
+
+assert(!source.includes('workflow-step vocabulary'), 'Catalog copy does not introduce a separate workflow-step vocabulary');
 
 // --- Summary ---
 if (failures === 0) {

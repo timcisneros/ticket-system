@@ -2,7 +2,6 @@
 <% const viewPagination = typeof pagination === 'undefined' ? null : pagination; %>
 
 <section class="admin-block">
-  <h2>Live Work</h2>
   <% if (viewPagination && viewPagination.total > 0) { %>
     <div class="pagination-bar">
       <span>Showing <%= viewPagination.start %>-<%= viewPagination.end %> of <%= viewPagination.total %> tickets</span>
@@ -53,37 +52,42 @@
             <% } %>
           </div>
         </div>
-        <div class="ticket-card__meta">
-          <span><%= ticket.assignmentTargetName %></span>
-          <span><%= ticket.assignmentMode === 'allocated' ? 'manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'automatic folder scopes' : ticket.assignmentMode %></span>
-          <% if (ticket.lastRunOperationalOutcome) { %>
-            <span>latest run: <code><%= ticket.lastRunOperationalOutcome %></code></span>
+        <%
+          const metadataItems = [];
+          if (ticket.currentMessage || (!ticket.currentRunDisplayLabel && ticket.activeRunIds && ticket.activeRunIds.length > 0)) metadataItems.push(ticket.currentMessage || 'No current output');
+          if (ticket.assignmentTargetName) metadataItems.push(ticket.assignmentTargetName);
+          if (ticket.assignmentMode) metadataItems.push(ticket.assignmentMode === 'allocated' ? 'manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'automatic folder scopes' : ticket.assignmentMode);
+          if (ticket.lastRunOperationalOutcomeLabel) metadataItems.push('latest run: ' + ticket.lastRunOperationalOutcomeLabel);
+          if (ticket.updatedAt) metadataItems.push(new Date(ticket.updatedAt).toLocaleString());
+        %>
+        <% if (metadataItems.length > 0) { %>
+          <div class="ticket-card__meta">
+          <% if (ticket.currentRunDisplayLabel) { %>
+            <span
+              data-run-state="<%= ticket.currentRunState || '' %>"
+              data-run-started-at="<%= ticket.currentRunStartedAt || ticket.currentRunCreatedAt || '' %>"
+              data-run-timeout-limit="<%= ticket.currentRunTimeoutLimit || '' %>"
+            ><%= ticket.currentRunDisplayLabel %><%= ticket.currentRunDisplayState && ticket.currentRunDisplayState.detail ? ': ' + ticket.currentRunDisplayState.detail : '' %></span>
           <% } %>
-          <span><%= new Date(ticket.updatedAt).toLocaleString() %></span>
-        </div>
-        <% if (canUpdateTickets) { %>
+          <% metadataItems.forEach(item => { %>
+            <% if (String(item).startsWith('latest run: ')) { %>
+              <span>latest run: <%= String(item).replace('latest run: ', '') %></span>
+            <% } else { %>
+              <span><%= item %></span>
+            <% } %>
+          <% }) %>
+          </div>
+        <% } %>
+        <% if (canUpdateTickets && ticket.status === 'open') { %>
           <div class="ticket-card__actions">
-            <% if (ticket.status === 'open') { %>
-              <form class="assign-form" data-ticket-id="<%= ticket.id %>">
-                <select name="agentId" class="agent-assign-select" aria-label="Assign agent">
-                  <option value="">Select agent</option>
-                  <% agents.forEach(agent => { %>
-                    <option value="<%= agent.id %>" <%= ticket.assignmentTargetType === 'agent' && ticket.assignmentTargetId === agent.id ? 'selected' : '' %>><%= agent.name %></option>
-                  <% }) %>
-                </select>
-              </form>
-            <% } %>
-            <% if (ticket.activeRunIds && ticket.activeRunIds.length > 0) { %>
-              <% ticket.activeRunIds.forEach(runId => { %>
-                <button type="button" class="btn-small btn-danger" data-stop-run-id="<%= runId %>">Stop #<%= runId %></button>
-              <% }) %>
-            <% } %>
-            <% if (ticket.status !== 'open') { %>
-              <button type="button" class="btn-small" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' || ticket.lastRunStatus === 'interrupted' ? 'Retry' : 'Rerun' %></button>
-            <% } %>
-            <% if ((!ticket.activeRunIds || ticket.activeRunIds.length === 0) && ticket.status === 'open') { %>
-              <span class="text-muted">No actions</span>
-            <% } %>
+            <form class="assign-form" data-ticket-id="<%= ticket.id %>">
+              <select name="agentId" class="agent-assign-select" aria-label="Assign agent">
+                <option value="">Select agent</option>
+                <% agents.forEach(agent => { %>
+                  <option value="<%= agent.id %>" <%= ticket.assignmentTargetType === 'agent' && ticket.assignmentTargetId === agent.id ? 'selected' : '' %>><%= agent.name %></option>
+                <% }) %>
+              </select>
+            </form>
           </div>
         <% } %>
       </div>
@@ -118,8 +122,16 @@ function ticketSignature(ticket) {
     (ticket.activeRunIds || []).join(','),
     ticket.lastRunStatus || '',
     ticket.lastRunOperationalOutcome || '',
+    ticket.lastRunOperationalOutcomeLabel || '',
     ticket.lastRunHadPartialMutations || false,
     ticket.lastRunPartialMutationCount || 0,
+    ticket.currentRunId || '',
+    ticket.currentRunDisplayLabel || '',
+    ticket.currentRunElapsedMs || '',
+    ticket.currentRunState || '',
+    ticket.currentRunStartedAt || '',
+    ticket.currentRunCreatedAt || '',
+    ticket.currentMessage || '',
     ticket.updatedAt
   ].join('|');
 }
@@ -185,100 +197,140 @@ function createTicketCard(ticket) {
   header.appendChild(statusWrap);
   card.appendChild(header);
 
+  const activeRunIds = ticket.activeRunIds || [];
+
   // Meta
-  const meta = document.createElement('div');
-  meta.className = 'ticket-card__meta';
+  const metadataItems = [];
 
-  const targetSpan = document.createElement('span');
-  targetSpan.textContent = ticket.assignmentTargetName;
-  meta.appendChild(targetSpan);
-
-  const modeSpan = document.createElement('span');
-  modeSpan.textContent = ticket.assignmentMode === 'allocated'
-    ? 'manual folder scopes'
-    : ticket.assignmentMode === 'dynamic'
-      ? 'automatic folder scopes'
-      : ticket.assignmentMode;
-  meta.appendChild(modeSpan);
-
-  if (ticket.lastRunOperationalOutcome) {
-    const outcomeSpan = document.createElement('span');
-    outcomeSpan.textContent = 'latest run: ';
-    const outcomeCode = document.createElement('code');
-    outcomeCode.textContent = ticket.lastRunOperationalOutcome;
-    outcomeSpan.appendChild(outcomeCode);
-    meta.appendChild(outcomeSpan);
+  if (ticket.currentRunDisplayLabel) {
+    const detail = ticket.currentRunDisplayState && ticket.currentRunDisplayState.detail
+      ? ': ' + ticket.currentRunDisplayState.detail
+      : '';
+    metadataItems.push({ text: ticket.currentRunDisplayLabel + detail });
   }
 
-  const updatedSpan = document.createElement('span');
-  updatedSpan.textContent = new Date(ticket.updatedAt).toLocaleString();
-  meta.appendChild(updatedSpan);
+  if (ticket.currentMessage || (!ticket.currentRunDisplayLabel && activeRunIds.length > 0)) {
+    metadataItems.push({ text: ticket.currentMessage || 'No current output' });
+  }
 
-  card.appendChild(meta);
+  if (ticket.assignmentTargetName) {
+    metadataItems.push({ text: ticket.assignmentTargetName });
+  }
+
+  if (ticket.assignmentMode) {
+    metadataItems.push({
+      text: ticket.assignmentMode === 'allocated'
+        ? 'manual folder scopes'
+        : ticket.assignmentMode === 'dynamic'
+          ? 'automatic folder scopes'
+          : ticket.assignmentMode
+    });
+  }
+
+  if (ticket.lastRunOperationalOutcomeLabel) {
+    metadataItems.push({ label: 'latest run: ', text: ticket.lastRunOperationalOutcomeLabel });
+  }
+
+  if (ticket.updatedAt) {
+    metadataItems.push({ text: new Date(ticket.updatedAt).toLocaleString() });
+  }
+
+  if (metadataItems.length > 0) {
+    const meta = document.createElement('div');
+    meta.className = 'ticket-card__meta';
+
+    metadataItems.forEach(item => {
+      const span = document.createElement('span');
+      if (item.code) {
+        span.textContent = item.label || '';
+        const code = document.createElement('code');
+        code.textContent = item.code;
+        span.appendChild(code);
+      } else if (item.label) {
+        span.textContent = item.label + item.text;
+      } else {
+        span.textContent = item.text;
+      }
+      meta.appendChild(span);
+    });
+
+    const firstSpan = meta.querySelector('span');
+    if (firstSpan && ticket.currentRunDisplayLabel) {
+      firstSpan.dataset.runState = ticket.currentRunState || '';
+      firstSpan.dataset.runStartedAt = ticket.currentRunStartedAt || ticket.currentRunCreatedAt || '';
+      firstSpan.dataset.runTimeoutLimit = ticket.currentRunTimeoutLimit || '';
+    }
+
+    card.appendChild(meta);
+  }
 
   // Actions
-  if (canUpdateTickets) {
+  if (canUpdateTickets && ticket.status === 'open') {
     const actions = document.createElement('div');
     actions.className = 'ticket-card__actions';
 
-    if (ticket.status === 'open') {
-      const form = document.createElement('form');
-      form.className = 'assign-form';
-      form.dataset.ticketId = ticket.id;
+    const form = document.createElement('form');
+    form.className = 'assign-form';
+    form.dataset.ticketId = ticket.id;
 
-      const select = document.createElement('select');
-      select.name = 'agentId';
-      select.className = 'agent-assign-select';
-      select.setAttribute('aria-label', 'Assign agent');
+    const select = document.createElement('select');
+    select.name = 'agentId';
+    select.className = 'agent-assign-select';
+    select.setAttribute('aria-label', 'Assign agent');
 
-      const emptyOption = document.createElement('option');
-      emptyOption.value = '';
-      emptyOption.textContent = 'Select agent';
-      select.appendChild(emptyOption);
+    const emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = 'Select agent';
+    select.appendChild(emptyOption);
 
-      agents.forEach(agent => {
-        const option = document.createElement('option');
-        option.value = agent.id;
-        option.textContent = agent.name;
-        option.selected = ticket.assignmentTargetType === 'agent' && ticket.assignmentTargetId === agent.id;
-        select.appendChild(option);
-      });
-
-      form.appendChild(select);
-      actions.appendChild(form);
-    }
-
-    const activeRunIds = ticket.activeRunIds || [];
-    activeRunIds.forEach(runId => {
-      const stopButton = document.createElement('button');
-      stopButton.type = 'button';
-      stopButton.className = 'btn-small btn-danger';
-      stopButton.dataset.stopRunId = runId;
-      stopButton.textContent = 'Stop #' + runId;
-      actions.appendChild(stopButton);
+    agents.forEach(agent => {
+      const option = document.createElement('option');
+      option.value = agent.id;
+      option.textContent = agent.name;
+      option.selected = ticket.assignmentTargetType === 'agent' && ticket.assignmentTargetId === agent.id;
+      select.appendChild(option);
     });
 
-    if (ticket.status !== 'open') {
-      const rerunButton = document.createElement('button');
-      rerunButton.type = 'button';
-      rerunButton.className = 'btn-small';
-      rerunButton.dataset.rerunTicketId = ticket.id;
-      rerunButton.textContent = ticket.status === 'failed' || ticket.lastRunStatus === 'interrupted' ? 'Retry' : 'Rerun';
-      actions.appendChild(rerunButton);
-    }
-
-    if (activeRunIds.length === 0 && ticket.status === 'open') {
-      const noAction = document.createElement('span');
-      noAction.className = 'text-muted';
-      noAction.textContent = 'No actions';
-      actions.appendChild(noAction);
-    }
-
+    form.appendChild(select);
+    actions.appendChild(form);
     card.appendChild(actions);
   }
 
   return card;
 }
+
+function formatElapsed(ms) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return seconds + ' second' + (seconds === 1 ? '' : 's');
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (rest === 0) return minutes + ' minute' + (minutes === 1 ? '' : 's');
+  return minutes + ' minute' + (minutes === 1 ? '' : 's') + ' ' + rest + ' second' + (rest === 1 ? '' : 's');
+}
+
+function refreshRunElapsedLabels() {
+  document.querySelectorAll('[data-run-state]').forEach(el => {
+    const state = el.dataset.runState;
+    const startedAt = el.dataset.runStartedAt;
+    if (!startedAt || !['waiting_on_local_model', 'running_actions', 'running', 'queued'].includes(state)) return;
+    const startMs = Date.parse(startedAt);
+    if (Number.isNaN(startMs)) return;
+    const elapsed = formatElapsed(Date.now() - startMs);
+    const limit = el.dataset.runTimeoutLimit || '';
+
+    if (state === 'waiting_on_local_model') {
+      el.textContent = 'waiting on local model: waiting ' + elapsed + (limit ? ' of ' + limit : '');
+    } else if (state === 'queued') {
+      el.textContent = 'queued: waiting ' + elapsed + ' for local model capacity';
+    } else if (state === 'running_actions') {
+      el.textContent = 'running actions: working for ' + elapsed;
+    } else {
+      el.textContent = 'running: running for ' + elapsed;
+    }
+  });
+}
+
+setInterval(refreshRunElapsedLabels, 1000);
 
 function renderTickets(tickets) {
   if (tickets.length === 0) {
@@ -378,19 +430,6 @@ ticketsBody.addEventListener('change', event => {
   }
 });
 
-ticketsBody.addEventListener('click', event => {
-  const stopButton = event.target.closest('[data-stop-run-id]');
-  if (stopButton) {
-    stopRun(stopButton.dataset.stopRunId, stopButton);
-    return;
-  }
-
-  const rerunButton = event.target.closest('[data-rerun-ticket-id]');
-  if (rerunButton) {
-    rerunTicket(rerunButton.dataset.rerunTicketId, rerunButton);
-  }
-});
-
 async function assignTicketAgent(ticketId, agentId, select) {
   select.disabled = true;
 
@@ -410,36 +449,6 @@ async function assignTicketAgent(ticketId, agentId, select) {
   } finally {
     select.disabled = false;
   }
-}
-
-async function postControl(url, button) {
-  button.disabled = true;
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { Accept: 'application/json' }
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      window.alert(data.error || 'Ticket action failed');
-    }
-
-    if (!response.ok || !liveTicketsConnected) {
-      await loadTickets();
-    }
-  } finally {
-    button.disabled = false;
-  }
-}
-
-function stopRun(runId, button) {
-  postControl('/api/runs/' + encodeURIComponent(runId) + '/stop', button);
-}
-
-function rerunTicket(ticketId, button) {
-  postControl('/api/tickets/' + encodeURIComponent(ticketId) + '/rerun', button);
 }
 
 if (window.EventSource) {

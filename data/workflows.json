@@ -1,0 +1,71 @@
+[
+  {
+    "id": "demo-agent-write-if-approved",
+    "name": "Demo: agent output gated write",
+    "description": "Asks the selected agent for structured content, gates it with a condition, writes a file, then stops.",
+    "enabled": true,
+    "inputSchema": {
+      "instruction": "string",
+      "path": "string"
+    },
+    "actions": [
+      {
+        "id": "draft",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.input.instruction}}",
+          "input": {
+            "path": "{{workflow.input.path}}"
+          },
+          "outputSchema": {
+            "shouldWrite": "boolean",
+            "content": "string"
+          }
+        },
+        "saveAs": "draft",
+        "next": "should_write"
+      },
+      {
+        "id": "should_write",
+        "action": "condition",
+        "input": {
+          "value": "{{draft.shouldWrite}}",
+          "equals": true
+        },
+        "trueNext": "write_note",
+        "falseNext": "stop_without_write"
+      },
+      {
+        "id": "write_note",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.path}}",
+          "content": "{{draft.content}}"
+        },
+        "next": "stop_after_write"
+      },
+      {
+        "id": "stop_without_write",
+        "action": "stop",
+        "input": {
+          "result": {
+            "written": false,
+            "reason": "condition did not match"
+          }
+        }
+      },
+      {
+        "id": "stop_after_write",
+        "action": "stop",
+        "input": {
+          "result": {
+            "written": true,
+            "path": "{{workflow.input.path}}"
+          }
+        }
+      }
+    ],
+    "createdAt": "2026-05-24T00:00:00.000Z",
+    "updatedAt": "2026-05-24T00:00:00.000Z"
+  }
+]

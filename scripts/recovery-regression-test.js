@@ -39,8 +39,27 @@ for (const file of DATA_FILES) {
   }
 }
 
+function readRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return null;
+  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
+  if (!run.replaySnapshotPath) return null;
+
+  const snapshotPath = path.resolve(DATA_DIR, run.replaySnapshotPath);
+  if (!snapshotPath.startsWith(DATA_DIR + path.sep)) return null;
+  if (!fs.existsSync(snapshotPath)) return null;
+  return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+}
+
+function hydrateRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return run;
+  const replaySnapshot = readRunReplaySnapshot(run);
+  return replaySnapshot ? { ...run, replaySnapshot } : run;
+}
+
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
+  const value = JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
+  if (file !== 'runs.json' || !Array.isArray(value)) return value;
+  return value.map(hydrateRunReplaySnapshot);
 }
 
 function writeJson(file, value) {
