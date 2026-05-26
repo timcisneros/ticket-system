@@ -398,5 +398,406 @@
     "error": null,
     "isRecovery": false,
     "recoveredHistoryId": null
+  },
+  {
+    "id": 15,
+    "timestamp": "2026-05-26T04:52:44.953885128Z",
+    "ticketId": 20,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 23,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "mike-draft-behavior.md",
+      "content": "Simple flat workflow draft intents succeeded for status note and bug triage note, branching workflow drafts are unsupported for normal agents."
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "eba2a14a4be64e856c569ed99dfcadf99ae97351fcbfcaa70e466a933e7bcb37"
+    },
+    "result": {
+      "path": "mike-draft-behavior.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 16,
+    "timestamp": "2026-05-26T05:00:21.454879785Z",
+    "ticketId": 21,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 24,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "recent-failed-unsupported-runs.md",
+      "content": "Recent workflow-draft runs can succeed, branching workflow drafts are unsupported for normal agents, unsupported branching should fail honestly without fake workflow files. Prior timeout looping was fixed to stop after an honest unsupported message."
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "2df7070e42f9a0bcedf216a727b4c6a448aabbb20d2a214d0ff99e9b9c606ae2"
+    },
+    "result": {
+      "path": "recent-failed-unsupported-runs.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 17,
+    "timestamp": "2026-05-26T05:03:55.534720285Z",
+    "ticketId": 22,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 25,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "cleanup-suggestion.md",
+      "content": "Ensure all files are named consistently and use a standard naming convention."
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "72fc012e3b8a9c27f874415c4f0a011d3c1121f43d59c51739b61c1b9c201c4a"
+    },
+    "result": {
+      "path": "cleanup-suggestion.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 18,
+    "timestamp": "2026-05-26T16:08:37.427958553Z",
+    "ticketId": 25,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 28,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "mike-repair-recommendation.md",
+      "content": "Recent repeated issue: Mike often returns complete:false after useful work.\n\nRuntime fix added evidence-based completion for direct write objectives.\n\nRemaining issue: Mike times out on multi-step inspect/read/write tickets.\n\nRecommendation should be 5 bullets max."
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "26a0ae27cf5795e751a785954859545d11e76c2591e937b9498bba6c72f81b67"
+    },
+    "result": {
+      "path": "mike-repair-recommendation.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 19,
+    "timestamp": "2026-05-26T16:34:11.231505018Z",
+    "ticketId": 27,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 30,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "mike-repair-recommendation.md",
+      "content": "- Mike often returns complete:false even after producing useful work, leading to incomplete task signaling.\n- A runtime fix has improved this by providing evidence-based completion for simple direct write objectives.\n- However, Mike still frequently times out on complex multi-step tickets involving inspection, reading, and writing.\n- This suggests a need for enhanced step management and pacing in Mike's multi-step workflow handling.\n- Recommendation: Optimize Mike's multi-step processing logic to avoid timeouts and ensure full completion on complex tasks."
+    },
+    "preState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "26a0ae27cf5795e751a785954859545d11e76c2591e937b9498bba6c72f81b67",
+      "content": "Recent repeated issue: Mike often returns complete:false after useful work.\n\nRuntime fix added evidence-based completion for direct write objectives.\n\nRemaining issue: Mike times out on multi-step inspect/read/write tickets.\n\nRecommendation should be 5 bullets max."
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "6598f2b31d1a01d7cc7eead85f48a9510c81067cd6469dd1b41406b151efa795"
+    },
+    "result": {
+      "path": "mike-repair-recommendation.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 20,
+    "timestamp": "2026-05-26T17:25:39.774778132Z",
+    "ticketId": 28,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 31,
+    "step": 2,
+    "operation": "writeFile",
+    "args": {
+      "path": "agent1-repair-recommendation.md",
+      "content": "# Repair Recommendation\n\n## Issue Identified\n\nThe recent failed or timeout workflow draft runs repeatedly show issues related to unsupported branching workflows. Agents attempt to handle branching by creating fake workflow files, which is not supported and leads to failure or endless looping.\n\n## Recommendation\n\n1. Agents should not attempt to fake workflow files for branching or conditional workflows.\n2. Instead, agents must fail honestly and clearly state that branching workflow drafts are unsupported for normal agents.\n3. Any timeout or looping issue seen earlier has been addressed by stopping after the honest unsupported message.\n\nThis approach simplifies error handling and avoids repeated failures and timeouts due to unsupported branching workflows being mishandled."
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "a74ec21e6042a227a5b4b926a401be0893d29bc08b749a10d7b4ec4599eb1c62"
+    },
+    "result": {
+      "path": "agent1-repair-recommendation.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 21,
+    "timestamp": "2026-05-26T17:28:46.334479750Z",
+    "ticketId": 29,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 32,
+    "step": 2,
+    "operation": "writeFile",
+    "args": {
+      "path": "mike-next-task.md",
+      "content": "Hi Mike,\n\nPlease review the recent issue with workflow drafts that have branching logic.\nBranching workflow drafts are unsupported for normal agents and should fail honestly without generating fake workflow files.\n\nYour next bounded task is to modify the system to ensure that any unsupported branching within workflow drafts is detected early and returns a clear failure message without creating any draft files.\n\nThis will help prevent timeout loops or ambiguous failure states in future runs.\n\nThank you.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "4bc6129ad3b70f3da83da35a7e14db0255433e6b8e5e62956e9e0a35037877cc"
+    },
+    "result": {
+      "path": "mike-next-task.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 22,
+    "timestamp": "2026-05-26T17:33:26.003048473Z",
+    "ticketId": 31,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 34,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "mike-next-task.md",
+      "content": "TARGET_FILE: mike-next-task.md\nCONTENT:\nPlease review the latest design documents in the docs/ folder and prepare a summary report highlighting key changes and any potential impact on the development timeline. Submit the summary as mike-summary.md in the reports/ directory by end of this week."
+    },
+    "preState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "4bc6129ad3b70f3da83da35a7e14db0255433e6b8e5e62956e9e0a35037877cc",
+      "content": "Hi Mike,\n\nPlease review the recent issue with workflow drafts that have branching logic.\nBranching workflow drafts are unsupported for normal agents and should fail honestly without generating fake workflow files.\n\nYour next bounded task is to modify the system to ensure that any unsupported branching within workflow drafts is detected early and returns a clear failure message without creating any draft files.\n\nThis will help prevent timeout loops or ambiguous failure states in future runs.\n\nThank you.\n"
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "1bf2a3d74c2ac53567d3f6d42e5a159e6dd635f0ca52ad8745be4899799e447f"
+    },
+    "result": {
+      "path": "mike-next-task.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 23,
+    "timestamp": "2026-05-26T17:35:18.802578426Z",
+    "ticketId": 32,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 35,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "mike-next-task.md",
+      "content": "This is the content to write to the file."
+    },
+    "preState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "1bf2a3d74c2ac53567d3f6d42e5a159e6dd635f0ca52ad8745be4899799e447f",
+      "content": "TARGET_FILE: mike-next-task.md\nCONTENT:\nPlease review the latest design documents in the docs/ folder and prepare a summary report highlighting key changes and any potential impact on the development timeline. Submit the summary as mike-summary.md in the reports/ directory by end of this week."
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "c3fee1dbfa4f0490ae92b4d0fc9ea00289363dd9fd8e7db4ef971f195a89481d"
+    },
+    "result": {
+      "path": "mike-next-task.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 24,
+    "timestamp": "2026-05-26T18:09:07.967192822Z",
+    "ticketId": 33,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 36,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "handoff-proof.md",
+      "content": "This is a structured handoff produced by the planner. Runtime validated this and executed writeFile under Mike's identity. No Mike model call was needed."
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "337efc20d1343f89a65fddb2fff24dd8dd78aee9262110d454f4b0f088ffe687"
+    },
+    "result": {
+      "path": "handoff-proof.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 25,
+    "timestamp": "2026-05-26T18:24:37.322281763Z",
+    "ticketId": 34,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 37,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "cli-proof.md",
+      "content": "# CLI Verification\n\nThis document verifies that the CLI is working correctly.\n\nVerification:\n\n```bash\n$ echo \"CLI verification OK\"\nCLI verification OK\n```\n\nThis confirms that the CLI is functioning as expected.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "53d9b0c0f2e42b4db61f94a4f8e31af91174f7aeaf75418be2d154c12f79f175"
+    },
+    "result": {
+      "path": "cli-proof.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 26,
+    "timestamp": "2026-05-26T18:32:27.752965582Z",
+    "ticketId": 35,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 38,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "status-handoff.md",
+      "content": "Status Note: This is a short status update.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "b3365c3ee40b9287bce64727de029ea0b270f937fc414e91bee14289340bb1d0"
+    },
+    "result": {
+      "path": "status-handoff.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 27,
+    "timestamp": "2026-05-26T18:33:11.682202221Z",
+    "ticketId": 36,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 39,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "recent-runtime-lessons.md",
+      "content": "Recent Runtime Lessons:\n\n- Limit mutating actions to 2 per response to avoid overloading.\n- Use relative paths inside the workspace for all file operations.\n- Always verify file existence and content before marking tasks complete.\n- Avoid creating branching or complex workflows with createWorkflowDraftIntent.\n- Each response can only have up to 8 actions, balancing read and write.\n- Use precise operation names and argument structures for clarity and correctness.\n"
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "d8c9121a77e057b14f2fad71f0c26349343656fd8d0557ecfb079261ee56bca9"
+    },
+    "result": {
+      "path": "recent-runtime-lessons.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
+  },
+  {
+    "id": 28,
+    "timestamp": "2026-05-26T18:33:46.472662875Z",
+    "ticketId": 37,
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "runId": 40,
+    "step": 0,
+    "operation": "writeFile",
+    "args": {
+      "path": "next-operational-step.md",
+      "content": "This note should outline the next operational step to be taken in the project workflow. Please update this file with clear and concise instructions for the subsequent actions required."
+    },
+    "preState": {
+      "existed": false
+    },
+    "postState": {
+      "existed": true,
+      "type": "file",
+      "contentHash": "28ac7256ea6dc3c79a941a0c593134833db7f5a9abf337cbdc6d86583ba7ca45"
+    },
+    "result": {
+      "path": "next-operational-step.md"
+    },
+    "error": null,
+    "isRecovery": false,
+    "recoveredHistoryId": null
   }
 ]

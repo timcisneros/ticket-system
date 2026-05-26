@@ -191,5 +191,146 @@
     "createdAt": "2026-05-25T01:56:04.368Z",
     "updatedAt": "2026-05-25T02:21:29.861Z",
     "postconditions": []
+  },
+  {
+    "id": "status-note-123",
+    "name": "Status Note",
+    "inputSchema": {},
+    "actions": [
+      {
+        "id": "write_1",
+        "action": "writeFile",
+        "input": {
+          "path": "status-note.txt",
+          "content": "Status: ok"
+        },
+        "next": "stop"
+      },
+      {
+        "id": "stop",
+        "action": "stop",
+        "input": {
+          "result": {
+            "paths": [
+              "status-note.txt"
+            ]
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "postcondition_1",
+        "type": "fileExists",
+        "path": "status-note.txt"
+      },
+      {
+        "id": "postcondition_2",
+        "type": "fileContains",
+        "path": "status-note.txt",
+        "contains": "Status: ok"
+      }
+    ],
+    "enabled": false,
+    "createdByType": "agent",
+    "createdByAgentId": 3,
+    "createdByRunId": 20,
+    "createdAt": "2026-05-26T04:32:42.353Z",
+    "updatedAt": "2026-05-26T04:32:42.353Z",
+    "description": ""
+  },
+  {
+    "id": "bug-triage-summary-draft",
+    "name": "Bug Triage Summary",
+    "inputSchema": {},
+    "actions": [
+      {
+        "id": "write_1",
+        "action": "writeFile",
+        "input": {
+          "path": "bug-triage-summary.md",
+          "content": "Bug triage summary: reproduce, impact, next step"
+        },
+        "next": "stop"
+      },
+      {
+        "id": "stop",
+        "action": "stop",
+        "input": {
+          "result": {
+            "paths": [
+              "bug-triage-summary.md"
+            ]
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "postcondition_1",
+        "type": "fileExists",
+        "path": "bug-triage-summary.md"
+      },
+      {
+        "id": "postcondition_2",
+        "type": "fileContains",
+        "path": "bug-triage-summary.md",
+        "contains": "Bug triage summary"
+      }
+    ],
+    "enabled": false,
+    "createdByType": "agent",
+    "createdByAgentId": 3,
+    "createdByRunId": 21,
+    "createdAt": "2026-05-26T04:34:53.876Z",
+    "updatedAt": "2026-05-26T04:34:53.876Z",
+    "description": ""
+  },
+  {
+    "id": "daily-status",
+    "name": "Daily Status Workflow",
+    "inputSchema": {},
+    "actions": [
+      {
+        "id": "write_1",
+        "action": "writeFile",
+        "input": {
+          "path": "daily-status.md",
+          "content": "Daily status: review queue, check failures, note next action"
+        },
+        "next": "stop"
+      },
+      {
+        "id": "stop",
+        "action": "stop",
+        "input": {
+          "result": {
+            "paths": [
+              "daily-status.md"
+            ]
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "postcondition_1",
+        "type": "fileExists",
+        "path": "daily-status.md"
+      },
+      {
+        "id": "postcondition_2",
+        "type": "fileContains",
+        "path": "daily-status.md",
+        "contains": "Daily status"
+      }
+    ],
+    "enabled": false,
+    "createdByType": "agent",
+    "createdByAgentId": 3,
+    "createdByRunId": 26,
+    "createdAt": "2026-05-26T05:07:49.022Z",
+    "updatedAt": "2026-05-26T05:07:49.022Z",
+    "description": ""
   }
 ]

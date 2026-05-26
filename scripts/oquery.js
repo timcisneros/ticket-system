@@ -14,6 +14,17 @@ function readJson(name) {
   try { return JSON.parse(fs.readFileSync(fp, 'utf8')); } catch (e) { return []; }
 }
 
+function resolveLocalAgent(value) {
+  const agents = readJson('agents.json');
+  const requested = value === undefined || value === null || value === '' ? '1' : String(value).trim();
+  const id = parseInt(requested, 10);
+  if (!Number.isNaN(id) && String(id) === requested) {
+    return agents.find(agent => agent.id === id) || { id, name: `Agent ${id}` };
+  }
+  const lower = requested.toLowerCase();
+  return agents.find(agent => String(agent.name || '').toLowerCase() === lower) || null;
+}
+
 function loadAll() {
   return {
     tickets: readJson('tickets.json'),
@@ -1178,19 +1189,96 @@ async function cmdLogin(args) {
   }
 }
 
+function createTicketSummary(ticket, run, agent) {
+  return {
+    ticketId: ticket ? ticket.id : 0,
+    runId: run ? run.id : 0,
+    status: run ? run.status : ticket ? ticket.status : 'unknown',
+    agent: agent ? agent.name : run ? run.agentName : null
+  };
+}
+
+async function fetchTicketAndRun(url, cookie, fallbackObjective = null) {
+  const listRes = await httpReq('GET', `${url}/api/tickets`, {
+    headers: { 'Cookie': `sessionId=${cookie}` }
+  });
+  if (listRes.status !== 200) return { ticket: null, run: null };
+
+  const ticketData = JSON.parse(listRes.body);
+  const tickets = ticketData.tickets || ticketData;
+  const matchingTickets = fallbackObjective
+    ? tickets.filter(ticket => ticket.objective === fallbackObjective)
+    : tickets;
+  const ticket = matchingTickets.length > 0
+    ? matchingTickets.reduce((a, b) => (a.id > b.id ? a : b))
+    : tickets.reduce((a, b) => (a.id > b.id ? a : b), null);
+  if (!ticket) return { ticket: null, run: null };
+
+  const exportRes = await httpReq('GET', `${url}/api/export`, {
+    headers: { 'Cookie': `sessionId=${cookie}` }
+  });
+  if (exportRes.status !== 200) return { ticket, run: null };
+
+  const data = JSON.parse(exportRes.body);
+  const runs = (data.runs || [])
+    .filter(run => run.ticketId === ticket.id)
+    .sort((a, b) => (a.id || 0) - (b.id || 0));
+  return { ticket, run: runs.length > 0 ? runs[runs.length - 1] : null };
+}
+
+async function waitForCreatedTicketRun(url, cookie, ticketId) {
+  const terminal = new Set(['completed', 'failed', 'interrupted', 'resumable_pending']);
+  const started = Date.now();
+  const timeoutMs = 300000;
+  let latest = { ticket: null, run: null };
+
+  while (Date.now() - started < timeoutMs) {
+    const exportRes = await httpReq('GET', `${url}/api/export`, {
+      headers: { 'Cookie': `sessionId=${cookie}` }
+    });
+    if (exportRes.status === 200) {
+      const data = JSON.parse(exportRes.body);
+      const ticket = (data.tickets || []).find(item => item.id === ticketId) || null;
+      const runs = (data.runs || [])
+        .filter(run => run.ticketId === ticketId)
+        .sort((a, b) => (a.id || 0) - (b.id || 0));
+      const run = runs.length > 0 ? runs[runs.length - 1] : null;
+      latest = { ticket, run };
+      if (ticket && ['completed', 'failed'].includes(ticket.status) && run && terminal.has(run.status)) {
+        return latest;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  return latest;
+}
+
 async function cmdCreateTicket(args) {
   const cookie = readCookie();
   if (!cookie) {
+    const message = 'Not logged in. Run oquery login first.';
+    if (args.json) return console.log(JSON.stringify({ error: 'not_authenticated', message }, null, 2));
     return console.log(red('  ✗ Not logged in. Run') + ` ${bold('oquery login')} ${red('first.')}`);
   }
 
   const objective = args._.join(' ');
-  if (!objective) return console.log(red('Usage: oquery create-ticket <objective>'));
+  if (!objective) {
+    const message = 'Usage: oquery create-ticket [--agent <id|name>] [--wait] [--json] <objective>';
+    if (args.json) return console.log(JSON.stringify({ error: 'missing_objective', message }, null, 2));
+    return console.log(red(message));
+  }
 
   const url = args.url || opercUrl();
+  const agent = resolveLocalAgent(args.agent || '1');
+  if (!agent) {
+    const message = `Agent not found: ${args.agent}`;
+    if (args.json) return console.log(JSON.stringify({ error: 'agent_not_found', message }, null, 2));
+    return console.log(red(`  ✗ ${message}`));
+  }
 
   // POST to create ticket
-  const body = `objective=${encodeURIComponent(objective)}&assignmentTargetType=agent&assignmentTargetId=1&assignmentMode=individual`;
+  const body = `objective=${encodeURIComponent(objective)}&assignmentTargetType=agent&assignmentTargetId=${encodeURIComponent(String(agent.id))}&assignmentMode=individual`;
   const res = await httpReq('POST', `${url}/tickets`, {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -1200,25 +1288,26 @@ async function cmdCreateTicket(args) {
   });
 
   if (res.status === 302) {
-    // Ticket created — fetch details
-    const listRes = await httpReq('GET', `${url}/api/tickets`, {
-      headers: { 'Cookie': `sessionId=${cookie}` }
-    });
-    if (listRes.status === 200) {
-      try {
-        const data = JSON.parse(listRes.body);
-        const tickets = data.tickets || data;
-        if (tickets.length > 0) {
-          const created = tickets.reduce((a, b) => (a.id > b.id ? a : b));
-          console.log(`  ${green('✓')} Ticket T${created.id} created on ${url} (${statusTag(created.status)})`);
-          return;
-        }
-      } catch (e) { /* fall through */ }
+    let { ticket, run } = await fetchTicketAndRun(url, cookie, objective);
+    if (args.wait && ticket) {
+      ({ ticket, run } = await waitForCreatedTicketRun(url, cookie, ticket.id));
+    }
+    const summary = createTicketSummary(ticket, run, agent);
+    if (args.json) {
+      console.log(JSON.stringify(summary, null, 2));
+      return;
+    }
+    if (ticket) {
+      console.log(`  ${green('✓')} Ticket T${ticket.id} created on ${url} (${statusTag(ticket.status)}) assigned to ${agent.name || `Agent ${agent.id}`}${run ? `, run R${run.id} ${statusTag(run.status)}` : ''}`);
+      return;
     }
     console.log(`  ${green('✓')} Ticket created (HTTP ${res.status})`);
   } else if (res.status === 401 || res.status === 403) {
+    const message = 'Session expired or permission denied. Run oquery login again.';
+    if (args.json) return console.log(JSON.stringify({ error: 'permission_denied', message }, null, 2));
     console.log(red('  ✗ Session expired or permission denied. Run') + ` ${bold('oquery login')} ${red('again.')}`);
   } else {
+    if (args.json) return console.log(JSON.stringify({ error: 'create_failed', status: res.status, body: res.body ? res.body.slice(0, 300) : null }, null, 2));
     console.log(red(`  ✗ Failed (HTTP ${res.status})`));
     if (res.body) console.log(`    ${dim(res.body.replace(/<[^>]+>/g, '').slice(0, 300))}`);
   }
@@ -1373,6 +1462,11 @@ function help() {
                       Uses cached session (run 'login' first)
                       Defaults to agent-1, individual mode
                       Prints created ticket id and status
+      --agent <id|name>
+                      Assign to agent id or local agent name
+      --wait          Poll until the created ticket/run reaches terminal state
+      --json          Print {"ticketId", "runId", "status", "agent"}
+      --url <url>     Server base URL
 
   ${bold('Examples:')}
     node scripts/oquery.js runs --ticket 5
@@ -1394,7 +1488,7 @@ async function main() {
   const cmd = process.argv[2];
   if (!cmd || cmd === '--help' || cmd === '-h') return help();
 
-  const boolFlags = new Set(['api', 'json', 'help', 'h']);
+  const boolFlags = new Set(['api', 'json', 'help', 'h', 'wait']);
   const args = { _: [] };
   for (let i = 3; i < process.argv.length; i++) {
     const a = process.argv[i];

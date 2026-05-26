@@ -1,0 +1,1 @@
+Simple flat workflow draft intents succeeded for status note and bug triage note, branching workflow drafts are unsupported for normal agents.

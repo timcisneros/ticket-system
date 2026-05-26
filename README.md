@@ -14,6 +14,7 @@ Real-model mode disables mocked provider responses and uses a configured agent/p
 ```sh
 REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-drafts
 REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-repair
+REAL_MODEL_BENCHMARK=1 npm run benchmark:ambiguous-operational
 BENCHMARK_AGENT_NAME=Mike REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-drafts
 ```
 

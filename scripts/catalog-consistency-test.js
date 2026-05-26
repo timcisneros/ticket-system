@@ -79,7 +79,7 @@ while ((m = nameRegex.exec(catSource)) !== null) {
 
 const allNames = [...genNames, ...handNames];
 const allNameSet = new Set(allNames);
-assert(allNameSet.size === 33, 'ACTIONS_CATALOG has 33 unique entries (got ' + allNameSet.size + ')');
+assert(allNameSet.size === 34, 'ACTIONS_CATALOG has 34 unique entries (got ' + allNameSet.size + ')');
 
 // Verify all agent primitives are present
 allowedOps.forEach(op => {

@@ -38,5 +38,14 @@
     "createdAt": "2026-05-25T02:17:58.957Z",
     "changedBy": "admin",
     "changedAt": "2026-05-25T02:18:51.010Z"
+  },
+  {
+    "id": 5,
+    "name": "Deepseek Planner",
+    "type": "agent",
+    "provider": "ollama",
+    "model": "deepseek-r1:latest",
+    "apiKey": "",
+    "createdAt": "2026-05-26T18:34:00.000Z"
   }
 ]

@@ -1143,5 +1143,2860 @@
     "lastHeartbeatAt": null,
     "runEvaluation": null,
     "runConsequence": null
+  },
+  {
+    "id": 20,
+    "ticketId": 17,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3894225:31129b8f-e0c6-48fa-aecd-20ce1e1768fd",
+    "leaseExpiresAt": "2026-05-26T04:33:52.812Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T04:30:52.812Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T04:30:52.634Z",
+    "createdAt": "2026-05-26T04:30:52.635Z",
+    "updatedAt": "2026-05-26T04:32:42.371Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 109618,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-20.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T04:32:42.375Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T04:30:52.753Z",
+    "completedAt": "2026-05-26T04:32:42.371Z",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 21,
+    "ticketId": 18,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3894225:31129b8f-e0c6-48fa-aecd-20ce1e1768fd",
+    "leaseExpiresAt": "2026-05-26T04:36:05.993Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T04:33:05.993Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T04:33:05.751Z",
+    "createdAt": "2026-05-26T04:33:05.752Z",
+    "updatedAt": "2026-05-26T04:34:53.880Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 107909,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-21.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T04:34:53.881Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T04:33:05.971Z",
+    "completedAt": "2026-05-26T04:34:53.880Z",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 22,
+    "ticketId": 19,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3894225:31129b8f-e0c6-48fa-aecd-20ce1e1768fd",
+    "leaseExpiresAt": "2026-05-26T04:39:56.433Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T04:36:56.433Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-26T04:35:22.607Z",
+    "createdAt": "2026-05-26T04:35:22.608Z",
+    "updatedAt": "2026-05-26T04:38:23.099Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 180000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180029,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 1,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-22.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 180000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 180004,
+          "configuredLimit": 180000
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T04:38:23.100Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 0,
+      "providerRequests": 2,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T04:35:23.070Z",
+    "completedAt": "2026-05-26T04:38:23.099Z",
+    "error": "Agent run exceeded runtime duration limit of 180000ms",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 23,
+    "ticketId": 20,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3898050:887359ed-f644-46bc-9a1a-4d11610946bb",
+    "leaseExpiresAt": "2026-05-26T04:54:11.166Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T04:51:11.166Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T04:51:11.059Z",
+    "createdAt": "2026-05-26T04:51:11.060Z",
+    "updatedAt": "2026-05-26T04:52:44.963Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 93824,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "mike-draft-behavior.md",
+          "nextPath": null,
+          "historyId": 15,
+          "step": 0,
+          "timestamp": "2026-05-26T04:52:44.953885128Z",
+          "result": {
+            "path": "mike-draft-behavior.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "mike-draft-behavior.md",
+          "nextPath": null,
+          "historyId": 15,
+          "step": 0,
+          "timestamp": "2026-05-26T04:52:44.953885128Z",
+          "result": {
+            "path": "mike-draft-behavior.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-23.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T04:52:44.964Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T04:51:11.139Z",
+    "completedAt": "2026-05-26T04:52:44.963Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 24,
+    "ticketId": 21,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3898796:8a27a0dd-be66-4533-a51e-79802489126b",
+    "leaseExpiresAt": "2026-05-26T05:03:21.465Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T05:00:21.465Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-26T04:58:39.303Z",
+    "createdAt": "2026-05-26T04:58:39.305Z",
+    "updatedAt": "2026-05-26T05:01:39.850Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 180000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180056,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 1,
+        "workspaceOperations": 2,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "recent-failed-unsupported-runs.md",
+          "nextPath": null,
+          "historyId": 16,
+          "step": 0,
+          "timestamp": "2026-05-26T05:00:21.454879785Z",
+          "result": {
+            "path": "recent-failed-unsupported-runs.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "recent-failed-unsupported-runs.md",
+          "nextPath": null,
+          "historyId": 16,
+          "step": 0,
+          "timestamp": "2026-05-26T05:00:21.454879785Z",
+          "result": {
+            "path": "recent-failed-unsupported-runs.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-24.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 180000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 180003,
+          "configuredLimit": 180000
+        }
+      },
+      "mutationCount": 1,
+      "mutationOutcome": "partial_mutations",
+      "finalizedAt": "2026-05-26T05:01:39.884Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T04:58:39.794Z",
+    "completedAt": "2026-05-26T05:01:39.850Z",
+    "error": "Agent run exceeded runtime duration limit of 180000ms",
+    "mutationCount": 1,
+    "mutationOutcome": "partial_mutations"
+  },
+  {
+    "id": 25,
+    "ticketId": 22,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3898796:8a27a0dd-be66-4533-a51e-79802489126b",
+    "leaseExpiresAt": "2026-05-26T05:06:55.538Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T05:03:55.538Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-26T05:02:09.337Z",
+    "createdAt": "2026-05-26T05:02:09.338Z",
+    "updatedAt": "2026-05-26T05:05:09.509Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 180000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180030,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 1,
+        "workspaceOperations": 2,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "cleanup-suggestion.md",
+          "nextPath": null,
+          "historyId": 17,
+          "step": 0,
+          "timestamp": "2026-05-26T05:03:55.534720285Z",
+          "result": {
+            "path": "cleanup-suggestion.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "cleanup-suggestion.md",
+          "nextPath": null,
+          "historyId": 17,
+          "step": 0,
+          "timestamp": "2026-05-26T05:03:55.534720285Z",
+          "result": {
+            "path": "cleanup-suggestion.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-25.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 180000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 180001,
+          "configuredLimit": 180000
+        }
+      },
+      "mutationCount": 1,
+      "mutationOutcome": "partial_mutations",
+      "finalizedAt": "2026-05-26T05:05:09.543Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T05:02:09.479Z",
+    "completedAt": "2026-05-26T05:05:09.509Z",
+    "error": "Agent run exceeded runtime duration limit of 180000ms",
+    "mutationCount": 1,
+    "mutationOutcome": "partial_mutations"
+  },
+  {
+    "id": 26,
+    "ticketId": 23,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3898796:8a27a0dd-be66-4533-a51e-79802489126b",
+    "leaseExpiresAt": "2026-05-26T05:08:46.704Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T05:05:46.704Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T05:05:46.636Z",
+    "createdAt": "2026-05-26T05:05:46.637Z",
+    "updatedAt": "2026-05-26T05:07:49.028Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 122350,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-26.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T05:07:49.029Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T05:05:46.678Z",
+    "completedAt": "2026-05-26T05:07:49.028Z",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 27,
+    "ticketId": 24,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3911436:a5dcf14b-a03f-41b5-a1cb-d5960defe802",
+    "leaseExpiresAt": "2026-05-26T16:02:20.086Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T15:59:20.086Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-26T15:57:51.537Z",
+    "createdAt": "2026-05-26T15:57:51.538Z",
+    "updatedAt": "2026-05-26T16:00:51.745Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 180000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180080,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-27.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 180000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 180006,
+          "configuredLimit": 180000
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T16:00:51.749Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 2,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T15:57:51.665Z",
+    "completedAt": "2026-05-26T16:00:51.745Z",
+    "error": "Agent run exceeded runtime duration limit of 180000ms",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 28,
+    "ticketId": 25,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3912511:0087f248-9dae-48e9-a5e1-9911f32d2694",
+    "leaseExpiresAt": "2026-05-26T16:11:37.447Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T16:08:37.447Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-26T16:06:40.918Z",
+    "createdAt": "2026-05-26T16:06:40.919Z",
+    "updatedAt": "2026-05-26T16:09:41.413Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 180000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180071,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 1,
+        "workspaceOperations": 2,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "mike-repair-recommendation.md",
+          "nextPath": null,
+          "historyId": 18,
+          "step": 0,
+          "timestamp": "2026-05-26T16:08:37.427958553Z",
+          "result": {
+            "path": "mike-repair-recommendation.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "mike-repair-recommendation.md",
+          "nextPath": null,
+          "historyId": 18,
+          "step": 0,
+          "timestamp": "2026-05-26T16:08:37.427958553Z",
+          "result": {
+            "path": "mike-repair-recommendation.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-28.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 180000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 180005,
+          "configuredLimit": 180000
+        }
+      },
+      "mutationCount": 1,
+      "mutationOutcome": "partial_mutations",
+      "finalizedAt": "2026-05-26T16:09:41.419Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T16:06:41.342Z",
+    "completedAt": "2026-05-26T16:09:41.413Z",
+    "error": "Agent run exceeded runtime duration limit of 180000ms",
+    "mutationCount": 1,
+    "mutationOutcome": "partial_mutations"
+  },
+  {
+    "id": 29,
+    "ticketId": 26,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3916299:ada263d9-1881-4d64-8c1b-f1673ed97a94",
+    "leaseExpiresAt": "2026-05-26T16:31:44.259Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T16:28:44.259Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-26T16:28:43.975Z",
+    "createdAt": "2026-05-26T16:28:43.976Z",
+    "updatedAt": "2026-05-26T16:31:44.277Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 180000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180102,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 0,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-29.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 180000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 180007,
+          "configuredLimit": 180000
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T16:31:44.302Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 0,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T16:28:44.175Z",
+    "completedAt": "2026-05-26T16:31:44.277Z",
+    "error": "Agent run exceeded runtime duration limit of 180000ms",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 30,
+    "ticketId": 27,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3918027:7d9fb192-960b-4ef5-afd2-54c14c5ada9b",
+    "leaseExpiresAt": "2026-05-26T16:37:06.452Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T16:34:06.452Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T16:34:05.906Z",
+    "createdAt": "2026-05-26T16:34:05.909Z",
+    "updatedAt": "2026-05-26T16:34:11.241Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 4867,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "mike-repair-recommendation.md",
+          "nextPath": null,
+          "historyId": 19,
+          "step": 0,
+          "timestamp": "2026-05-26T16:34:11.231505018Z",
+          "result": {
+            "path": "mike-repair-recommendation.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [],
+      "updated": [
+        {
+          "operation": "writeFile",
+          "path": "mike-repair-recommendation.md",
+          "nextPath": null,
+          "historyId": 19,
+          "step": 0,
+          "timestamp": "2026-05-26T16:34:11.231505018Z",
+          "result": {
+            "path": "mike-repair-recommendation.md"
+          },
+          "type": "file"
+        }
+      ],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-30.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T16:34:11.242Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T16:34:06.374Z",
+    "completedAt": "2026-05-26T16:34:11.241Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 31,
+    "ticketId": 28,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3922009:afd477fa-ca3b-4fc6-b24d-65015795b14f",
+    "leaseExpiresAt": "2026-05-26T17:28:37.064Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T17:25:37.064Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T17:25:29.991Z",
+    "createdAt": "2026-05-26T17:25:29.993Z",
+    "updatedAt": "2026-05-26T17:25:39.786Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 9663,
+        "workflowSteps": 0,
+        "providerRequests": 3,
+        "modelResponses": 3,
+        "workspaceOperations": 3,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "agent1-repair-recommendation.md",
+          "nextPath": null,
+          "historyId": 20,
+          "step": 2,
+          "timestamp": "2026-05-26T17:25:39.774778132Z",
+          "result": {
+            "path": "agent1-repair-recommendation.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "agent1-repair-recommendation.md",
+          "nextPath": null,
+          "historyId": 20,
+          "step": 2,
+          "timestamp": "2026-05-26T17:25:39.774778132Z",
+          "result": {
+            "path": "agent1-repair-recommendation.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-31.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T17:25:39.788Z",
+      "continuationOf": null,
+      "steps": 3,
+      "workspaceOperations": 3,
+      "providerRequests": 3,
+      "modelResponses": 3,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T17:25:30.123Z",
+    "completedAt": "2026-05-26T17:25:39.786Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 32,
+    "ticketId": 29,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3922358:bec09847-866a-4374-b496-23acb16d67a5",
+    "leaseExpiresAt": "2026-05-26T17:31:43.158Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T17:28:43.158Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T17:28:35.114Z",
+    "createdAt": "2026-05-26T17:28:35.115Z",
+    "updatedAt": "2026-05-26T17:28:46.347Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 11171,
+        "workflowSteps": 0,
+        "providerRequests": 3,
+        "modelResponses": 3,
+        "workspaceOperations": 3,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "mike-next-task.md",
+          "nextPath": null,
+          "historyId": 21,
+          "step": 2,
+          "timestamp": "2026-05-26T17:28:46.334479750Z",
+          "result": {
+            "path": "mike-next-task.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "mike-next-task.md",
+          "nextPath": null,
+          "historyId": 21,
+          "step": 2,
+          "timestamp": "2026-05-26T17:28:46.334479750Z",
+          "result": {
+            "path": "mike-next-task.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-32.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T17:28:46.349Z",
+      "continuationOf": null,
+      "steps": 3,
+      "workspaceOperations": 3,
+      "providerRequests": 3,
+      "modelResponses": 3,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T17:28:35.176Z",
+    "completedAt": "2026-05-26T17:28:46.347Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 33,
+    "ticketId": 30,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3922358:bec09847-866a-4374-b496-23acb16d67a5",
+    "leaseExpiresAt": "2026-05-26T17:32:19.754Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T17:29:19.754Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T17:29:19.248Z",
+    "createdAt": "2026-05-26T17:29:19.249Z",
+    "updatedAt": "2026-05-26T17:30:42.392Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 82656,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-33.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T17:30:42.393Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T17:29:19.736Z",
+    "completedAt": "2026-05-26T17:30:42.392Z",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 34,
+    "ticketId": 31,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3922994:725b1654-768d-430c-8558-487124ea9eb8",
+    "leaseExpiresAt": "2026-05-26T17:36:23.704Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T17:33:23.704Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T17:33:23.414Z",
+    "createdAt": "2026-05-26T17:33:23.416Z",
+    "updatedAt": "2026-05-26T17:33:26.013Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 2353,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "mike-next-task.md",
+          "nextPath": null,
+          "historyId": 22,
+          "step": 0,
+          "timestamp": "2026-05-26T17:33:26.003048473Z",
+          "result": {
+            "path": "mike-next-task.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [],
+      "updated": [
+        {
+          "operation": "writeFile",
+          "path": "mike-next-task.md",
+          "nextPath": null,
+          "historyId": 22,
+          "step": 0,
+          "timestamp": "2026-05-26T17:33:26.003048473Z",
+          "result": {
+            "path": "mike-next-task.md"
+          },
+          "type": "file"
+        }
+      ],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-34.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T17:33:26.014Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T17:33:23.660Z",
+    "completedAt": "2026-05-26T17:33:26.013Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 35,
+    "ticketId": 32,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3922994:725b1654-768d-430c-8558-487124ea9eb8",
+    "leaseExpiresAt": "2026-05-26T17:36:59.232Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T17:33:59.232Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T17:33:58.948Z",
+    "createdAt": "2026-05-26T17:33:58.949Z",
+    "updatedAt": "2026-05-26T17:35:18.808Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 79593,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "mike-next-task.md",
+          "nextPath": null,
+          "historyId": 23,
+          "step": 0,
+          "timestamp": "2026-05-26T17:35:18.802578426Z",
+          "result": {
+            "path": "mike-next-task.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [],
+      "updated": [
+        {
+          "operation": "writeFile",
+          "path": "mike-next-task.md",
+          "nextPath": null,
+          "historyId": 23,
+          "step": 0,
+          "timestamp": "2026-05-26T17:35:18.802578426Z",
+          "result": {
+            "path": "mike-next-task.md"
+          },
+          "type": "file"
+        }
+      ],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-35.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T17:35:18.809Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T17:33:59.215Z",
+    "completedAt": "2026-05-26T17:35:18.808Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 36,
+    "ticketId": 33,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3925829:5230e477-ce31-4595-b918-7c4b4cbab850",
+    "leaseExpiresAt": "2026-05-26T18:12:05.155Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T18:09:05.155Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T18:09:04.607Z",
+    "createdAt": "2026-05-26T18:09:04.609Z",
+    "updatedAt": "2026-05-26T18:09:07.977Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 2882,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "handoff-proof.md",
+          "nextPath": null,
+          "historyId": 24,
+          "step": 0,
+          "timestamp": "2026-05-26T18:09:07.967192822Z",
+          "result": {
+            "path": "handoff-proof.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "handoff-proof.md",
+          "nextPath": null,
+          "historyId": 24,
+          "step": 0,
+          "timestamp": "2026-05-26T18:09:07.967192822Z",
+          "result": {
+            "path": "handoff-proof.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-36.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T18:09:07.978Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T18:09:05.095Z",
+    "completedAt": "2026-05-26T18:09:07.977Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 37,
+    "ticketId": 34,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3926877:fbfce295-0b97-4114-84b2-62bdfddc53f7",
+    "leaseExpiresAt": "2026-05-26T18:27:33.244Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T18:24:33.244Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T18:24:32.685Z",
+    "createdAt": "2026-05-26T18:24:32.686Z",
+    "updatedAt": "2026-05-26T18:24:37.332Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 4146,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "cli-proof.md",
+          "nextPath": null,
+          "historyId": 25,
+          "step": 0,
+          "timestamp": "2026-05-26T18:24:37.322281763Z",
+          "result": {
+            "path": "cli-proof.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "cli-proof.md",
+          "nextPath": null,
+          "historyId": 25,
+          "step": 0,
+          "timestamp": "2026-05-26T18:24:37.322281763Z",
+          "result": {
+            "path": "cli-proof.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-37.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T18:24:37.334Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T18:24:33.186Z",
+    "completedAt": "2026-05-26T18:24:37.332Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 38,
+    "ticketId": 35,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3927297:09a35963-6a8d-4ca9-addb-b16681a58a18",
+    "leaseExpiresAt": "2026-05-26T18:35:24.857Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T18:32:24.857Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T18:32:24.792Z",
+    "createdAt": "2026-05-26T18:32:24.793Z",
+    "updatedAt": "2026-05-26T18:32:27.766Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 2956,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "status-handoff.md",
+          "nextPath": null,
+          "historyId": 26,
+          "step": 0,
+          "timestamp": "2026-05-26T18:32:27.752965582Z",
+          "result": {
+            "path": "status-handoff.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "status-handoff.md",
+          "nextPath": null,
+          "historyId": 26,
+          "step": 0,
+          "timestamp": "2026-05-26T18:32:27.752965582Z",
+          "result": {
+            "path": "status-handoff.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-38.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T18:32:27.768Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T18:32:24.810Z",
+    "completedAt": "2026-05-26T18:32:27.766Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 39,
+    "ticketId": 36,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3927297:09a35963-6a8d-4ca9-addb-b16681a58a18",
+    "leaseExpiresAt": "2026-05-26T18:36:08.933Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T18:33:08.933Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T18:33:08.617Z",
+    "createdAt": "2026-05-26T18:33:08.617Z",
+    "updatedAt": "2026-05-26T18:33:11.698Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 2788,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "recent-runtime-lessons.md",
+          "nextPath": null,
+          "historyId": 27,
+          "step": 0,
+          "timestamp": "2026-05-26T18:33:11.682202221Z",
+          "result": {
+            "path": "recent-runtime-lessons.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "recent-runtime-lessons.md",
+          "nextPath": null,
+          "historyId": 27,
+          "step": 0,
+          "timestamp": "2026-05-26T18:33:11.682202221Z",
+          "result": {
+            "path": "recent-runtime-lessons.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-39.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T18:33:11.701Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T18:33:08.910Z",
+    "completedAt": "2026-05-26T18:33:11.698Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 40,
+    "ticketId": 37,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3927297:09a35963-6a8d-4ca9-addb-b16681a58a18",
+    "leaseExpiresAt": "2026-05-26T18:36:44.489Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T18:33:44.489Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-26T18:33:44.313Z",
+    "createdAt": "2026-05-26T18:33:44.314Z",
+    "updatedAt": "2026-05-26T18:33:46.484Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 2017,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "next-operational-step.md",
+          "nextPath": null,
+          "historyId": 28,
+          "step": 0,
+          "timestamp": "2026-05-26T18:33:46.472662875Z",
+          "result": {
+            "path": "next-operational-step.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "next-operational-step.md",
+          "nextPath": null,
+          "historyId": 28,
+          "step": 0,
+          "timestamp": "2026-05-26T18:33:46.472662875Z",
+          "result": {
+            "path": "next-operational-step.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-40.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-26T18:33:46.486Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T18:33:44.467Z",
+    "completedAt": "2026-05-26T18:33:46.484Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 41,
+    "ticketId": 38,
+    "agentId": 5,
+    "agentName": "Deepseek Planner",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+    "leaseExpiresAt": "2026-05-26T18:45:54.253Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T18:42:54.253Z",
+    "status": "interrupted",
+    "ticketOpenedAt": "2026-05-26T18:42:53.718Z",
+    "createdAt": "2026-05-26T18:42:53.720Z",
+    "updatedAt": "2026-05-26T18:45:54.352Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180154,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 0,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-41.json",
+    "replaySummary": {
+      "model": "deepseek-r1:latest",
+      "terminalStatus": "interrupted",
+      "failureReason": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+      "failure": {
+        "code": "RUN_INTERRUPTED",
+        "kind": "interrupted",
+        "detail": {
+          "reason": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+          "phase": "during_provider_call"
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T18:45:54.355Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 0,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T18:42:54.198Z",
+    "completedAt": "2026-05-26T18:45:54.352Z",
+    "error": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 42,
+    "ticketId": 39,
+    "agentId": 5,
+    "agentName": "Deepseek Planner",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+    "leaseExpiresAt": "2026-05-26T18:54:11.853Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T18:51:11.853Z",
+    "status": "interrupted",
+    "ticketOpenedAt": "2026-05-26T18:51:11.496Z",
+    "createdAt": "2026-05-26T18:51:11.497Z",
+    "updatedAt": "2026-05-26T18:54:12.067Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180231,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 0,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-42.json",
+    "replaySummary": {
+      "model": "deepseek-r1:latest",
+      "terminalStatus": "interrupted",
+      "failureReason": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+      "failure": {
+        "code": "RUN_INTERRUPTED",
+        "kind": "interrupted",
+        "detail": {
+          "reason": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+          "phase": "during_provider_call"
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T18:54:12.069Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 0,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T18:51:11.836Z",
+    "completedAt": "2026-05-26T18:54:12.067Z",
+    "error": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 43,
+    "ticketId": 40,
+    "agentId": 5,
+    "agentName": "Deepseek Planner",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+    "leaseExpiresAt": "2026-05-26T19:00:04.831Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T18:57:04.831Z",
+    "status": "interrupted",
+    "ticketOpenedAt": "2026-05-26T18:57:04.583Z",
+    "createdAt": "2026-05-26T18:57:04.584Z",
+    "updatedAt": "2026-05-26T19:00:04.970Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180162,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 0,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-43.json",
+    "replaySummary": {
+      "model": "deepseek-r1:latest",
+      "terminalStatus": "interrupted",
+      "failureReason": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+      "failure": {
+        "code": "RUN_INTERRUPTED",
+        "kind": "interrupted",
+        "detail": {
+          "reason": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+          "phase": "during_provider_call"
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T19:00:04.972Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 0,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T18:57:04.808Z",
+    "completedAt": "2026-05-26T19:00:04.970Z",
+    "error": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 44,
+    "ticketId": 40,
+    "agentId": 5,
+    "agentName": "Deepseek Planner",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3935878:a519086c-7588-490e-8882-f846ad016c72",
+    "leaseExpiresAt": "2026-05-26T19:09:22.485Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T19:06:22.485Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-26T19:06:22.149Z",
+    "createdAt": "2026-05-26T19:06:22.152Z",
+    "updatedAt": "2026-05-26T19:08:22.512Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 120000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 120043,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 0,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 1
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-44.json",
+    "replaySummary": {
+      "model": "deepseek-r1:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 120000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 120017,
+          "configuredLimit": 120000
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T19:08:22.514Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 0,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T19:06:22.469Z",
+    "completedAt": "2026-05-26T19:08:22.512Z",
+    "error": "Agent run exceeded runtime duration limit of 120000ms",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 45,
+    "ticketId": 40,
+    "agentId": 5,
+    "agentName": "Deepseek Planner",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3935878:a519086c-7588-490e-8882-f846ad016c72",
+    "leaseExpiresAt": "2026-05-26T19:11:37.331Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T19:08:37.331Z",
+    "status": "interrupted",
+    "ticketOpenedAt": "2026-05-26T19:08:37.255Z",
+    "createdAt": "2026-05-26T19:08:37.296Z",
+    "updatedAt": "2026-05-26T19:08:39.835Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "admin closed ticket #40"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 2527,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 0,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 2
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-45.json",
+    "replaySummary": {
+      "model": "deepseek-r1:latest",
+      "terminalStatus": "interrupted",
+      "failureReason": "admin closed ticket #40",
+      "failure": {
+        "code": "RUN_INTERRUPTED",
+        "kind": "interrupted",
+        "detail": {
+          "reason": "admin closed ticket #40",
+          "phase": "during_provider_call"
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T19:08:39.839Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 0,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T19:08:37.308Z",
+    "completedAt": "2026-05-26T19:08:39.835Z",
+    "error": "admin closed ticket #40",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 46,
+    "ticketId": 41,
+    "agentId": 5,
+    "agentName": "Deepseek Planner",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3935878:a519086c-7588-490e-8882-f846ad016c72",
+    "leaseExpiresAt": "2026-05-26T19:12:53.446Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T19:09:53.446Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-26T19:09:53.122Z",
+    "createdAt": "2026-05-26T19:09:53.124Z",
+    "updatedAt": "2026-05-26T19:11:53.459Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 120000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 120049,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 0,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-46.json",
+    "replaySummary": {
+      "model": "deepseek-r1:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 120000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 120001,
+          "configuredLimit": 120000
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T19:11:53.461Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 0,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T19:09:53.410Z",
+    "completedAt": "2026-05-26T19:11:53.459Z",
+    "error": "Agent run exceeded runtime duration limit of 120000ms",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 47,
+    "ticketId": 42,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "3935878:a519086c-7588-490e-8882-f846ad016c72",
+    "leaseExpiresAt": "2026-05-26T19:17:02.350Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-26T19:14:02.350Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-26T19:12:24.637Z",
+    "createdAt": "2026-05-26T19:12:24.637Z",
+    "updatedAt": "2026-05-26T19:14:25.016Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 120000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 120022,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 1,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-47.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 120000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 120002,
+          "configuredLimit": 120000
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-26T19:14:25.020Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 0,
+      "providerRequests": 2,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-26T19:12:24.994Z",
+    "completedAt": "2026-05-26T19:14:25.016Z",
+    "error": "Agent run exceeded runtime duration limit of 120000ms",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
   }
 ]

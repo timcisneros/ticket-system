@@ -14,6 +14,7 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 const STAMP = Date.now();
 const REAL_MODE = process.env.REAL_MODEL_BENCHMARK === '1';
 const RESULTS_FILE = path.join(REAL_DATA_DIR, 'benchmark-results.jsonl');
+const RUN_WAIT_TIMEOUT_MS = parseInt(process.env.BENCHMARK_RUN_WAIT_TIMEOUT_MS || process.env.AGENT_MAX_RUNTIME_DURATION_MS || '15000', 10);
 const DATA_FILES = [
   'agents.json',
   'allocation-plans.json',
@@ -284,7 +285,7 @@ async function createWorkflowTicket(cookie, agent, workflow, workflowInput, obje
 
 async function waitForTerminalRun(ticketId) {
   const started = Date.now();
-  while (Date.now() - started < 15000) {
+  while (Date.now() - started < RUN_WAIT_TIMEOUT_MS) {
     const runs = readJson('runs.json').filter(run => run.ticketId === ticketId);
     const run = runs[runs.length - 1];
     if (run && ['completed', 'failed', 'interrupted'].includes(run.status)) return run;
@@ -414,10 +415,11 @@ async function main() {
       PORT,
       DATA_DIR,
       WORKSPACE_ROOT,
+      ...(preloadPath ? { AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT: '1' } : {}),
       AGENT_MAX_EXECUTION_STEPS: '4',
       AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
       AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
-      AGENT_MAX_RUNTIME_DURATION_MS: '5000',
+      AGENT_MAX_RUNTIME_DURATION_MS: process.env.AGENT_MAX_RUNTIME_DURATION_MS || '5000',
       WORKFLOW_MAX_MUTATIONS: '4'
     },
     stdio: ['ignore', 'pipe', 'pipe']

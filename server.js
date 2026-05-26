@@ -34,7 +34,13 @@ const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'closed'];
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, 'workspace-root'));
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
-const AGENT_DIRECT_OPERATIONS = [...AGENT_ALLOWED_OPERATIONS, 'createWorkflowDraft'];
+const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT === '1';
+const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
+  ...(AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED ? ['createWorkflowDraft'] : []),
+  'createWorkflowDraftIntent'
+];
+const AGENT_HANDOFF_OPERATIONS = ['createHandoffTask'];
+const AGENT_DIRECT_OPERATIONS = [...AGENT_ALLOWED_OPERATIONS, ...AGENT_WORKFLOW_DRAFT_OPERATIONS, ...AGENT_HANDOFF_OPERATIONS];
 const AGENT_MUTATING_OPERATIONS = ['createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_OPERATION_ARGS = {
   listDirectory: ['path'],
@@ -157,6 +163,26 @@ const ACTIONS_CATALOG = [
     errorShape: { error: 'string' },
     authorityConstraints: 'Agent may save disabled workflow drafts only; existing action contracts only; mutating workflows require postconditions',
     provenanceSurface: 'data/workflows.json disabled draft; workflow.draft_created event; run replay snapshot workflowDrafts'
+  },
+  {
+    name: 'createWorkflowDraftIntent', displayName: 'Create Workflow Draft Intent', category: 'workflow', type: 'workflowAction', invoker: 'agent', mutating: false,
+    requestShape: { id: 'string', name: 'string', writes: [{ path: 'string', content: 'string' }], postconditions: [{ type: 'string', path: 'string', contains: 'string' }] },
+    inputSchema: { id: 'string', name: 'string', writes: [{ path: 'string', content: 'string' }], postconditions: [{}] },
+    optionalShape: null,
+    responseShape: { workflowId: 'string', enabled: 'boolean', status: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Agent may submit simple write workflow draft intent only; runtime deterministically compiles to disabled workflow draft and validates normally',
+    provenanceSurface: 'Run replay snapshot workflowDraftIntents and workflowDrafts; workflow.draft_created event'
+  },
+  {
+    name: 'createHandoffTask', displayName: 'Create Handoff Task', category: 'agent', type: 'agentAction', invoker: 'agent', mutating: true,
+    requestShape: { executor: 'string', operation: 'writeFile', args: { path: 'string', content: 'string' } },
+    inputSchema: { executor: 'string', operation: 'string', args: { path: 'string', content: 'string' } },
+    optionalShape: null,
+    responseShape: { executorAgentId: 'number', executorAgentName: 'string', operation: 'writeFile', path: 'string', status: 'executed' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Planner may create one validated writeFile handoff to one existing executor agent; runtime executes directly through workspace authority',
+    provenanceSurface: 'Run replay snapshot handoffTasks, authorityChecks, workspaceOperations, operation-history, run.evaluation, run.consequence'
   },
   {
     name: 'providerModelCall', displayName: 'Provider/Model Call', category: 'provider', invoker: 'agent', mutating: false,
@@ -3593,6 +3619,8 @@ function createReplaySnapshotBase(run, overrides = {}) {
     workflowInvocation: [],
     authorityChecks: [],
     workflowDrafts: [],
+    workflowDraftIntents: [],
+    handoffTasks: [],
     workflowActions: [],
     workspaceOperations: [],
     events: [],
@@ -5716,6 +5744,14 @@ function parseAgentDirectAction(action) {
     }
   }
 
+  if (operation === 'createWorkflowDraftIntent') {
+    assertOnlyKeys(action.args, ['id', 'name', 'writes', 'postconditions'], 'createWorkflowDraftIntent args');
+  }
+
+  if (operation === 'createHandoffTask') {
+    assertOnlyKeys(action.args, ['executor', 'operation', 'args'], 'createHandoffTask args');
+  }
+
   return { operation, args: action.args };
 }
 
@@ -5879,6 +5915,155 @@ function validateWorkflowDefinition(workflow) {
   return errors;
 }
 
+function requireIntentString(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    const error = new Error(`${label} must be a non-empty string`);
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  }
+  return value.trim();
+}
+
+function assertWorkflowDraftIntentRelativePath(value, label) {
+  const candidate = requireIntentString(value, label);
+  const normalized = candidate.replace(/\\/g, '/');
+  if (path.isAbsolute(candidate) || path.win32.isAbsolute(candidate) || normalized.startsWith('/')) {
+    const error = new Error(`${label} must be a relative workspace path`);
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  }
+  const normalizedPath = path.posix.normalize(normalized);
+  const segments = normalizedPath.split('/').filter(Boolean);
+  if (normalizedPath === '..' || normalizedPath.startsWith('../') || segments.includes('..')) {
+    const error = new Error(`${label} must not contain path traversal`);
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  }
+  return normalizedPath === '.' ? '' : normalizedPath;
+}
+
+function assertWorkflowDraftIntentContent(content, label) {
+  const text = requireIntentString(content, label);
+  const lower = text.toLowerCase();
+  const looksLikeWorkflowDocument = /(^|\n)\s*workflow\s*:/i.test(text) ||
+    /(^|\n)\s*steps\s*:/i.test(text) ||
+    /"actions"\s*:\s*\[/i.test(text);
+  const looksLikeBranching = /(^|\n)\s*branches\s*:/i.test(text) ||
+    /(^|\n)\s*condition\s*:/i.test(text) ||
+    /(^|\n)\s*type\s*:\s*condition\b/i.test(text) ||
+    /\b(trueNext|falseNext)\b/.test(text) ||
+    /\bbranch(?:es|ing)?\b/i.test(text);
+
+  if (looksLikeWorkflowDocument && looksLikeBranching) {
+    const error = new Error(`${label} appears to encode an unsupported branching workflow; createWorkflowDraftIntent only writes literal files`);
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  }
+  if (lower.includes('createworkflowdraft') || lower.includes('createworkflowdraftintent')) {
+    const error = new Error(`${label} must be literal file content, not another workflow draft request`);
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  }
+  return text;
+}
+
+function compileWorkflowDraftIntent(intentInput) {
+  const intent = intentInput && typeof intentInput === 'object' && !Array.isArray(intentInput)
+    ? sanitizeSnapshotValue(intentInput)
+    : null;
+
+  if (!intent) {
+    const error = new Error('Workflow draft intent must be an object');
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  }
+
+  const id = requireIntentString(intent.id, 'createWorkflowDraftIntent.id');
+  const name = requireIntentString(intent.name, 'createWorkflowDraftIntent.name');
+  if (!Array.isArray(intent.writes) || intent.writes.length === 0) {
+    const error = new Error('createWorkflowDraftIntent.writes must contain at least one write');
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  }
+  if (!Array.isArray(intent.postconditions) || intent.postconditions.length === 0) {
+    const error = new Error('createWorkflowDraftIntent postconditions are required for write workflows');
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  }
+
+  const writes = intent.writes.map((write, index) => {
+    if (!write || typeof write !== 'object' || Array.isArray(write)) {
+      const error = new Error(`createWorkflowDraftIntent.writes[${index}] must be an object`);
+      error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+      throw error;
+    }
+    assertOnlyKeys(write, ['path', 'content'], `createWorkflowDraftIntent.writes[${index}]`);
+    return {
+      path: assertWorkflowDraftIntentRelativePath(write.path, `createWorkflowDraftIntent.writes[${index}].path`),
+      content: assertWorkflowDraftIntentContent(write.content, `createWorkflowDraftIntent.writes[${index}].content`)
+    };
+  });
+
+  const postconditions = intent.postconditions.map((postcondition, index) => {
+    if (!postcondition || typeof postcondition !== 'object' || Array.isArray(postcondition)) {
+      const error = new Error(`createWorkflowDraftIntent.postconditions[${index}] must be an object`);
+      error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+      throw error;
+    }
+    if (postcondition.type === 'fileExists') {
+      assertOnlyKeys(postcondition, ['id', 'type', 'path'], `createWorkflowDraftIntent.postconditions[${index}]`);
+      return {
+        id: typeof postcondition.id === 'string' && postcondition.id.trim() ? postcondition.id.trim() : `postcondition_${index + 1}`,
+        type: 'fileExists',
+        path: assertWorkflowDraftIntentRelativePath(postcondition.path, `createWorkflowDraftIntent.postconditions[${index}].path`)
+      };
+    }
+    if (postcondition.type === 'fileContains') {
+      assertOnlyKeys(postcondition, ['id', 'type', 'path', 'contains'], `createWorkflowDraftIntent.postconditions[${index}]`);
+      return {
+        id: typeof postcondition.id === 'string' && postcondition.id.trim() ? postcondition.id.trim() : `postcondition_${index + 1}`,
+        type: 'fileContains',
+        path: assertWorkflowDraftIntentRelativePath(postcondition.path, `createWorkflowDraftIntent.postconditions[${index}].path`),
+        contains: requireIntentString(postcondition.contains, `createWorkflowDraftIntent.postconditions[${index}].contains`)
+      };
+    }
+    const error = new Error(`createWorkflowDraftIntent.postconditions[${index}].type is unsupported: ${postcondition.type}`);
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  });
+
+  const actions = writes.map((write, index) => ({
+    id: `write_${index + 1}`,
+    action: 'writeFile',
+    input: {
+      path: write.path,
+      content: write.content
+    },
+    next: index === writes.length - 1 ? 'stop' : `write_${index + 2}`
+  }));
+
+  actions.push({
+    id: 'stop',
+    action: 'stop',
+    input: {
+      result: {
+        paths: writes.map(write => write.path)
+      }
+    }
+  });
+
+  return {
+    intent,
+    workflow: {
+      id,
+      name,
+      inputSchema: {},
+      actions,
+      postconditions
+    }
+  };
+}
+
 function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
   const submittedWorkflow = workflowInput && typeof workflowInput === 'object' && !Array.isArray(workflowInput)
     ? workflowInput
@@ -5948,6 +6133,260 @@ function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
   });
 
   return { workflowId: draft.id, enabled: false, status: 'draft_created' };
+}
+
+function createWorkflowDraftFromIntent(run, intentInput, step = 0) {
+  const compiled = compileWorkflowDraftIntent(intentInput);
+  appendRunReplaySnapshotItem(run.id, 'workflowDraftIntents', {
+    intent: compiled.intent,
+    compiledWorkflowId: compiled.workflow.id,
+    step
+  });
+  return createWorkflowDraftFromAgent(run, compiled.workflow, step);
+}
+
+function createHandoffTaskError(message, code = 'HANDOFF_TASK_INVALID') {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function resolveHandoffExecutor(value) {
+  const executorValue = typeof value === 'string' ? value.trim() : value;
+  if (executorValue === null || executorValue === undefined || executorValue === '') {
+    throw createHandoffTaskError('createHandoffTask executor is required');
+  }
+
+  const agents = readAgents();
+  const numericId = Number(executorValue);
+  const executor = Number.isInteger(numericId)
+    ? agents.find(agent => agent.id === numericId)
+    : agents.find(agent => String(agent.name || '').toLowerCase() === String(executorValue).toLowerCase());
+
+  if (!executor) {
+    throw createHandoffTaskError(`createHandoffTask executor not found: ${executorValue}`, 'HANDOFF_EXECUTOR_NOT_FOUND');
+  }
+
+  return executor;
+}
+
+function normalizeHandoffWritePath(value) {
+  const pathValue = requireStringArg({ path: value }, 'path', { nonEmpty: true }).replace(/\\/g, '/').trim();
+  if (path.isAbsolute(pathValue) || path.win32.isAbsolute(pathValue) || pathValue.startsWith('/')) {
+    throw createHandoffTaskError('createHandoffTask args.path must be a relative workspace path', 'HANDOFF_PATH_INVALID');
+  }
+
+  const normalized = path.posix.normalize(pathValue);
+  if (!normalized || normalized === '.' || normalized.startsWith('../') || normalized === '..' || normalized.includes('/../')) {
+    throw createHandoffTaskError('createHandoffTask args.path must not traverse outside the workspace', 'HANDOFF_PATH_INVALID');
+  }
+
+  assertAgentWorkspacePathAllowed(normalized);
+  return normalized;
+}
+
+function validateHandoffTaskInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw createHandoffTaskError('createHandoffTask args must be an object');
+  }
+
+  assertOnlyKeys(input, ['executor', 'operation', 'args'], 'createHandoffTask args');
+  const executor = resolveHandoffExecutor(input.executor);
+  if (input.operation !== 'writeFile') {
+    throw createHandoffTaskError('createHandoffTask operation must be writeFile', 'HANDOFF_OPERATION_UNSUPPORTED');
+  }
+  if (!input.args || typeof input.args !== 'object' || Array.isArray(input.args)) {
+    throw createHandoffTaskError('createHandoffTask args.args must be an object');
+  }
+  assertOnlyKeys(input.args, ['path', 'content'], 'createHandoffTask args.args');
+
+  return {
+    executor,
+    operation: 'writeFile',
+    args: {
+      path: normalizeHandoffWritePath(input.args.path),
+      content: requireStringArg(input.args, 'content')
+    }
+  };
+}
+
+function executeHandoffTask(run, handoffInput, step = 0) {
+  const validated = validateHandoffTaskInput(handoffInput);
+  const planner = readAgents().find(agent => agent.id === run.agentId) || null;
+  const executorRun = {
+    ...run,
+    agentId: validated.executor.id,
+    agentName: validated.executor.name
+  };
+  const workspaceAction = {
+    operation: 'writeFile',
+    args: validated.args
+  };
+  const evidenceBase = {
+    plannerAgentId: run.agentId,
+    plannerAgentName: run.agentName || (planner ? planner.name : null),
+    executorAgentId: validated.executor.id,
+    executorAgentName: validated.executor.name,
+    operation: validated.operation,
+    args: sanitizeSnapshotValue(validated.args),
+    step
+  };
+
+  appendRunReplaySnapshotItem(run.id, 'handoffTasks', {
+    ...evidenceBase,
+    status: 'validated'
+  });
+  appendEvent({
+    type: 'handoff.task_validated',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: String(step),
+    payload: evidenceBase
+  });
+
+  const result = executeWorkspaceOperation(executorRun, workspaceAction, step);
+  const executionEvidence = {
+    ...evidenceBase,
+    status: 'executed',
+    result: sanitizeSnapshotValue(result)
+  };
+  appendRunReplaySnapshotItem(run.id, 'handoffTasks', executionEvidence);
+  appendEvent({
+    type: 'handoff.task_executed',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: String(step),
+    payload: executionEvidence
+  });
+
+  return {
+    status: 'executed',
+    executorAgentId: validated.executor.id,
+    executorAgentName: validated.executor.name,
+    operation: validated.operation,
+    args: validated.args,
+    result,
+    historyId: result && result.historyId ? result.historyId : null
+  };
+}
+
+function isWorkflowDraftObjective(objective) {
+  const text = String(objective || '').toLowerCase();
+  return /\b(workflow|draft)\b/.test(text) && /\b(create|draft|define|repair|workflow)\b/.test(text);
+}
+
+function hasSuccessfulWorkflowDraftAction(actionResults) {
+  return (actionResults || []).some(item => {
+    const operation = item && item.action ? item.action.operation : null;
+    const result = item ? item.result : null;
+    return (operation === 'createWorkflowDraft' || operation === 'createWorkflowDraftIntent') &&
+      result &&
+      result.status === 'draft_created' &&
+      result.enabled === false &&
+      typeof result.workflowId === 'string' &&
+      result.workflowId.trim();
+  });
+}
+
+function normalizeObjectivePathToken(value) {
+  let token = String(value || '')
+    .trim()
+    .replace(/^["'`]+|["'`.,;:!?]+$/g, '')
+    .replace(/\\/g, '/');
+  while (token.startsWith('./')) token = token.slice(2);
+  if (!token || token.startsWith('/') || token.includes('\0')) return null;
+  let segments = token.split('/');
+  if (segments.some(segment => segment === '..')) return null;
+  if (segments[0] === 'workspace-root') {
+    token = segments.slice(1).join('/');
+    segments = token.split('/');
+  }
+  if (!token || token.startsWith('/') || segments.some(segment => segment === '..')) return null;
+  return token;
+}
+
+function extractObjectivePathTokens(objective) {
+  const text = String(objective || '');
+  const tokens = new Set();
+  const patterns = [
+    /\b(?:file|note|summary|report)\s+(?:named|called)\s+([A-Za-z0-9._/-]+\.[A-Za-z0-9._-]+)/gi,
+    /\b(?:write|create|update)\s+([A-Za-z0-9._/-]+\.[A-Za-z0-9._-]+)/gi,
+    /\b([A-Za-z0-9._/-]+\.(?:md|txt|json|csv|yaml|yml|log|html|js|css))\b/gi
+  ];
+
+  patterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const token = normalizeObjectivePathToken(match[1]);
+      if (token) tokens.add(token);
+    }
+  });
+
+  return Array.from(tokens);
+}
+
+function isDirectWorkspaceWriteObjective(objective) {
+  const text = String(objective || '').toLowerCase();
+  if (!text.trim()) return false;
+  if (/\b(workflow|draft)\b/.test(text)) return false;
+  if (/\b(read|list|inspect|review|check)\b/.test(text) && !/\b(write|create|update)\b/.test(text)) return false;
+  if (/\bsuggest(?:ion|ions)?\b/.test(text) && !/\bwrite\b/.test(text)) return false;
+  return /\b(write|create|update)\b/.test(text) &&
+    (/\b(note|summary|report|file)\b/.test(text) || extractObjectivePathTokens(objective).length > 0);
+}
+
+function hasViolationEvidence(runId) {
+  return getRunEvents(runId).some(event => event.type === 'run.violation_detected' || event.type === 'authority.denied');
+}
+
+function hasSuccessfulObjectiveMutationEvidence(run, actionResults, objectivePaths) {
+  const objectivePathSet = new Set((objectivePaths || []).map(normalizeObjectivePathToken).filter(Boolean));
+  if (objectivePathSet.size === 0) return false;
+  const successfulMutations = (actionResults || []).filter(item => {
+    const action = item && item.action;
+    const operation = action ? action.operation : null;
+    const result = item ? item.result : null;
+    return operation &&
+      ['createFolder', 'writeFile', 'renamePath'].includes(operation) &&
+      result &&
+      !item.error;
+  });
+
+  if (successfulMutations.length === 0) return false;
+
+  const historyRecords = getOperationHistoryForRun(run.id).filter(record =>
+    record &&
+    ['createFolder', 'writeFile', 'renamePath'].includes(record.operation) &&
+    !record.error &&
+    record.postState &&
+    (record.postState.existed === true || (record.postState.destination && record.postState.destination.existed === true))
+  );
+  if (historyRecords.length === 0) return false;
+
+  return historyRecords.some(record => {
+    const candidates = [
+      record.args && record.args.path,
+      record.args && record.args.nextPath,
+      record.result && record.result.path
+    ].map(normalizeObjectivePathToken).filter(Boolean);
+    return candidates.some(candidate => objectivePathSet.has(candidate));
+  });
+}
+
+function isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults) {
+  if (!run || !ticket) return false;
+  if (!isDirectWorkspaceWriteObjective(ticket.objective)) return false;
+  if (hasViolationEvidence(run.id)) return false;
+  return hasSuccessfulObjectiveMutationEvidence(run, actionResults, extractObjectivePathTokens(ticket.objective));
+}
+
+function isUnsupportedObjectiveModelPlan(modelPlan) {
+  if (!modelPlan || modelPlan.complete !== false) return false;
+  if (Array.isArray(modelPlan.actions) && modelPlan.actions.length > 0) return false;
+  const message = typeof modelPlan.message === 'string' ? modelPlan.message.trim() : '';
+  if (!message) return false;
+  return /\b(unsupported|unavailable|not available|cannot be completed|can't be completed|cannot be represented|can't be represented|not supported)\b/i.test(message) &&
+    /\b(allowed operations|normal agents?|workflow drafts?|branching|conditional|createWorkflowDraftIntent|operation|operations)\b/i.test(message);
 }
 
 function executeWorkspaceOperation(run, action, step = 0) {
@@ -6524,6 +6963,23 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
 }
 
 function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
+  const allowedOperationList = (runtimeEnvelope.allowedOperations || AGENT_DIRECT_OPERATIONS).join('|');
+  const workflowDraftArgShape = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED
+    ? ',"workflow":"for createWorkflowDraft only"'
+    : '';
+  const canonicalWorkflowDraftGuidance = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED
+    ? [
+        'Trusted canonical workflow draft mode is enabled. You may emit createWorkflowDraft only when the ticket explicitly asks for operator-authored workflow JSON or a canonical workflow definition.',
+        'For createWorkflowDraft, args must have exactly one key: workflow. Do not put postconditions beside workflow in args.',
+        'For workflow drafts, the workflow object must have top-level keys id, name, inputSchema, actions, and postconditions. Each workflow step must use id, action, input, and optional next/trueNext/falseNext. Do not use type or args inside workflow.actions. Put postconditions only at args.workflow.postconditions. Never put postconditions inside a workflow action step or beside args.workflow.',
+        'Before returning createWorkflowDraft, check: workflow.postconditions is present and non-empty when any workflow action is writeFile/createFolder/renamePath/deletePath; step.next is a sibling of step.input, not inside step.input.',
+        'Minimal valid createWorkflowDraft example: {"operation":"createWorkflowDraft","args":{"workflow":{"id":"write-note","name":"Write note","inputSchema":{},"actions":[{"id":"write","action":"writeFile","input":{"path":"note.txt","content":"ok"},"next":"done"},{"id":"done","action":"stop","input":{"result":{"path":"note.txt"}}}],"postconditions":[{"id":"file-exists","type":"fileExists","path":"note.txt"},{"id":"file-contains","type":"fileContains","path":"note.txt","contains":"ok"}]}}}',
+        'createWorkflowDraft args: { "workflow": { "id":"string", "name":"string", "inputSchema":{}, "actions":[], "postconditions":[] } }.'
+      ]
+    : [
+        'Do not emit createWorkflowDraft. Normal agents are not allowed to submit canonical workflow JSON.'
+      ];
+
   return [
     {
       role: 'system',
@@ -6534,9 +6990,9 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
         'Inspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.',
         'If the ticket requires creating or changing files, request the necessary workspace actions.',
         'Do not say you will do work later. Do not describe future work instead of performing it.',
-        'If no workspace operation is needed and the task is truly done, set complete to true.',
         'If the task cannot be completed, explain the failure reason clearly in the message.',
-        'Never return complete false with an empty actions array.',
+        'Never return complete false with an empty actions array unless the requested workflow cannot be represented by the allowed operations.',
+        'Set complete:true only when the ticket objective has been fully satisfied by completed actions in this response or by prior verified state.',
         'Before setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.',
         'If the target path is clear or can be overwritten or created safely, emit the create or write operation.',
         'You have runtimeEnvelope.maxExecutionSteps execution steps total. Each response consumes one step. Inspect enough to identify all remaining work, then act. Balance verification and mutation within your remaining steps.',
@@ -6550,14 +7006,24 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
         'Do not fail or return an error just because the total task exceeds one response.',
         'For bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.',
         'Use only the operations listed in runtimeEnvelope.allowedOperations.',
-        'To propose a reusable workflow, emit createWorkflowDraft with args.workflow containing a complete workflow JSON definition. Drafts are saved disabled and must include postconditions when they contain mutating actions.',
+        'If the ticket asks to create, draft, define, or repair a simple workflow that writes files, use createWorkflowDraftIntent. Do not perform the workflow output actions directly. Emit exactly one workflow draft action and no writeFile/createFolder/readFile/listDirectory actions for that response.',
+        'For workflow draft tickets, creating the disabled draft may satisfy the ticket if the objective was only to create that draft. Executing the workflow output actions directly does not satisfy a workflow draft objective.',
+        'createWorkflowDraftIntent is only for flat simple write workflows. Args shape: {"id":"string","name":"string","writes":[{"path":"relative/path","content":"text"}],"postconditions":[{"type":"fileExists","path":"relative/path"},{"type":"fileContains","path":"relative/path","contains":"text"}]}.',
+        'The complete flag belongs only at the top level of your response. Never put complete inside action args.',
+        'All createWorkflowDraftIntent paths must be relative workspace paths like "note.txt" or "reports/note.txt". Never use absolute paths or runtimeEnvelope.workspaceRoot in a path.',
+        'createWorkflowDraftIntent does not support branching, conditions, arbitrary actions, next fields, templates, or workflow JSON.',
+        'If a ticket asks for a branching or conditional workflow, do not fake it by writing YAML, JSON, prose, or another workflow definition file through createWorkflowDraftIntent. Return no actions, complete:false, and explain that branching workflow drafts are not available to normal agents.',
+        'To hand one bounded write task to another agent, emit createHandoffTask. It executes directly through runtime authority; the executor model will not receive prose or make a model call.',
+        'createHandoffTask is only for one writeFile operation to one existing executor. Args shape: {"executor":"agent name","operation":"writeFile","args":{"path":"relative/path.md","content":"exact content"}}. Do not include task descriptions, action lists, branches, or workflow JSON.',
+        ...canonicalWorkflowDraftGuidance,
         'If runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.',
         'If runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.',
         'Each action must be exactly {"operation":"operationName","args":{...}} with no extra fields.',
         'Required args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path "" only for the workspace root in listDirectory.',
-        'createWorkflowDraft args: { "workflow": { "id":"string", "name":"string", "inputSchema":{}, "actions":[], "postconditions":[] } }.',
+        'createWorkflowDraftIntent args: { "id":"string", "name":"string", "writes":[{"path":"string","content":"string"}], "postconditions":[{"type":"fileExists","path":"string"},{"type":"fileContains","path":"string","contains":"string"}] }.',
+        'createHandoffTask args: { "executor":"agent name", "operation":"writeFile", "args":{"path":"relative/path","content":"exact content"} }.',
         'Respond only as JSON with this shape:',
-        '{"message":"short summary","actions":[{"operation":"listDirectory|readFile|createFolder|writeFile|renamePath|deletePath|createWorkflowDraft","args":{"path":"relative/path","content":"for writeFile only","nextPath":"for renamePath only","workflow":"for createWorkflowDraft only"}}],"complete":true|false}'
+        `{"message":"short summary","actions":[{"operation":"${allowedOperationList}","args":{"path":"relative/path","content":"for writeFile only","nextPath":"for renamePath only"${workflowDraftArgShape},"id":"for createWorkflowDraftIntent","name":"for createWorkflowDraftIntent","writes":"for createWorkflowDraftIntent","postconditions":"for createWorkflowDraftIntent","executor":"for createHandoffTask","operation":"writeFile for createHandoffTask","args":"nested args for createHandoffTask"}}],"complete":true|false}`
       ].join('\n')
     },
     {
@@ -6838,6 +7304,16 @@ async function runAgentTicket(runId) {
       }
 
       if (!modelPlan.complete && actions.length === 0) {
+        if (isUnsupportedObjectiveModelPlan(modelPlan)) {
+          const message = modelPlan.message.trim();
+          recordRunEvent(run, 'model:unsupported_objective', message, { step });
+          const error = new Error(message);
+          error.code = 'OBJECTIVE_UNSUPPORTED_BY_ALLOWED_OPERATIONS';
+          error.failureKind = 'unsupported_objective';
+          error.details = { step, message };
+          throw error;
+        }
+
         stalledResponses += 1;
         recordRunEvent(run, 'model:stalled', 'Model returned complete:false with no workspace actions', { step });
 
@@ -6875,11 +7351,18 @@ async function runAgentTicket(runId) {
 
           assertRunNotTimedOut(run, runStartedAtMs, limits);
           operation = parseAgentDirectAction(action);
-          const result = operation.operation === 'createWorkflowDraft'
-            ? createWorkflowDraftFromAgent(run, operation.args.workflow, step)
-            : executeWorkspaceOperation(run, action, step);
+          let result;
+          if (operation.operation === 'createWorkflowDraft') {
+            result = createWorkflowDraftFromAgent(run, operation.args.workflow, step);
+          } else if (operation.operation === 'createWorkflowDraftIntent') {
+            result = createWorkflowDraftFromIntent(run, operation.args, step);
+          } else if (operation.operation === 'createHandoffTask') {
+            result = executeHandoffTask(run, operation.args, step);
+          } else {
+            result = executeWorkspaceOperation(run, action, step);
+          }
           const opDurationMs = Date.now() - actionStartedAt;
-          if (AGENT_ALLOWED_OPERATIONS.includes(operation.operation)) workspaceOperationCount += 1;
+          if (AGENT_ALLOWED_OPERATIONS.includes(operation.operation) || operation.operation === 'createHandoffTask') workspaceOperationCount += 1;
 
           actionResults.push({ action, result });
           // INVARIANT: Success replay entry shape must remain structurally
@@ -6918,7 +7401,52 @@ async function runAgentTicket(runId) {
             });
           }
 
-          if (AGENT_MUTATING_OPERATIONS.includes(operation.operation)) {
+          if (operation.operation === 'createHandoffTask') {
+            const executedOperation = {
+              operation: result.operation,
+              args: result.args
+            };
+            appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+              operation: executedOperation,
+              result: result.result,
+              startedAt: new Date(actionStartedAt).toISOString(),
+              durationMs: opDurationMs,
+              historyId: result.historyId || null,
+              handoffTask: {
+                plannerAgentId: run.agentId,
+                plannerAgentName: run.agentName || null,
+                executorAgentId: result.executorAgentId,
+                executorAgentName: result.executorAgentName
+              },
+              workspaceRoot: getRunWorkspaceProvider(run).root,
+              executionWorkspaceType: run.executionWorkspaceType || 'main',
+              allocationPlanId: run.allocationPlanId || null,
+              allocationItemId: run.allocationItemId || null,
+              ownedOutputPaths: getRunOwnedOutputPaths(run)
+            });
+            appendEvent({
+              type: 'workspace.operation',
+              ticketId: run.ticketId,
+              runId: run.id,
+              stepId: String(step),
+              payload: {
+                operation: result.operation,
+                path: result.args ? result.args.path || null : null,
+                nextPath: null,
+                mutating: true,
+                input: sanitizeSnapshotValue(result.args || {}),
+                result: sanitizeSnapshotValue(result.result),
+                handoffTask: {
+                  plannerAgentId: run.agentId,
+                  plannerAgentName: run.agentName || null,
+                  executorAgentId: result.executorAgentId,
+                  executorAgentName: result.executorAgentName
+                }
+              }
+            });
+          }
+
+          if (AGENT_MUTATING_OPERATIONS.includes(operation.operation) || operation.operation === 'createHandoffTask') {
             hasMutatingAction = true;
           }
 
@@ -6984,6 +7512,25 @@ async function runAgentTicket(runId) {
       }
 
       listPathsThisStep.forEach(listedPath => listedDirectoryPaths.add(listedPath));
+
+      if (!modelPlan.complete && isWorkflowDraftObjective(ticket.objective) && hasSuccessfulWorkflowDraftAction(actionResults)) {
+        recordRunEvent(run, 'workflow.draft_objective_satisfied', 'Workflow draft objective satisfied by created disabled draft', {
+          step,
+          source: 'successful_workflow_draft_action'
+        });
+        completed = true;
+        break;
+      }
+
+      if (!modelPlan.complete && isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
+        recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
+          step,
+          source: 'successful_workspace_mutation',
+          objectivePaths: extractObjectivePathTokens(ticket.objective)
+        });
+        completed = true;
+        break;
+      }
 
       if (!modelPlan.complete && !hasMutatingAction && repeatedListPaths.length > 0) {
         noProgressResponses += 1;

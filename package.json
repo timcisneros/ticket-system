@@ -8,6 +8,9 @@
     "dev": "NODE_ENV=development node server.js",
     "build": "node --check server.js",
     "preview": "NODE_ENV=production node server.js",
+    "codex:bootstrap": "node scripts/codex-bootstrap.js",
+    "codex:trace": "node scripts/codex-trace.js",
+    "codex:verify": "node scripts/codex-verify.js",
     "demo:legal-workflow": "node scripts/demo-legal-workflow.js",
     "test:agent": "NODE_ENV=test node scripts/agent-regression-test.js",
     "test:runtime-budget": "NODE_ENV=test node scripts/runtime-budget-test.js",
@@ -19,6 +22,9 @@
     "test:workflow": "NODE_ENV=test node scripts/workflow-composition-test.js",
     "benchmark:workflow-drafts": "NODE_ENV=test node scripts/workflow-draft-quality-benchmark.js",
     "benchmark:workflow-repair": "NODE_ENV=test node scripts/workflow-repair-benchmark.js",
+    "benchmark:operational-endurance": "NODE_ENV=test node scripts/operational-endurance-benchmark.js",
+    "benchmark:ambiguous-operational": "NODE_ENV=test node scripts/ambiguous-operational-benchmark.js",
+    "experiment:workflow-schema-teaching": "NODE_ENV=test node scripts/workflow-schema-teaching-experiment.js",
     "harvest:benchmark-cases": "node scripts/harvest-benchmark-cases.js"
   },
   "dependencies": {
