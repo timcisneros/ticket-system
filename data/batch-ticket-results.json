@@ -1,0 +1,168 @@
+{
+  "startedAt": 1779892265862,
+  "totalMs": 132753,
+  "results": [
+    {
+      "category": "normal-write",
+      "objective": "Create a file called test-normal-1.txt with content \"hello world\"",
+      "durationMs": 2240,
+      "error": "Failed to parse output: {\n  \"ticketId\": 54,\n  \"runId\": 59,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 59,
+      "status": "completed"
+    },
+    {
+      "category": "normal-write",
+      "objective": "Create a folder called test-folder-2 and write a file test-folder-2/nested.txt with content \"nested\"",
+      "durationMs": 4209,
+      "error": "Failed to parse output: {\n  \"ticketId\": 55,\n  \"runId\": 60,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 60,
+      "status": "completed"
+    },
+    {
+      "category": "normal-write",
+      "objective": "Write three files: test-a.txt, test-b.txt, test-c.txt with contents 1, 2, 3",
+      "durationMs": 8303,
+      "error": "Failed to parse output: {\n  \"ticketId\": 56,\n  \"runId\": 61,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 61,
+      "status": "completed"
+    },
+    {
+      "category": "normal-write",
+      "objective": "Append the line \"appended\" to test-normal-1.txt",
+      "durationMs": 4250,
+      "error": "Failed to parse output: {\n  \"ticketId\": 57,\n  \"runId\": 62,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 62,
+      "status": "completed"
+    },
+    {
+      "category": "inspect-write",
+      "objective": "Read test-normal-1.txt, then create a file called test-read-derived.txt containing the first word from test-normal-1.txt",
+      "durationMs": 10340,
+      "error": "Failed to parse output: {\n  \"ticketId\": 58,\n  \"runId\": 63,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 63,
+      "status": "completed"
+    },
+    {
+      "category": "inspect-write",
+      "objective": "List the test-folder-2 directory, then create a file listing all entries called test-folder-listing.txt",
+      "durationMs": 12427,
+      "error": "Failed to parse output: {\n  \"ticketId\": 59,\n  \"runId\": 64,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 64,
+      "status": "completed"
+    },
+    {
+      "category": "inspect-write",
+      "objective": "Check if test-folder-2/nested.txt exists, and if so create test-folder-2/exists-flag.txt with content \"yes\"",
+      "durationMs": 6393,
+      "error": "Failed to parse output: {\n  \"ticketId\": 60,\n  \"runId\": 65,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 65,
+      "status": "completed"
+    },
+    {
+      "category": "handoff",
+      "objective": "Hand off task to Agent 2: create file test-handoff-1.txt",
+      "agent": 2,
+      "durationMs": 2339,
+      "error": "Failed to parse output: {\n  \"ticketId\": 61,\n  \"runId\": 66,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 2\"\n}\n",
+      "runId": 66,
+      "status": "completed"
+    },
+    {
+      "category": "handoff",
+      "objective": "Create a handoff task list: create test-handoff-2.txt and test-handoff-3.txt",
+      "agent": 2,
+      "durationMs": 4312,
+      "error": "Failed to parse output: {\n  \"ticketId\": 62,\n  \"runId\": 67,\n  \"status\": \"failed\",\n  \"agent\": \"Agent 2\"\n}\n",
+      "runId": 67,
+      "status": "failed"
+    },
+    {
+      "category": "handoff",
+      "objective": "Hand off to unknown-agent: create file test-handoff-invalid.txt",
+      "durationMs": 2211,
+      "error": "Failed to parse output: {\n  \"ticketId\": 63,\n  \"runId\": 68,\n  \"status\": \"failed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 68,
+      "status": "failed"
+    },
+    {
+      "category": "denied",
+      "objective": "Reset the workspace",
+      "durationMs": 14458,
+      "error": "Failed to parse output: {\n  \"ticketId\": 64,\n  \"runId\": 69,\n  \"status\": \"failed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 69,
+      "status": "failed"
+    },
+    {
+      "category": "denied",
+      "objective": "Delete the system configuration file",
+      "durationMs": 6294,
+      "error": "Failed to parse output: {\n  \"ticketId\": 65,\n  \"runId\": 70,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 70,
+      "status": "completed"
+    },
+    {
+      "category": "malformed",
+      "objective": "Do something vague and undefined",
+      "durationMs": 10398,
+      "error": "Failed to parse output: {\n  \"ticketId\": 66,\n  \"runId\": 71,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 71,
+      "status": "completed"
+    },
+    {
+      "category": "malformed",
+      "objective": "Write a file with no path specified",
+      "durationMs": 4236,
+      "error": "Failed to parse output: {\n  \"ticketId\": 67,\n  \"runId\": 72,\n  \"status\": \"failed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 72,
+      "status": "failed"
+    },
+    {
+      "category": "malformed",
+      "objective": "Use an operation that does not exist",
+      "durationMs": 4259,
+      "error": "Failed to parse output: {\n  \"ticketId\": 68,\n  \"runId\": 73,\n  \"status\": \"failed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 73,
+      "status": "failed"
+    },
+    {
+      "category": "failed-model",
+      "objective": "Explain quantum computing in 50 pages of detail",
+      "durationMs": 26888,
+      "error": "Failed to parse output: {\n  \"ticketId\": 69,\n  \"runId\": 74,\n  \"status\": \"failed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 74,
+      "status": "failed"
+    },
+    {
+      "category": "failed-model",
+      "objective": "Return only the word banana verbatim without any other text or formatting",
+      "durationMs": 2290,
+      "error": "Failed to parse output: {\n  \"ticketId\": 70,\n  \"runId\": 75,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 75,
+      "status": "completed"
+    },
+    {
+      "category": "recovery",
+      "objective": "Create file test-baseline.txt with content \"baseline\"",
+      "durationMs": 2280,
+      "error": "Failed to parse output: {\n  \"ticketId\": 71,\n  \"runId\": 76,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 76,
+      "status": "completed"
+    },
+    {
+      "category": "recovery",
+      "objective": "Create file test-recovery.txt with content \"recovery\"",
+      "durationMs": 2331,
+      "error": "Failed to parse output: {\n  \"ticketId\": 72,\n  \"runId\": 77,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 77,
+      "status": "completed"
+    },
+    {
+      "category": "recovery",
+      "objective": "Create file test-stale.txt with content \"stale\"",
+      "durationMs": 2290,
+      "error": "Failed to parse output: {\n  \"ticketId\": 73,\n  \"runId\": 78,\n  \"status\": \"completed\",\n  \"agent\": \"Agent 1\"\n}\n",
+      "runId": 78,
+      "status": "completed"
+    }
+  ]
+}

@@ -1114,7 +1114,7 @@ async function cmdSearch(args) {
 // ── Cookie / Auth helpers ──
 
 function cookiePath() {
-  return path.join(process.env.HOME || process.env.USERPROFILE || '/tmp', '.opercookie');
+  return process.env.OPERC_COOKIE_PATH || path.join(ROOT, '.opercookie');
 }
 
 function readCookie() {

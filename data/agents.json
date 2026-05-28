@@ -47,5 +47,13 @@
     "model": "deepseek-r1:latest",
     "apiKey": "",
     "createdAt": "2026-05-26T18:34:00.000Z"
+  },
+  {
+    "id": 6,
+    "name": "WALTestAgent-1779914899146",
+    "type": "agent",
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "apiKey": "test-key-wal"
   }
 ]

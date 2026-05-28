@@ -71,6 +71,538 @@ const WORKSPACE_FIXTURES = [
   { id: 'large-file', name: 'Large-ish file scenario' },
   { id: 'many-small-files', name: 'Many small files scenario' }
 ];
+
+// ── Execution phases ──────────────────────────────────────────────
+const EXECUTION_PHASES = ['planning', 'inspection', 'mutation', 'verification', 'terminalization'];
+const PHASE_OPERATIONS = {
+  planning: [],
+  inspection: ['listDirectory', 'readFile'],
+  mutation: ['writeFile', 'createFolder', 'renamePath', 'deletePath', 'createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask'],
+  verification: ['listDirectory', 'readFile'],
+  terminalization: []
+};
+const ALLOWED_PHASE_TRANSITIONS = {
+  planning: ['planning', 'inspection', 'mutation', 'verification'],
+  inspection: ['inspection', 'mutation', 'verification'],
+  mutation: ['mutation', 'verification'],
+  verification: ['verification', 'terminalization'],
+  terminalization: ['terminalization']
+};
+
+// ── Workload Profiles ─────────────────────────────────────────────
+// Explicit operational envelopes for common ticket classes.
+// Derived from observed workload behavior during validation.
+
+const WORKLOAD_PROFILES = {
+  report: {
+    name: 'report',
+    description: 'Inspection-heavy task producing a summary or analysis document',
+    executionStepLimit: 12,
+    modelRequestLimit: 8,
+    maxWorkspaceOperations: 32,
+    maxListDirectory: 3,
+    maxReadFile: 8,
+    allowedOperations: ['listDirectory', 'readFile', 'writeFile', 'createFolder'],
+    finalArtifactRequired: true,
+    expectedPhasePattern: 'planning → inspection → mutation',
+    retryGuidance: 'Simplify objective to target fewer directories. Avoid listing subdirectories individually.'
+  },
+  diagnosis: {
+    name: 'diagnosis',
+    description: 'Read files to identify bugs, test failures, or incorrect behavior',
+    executionStepLimit: 12,
+    modelRequestLimit: 8,
+    maxWorkspaceOperations: 24,
+    maxListDirectory: 2,
+    maxReadFile: 6,
+    allowedOperations: ['listDirectory', 'readFile', 'writeFile', 'createFolder'],
+    finalArtifactRequired: true,
+    expectedPhasePattern: 'planning → inspection → mutation',
+    retryGuidance: 'Specify exact file paths to inspect. Avoid broad workspace scans.'
+  },
+  refactor: {
+    name: 'refactor',
+    description: 'Move, rename, or restructure files and folders',
+    executionStepLimit: 12,
+    modelRequestLimit: 8,
+    maxWorkspaceOperations: 24,
+    maxListDirectory: 2,
+    maxReadFile: 4,
+    allowedOperations: ['listDirectory', 'readFile', 'renamePath', 'createFolder', 'deletePath'],
+    finalArtifactRequired: false,
+    expectedPhasePattern: 'planning → inspection → mutation → verification',
+    retryGuidance: 'Name exact source files and destination paths. Do not use "all files" phrasing.'
+  },
+  recommendation: {
+    name: 'recommendation',
+    description: 'Read files and produce an evidence-based improvement plan',
+    executionStepLimit: 12,
+    modelRequestLimit: 8,
+    maxWorkspaceOperations: 24,
+    maxListDirectory: 2,
+    maxReadFile: 6,
+    allowedOperations: ['listDirectory', 'readFile', 'writeFile', 'createFolder'],
+    finalArtifactRequired: true,
+    expectedPhasePattern: 'planning → inspection → mutation',
+    retryGuidance: 'Limit scope to top N issues. Specify exact files to analyze.'
+  },
+  'bulk-inventory': {
+    name: 'bulk-inventory',
+    description: 'List and catalog many directories or files across the workspace',
+    executionStepLimit: 16,
+    modelRequestLimit: 10,
+    maxWorkspaceOperations: 40,
+    maxListDirectory: 8,
+    maxReadFile: 4,
+    allowedOperations: ['listDirectory', 'readFile', 'writeFile', 'createFolder'],
+    finalArtifactRequired: true,
+    expectedPhasePattern: 'planning → inspection → mutation',
+    retryGuidance: 'Break into smaller inventory scopes. Do not list every subdirectory individually.'
+  }
+};
+
+// ── Test-only deterministic interruption hooks ──────────────────────
+// These hooks are activated by TEST_INTERRUPTION_POINT env var.
+// They allow pressure tests to crash the server at known evidence
+// boundaries, making recovery scenarios reproducible.
+// No production behavior change when the env var is absent.
+
+const TEST_INTERRUPTION_POINT = process.env.TEST_INTERRUPTION_POINT || '';
+const testInterruptFirstAuthority = new Set();
+const testInterruptFirstWorkspaceOp = new Set();
+
+function maybeTestInterrupt(run, point) {
+  if (!TEST_INTERRUPTION_POINT || TEST_INTERRUPTION_POINT !== point) return;
+  if (!run || !run.id) return;
+
+  // For per-run-once hooks, only fire once
+  if (point === 'after_first_authority.allowed') {
+    if (testInterruptFirstAuthority.has(run.id)) return;
+    testInterruptFirstAuthority.add(run.id);
+  }
+  if (point === 'after_first_workspace.operation') {
+    if (testInterruptFirstWorkspaceOp.has(run.id)) return;
+    testInterruptFirstWorkspaceOp.add(run.id);
+  }
+
+  // Flush ALL pending events to disk synchronously before SIGKILL
+  // so that recovery tools can reconstruct state from persisted evidence.
+  // Avoid writing duplicates by skipping events already on disk.
+  let persistedIds = new Set();
+  try {
+    const lines = fs.readFileSync(EVENTS_FILE, 'utf8').split('\n').filter(Boolean);
+    for (const line of lines) {
+      try {
+        const ev = JSON.parse(line);
+        if (ev && ev.id) persistedIds.add(ev.id);
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  const eventsToFlush = pendingEventBuffer.filter(e => !persistedIds.has(e.id));
+  if (eventsToFlush.length > 0) {
+    const lines = eventsToFlush.map(ev => `${JSON.stringify(ev)}\n`).join('');
+    try {
+      fs.appendFileSync(EVENTS_FILE, lines, 'utf8');
+      pendingEventBuffer = pendingEventBuffer.filter(e => !eventsToFlush.includes(e));
+    } catch (e) {
+      console.error(`Failed to flush pending events: ${e.message}`);
+    }
+  }
+
+  // Write the interruption event itself
+  const event = {
+    id: normalizeEventId(),
+    ts: createLogTimestamp(),
+    type: 'interruption.test_hook',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: null,
+    payload: { point, reason: 'Deterministic test interruption triggered' }
+  };
+
+  // Add seq/prevHash for run events
+  if (event.runId !== null) {
+    const runId = event.runId;
+    const chain = runEventChains.get(runId) || { seq: 0, prevHash: null };
+    event.seq = chain.seq;
+    event.prevHash = chain.prevHash;
+    const currentHash = computeEventHash(event);
+    runEventChains.set(runId, {
+      seq: chain.seq + 1,
+      prevHash: currentHash
+    });
+  }
+
+  try {
+    fs.appendFileSync(EVENTS_FILE, `${JSON.stringify(event)}\n`, 'utf8');
+  } catch (e) {
+    console.error(`Failed to write interruption event: ${e.message}`);
+  }
+
+  // Kill the server process to simulate a crash
+  process.kill(process.pid, 'SIGKILL');
+}
+
+// ── Resumable execution helpers (minimal) ─────────────────────────
+
+function computeMutationFingerprint(operation, args) {
+  if (operation === 'writeFile') return `writeFile:${args.path}`;
+  if (operation === 'createFolder') return `createFolder:${args.path}`;
+  if (operation === 'renamePath') return `renamePath:${args.path}->${args.nextPath}`;
+  if (operation === 'deletePath') return `deletePath:${args.path}`;
+  return null;
+}
+
+function computePathFingerprint(operation, args) {
+  if (operation === 'writeFile') return `path:${args.path}`;
+  if (operation === 'createFolder') return `path:${args.path}`;
+  if (operation === 'renamePath') return `path:${args.path}`;
+  if (operation === 'deletePath') return `path:${args.path}`;
+  return null;
+}
+
+function findConflictingMutation(runId, operation, args) {
+  const histories = readOperationHistory();
+  const pathFingerprint = computePathFingerprint(operation, args);
+  if (!pathFingerprint) return null;
+  return histories.find(h =>
+    h.runId === runId &&
+    computePathFingerprint(h.operation, h.args) === pathFingerprint &&
+    computeMutationFingerprint(h.operation, h.args) !== computeMutationFingerprint(operation, args)
+  );
+}
+
+function findCommittedMutation(runId, operation, args) {
+  const histories = readOperationHistory();
+  const fingerprint = computeMutationFingerprint(operation, args);
+  if (!fingerprint) return null;
+  return histories.find(h =>
+    h.runId === runId &&
+    h.operation === operation &&
+    computeMutationFingerprint(h.operation, h.args) === fingerprint
+  );
+}
+
+function mutationAlreadyCommitted(runId, operation, args) {
+  return !!findCommittedMutation(runId, operation, args);
+}
+
+// ── Phase-aware execution helpers ─────────────────────────────────
+
+function inferPhaseFromActions(actions) {
+  const ops = actions.map(a => {
+    if (a && typeof a === 'object' && a.operation) return a.operation;
+    if (a && typeof a === 'object' && a.op) return a.op;
+    return null;
+  }).filter(Boolean);
+
+  if (ops.length === 0) return 'planning';
+
+  const phases = new Set();
+  for (const op of ops) {
+    for (const [phase, allowed] of Object.entries(PHASE_OPERATIONS)) {
+      if (allowed.includes(op)) phases.add(phase);
+    }
+  }
+
+  if (phases.size === 1) return [...phases][0];
+
+  // Disambiguate: inspection and verification share the same operations.
+  // If the only matched phases are inspection+verification, default to inspection.
+  const onlyReadPhases = phases.size === 2 && phases.has('inspection') && phases.has('verification');
+  if (onlyReadPhases) return 'inspection';
+
+  return 'mixed';
+}
+
+function isPhaseTransitionAllowed(currentPhase, nextPhase) {
+  if (currentPhase === nextPhase) return true;
+  const allowed = ALLOWED_PHASE_TRANSITIONS[currentPhase] || [];
+  return allowed.includes(nextPhase);
+}
+
+function checkPhaseCompliance(run, actions) {
+  const currentPhase = run.currentPhase || 'planning';
+  let inferredPhase = inferPhaseFromActions(actions);
+
+  // Disambiguate inspection vs verification based on current phase.
+  // readFile/listDirectory after mutation is verification, not inspection.
+  if (inferredPhase === 'inspection' && ['mutation', 'verification'].includes(currentPhase)) {
+    inferredPhase = 'verification';
+  }
+
+  // Terminalization with no actions stays in terminalization.
+  if (currentPhase === 'terminalization' && inferredPhase === 'planning') {
+    inferredPhase = 'terminalization';
+  }
+
+  if (inferredPhase === 'mixed') {
+    return {
+      compliant: false,
+      reason: 'Mixed-phase response: actions belong to different execution phases',
+      currentPhase,
+      inferredPhase,
+      violationType: 'mixed_phase'
+    };
+  }
+
+  // Terminalization is a terminal state: no workspace or model operations allowed.
+  if (currentPhase === 'terminalization' && inferredPhase !== 'terminalization') {
+    return {
+      compliant: false,
+      reason: 'Run is in terminalization phase: no further workspace operations allowed',
+      currentPhase,
+      inferredPhase,
+      violationType: 'terminalization_blocked'
+    };
+  }
+
+  // The invariant is: a single model response must belong to exactly one execution phase.
+  // Phase state tracks forward progression for observability, but does not constrain
+  // which single-phase response the model may emit. The only rejection boundary is
+  // mixed-phase responses (enforced above) and terminalization (enforced here).
+  return { compliant: true, currentPhase, inferredPhase };
+}
+
+function advanceRunPhase(run, phase) {
+  if (!run || !phase) return run;
+  if (run.currentPhase === phase) return run;
+  // Phase state tracks forward progression only. Do not record backward moves.
+  if (!isPhaseTransitionAllowed(run.currentPhase || 'planning', phase)) return run;
+  run.currentPhase = phase;
+  const runs = readRuns();
+  const idx = runs.findIndex(r => r.id === run.id);
+  if (idx !== -1) {
+    runs[idx].currentPhase = phase;
+    writeRuns(runs);
+  }
+  return run;
+}
+
+function reconstructRunPhase(run) {
+  const allEvents = readEvents();
+  const runEvents = allEvents.filter(e => e.runId === run.id && !e._parseError).sort((a, b) => {
+    const tsCmp = String(a.ts).localeCompare(String(b.ts));
+    if (tsCmp !== 0) return tsCmp;
+    if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq;
+    return 0;
+  });
+
+  // Replay phase transitions from events
+  let phase = 'planning';
+  for (const e of runEvents) {
+    if (e.type === 'execution.phase_transition' && e.payload && e.payload.toPhase) {
+      phase = e.payload.toPhase;
+    }
+    if (e.type === 'execution.phase_violation' && e.payload && e.payload.currentPhase) {
+      phase = e.payload.currentPhase;
+    }
+  }
+  return phase;
+}
+
+function reconstructResumableState(run) {
+  // Read all events for this run
+  const allEvents = readEvents();
+  const runEvents = allEvents.filter(e => e.runId === run.id && !e._parseError).sort((a, b) => {
+    const tsCmp = String(a.ts).localeCompare(String(b.ts));
+    if (tsCmp !== 0) return tsCmp;
+    if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq;
+    return 0;
+  });
+
+  if (runEvents.length === 0) return null;
+
+  // Count prior workspace operations
+  let workspaceOperationCount = 0;
+  const listedDirectoryPaths = new Set();
+  const stalledResponses = 0; // We don't track stalled across restarts
+  const noProgressResponses = 0;
+  const hasLegacyTerminal = runEvents.some(e => ['run.completed', 'run.failed', 'run.interrupted'].includes(e.type));
+  const hasTerminal = runEvents.some(e => e.type === 'run.terminalized');
+  const hasExecutionCompleted = runEvents.some(e => e.type === 'run.execution_completed') || hasLegacyTerminal;
+  const hasSnapshotFinalized = runEvents.some(e => e.type === 'replay.snapshot.finalized' || e.type === 'run.snapshot_finalized');
+
+  // Backward compat: treat legacy terminal events as also-terminalized
+  // (old logs have run.completed/failed/interrupted as the final event)
+  const isTerminal = hasTerminal || hasLegacyTerminal;
+
+  // Check hash chain integrity (allow seq resets after server restart)
+  let hashChainIntact = true;
+  let segmentStart = 0;
+  for (let i = 1; i < runEvents.length; i++) {
+    const ev = runEvents[i];
+    const prev = runEvents[i - 1];
+    // New chain segment starts with prevHash=null (run.created or run.resumed)
+    if (ev.prevHash !== undefined && ev.prevHash === null) {
+      segmentStart = i;
+      continue;
+    }
+    // Also detect seq reset (safety net for events missing prevHash)
+    if (ev.seq !== undefined && prev.seq !== undefined && ev.seq < prev.seq) {
+      segmentStart = i;
+      continue;
+    }
+    if (i <= segmentStart) continue;
+    if (ev.seq !== undefined && prev.seq !== undefined) {
+      if (ev.seq !== prev.seq + 1) {
+        hashChainIntact = false;
+        break;
+      }
+    }
+    if (ev.prevHash !== undefined) {
+      const expected = computeEventHash(prev);
+      if (ev.prevHash !== expected) {
+        hashChainIntact = false;
+        break;
+      }
+    }
+  }
+
+  // Check for duplicate mutating operations
+  const mutatingOps = runEvents.filter(e => e.type === 'workspace.operation' && e.payload && AGENT_MUTATING_OPERATIONS.includes(e.payload.operation));
+  const seenMutations = new Set();
+  let hasDuplicateMutation = false;
+  for (const m of mutatingOps) {
+    const p = m.payload;
+    const key = `${p.operation}:${p.path}`;
+    if (seenMutations.has(key)) {
+      hasDuplicateMutation = true;
+      break;
+    }
+    seenMutations.add(key);
+  }
+
+  // Check authority chain for mutating ops
+  const authEvents = runEvents.filter(e => e.type === 'authority.allowed' || e.type === 'authority.denied');
+  let authorityIntact = true;
+  for (const m of mutatingOps) {
+    const p = m.payload;
+    const hasAuth = authEvents.some(a => {
+      const ap = a.payload || {};
+      return ap.operation === p.operation && ap.path === p.path;
+    });
+    if (!hasAuth) {
+      authorityIntact = false;
+      break;
+    }
+  }
+
+  // Determine expected next phase
+  const lastEvent = runEvents[runEvents.length - 1];
+  let expectedNextPhase = 'unknown';
+  if (lastEvent) {
+    if (lastEvent.type === 'run.terminalized') {
+      expectedNextPhase = 'already_terminal';
+    } else if (['run.completed', 'run.failed', 'run.interrupted'].includes(lastEvent.type)) {
+      // Legacy terminal events — old logs used these as final event
+      expectedNextPhase = 'already_terminal';
+    } else if (lastEvent.type === 'run.execution_completed') {
+      expectedNextPhase = 'snapshot_finalization';
+    } else if (lastEvent.type === 'run.evaluation_completed') {
+      expectedNextPhase = 'consequence';
+    } else if (lastEvent.type === 'run.consequence_recorded') {
+      expectedNextPhase = 'terminalization';
+    } else if (lastEvent.type === 'run.violations_checked') {
+      expectedNextPhase = 'evaluation';
+    } else if (lastEvent.type === 'authority.allowed') {
+      expectedNextPhase = 'workspace_operation';
+    } else if (lastEvent.type === 'replay.snapshot.finalized' || lastEvent.type === 'run.snapshot_finalized') {
+      expectedNextPhase = 'terminalization_or_evaluation';
+    } else if (lastEvent.type === 'workspace.operation') {
+      // Check for unmatched authority events after this workspace op
+      const lastSeq = lastEvent.seq;
+      const unmatchedAuth = authEvents.filter(a => {
+        if (a.seq <= lastSeq) return false;
+        const ap = a.payload || {};
+        const aOp = ap.operation;
+        const aPath = ap.path;
+        return !mutatingOps.some(mo => {
+          const mp = mo.payload;
+          return mp.operation === aOp && mp.path === aPath && mo.seq > a.seq;
+        });
+      });
+      expectedNextPhase = unmatchedAuth.length > 0 ? 'workspace_operation' : 'terminalization_or_evaluation';
+    } else if (lastEvent.type === 'run.heartbeat') {
+      // Check if there are authority events without matching workspace ops
+      const unmatchedAuth = authEvents.filter(a => {
+        const ap = a.payload || {};
+        const aOp = ap.operation;
+        const aPath = ap.path;
+        return !mutatingOps.some(mo => {
+          const mp = mo.payload;
+          return mp.operation === aOp && mp.path === aPath;
+        });
+      });
+      expectedNextPhase = unmatchedAuth.length > 0 ? 'workspace_operation' : 'model_request';
+    } else {
+      expectedNextPhase = 'model_request';
+    }
+  }
+
+  // Rebuild listedDirectoryPaths from events
+  for (const e of runEvents) {
+    if (e.type === 'workspace.operation' && e.payload && e.payload.operation === 'listDirectory') {
+      const listedPath = e.payload.result && typeof e.payload.result.path === 'string'
+        ? e.payload.result.path
+        : (e.payload.input && e.payload.input.path) || '';
+      listedDirectoryPaths.add(listedPath);
+    }
+    if (e.type === 'workspace.operation' && e.payload && AGENT_MUTATING_OPERATIONS.includes(e.payload.operation)) {
+      workspaceOperationCount += 1;
+      listedDirectoryPaths.clear(); // Mutating action clears listed paths
+    }
+  }
+
+  // Three mutually-exclusive resume dispositions.
+  // safeToResumeExecution:  model loop can continue (running normally or resuming mid-execution)
+  // safeToReconcileTerminalState: execution completed but not yet terminalized — needs reconciliation
+  //   (triggered by run.execution_completed, or legacy run.completed/failed/interrupted)
+  // unsafeToContinue:        integrity broken, cannot proceed at all
+  const safeToResumeExecution =
+    hashChainIntact &&
+    !isTerminal &&
+    !hasExecutionCompleted &&
+    authorityIntact &&
+    !hasDuplicateMutation;
+
+  const safeToReconcileTerminalState =
+    hashChainIntact &&
+    hasExecutionCompleted &&
+    !isTerminal &&
+    !hasDuplicateMutation;
+
+  const unsafeToContinue =
+    !hashChainIntact ||
+    hasDuplicateMutation;
+
+  // Reconstruct current phase from events
+  const currentPhase = reconstructRunPhase(run);
+
+  return {
+    priorEvents: runEvents.length,
+    workspaceOperationCount,
+    listedDirectoryPaths,
+    stalledResponses,
+    noProgressResponses,
+    isTerminal,
+    hasTerminal,
+    hasLegacyTerminal,
+    hasExecutionCompleted,
+    hasSnapshotFinalized,
+    hashChainIntact,
+    authorityIntact,
+    hasDuplicateMutation,
+    safeToResumeExecution,
+    safeToReconcileTerminalState,
+    unsafeToContinue,
+    expectedNextPhase,
+    lastEvent,
+    currentPhase
+  };
+}
+
 const AGENT_PRIMITIVE_METADATA = {
   listDirectory: {
     responseShape: { path: 'string', entries: [{ name: 'string', type: 'file', size: 'number', modifiedAt: 'string' }] },
@@ -1513,8 +2045,25 @@ function createLogTimestamp() {
 let eventAppendChain = Promise.resolve();
 let pendingEventBuffer = [];
 
+// Per-run event chain state for forensic sequence numbers and hash chaining
+const runEventChains = new Map(); // runId -> { seq: number, prevHash: string | null }
+
 function normalizeEventId(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : crypto.randomUUID();
+}
+
+function computeEventHash(event) {
+  // Canonical content excludes mutable/transient forensic metadata (id, ts, seq, prevHash)
+  const canonical = {
+    type: event.type,
+    ticketId: event.ticketId,
+    runId: event.runId,
+    stepId: event.stepId,
+    payload: event.payload
+  };
+  return crypto.createHash('sha256')
+    .update(JSON.stringify(canonical))
+    .digest('hex');
 }
 
 function normalizeNullableInteger(value) {
@@ -1533,16 +2082,38 @@ function appendEvent(event = {}) {
     stepId: event.stepId === undefined || event.stepId === null ? null : String(event.stepId),
     payload: sanitizeSnapshotValue(event.payload && typeof event.payload === 'object' ? event.payload : {})
   };
+
+  // Add forensic sequence number and hash chain for run events
+  if (normalized.runId !== null) {
+    const runId = normalized.runId;
+    const chain = runEventChains.get(runId) || { seq: 0, prevHash: null };
+    normalized.seq = chain.seq;
+    normalized.prevHash = chain.prevHash;
+    // Advance chain for next event: current hash becomes previous for next
+    const currentHash = computeEventHash(normalized);
+    runEventChains.set(runId, {
+      seq: chain.seq + 1,
+      prevHash: currentHash
+    });
+  }
+
   const line = `${JSON.stringify(normalized)}\n`;
 
   pendingEventBuffer.push(normalized);
   eventAppendChain = eventAppendChain
-    .then(() => new Promise((resolve, reject) => {
-      fs.appendFile(EVENTS_FILE, line, 'utf8', error => {
-        if (error) reject(error);
-        else resolve();
+    .then(() => {
+      // Skip write if this event was already flushed synchronously
+      // (e.g. by maybeTestInterrupt before SIGKILL).  The synchronous
+      // flush removes events from pendingEventBuffer, so the buffer
+      // membership check acts as a "was this already written?" guard.
+      if (!pendingEventBuffer.some(event => event.id === normalized.id)) return;
+      return new Promise((resolve, reject) => {
+        fs.appendFile(EVENTS_FILE, line, 'utf8', error => {
+          if (error) reject(error);
+          else resolve();
+        });
       });
-    }))
+    })
     .then(() => {
       pendingEventBuffer = pendingEventBuffer.filter(event => event.id !== normalized.id);
     })
@@ -1575,10 +2146,11 @@ function readEvents() {
   }
 
   const persistedIds = new Set(persistedEvents.map(event => event.id));
-  return [
+  const result = [
     ...persistedEvents,
     ...pendingEventBuffer.filter(event => !persistedIds.has(event.id))
   ];
+  return result;
 }
 
 function getRunEvents(runId) {
@@ -1599,7 +2171,7 @@ function recentEventSummary(runId) {
     latestError: null,
     latestWorkspaceMutation: null
   };
-  const statusTypes = new Set(['run.created', 'run.queued', 'run.started', 'run.completed', 'run.failed']);
+  const statusTypes = new Set(['run.created', 'run.queued', 'run.started', 'run.completed', 'run.failed', 'run.interrupted', 'run.execution_completed', 'run.terminalized']);
 
   events.forEach(event => {
     const payload = event.payload || {};
@@ -1623,7 +2195,7 @@ function recentEventSummary(runId) {
       };
     }
 
-    if (event.type === 'run.failed' || event.type === 'workflow.step.failed') {
+    if (event.type === 'run.failed' || event.type === 'run.terminalized' || event.type === 'workflow.step.failed') {
       summary.latestError = {
         message: payload.error || payload.message || null,
         code: payload.code || null,
@@ -1716,6 +2288,9 @@ function updateTicketStatusById(ticketId, status) {
 
   ticket.status = status;
   ticket.updatedAt = new Date().toISOString();
+  if (['completed', 'failed', 'interrupted'].includes(status)) {
+    delete ticket.rerunMode;
+  }
   writeTickets(tickets);
   appendEvent({
     type: 'ticket.updated',
@@ -2066,6 +2641,7 @@ function normalizeRuns(runs) {
     run.leaseExpiresAt = typeof run.leaseExpiresAt === 'string' && isValidIsoTimestamp(run.leaseExpiresAt) ? run.leaseExpiresAt : null;
     run.currentStepId = typeof run.currentStepId === 'string' && run.currentStepId.trim() ? run.currentStepId : null;
     run.currentWorkflowAction = typeof run.currentWorkflowAction === 'string' && run.currentWorkflowAction.trim() ? run.currentWorkflowAction : null;
+    run.currentPhase = EXECUTION_PHASES.includes(run.currentPhase) ? run.currentPhase : 'planning';
     run.lastHeartbeatAt = typeof run.lastHeartbeatAt === 'string' && isValidIsoTimestamp(run.lastHeartbeatAt) ? run.lastHeartbeatAt : null;
     run.runEvaluation = run.runEvaluation && typeof run.runEvaluation === 'object' && !Array.isArray(run.runEvaluation)
       ? sanitizeSnapshotValue(run.runEvaluation)
@@ -2198,7 +2774,7 @@ function buildRunEvaluation(run) {
       if (log.message) errorMessages.push(sanitizeLogMessage(log.message));
     });
   events
-    .filter(event => event.type === 'run.failed' || event.type === 'workflow.step.failed')
+    .filter(event => event.type === 'run.failed' || event.type === 'run.terminalized' || event.type === 'workflow.step.failed')
     .forEach(event => {
       const payload = event.payload || {};
       const message = payload.error || payload.message;
@@ -2232,6 +2808,23 @@ function buildRunEvaluation(run) {
       ? 'none'
       : 'unknown';
 
+  const effectiveRuntimeConfig = snapshot.effectiveRuntimeConfig
+    ? {
+        effectiveConfig: snapshot.effectiveRuntimeConfig.effectiveConfig
+          ? { ...snapshot.effectiveRuntimeConfig.effectiveConfig }
+          : null,
+        agentConfig: snapshot.effectiveRuntimeConfig.agentConfig
+          ? { ...snapshot.effectiveRuntimeConfig.agentConfig }
+          : null,
+        configSources: snapshot.effectiveRuntimeConfig.configSources
+          ? { ...snapshot.effectiveRuntimeConfig.configSources }
+          : null,
+        runtimeLimits: snapshot.effectiveRuntimeConfig.runtimeLimits
+          ? { ...snapshot.effectiveRuntimeConfig.runtimeLimits }
+          : null
+      }
+    : null;
+
   return {
     effectiveness: {
       status: postconditionFailedEvents.length > 0
@@ -2259,7 +2852,8 @@ function buildRunEvaluation(run) {
     violations: {
       status: violationStatus,
       items: violationItems
-    }
+    },
+    effectiveRuntimeConfig
   };
 }
 
@@ -2725,6 +3319,8 @@ function persistRunConsequence(runId) {
   const run = runs.find(item => item.id === runId);
   if (!run) return null;
 
+  maybeTestInterrupt(run, 'before_run.consequence_recorded');
+
   const runConsequence = buildRunConsequence(run);
   if (!runConsequence) return null;
 
@@ -2745,6 +3341,39 @@ function expireStaleRunLeases() {
   const expiredRuns = readRuns().filter(run => run.status === 'running' && isRunLeaseExpired(run));
 
   expiredRuns.forEach(run => {
+    // Check if run is safe to resume before interrupting
+    const resumeState = reconstructResumableState(run);
+    if (resumeState && resumeState.safeToResumeExecution) {
+      // Safe to resume: clear stale lease and return to pending so scheduler can restart it
+      const runs = readRuns();
+      const r = runs.find(item => item.id === run.id);
+      if (r) {
+        r.status = 'pending';
+        r.leaseOwner = null;
+        r.leaseExpiresAt = null;
+        delete r.startedAt;
+        writeRuns(runs);
+        appendEvent({
+          type: 'run.resumed',
+          ticketId: run.ticketId,
+          runId: run.id,
+          payload: {
+            reason: 'stale lease, safe to resume',
+            priorEvents: resumeState.priorEvents,
+            expectedNextPhase: resumeState.expectedNextPhase
+          }
+        });
+        appendRunLog(run, 'run:resumed', `Stale lease expired; run is safe to resume (${resumeState.priorEvents} prior events, next phase: ${resumeState.expectedNextPhase})`);
+      }
+      return;
+    }
+
+    // Terminal state reached — reconcile (evaluate, finalize, cleanup)
+    if (resumeState && resumeState.safeToReconcileTerminalState) {
+      reconcileTerminalRun(run);
+      return;
+    }
+
     appendEvent({
       type: 'run.lease_expired',
       ticketId: run.ticketId,
@@ -3637,7 +4266,8 @@ function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnve
     model: providerConfig.model,
     runtimeEnvelope,
     ticketObjectiveSnapshot: ticket.objective,
-    systemInstructionSnapshot
+    systemInstructionSnapshot,
+    effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent)
   }));
 }
 
@@ -3675,13 +4305,22 @@ function getPositiveIntegerEnv(name, fallback) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-function getAgentRuntimeLimits() {
-  return {
+function getAgentRuntimeLimits(objective = null) {
+  const base = {
     maxExecutionSteps: getPositiveIntegerEnv('AGENT_MAX_EXECUTION_STEPS', DEFAULT_AGENT_RUNTIME_LIMITS.maxExecutionSteps),
     maxWorkspaceOperationsPerRun: getPositiveIntegerEnv('AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxWorkspaceOperationsPerRun),
     maxModelRequestsPerRun: getPositiveIntegerEnv('AGENT_MAX_MODEL_REQUESTS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxModelRequestsPerRun),
     maxRuntimeDurationMs: getPositiveIntegerEnv('AGENT_MAX_RUNTIME_DURATION_MS', DEFAULT_AGENT_RUNTIME_LIMITS.maxRuntimeDurationMs)
   };
+  const profile = detectWorkloadProfile(objective);
+  if (profile) {
+    return getProfileRuntimeLimits(base, profile);
+  }
+  // Fallback to legacy report detection for backward compatibility
+  if (isReportObjective(objective)) {
+    return getReportRuntimeLimits(base);
+  }
+  return base;
 }
 
 function createRunLimitError(run, type, message, details) {
@@ -3775,6 +4414,19 @@ function assertRunWorkspaceOperationAllowed(run, currentCount, incomingCount, li
   const nextCount = currentCount + incomingCount;
 
   if (nextCount > limits.maxWorkspaceOperationsPerRun) {
+    appendEvent({
+      type: 'action.rejected',
+      ticketId: run.ticketId,
+      runId: run.id,
+      stepId: String(run.currentStepId || ''),
+      payload: {
+        reason: 'workspace_operation_limit',
+        currentCount,
+        incomingCount,
+        nextCount,
+        limit: limits.maxWorkspaceOperationsPerRun
+      }
+    });
     throw createRunLimitError(run, 'operation', `Agent run exceeded workspace operation limit of ${limits.maxWorkspaceOperationsPerRun}`, {
       currentValue: nextCount,
       configuredLimit: limits.maxWorkspaceOperationsPerRun
@@ -3803,6 +4455,10 @@ function checkPostconditionCompletion(run, actions, actionResults, step) {
   for (const { action, i } of mutatingIndices) {
     const ar = actionResults[i];
     if (!ar || !ar.result) return null;
+
+    // Skipped mutations were already committed in a prior step; the
+    // current workspace state already reflects them — treat as redundant.
+    if (ar.result.skipped) continue;
 
     if (action.operation === 'createFolder') {
       if (ar.result.status !== 'already_exists_noop') return null;
@@ -3985,6 +4641,7 @@ function buildFailureMetadata(error, status, failureReason = null, detail = {}) 
 
 // mutationCount parameter is reserved but never passed by callers; count is always derived.
 function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
+  maybeTestInterrupt(run, 'before_run.snapshot_finalized');
   const effectiveMutationCount = mutationCount !== null ? mutationCount : countRunMutatingOperations(run.id);
   const finalizedAt = new Date().toISOString();
   updateRunReplaySnapshot(run.id, snapshot => snapshot ? {
@@ -3997,7 +4654,7 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
     finalizedAt
   } : snapshot);
   appendEvent({
-    type: 'replay.snapshot.finalized',
+    type: 'run.snapshot_finalized',
     ticketId: run.ticketId,
     runId: run.id,
     payload: {
@@ -4007,6 +4664,7 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
       finalizedAt
     }
   });
+  maybeTestInterrupt(run, 'after_run.snapshot_finalized');
 }
 
 function classifyInterruptionPhase(run) {
@@ -4235,6 +4893,9 @@ function recordAuthorityEvidence(run, evidence) {
     runId: run.id,
     payload: normalized
   });
+  if (evidence.status !== 'denied') {
+    maybeTestInterrupt(run, 'after_first_authority.allowed');
+  }
   return normalized;
 }
 
@@ -4254,6 +4915,15 @@ function createAuthorityDeniedError(evidence, operation, args) {
     error.code = 'RUN_LEASE_REQUIRED';
     error.operation = operation;
     error.path = evidence.path;
+    error.reason = evidence.reason;
+    return error;
+  }
+
+  if (evidence.rule === 'agent_runtime_config') {
+    const error = new Error(evidence.reason || `Operation denied by agent runtimeConfig`);
+    error.code = 'AGENT_OPERATION_DISABLED';
+    error.operation = operation;
+    error.configKey = evidence.configKey;
     error.reason = evidence.reason;
     return error;
   }
@@ -4307,6 +4977,95 @@ function checkWorkspaceMutationAuthority(run, operation, args) {
     run,
     buildAuthorityEvidence(run, operation, primaryPath, 'allowed', 'workspace_mutation', 'Runtime authority checks passed')
   );
+}
+
+function normalizeAgentRuntimeConfig(agent) {
+  const KEYS = ['allowHandoffTask', 'allowWorkflowDraftIntent', 'allowCanonicalWorkflowDraft'];
+  const result = {};
+  for (const key of KEYS) {
+    const agentVal = agent && agent.runtimeConfig && agent.runtimeConfig[key];
+    const envKey = `AGENT_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`;
+    const envVal = process.env[envKey];
+    if (envVal !== undefined) {
+      if (envVal === 'true' || envVal === '1') result[key] = true;
+      else if (envVal === 'false' || envVal === '0') result[key] = false;
+      else result[key] = envVal;
+    } else if (agentVal !== undefined && agentVal !== null) {
+      result[key] = agentVal;
+    } else {
+      result[key] = null;
+    }
+  }
+  return result;
+}
+
+function getAgentEffectiveRuntimeConfig(agent) {
+  return normalizeAgentRuntimeConfig(agent);
+}
+
+function buildEffectiveRuntimeConfigSnapshot(agent) {
+  const effectiveConfig = getAgentEffectiveRuntimeConfig(agent);
+  const runtimeLimits = getAgentRuntimeLimits();
+  const KEYS = ['allowHandoffTask', 'allowWorkflowDraftIntent', 'allowCanonicalWorkflowDraft'];
+
+  const configSources = {};
+  for (const key of KEYS) {
+    const envKey = `AGENT_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`;
+    const envVal = process.env[envKey];
+    const agentVal = agent && agent.runtimeConfig && agent.runtimeConfig[key];
+    if (envVal !== undefined) {
+      configSources[key] = 'env';
+    } else if (agentVal !== undefined && agentVal !== null) {
+      configSources[key] = 'agent';
+    } else {
+      configSources[key] = 'default';
+    }
+  }
+
+  return {
+    effectiveConfig,
+    agentConfig: agent && agent.runtimeConfig ? { ...agent.runtimeConfig } : null,
+    configSources,
+    runtimeLimits
+  };
+}
+
+function assertAgentOperationAllowed(run, agent, operation, step) {
+  const configKeyByOperation = {
+    createWorkflowDraft: 'allowCanonicalWorkflowDraft',
+    createWorkflowDraftIntent: 'allowWorkflowDraftIntent',
+    createHandoffTask: 'allowHandoffTask'
+  };
+  const configKey = configKeyByOperation[operation];
+  if (!configKey) return;
+
+  const cfg = getAgentEffectiveRuntimeConfig(agent);
+  const allowed = cfg[configKey];
+  if (allowed !== false) return;
+
+  const configSource = agent && agent.runtimeConfig && agent.runtimeConfig[configKey] !== undefined
+    ? `agent.${agent.id}.runtimeConfig.${configKey}`
+    : `env.AGENT_${configKey.replace(/([A-Z])/g, '_$1').toUpperCase()}`;
+
+  const evidence = buildAuthorityEvidence(
+    run,
+    operation,
+    null,
+    'denied',
+    'agent_runtime_config',
+    `Operation '${operation}' denied by ${configSource}=false`
+  );
+  evidence.configKey = configKey;
+  evidence.configKeyEffectiveValue = false;
+  evidence.agentId = agent ? agent.id : null;
+  recordAuthorityEvidence(run, evidence);
+
+  const error = new Error(`Operation '${operation}' is disabled for this agent by runtimeConfig`);
+  error.code = 'AGENT_OPERATION_DISABLED';
+  error.operation = operation;
+  error.configKey = configKey;
+  error.failureKind = 'invalid_action';
+  throw error;
 }
 
 function assertNoOverlappingOwnedPaths(planItems) {
@@ -4557,6 +5316,120 @@ function finalizeTicketForRun(run, terminalStatus) {
   return ticket;
 }
 
+function reconcileTerminalRun(run) {
+  // Idempotent reconciliation for runs that have run.execution_completed (or legacy
+  // run.completed/failed/interrupted) but not yet run.terminalized.
+  // Call only when safeToReconcileTerminalState is true.
+  const runId = run.id;
+  const events = getRunEvents(runId);
+  const existingTypes = new Set(events.map(e => e.type));
+
+  // Already fully terminalized — no-op
+  if (existingTypes.has('run.terminalized')) return;
+
+  // Determine target status from execution_completed or legacy terminal event
+  const execCompletedEvent = events.find(e => e.type === 'run.execution_completed');
+  const legacyTerminalEvent = events.find(e => ['run.completed', 'run.failed', 'run.interrupted'].includes(e.type));
+  const isLegacy = !execCompletedEvent && !!legacyTerminalEvent;
+
+  const targetStatus = execCompletedEvent
+    ? (execCompletedEvent.payload && execCompletedEvent.payload.status) || 'completed'
+    : legacyTerminalEvent
+      ? legacyTerminalEvent.type.replace('run.', '')
+      : 'interrupted';
+
+  const terminalPayload = (legacyTerminalEvent && legacyTerminalEvent.payload) ||
+    (execCompletedEvent && execCompletedEvent.payload) || {};
+
+  appendRunLog(run, 'run:reconciliation_started', `Reconciling run at terminal state ${targetStatus}`, {
+    existingEvents: events.length,
+    isLegacy,
+    hasSnapshotFinalized: existingTypes.has('replay.snapshot.finalized') || existingTypes.has('run.snapshot_finalized'),
+    hasEvaluation: existingTypes.has('run.evaluation_completed'),
+    hasConsequence: existingTypes.has('run.consequence_recorded')
+  });
+
+  // 1. Finalize replay snapshot if not already done
+  let didFinalize = false;
+  const snapshotDone = existingTypes.has('replay.snapshot.finalized') || existingTypes.has('run.snapshot_finalized');
+  if (!snapshotDone) {
+    maybeTestInterrupt(run, 'before_run.snapshot_finalized');
+    let failure = null;
+    if (targetStatus === 'failed' || targetStatus === 'interrupted') {
+      failure = buildFailureMetadata(null, targetStatus, run.error || 'Run reconciled to terminal state');
+    }
+    finalizeRunReplaySnapshot(run, targetStatus, run.error || null, null, failure);
+    didFinalize = true;
+    maybeTestInterrupt(run, 'after_run.snapshot_finalized');
+  }
+
+  // 2. Postcondition check for workflow runs that completed (idempotent internally)
+  if (targetStatus === 'completed' && run.executionMode === 'workflow' && run.workflowId) {
+    completeRunPostconditionCheck(runId);
+  }
+
+  // 3. Violation check (idempotent internally)
+  completeRunViolationCheck(runId);
+
+  // 4. Evaluation (guard against double-emission)
+  let didEvaluate = false;
+  if (!existingTypes.has('run.evaluation_completed')) {
+    persistRunEvaluation(runId);
+    didEvaluate = true;
+  }
+
+  // 5. Consequence (guard against double-emission)
+  let didConsequence = false;
+  if (!existingTypes.has('run.consequence_recorded')) {
+    persistRunConsequence(runId);
+    didConsequence = true;
+  }
+
+  // 6. Normalize run status if still in a non-terminal state
+  const runs = readRuns();
+  const r = runs.find(item => item.id === runId);
+  if (r) {
+    if (!['completed', 'failed', 'interrupted'].includes(r.status)) {
+      r.status = targetStatus;
+      r.completedAt = r.completedAt || terminalPayload.completedAt || new Date().toISOString();
+      r.updatedAt = new Date().toISOString();
+      writeRuns(runs);
+    }
+    // 7. Clean up stale lease
+    if (r.leaseOwner || r.leaseExpiresAt) {
+      r.leaseOwner = null;
+      r.leaseExpiresAt = null;
+      writeRuns(runs);
+    }
+  }
+
+  // 8. Emit terminalized lifecycle event (skip for legacy logs — no migration)
+  if (!existingTypes.has('run.terminalized') && !isLegacy) {
+    appendEvent({
+      type: 'run.terminalized',
+      ticketId: run.ticketId,
+      runId: run.id,
+      payload: { status: targetStatus }
+    });
+  }
+
+  // 9. Finalize ticket
+  finalizeTicketForRun(run, targetStatus);
+
+  // 10. Running-run cleanup
+  runningRunKeys.delete(runExecutionKey(run));
+  startingRunIds.delete(runId);
+  startingLocalModelRunIds.delete(runId);
+
+  appendRunLog(run, 'run:reconciled', `Run reconciled to terminal state after restart (${targetStatus})`, {
+    events,
+    isLegacy,
+    didFinalize,
+    didEvaluate,
+    didConsequence
+  });
+}
+
 function updateTicketAfterRunInterrupted(run) {
   const ticket = readTickets().find(item => item.id === run.ticketId);
 
@@ -4578,6 +5451,7 @@ function allocationLogSuffix(run) {
 }
 
 function interruptAgentRun(run, reason) {
+  advanceRunPhase(run, 'terminalization');
   const phase = classifyInterruptionPhase(run);
   ensureInterruptedRunReplaySnapshot(run, reason, phase);
   const interruptedRun = updateRunStatus(run.id, 'interrupted', reason) || {
@@ -4589,10 +5463,27 @@ function interruptAgentRun(run, reason) {
   };
 
   const failure = buildFailureMetadata(null, 'interrupted', reason, { phase });
+  appendEvent({
+    type: 'run.execution_completed',
+    ticketId: interruptedRun.ticketId,
+    runId: interruptedRun.id,
+    payload: {
+      status: 'interrupted',
+      error: reason,
+      failure,
+      completedAt: interruptedRun.completedAt || interruptedRun.updatedAt
+    }
+  });
   finalizeRunReplaySnapshot(interruptedRun, 'interrupted', reason, null, failure);
   completeRunViolationCheck(interruptedRun.id);
   persistRunEvaluation(interruptedRun.id);
   persistRunConsequence(interruptedRun.id);
+  appendEvent({
+    type: 'run.terminalized',
+    ticketId: interruptedRun.ticketId,
+    runId: interruptedRun.id,
+    payload: { status: 'interrupted', error: reason }
+  });
   appendRunLog(interruptedRun, 'run:interrupted', `${reason}${allocationLogSuffix(interruptedRun)}`, null, {
     allocationPlanId: interruptedRun.allocationPlanId || null,
     allocationItemId: interruptedRun.allocationItemId || null,
@@ -4606,7 +5497,7 @@ function interruptAgentRun(run, reason) {
   return interruptedRun;
 }
 
-function forceTicketOpenForRerun(ticketId) {
+function forceTicketOpenForRerun(ticketId, rerunMode = null) {
   const tickets = readTickets();
   const ticket = tickets.find(item => item.id === ticketId);
 
@@ -4614,6 +5505,11 @@ function forceTicketOpenForRerun(ticketId) {
 
   ticket.status = 'open';
   ticket.updatedAt = new Date().toISOString();
+  if (rerunMode) {
+    ticket.rerunMode = rerunMode;
+  } else {
+    delete ticket.rerunMode;
+  }
   writeTickets(tickets);
   appendEvent({
     type: 'ticket.updated',
@@ -4627,7 +5523,7 @@ function forceTicketOpenForRerun(ticketId) {
   return ticket;
 }
 
-function rerunTicketFromBeginning(ticketId, changedBy = 'operator') {
+function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retry') {
   const ticket = readTickets().find(item => item.id === ticketId);
 
   if (!ticket) return null;
@@ -4644,10 +5540,11 @@ function rerunTicketFromBeginning(ticketId, changedBy = 'operator') {
     .filter(run => run.ticketId === ticketId && ['pending', 'running'].includes(run.status))
     .forEach(run => interruptAgentRun(run, `${changedBy} rerun requested`));
 
-  const reopenedTicket = forceTicketOpenForRerun(ticketId);
-  appendSystemLog('ticket:rerun', `Ticket #${ticketId} rerun requested by ${changedBy}`, null, {
+  const reopenedTicket = forceTicketOpenForRerun(ticketId, mode);
+  appendSystemLog('ticket:rerun', `Ticket #${ticketId} rerun requested by ${changedBy} (mode: ${mode})`, null, {
     ticketId,
     changedBy,
+    mode,
     changedAt: new Date().toISOString()
   });
   createRunsForTicket(reopenedTicket);
@@ -4656,17 +5553,85 @@ function rerunTicketFromBeginning(ticketId, changedBy = 'operator') {
 
 function interruptStaleRunsOnStartup() {
   const staleRuns = readRuns().filter(run => ['pending', 'running'].includes(run.status));
-
-  staleRuns.forEach(run => {
-    interruptAgentRun(run, 'process restarted before run completed');
-  });
+  let interruptedCount = 0;
+  let resumedCount = 0;
+  let reconciledCount = 0;
 
   if (staleRuns.length > 0) {
-    console.log(`Marked ${staleRuns.length} stale agent run(s) interrupted`);
+  }
+
+  staleRuns.forEach(run => {
+    const runEvents = readEvents().filter(e => e.runId === run.id);
+    const resumeState = reconstructResumableState(run);
+    if (resumeState && resumeState.safeToResumeExecution) {
+      // Safe to resume: clear stale lease and return to pending
+      const runs = readRuns();
+      const r = runs.find(item => item.id === run.id);
+      if (r) {
+        r.status = 'pending';
+        r.leaseOwner = null;
+        r.leaseExpiresAt = null;
+        delete r.startedAt;
+        writeRuns(runs);
+        appendEvent({
+          type: 'run.resumed',
+          ticketId: run.ticketId,
+          runId: run.id,
+          payload: {
+            reason: 'startup resumption, safe to resume',
+            priorEvents: resumeState.priorEvents,
+            expectedNextPhase: resumeState.expectedNextPhase
+          }
+        });
+        appendRunLog(run, 'run:resumed', `Startup resumption: ${resumeState.priorEvents} prior events, next phase ${resumeState.expectedNextPhase}`);
+        resumedCount++;
+      }
+      return;
+    }
+
+    // Terminal state reached — reconcile (evaluate, finalize, cleanup)
+    if (resumeState && resumeState.safeToReconcileTerminalState) {
+      reconcileTerminalRun(run);
+      reconciledCount++;
+      return;
+    }
+
+    // Already terminalized — just fix the status to match the events
+    if (resumeState && resumeState.isTerminal) {
+      const runs = readRuns();
+      const r = runs.find(item => item.id === run.id);
+      if (r) {
+        // Determine terminal status from events
+        const terminalEvent = runEvents.find(e => e.type === 'run.terminalized');
+        const legacyEvent = runEvents.find(e => ['run.completed', 'run.failed', 'run.interrupted'].includes(e.type));
+        const status = terminalEvent ? (terminalEvent.payload && terminalEvent.payload.status) || 'completed'
+          : legacyEvent ? legacyEvent.type.replace('run.', '') : 'interrupted';
+        r.status = status;
+        r.leaseOwner = null;
+        r.leaseExpiresAt = null;
+        writeRuns(runs);
+        appendRunLog(run, 'run:terminalized', `Startup: terminal run ${run.id} had stale status '${run.status}', fixed to '${status}'`);
+      }
+      return;
+    }
+
+    interruptAgentRun(run, 'process restarted before run completed');
+    interruptedCount++;
+  });
+
+  if (interruptedCount > 0) {
+    console.log(`Marked ${interruptedCount} stale agent run(s) interrupted`);
+  }
+  if (resumedCount > 0) {
+    console.log(`Resumed ${resumedCount} stale agent run(s) on startup`);
+  }
+  if (reconciledCount > 0) {
+    console.log(`Reconciled ${reconciledCount} terminal agent run(s) on startup`);
   }
 }
 
 function failAgentRun(run, error, workspaceAction = null) {
+  advanceRunPhase(run, 'terminalization');
   let message = error && error.message ? error.message : String(error || 'Agent run failed');
   const failure = buildFailureMetadata(error, 'failed', message);
 
@@ -4686,9 +5651,8 @@ function failAgentRun(run, error, workspaceAction = null) {
   };
 
   if (failedRun.status === 'interrupted') return failedRun;
-  finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
   appendEvent({
-    type: 'run.failed',
+    type: 'run.execution_completed',
     ticketId: failedRun.ticketId,
     runId: failedRun.id,
     payload: {
@@ -4699,6 +5663,7 @@ function failAgentRun(run, error, workspaceAction = null) {
       completedAt: failedRun.completedAt || failedRun.updatedAt
     }
   });
+  finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
   appendRunLog(failedRun, 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
     allocationPlanId: failedRun.allocationPlanId || null,
     allocationItemId: failedRun.allocationItemId || null,
@@ -4708,16 +5673,22 @@ function failAgentRun(run, error, workspaceAction = null) {
   completeRunViolationCheck(failedRun.id);
   persistRunEvaluation(failedRun.id);
   persistRunConsequence(failedRun.id);
+  appendEvent({
+    type: 'run.terminalized',
+    ticketId: failedRun.ticketId,
+    runId: failedRun.id,
+    payload: { status: 'failed', error: message }
+  });
   finalizeTicketForRun(failedRun, 'failed');
   return failedRun;
 }
 
 function completeAgentRun(run) {
+  advanceRunPhase(run, 'terminalization');
   const completedRun = updateRunStatus(run.id, 'completed');
   if (completedRun.status === 'interrupted') return completedRun;
-  finalizeRunReplaySnapshot(completedRun, 'completed');
   appendEvent({
-    type: 'run.completed',
+    type: 'run.execution_completed',
     ticketId: completedRun.ticketId,
     runId: completedRun.id,
     payload: {
@@ -4726,6 +5697,7 @@ function completeAgentRun(run) {
       completedAt: completedRun.completedAt || completedRun.updatedAt
     }
   });
+  finalizeRunReplaySnapshot(completedRun, 'completed');
   appendRunLog(completedRun, 'run:completed', `Agent run completed${allocationLogSuffix(completedRun)}`, null, {
     allocationPlanId: completedRun.allocationPlanId || null,
     allocationItemId: completedRun.allocationItemId || null
@@ -4734,6 +5706,12 @@ function completeAgentRun(run) {
   completeRunViolationCheck(completedRun.id);
   persistRunEvaluation(completedRun.id);
   persistRunConsequence(completedRun.id);
+  appendEvent({
+    type: 'run.terminalized',
+    ticketId: completedRun.ticketId,
+    runId: completedRun.id,
+    payload: { status: 'completed' }
+  });
   finalizeTicketForRun(completedRun, 'completed');
   return completedRun;
 }
@@ -4775,6 +5753,8 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     capabilityType: ticket.executionMode === 'workflow' ? 'workflow' : 'directAction',
     capabilityId: ticket.executionMode === 'workflow' ? ticket.workflowId : 'agent-selected-actions',
     capabilityInput: ticket.executionMode === 'workflow' ? (ticket.workflowInput || {}) : null,
+    rerunMode: ticket.rerunMode || null,
+    currentPhase: 'planning',
     leaseOwner: null,
     leaseExpiresAt: null,
     currentStepId: null,
@@ -4808,6 +5788,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     allocationItemId: run.allocationItemId
   });
   updateTicketInProgressForRun(run);
+  maybeTestInterrupt(run, 'after_run.created');
   return run;
 }
 
@@ -4921,10 +5902,27 @@ function formatDateTimeForTimezone(date, timeZone) {
   return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}${offsetSign}${offsetHours}:${offsetRemainder}`;
 }
 
-function buildRuntimeEnvelope(run, step = 0) {
+function buildRuntimeEnvelope(run, step = 0, objective = null) {
   const timezone = getRuntimeTimezone();
   const workspaceRoot = run.workspaceRoot || workspaceProvider.root;
-  const limits = getAgentRuntimeLimits();
+  const limits = getAgentRuntimeLimits(objective);
+
+  const disabledConfigToOps = {
+    allowHandoffTask: 'createHandoffTask',
+    allowWorkflowDraftIntent: 'createWorkflowDraftIntent',
+    allowCanonicalWorkflowDraft: 'createWorkflowDraft'
+  };
+
+  const agent = readAgents().find(item => item.id === run.agentId);
+  const effectiveConfig = agent ? getAgentEffectiveRuntimeConfig(agent) : {};
+  const filteredOps = AGENT_DIRECT_OPERATIONS.filter(op => {
+    for (const [configKey, operationName] of Object.entries(disabledConfigToOps)) {
+      if (op === operationName && effectiveConfig[configKey] === false) return false;
+    }
+    return true;
+  });
+
+  const profile = detectWorkloadProfile(objective);
 
   return {
     runId: run.id,
@@ -4940,11 +5938,13 @@ function buildRuntimeEnvelope(run, step = 0) {
     allocationItem: getRunAllocationItem(run),
     allocationSubtask: run.allocationSubtask || null,
     ownedOutputPaths: getRunOwnedOutputPaths(run),
-    allowedOperations: AGENT_DIRECT_OPERATIONS,
+    allowedOperations: filteredOps,
     maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
     maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
     currentStep: step,
-    maxExecutionSteps: limits.maxExecutionSteps
+    maxExecutionSteps: limits.maxExecutionSteps,
+    workloadProfile: profile || null,
+    currentPhase: run.currentPhase || 'planning'
   };
 }
 
@@ -6335,6 +7335,130 @@ function isDirectWorkspaceWriteObjective(objective) {
     (/\b(note|summary|report|file)\b/.test(text) || extractObjectivePathTokens(objective).length > 0);
 }
 
+function isReportObjective(objective) {
+  const text = String(objective || '').toLowerCase();
+  return /\b(report|summary|synthesis|overview|analysis|status|audit)\b/.test(text);
+}
+
+function getReportRuntimeLimits(baseLimits) {
+  return {
+    ...baseLimits,
+    maxExecutionSteps: Math.min(baseLimits.maxExecutionSteps, 12),
+    maxModelRequestsPerRun: Math.min(baseLimits.maxModelRequestsPerRun, 8),
+    maxListDirectoryPerRun: 3,
+    maxReadFilePerRun: 8
+  };
+}
+
+// ── Workload profile detection ────────────────────────────────────
+
+function detectWorkloadProfile(objective) {
+  const text = String(objective || '').toLowerCase();
+
+  // Diagnosis: read files to find bugs, test failures, incorrect assertions
+  if (/\b(diagnos|bug|failing test|incorrect assertion|test failure|which test|fix test|broken test)\b/.test(text)) {
+    return 'diagnosis';
+  }
+
+  // Refactor: move, rename, restructure files/folders
+  if (/\b(move|rename|restructur|refactor|reorganize|archive|consolidate)\b/.test(text)) {
+    return 'refactor';
+  }
+
+  // Recommendation: evidence-based improvement plan, top N issues
+  if (/\b(recommend|top [0-9]+|improvement|critical issue|action item|fix plan|roadmap)\b/.test(text)) {
+    return 'recommendation';
+  }
+
+  // Bulk inventory: catalog many directories, list all files, full inventory
+  if (/\b(list all|catalog|inventory|enumerate|all files|all directories|every file|full list)\b/.test(text)) {
+    return 'bulk-inventory';
+  }
+
+  // Report: catch-all for inspection-heavy summary tasks
+  if (/\b(report|summary|synthesis|overview|analysis|status|audit)\b/.test(text)) {
+    return 'report';
+  }
+
+  return null;
+}
+
+function getProfileRuntimeLimits(baseLimits, profileName) {
+  const profile = WORKLOAD_PROFILES[profileName];
+  if (!profile) return baseLimits;
+
+  return {
+    ...baseLimits,
+    maxExecutionSteps: Math.min(baseLimits.maxExecutionSteps, profile.executionStepLimit),
+    maxModelRequestsPerRun: Math.min(baseLimits.maxModelRequestsPerRun, profile.modelRequestLimit),
+    maxWorkspaceOperationsPerRun: Math.min(baseLimits.maxWorkspaceOperationsPerRun, profile.maxWorkspaceOperations),
+    maxListDirectoryPerRun: profile.maxListDirectory,
+    maxReadFilePerRun: profile.maxReadFile,
+    profileName: profile.name,
+    profileDescription: profile.description
+  };
+}
+
+function buildProfileGuidance(objective) {
+  const profileName = detectWorkloadProfile(objective);
+  if (!profileName) return [];
+
+  const profile = WORKLOAD_PROFILES[profileName];
+  if (!profile) return [];
+
+  const lines = [
+    `This ticket matches the "${profile.name}" workload profile: ${profile.description}.`,
+    `Use at most ${profile.maxListDirectory} listDirectory calls total. Use at most ${profile.maxReadFile} readFile calls total.`,
+    `Expected phase pattern: ${profile.expectedPhasePattern}.`
+  ];
+
+  if (profile.finalArtifactRequired) {
+    lines.push('The final response must produce the requested artifact via writeFile.');
+  }
+
+  if (profileName === 'report') {
+    lines.push(
+      'Cite specific file paths you inspected. Do not invent file contents.',
+      'Do not create multiple report files. One report artifact per ticket.'
+    );
+  }
+
+  if (profileName === 'diagnosis') {
+    lines.push(
+      'Focus on identifying the root cause of the bug or test failure.',
+      'Explain why each identified assertion is incorrect with evidence from the source code.'
+    );
+  }
+
+  if (profileName === 'refactor') {
+    lines.push(
+      'This is a workspace organization task. Follow this exact phase progression in your responses:',
+      '  Phase 1 — DISCOVER: listDirectory the relevant directory ONCE. Identify every item that must be moved, renamed, or created. Do not list again in later steps.',
+      '  Phase 2 — MUTATE: Use the discovered entries to emit bounded mutation batches. Do not repeat DISCOVER unless evidence is insufficient. Respect maxMutatingActionsPerResponse. If more mutations remain, continue with the next bounded mutation batch.',
+      '  Phase 3 — VERIFY: listDirectory the affected directories to confirm items are in the correct locations. Check that no items remain at old locations. Verify only after at least one mutation batch has executed.',
+      '  Phase 4 — COMPLETE: Set complete:true only after verification succeeds.',
+      'If no matching items exist at the source, state this clearly and complete after any required createFolder operations.',
+      'If required paths or destinations cannot be determined, fail with an explicit reason. Do not enter a loop of repeated listDirectory calls.'
+    );
+  }
+
+  if (profileName === 'recommendation') {
+    lines.push(
+      'Prioritize the most critical issues. Do not list every minor improvement.',
+      'Link each recommendation to specific evidence from the inspected files.'
+    );
+  }
+
+  if (profileName === 'bulk-inventory') {
+    lines.push(
+      'Avoid listing every subdirectory individually. Group related paths when possible.',
+      'Produce one summary writeFile with the inventory results.'
+    );
+  }
+
+  return lines;
+}
+
 function hasViolationEvidence(runId) {
   return getRunEvents(runId).some(event => event.type === 'run.violation_detected' || event.type === 'authority.denied');
 }
@@ -6438,6 +7562,28 @@ function executeWorkspaceOperation(run, action, step = 0) {
     checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
+
+    // Skip if already committed in this run's ledger
+    const committed = findCommittedMutation(run.id, operation, args);
+    if (committed && committed.result) {
+      appendRunLog(run, 'workspace:create', `Skipped createFolder on ${pathValue} (already committed in run ledger)`, {
+        operation,
+        args: { path: pathValue },
+        status: 'already_exists_noop',
+        kind: 'folder',
+        ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
+      });
+      return { path: pathValue, status: 'already_exists_noop', historyId: committed.id, skipped: true };
+    }
+
+    // Reject if a different mutation already committed on the same path
+    const conflict = findConflictingMutation(run.id, operation, args);
+    if (conflict) {
+      const error = new Error(`Conflicting mutation already committed on ${pathValue}: ${conflict.operation} (historyId: ${conflict.id})`);
+      error.code = 'MUTATION_CONFLICT';
+      throw error;
+    }
+
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
     try {
@@ -6473,6 +7619,27 @@ function executeWorkspaceOperation(run, action, step = 0) {
       blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     }
     assertAgentWorkspacePathAllowed(pathValue);
+
+    // Skip if already committed in this run's ledger
+    const committed = findCommittedMutation(run.id, operation, args);
+    if (committed && committed.result) {
+      appendRunLog(run, 'workspace:write', `Skipped writeFile on ${pathValue} (already committed in run ledger)`, {
+        operation,
+        args: { path: pathValue },
+        status: 'skipped_already_committed',
+        ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
+      });
+      return { ...committed.result, size: committed.result.size || 0, historyId: committed.id, skipped: true };
+    }
+
+    // Reject if a different mutation already committed on the same path
+    const conflict = findConflictingMutation(run.id, operation, args);
+    if (conflict) {
+      const error = new Error(`Conflicting mutation already committed on ${pathValue}: ${conflict.operation} (historyId: ${conflict.id})`);
+      error.code = 'MUTATION_CONFLICT';
+      throw error;
+    }
+
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
     try {
@@ -6504,6 +7671,27 @@ function executeWorkspaceOperation(run, action, step = 0) {
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue, nextPath }, nextPath, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
     assertAgentWorkspacePathAllowed(nextPath);
+
+    // Skip if already committed in this run's ledger
+    const committed = findCommittedMutation(run.id, operation, args);
+    if (committed && committed.result) {
+      appendRunLog(run, 'workspace:rename', `Skipped renamePath from ${pathValue} to ${nextPath} (already committed in run ledger)`, {
+        operation,
+        args: { path: pathValue, nextPath },
+        status: 'already_committed_noop',
+        ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
+      });
+      return { ...committed.result, historyId: committed.id, skipped: true };
+    }
+
+    // Reject if a different mutation already committed on the same path
+    const conflict = findConflictingMutation(run.id, operation, args);
+    if (conflict) {
+      const error = new Error(`Conflicting mutation already committed on ${pathValue}: ${conflict.operation} (historyId: ${conflict.id})`);
+      error.code = 'MUTATION_CONFLICT';
+      throw error;
+    }
+
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
     try {
@@ -6531,6 +7719,27 @@ function executeWorkspaceOperation(run, action, step = 0) {
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
+
+    // Skip if already committed in this run's ledger
+    const committed = findCommittedMutation(run.id, operation, args);
+    if (committed && committed.result) {
+      appendRunLog(run, 'workspace:delete', `Skipped deletePath on ${pathValue} (already committed in run ledger)`, {
+        operation,
+        args: { path: pathValue },
+        status: 'already_committed_noop',
+        ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
+      });
+      return { ...committed.result, historyId: committed.id, skipped: true };
+    }
+
+    // Reject if a different mutation already committed on the same path
+    const conflict = findConflictingMutation(run.id, operation, args);
+    if (conflict) {
+      const error = new Error(`Conflicting mutation already committed on ${pathValue}: ${conflict.operation} (historyId: ${conflict.id})`);
+      error.code = 'MUTATION_CONFLICT';
+      throw error;
+    }
+
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
     try {
@@ -6558,6 +7767,80 @@ function executeWorkspaceOperation(run, action, step = 0) {
   }
 
   throw new Error(`Unsupported workspace operation: ${operation}`);
+}
+
+// ── Deterministic runtime verification ────────────────────────────
+// After executing a bounded operation batch, the runtime verifies structural
+// properties without re-entering the model. Only semantic ambiguity requires
+// model re-entry.
+
+function verifyBatchOperation(run, action, result) {
+  const runWorkspaceProvider = getRunWorkspaceProvider(run);
+  const operation = action && action.operation;
+  const args = action && action.args ? action.args : {};
+  const checks = [];
+
+  if (operation === 'renamePath') {
+    // Source should no longer exist; destination should exist
+    const sourceExists = runWorkspaceProvider.exists(args.path, { allowHidden: true });
+    const destExists = runWorkspaceProvider.exists(args.nextPath, { allowHidden: true });
+    if (sourceExists) {
+      checks.push({ check: 'source_still_exists', path: args.path, severity: 'warning' });
+    }
+    if (!destExists) {
+      checks.push({ check: 'destination_missing', path: args.nextPath, severity: 'error' });
+    }
+  }
+
+  if (operation === 'createFolder') {
+    const folderExists = runWorkspaceProvider.exists(args.path, { allowHidden: true });
+    if (!folderExists) {
+      checks.push({ check: 'folder_missing', path: args.path, severity: 'error' });
+    }
+  }
+
+  if (operation === 'writeFile') {
+    const fileExists = runWorkspaceProvider.exists(args.path, { allowHidden: true });
+    if (!fileExists) {
+      checks.push({ check: 'file_missing', path: args.path, severity: 'error' });
+    } else {
+      // Verify content hash matches expected
+      const actualContent = runWorkspaceProvider.readFile(args.path);
+      const actualHash = hashContent(actualContent);
+      const expectedHash = hashContent(args.content);
+      if (actualHash !== expectedHash) {
+        checks.push({ check: 'content_mismatch', path: args.path, severity: 'error' });
+      }
+    }
+  }
+
+  if (operation === 'deletePath') {
+    const pathExists = runWorkspaceProvider.exists(args.path, { allowHidden: true });
+    if (pathExists) {
+      checks.push({ check: 'path_still_exists', path: args.path, severity: 'error' });
+    }
+  }
+
+  if (checks.length > 0) {
+    appendEvent({
+      type: 'batch.verification_failed',
+      ticketId: run.ticketId,
+      runId: run.id,
+      payload: {
+        operation,
+        path: args.path,
+        nextPath: args.nextPath || null,
+        checks,
+        result: sanitizeSnapshotValue(result)
+      }
+    });
+    recordRunEvent(run, 'batch:verification_failed', `Batch verification failed for ${operation}`, {
+      operation,
+      checks
+    });
+  }
+
+  return checks.length === 0;
 }
 
 function resolveWorkflowReference(expression, context) {
@@ -6962,8 +8245,85 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
   return { status: 'completed', result: context, counters };
 }
 
-function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
-  const allowedOperationList = (runtimeEnvelope.allowedOperations || AGENT_DIRECT_OPERATIONS).join('|');
+function buildPriorFailureContext(ticketId, currentRunId) {
+  const runs = readRuns().filter(r => r.ticketId === ticketId && r.id !== currentRunId);
+  const terminalRuns = runs.filter(r => ['completed', 'failed', 'interrupted'].includes(r.status));
+  if (terminalRuns.length === 0) return null;
+
+  // Only use the most recent prior terminal run
+  const priorRun = terminalRuns.sort((a, b) => {
+    const aTime = a.completedAt || a.updatedAt || a.startedAt || '';
+    const bTime = b.completedAt || b.updatedAt || b.startedAt || '';
+    return aTime.localeCompare(bTime);
+  })[terminalRuns.length - 1];
+
+  if (!priorRun || priorRun.status === 'completed') return null;
+
+  const events = getRunEvents(priorRun.id);
+  const workspaceOps = events.filter(e => e.type === 'workspace.operation');
+  const lastAction = workspaceOps.length > 0 ? workspaceOps[workspaceOps.length - 1].payload?.operation : null;
+  const inspectedFiles = events
+    .filter(e => e.type === 'workspace.operation' && e.payload?.operation === 'readFile')
+    .map(e => e.payload?.path)
+    .filter(Boolean);
+  const uniqueFiles = [...new Set(inspectedFiles)];
+  const mutations = workspaceOps.filter(e =>
+    e.payload?.mutating === true || ['writeFile', 'createFolder', 'renamePath', 'deletePath'].includes(e.payload?.operation)
+  );
+
+  return {
+    priorRunId: priorRun.id,
+    status: priorRun.status,
+    reason: priorRun.error || priorRun.status,
+    lastAction,
+    inspectedFiles: uniqueFiles.slice(0, 8),
+    mutationsCompleted: mutations.length,
+    recoveryClassification: priorRun.status === 'failed' ? 'failed' : priorRun.status === 'interrupted' ? 'interrupted' : 'unknown'
+  };
+}
+
+function buildTransitionGuidance(actionResults) {
+  if (!actionResults || actionResults.length === 0) return [];
+
+  // Filter to actual workspace operations (not warning entries from limit hits)
+  const ops = actionResults.filter(item => item && item.action && item.action.operation);
+  if (ops.length === 0) return [];
+
+  // Check if all were inspection-only
+  const allInspection = ops.every(item => {
+    const op = item.action.operation;
+    return op === 'listDirectory' || op === 'readFile';
+  });
+
+  if (!allInspection) return [];
+
+  // Check if all succeeded (no error in result)
+  const allSuccessful = ops.every(item => {
+    const result = item.result;
+    return result && !result.error;
+  });
+
+  if (!allSuccessful) return [];
+
+  return [
+    'Previous inspection is complete. You already have the directory entries in previousActionResults.',
+    'Do not call listDirectory or readFile again for discovery.',
+    'Use those entries now to emit up to runtimeEnvelope.maxMutatingActionsPerResponse exact mutation operations (createFolder, writeFile, renamePath, deletePath), or fail explicitly if no valid mutation can be determined.'
+  ];
+}
+
+function buildPhaseGatedCatalog(currentPhase, baseAllowedOps) {
+  const ops = PHASE_OPERATIONS[currentPhase] || baseAllowedOps;
+  // Always intersect with base allowed ops (which may exclude workflow/handoff ops)
+  const effectiveOps = ops.filter(op => baseAllowedOps.includes(op));
+  return effectiveOps.length > 0 ? effectiveOps : baseAllowedOps;
+}
+
+function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null) {
+  const baseAllowedOps = runtimeEnvelope.allowedOperations || AGENT_DIRECT_OPERATIONS;
+  const currentPhase = runtimeEnvelope.currentPhase || 'planning';
+  const phaseGatedOps = buildPhaseGatedCatalog(currentPhase, baseAllowedOps);
+  const allowedOperationList = phaseGatedOps.join('|');
   const workflowDraftArgShape = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED
     ? ',"workflow":"for createWorkflowDraft only"'
     : '';
@@ -7005,7 +8365,9 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
         'Emit up to the mutating limit, set complete:false, and continue with the remaining items in the next response.',
         'Do not fail or return an error just because the total task exceeds one response.',
         'For bounded bulk work, perform one small verified transition, then continue with remaining items in later responses.',
-        'Use only the operations listed in runtimeEnvelope.allowedOperations.',
+        'Use only the operations appropriate to your current execution phase, as listed below.',
+        'Your current execution phase is runtimeEnvelope.currentPhase. In this phase, the allowed operations are: ' + phaseGatedOps.join(', ') + '.',
+        'If you already performed inspection (listDirectory or readFile) and are now in the mutation phase, do not emit listDirectory or readFile again unless you are explicitly verifying results.',
         'If the ticket asks to create, draft, define, or repair a simple workflow that writes files, use createWorkflowDraftIntent. Do not perform the workflow output actions directly. Emit exactly one workflow draft action and no writeFile/createFolder/readFile/listDirectory actions for that response.',
         'For workflow draft tickets, creating the disabled draft may satisfy the ticket if the objective was only to create that draft. Executing the workflow output actions directly does not satisfy a workflow draft objective.',
         'createWorkflowDraftIntent is only for flat simple write workflows. Args shape: {"id":"string","name":"string","writes":[{"path":"relative/path","content":"text"}],"postconditions":[{"type":"fileExists","path":"relative/path"},{"type":"fileContains","path":"relative/path","contains":"text"}]}.',
@@ -7016,11 +8378,13 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
         'To hand one bounded write task to another agent, emit createHandoffTask. It executes directly through runtime authority; the executor model will not receive prose or make a model call.',
         'createHandoffTask is only for one writeFile operation to one existing executor. Args shape: {"executor":"agent name","operation":"writeFile","args":{"path":"relative/path.md","content":"exact content"}}. Do not include task descriptions, action lists, branches, or workflow JSON.',
         ...canonicalWorkflowDraftGuidance,
+        ...buildProfileGuidance(ticket.objective),
+        ...buildTransitionGuidance(actionResults),
         'If runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.',
         'If runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.',
         'Each action must be exactly {"operation":"operationName","args":{...}} with no extra fields.',
         'Required args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path "" only for the workspace root in listDirectory.',
-        'createWorkflowDraftIntent args: { "id":"string", "name":"string", "writes":[{"path":"string","content":"string"}], "postconditions":[{"type":"fileExists","path":"string"},{"type":"fileContains","path":"string","contains":"string"}] }.',
+        'createWorkflowDraftIntent args: { "id":"string", "name":"string", "writes":[{"path":"string","content":"string"}],"postconditions":[{"type":"fileExists","path":"string"},{"type":"fileContains","path":"string","contains":"string"}] }.',
         'createHandoffTask args: { "executor":"agent name", "operation":"writeFile", "args":{"path":"relative/path","content":"exact content"} }.',
         'Respond only as JSON with this shape:',
         `{"message":"short summary","actions":[{"operation":"${allowedOperationList}","args":{"path":"relative/path","content":"for writeFile only","nextPath":"for renamePath only"${workflowDraftArgShape},"id":"for createWorkflowDraftIntent","name":"for createWorkflowDraftIntent","writes":"for createWorkflowDraftIntent","postconditions":"for createWorkflowDraftIntent","executor":"for createHandoffTask","operation":"writeFile for createHandoffTask","args":"nested args for createHandoffTask"}}],"complete":true|false}`
@@ -7036,7 +8400,10 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = []) {
       role: 'user',
       content: JSON.stringify({
         ticketObjective: ticket.objective,
-        previousActionResults: actionResults
+        previousActionResults: actionResults,
+        priorFailureContext: actionResults.length === 0 && rerunMode === 'reassess'
+          ? buildPriorFailureContext(ticket.id, runtimeEnvelope.runId)
+          : null
       })
     }
   ];
@@ -7083,6 +8450,7 @@ async function runAgentTicket(runId) {
     allocationItemId: run.allocationItemId || null
   });
   updateTicketInProgressForRun(run);
+  maybeTestInterrupt(run, 'after_run.started');
   let currentProviderRequestPersisted = false;
   let providerConfig = null;
 
@@ -7093,8 +8461,8 @@ async function runAgentTicket(runId) {
     if (!ticket) throw new Error('Ticket not found');
     if (!agent) throw new Error('Agent not found');
     providerConfig = getAgentProviderConfig(agent);
-    const runtimeEnvelope = buildRuntimeEnvelope(run);
-    const initialInput = buildAgentPrompt(ticket, runtimeEnvelope, []);
+    const runtimeEnvelope = buildRuntimeEnvelope(run, 0, ticket.objective);
+    const initialInput = buildAgentPrompt(ticket, runtimeEnvelope, [], run.rerunMode);
     createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
     appendRunLog(run, 'run:runtime', JSON.stringify(runtimeEnvelope));
 
@@ -7148,10 +8516,55 @@ async function runAgentTicket(runId) {
     let lastMutatingActionLimitSignature = null;
     let modelRequestCount = 0;
     let workspaceOperationCount = 0;
+    let listDirectoryCount = 0;
+    let readFileCount = 0;
     const listedDirectoryPaths = new Set();
     let completed = false;
-    const limits = getAgentRuntimeLimits();
+    const limits = getAgentRuntimeLimits(ticket.objective);
     const runStartedAtMs = Date.now();
+
+    // ── Resumable execution check ─────────────────────────────────
+    const beforeEvents = readEvents();
+    const resumeState = reconstructResumableState(run);
+    if (resumeState) {
+      appendRunLog(run, 'run:resume_check', `Resumable state detected: ${resumeState.priorEvents} prior events, execution=${resumeState.safeToResumeExecution}, reconcile=${resumeState.safeToReconcileTerminalState}, unsafe=${resumeState.unsafeToContinue}, nextPhase=${resumeState.expectedNextPhase}`);
+      if (resumeState.unsafeToContinue) {
+        const reason = resumeState.hasDuplicateMutation
+          ? 'Duplicate mutations detected in event log'
+          : 'Hash chain broken';
+        const error = new Error(`Resume denied: ${reason}`);
+        error.code = 'RUN_RESUME_UNSAFE';
+        error.failureKind = 'resume_rejected';
+        error.details = { expectedNextPhase: resumeState.expectedNextPhase, priorEvents: resumeState.priorEvents };
+        throw error;
+      }
+      if (resumeState.safeToReconcileTerminalState) {
+        appendRunLog(run, 'run:resume_reconcile', `Resuming into terminal state reconciliation: ${resumeState.expectedNextPhase}`);
+        reconcileTerminalRun(run);
+        return;
+      }
+      if (resumeState.isTerminal) {
+        appendRunLog(run, 'run:skip_terminal', `Run already in terminal state (legacy)`);
+        return;
+      }
+      if (!resumeState.safeToResumeExecution) {
+        const error = new Error('Resume denied: Authority chain missing for committed mutations');
+        error.code = 'RUN_RESUME_UNSAFE';
+        error.failureKind = 'resume_rejected';
+        error.details = { expectedNextPhase: resumeState.expectedNextPhase, priorEvents: resumeState.priorEvents };
+        throw error;
+      }
+      // Reconstruct execution state from prior events
+      workspaceOperationCount = resumeState.workspaceOperationCount;
+      for (const p of resumeState.listedDirectoryPaths) listedDirectoryPaths.add(p);
+      if (resumeState.currentPhase) {
+        run.currentPhase = resumeState.currentPhase;
+      }
+      if (resumeState.expectedNextPhase === 'terminalization' || resumeState.expectedNextPhase === 'terminalization_or_evaluation' || resumeState.expectedNextPhase === 'consequence' || resumeState.expectedNextPhase === 'snapshot_finalization') {
+        appendRunLog(run, 'run:resume_skip_model', `Resuming into terminalization phase: ${resumeState.expectedNextPhase}`);
+        completed = true; // Skip model loop, go straight to completion
+      }
+    }
 
     for (let step = 0; !completed; step += 1) {
       heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
@@ -7159,6 +8572,11 @@ async function runAgentTicket(runId) {
       assertRunStepAllowed(run, step, limits);
       assertRunModelRequestAllowed(run, modelRequestCount, limits);
 
+      try { 
+        const wsRoot = typeof workspaceProvider.root === 'string' ? workspaceProvider.root : String(workspaceProvider.root); 
+        const fs2 = require('fs');
+      } catch(e) { 
+      }
       const obviousPostcondition = checkObviousTicketPostcondition(ticket);
       if (obviousPostcondition) {
         recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
@@ -7171,8 +8589,8 @@ async function runAgentTicket(runId) {
         break;
       }
 
-      const currentEnvelope = buildRuntimeEnvelope(run, step);
-      const input = buildAgentPrompt(ticket, currentEnvelope, actionResults);
+      const currentEnvelope = buildRuntimeEnvelope(run, step, ticket.objective);
+      const input = buildAgentPrompt(ticket, currentEnvelope, actionResults, run.rerunMode);
       appendRunLog(run, 'model:request', `${providerConfig.provider} request sent with model ${providerConfig.model}`);
       modelRequestCount += 1;
       currentProviderRequestPersisted = false;
@@ -7279,6 +8697,23 @@ async function runAgentTicket(runId) {
           step
         });
 
+        appendEvent({
+          type: 'action.suppressed',
+          ticketId: run.ticketId,
+          runId: run.id,
+          stepId: String(step),
+          payload: {
+            reason: 'mutating_action_limit',
+            proposedCount: actions.length,
+            mutatingCount: mutatingActionCount,
+            limit: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+            repeatedViolationCount: repeatedMutatingActionLimitViolations,
+            droppedActions: actions
+              .filter(a => a && typeof a === 'object' && AGENT_MUTATING_OPERATIONS.includes(a.operation))
+              .map(a => ({ operation: a.operation, path: a.args && a.args.path, nextPath: a.args && a.args.nextPath }))
+          }
+        });
+
         if (repeatedMutatingActionLimitViolations >= 2) {
           const error = createRunLimitError(
             run,
@@ -7301,6 +8736,51 @@ async function runAgentTicket(runId) {
           message: `You returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Retry with at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} createFolder/writeFile/renamePath/deletePath action(s). You may include read/list actions if needed. If more work remains, set complete:false and continue in the next response.`
         }];
         continue;
+      }
+
+      // ── Phase-aware execution enforcement ─────────────────────────
+      const phaseCheck = checkPhaseCompliance(run, actions);
+      if (!phaseCheck.compliant) {
+        recordRunEvent(run, 'execution.phase_violation', phaseCheck.reason, {
+          step,
+          currentPhase: phaseCheck.currentPhase,
+          inferredPhase: phaseCheck.inferredPhase,
+          violationType: phaseCheck.violationType,
+          actions: actions.map(a => ({ operation: a.operation, path: a.args && a.args.path }))
+        });
+        appendEvent({
+          type: 'execution.phase_violation',
+          ticketId: run.ticketId,
+          runId: run.id,
+          stepId: String(step),
+          payload: {
+            currentPhase: phaseCheck.currentPhase,
+            inferredPhase: phaseCheck.inferredPhase,
+            violationType: phaseCheck.violationType,
+            reason: phaseCheck.reason,
+            actions: actions.map(a => ({ operation: a.operation, path: a.args && a.args.path }))
+          }
+        });
+        actionResults = [{
+          warning: 'execution.phase_violation',
+          message: `${phaseCheck.reason}. Current phase is ${phaseCheck.currentPhase}. Actions in this response must all belong to the same allowed phase.`
+        }];
+        continue;
+      }
+      // Advance phase if transitioned
+      if (phaseCheck.inferredPhase && phaseCheck.inferredPhase !== run.currentPhase) {
+        advanceRunPhase(run, phaseCheck.inferredPhase);
+        appendEvent({
+          type: 'execution.phase_transition',
+          ticketId: run.ticketId,
+          runId: run.id,
+          stepId: String(step),
+          payload: {
+            fromPhase: phaseCheck.currentPhase,
+            toPhase: phaseCheck.inferredPhase,
+            reason: 'Inferred from model response actions'
+          }
+        });
       }
 
       if (!modelPlan.complete && actions.length === 0) {
@@ -7351,6 +8831,28 @@ async function runAgentTicket(runId) {
 
           assertRunNotTimedOut(run, runStartedAtMs, limits);
           operation = parseAgentDirectAction(action);
+          assertAgentOperationAllowed(run, agent, operation.operation, step);
+
+          // Report budget limits: listDirectory and readFile
+          if (operation.operation === 'listDirectory' && limits.maxListDirectoryPerRun != null) {
+            listDirectoryCount += 1;
+            if (listDirectoryCount > limits.maxListDirectoryPerRun) {
+              throw createRunLimitError(run, 'operation', `Agent run exceeded listDirectory limit of ${limits.maxListDirectoryPerRun}`, {
+                currentValue: listDirectoryCount,
+                configuredLimit: limits.maxListDirectoryPerRun
+              });
+            }
+          }
+          if (operation.operation === 'readFile' && limits.maxReadFilePerRun != null) {
+            readFileCount += 1;
+            if (readFileCount > limits.maxReadFilePerRun) {
+              throw createRunLimitError(run, 'operation', `Agent run exceeded readFile limit of ${limits.maxReadFilePerRun}`, {
+                currentValue: readFileCount,
+                configuredLimit: limits.maxReadFilePerRun
+              });
+            }
+          }
+
           let result;
           if (operation.operation === 'createWorkflowDraft') {
             result = createWorkflowDraftFromAgent(run, operation.args.workflow, step);
@@ -7360,9 +8862,14 @@ async function runAgentTicket(runId) {
             result = executeHandoffTask(run, operation.args, step);
           } else {
             result = executeWorkspaceOperation(run, action, step);
+            // Deterministic runtime verification for bounded operation batches
+            if (AGENT_MUTATING_OPERATIONS.includes(operation.operation)) {
+              verifyBatchOperation(run, action, result);
+            }
           }
           const opDurationMs = Date.now() - actionStartedAt;
-          if (AGENT_ALLOWED_OPERATIONS.includes(operation.operation) || operation.operation === 'createHandoffTask') workspaceOperationCount += 1;
+          const isResumeSkipped = result && result.skipped === true;
+          if (!isResumeSkipped && (AGENT_ALLOWED_OPERATIONS.includes(operation.operation) || operation.operation === 'createHandoffTask')) workspaceOperationCount += 1;
 
           actionResults.push({ action, result });
           // INVARIANT: Success replay entry shape must remain structurally
@@ -7372,7 +8879,7 @@ async function runAgentTicket(runId) {
           // Downstream consumers (EJS template, test assertions) access
           // item.operation.operation and item.result — any shape change
           // here must be mirrored in the error entry and all consumers.
-          if (AGENT_ALLOWED_OPERATIONS.includes(operation.operation)) {
+          if (!isResumeSkipped && AGENT_ALLOWED_OPERATIONS.includes(operation.operation)) {
             appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
               operation,
               result,
@@ -7399,6 +8906,7 @@ async function runAgentTicket(runId) {
                 result: sanitizeSnapshotValue(result)
               }
             });
+            maybeTestInterrupt(run, 'after_first_workspace.operation');
           }
 
           if (operation.operation === 'createHandoffTask') {
@@ -7532,33 +9040,48 @@ async function runAgentTicket(runId) {
         break;
       }
 
-      if (!modelPlan.complete && !hasMutatingAction && repeatedListPaths.length > 0) {
-        noProgressResponses += 1;
-        const uniqueRepeatedPaths = Array.from(new Set(repeatedListPaths));
-        const message = `Model repeated listDirectory without a write/create/rename/delete action: ${uniqueRepeatedPaths.join(', ')}`;
-        recordRunEvent(run, 'model:no_progress', message, {
-          repeatedListPaths: uniqueRepeatedPaths,
-          step
+      // Bounded operation batch: repeated inspection without mutation is non-progress.
+      // The model must produce exactly one bounded inspection phase, then emit a batch.
+      if (!modelPlan.complete && !hasMutatingAction && actions.length > 0) {
+        // Any inspection-only response (listDirectory, readFile) after prior
+        // inspection is non-progress. The model must emit mutations after
+        // bounded inspection or fail explicitly.
+        const isInspectionOnly = actions.every(a => {
+          const op = a && a.operation;
+          return op === 'listDirectory' || op === 'readFile';
         });
 
-        if (noProgressResponses >= 2) {
-          const error = createRunLimitError(run, 'step', 'Model repeated list-only non-progress twice', {
-            currentValue: noProgressResponses,
-            configuredLimit: 1,
+        if (isInspectionOnly) {
+          noProgressResponses += 1;
+          const uniqueRepeatedPaths = Array.from(new Set(repeatedListPaths));
+          const message = uniqueRepeatedPaths.length > 0
+            ? `Model repeated listDirectory without a write/create/rename/delete action: ${uniqueRepeatedPaths.join(', ')}`
+            : 'Model emitted inspection-only actions without progress after bounded inspection phase';
+          recordRunEvent(run, 'model:no_progress', message, {
+            repeatedListPaths: uniqueRepeatedPaths,
             step,
-            repeatedListPaths: uniqueRepeatedPaths
+            isInspectionOnly: true
           });
-          error.failureKind = 'no_progress';
-          throw error;
-        }
 
-        const remainingSteps = limits.maxExecutionSteps - step - 1;
-        actionResults = [{
-          warning: 'model:no_progress',
-          repeatedListPaths: uniqueRepeatedPaths,
-          message: `You repeated listDirectory without progress. You have ${remainingSteps} remaining execution step(s). Perform the next required createFolder, writeFile, renamePath, or deletePath operation now, or fail explicitly with a reason.`
-        }];
-        continue;
+          if (noProgressResponses >= 2) {
+            const error = createRunLimitError(run, 'step', 'Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.', {
+              currentValue: noProgressResponses,
+              configuredLimit: 1,
+              step,
+              repeatedListPaths: uniqueRepeatedPaths
+            });
+            error.failureKind = 'no_progress';
+            throw error;
+          }
+
+          const remainingSteps = limits.maxExecutionSteps - step - 1;
+          actionResults.push({
+            warning: 'model:no_progress',
+            repeatedListPaths: uniqueRepeatedPaths,
+            message: `You emitted inspection-only actions without progress. Bounded inspection must be followed by exactly one bounded operation batch (createFolder, writeFile, renamePath, deletePath). You have ${remainingSteps} remaining execution step(s). Emit the required batch now or fail explicitly with a reason.`
+          });
+          continue;
+        }
       }
 
       const postcondition = checkPostconditionCompletion(run, actions, actionResults, step);
@@ -7755,6 +9278,10 @@ function createLocalWorkspaceProvider(root) {
       }
 
       try {
+        const parentDir = path.dirname(resolved.resolvedPath);
+        if (!fs.existsSync(parentDir)) {
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
         fs.writeFileSync(resolved.resolvedPath, String(content || ''), 'utf8');
       } catch (error) {
         throw createStructuredWorkspaceFsError(error, 'writeFile', resolved.relativePath);
@@ -8498,11 +10025,12 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
     return { error: 'Invalid ticket id' };
   }
 
+  const mode = request.body && request.body.mode === 'reassess' ? 'reassess' : 'retry';
   const changedBy = request.user ? request.user.username : 'operator';
   let ticket = null;
 
   try {
-    ticket = rerunTicketFromBeginning(ticketId, changedBy);
+    ticket = rerunTicketFromBeginning(ticketId, changedBy, mode);
   } catch (error) {
     appendSystemLog('allocation:setup_failed', error.message, null, {
       code: error.code || 'VALIDATION_ERROR',

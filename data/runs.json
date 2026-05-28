@@ -58,7 +58,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 2,
@@ -119,7 +120,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 3,
@@ -180,7 +182,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 4,
@@ -241,7 +244,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 5,
@@ -302,7 +306,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 6,
@@ -363,7 +368,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 7,
@@ -424,7 +430,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 8,
@@ -484,7 +491,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 9,
@@ -536,7 +544,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 10,
@@ -598,7 +607,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 11,
@@ -660,7 +670,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 12,
@@ -722,7 +733,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 13,
@@ -790,7 +802,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 14,
@@ -848,7 +861,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 15,
@@ -906,7 +920,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 16,
@@ -964,7 +979,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 17,
@@ -1030,7 +1046,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 18,
@@ -1086,7 +1103,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 19,
@@ -1142,7 +1160,8 @@
     "currentWorkflowAction": null,
     "lastHeartbeatAt": null,
     "runEvaluation": null,
-    "runConsequence": null
+    "runConsequence": null,
+    "currentPhase": "planning"
   },
   {
     "id": 20,
@@ -1226,7 +1245,8 @@
     "startedAt": "2026-05-26T04:30:52.753Z",
     "completedAt": "2026-05-26T04:32:42.371Z",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 21,
@@ -1310,7 +1330,8 @@
     "startedAt": "2026-05-26T04:33:05.971Z",
     "completedAt": "2026-05-26T04:34:53.880Z",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 22,
@@ -1405,7 +1426,8 @@
     "completedAt": "2026-05-26T04:38:23.099Z",
     "error": "Agent run exceeded runtime duration limit of 180000ms",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 23,
@@ -1515,7 +1537,8 @@
     "startedAt": "2026-05-26T04:51:11.139Z",
     "completedAt": "2026-05-26T04:52:44.963Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 24,
@@ -1636,7 +1659,8 @@
     "completedAt": "2026-05-26T05:01:39.850Z",
     "error": "Agent run exceeded runtime duration limit of 180000ms",
     "mutationCount": 1,
-    "mutationOutcome": "partial_mutations"
+    "mutationOutcome": "partial_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 25,
@@ -1757,7 +1781,8 @@
     "completedAt": "2026-05-26T05:05:09.509Z",
     "error": "Agent run exceeded runtime duration limit of 180000ms",
     "mutationCount": 1,
-    "mutationOutcome": "partial_mutations"
+    "mutationOutcome": "partial_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 26,
@@ -1841,7 +1866,8 @@
     "startedAt": "2026-05-26T05:05:46.678Z",
     "completedAt": "2026-05-26T05:07:49.028Z",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 27,
@@ -1936,7 +1962,8 @@
     "completedAt": "2026-05-26T16:00:51.745Z",
     "error": "Agent run exceeded runtime duration limit of 180000ms",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 28,
@@ -2057,7 +2084,8 @@
     "completedAt": "2026-05-26T16:09:41.413Z",
     "error": "Agent run exceeded runtime duration limit of 180000ms",
     "mutationCount": 1,
-    "mutationOutcome": "partial_mutations"
+    "mutationOutcome": "partial_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 29,
@@ -2152,7 +2180,8 @@
     "completedAt": "2026-05-26T16:31:44.277Z",
     "error": "Agent run exceeded runtime duration limit of 180000ms",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 30,
@@ -2262,7 +2291,8 @@
     "startedAt": "2026-05-26T16:34:06.374Z",
     "completedAt": "2026-05-26T16:34:11.241Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 31,
@@ -2372,7 +2402,8 @@
     "startedAt": "2026-05-26T17:25:30.123Z",
     "completedAt": "2026-05-26T17:25:39.786Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 32,
@@ -2482,7 +2513,8 @@
     "startedAt": "2026-05-26T17:28:35.176Z",
     "completedAt": "2026-05-26T17:28:46.347Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 33,
@@ -2566,7 +2598,8 @@
     "startedAt": "2026-05-26T17:29:19.736Z",
     "completedAt": "2026-05-26T17:30:42.392Z",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 34,
@@ -2676,7 +2709,8 @@
     "startedAt": "2026-05-26T17:33:23.660Z",
     "completedAt": "2026-05-26T17:33:26.013Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 35,
@@ -2786,7 +2820,8 @@
     "startedAt": "2026-05-26T17:33:59.215Z",
     "completedAt": "2026-05-26T17:35:18.808Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 36,
@@ -2896,7 +2931,8 @@
     "startedAt": "2026-05-26T18:09:05.095Z",
     "completedAt": "2026-05-26T18:09:07.977Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 37,
@@ -3006,7 +3042,8 @@
     "startedAt": "2026-05-26T18:24:33.186Z",
     "completedAt": "2026-05-26T18:24:37.332Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 38,
@@ -3116,7 +3153,8 @@
     "startedAt": "2026-05-26T18:32:24.810Z",
     "completedAt": "2026-05-26T18:32:27.766Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 39,
@@ -3226,7 +3264,8 @@
     "startedAt": "2026-05-26T18:33:08.910Z",
     "completedAt": "2026-05-26T18:33:11.698Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 40,
@@ -3336,7 +3375,8 @@
     "startedAt": "2026-05-26T18:33:44.467Z",
     "completedAt": "2026-05-26T18:33:46.484Z",
     "mutationCount": 1,
-    "mutationOutcome": "all_intended"
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
   },
   {
     "id": 41,
@@ -3430,7 +3470,8 @@
     "completedAt": "2026-05-26T18:45:54.352Z",
     "error": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 42,
@@ -3524,7 +3565,8 @@
     "completedAt": "2026-05-26T18:54:12.067Z",
     "error": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 43,
@@ -3618,7 +3660,8 @@
     "completedAt": "2026-05-26T19:00:04.970Z",
     "error": "Run lease expired for owner 3928582:e31ae137-eeba-42b0-8629-1662c61c1388",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 44,
@@ -3713,7 +3756,8 @@
     "completedAt": "2026-05-26T19:08:22.512Z",
     "error": "Agent run exceeded runtime duration limit of 120000ms",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 45,
@@ -3807,7 +3851,8 @@
     "completedAt": "2026-05-26T19:08:39.835Z",
     "error": "admin closed ticket #40",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 46,
@@ -3902,7 +3947,8 @@
     "completedAt": "2026-05-26T19:11:53.459Z",
     "error": "Agent run exceeded runtime duration limit of 120000ms",
     "mutationCount": 0,
-    "mutationOutcome": "no_mutations"
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
   },
   {
     "id": 47,
@@ -3996,6 +4042,4714 @@
     "startedAt": "2026-05-26T19:12:24.994Z",
     "completedAt": "2026-05-26T19:14:25.016Z",
     "error": "Agent run exceeded runtime duration limit of 120000ms",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 48,
+    "ticketId": 43,
+    "agentId": 6,
+    "agentName": "WALTestAgent-1779914899146",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4072332:fe312e3c-3f6a-4aaf-aaf9-f663325221dc",
+    "leaseExpiresAt": "2026-05-27T20:51:19.935Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T20:48:19.935Z",
+    "status": "interrupted",
+    "ticketOpenedAt": "2026-05-27T20:48:19.616Z",
+    "createdAt": "2026-05-27T20:48:19.617Z",
+    "updatedAt": "2026-05-27T20:51:20.435Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Run lease expired for owner 4072332:fe312e3c-3f6a-4aaf-aaf9-f663325221dc"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 180560,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 10,
+          "maxWorkspaceOperationsPerRun": 10,
+          "maxModelRequestsPerRun": 10,
+          "maxRuntimeDurationMs": 10000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-48.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "interrupted",
+      "failureReason": "Run lease expired for owner 4072332:fe312e3c-3f6a-4aaf-aaf9-f663325221dc",
+      "failure": {
+        "code": "RUN_INTERRUPTED",
+        "kind": "interrupted",
+        "detail": {
+          "reason": "Run lease expired for owner 4072332:fe312e3c-3f6a-4aaf-aaf9-f663325221dc",
+          "phase": "after_workspace_operation"
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-27T20:51:20.438Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T20:48:19.875Z",
+    "completedAt": "2026-05-27T20:51:20.435Z",
+    "error": "Run lease expired for owner 4072332:fe312e3c-3f6a-4aaf-aaf9-f663325221dc",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 49,
+    "ticketId": 42,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4084796:76384a46-34b4-4d4a-b3b4-c789abc00fa9",
+    "leaseExpiresAt": "2026-05-27T21:43:52.886Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T21:40:52.886Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-27T21:40:52.644Z",
+    "createdAt": "2026-05-27T21:40:52.650Z",
+    "updatedAt": "2026-05-27T21:40:53.680Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "model requires more system memory (4.0 GiB) than is available (2.4 GiB)"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 828,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 1
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-49.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "model requires more system memory (4.0 GiB) than is available (2.4 GiB)",
+      "failure": {
+        "code": "OLLAMA_HTTP_ERROR",
+        "kind": "provider_error",
+        "detail": {
+          "phase": "response_status",
+          "provider": "ollama",
+          "status": 500,
+          "requestId": null
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-27T21:40:53.689Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T21:40:52.852Z",
+    "completedAt": "2026-05-27T21:40:53.680Z",
+    "error": "model requires more system memory (4.0 GiB) than is available (2.4 GiB)",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 50,
+    "ticketId": 42,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4085765:4252cefe-896f-4f03-8b2c-86c55a283386",
+    "leaseExpiresAt": "2026-05-27T21:46:35.534Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T21:43:35.534Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-27T21:43:35.453Z",
+    "createdAt": "2026-05-27T21:43:35.469Z",
+    "updatedAt": "2026-05-27T21:45:08.544Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Hidden and system paths are not allowed"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 93048,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 1,
+        "mutationCount": 0,
+        "retryCount": 2
+      },
+      "violations": {
+        "status": "present",
+        "items": [
+          {
+            "id": "23ff492a-f3fe-4a62-8eb8-c3fb12c165fa",
+            "ts": "2026-05-27T21:45:08.588768858Z",
+            "type": "run.violation_detected",
+            "ticketId": 42,
+            "runId": 50,
+            "stepId": null,
+            "payload": {
+              "rule": "authority_blocked",
+              "operation": "createFolder",
+              "path": "./",
+              "pathRole": "path",
+              "source": {
+                "type": "replay.workspaceOperations",
+                "index": 0,
+                "historyId": null
+              }
+            }
+          }
+        ]
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "createFolder",
+          "path": "./",
+          "evidence": {
+            "type": "replay.workspaceOperations",
+            "index": 0,
+            "blocked": true,
+            "error": "Hidden and system paths are not allowed"
+          },
+          "attempted": true
+        },
+        {
+          "operation": "createFolder",
+          "path": "./",
+          "evidence": {
+            "type": "event.workspace.operation",
+            "id": "916c3fee-3297-4b54-88ed-d4f5d1a4020b",
+            "stepId": "0",
+            "blocked": true,
+            "error": "Hidden and system paths are not allowed"
+          },
+          "attempted": true
+        }
+      ],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "present"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-50.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Hidden and system paths are not allowed",
+      "failure": {
+        "code": "WORKSPACE_HIDDEN_PATH",
+        "kind": "protected_path",
+        "detail": {
+          "path": "./"
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-27T21:45:08.546Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 1,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": true,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T21:43:35.496Z",
+    "completedAt": "2026-05-27T21:45:08.544Z",
+    "error": "Hidden and system paths are not allowed",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 51,
+    "ticketId": 42,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4085765:4252cefe-896f-4f03-8b2c-86c55a283386",
+    "leaseExpiresAt": "2026-05-27T21:50:34.858Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T21:47:34.858Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-27T21:46:03.457Z",
+    "createdAt": "2026-05-27T21:46:03.462Z",
+    "updatedAt": "2026-05-27T21:48:03.801Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded runtime duration limit of 120000ms"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 120031,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 1,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 3
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-51.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded runtime duration limit of 120000ms",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "timeout",
+        "detail": {
+          "limitType": "timeout",
+          "currentValue": 120003,
+          "configuredLimit": 120000
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-27T21:48:03.833Z",
+      "continuationOf": null,
+      "steps": 1,
+      "workspaceOperations": 0,
+      "providerRequests": 2,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T21:46:03.770Z",
+    "completedAt": "2026-05-27T21:48:03.801Z",
+    "error": "Agent run exceeded runtime duration limit of 120000ms",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 52,
+    "ticketId": 44,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4085765:4252cefe-896f-4f03-8b2c-86c55a283386",
+    "leaseExpiresAt": "2026-05-27T21:53:55.963Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T21:50:55.963Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-27T21:50:52.199Z",
+    "createdAt": "2026-05-27T21:50:52.199Z",
+    "updatedAt": "2026-05-27T21:50:57.278Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 5017,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 3,
+        "mutationCount": 2,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "1.txt",
+          "nextPath": null,
+          "historyId": 30,
+          "step": 1,
+          "timestamp": "2026-05-27T21:50:57.267558143Z",
+          "result": {
+            "path": "1.txt"
+          },
+          "type": "file"
+        },
+        {
+          "operation": "writeFile",
+          "path": "2.txt",
+          "nextPath": null,
+          "historyId": 31,
+          "step": 1,
+          "timestamp": "2026-05-27T21:50:57.275752455Z",
+          "result": {
+            "path": "2.txt"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "1.txt",
+          "nextPath": null,
+          "historyId": 30,
+          "step": 1,
+          "timestamp": "2026-05-27T21:50:57.267558143Z",
+          "result": {
+            "path": "1.txt"
+          },
+          "type": "file"
+        },
+        {
+          "operation": "writeFile",
+          "path": "2.txt",
+          "nextPath": null,
+          "historyId": 31,
+          "step": 1,
+          "timestamp": "2026-05-27T21:50:57.275752455Z",
+          "result": {
+            "path": "2.txt"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-52.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 2,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-27T21:50:57.279Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 3,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T21:50:52.261Z",
+    "completedAt": "2026-05-27T21:50:57.278Z",
+    "mutationCount": 2,
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 53,
+    "ticketId": 45,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4085765:4252cefe-896f-4f03-8b2c-86c55a283386",
+    "leaseExpiresAt": "2026-05-27T22:25:27.232Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T22:22:27.232Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-27T22:22:11.438Z",
+    "createdAt": "2026-05-27T22:22:11.439Z",
+    "updatedAt": "2026-05-27T22:22:27.236Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded execution step limit of 4"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 15337,
+        "workflowSteps": 0,
+        "providerRequests": 4,
+        "modelResponses": 4,
+        "workspaceOperations": 15,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-53.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded execution step limit of 4",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "budget_exhausted",
+        "detail": {
+          "limitType": "step",
+          "currentValue": 4,
+          "configuredLimit": 4
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-27T22:22:27.237Z",
+      "continuationOf": null,
+      "steps": 4,
+      "workspaceOperations": 15,
+      "providerRequests": 4,
+      "modelResponses": 4,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T22:22:11.899Z",
+    "completedAt": "2026-05-27T22:22:27.236Z",
+    "error": "Agent run exceeded execution step limit of 4",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 54,
+    "ticketId": 45,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4089474:167680e2-6b40-4669-a9c4-bb2256731c46",
+    "leaseExpiresAt": "2026-05-27T22:35:37.022Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T22:32:37.022Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-27T22:32:29.367Z",
+    "createdAt": "2026-05-27T22:32:29.373Z",
+    "updatedAt": "2026-05-27T22:32:41.366Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "ENOENT: no such file or directory, open '/home/timcis/Desktop/Codex/ticket-system/workspace-root/reports/workspace-status-report.md'"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 11685,
+        "workflowSteps": 0,
+        "providerRequests": 4,
+        "modelResponses": 4,
+        "workspaceOperations": 11,
+        "mutationCount": 0,
+        "retryCount": 1
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "reports/workspace-status-report.md",
+          "evidence": {
+            "type": "replay.workspaceOperations",
+            "index": 10,
+            "blocked": false,
+            "error": "ENOENT: no such file or directory, open '/home/timcis/Desktop/Codex/ticket-system/workspace-root/reports/workspace-status-report.md'"
+          },
+          "attempted": true
+        },
+        {
+          "operation": "writeFile",
+          "path": "reports/workspace-status-report.md",
+          "evidence": {
+            "type": "event.workspace.operation",
+            "id": "22f2e3fd-d9d8-46bc-9dfb-ad745dbe8cb2",
+            "stepId": "3",
+            "blocked": false,
+            "error": "ENOENT: no such file or directory, open '/home/timcis/Desktop/Codex/ticket-system/workspace-root/reports/workspace-status-report.md'"
+          },
+          "attempted": true
+        }
+      ],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-54.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "ENOENT: no such file or directory, open '/home/timcis/Desktop/Codex/ticket-system/workspace-root/reports/workspace-status-report.md'",
+      "failure": {
+        "code": "WORKSPACE_FS_ENOENT",
+        "kind": "workspace_error",
+        "detail": {
+          "operation": "writeFile",
+          "path": "reports/workspace-status-report.md",
+          "parentPath": "reports",
+          "fsCode": "ENOENT"
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-27T22:32:41.367Z",
+      "continuationOf": null,
+      "steps": 4,
+      "workspaceOperations": 11,
+      "providerRequests": 4,
+      "modelResponses": 4,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T22:32:29.681Z",
+    "completedAt": "2026-05-27T22:32:41.366Z",
+    "error": "ENOENT: no such file or directory, open '/home/timcis/Desktop/Codex/ticket-system/workspace-root/reports/workspace-status-report.md'",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 55,
+    "ticketId": 46,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4089474:167680e2-6b40-4669-a9c4-bb2256731c46",
+    "leaseExpiresAt": "2026-05-27T22:38:40.165Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T22:35:40.165Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-27T22:35:29.860Z",
+    "createdAt": "2026-05-27T22:35:29.861Z",
+    "updatedAt": "2026-05-27T22:35:48.387Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 18416,
+        "workflowSteps": 0,
+        "providerRequests": 4,
+        "modelResponses": 4,
+        "workspaceOperations": 8,
+        "mutationCount": 2,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "createFolder",
+          "path": "reports",
+          "nextPath": null,
+          "historyId": 33,
+          "step": 1,
+          "timestamp": "2026-05-27T22:35:35.925793803Z",
+          "result": {
+            "path": "reports",
+            "status": "created"
+          },
+          "type": "folder"
+        },
+        {
+          "operation": "writeFile",
+          "path": "reports/workspace-status-report.md",
+          "nextPath": null,
+          "historyId": 34,
+          "step": 3,
+          "timestamp": "2026-05-27T22:35:48.373683496Z",
+          "result": {
+            "path": "reports/workspace-status-report.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "createFolder",
+          "path": "reports",
+          "nextPath": null,
+          "historyId": 33,
+          "step": 1,
+          "timestamp": "2026-05-27T22:35:35.925793803Z",
+          "result": {
+            "path": "reports",
+            "status": "created"
+          },
+          "type": "folder"
+        },
+        {
+          "operation": "writeFile",
+          "path": "reports/workspace-status-report.md",
+          "nextPath": null,
+          "historyId": 34,
+          "step": 3,
+          "timestamp": "2026-05-27T22:35:48.373683496Z",
+          "result": {
+            "path": "reports/workspace-status-report.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-55.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 2,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-27T22:35:48.390Z",
+      "continuationOf": null,
+      "steps": 4,
+      "workspaceOperations": 8,
+      "providerRequests": 4,
+      "modelResponses": 4,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T22:35:29.971Z",
+    "completedAt": "2026-05-27T22:35:48.387Z",
+    "mutationCount": 2,
+    "mutationOutcome": "all_intended",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 56,
+    "ticketId": 47,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4089474:167680e2-6b40-4669-a9c4-bb2256731c46",
+    "leaseExpiresAt": "2026-05-27T22:41:02.583Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T22:38:02.583Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-27T22:37:52.657Z",
+    "createdAt": "2026-05-27T22:37:52.658Z",
+    "updatedAt": "2026-05-27T22:38:04.348Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated list-only non-progress twice"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 11603,
+        "workflowSteps": 0,
+        "providerRequests": 4,
+        "modelResponses": 4,
+        "workspaceOperations": 3,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-56.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated list-only non-progress twice",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 3,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-27T22:38:04.351Z",
+      "continuationOf": null,
+      "steps": 4,
+      "workspaceOperations": 3,
+      "providerRequests": 4,
+      "modelResponses": 4,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T22:37:52.745Z",
+    "completedAt": "2026-05-27T22:38:04.348Z",
+    "error": "Model repeated list-only non-progress twice",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 57,
+    "ticketId": 48,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4089474:167680e2-6b40-4669-a9c4-bb2256731c46",
+    "leaseExpiresAt": "2026-05-27T22:43:59.568Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T22:40:59.568Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-27T22:40:51.242Z",
+    "createdAt": "2026-05-27T22:40:51.243Z",
+    "updatedAt": "2026-05-27T22:40:59.577Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded model request limit of 4"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 8106,
+        "workflowSteps": 0,
+        "providerRequests": 4,
+        "modelResponses": 4,
+        "workspaceOperations": 6,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-57.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded model request limit of 4",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "budget_exhausted",
+        "detail": {
+          "limitType": "model_request",
+          "currentValue": 4,
+          "configuredLimit": 4
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-27T22:40:59.578Z",
+      "continuationOf": null,
+      "steps": 4,
+      "workspaceOperations": 6,
+      "providerRequests": 4,
+      "modelResponses": 4,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T22:40:51.471Z",
+    "completedAt": "2026-05-27T22:40:59.577Z",
+    "error": "Agent run exceeded model request limit of 4",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 58,
+    "ticketId": 48,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4089885:5ebe5b2a-fadf-4e49-a829-22c2cba84ce6",
+    "leaseExpiresAt": "2026-05-27T22:46:15.389Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T22:43:15.389Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-27T22:43:08.005Z",
+    "createdAt": "2026-05-27T22:43:08.010Z",
+    "updatedAt": "2026-05-27T22:43:16.695Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 1,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 8584,
+        "workflowSteps": 0,
+        "providerRequests": 4,
+        "modelResponses": 4,
+        "workspaceOperations": 5,
+        "mutationCount": 0,
+        "retryCount": 1
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-58.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-27T22:43:16.697Z",
+      "continuationOf": null,
+      "steps": 4,
+      "workspaceOperations": 5,
+      "providerRequests": 4,
+      "modelResponses": 4,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": true
+    },
+    "startedAt": "2026-05-27T22:43:08.111Z",
+    "completedAt": "2026-05-27T22:43:16.695Z",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 59,
+    "ticketId": 47,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "leaseOwner": "4089885:5ebe5b2a-fadf-4e49-a829-22c2cba84ce6",
+    "leaseExpiresAt": "2026-05-27T22:48:05.461Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-27T22:45:05.461Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-27T22:44:16.657Z",
+    "createdAt": "2026-05-27T22:44:16.659Z",
+    "updatedAt": "2026-05-27T22:45:05.471Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded execution step limit of 12 The model performed 12 successful workspace mutations but did not signal completion before the limit was reached."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 48554,
+        "workflowSteps": 0,
+        "providerRequests": 12,
+        "modelResponses": 12,
+        "workspaceOperations": 18,
+        "mutationCount": 12,
+        "retryCount": 1
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "deletePath",
+          "path": "mike-simple",
+          "nextPath": null,
+          "historyId": 37,
+          "step": 1,
+          "timestamp": "2026-05-27T22:44:22.066743790Z",
+          "result": {
+            "path": "mike-simple",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "postcondition-overlap-fixed-20260524-0622",
+          "nextPath": null,
+          "historyId": 38,
+          "step": 1,
+          "timestamp": "2026-05-27T22:44:22.087771852Z",
+          "result": {
+            "path": "postcondition-overlap-fixed-20260524-0622",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "1.txt",
+          "nextPath": null,
+          "historyId": 39,
+          "step": 3,
+          "timestamp": "2026-05-27T22:44:31.106799546Z",
+          "result": {
+            "path": "1.txt",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "2.txt",
+          "nextPath": null,
+          "historyId": 40,
+          "step": 3,
+          "timestamp": "2026-05-27T22:44:31.130975170Z",
+          "result": {
+            "path": "2.txt",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "postcondition-patch-20260524-0620",
+          "nextPath": null,
+          "historyId": 41,
+          "step": 5,
+          "timestamp": "2026-05-27T22:44:35.182355090Z",
+          "result": {
+            "path": "postcondition-patch-20260524-0620",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "recheck-queue-two-20260524",
+          "nextPath": null,
+          "historyId": 42,
+          "step": 5,
+          "timestamp": "2026-05-27T22:44:35.213221814Z",
+          "result": {
+            "path": "recheck-queue-two-20260524",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "agent1-repair-recommendation.md",
+          "nextPath": null,
+          "historyId": 43,
+          "step": 7,
+          "timestamp": "2026-05-27T22:44:53.211893104Z",
+          "result": {
+            "path": "agent1-repair-recommendation.md",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "banana.txt",
+          "nextPath": null,
+          "historyId": 44,
+          "step": 7,
+          "timestamp": "2026-05-27T22:44:53.236639054Z",
+          "result": {
+            "path": "banana.txt",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "recheck-satisfied-20260524-0551",
+          "nextPath": null,
+          "historyId": 45,
+          "step": 9,
+          "timestamp": "2026-05-27T22:44:58.738302124Z",
+          "result": {
+            "path": "recheck-satisfied-20260524-0551",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "reports",
+          "nextPath": null,
+          "historyId": 46,
+          "step": 9,
+          "timestamp": "2026-05-27T22:44:58.764901849Z",
+          "result": {
+            "path": "reports",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "test-folder-2",
+          "nextPath": null,
+          "historyId": 47,
+          "step": 11,
+          "timestamp": "2026-05-27T22:45:05.419933892Z",
+          "result": {
+            "path": "test-folder-2",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "wal-test-dir",
+          "nextPath": null,
+          "historyId": 48,
+          "step": 11,
+          "timestamp": "2026-05-27T22:45:05.447815970Z",
+          "result": {
+            "path": "wal-test-dir",
+            "status": "deleted"
+          }
+        }
+      ],
+      "created": [],
+      "updated": [],
+      "deleted": [
+        {
+          "operation": "deletePath",
+          "path": "mike-simple",
+          "nextPath": null,
+          "historyId": 37,
+          "step": 1,
+          "timestamp": "2026-05-27T22:44:22.066743790Z",
+          "result": {
+            "path": "mike-simple",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "postcondition-overlap-fixed-20260524-0622",
+          "nextPath": null,
+          "historyId": 38,
+          "step": 1,
+          "timestamp": "2026-05-27T22:44:22.087771852Z",
+          "result": {
+            "path": "postcondition-overlap-fixed-20260524-0622",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "1.txt",
+          "nextPath": null,
+          "historyId": 39,
+          "step": 3,
+          "timestamp": "2026-05-27T22:44:31.106799546Z",
+          "result": {
+            "path": "1.txt",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "2.txt",
+          "nextPath": null,
+          "historyId": 40,
+          "step": 3,
+          "timestamp": "2026-05-27T22:44:31.130975170Z",
+          "result": {
+            "path": "2.txt",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "postcondition-patch-20260524-0620",
+          "nextPath": null,
+          "historyId": 41,
+          "step": 5,
+          "timestamp": "2026-05-27T22:44:35.182355090Z",
+          "result": {
+            "path": "postcondition-patch-20260524-0620",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "recheck-queue-two-20260524",
+          "nextPath": null,
+          "historyId": 42,
+          "step": 5,
+          "timestamp": "2026-05-27T22:44:35.213221814Z",
+          "result": {
+            "path": "recheck-queue-two-20260524",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "agent1-repair-recommendation.md",
+          "nextPath": null,
+          "historyId": 43,
+          "step": 7,
+          "timestamp": "2026-05-27T22:44:53.211893104Z",
+          "result": {
+            "path": "agent1-repair-recommendation.md",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "banana.txt",
+          "nextPath": null,
+          "historyId": 44,
+          "step": 7,
+          "timestamp": "2026-05-27T22:44:53.236639054Z",
+          "result": {
+            "path": "banana.txt",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "recheck-satisfied-20260524-0551",
+          "nextPath": null,
+          "historyId": 45,
+          "step": 9,
+          "timestamp": "2026-05-27T22:44:58.738302124Z",
+          "result": {
+            "path": "recheck-satisfied-20260524-0551",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "reports",
+          "nextPath": null,
+          "historyId": 46,
+          "step": 9,
+          "timestamp": "2026-05-27T22:44:58.764901849Z",
+          "result": {
+            "path": "reports",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "test-folder-2",
+          "nextPath": null,
+          "historyId": 47,
+          "step": 11,
+          "timestamp": "2026-05-27T22:45:05.419933892Z",
+          "result": {
+            "path": "test-folder-2",
+            "status": "deleted"
+          }
+        },
+        {
+          "operation": "deletePath",
+          "path": "wal-test-dir",
+          "nextPath": null,
+          "historyId": 48,
+          "step": 11,
+          "timestamp": "2026-05-27T22:45:05.447815970Z",
+          "result": {
+            "path": "wal-test-dir",
+            "status": "deleted"
+          }
+        }
+      ],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-59.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded execution step limit of 12 The model performed 12 successful workspace mutations but did not signal completion before the limit was reached.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "budget_exhausted",
+        "detail": {
+          "limitType": "step",
+          "currentValue": 12,
+          "configuredLimit": 12
+        }
+      },
+      "mutationCount": 12,
+      "mutationOutcome": "partial_mutations",
+      "finalizedAt": "2026-05-27T22:45:05.473Z",
+      "continuationOf": null,
+      "steps": 12,
+      "workspaceOperations": 18,
+      "providerRequests": 12,
+      "modelResponses": 12,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-27T22:44:16.917Z",
+    "completedAt": "2026-05-27T22:45:05.471Z",
+    "error": "Agent run exceeded execution step limit of 12 The model performed 12 successful workspace mutations but did not signal completion before the limit was reached.",
+    "mutationCount": 12,
+    "mutationOutcome": "partial_mutations",
+    "currentPhase": "planning"
+  },
+  {
+    "id": 60,
+    "ticketId": 49,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "inspection",
+    "leaseOwner": "4113348:f4e5d4dd-93f9-4d8d-8d44-da2907c5de13",
+    "leaseExpiresAt": "2026-05-28T01:48:19.482Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T01:45:19.482Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T01:45:16.787Z",
+    "createdAt": "2026-05-28T01:45:16.788Z",
+    "updatedAt": "2026-05-28T01:45:23.718Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded listDirectory limit of 3"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 6583,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 4,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-60.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded listDirectory limit of 3",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "budget_exhausted",
+        "detail": {
+          "limitType": "operation",
+          "currentValue": 4,
+          "configuredLimit": 3
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T01:45:23.720Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 4,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T01:45:17.135Z",
+    "completedAt": "2026-05-28T01:45:23.718Z",
+    "error": "Agent run exceeded listDirectory limit of 3",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 61,
+    "ticketId": 50,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "planning",
+    "leaseOwner": "4113348:f4e5d4dd-93f9-4d8d-8d44-da2907c5de13",
+    "leaseExpiresAt": "2026-05-28T01:48:32.255Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T01:45:32.255Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T01:45:31.731Z",
+    "createdAt": "2026-05-28T01:45:31.732Z",
+    "updatedAt": "2026-05-28T01:45:33.452Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "model requires more system memory (4.0 GiB) than is available (1.5 GiB)"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 1247,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-61.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "model requires more system memory (4.0 GiB) than is available (1.5 GiB)",
+      "failure": {
+        "code": "OLLAMA_HTTP_ERROR",
+        "kind": "provider_error",
+        "detail": {
+          "phase": "response_status",
+          "provider": "ollama",
+          "status": 500,
+          "requestId": null
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T01:45:33.454Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T01:45:32.205Z",
+    "completedAt": "2026-05-28T01:45:33.452Z",
+    "error": "model requires more system memory (4.0 GiB) than is available (1.5 GiB)",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 62,
+    "ticketId": 51,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "mutation",
+    "leaseOwner": "4113348:f4e5d4dd-93f9-4d8d-8d44-da2907c5de13",
+    "leaseExpiresAt": "2026-05-28T01:48:39.012Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T01:45:39.012Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-28T01:45:31.745Z",
+    "createdAt": "2026-05-28T01:45:31.746Z",
+    "updatedAt": "2026-05-28T01:45:45.827Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 13557,
+        "workflowSteps": 0,
+        "providerRequests": 3,
+        "modelResponses": 3,
+        "workspaceOperations": 6,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "ri[redacted-api-key].md",
+          "nextPath": null,
+          "historyId": 51,
+          "step": 2,
+          "timestamp": "2026-05-28T01:45:45.820099400Z",
+          "result": {
+            "path": "ri[redacted-api-key].md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "ri[redacted-api-key].md",
+          "nextPath": null,
+          "historyId": 51,
+          "step": 2,
+          "timestamp": "2026-05-28T01:45:45.820099400Z",
+          "result": {
+            "path": "ri[redacted-api-key].md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-62.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-28T01:45:45.828Z",
+      "continuationOf": null,
+      "steps": 3,
+      "workspaceOperations": 6,
+      "providerRequests": 3,
+      "modelResponses": 3,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T01:45:32.270Z",
+    "completedAt": "2026-05-28T01:45:45.827Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 63,
+    "ticketId": 52,
+    "agentId": 3,
+    "agentName": "Mike",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "planning",
+    "leaseOwner": "4113348:f4e5d4dd-93f9-4d8d-8d44-da2907c5de13",
+    "leaseExpiresAt": "2026-05-28T01:48:33.738Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T01:45:33.738Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T01:45:31.775Z",
+    "createdAt": "2026-05-28T01:45:31.776Z",
+    "updatedAt": "2026-05-28T01:45:34.778Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "model requires more system memory (4.0 GiB) than is available (1.6 GiB)"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 1088,
+        "workflowSteps": 0,
+        "providerRequests": 1,
+        "modelResponses": 1,
+        "workspaceOperations": 0,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-63.json",
+    "replaySummary": {
+      "model": "gemma3:latest",
+      "terminalStatus": "failed",
+      "failureReason": "model requires more system memory (4.0 GiB) than is available (1.6 GiB)",
+      "failure": {
+        "code": "OLLAMA_HTTP_ERROR",
+        "kind": "provider_error",
+        "detail": {
+          "phase": "response_status",
+          "provider": "ollama",
+          "status": 500,
+          "requestId": null
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T01:45:34.780Z",
+      "continuationOf": null,
+      "steps": 0,
+      "workspaceOperations": 0,
+      "providerRequests": 1,
+      "modelResponses": 1,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T01:45:33.690Z",
+    "completedAt": "2026-05-28T01:45:34.778Z",
+    "error": "model requires more system memory (4.0 GiB) than is available (1.6 GiB)",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 64,
+    "ticketId": 53,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "terminalization",
+    "leaseOwner": "4113348:f4e5d4dd-93f9-4d8d-8d44-da2907c5de13",
+    "leaseExpiresAt": "2026-05-28T01:48:54.435Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T01:45:54.435Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T01:45:31.861Z",
+    "createdAt": "2026-05-28T01:45:31.861Z",
+    "updatedAt": "2026-05-28T01:45:56.698Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated list-only non-progress twice The model performed 2 successful workspace mutations but did not signal completion before the limit was reached."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 24374,
+        "workflowSteps": 0,
+        "providerRequests": 7,
+        "modelResponses": 7,
+        "workspaceOperations": 6,
+        "mutationCount": 2,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "createFolder",
+          "path": "archive",
+          "nextPath": null,
+          "historyId": 49,
+          "step": 1,
+          "timestamp": "2026-05-28T01:45:39.668916711Z",
+          "result": {
+            "path": "archive",
+            "status": "created"
+          },
+          "type": "folder"
+        },
+        {
+          "operation": "renamePath",
+          "path": "mike-workflow-deterministic-2.txt",
+          "nextPath": "archive/mike-workflow-deterministic-2.txt",
+          "historyId": 50,
+          "step": 1,
+          "timestamp": "2026-05-28T01:45:39.678461779Z",
+          "result": {
+            "path": "archive/mike-workflow-deterministic-2.txt"
+          }
+        }
+      ],
+      "created": [
+        {
+          "operation": "createFolder",
+          "path": "archive",
+          "nextPath": null,
+          "historyId": 49,
+          "step": 1,
+          "timestamp": "2026-05-28T01:45:39.668916711Z",
+          "result": {
+            "path": "archive",
+            "status": "created"
+          },
+          "type": "folder"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [
+        {
+          "operation": "renamePath",
+          "path": "mike-workflow-deterministic-2.txt",
+          "nextPath": "archive/mike-workflow-deterministic-2.txt",
+          "historyId": 50,
+          "step": 1,
+          "timestamp": "2026-05-28T01:45:39.678461779Z",
+          "result": {
+            "path": "archive/mike-workflow-deterministic-2.txt"
+          }
+        }
+      ],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-64.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated list-only non-progress twice The model performed 2 successful workspace mutations but did not signal completion before the limit was reached.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 6,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 2,
+      "mutationOutcome": "partial_mutations",
+      "finalizedAt": "2026-05-28T01:45:56.699Z",
+      "continuationOf": null,
+      "steps": 7,
+      "workspaceOperations": 6,
+      "providerRequests": 7,
+      "modelResponses": 7,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T01:45:32.324Z",
+    "completedAt": "2026-05-28T01:45:56.698Z",
+    "error": "Model repeated list-only non-progress twice The model performed 2 successful workspace mutations but did not signal completion before the limit was reached.",
+    "mutationCount": 2,
+    "mutationOutcome": "partial_mutations"
+  },
+  {
+    "id": 65,
+    "ticketId": 54,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "mutation",
+    "leaseOwner": "4113348:f4e5d4dd-93f9-4d8d-8d44-da2907c5de13",
+    "leaseExpiresAt": "2026-05-28T01:51:22.560Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T01:48:22.560Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-28T01:48:18.378Z",
+    "createdAt": "2026-05-28T01:48:18.378Z",
+    "updatedAt": "2026-05-28T01:48:28.230Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 9783,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "workspace-status-report.md",
+          "nextPath": null,
+          "historyId": 52,
+          "step": 1,
+          "timestamp": "2026-05-28T01:48:28.223539819Z",
+          "result": {
+            "path": "workspace-status-report.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "workspace-status-report.md",
+          "nextPath": null,
+          "historyId": 52,
+          "step": 1,
+          "timestamp": "2026-05-28T01:48:28.223539819Z",
+          "result": {
+            "path": "workspace-status-report.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-65.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-28T01:48:28.232Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T01:48:18.447Z",
+    "completedAt": "2026-05-28T01:48:28.230Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 66,
+    "ticketId": 55,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "mutation",
+    "leaseOwner": "4113348:f4e5d4dd-93f9-4d8d-8d44-da2907c5de13",
+    "leaseExpiresAt": "2026-05-28T01:51:39.736Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T01:48:39.736Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-28T01:48:35.907Z",
+    "createdAt": "2026-05-28T01:48:35.908Z",
+    "updatedAt": "2026-05-28T01:48:43.701Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 7543,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 3,
+        "mutationCount": 2,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "renamePath",
+          "path": "test-a.txt",
+          "nextPath": "archive/test-a.txt",
+          "historyId": 53,
+          "step": 1,
+          "timestamp": "2026-05-28T01:48:43.685074327Z",
+          "result": {
+            "path": "archive/test-a.txt"
+          }
+        },
+        {
+          "operation": "renamePath",
+          "path": "test-b.txt",
+          "nextPath": "archive/test-b.txt",
+          "historyId": 54,
+          "step": 1,
+          "timestamp": "2026-05-28T01:48:43.695556149Z",
+          "result": {
+            "path": "archive/test-b.txt"
+          }
+        }
+      ],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [
+        {
+          "operation": "renamePath",
+          "path": "test-a.txt",
+          "nextPath": "archive/test-a.txt",
+          "historyId": 53,
+          "step": 1,
+          "timestamp": "2026-05-28T01:48:43.685074327Z",
+          "result": {
+            "path": "archive/test-a.txt"
+          }
+        },
+        {
+          "operation": "renamePath",
+          "path": "test-b.txt",
+          "nextPath": "archive/test-b.txt",
+          "historyId": 54,
+          "step": 1,
+          "timestamp": "2026-05-28T01:48:43.695556149Z",
+          "result": {
+            "path": "archive/test-b.txt"
+          }
+        }
+      ],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-66.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 2,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-28T01:48:43.703Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 3,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T01:48:36.158Z",
+    "completedAt": "2026-05-28T01:48:43.701Z",
+    "mutationCount": 2,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 67,
+    "ticketId": 56,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "mutation",
+    "leaseOwner": "4113348:f4e5d4dd-93f9-4d8d-8d44-da2907c5de13",
+    "leaseExpiresAt": "2026-05-28T01:51:49.025Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T01:48:49.025Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-28T01:48:35.947Z",
+    "createdAt": "2026-05-28T01:48:35.948Z",
+    "updatedAt": "2026-05-28T01:48:59.362Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 23153,
+        "workflowSteps": 0,
+        "providerRequests": 3,
+        "modelResponses": 3,
+        "workspaceOperations": 4,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "implementation-recommendation.md",
+          "nextPath": null,
+          "historyId": 56,
+          "step": 2,
+          "timestamp": "2026-05-28T01:48:59.357640207Z",
+          "result": {
+            "path": "implementation-recommendation.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "implementation-recommendation.md",
+          "nextPath": null,
+          "historyId": 56,
+          "step": 2,
+          "timestamp": "2026-05-28T01:48:59.357640207Z",
+          "result": {
+            "path": "implementation-recommendation.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-67.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-28T01:48:59.363Z",
+      "continuationOf": null,
+      "steps": 3,
+      "workspaceOperations": 4,
+      "providerRequests": 3,
+      "modelResponses": 3,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T01:48:36.209Z",
+    "completedAt": "2026-05-28T01:48:59.362Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 68,
+    "ticketId": 57,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "mutation",
+    "leaseOwner": "4113348:f4e5d4dd-93f9-4d8d-8d44-da2907c5de13",
+    "leaseExpiresAt": "2026-05-28T01:51:46.587Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T01:48:46.587Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-28T01:48:35.986Z",
+    "createdAt": "2026-05-28T01:48:35.988Z",
+    "updatedAt": "2026-05-28T01:48:51.779Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 15512,
+        "workflowSteps": 0,
+        "providerRequests": 4,
+        "modelResponses": 4,
+        "workspaceOperations": 6,
+        "mutationCount": 1,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "writeFile",
+          "path": "test-diagnosis.md",
+          "nextPath": null,
+          "historyId": 55,
+          "step": 3,
+          "timestamp": "2026-05-28T01:48:51.771993252Z",
+          "result": {
+            "path": "test-diagnosis.md"
+          },
+          "type": "file"
+        }
+      ],
+      "created": [
+        {
+          "operation": "writeFile",
+          "path": "test-diagnosis.md",
+          "nextPath": null,
+          "historyId": 55,
+          "step": 3,
+          "timestamp": "2026-05-28T01:48:51.771993252Z",
+          "result": {
+            "path": "test-diagnosis.md"
+          },
+          "type": "file"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-68.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 1,
+      "mutationOutcome": "all_intended",
+      "finalizedAt": "2026-05-28T01:48:51.780Z",
+      "continuationOf": null,
+      "steps": 4,
+      "workspaceOperations": 6,
+      "providerRequests": 4,
+      "modelResponses": 4,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T01:48:36.267Z",
+    "completedAt": "2026-05-28T01:48:51.779Z",
+    "mutationCount": 1,
+    "mutationOutcome": "all_intended"
+  },
+  {
+    "id": 69,
+    "ticketId": 58,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "terminalization",
+    "leaseOwner": "4118831:90fea893-7fff-4ba2-86ea-ebf471a4d7ba",
+    "leaseExpiresAt": "2026-05-28T03:23:11.271Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T03:20:11.271Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T03:19:57.789Z",
+    "createdAt": "2026-05-28T03:19:57.792Z",
+    "updatedAt": "2026-05-28T03:20:14.732Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated list-only non-progress twice The model performed 2 successful workspace mutations but did not signal completion before the limit was reached."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 16799,
+        "workflowSteps": 0,
+        "providerRequests": 5,
+        "modelResponses": 5,
+        "workspaceOperations": 6,
+        "mutationCount": 2,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [
+        {
+          "operation": "createFolder",
+          "path": "A",
+          "nextPath": null,
+          "historyId": 57,
+          "step": 1,
+          "timestamp": "2026-05-28T03:20:04.608913486Z",
+          "result": {
+            "path": "A",
+            "status": "created"
+          },
+          "type": "folder"
+        },
+        {
+          "operation": "createFolder",
+          "path": "B",
+          "nextPath": null,
+          "historyId": 58,
+          "step": 1,
+          "timestamp": "2026-05-28T03:20:04.635739695Z",
+          "result": {
+            "path": "B",
+            "status": "created"
+          },
+          "type": "folder"
+        }
+      ],
+      "created": [
+        {
+          "operation": "createFolder",
+          "path": "A",
+          "nextPath": null,
+          "historyId": 57,
+          "step": 1,
+          "timestamp": "2026-05-28T03:20:04.608913486Z",
+          "result": {
+            "path": "A",
+            "status": "created"
+          },
+          "type": "folder"
+        },
+        {
+          "operation": "createFolder",
+          "path": "B",
+          "nextPath": null,
+          "historyId": 58,
+          "step": 1,
+          "timestamp": "2026-05-28T03:20:04.635739695Z",
+          "result": {
+            "path": "B",
+            "status": "created"
+          },
+          "type": "folder"
+        }
+      ],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-69.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated list-only non-progress twice The model performed 2 successful workspace mutations but did not signal completion before the limit was reached.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 4,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 2,
+      "mutationOutcome": "partial_mutations",
+      "finalizedAt": "2026-05-28T03:20:14.735Z",
+      "continuationOf": null,
+      "steps": 5,
+      "workspaceOperations": 6,
+      "providerRequests": 5,
+      "modelResponses": 5,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T03:19:57.933Z",
+    "completedAt": "2026-05-28T03:20:14.732Z",
+    "error": "Model repeated list-only non-progress twice The model performed 2 successful workspace mutations but did not signal completion before the limit was reached.",
+    "mutationCount": 2,
+    "mutationOutcome": "partial_mutations"
+  },
+  {
+    "id": 70,
+    "ticketId": 58,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "inspection",
+    "leaseOwner": "4121282:b88ca93b-7c40-4b4b-9c82-ec831767f837",
+    "leaseExpiresAt": "2026-05-28T03:56:49.226Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T03:53:49.226Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T03:53:38.722Z",
+    "createdAt": "2026-05-28T03:53:38.733Z",
+    "updatedAt": "2026-05-28T03:53:51.181Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated list-only non-progress twice"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 11995,
+        "workflowSteps": 0,
+        "providerRequests": 4,
+        "modelResponses": 4,
+        "workspaceOperations": 5,
+        "mutationCount": 0,
+        "retryCount": 1
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-70.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated list-only non-progress twice",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 3,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T03:53:51.183Z",
+      "continuationOf": null,
+      "steps": 4,
+      "workspaceOperations": 5,
+      "providerRequests": 4,
+      "modelResponses": 4,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T03:53:39.186Z",
+    "completedAt": "2026-05-28T03:53:51.181Z",
+    "error": "Model repeated list-only non-progress twice",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 71,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "inspection",
+    "leaseOwner": "4121282:b88ca93b-7c40-4b4b-9c82-ec831767f837",
+    "leaseExpiresAt": "2026-05-28T03:59:20.572Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T03:56:20.572Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T03:56:13.571Z",
+    "createdAt": "2026-05-28T03:56:13.571Z",
+    "updatedAt": "2026-05-28T03:56:22.718Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Agent run exceeded listDirectory limit of 2"
+        ]
+      },
+      "efficiency": {
+        "durationMs": 8708,
+        "workflowSteps": 0,
+        "providerRequests": 4,
+        "modelResponses": 4,
+        "workspaceOperations": 3,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 12,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 12,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-71.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Agent run exceeded listDirectory limit of 2",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "budget_exhausted",
+        "detail": {
+          "limitType": "operation",
+          "currentValue": 3,
+          "configuredLimit": 2
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T03:56:22.721Z",
+      "continuationOf": null,
+      "steps": 4,
+      "workspaceOperations": 3,
+      "providerRequests": 4,
+      "modelResponses": 4,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T03:56:14.010Z",
+    "completedAt": "2026-05-28T03:56:22.718Z",
+    "error": "Agent run exceeded listDirectory limit of 2",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 72,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "inspection",
+    "leaseOwner": "4133550:9f444602-e54f-47c8-af02-c60ad60c3d8b",
+    "leaseExpiresAt": "2026-05-28T07:17:07.118Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T07:14:07.118Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T07:14:02.934Z",
+    "createdAt": "2026-05-28T07:14:02.940Z",
+    "updatedAt": "2026-05-28T07:14:11.047Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 7943,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 1
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-72.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T07:14:11.050Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T07:14:03.104Z",
+    "completedAt": "2026-05-28T07:14:11.047Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 73,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "inspection",
+    "leaseOwner": "4148022:877ac115-c9f2-4509-bc91-b8d3a6f6e757",
+    "leaseExpiresAt": "2026-05-28T17:20:08.282Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T17:17:08.282Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T17:17:04.210Z",
+    "createdAt": "2026-05-28T17:17:04.219Z",
+    "updatedAt": "2026-05-28T17:17:12.746Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 8307,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 2
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-73.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T17:17:12.748Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T17:17:04.439Z",
+    "completedAt": "2026-05-28T17:17:12.746Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 74,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": "retry",
+    "currentPhase": "inspection",
+    "leaseOwner": "4148022:877ac115-c9f2-4509-bc91-b8d3a6f6e757",
+    "leaseExpiresAt": "2026-05-28T17:46:35.229Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T17:43:35.229Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T17:43:31.816Z",
+    "createdAt": "2026-05-28T17:43:31.820Z",
+    "updatedAt": "2026-05-28T17:43:39.081Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 7149,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 3
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-74.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T17:43:39.083Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T17:43:31.932Z",
+    "completedAt": "2026-05-28T17:43:39.081Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 75,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": "retry",
+    "currentPhase": "inspection",
+    "leaseOwner": "4148022:877ac115-c9f2-4509-bc91-b8d3a6f6e757",
+    "leaseExpiresAt": "2026-05-28T17:54:46.066Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T17:51:46.066Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T17:51:41.551Z",
+    "createdAt": "2026-05-28T17:51:41.554Z",
+    "updatedAt": "2026-05-28T17:51:48.429Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 6519,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 4
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-75.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T17:51:48.431Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T17:51:41.910Z",
+    "completedAt": "2026-05-28T17:51:48.429Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 76,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": "retry",
+    "currentPhase": "inspection",
+    "leaseOwner": "4150923:0e5fcc62-e0d7-4d73-b737-684c5b3cea17",
+    "leaseExpiresAt": "2026-05-28T18:16:13.075Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T18:13:13.075Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T18:13:09.114Z",
+    "createdAt": "2026-05-28T18:13:09.120Z",
+    "updatedAt": "2026-05-28T18:13:15.619Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 6367,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 5
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-76.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T18:13:15.621Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T18:13:09.252Z",
+    "completedAt": "2026-05-28T18:13:15.619Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 77,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "inspection",
+    "leaseOwner": "25489:8f45e315-8c05-42d5-ac1f-b3bede95bd06",
+    "leaseExpiresAt": "2026-05-28T21:47:26.427Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T21:44:26.427Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T21:44:22.655Z",
+    "createdAt": "2026-05-28T21:44:22.659Z",
+    "updatedAt": "2026-05-28T21:44:29.069Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 6339,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 6
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-77.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T21:44:29.071Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T21:44:22.730Z",
+    "completedAt": "2026-05-28T21:44:29.069Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 78,
+    "ticketId": 60,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": null,
+    "currentPhase": "inspection",
+    "leaseOwner": "25489:8f45e315-8c05-42d5-ac1f-b3bede95bd06",
+    "leaseExpiresAt": "2026-05-28T21:49:33.629Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T21:46:33.629Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T21:46:30.952Z",
+    "createdAt": "2026-05-28T21:46:30.953Z",
+    "updatedAt": "2026-05-28T21:46:38.391Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 6991,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 0
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-78.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T21:46:38.392Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T21:46:31.400Z",
+    "completedAt": "2026-05-28T21:46:38.391Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 79,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": "retry",
+    "currentPhase": "inspection",
+    "leaseOwner": "26995:3241f8cc-0464-4772-a684-54349e8e2d97",
+    "leaseExpiresAt": "2026-05-28T22:18:41.409Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T22:15:41.409Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T22:15:38.482Z",
+    "createdAt": "2026-05-28T22:15:38.489Z",
+    "updatedAt": "2026-05-28T22:15:43.944Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 5189,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 7
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-79.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T22:15:43.946Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T22:15:38.755Z",
+    "completedAt": "2026-05-28T22:15:43.944Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 80,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": "retry",
+    "currentPhase": "inspection",
+    "leaseOwner": "26995:3241f8cc-0464-4772-a684-54349e8e2d97",
+    "leaseExpiresAt": "2026-05-28T22:34:41.410Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T22:31:41.410Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T22:31:38.217Z",
+    "createdAt": "2026-05-28T22:31:38.221Z",
+    "updatedAt": "2026-05-28T22:31:48.456Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 10192,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 8
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-80.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T22:31:48.458Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T22:31:38.264Z",
+    "completedAt": "2026-05-28T22:31:48.456Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 81,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": "retry",
+    "currentPhase": "inspection",
+    "leaseOwner": "29350:f6c3c911-6ab3-4980-a918-58dfb7f34f63",
+    "leaseExpiresAt": "2026-05-28T22:35:24.847Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T22:32:24.847Z",
+    "status": "failed",
+    "ticketOpenedAt": "2026-05-28T22:32:21.656Z",
+    "createdAt": "2026-05-28T22:32:21.662Z",
+    "updatedAt": "2026-05-28T22:32:28.550Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 0,
+        "postconditionsFailed": 0,
+        "errors": [
+          "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch."
+        ]
+      },
+      "efficiency": {
+        "durationMs": 6538,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 2,
+        "mutationCount": 0,
+        "retryCount": 9
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-81.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "failed",
+      "failureReason": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+      "failure": {
+        "code": "RUN_LIMIT_EXCEEDED",
+        "kind": "no_progress",
+        "detail": {
+          "currentValue": 2,
+          "configuredLimit": 1,
+          "step": 1,
+          "repeatedListPaths": [
+            "/"
+          ]
+        }
+      },
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T22:32:28.552Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 2,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": false
+    },
+    "startedAt": "2026-05-28T22:32:22.012Z",
+    "completedAt": "2026-05-28T22:32:28.550Z",
+    "error": "Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.",
+    "mutationCount": 0,
+    "mutationOutcome": "no_mutations"
+  },
+  {
+    "id": 82,
+    "ticketId": 59,
+    "agentId": 1,
+    "agentName": "Agent 1",
+    "workspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "mainWorkspaceRoot": "/home/timcis/Desktop/Codex/ticket-system/workspace-root",
+    "executionWorkspaceType": "main",
+    "allocationPlanId": null,
+    "allocationItemId": null,
+    "allocationSubtask": null,
+    "ownedOutputPaths": [],
+    "executionMode": "agent",
+    "workflowId": null,
+    "workflowInput": null,
+    "capabilityType": "directAction",
+    "capabilityId": "agent-selected-actions",
+    "capabilityInput": null,
+    "rerunMode": "retry",
+    "currentPhase": "mutation",
+    "leaseOwner": "30419:21ee1a76-0d22-437e-9f3b-3a5b75a4f263",
+    "leaseExpiresAt": "2026-05-28T22:48:36.404Z",
+    "currentStepId": null,
+    "currentWorkflowAction": null,
+    "lastHeartbeatAt": "2026-05-28T22:45:36.404Z",
+    "status": "completed",
+    "ticketOpenedAt": "2026-05-28T22:45:30.881Z",
+    "createdAt": "2026-05-28T22:45:30.888Z",
+    "updatedAt": "2026-05-28T22:45:38.141Z",
+    "runEvaluation": {
+      "effectiveness": {
+        "status": "unknown",
+        "postconditionsPassed": 1,
+        "postconditionsFailed": 0,
+        "errors": []
+      },
+      "efficiency": {
+        "durationMs": 7089,
+        "workflowSteps": 0,
+        "providerRequests": 2,
+        "modelResponses": 2,
+        "workspaceOperations": 3,
+        "mutationCount": 0,
+        "retryCount": 10
+      },
+      "violations": {
+        "status": "none",
+        "items": []
+      },
+      "effectiveRuntimeConfig": {
+        "effectiveConfig": {
+          "allowHandoffTask": null,
+          "allowWorkflowDraftIntent": null,
+          "allowCanonicalWorkflowDraft": null
+        },
+        "agentConfig": null,
+        "configSources": {
+          "allowHandoffTask": "default",
+          "allowWorkflowDraftIntent": "default",
+          "allowCanonicalWorkflowDraft": "default"
+        },
+        "runtimeLimits": {
+          "maxExecutionSteps": 4,
+          "maxWorkspaceOperationsPerRun": 32,
+          "maxModelRequestsPerRun": 4,
+          "maxRuntimeDurationMs": 120000
+        }
+      }
+    },
+    "runConsequence": {
+      "mutations": [],
+      "created": [],
+      "updated": [],
+      "deleted": [],
+      "renamed": [],
+      "notifications": [],
+      "externalEffects": [],
+      "verification": {
+        "postconditionsStatus": "unknown",
+        "violationsStatus": "none"
+      }
+    },
+    "replaySnapshotPath": "replay-snapshots/run-82.json",
+    "replaySummary": {
+      "model": "gpt-4.1-mini",
+      "terminalStatus": "completed",
+      "failureReason": null,
+      "failure": null,
+      "mutationCount": 0,
+      "mutationOutcome": "no_mutations",
+      "finalizedAt": "2026-05-28T22:45:38.143Z",
+      "continuationOf": null,
+      "steps": 2,
+      "workspaceOperations": 3,
+      "providerRequests": 2,
+      "modelResponses": 2,
+      "hasBlockedOrRejected": false,
+      "hasCompletedNoop": false,
+      "hasPostconditionCompleted": true
+    },
+    "startedAt": "2026-05-28T22:45:31.052Z",
+    "completedAt": "2026-05-28T22:45:38.141Z",
     "mutationCount": 0,
     "mutationOutcome": "no_mutations"
   }

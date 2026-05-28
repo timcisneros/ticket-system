@@ -319,8 +319,9 @@ async function main() {
     assert(eventTypes.includes('workflow.step.started'), 'events should include workflow.step.started');
     assert(eventTypes.includes('workflow.step.completed'), 'events should include workflow.step.completed');
     assert(eventTypes.includes('workspace.operation'), 'events should include workspace.operation');
-    assert(eventTypes.includes('replay.snapshot.finalized'), 'events should include replay.snapshot.finalized');
-    assert(eventTypes.includes('run.completed'), 'events should include run.completed');
+    assert(eventTypes.includes('run.snapshot_finalized') || eventTypes.includes('replay.snapshot.finalized'), 'events should include snapshot finalized');
+    assert(eventTypes.includes('run.execution_completed'), 'events should include run.execution_completed');
+    assert(eventTypes.includes('run.terminalized'), 'events should include run.terminalized');
     assert(eventTypes.includes('run.postconditions_checked'), 'events should include run.postconditions_checked');
     assert(eventTypes.includes('run.violations_checked'), 'events should include run.violations_checked');
     assert(eventTypes.includes('run.evaluation_completed'), 'events should include run.evaluation_completed');

@@ -1,0 +1,8 @@
+{
+  "debug": true,
+  "apiKey": "hardcoded-secret-key-12345",
+  "database": {
+    "host": "localhost",
+    "password": "admin123"
+  }
+}
