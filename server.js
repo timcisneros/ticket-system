@@ -8973,33 +8973,39 @@ async function runAgentTicket(runId) {
 
         if (isInspectionOnly) {
           noProgressResponses += 1;
-          const uniqueRepeatedPaths = Array.from(new Set(repeatedListPaths));
-          const message = uniqueRepeatedPaths.length > 0
-            ? `Model repeated listDirectory without a write/create/rename/delete action: ${uniqueRepeatedPaths.join(', ')}`
-            : 'Model emitted inspection-only actions without progress after bounded inspection phase';
-          recordRunEvent(run, 'model:no_progress', message, {
-            repeatedListPaths: uniqueRepeatedPaths,
-            step,
-            isInspectionOnly: true
-          });
 
+          // Only warn and penalize starting from the second inspection-only step.
+          // The first inspection step is legitimate discovery and must not be scolded.
           if (noProgressResponses >= 2) {
-            const error = createRunLimitError(run, 'step', 'Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.', {
-              currentValue: noProgressResponses,
-              configuredLimit: 1,
+            const uniqueRepeatedPaths = Array.from(new Set(repeatedListPaths));
+            const message = uniqueRepeatedPaths.length > 0
+              ? `Model repeated listDirectory without a write/create/rename/delete action: ${uniqueRepeatedPaths.join(', ')}`
+              : 'Model emitted inspection-only actions without progress after bounded inspection phase';
+            recordRunEvent(run, 'model:no_progress', message, {
+              repeatedListPaths: uniqueRepeatedPaths,
               step,
-              repeatedListPaths: uniqueRepeatedPaths
+              isInspectionOnly: true
             });
-            error.failureKind = 'no_progress';
-            throw error;
+
+            if (noProgressResponses >= 3) {
+              const error = createRunLimitError(run, 'step', 'Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.', {
+                currentValue: noProgressResponses,
+                configuredLimit: 1,
+                step,
+                repeatedListPaths: uniqueRepeatedPaths
+              });
+              error.failureKind = 'no_progress';
+              throw error;
+            }
+
+            const remainingSteps = limits.maxExecutionSteps - step - 1;
+            actionResults.push({
+              warning: 'model:no_progress',
+              repeatedListPaths: uniqueRepeatedPaths,
+              message: `You emitted inspection-only actions without progress. Bounded inspection must be followed by exactly one bounded operation batch (createFolder, writeFile, renamePath, deletePath). You have ${remainingSteps} remaining execution step(s). Emit the required batch now or fail explicitly with a reason.`
+            });
           }
 
-          const remainingSteps = limits.maxExecutionSteps - step - 1;
-          actionResults.push({
-            warning: 'model:no_progress',
-            repeatedListPaths: uniqueRepeatedPaths,
-            message: `You emitted inspection-only actions without progress. Bounded inspection must be followed by exactly one bounded operation batch (createFolder, writeFile, renamePath, deletePath). You have ${remainingSteps} remaining execution step(s). Emit the required batch now or fail explicitly with a reason.`
-          });
           continue;
         }
       }
