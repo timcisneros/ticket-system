@@ -1,1 +1,0 @@
-Ensure all files are named consistently and use a standard naming convention.

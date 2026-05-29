@@ -1,1 +1,0 @@
-This is a structured handoff produced by the planner. Runtime validated this and executed writeFile under Mike's identity. No Mike model call was needed.

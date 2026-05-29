@@ -1,1 +1,0 @@
-Recent workflow-draft runs can succeed, branching workflow drafts are unsupported for normal agents, unsupported branching should fail honestly without fake workflow files. Prior timeout looping was fixed to stop after an honest unsupported message.
