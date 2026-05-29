@@ -2,11 +2,9 @@
 // Workload Profile Test — verifies profile detection, limits, and guidance.
 //
 // Scenarios:
-// 1. Profile detection for all 5 profiles
+// 1. Profile detection for all 3 profiles
 // 2. Profile limits are applied and capped at base limits
 // 3. Profile guidance is generated for each profile
-// 4. Bulk-inventory profile has higher listDirectory limit than report
-// 5. Refactor profile allows renamePath and expects verification phase
 
 const fs = require('fs');
 const path = require('path');
@@ -118,18 +116,10 @@ function testProfileDetection() {
   assertEqual(detect('Move files to archive folder'), 'refactor', 'should detect refactor');
   assertEqual(detect('Rename old paths to new paths'), 'refactor', 'should detect rename as refactor');
 
-  // Recommendation
-  assertEqual(detect('Recommend top 3 critical fixes'), 'recommendation', 'should detect recommendation');
-  assertEqual(detect('Provide improvement plan for codebase'), 'recommendation', 'should detect improvement as recommendation');
-
-  // Bulk inventory
-  assertEqual(detect('List all files in workspace'), 'bulk-inventory', 'should detect bulk-inventory');
-  assertEqual(detect('Catalog every directory'), 'bulk-inventory', 'should detect catalog as bulk-inventory');
-
   // No match
   assertEqual(detect('Hello world'), null, 'should return null for no match');
 
-  console.log('  ✓ profile-detection: all 5 profiles detected correctly');
+  console.log('  ✓ profile-detection: all 3 profiles detected correctly');
 }
 
 // ── Test 2: Profile limits are applied and capped ─────────────────
@@ -157,13 +147,6 @@ function testProfileLimits() {
   assertEqual(reportLimits.maxModelRequestsPerRun, 8, 'report should cap model requests at 8');
   assertEqual(reportLimits.maxListDirectoryPerRun, 3, 'report should set listDir to 3');
   assertEqual(reportLimits.maxReadFilePerRun, 8, 'report should set readFile to 8');
-
-  // Bulk inventory limits should be higher than report
-  const inventoryLimits = getLimits(base, 'bulk-inventory');
-  assertEqual(inventoryLimits.maxExecutionSteps, 16, 'bulk-inventory should cap steps at 16');
-  assertEqual(inventoryLimits.maxModelRequestsPerRun, 10, 'bulk-inventory should cap model requests at 10');
-  assertEqual(inventoryLimits.maxListDirectoryPerRun, 8, 'bulk-inventory should set listDir to 8');
-  assertEqual(inventoryLimits.maxReadFilePerRun, 4, 'bulk-inventory should set readFile to 4');
 
   // Refactor limits
   const refactorLimits = getLimits(base, 'refactor');
@@ -203,74 +186,12 @@ function testProfileGuidance() {
 
   // Refactor guidance
   const refactorGuidance = guidance('Move files to archive');
-  assert(refactorGuidance.some(l => l.includes('renamePath')), 'refactor guidance should mention renamePath');
   assert(refactorGuidance.some(l => l.includes('verification')), 'refactor guidance should mention verification');
-
-  // Recommendation guidance
-  const recGuidance = guidance('Recommend top 3 fixes');
-  assert(recGuidance.some(l => l.includes('critical')), 'recommendation guidance should mention critical');
-
-  // Bulk inventory guidance
-  const invGuidance = guidance('List all files');
-  assert(invGuidance.some(l => l.includes('inventory')), 'bulk-inventory guidance should mention inventory');
 
   // No match
   assertEqual(guidance('Hello world').length, 0, 'no guidance for unknown objective');
 
   console.log('  ✓ profile-guidance: guidance generated for all profiles');
-}
-
-// ── Test 4: Bulk-inventory has higher listDirectory than report ─
-function testBulkInventoryHigherListDir() {
-  const code = loadServerCode();
-
-  const sandbox = makeSandbox();
-  installInSandbox(
-    extractConstant(code, 'WORKLOAD_PROFILES') + '\n' +
-    extractFunction(code, 'getProfileRuntimeLimits'),
-    sandbox
-  );
-
-  const getLimits = sandbox.getProfileRuntimeLimits;
-  const base = { maxExecutionSteps: 20, maxModelRequestsPerRun: 15, maxWorkspaceOperationsPerRun: 50, maxRuntimeDurationMs: 120000 };
-
-  const report = getLimits(base, 'report');
-  const inventory = getLimits(base, 'bulk-inventory');
-
-  assert(inventory.maxListDirectoryPerRun > report.maxListDirectoryPerRun,
-    'bulk-inventory should have higher listDirectory limit than report');
-  assertEqual(inventory.maxListDirectoryPerRun, 8, 'bulk-inventory listDir should be 8');
-  assertEqual(report.maxListDirectoryPerRun, 3, 'report listDir should be 3');
-
-  console.log('  ✓ bulk-inventory-higher-listdir: bulk-inventory allows 8 listDir vs report 3');
-}
-
-// ── Test 5: Refactor profile allows renamePath ────────────────────
-function testRefactorAllowsRename() {
-  const code = loadServerCode();
-
-  const sandbox = makeSandbox();
-  installInSandbox(
-    extractConstant(code, 'WORKLOAD_PROFILES') + '\n' +
-    extractFunction(code, 'detectWorkloadProfile') + '\n' +
-    extractFunction(code, 'getProfileRuntimeLimits') + '\n' +
-    extractFunction(code, 'buildProfileGuidance'),
-    sandbox
-  );
-
-  const getLimits = sandbox.getProfileRuntimeLimits;
-  const base = { maxExecutionSteps: 20, maxModelRequestsPerRun: 15, maxWorkspaceOperationsPerRun: 50, maxRuntimeDurationMs: 120000 };
-  const refactorLimits = getLimits(base, 'refactor');
-
-  // Verify the profile definition includes renamePath
-  const profileConst = extractConstant(code, 'WORKLOAD_PROFILES');
-  assert(profileConst.includes('renamePath'), 'refactor profile should include renamePath');
-  assert(profileConst.includes('deletePath'), 'refactor profile should include deletePath');
-
-  const guidance = sandbox.buildProfileGuidance('Move files');
-  assert(guidance.some(l => l.includes('renamePath')), 'refactor guidance should mention renamePath');
-
-  console.log('  ✓ refactor-allows-rename: refactor profile supports renamePath and deletePath');
 }
 
 // ── Main ─────────────────────────────────────────────────────────
@@ -281,9 +202,7 @@ function main() {
   const tests = [
     testProfileDetection,
     testProfileLimits,
-    testProfileGuidance,
-    testBulkInventoryHigherListDir,
-    testRefactorAllowsRename
+    testProfileGuidance
   ];
 
   let passed = 0;

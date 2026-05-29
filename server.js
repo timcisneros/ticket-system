@@ -102,10 +102,10 @@ const WORKLOAD_PROFILES = {
     maxWorkspaceOperations: 32,
     maxListDirectory: 3,
     maxReadFile: 8,
-    allowedOperations: ['listDirectory', 'readFile', 'writeFile', 'createFolder'],
-    finalArtifactRequired: true,
-    expectedPhasePattern: 'planning → inspection → mutation',
-    retryGuidance: 'Simplify objective to target fewer directories. Avoid listing subdirectories individually.'
+    procedure: [
+      'Cite specific file paths you inspected. Do not invent file contents.',
+      'Do not create multiple report files. One report artifact per ticket.'
+    ]
   },
   diagnosis: {
     name: 'diagnosis',
@@ -115,10 +115,10 @@ const WORKLOAD_PROFILES = {
     maxWorkspaceOperations: 24,
     maxListDirectory: 2,
     maxReadFile: 6,
-    allowedOperations: ['listDirectory', 'readFile', 'writeFile', 'createFolder'],
-    finalArtifactRequired: true,
-    expectedPhasePattern: 'planning → inspection → mutation',
-    retryGuidance: 'Specify exact file paths to inspect. Avoid broad workspace scans.'
+    procedure: [
+      'Focus on identifying the root cause of the bug or test failure.',
+      'Explain why each identified assertion is incorrect with evidence from the source code.'
+    ]
   },
   refactor: {
     name: 'refactor',
@@ -128,36 +128,15 @@ const WORKLOAD_PROFILES = {
     maxWorkspaceOperations: 24,
     maxListDirectory: 2,
     maxReadFile: 4,
-    allowedOperations: ['listDirectory', 'readFile', 'renamePath', 'createFolder', 'deletePath'],
-    finalArtifactRequired: false,
-    expectedPhasePattern: 'planning → inspection → mutation → verification',
-    retryGuidance: 'Name exact source files and destination paths. Do not use "all files" phrasing.'
-  },
-  recommendation: {
-    name: 'recommendation',
-    description: 'Read files and produce an evidence-based improvement plan',
-    executionStepLimit: 12,
-    modelRequestLimit: 8,
-    maxWorkspaceOperations: 24,
-    maxListDirectory: 2,
-    maxReadFile: 6,
-    allowedOperations: ['listDirectory', 'readFile', 'writeFile', 'createFolder'],
-    finalArtifactRequired: true,
-    expectedPhasePattern: 'planning → inspection → mutation',
-    retryGuidance: 'Limit scope to top N issues. Specify exact files to analyze.'
-  },
-  'bulk-inventory': {
-    name: 'bulk-inventory',
-    description: 'List and catalog many directories or files across the workspace',
-    executionStepLimit: 16,
-    modelRequestLimit: 10,
-    maxWorkspaceOperations: 40,
-    maxListDirectory: 8,
-    maxReadFile: 4,
-    allowedOperations: ['listDirectory', 'readFile', 'writeFile', 'createFolder'],
-    finalArtifactRequired: true,
-    expectedPhasePattern: 'planning → inspection → mutation',
-    retryGuidance: 'Break into smaller inventory scopes. Do not list every subdirectory individually.'
+    procedure: [
+      'This is a workspace organization task. Follow this exact phase progression in your responses:',
+      '  Phase 1 — DISCOVER: listDirectory the relevant directory ONCE. Identify every item that must be moved, renamed, or created. Do not list again in later steps.',
+      '  Phase 2 — MUTATE: Use the discovered entries to emit bounded mutation batches. Do not repeat DISCOVER unless evidence is insufficient. Respect maxMutatingActionsPerResponse. If more mutations remain, continue with the next bounded mutation batch.',
+      '  Phase 3 — VERIFY: listDirectory the affected directories to confirm items are in the correct locations. Check that no items remain at old locations. Verify only after at least one mutation batch has executed.',
+      '  Phase 4 — COMPLETE: Set complete:true only after verification succeeds.',
+      'If no matching items exist at the source, state this clearly and complete after any required createFolder operations.',
+      'If required paths or destinations cannot be determined, fail with an explicit reason. Do not enter a loop of repeated listDirectory calls.'
+    ]
   }
 };
 
@@ -7355,27 +7334,14 @@ function getReportRuntimeLimits(baseLimits) {
 function detectWorkloadProfile(objective) {
   const text = String(objective || '').toLowerCase();
 
-  // Diagnosis: read files to find bugs, test failures, incorrect assertions
   if (/\b(diagnos|bug|failing test|incorrect assertion|test failure|which test|fix test|broken test)\b/.test(text)) {
     return 'diagnosis';
   }
 
-  // Refactor: move, rename, restructure files/folders
   if (/\b(move|rename|restructur|refactor|reorganize|archive|consolidate)\b/.test(text)) {
     return 'refactor';
   }
 
-  // Recommendation: evidence-based improvement plan, top N issues
-  if (/\b(recommend|top [0-9]+|improvement|critical issue|action item|fix plan|roadmap)\b/.test(text)) {
-    return 'recommendation';
-  }
-
-  // Bulk inventory: catalog many directories, list all files, full inventory
-  if (/\b(list all|catalog|inventory|enumerate|all files|all directories|every file|full list)\b/.test(text)) {
-    return 'bulk-inventory';
-  }
-
-  // Report: catch-all for inspection-heavy summary tasks
   if (/\b(report|summary|synthesis|overview|analysis|status|audit)\b/.test(text)) {
     return 'report';
   }
@@ -7406,57 +7372,11 @@ function buildProfileGuidance(objective) {
   const profile = WORKLOAD_PROFILES[profileName];
   if (!profile) return [];
 
-  const lines = [
+  return [
     `This ticket matches the "${profile.name}" workload profile: ${profile.description}.`,
     `Use at most ${profile.maxListDirectory} listDirectory calls total. Use at most ${profile.maxReadFile} readFile calls total.`,
-    `Expected phase pattern: ${profile.expectedPhasePattern}.`
+    ...profile.procedure
   ];
-
-  if (profile.finalArtifactRequired) {
-    lines.push('The final response must produce the requested artifact via writeFile.');
-  }
-
-  if (profileName === 'report') {
-    lines.push(
-      'Cite specific file paths you inspected. Do not invent file contents.',
-      'Do not create multiple report files. One report artifact per ticket.'
-    );
-  }
-
-  if (profileName === 'diagnosis') {
-    lines.push(
-      'Focus on identifying the root cause of the bug or test failure.',
-      'Explain why each identified assertion is incorrect with evidence from the source code.'
-    );
-  }
-
-  if (profileName === 'refactor') {
-    lines.push(
-      'This is a workspace organization task. Follow this exact phase progression in your responses:',
-      '  Phase 1 — DISCOVER: listDirectory the relevant directory ONCE. Identify every item that must be moved, renamed, or created. Do not list again in later steps.',
-      '  Phase 2 — MUTATE: Use the discovered entries to emit bounded mutation batches. Do not repeat DISCOVER unless evidence is insufficient. Respect maxMutatingActionsPerResponse. If more mutations remain, continue with the next bounded mutation batch.',
-      '  Phase 3 — VERIFY: listDirectory the affected directories to confirm items are in the correct locations. Check that no items remain at old locations. Verify only after at least one mutation batch has executed.',
-      '  Phase 4 — COMPLETE: Set complete:true only after verification succeeds.',
-      'If no matching items exist at the source, state this clearly and complete after any required createFolder operations.',
-      'If required paths or destinations cannot be determined, fail with an explicit reason. Do not enter a loop of repeated listDirectory calls.'
-    );
-  }
-
-  if (profileName === 'recommendation') {
-    lines.push(
-      'Prioritize the most critical issues. Do not list every minor improvement.',
-      'Link each recommendation to specific evidence from the inspected files.'
-    );
-  }
-
-  if (profileName === 'bulk-inventory') {
-    lines.push(
-      'Avoid listing every subdirectory individually. Group related paths when possible.',
-      'Produce one summary writeFile with the inventory results.'
-    );
-  }
-
-  return lines;
 }
 
 function hasViolationEvidence(runId) {

@@ -39,15 +39,47 @@ function extractFunction(code, name) {
   return code.slice(start, i);
 }
 
+function extractConstant(code, name) {
+  const pattern = new RegExp(`(const|let|var) ${name}\\s*=\\s*[{\\[]`);
+  const match = code.match(pattern);
+  if (!match) return null;
+  const start = match.index;
+  let i = start + match[0].length - 1;
+  let depth = 0;
+  let inString = false;
+  let stringChar = null;
+  while (i < code.length) {
+    const ch = code[i];
+    if (inString) {
+      if (ch === '\\') { i += 2; continue; }
+      if (ch === stringChar) inString = false;
+    } else if (ch === '"' || ch === "'" || ch === '`') {
+      inString = true;
+      stringChar = ch;
+    } else if (ch === '(' || ch === '{' || ch === '[') {
+      depth++;
+    } else if (ch === ')' || ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 0) {
+        i++;
+        while (i < code.length && /[;\\s]/.test(code[i])) i++;
+        break;
+      }
+    }
+    i++;
+  }
+  return code.slice(start, i);
+}
+
 // ── Test 1: Refactor guidance includes DISCOVER phase ────────────
 function testDiscoverPhase() {
   const code = loadServerCode();
-  const guidanceFn = extractFunction(code, 'buildProfileGuidance');
-  assert(guidanceFn, 'buildProfileGuidance should exist');
-  assert(guidanceFn.includes('DISCOVER'), 'refactor guidance should include DISCOVER phase');
-  assert(guidanceFn.includes('listDirectory the relevant directory ONCE'), 'discover should say list once');
-  assert(guidanceFn.includes('Phase 1'), 'refactor guidance should number phases');
-  assert(!guidanceFn.includes('PLAN'), 'refactor guidance should NOT include a PLAN phase');
+  const profileConst = extractConstant(code, 'WORKLOAD_PROFILES');
+  assert(profileConst, 'WORKLOAD_PROFILES should exist');
+  assert(profileConst.includes('DISCOVER'), 'refactor guidance should include DISCOVER phase');
+  assert(profileConst.includes('listDirectory the relevant directory ONCE'), 'discover should say list once');
+  assert(profileConst.includes('Phase 1'), 'refactor guidance should number phases');
+  assert(!profileConst.includes('PLAN'), 'refactor guidance should NOT include a PLAN phase');
 
   console.log('  ✓ discover-phase: refactor guidance includes explicit DISCOVER phase, no PLAN phase');
 }
@@ -55,12 +87,12 @@ function testDiscoverPhase() {
 // ── Test 2: Refactor guidance includes MUTATE with bounded batches ─
 function testMutatePhase() {
   const code = loadServerCode();
-  const guidanceFn = extractFunction(code, 'buildProfileGuidance');
+  const profileConst = extractConstant(code, 'WORKLOAD_PROFILES');
 
-  assert(guidanceFn.includes('MUTATE'), 'refactor guidance should include MUTATE phase');
-  assert(guidanceFn.includes('bounded mutation batches'), 'mutate should mention bounded mutation batches');
-  assert(guidanceFn.includes('Respect maxMutatingActionsPerResponse'), 'mutate should reference mutation limit');
-  assert(guidanceFn.includes('next bounded mutation batch'), 'mutate should describe continuation batches');
+  assert(profileConst.includes('MUTATE'), 'refactor guidance should include MUTATE phase');
+  assert(profileConst.includes('bounded mutation batches'), 'mutate should mention bounded mutation batches');
+  assert(profileConst.includes('Respect maxMutatingActionsPerResponse'), 'mutate should reference mutation limit');
+  assert(profileConst.includes('next bounded mutation batch'), 'mutate should describe continuation batches');
 
   console.log('  ✓ mutate-phase: refactor guidance includes bounded batch MUTATE phase');
 }
@@ -68,11 +100,11 @@ function testMutatePhase() {
 // ── Test 3: Refactor guidance defers VERIFY until after mutations ──
 function testVerifyPhase() {
   const code = loadServerCode();
-  const guidanceFn = extractFunction(code, 'buildProfileGuidance');
+  const profileConst = extractConstant(code, 'WORKLOAD_PROFILES');
 
-  assert(guidanceFn.includes('VERIFY'), 'refactor guidance should include VERIFY phase');
-  assert(guidanceFn.includes('listDirectory the affected directories'), 'verify should mention listDirectory confirmation');
-  assert(guidanceFn.includes('Verify only after at least one mutation batch has executed'), 'verify must be deferred until after mutations');
+  assert(profileConst.includes('VERIFY'), 'refactor guidance should include VERIFY phase');
+  assert(profileConst.includes('listDirectory the affected directories'), 'verify should mention listDirectory confirmation');
+  assert(profileConst.includes('Verify only after at least one mutation batch has executed'), 'verify must be deferred until after mutations');
 
   console.log('  ✓ verify-phase: refactor guidance defers verification until after mutation batch');
 }
@@ -80,11 +112,11 @@ function testVerifyPhase() {
 // ── Test 4: Refactor guidance includes COMPLETE phase ────────────
 function testCompletePhase() {
   const code = loadServerCode();
-  const guidanceFn = extractFunction(code, 'buildProfileGuidance');
+  const profileConst = extractConstant(code, 'WORKLOAD_PROFILES');
 
-  assert(guidanceFn.includes('COMPLETE'), 'refactor guidance should include COMPLETE phase');
-  assert(guidanceFn.includes('complete:true'), 'complete phase should mention complete:true');
-  assert(guidanceFn.includes('after verification succeeds'), 'complete should be gated on verification');
+  assert(profileConst.includes('COMPLETE'), 'refactor guidance should include COMPLETE phase');
+  assert(profileConst.includes('complete:true'), 'complete phase should mention complete:true');
+  assert(profileConst.includes('after verification succeeds'), 'complete should be gated on verification');
 
   console.log('  ✓ complete-phase: refactor guidance includes explicit COMPLETE phase');
 }
@@ -92,12 +124,12 @@ function testCompletePhase() {
 // ── Test 5: Refactor guidance forbids repeated DISCOVER ──────────
 function testNoRepeatedDiscover() {
   const code = loadServerCode();
-  const guidanceFn = extractFunction(code, 'buildProfileGuidance');
+  const profileConst = extractConstant(code, 'WORKLOAD_PROFILES');
 
-  assert(guidanceFn.includes('Do not repeat DISCOVER'), 'guidance should forbid repeating DISCOVER');
-  assert(guidanceFn.includes('Do not list again in later steps'), 'guidance should explicitly forbid later listing');
-  assert(guidanceFn.includes('unless evidence is insufficient'), 'guidance should allow exception only for insufficient evidence');
-  assert(guidanceFn.includes('loop of repeated listDirectory'), 'guidance should warn against listDirectory loops');
+  assert(profileConst.includes('Do not repeat DISCOVER'), 'guidance should forbid repeating DISCOVER');
+  assert(profileConst.includes('Do not list again in later steps'), 'guidance should explicitly forbid later listing');
+  assert(profileConst.includes('unless evidence is insufficient'), 'guidance should allow exception only for insufficient evidence');
+  assert(profileConst.includes('loop of repeated listDirectory'), 'guidance should warn against listDirectory loops');
 
   console.log('  ✓ no-repeated-discover: refactor guidance forbids repeated DISCOVER');
 }
@@ -105,10 +137,10 @@ function testNoRepeatedDiscover() {
 // ── Test 6: Refactor guidance requires explicit failure ───────────
 function testExplicitFailure() {
   const code = loadServerCode();
-  const guidanceFn = extractFunction(code, 'buildProfileGuidance');
+  const profileConst = extractConstant(code, 'WORKLOAD_PROFILES');
 
-  assert(guidanceFn.includes('cannot be determined'), 'guidance should mention indeterminate paths case');
-  assert(guidanceFn.includes('fail with an explicit reason'), 'guidance should require explicit failure reason');
+  assert(profileConst.includes('cannot be determined'), 'guidance should mention indeterminate paths case');
+  assert(profileConst.includes('fail with an explicit reason'), 'guidance should require explicit failure reason');
 
   console.log('  ✓ explicit-failure: refactor guidance requires explicit failure for indeterminate paths');
 }
