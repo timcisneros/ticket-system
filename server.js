@@ -8931,7 +8931,9 @@ async function runAgentTicket(runId) {
           });
           }
           error.workspaceAction = error.workspaceAction || action;
-          throw error;
+          if (error.failureKind !== 'workspace_error') {
+            throw error;
+          }
         }
       }
 

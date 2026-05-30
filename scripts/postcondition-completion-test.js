@@ -17,7 +17,9 @@ const DATA_FILES = ['agents.json', 'allocation-plans.json', 'events.jsonl', 'gro
 for (const file of DATA_FILES) {
   const src = path.join(REAL_DATA_DIR, file);
   const dst = path.join(DATA_DIR, file);
-  if (fs.existsSync(src)) {
+  if (file === 'events.jsonl') {
+    fs.writeFileSync(dst, '');
+  } else if (fs.existsSync(src)) {
     fs.copyFileSync(src, dst);
   } else {
     fs.writeFileSync(dst, '[]');
