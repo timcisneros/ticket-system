@@ -12,6 +12,22 @@ const WORKSPACE_ROOT = createTempWorkspaceRoot('operational-endurance');
 const PORT = process.env.PORT || '3448';
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const STAMP = Date.now();
+const REAL_MODE = process.env.REAL_MODEL_BENCHMARK === '1';
+function positiveIntegerEnv(name, fallback) {
+  const value = parseInt(process.env[name] || '', 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+const BENCHMARK_AGENT_RUNTIME_MS = positiveIntegerEnv('BENCHMARK_AGENT_RUNTIME_MS', 5000);
+const RUN_WAIT_TIMEOUT_MS = positiveIntegerEnv('BENCHMARK_RUN_WAIT_TIMEOUT_MS', 20000);
+function isTimeoutFailure(reason) {
+  return /timeout|timed out|runtime duration limit/i.test(String(reason || ''));
+}
+function maybeWarnSlowLocalModelBudget() {
+  if (!REAL_MODE) return;
+  if (BENCHMARK_AGENT_RUNTIME_MS < 180000 || RUN_WAIT_TIMEOUT_MS < 180000) {
+    console.warn('[benchmark] REAL_MODEL_BENCHMARK=1 with runtimeLimitMs=' + BENCHMARK_AGENT_RUNTIME_MS + ' waitTimeoutMs=' + RUN_WAIT_TIMEOUT_MS + '; slow local models may need BENCHMARK_AGENT_RUNTIME_MS=180000 and BENCHMARK_RUN_WAIT_TIMEOUT_MS=180000 minimum, 300000 comfortable.');
+  }
+}
 const CYCLES = Math.max(1, parseInt(process.env.ENDURANCE_CYCLES || process.argv[2] || '10', 10) || 10);
 const DATA_FILES = [
   'agents.json',
@@ -245,7 +261,7 @@ async function createWorkflowTicket(cookie, agent, workflow, workflowInput, obje
 
 async function waitForTerminalRun(ticketId) {
   const started = Date.now();
-  while (Date.now() - started < 20000) {
+  while (Date.now() - started < RUN_WAIT_TIMEOUT_MS) {
     const runs = readJson('runs.json').filter(run => run.ticketId === ticketId);
     const run = runs[runs.length - 1];
     if (run && ['completed', 'failed', 'interrupted'].includes(run.status)) return run;
@@ -396,6 +412,7 @@ async function runCycle(cookie, agent, cycle, summary) {
 }
 
 async function main() {
+  maybeWarnSlowLocalModelBudget();
   const startedAt = Date.now();
   const preloadPath = createFakeOpenAIPreload();
   const agent = seedAgent();
@@ -410,8 +427,13 @@ async function main() {
     consequenceMissing: 0,
     postconditionCheckMissing: 0,
     violationCheckMissing: 0,
-    durationMs: 0
+    durationMs: 0,
+    runtimeLimitMs: BENCHMARK_AGENT_RUNTIME_MS,
+    waitTimeoutMs: RUN_WAIT_TIMEOUT_MS,
+    model: null,
+    timeoutCompatible: null
   };
+  summary.model = agent.model || null;
 
   const server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
@@ -419,13 +441,14 @@ async function main() {
       ...process.env,
       NODE_ENV: 'test',
       NODE_OPTIONS: `--require ${preloadPath}`,
+      AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT: '1',
       PORT,
       DATA_DIR,
       WORKSPACE_ROOT,
       AGENT_MAX_EXECUTION_STEPS: '4',
       AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
       AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
-      AGENT_MAX_RUNTIME_DURATION_MS: '5000',
+      AGENT_MAX_RUNTIME_DURATION_MS: String(BENCHMARK_AGENT_RUNTIME_MS),
       WORKFLOW_MAX_MUTATIONS: '4'
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -445,11 +468,13 @@ async function main() {
         summary.passed += 1;
       } catch (error) {
         summary.failed += 1;
+        summary.timeoutCompatible = !isTimeoutFailure(error.message || String(error));
         throw error;
       }
     }
   } finally {
     summary.durationMs = Date.now() - startedAt;
+    if (summary.timeoutCompatible === null) summary.timeoutCompatible = true;
     console.log(JSON.stringify(summary));
 
     server.kill();

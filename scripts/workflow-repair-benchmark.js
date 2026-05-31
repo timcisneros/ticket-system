@@ -14,6 +14,24 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 const STAMP = Date.now();
 const REAL_MODE = process.env.REAL_MODEL_BENCHMARK === '1';
 const RESULTS_FILE = path.join(REAL_DATA_DIR, 'benchmark-results.jsonl');
+function positiveIntegerEnv(name, fallback) {
+  const value = parseInt(process.env[name] || '', 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+const BENCHMARK_AGENT_RUNTIME_MS = positiveIntegerEnv('BENCHMARK_AGENT_RUNTIME_MS', 5000);
+const RUN_WAIT_TIMEOUT_MS = positiveIntegerEnv('BENCHMARK_RUN_WAIT_TIMEOUT_MS', 15000);
+function isTimeoutFailure(reason) {
+  return /timeout|timed out|runtime duration limit/i.test(String(reason || ''));
+}
+function timeoutCompatibleFromFailure(reason) {
+  return reason ? !isTimeoutFailure(reason) : true;
+}
+function maybeWarnSlowLocalModelBudget() {
+  if (!REAL_MODE) return;
+  if (BENCHMARK_AGENT_RUNTIME_MS < 180000 || RUN_WAIT_TIMEOUT_MS < 180000) {
+    console.warn('[benchmark] REAL_MODEL_BENCHMARK=1 with runtimeLimitMs=' + BENCHMARK_AGENT_RUNTIME_MS + ' waitTimeoutMs=' + RUN_WAIT_TIMEOUT_MS + '; slow local models may need BENCHMARK_AGENT_RUNTIME_MS=180000 and BENCHMARK_RUN_WAIT_TIMEOUT_MS=180000 minimum, 300000 comfortable.');
+  }
+}
 const HARVESTED_CASES_FILE = path.join(REAL_DATA_DIR, 'benchmark-cases.jsonl');
 const INCLUDE_HARVESTED = process.env.INCLUDE_HARVESTED_BENCHMARK_CASES === '1';
 const DATA_FILES = [
@@ -353,7 +371,7 @@ async function createWorkflowTicket(cookie, agent, workflow, workflowInput, obje
 
 async function waitForTerminalRun(ticketId) {
   const started = Date.now();
-  while (Date.now() - started < 15000) {
+  while (Date.now() - started < RUN_WAIT_TIMEOUT_MS) {
     const runs = readJson('runs.json').filter(run => run.ticketId === ticketId);
     const run = runs[runs.length - 1];
     if (run && ['completed', 'failed', 'interrupted'].includes(run.status)) return run;
@@ -456,6 +474,9 @@ async function runRepairCase(cookie, agent, repairCase) {
     benchmark: 'workflow-repair',
     case: repairCase.marker,
     model: agent.model || null,
+    runtimeLimitMs: BENCHMARK_AGENT_RUNTIME_MS,
+    waitTimeoutMs: RUN_WAIT_TIMEOUT_MS,
+    timeoutCompatible: null,
     passed: false,
     durationMs: 0,
     draftCreated: false,
@@ -525,6 +546,7 @@ async function runRepairCase(cookie, agent, repairCase) {
     const result = {
       ...base,
       passed: repairSucceeded,
+      timeoutCompatible: true,
       durationMs: Date.now() - startedAt,
       draftCreated: Boolean(replacementDraft),
       validWorkflow: Boolean(enabledDraft && enabledDraft.enabled === true),
@@ -543,7 +565,8 @@ async function runRepairCase(cookie, agent, repairCase) {
     const result = {
       ...base,
       durationMs: Date.now() - startedAt,
-      failureReason: error.message || String(error)
+      failureReason: error.message || String(error),
+      timeoutCompatible: timeoutCompatibleFromFailure(error.message || String(error))
     };
     if (!REAL_MODE) throw error;
     return result;
@@ -551,6 +574,7 @@ async function runRepairCase(cookie, agent, repairCase) {
 }
 
 async function main() {
+  maybeWarnSlowLocalModelBudget();
   const failingWorkflows = seedFailingWorkflows();
   const preloadPath = REAL_MODE ? null : createFakeOpenAIPreload();
   const agent = seedAgent();
@@ -559,14 +583,14 @@ async function main() {
     env: {
       ...process.env,
       NODE_ENV: 'test',
-      ...(preloadPath ? { NODE_OPTIONS: `--require ${preloadPath}` } : {}),
+      ...(preloadPath ? { NODE_OPTIONS: `--require ${preloadPath}`, AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT: '1' } : {}),
       PORT,
       DATA_DIR,
       WORKSPACE_ROOT,
       AGENT_MAX_EXECUTION_STEPS: '4',
       AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
       AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
-      AGENT_MAX_RUNTIME_DURATION_MS: '5000',
+      AGENT_MAX_RUNTIME_DURATION_MS: String(BENCHMARK_AGENT_RUNTIME_MS),
       WORKFLOW_MAX_MUTATIONS: '4'
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -621,7 +645,13 @@ async function main() {
       results.push(result);
     }
 
-    console.log(JSON.stringify({ results }));
+    console.log(JSON.stringify({
+      runtimeLimitMs: BENCHMARK_AGENT_RUNTIME_MS,
+      waitTimeoutMs: RUN_WAIT_TIMEOUT_MS,
+      model: agent.model || null,
+      timeoutCompatible: results.every(result => result.timeoutCompatible !== false),
+      results
+    }));
   } finally {
     server.kill();
     await new Promise(resolve => server.once('exit', resolve));
