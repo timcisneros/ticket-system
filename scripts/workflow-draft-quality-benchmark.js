@@ -14,6 +14,7 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 const STAMP = Date.now();
 const REAL_MODE = process.env.REAL_MODEL_BENCHMARK === '1';
 const RESULTS_FILE = path.join(REAL_DATA_DIR, 'benchmark-results.jsonl');
+const ARTIFACT_DIR = path.join(REAL_DATA_DIR, 'benchmark-artifacts', 'workflow-draft');
 function positiveIntegerEnv(name, fallback) {
   const value = parseInt(process.env[name] || '', 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -111,6 +112,96 @@ function assert(condition, message) {
 function appendBenchmarkResult(record) {
   if (!REAL_MODE) return;
   fs.appendFileSync(RESULTS_FILE, `${JSON.stringify(record)}\n`);
+}
+
+function readJsonIfExists(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    return { readError: error.message };
+  }
+}
+
+function safeFileSegment(value) {
+  return String(value || 'unknown').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';
+}
+
+function compactWorkflowDraft(workflow) {
+  if (!workflow || typeof workflow !== 'object') return null;
+  return {
+    id: workflow.id || null,
+    name: workflow.name || null,
+    enabled: workflow.enabled === true,
+    createdByRunId: workflow.createdByRunId || null,
+    createdByAgentId: workflow.createdByAgentId || null,
+    createdByType: workflow.createdByType || null,
+    actionTypes: Array.isArray(workflow.actions) ? workflow.actions.map(step => step && step.action || null) : [],
+    actionCount: Array.isArray(workflow.actions) ? workflow.actions.length : 0,
+    postconditionCount: Array.isArray(workflow.postconditions) ? workflow.postconditions.length : 0
+  };
+}
+
+function extractModelResponseTextPrefix(replaySnapshot) {
+  const responses = replaySnapshot && Array.isArray(replaySnapshot.modelResponses)
+    ? replaySnapshot.modelResponses
+    : [];
+  const lastWithText = responses.filter(item => typeof item.text === 'string').pop();
+  return lastWithText ? lastWithText.text.slice(0, 2000) : null;
+}
+
+function writeFailureArtifact(benchmarkCase, agent, result, evidence) {
+  if (!REAL_MODE || result.passed) return;
+
+  const run = evidence.draftRun || null;
+  const replaySnapshotPath = run && run.id
+    ? path.join(DATA_DIR, 'replay-snapshots', `run-${run.id}.json`)
+    : null;
+  const replaySnapshot = replaySnapshotPath ? readJsonIfExists(replaySnapshotPath) : null;
+  const providerRequests = replaySnapshot && Array.isArray(replaySnapshot.providerRequests)
+    ? replaySnapshot.providerRequests
+    : [];
+  const modelResponses = replaySnapshot && Array.isArray(replaySnapshot.modelResponses)
+    ? replaySnapshot.modelResponses
+    : [];
+  const parsedPlans = replaySnapshot && Array.isArray(replaySnapshot.parsedModelPlans)
+    ? replaySnapshot.parsedModelPlans
+    : [];
+  const emittedActions = parsedPlans.flatMap(plan => Array.isArray(plan.actions) ? plan.actions : []);
+  const workflows = evidence.workflows || readJson('workflows.json');
+  const workflowsMatchingExpectedId = workflows
+    .filter(workflow => workflow.id === benchmarkCase.workflowId)
+    .map(compactWorkflowDraft);
+  const workflowsMatchingCreatedByRunId = run && run.id
+    ? workflows.filter(workflow => workflow.createdByRunId === run.id).map(compactWorkflowDraft)
+    : [];
+
+  const artifact = {
+    case: benchmarkCase.case,
+    timestamp: new Date().toISOString(),
+    runtimeLimitMs: BENCHMARK_AGENT_RUNTIME_MS,
+    waitTimeoutMs: RUN_WAIT_TIMEOUT_MS,
+    model: agent.model || null,
+    timeoutCompatible: result.timeoutCompatible,
+    failureReason: result.failureReason,
+    ticketId: evidence.draftTicket ? evidence.draftTicket.id : null,
+    runId: run ? run.id : null,
+    runStatus: run ? run.status || null : null,
+    runError: run ? run.error || null : null,
+    providerRequestCount: providerRequests.length,
+    modelResponseCount: modelResponses.length,
+    parsedPlanCount: parsedPlans.length,
+    actionCount: emittedActions.length,
+    emittedActionTypes: emittedActions.map(action => action && action.operation || null),
+    modelResponseTextPrefix: extractModelResponseTextPrefix(replaySnapshot),
+    workflowsMatchingExpectedId,
+    workflowsMatchingCreatedByRunId,
+    validation: evidence.validation
+  };
+
+  fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
+  const fileName = `${STAMP}-${safeFileSegment(benchmarkCase.case)}-${safeFileSegment(run ? run.id : 'no-run')}.json`;
+  fs.writeFileSync(path.join(ARTIFACT_DIR, fileName), JSON.stringify(artifact, null, 2));
 }
 
 function createFakeOpenAIPreload() {
@@ -347,6 +438,22 @@ async function enableWorkflow(cookie, workflow) {
 
 async function runBenchmarkCase(cookie, agent, benchmarkCase) {
   const startedAt = Date.now();
+  const evidence = {
+    draftTicket: null,
+    draftRun: null,
+    workflows: null,
+    validation: {
+      expectedWorkflowFound: false,
+      createdByRunWorkflowFound: false,
+      draftCreated: false,
+      actionValidationPassed: false,
+      postconditionValidationPassed: false,
+      enabledByOperator: false,
+      executionRunCompleted: false,
+      postconditionsPassed: false,
+      violationsClear: false
+    }
+  };
   const base = {
     benchmark: 'workflow-draft',
     case: benchmarkCase.case,
@@ -368,18 +475,28 @@ async function runBenchmarkCase(cookie, agent, benchmarkCase) {
 
   try {
     const draftTicket = await createAgentTicket(cookie, agent, benchmarkCase.prompt);
+    evidence.draftTicket = draftTicket || null;
     const draftRun = await waitForTerminalRun(draftTicket.id);
+    evidence.draftRun = draftRun || null;
     const workflows = readJson('workflows.json');
-    const draft = workflows.find(workflow => workflow.id === benchmarkCase.workflowId) ||
-      workflows.find(workflow => workflow.createdByRunId === draftRun.id);
+    evidence.workflows = workflows;
+    const expectedDraft = workflows.find(workflow => workflow.id === benchmarkCase.workflowId);
+    const runDraft = workflows.find(workflow => workflow.createdByRunId === draftRun.id);
+    evidence.validation.expectedWorkflowFound = Boolean(expectedDraft);
+    evidence.validation.createdByRunWorkflowFound = Boolean(runDraft);
+    const draft = expectedDraft || runDraft;
     const draftCreated = Boolean(draft && draft.createdByType === 'agent' && draft.createdByAgentId === agent.id && draft.createdByRunId === draftRun.id && draft.enabled === false);
+    evidence.validation.draftCreated = draftCreated;
 
     assert(draftCreated, `Draft was not created correctly for ${benchmarkCase.workflowId}`);
     assertUsesOnlyExistingActions(draft);
+    evidence.validation.actionValidationPassed = true;
     assertMutatingWorkflowHasPostconditions(draft);
+    evidence.validation.postconditionValidationPassed = true;
 
     const enabledDraft = await enableWorkflow(cookie, draft);
     const enabledByOperator = Boolean(enabledDraft && enabledDraft.enabled === true);
+    evidence.validation.enabledByOperator = enabledByOperator;
     assert(enabledByOperator, `Draft was not enabled by operator for ${draft.id}`);
 
     const executionTicket = await createWorkflowTicket(
@@ -391,6 +508,13 @@ async function runBenchmarkCase(cookie, agent, benchmarkCase) {
     );
     const executionRun = await waitForTerminalRun(executionTicket.id);
     const runState = await getRunState(cookie, executionRun.id);
+    evidence.validation.executionRunCompleted = executionRun.status === 'completed';
+    evidence.validation.postconditionsPassed = Boolean(runState.runEvaluation &&
+      runState.runEvaluation.effectiveness &&
+      runState.runEvaluation.effectiveness.status === 'passed');
+    evidence.validation.violationsClear = Boolean(runState.runEvaluation &&
+      runState.runEvaluation.violations &&
+      runState.runEvaluation.violations.status === 'none');
     const result = {
       ...base,
       passed: true,
@@ -420,6 +544,7 @@ async function runBenchmarkCase(cookie, agent, benchmarkCase) {
       failureReason: error.message || String(error),
       timeoutCompatible: timeoutCompatibleFromFailure(error.message || String(error))
     };
+    writeFailureArtifact(benchmarkCase, agent, result, evidence);
     if (!REAL_MODE) throw error;
     return result;
   }
