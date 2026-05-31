@@ -26,6 +26,8 @@ data/benchmark-results.jsonl
 
 Real-mode failures are recorded with `passed:false` and `failureReason`; mocked mode still fails the process on regressions.
 
+Slow local real-model benchmarks require configurable timeout budgets. Short benchmark defaults are suitable for fast CI, but they are not evidence of model or runtime failure when evaluating slow local models. Use explicit timeout overrides such as `BENCHMARK_AGENT_RUNTIME_MS` and `BENCHMARK_RUN_WAIT_TIMEOUT_MS` when running observational real-model benchmarks.
+
 Harvest real failed workflow runs into future repair benchmark fixtures:
 
 ```sh
