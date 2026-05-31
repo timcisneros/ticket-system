@@ -352,6 +352,26 @@ function createFakeOpenAIPreload() {
     "    });",
     "  }",
     "",
+    "  if (combined.includes('workflow-draft-intent-numeric-id')) {",
+    "    return okResponse({",
+    "      message: 'Creating workflow draft intent with numeric id.',",
+    "      actions: [",
+    "        { operation: 'createWorkflowDraftIntent', args: {",
+    "          id: '12345',",
+    "          name: 'Numeric id draft intent',",
+    "          writes: [",
+    "            { path: 'numeric-intent-summary.txt', content: 'numeric intent summary content' }",
+    "          ],",
+    "          postconditions: [",
+    "            { type: 'fileExists', path: 'numeric-intent-summary.txt' },",
+    "            { type: 'fileContains', path: 'numeric-intent-summary.txt', contains: 'numeric intent summary content' }",
+    "          ]",
+    "        } }",
+    "      ],",
+    "      complete: false",
+    "    });",
+    "  }",
+    "",
     "  if (combined.includes('workflow-draft-intent')) {",
     "    return okResponse({",
     "      message: 'Creating workflow draft from intent.',",
@@ -798,7 +818,34 @@ async function main() {
       }
     );
 
-    // 10. unsupported workflow draft objectives fail terminally without retrying until timeout
+    // 10. workflow draft intent rejects bare numeric ids with a clear terminal error
+    await runScenario(
+      preloadPath,
+      agent,
+      `workflow-draft-intent-numeric-id ${STAMP}`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+      },
+      {
+        expectedStatus: 'failed',
+        expectNoPostcondition: true,
+        verify: async ({ run, snapshot }) => {
+          const expectedError = 'createWorkflowDraftIntent.id must be a descriptive non-numeric id such as draft-summary-file-123 or draft-verified-output-123';
+          assert(run.error === expectedError, 'Numeric workflow draft intent id should preserve clear validation error');
+          assert(snapshot.failureReason === expectedError, 'Numeric workflow draft intent id should preserve failure reason');
+          assert(snapshot.parsedModelPlans.length === 1, 'Numeric id validation should not retry or recover');
+          assert(snapshot.workflowDraftIntents.length === 0, 'Invalid numeric id intent should not record compiled workflow intent');
+          assert(snapshot.workflowDrafts.length === 0, 'Invalid numeric id intent should not create a workflow draft');
+          const draft = readJson('workflows.json').find(workflow => workflow.id === '12345');
+          assert(!draft, 'Invalid numeric id should not create a workflow under the numeric id');
+        }
+      }
+    );
+
+    // 11. unsupported workflow draft objectives fail terminally without retrying until timeout
     await runScenario(
       preloadPath,
       agent,
@@ -934,6 +981,7 @@ async function main() {
       partialMutationHandled: true,
       workflowDraftCreated: true,
       workflowDraftIntentCreated: true,
+      workflowDraftIntentNumericIdRejected: true,
       unsupportedObjectiveFailed: true,
       handoffTaskExecuted: true,
       handoffInvalidPathRejected: true,

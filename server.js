@@ -6903,6 +6903,16 @@ function requireIntentString(value, label) {
   return value.trim();
 }
 
+function assertWorkflowDraftIntentId(value, label) {
+  const id = requireIntentString(value, label);
+  if (/^\d+$/.test(id)) {
+    const error = new Error(`${label} must be a descriptive non-numeric id such as draft-summary-file-123 or draft-verified-output-123`);
+    error.code = 'WORKFLOW_DRAFT_INTENT_INVALID';
+    throw error;
+  }
+  return id;
+}
+
 function assertWorkflowDraftIntentRelativePath(value, label) {
   const candidate = requireIntentString(value, label);
   const normalized = candidate.replace(/\\/g, '/');
@@ -6957,7 +6967,7 @@ function compileWorkflowDraftIntent(intentInput) {
     throw error;
   }
 
-  const id = requireIntentString(intent.id, 'createWorkflowDraftIntent.id');
+  const id = assertWorkflowDraftIntentId(intent.id, 'createWorkflowDraftIntent.id');
   const name = requireIntentString(intent.name, 'createWorkflowDraftIntent.name');
   if (!Array.isArray(intent.writes) || intent.writes.length === 0) {
     const error = new Error('createWorkflowDraftIntent.writes must contain at least one write');
@@ -8309,7 +8319,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
     ? [
         'If the ticket asks to create, draft, define, or repair a simple workflow that writes files, use createWorkflowDraftIntent. Do not perform the workflow output actions directly. Emit exactly one workflow draft action and no writeFile/createFolder/readFile/listDirectory actions for that response.',
         'For workflow draft tickets, creating the disabled draft may satisfy the ticket if the objective was only to create that draft. Executing the workflow output actions directly does not satisfy a workflow draft objective.',
-        'createWorkflowDraftIntent is only for flat simple write workflows. Args shape: {"id":"string","name":"string","writes":[{"path":"relative/path","content":"text"}],"postconditions":[{"type":"fileExists","path":"relative/path"},{"type":"fileContains","path":"relative/path","contains":"text"}]}.',
+        'createWorkflowDraftIntent is only for flat simple write workflows. Args shape: {"id":"descriptive-non-numeric-slug","name":"string","writes":[{"path":"relative/path","content":"text"}],"postconditions":[{"type":"fileExists","path":"relative/path"},{"type":"fileContains","path":"relative/path","contains":"text"}]}. Use ids such as draft-summary-file-123 or draft-verified-output-123; never use a bare number.',
         'The complete flag belongs only at the top level of your response. Never put complete inside action args.',
         'All createWorkflowDraftIntent paths must be relative workspace paths like "note.txt" or "reports/note.txt". Never use absolute paths or runtimeEnvelope.workspaceRoot in a path.',
         'createWorkflowDraftIntent does not support branching, conditions, arbitrary actions, next fields, templates, or workflow JSON.',
@@ -8329,7 +8339,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'Do not emit createWorkflowDraft. Normal agents are not allowed to submit canonical workflow JSON.'
       ];
   const workflowDraftIntentArgReminder = includeWorkflowDraftPromptGuidance
-    ? 'createWorkflowDraftIntent args: { "id":"string", "name":"string", "writes":[{"path":"string","content":"string"}],"postconditions":[{"type":"fileExists","path":"string"},{"type":"fileContains","path":"string","contains":"string"}] }.'
+    ? 'createWorkflowDraftIntent args: { "id":"descriptive non-numeric slug, e.g. draft-summary-file-123", "name":"string", "writes":[{"path":"string","content":"string"}],"postconditions":[{"type":"fileExists","path":"string"},{"type":"fileContains","path":"string","contains":"string"}] }.'
     : null;
   const workflowDraftIntentResponseFields = includeWorkflowDraftPromptGuidance
     ? ',"id":"for createWorkflowDraftIntent","name":"for createWorkflowDraftIntent","writes":"for createWorkflowDraftIntent","postconditions":"for createWorkflowDraftIntent"'
