@@ -9187,7 +9187,17 @@ function createLocalWorkspaceProvider(root) {
       }
 
       if (!stat.isFile()) {
-        throw new Error('Path is not a file');
+        throw createStructuredWorkspaceError(
+          `Path is not a file: ${resolved.relativePath}`,
+          'WORKSPACE_PATH_TYPE_CONFLICT',
+          'workspace_error',
+          {
+            operation: 'readFile',
+            path: resolved.relativePath,
+            expectedType: 'file',
+            actualType: stat.isDirectory() ? 'directory' : 'other'
+          }
+        );
       }
 
       try {
