@@ -8267,6 +8267,34 @@ function buildPhaseGatedCatalog(currentPhase, baseAllowedOps) {
   return effectiveOps.length > 0 ? effectiveOps : baseAllowedOps;
 }
 
+function compactRuntimeEnvelopeForPrompt(runtimeEnvelope) {
+  const compact = { ...(runtimeEnvelope || {}) };
+
+  if (compact.allocationPlanId === null) delete compact.allocationPlanId;
+  if (compact.allocationItemId === null) delete compact.allocationItemId;
+  if (compact.allocationItem === null) delete compact.allocationItem;
+  if (compact.allocationSubtask === null) delete compact.allocationSubtask;
+  if (Array.isArray(compact.ownedOutputPaths) && compact.ownedOutputPaths.length === 0) delete compact.ownedOutputPaths;
+  if (compact.workloadProfile === null) delete compact.workloadProfile;
+
+  return compact;
+}
+
+function compactTicketContextForPrompt(ticketObjective, previousActionResults, priorFailureContext) {
+  const compact = {
+    ticketObjective
+  };
+
+  if (Array.isArray(previousActionResults) && previousActionResults.length > 0) {
+    compact.previousActionResults = previousActionResults;
+  }
+  if (priorFailureContext !== null && priorFailureContext !== undefined) {
+    compact.priorFailureContext = priorFailureContext;
+  }
+
+  return compact;
+}
+
 function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null) {
   const baseAllowedOps = runtimeEnvelope.allowedOperations || AGENT_DIRECT_OPERATIONS;
   const currentPhase = runtimeEnvelope.currentPhase || 'planning';
@@ -8354,18 +8382,18 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
     {
       role: 'user',
       content: JSON.stringify({
-        runtimeEnvelope
+        runtimeEnvelope: compactRuntimeEnvelopeForPrompt(runtimeEnvelope)
       })
     },
     {
       role: 'user',
-      content: JSON.stringify({
-        ticketObjective: ticket.objective,
-        previousActionResults: actionResults,
-        priorFailureContext: actionResults.length === 0 && rerunMode === 'reassess'
+      content: JSON.stringify(compactTicketContextForPrompt(
+        ticket.objective,
+        actionResults,
+        actionResults.length === 0 && rerunMode === 'reassess'
           ? buildPriorFailureContext(ticket.id, runtimeEnvelope.runId)
           : null
-      })
+      ))
     }
   ];
 }

@@ -68,6 +68,46 @@ global.fetch = async function(_url, options = {}) {
   const input = Array.isArray(body.input) ? body.input : [];
   const combined = input.map(item => item && item.content ? String(item.content) : '').join('\\n');
 
+  if (combined.includes('conditional previous results prompt')) {
+    if (combined.includes('previousActionResults')) {
+      return okResponse({
+        message: 'Previous action results preserved.',
+        actions: [],
+        complete: true
+      });
+    }
+
+    return okResponse({
+      message: 'Reading file first.',
+      actions: [{ operation: 'readFile', args: { path: 'previous-source-${label}.txt' } }],
+      complete: false
+    });
+  }
+
+  if (combined.includes('conditional reassess prompt')) {
+    if (combined.includes('priorFailureContext')) {
+      return okResponse({
+        message: 'Prior failure context preserved.',
+        actions: [],
+        complete: true
+      });
+    }
+
+    return okResponse({
+      message: 'Triggering protected path failure.',
+      actions: [{ operation: 'writeFile', args: { path: 'package.json', content: 'blocked' } }],
+      complete: true
+    });
+  }
+
+  if (combined.includes('conditional allocated prompt')) {
+    return okResponse({
+      message: 'Writing allocated file.',
+      actions: [{ operation: 'writeFile', args: { path: 'allocated-${label}/owned.txt', content: 'ok' } }],
+      complete: true
+    });
+  }
+
   if (combined.includes('conditional handoff prompt handoff')) {
     return okResponse({
       message: 'Creating handoff task.',
@@ -159,6 +199,34 @@ async function createTicket(baseUrl, cookie, agent, objective) {
   assert(response.statusCode === 302, `Ticket create failed with HTTP ${response.statusCode}: ${response.body}`);
 }
 
+async function createAllocatedTicket(baseUrl, cookie, group, agent, objective, ownedPath) {
+  const response = await request(baseUrl, 'POST', '/tickets', {
+    cookie,
+    form: {
+      objective,
+      assignmentTargetType: 'group',
+      assignmentTargetId: String(group.id),
+      assignmentMode: 'allocated',
+      ownedOutputPaths: JSON.stringify({ [agent.id]: ownedPath })
+    }
+  });
+  assert(response.statusCode === 302, `Allocated ticket create failed with HTTP ${response.statusCode}: ${response.body}`);
+}
+
+function providerInput(snapshot) {
+  assert(Array.isArray(snapshot.providerRequests) && snapshot.providerRequests.length > 0, 'snapshot should include provider request');
+  const input = snapshot.providerRequests[0].body && snapshot.providerRequests[0].body.input;
+  assert(Array.isArray(input), 'provider request should include input array');
+  return input;
+}
+
+function combinedProviderInput(snapshot, requestIndex = 0) {
+  assert(Array.isArray(snapshot.providerRequests) && snapshot.providerRequests.length > requestIndex, `snapshot should include provider request ${requestIndex}`);
+  const input = snapshot.providerRequests[requestIndex].body && snapshot.providerRequests[requestIndex].body.input;
+  assert(Array.isArray(input), 'provider request should include input array');
+  return input.map(item => item && item.content ? String(item.content) : '').join('\n');
+}
+
 async function runScenario({ label, port, canonicalEnabled }) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `conditional-workflow-prompt-${label}-data-`));
   const workspaceRoot = createTempWorkspaceRoot(`conditional-workflow-prompt-${label}`);
@@ -181,6 +249,29 @@ async function runScenario({ label, port, canonicalEnabled }) {
     createdAt: new Date().toISOString()
   };
   fs.writeFileSync(path.join(dataDir, 'agents.json'), JSON.stringify([...agents, agent], null, 2));
+
+  const groups = readJson(dataDir, 'groups.json');
+  const group = {
+    id: Math.max(0, ...groups.map(item => item.id || 0)) + 1,
+    name: `ConditionalPromptGroup-${label}-${STAMP}`,
+    permissions: [],
+    canReceiveTickets: true
+  };
+  fs.writeFileSync(path.join(dataDir, 'groups.json'), JSON.stringify([...groups, group], null, 2));
+
+  const memberships = readJson(dataDir, 'memberships.json');
+  fs.writeFileSync(path.join(dataDir, 'memberships.json'), JSON.stringify([
+    ...memberships,
+    {
+      id: Math.max(0, ...memberships.map(item => item.id || 0)) + 1,
+      principalType: 'agent',
+      principalId: agent.id,
+      groupId: group.id
+    }
+  ], null, 2));
+
+  fs.mkdirSync(path.join(workspaceRoot, `allocated-${label}`), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, `previous-source-${label}.txt`), 'previous content');
 
   const server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
@@ -209,20 +300,42 @@ async function runScenario({ label, port, canonicalEnabled }) {
     const ordinaryObjective = `conditional prompt ordinary write ${label} ${STAMP}`;
     const workflowObjective = `conditional workflow prompt workflow ${label} ${STAMP}`;
     const handoffObjective = `conditional handoff prompt handoff ${label} ${STAMP}`;
+    const previousResultsObjective = `conditional previous results prompt ${label} ${STAMP}`;
+    const reassessObjective = `conditional reassess prompt ${label} ${STAMP}`;
+    const allocatedObjective = `conditional allocated prompt file ${label} ${STAMP}`;
     await createTicket(baseUrl, cookie, agent, ordinaryObjective);
     await createTicket(baseUrl, cookie, agent, workflowObjective);
     await createTicket(baseUrl, cookie, agent, handoffObjective);
+    await createTicket(baseUrl, cookie, agent, previousResultsObjective);
+    await createTicket(baseUrl, cookie, agent, reassessObjective);
+    await createAllocatedTicket(baseUrl, cookie, group, agent, allocatedObjective, `allocated-${label}/`);
 
     const tickets = readJson(dataDir, 'tickets.json');
     const ordinaryTicket = tickets.find(ticket => ticket.objective === ordinaryObjective);
     const workflowTicket = tickets.find(ticket => ticket.objective === workflowObjective);
     const handoffTicket = tickets.find(ticket => ticket.objective === handoffObjective);
+    const previousResultsTicket = tickets.find(ticket => ticket.objective === previousResultsObjective);
+    const reassessTicket = tickets.find(ticket => ticket.objective === reassessObjective);
+    const allocatedTicket = tickets.find(ticket => ticket.objective === allocatedObjective);
     const ordinaryRun = await waitForRun(dataDir, ordinaryTicket.id);
     const workflowRun = await waitForRun(dataDir, workflowTicket.id);
     const handoffRun = await waitForRun(dataDir, handoffTicket.id);
+    const previousResultsRun = await waitForRun(dataDir, previousResultsTicket.id);
+    const firstReassessRun = await waitForRun(dataDir, reassessTicket.id);
+    assert(firstReassessRun.status === 'failed', 'initial reassess fixture run should fail before rerun');
+    const reassessResponse = await request(baseUrl, 'POST', `/api/tickets/${reassessTicket.id}/rerun`, {
+      cookie,
+      body: { mode: 'reassess' }
+    });
+    assert(reassessResponse.statusCode === 200, `Reassess rerun failed with HTTP ${reassessResponse.statusCode}: ${reassessResponse.body}`);
+    const reassessRun = await waitForRun(dataDir, reassessTicket.id);
+    const allocatedRun = await waitForRun(dataDir, allocatedTicket.id);
     const ordinarySnapshot = readSnapshot(dataDir, ordinaryRun);
     const workflowSnapshot = readSnapshot(dataDir, workflowRun);
     const handoffSnapshot = readSnapshot(dataDir, handoffRun);
+    const previousResultsSnapshot = readSnapshot(dataDir, previousResultsRun);
+    const reassessSnapshot = readSnapshot(dataDir, reassessRun);
+    const allocatedSnapshot = readSnapshot(dataDir, allocatedRun);
 
     return {
       ordinaryPrompt: ordinarySnapshot.systemInstructionSnapshot,
@@ -230,7 +343,13 @@ async function runScenario({ label, port, canonicalEnabled }) {
       handoffPrompt: handoffSnapshot.systemInstructionSnapshot,
       ordinaryAllowedOperations: ordinarySnapshot.runtimeEnvelope.allowedOperations,
       workflowAllowedOperations: workflowSnapshot.runtimeEnvelope.allowedOperations,
-      handoffAllowedOperations: handoffSnapshot.runtimeEnvelope.allowedOperations
+      handoffAllowedOperations: handoffSnapshot.runtimeEnvelope.allowedOperations,
+      ordinaryInput: providerInput(ordinarySnapshot),
+      ordinaryCombinedInput: combinedProviderInput(ordinarySnapshot),
+      previousResultsSecondInput: combinedProviderInput(previousResultsSnapshot, 1),
+      reassessCombinedInput: combinedProviderInput(reassessSnapshot),
+      allocatedCombinedInput: combinedProviderInput(allocatedSnapshot),
+      allocatedRuntimeEnvelope: allocatedSnapshot.runtimeEnvelope
     };
   } finally {
     server.kill();
@@ -262,6 +381,29 @@ async function main() {
   assert(budgetPrompt.includes('bounded batch'), 'compact budget guidance should preserve batching guidance');
   assert(budgetPrompt.includes('complete:false'), 'compact budget guidance should preserve continuation discipline');
   assert(!budgetPrompt.includes('Do not fail or return an error just because the total task exceeds one response.'), 'verbose budget prose should be compacted');
+
+  const ordinaryCombinedInput = defaultScenario.ordinaryCombinedInput;
+  assert(!ordinaryCombinedInput.includes('"allocationPlanId":null'), 'ordinary prompt should omit null allocationPlanId');
+  assert(!ordinaryCombinedInput.includes('"allocationItemId":null'), 'ordinary prompt should omit null allocationItemId');
+  assert(!ordinaryCombinedInput.includes('"allocationItem":null'), 'ordinary prompt should omit null allocationItem');
+  assert(!ordinaryCombinedInput.includes('"allocationSubtask":null'), 'ordinary prompt should omit null allocationSubtask');
+  assert(!ordinaryCombinedInput.includes('"ownedOutputPaths":[]'), 'ordinary prompt should omit empty ownedOutputPaths');
+  assert(!ordinaryCombinedInput.includes('"workloadProfile":null'), 'ordinary prompt should omit null workloadProfile');
+  assert(!ordinaryCombinedInput.includes('"previousActionResults"'), 'ordinary prompt should omit empty previousActionResults');
+  assert(!ordinaryCombinedInput.includes('"priorFailureContext":null'), 'ordinary prompt should omit null priorFailureContext');
+
+  assert(defaultScenario.allocatedCombinedInput.includes('"allocationPlanId":'), 'allocated prompt should include populated allocationPlanId');
+  assert(defaultScenario.allocatedCombinedInput.includes('"allocationItemId":'), 'allocated prompt should include populated allocationItemId');
+  assert(defaultScenario.allocatedCombinedInput.includes('"allocationItem":{'), 'allocated prompt should include populated allocationItem');
+  assert(defaultScenario.allocatedCombinedInput.includes('"allocationSubtask":"'), 'allocated prompt should include populated allocationSubtask');
+  assert(defaultScenario.allocatedCombinedInput.includes('"ownedOutputPaths":["allocated-default/"'), 'allocated prompt should include populated ownedOutputPaths');
+  assert(defaultScenario.allocatedRuntimeEnvelope.allocationPlanId, 'replay runtimeEnvelope should keep allocationPlanId');
+  assert(defaultScenario.allocatedRuntimeEnvelope.allocationItemId, 'replay runtimeEnvelope should keep allocationItemId');
+
+  assert(defaultScenario.previousResultsSecondInput.includes('"previousActionResults"'), 'second-step prompt should include non-empty previousActionResults');
+  assert(defaultScenario.previousResultsSecondInput.includes('readFile'), 'second-step previousActionResults should include prior readFile result');
+  assert(defaultScenario.reassessCombinedInput.includes('"priorFailureContext"'), 'reassess prompt should include priorFailureContext');
+  assert(defaultScenario.reassessCombinedInput.includes('"recoveryClassification":"failed"'), 'reassess priorFailureContext should preserve failure classification');
 
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentProse), 'ordinary prompt should not include workflow draft intent prose');
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentArgs), 'ordinary prompt should not include workflow draft intent args reminder');
