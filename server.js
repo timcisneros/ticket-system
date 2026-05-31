@@ -9212,7 +9212,17 @@ function createLocalWorkspaceProvider(root) {
       const stat = fs.existsSync(resolved.resolvedPath) ? fs.lstatSync(resolved.resolvedPath) : null;
 
       if (stat && !stat.isFile()) {
-        throw new Error('Path is not a file');
+        throw createStructuredWorkspaceError(
+          `Path is not a file: ${resolved.relativePath}`,
+          'WORKSPACE_PATH_TYPE_CONFLICT',
+          'workspace_error',
+          {
+            operation: 'writeFile',
+            path: resolved.relativePath,
+            expectedType: 'file',
+            actualType: stat.isDirectory() ? 'directory' : 'other'
+          }
+        );
       }
 
       try {
