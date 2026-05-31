@@ -68,6 +68,21 @@ global.fetch = async function(_url, options = {}) {
   const input = Array.isArray(body.input) ? body.input : [];
   const combined = input.map(item => item && item.content ? String(item.content) : '').join('\\n');
 
+  if (combined.includes('conditional handoff prompt handoff')) {
+    return okResponse({
+      message: 'Creating handoff task.',
+      actions: [{
+        operation: 'createHandoffTask',
+        args: {
+          executor: 'ConditionalPrompt-${label}-${STAMP}',
+          operation: 'writeFile',
+          args: { path: 'handoff-${label}.txt', content: 'ok' }
+        }
+      }],
+      complete: true
+    });
+  }
+
   if (combined.includes('conditional workflow prompt workflow')) {
     return okResponse({
       message: 'Creating workflow draft intent.',
@@ -193,22 +208,29 @@ async function runScenario({ label, port, canonicalEnabled }) {
 
     const ordinaryObjective = `conditional prompt ordinary write ${label} ${STAMP}`;
     const workflowObjective = `conditional workflow prompt workflow ${label} ${STAMP}`;
+    const handoffObjective = `conditional handoff prompt handoff ${label} ${STAMP}`;
     await createTicket(baseUrl, cookie, agent, ordinaryObjective);
     await createTicket(baseUrl, cookie, agent, workflowObjective);
+    await createTicket(baseUrl, cookie, agent, handoffObjective);
 
     const tickets = readJson(dataDir, 'tickets.json');
     const ordinaryTicket = tickets.find(ticket => ticket.objective === ordinaryObjective);
     const workflowTicket = tickets.find(ticket => ticket.objective === workflowObjective);
+    const handoffTicket = tickets.find(ticket => ticket.objective === handoffObjective);
     const ordinaryRun = await waitForRun(dataDir, ordinaryTicket.id);
     const workflowRun = await waitForRun(dataDir, workflowTicket.id);
+    const handoffRun = await waitForRun(dataDir, handoffTicket.id);
     const ordinarySnapshot = readSnapshot(dataDir, ordinaryRun);
     const workflowSnapshot = readSnapshot(dataDir, workflowRun);
+    const handoffSnapshot = readSnapshot(dataDir, handoffRun);
 
     return {
       ordinaryPrompt: ordinarySnapshot.systemInstructionSnapshot,
       workflowPrompt: workflowSnapshot.systemInstructionSnapshot,
+      handoffPrompt: handoffSnapshot.systemInstructionSnapshot,
       ordinaryAllowedOperations: ordinarySnapshot.runtimeEnvelope.allowedOperations,
-      workflowAllowedOperations: workflowSnapshot.runtimeEnvelope.allowedOperations
+      workflowAllowedOperations: workflowSnapshot.runtimeEnvelope.allowedOperations,
+      handoffAllowedOperations: handoffSnapshot.runtimeEnvelope.allowedOperations
     };
   } finally {
     server.kill();
@@ -229,26 +251,44 @@ async function main() {
   const workflowIntentField = '"writes":"for createWorkflowDraftIntent"';
   const canonicalDisabled = 'Do not emit createWorkflowDraft. Normal agents are not allowed to submit canonical workflow JSON.';
   const canonicalEnabled = 'Trusted canonical workflow draft mode is enabled.';
+  const handoffProse = 'To hand one bounded write task to another agent, emit createHandoffTask.';
+  const handoffArgs = 'createHandoffTask args:';
 
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentProse), 'ordinary prompt should not include workflow draft intent prose');
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentArgs), 'ordinary prompt should not include workflow draft intent args reminder');
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentField), 'ordinary prompt should not include workflow draft intent response schema fields');
   assert(!defaultScenario.ordinaryPrompt.includes(canonicalDisabled), 'ordinary prompt should not include canonical disabled warning');
   assert(defaultScenario.ordinaryAllowedOperations.includes('createWorkflowDraftIntent'), 'ordinary runtimeEnvelope.allowedOperations should still include createWorkflowDraftIntent');
+  assert(defaultScenario.ordinaryAllowedOperations.includes('createHandoffTask'), 'ordinary runtimeEnvelope.allowedOperations should still include createHandoffTask');
+  assert(!defaultScenario.ordinaryPrompt.includes(handoffProse), 'ordinary prompt should not include handoff prose');
+  assert(!defaultScenario.ordinaryPrompt.includes(handoffArgs), 'ordinary prompt should not include handoff args reminder');
 
   assert(defaultScenario.workflowPrompt.includes(workflowIntentProse), 'workflow prompt should include workflow draft intent prose');
   assert(defaultScenario.workflowPrompt.includes(workflowIntentArgs), 'workflow prompt should include workflow draft intent args reminder');
   assert(defaultScenario.workflowPrompt.includes(workflowIntentField), 'workflow prompt should include workflow draft intent response schema fields');
   assert(defaultScenario.workflowPrompt.includes(canonicalDisabled), 'workflow prompt should include canonical disabled warning when canonical env is off');
+  assert(!defaultScenario.workflowPrompt.includes(handoffProse), 'workflow prompt should not include handoff prose');
+  assert(!defaultScenario.workflowPrompt.includes(handoffArgs), 'workflow prompt should not include handoff args reminder');
+
+  assert(defaultScenario.handoffPrompt.includes(handoffProse), 'handoff prompt should include handoff prose');
+  assert(defaultScenario.handoffPrompt.includes(handoffArgs), 'handoff prompt should include handoff args reminder');
+  assert(defaultScenario.handoffAllowedOperations.includes('createHandoffTask'), 'handoff runtimeEnvelope.allowedOperations should include createHandoffTask');
 
   assert(!canonicalScenario.ordinaryPrompt.includes(workflowIntentProse), 'canonical ordinary prompt should not include workflow draft intent prose');
   assert(!canonicalScenario.ordinaryPrompt.includes(canonicalEnabled), 'canonical ordinary prompt should not include canonical enabled guidance');
   assert(!canonicalScenario.ordinaryPrompt.includes(canonicalDisabled), 'canonical ordinary prompt should not include canonical disabled warning');
   assert(canonicalScenario.ordinaryAllowedOperations.includes('createWorkflowDraftIntent'), 'canonical ordinary allowedOperations should still include createWorkflowDraftIntent');
+  assert(canonicalScenario.ordinaryAllowedOperations.includes('createHandoffTask'), 'canonical ordinary allowedOperations should still include createHandoffTask');
+  assert(!canonicalScenario.ordinaryPrompt.includes(handoffProse), 'canonical ordinary prompt should not include handoff prose');
+  assert(!canonicalScenario.ordinaryPrompt.includes(handoffArgs), 'canonical ordinary prompt should not include handoff args reminder');
 
   assert(canonicalScenario.workflowPrompt.includes(workflowIntentProse), 'canonical workflow prompt should include workflow draft intent prose');
   assert(canonicalScenario.workflowPrompt.includes(canonicalEnabled), 'canonical workflow prompt should include canonical enabled guidance');
   assert(canonicalScenario.workflowPrompt.includes('"workflow":"for createWorkflowDraft only"'), 'canonical workflow response schema should include canonical workflow field');
+  assert(!canonicalScenario.workflowPrompt.includes(handoffProse), 'canonical workflow prompt should not include handoff prose');
+  assert(!canonicalScenario.workflowPrompt.includes(handoffArgs), 'canonical workflow prompt should not include handoff args reminder');
+  assert(canonicalScenario.handoffPrompt.includes(handoffProse), 'canonical handoff prompt should include handoff prose');
+  assert(canonicalScenario.handoffPrompt.includes(handoffArgs), 'canonical handoff prompt should include handoff args reminder');
 
   console.log(JSON.stringify({ conditionalWorkflowPrompt: true }));
 }

@@ -8252,6 +8252,14 @@ function isWorkflowDraftPromptObjective(objective) {
     (/\bpostcondition(s)?\b/.test(text) && /\b(draft|create|define|verify|workflow)\b/.test(text));
 }
 
+function isHandoffPromptObjective(objective) {
+  const text = String(objective || '').toLowerCase();
+  if (!text.trim()) return false;
+
+  return /\b(createhandofftask|handoff|hand off|delegate|delegation)\b/.test(text) ||
+    (/\bworkflow(s)?\b/.test(text) && /\b(handoff|hand off|delegate|delegation|executor|another agent)\b/.test(text));
+}
+
 function buildPhaseGatedCatalog(currentPhase, baseAllowedOps) {
   const ops = PHASE_OPERATIONS[currentPhase] || baseAllowedOps;
   // Always intersect with base allowed ops (which may exclude workflow/handoff ops)
@@ -8265,6 +8273,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
   const phaseGatedOps = buildPhaseGatedCatalog(currentPhase, baseAllowedOps);
   const allowedOperationList = phaseGatedOps.join('|');
   const includeWorkflowDraftPromptGuidance = isWorkflowDraftPromptObjective(ticket.objective);
+  const includeHandoffPromptGuidance = isHandoffPromptObjective(ticket.objective);
   const workflowDraftArgShape = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED && includeWorkflowDraftPromptGuidance
     ? ',"workflow":"for createWorkflowDraft only"'
     : '';
@@ -8297,6 +8306,15 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
   const workflowDraftIntentResponseFields = includeWorkflowDraftPromptGuidance
     ? ',"id":"for createWorkflowDraftIntent","name":"for createWorkflowDraftIntent","writes":"for createWorkflowDraftIntent","postconditions":"for createWorkflowDraftIntent"'
     : '';
+  const handoffGuidance = includeHandoffPromptGuidance
+    ? [
+        'To hand one bounded write task to another agent, emit createHandoffTask. It executes directly through runtime authority; the executor model will not receive prose or make a model call.',
+        'createHandoffTask is only for one writeFile operation to one existing executor. Args shape: {"executor":"agent name","operation":"writeFile","args":{"path":"relative/path.md","content":"exact content"}}. Do not include task descriptions, action lists, branches, or workflow JSON.'
+      ]
+    : [];
+  const handoffArgReminder = includeHandoffPromptGuidance
+    ? 'createHandoffTask args: { "executor":"agent name", "operation":"writeFile", "args":{"path":"relative/path","content":"exact content"} }.'
+    : null;
 
   return [
     {
@@ -8327,8 +8345,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'Your current execution phase is runtimeEnvelope.currentPhase. In this phase, the allowed operations are: ' + phaseGatedOps.join(', ') + '.',
         'If you already performed inspection (listDirectory or readFile) and are now in the mutation phase, do not emit listDirectory or readFile again unless you are explicitly verifying results.',
         ...workflowDraftIntentGuidance,
-        'To hand one bounded write task to another agent, emit createHandoffTask. It executes directly through runtime authority; the executor model will not receive prose or make a model call.',
-        'createHandoffTask is only for one writeFile operation to one existing executor. Args shape: {"executor":"agent name","operation":"writeFile","args":{"path":"relative/path.md","content":"exact content"}}. Do not include task descriptions, action lists, branches, or workflow JSON.',
+        ...handoffGuidance,
         ...canonicalWorkflowDraftGuidance,
         ...buildProfileGuidance(ticket.objective),
         ...buildTransitionGuidance(actionResults),
@@ -8337,7 +8354,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'Each action must be exactly {"operation":"operationName","args":{...}} with no extra fields.',
         'Required args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path "" only for the workspace root in listDirectory.',
         ...(workflowDraftIntentArgReminder ? [workflowDraftIntentArgReminder] : []),
-        'createHandoffTask args: { "executor":"agent name", "operation":"writeFile", "args":{"path":"relative/path","content":"exact content"} }.',
+        ...(handoffArgReminder ? [handoffArgReminder] : []),
         'Respond only as JSON with this shape:',
         `{"message":"short summary","actions":[{"operation":"${allowedOperationList}","args":{"path":"relative/path","content":"for writeFile only","nextPath":"for renamePath only"${workflowDraftArgShape}${workflowDraftIntentResponseFields},"executor":"for createHandoffTask","operation":"writeFile for createHandoffTask","args":"nested args for createHandoffTask"}}],"complete":true|false}`
       ].join('\n')
