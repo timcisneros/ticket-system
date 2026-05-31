@@ -6684,6 +6684,22 @@ function parseWorkspaceOperation(action) {
   };
 }
 
+function normalizeWorkflowDraftIntentAction(action) {
+  if (!action || action.operation !== 'createWorkflowDraftIntent') return action;
+  if (!Object.prototype.hasOwnProperty.call(action, 'postconditions')) return action;
+  if (!action.args || typeof action.args !== 'object' || Array.isArray(action.args)) return action;
+  if (Object.prototype.hasOwnProperty.call(action.args, 'postconditions')) return action;
+
+  assertOnlyKeys(action, ['operation', 'args', 'postconditions'], 'Agent action');
+  return {
+    operation: action.operation,
+    args: {
+      ...action.args,
+      postconditions: action.postconditions
+    }
+  };
+}
+
 function parseAgentDirectAction(action) {
   if (!action || typeof action !== 'object' || Array.isArray(action)) {
     const error = new Error('Agent action must be an object');
@@ -6691,6 +6707,7 @@ function parseAgentDirectAction(action) {
     throw error;
   }
 
+  action = normalizeWorkflowDraftIntentAction(action);
   assertOnlyKeys(action, ['operation', 'args'], 'Agent action');
 
   if (typeof action.operation !== 'string' || !action.operation.trim()) {

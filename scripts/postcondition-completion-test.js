@@ -352,6 +352,66 @@ function createFakeOpenAIPreload() {
     "    });",
     "  }",
     "",
+    "  if (combined.includes('workflow-draft-intent-action-postconditions')) {",
+    "    return okResponse({",
+    "      message: 'Creating workflow draft intent with action-level postconditions.',",
+    "      actions: [",
+    "        { operation: 'createWorkflowDraftIntent', args: {",
+    "          id: 'agent-draft-intent-action-postconditions',",
+    "          name: 'Agent draft intent action postconditions',",
+    "          writes: [",
+    "            { path: 'intent-action-postconditions.txt', content: 'action postconditions content' }",
+    "          ]",
+    "        }, postconditions: [",
+    "          { type: 'fileExists', path: 'intent-action-postconditions.txt' },",
+    "          { type: 'fileContains', path: 'intent-action-postconditions.txt', contains: 'action postconditions content' }",
+    "        ] }",
+    "      ],",
+    "      complete: false",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('workflow-draft-intent-both-postconditions')) {",
+    "    return okResponse({",
+    "      message: 'Creating workflow draft intent with duplicate postcondition locations.',",
+    "      actions: [",
+    "        { operation: 'createWorkflowDraftIntent', args: {",
+    "          id: 'agent-draft-intent-both-postconditions',",
+    "          name: 'Agent draft intent both postconditions',",
+    "          writes: [",
+    "            { path: 'intent-both-postconditions.txt', content: 'both postconditions content' }",
+    "          ],",
+    "          postconditions: [",
+    "            { type: 'fileExists', path: 'intent-both-postconditions.txt' }",
+    "          ]",
+    "        }, postconditions: [",
+    "          { type: 'fileExists', path: 'intent-both-postconditions.txt' },",
+    "          { type: 'fileContains', path: 'intent-both-postconditions.txt', contains: 'both postconditions content' }",
+    "        ] }",
+    "      ],",
+    "      complete: false",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('workflow-draft-intent-action-note')) {",
+    "    return okResponse({",
+    "      message: 'Creating workflow draft intent with unsupported action-level note.',",
+    "      actions: [",
+    "        { operation: 'createWorkflowDraftIntent', args: {",
+    "          id: 'agent-draft-intent-action-note',",
+    "          name: 'Agent draft intent action note',",
+    "          writes: [",
+    "            { path: 'intent-action-note.txt', content: 'action note content' }",
+    "          ],",
+    "          postconditions: [",
+    "            { type: 'fileExists', path: 'intent-action-note.txt' }",
+    "          ]",
+    "        }, note: 'unsupported' }",
+    "      ],",
+    "      complete: false",
+    "    });",
+    "  }",
+    "",
     "  if (combined.includes('workflow-draft-intent-numeric-id')) {",
     "    return okResponse({",
     "      message: 'Creating workflow draft intent with numeric id.',",
@@ -818,7 +878,79 @@ async function main() {
       }
     );
 
-    // 10. workflow draft intent rejects bare numeric ids with a clear terminal error
+    // 10. action-level workflow draft intent postconditions are normalized when args.postconditions is absent
+    await runScenario(
+      preloadPath,
+      agent,
+      `workflow-draft-intent-action-postconditions ${STAMP}`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+      },
+      {
+        expectedStatus: 'completed',
+        expectNoPostcondition: true,
+        verify: async ({ run, snapshot }) => {
+          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-intent-action-postconditions');
+          assert(draft, 'Action-level postconditions intent should create a workflow draft');
+          assert(draft.enabled === false, 'Action-level postconditions draft should be disabled');
+          assert(draft.createdByRunId === run.id, 'Action-level postconditions draft should preserve createdByRunId');
+          assert(Array.isArray(draft.postconditions) && draft.postconditions.length === 2, 'Action-level postconditions should normalize into workflow.postconditions');
+          assert(snapshot.workflowDraftIntents.some(item => item.compiledWorkflowId === 'agent-draft-intent-action-postconditions'), 'Replay should record normalized workflow draft intent compilation');
+          assert(snapshot.workflowDrafts.some(item => item.workflowId === 'agent-draft-intent-action-postconditions'), 'Replay should record normalized workflow draft creation');
+        }
+      }
+    );
+
+    // 11. args.postconditions plus action-level postconditions remains rejected deterministically
+    await runScenario(
+      preloadPath,
+      agent,
+      `workflow-draft-intent-both-postconditions ${STAMP}`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+      },
+      {
+        expectedStatus: 'failed',
+        expectNoPostcondition: true,
+        verify: async ({ run, snapshot }) => {
+          assert(run.error === 'Agent action includes unsupported field: postconditions', 'Both postcondition locations should reject action-level postconditions');
+          assert(snapshot.failureReason === run.error, 'Both postcondition locations should preserve failure reason');
+          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-intent-both-postconditions');
+          assert(!draft, 'Both postcondition locations should not create a workflow draft');
+        }
+      }
+    );
+
+    // 12. unrelated action-level fields are still rejected
+    await runScenario(
+      preloadPath,
+      agent,
+      `workflow-draft-intent-action-note ${STAMP}`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+      },
+      {
+        expectedStatus: 'failed',
+        expectNoPostcondition: true,
+        verify: async ({ run, snapshot }) => {
+          assert(run.error === 'Agent action includes unsupported field: note', 'Unrelated action-level field should remain rejected');
+          assert(snapshot.failureReason === run.error, 'Unrelated action-level field should preserve failure reason');
+          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-intent-action-note');
+          assert(!draft, 'Unrelated action-level field should not create a workflow draft');
+        }
+      }
+    );
+
+    // 13. workflow draft intent rejects bare numeric ids with a clear terminal error
     await runScenario(
       preloadPath,
       agent,
@@ -982,6 +1114,9 @@ async function main() {
       workflowDraftCreated: true,
       workflowDraftIntentCreated: true,
       workflowDraftIntentNumericIdRejected: true,
+      workflowDraftIntentActionPostconditionsNormalized: true,
+      workflowDraftIntentBothPostconditionsRejected: true,
+      workflowDraftIntentUnrelatedActionFieldRejected: true,
       unsupportedObjectiveFailed: true,
       handoffTaskExecuted: true,
       handoffInvalidPathRejected: true,
