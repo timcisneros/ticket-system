@@ -7447,6 +7447,17 @@ function executeWorkspaceOperation(run, action, step = 0) {
     } catch (error) {
       if (error.code === 'ENOENT') {
         result = { status: 'not_found', path: pathValue, entries: [] };
+      } else if (!error.failureKind) {
+        throw createStructuredWorkspaceError(
+          error.message,
+          'WORKSPACE_PATH_TYPE_CONFLICT',
+          'workspace_error',
+          {
+            operation: 'listDirectory',
+            path: pathValue,
+            fsCode: error.code || null
+          }
+        );
       } else {
         throw error;
       }
