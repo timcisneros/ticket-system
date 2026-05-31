@@ -8243,6 +8243,15 @@ function buildTransitionGuidance(actionResults) {
   ];
 }
 
+function isWorkflowDraftPromptObjective(objective) {
+  const text = String(objective || '').toLowerCase();
+  if (!text.trim()) return false;
+
+  return /\b(createworkflowdraft|createworkflowdraftintent)\b/.test(text) ||
+    /\bworkflow(s)?\b/.test(text) ||
+    (/\bpostcondition(s)?\b/.test(text) && /\b(draft|create|define|verify|workflow)\b/.test(text));
+}
+
 function buildPhaseGatedCatalog(currentPhase, baseAllowedOps) {
   const ops = PHASE_OPERATIONS[currentPhase] || baseAllowedOps;
   // Always intersect with base allowed ops (which may exclude workflow/handoff ops)
@@ -8255,10 +8264,22 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
   const currentPhase = runtimeEnvelope.currentPhase || 'planning';
   const phaseGatedOps = buildPhaseGatedCatalog(currentPhase, baseAllowedOps);
   const allowedOperationList = phaseGatedOps.join('|');
-  const workflowDraftArgShape = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED
+  const includeWorkflowDraftPromptGuidance = isWorkflowDraftPromptObjective(ticket.objective);
+  const workflowDraftArgShape = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED && includeWorkflowDraftPromptGuidance
     ? ',"workflow":"for createWorkflowDraft only"'
     : '';
-  const canonicalWorkflowDraftGuidance = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED
+  const workflowDraftIntentGuidance = includeWorkflowDraftPromptGuidance
+    ? [
+        'If the ticket asks to create, draft, define, or repair a simple workflow that writes files, use createWorkflowDraftIntent. Do not perform the workflow output actions directly. Emit exactly one workflow draft action and no writeFile/createFolder/readFile/listDirectory actions for that response.',
+        'For workflow draft tickets, creating the disabled draft may satisfy the ticket if the objective was only to create that draft. Executing the workflow output actions directly does not satisfy a workflow draft objective.',
+        'createWorkflowDraftIntent is only for flat simple write workflows. Args shape: {"id":"string","name":"string","writes":[{"path":"relative/path","content":"text"}],"postconditions":[{"type":"fileExists","path":"relative/path"},{"type":"fileContains","path":"relative/path","contains":"text"}]}.',
+        'The complete flag belongs only at the top level of your response. Never put complete inside action args.',
+        'All createWorkflowDraftIntent paths must be relative workspace paths like "note.txt" or "reports/note.txt". Never use absolute paths or runtimeEnvelope.workspaceRoot in a path.',
+        'createWorkflowDraftIntent does not support branching, conditions, arbitrary actions, next fields, templates, or workflow JSON.',
+        'If a ticket asks for a branching or conditional workflow, do not fake it by writing YAML, JSON, prose, or another workflow definition file through createWorkflowDraftIntent. Return no actions, complete:false, and explain that branching workflow drafts are not available to normal agents.'
+      ]
+    : [];
+  const canonicalWorkflowDraftGuidance = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED && includeWorkflowDraftPromptGuidance
     ? [
         'Trusted canonical workflow draft mode is enabled. You may emit createWorkflowDraft only when the ticket explicitly asks for operator-authored workflow JSON or a canonical workflow definition.',
         'For createWorkflowDraft, args must have exactly one key: workflow. Do not put postconditions beside workflow in args.',
@@ -8267,9 +8288,15 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'Minimal valid createWorkflowDraft example: {"operation":"createWorkflowDraft","args":{"workflow":{"id":"write-note","name":"Write note","inputSchema":{},"actions":[{"id":"write","action":"writeFile","input":{"path":"note.txt","content":"ok"},"next":"done"},{"id":"done","action":"stop","input":{"result":{"path":"note.txt"}}}],"postconditions":[{"id":"file-exists","type":"fileExists","path":"note.txt"},{"id":"file-contains","type":"fileContains","path":"note.txt","contains":"ok"}]}}}',
         'createWorkflowDraft args: { "workflow": { "id":"string", "name":"string", "inputSchema":{}, "actions":[], "postconditions":[] } }.'
       ]
-    : [
+    : !includeWorkflowDraftPromptGuidance ? [] : [
         'Do not emit createWorkflowDraft. Normal agents are not allowed to submit canonical workflow JSON.'
       ];
+  const workflowDraftIntentArgReminder = includeWorkflowDraftPromptGuidance
+    ? 'createWorkflowDraftIntent args: { "id":"string", "name":"string", "writes":[{"path":"string","content":"string"}],"postconditions":[{"type":"fileExists","path":"string"},{"type":"fileContains","path":"string","contains":"string"}] }.'
+    : null;
+  const workflowDraftIntentResponseFields = includeWorkflowDraftPromptGuidance
+    ? ',"id":"for createWorkflowDraftIntent","name":"for createWorkflowDraftIntent","writes":"for createWorkflowDraftIntent","postconditions":"for createWorkflowDraftIntent"'
+    : '';
 
   return [
     {
@@ -8299,13 +8326,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'Use only the operations appropriate to your current execution phase, as listed below.',
         'Your current execution phase is runtimeEnvelope.currentPhase. In this phase, the allowed operations are: ' + phaseGatedOps.join(', ') + '.',
         'If you already performed inspection (listDirectory or readFile) and are now in the mutation phase, do not emit listDirectory or readFile again unless you are explicitly verifying results.',
-        'If the ticket asks to create, draft, define, or repair a simple workflow that writes files, use createWorkflowDraftIntent. Do not perform the workflow output actions directly. Emit exactly one workflow draft action and no writeFile/createFolder/readFile/listDirectory actions for that response.',
-        'For workflow draft tickets, creating the disabled draft may satisfy the ticket if the objective was only to create that draft. Executing the workflow output actions directly does not satisfy a workflow draft objective.',
-        'createWorkflowDraftIntent is only for flat simple write workflows. Args shape: {"id":"string","name":"string","writes":[{"path":"relative/path","content":"text"}],"postconditions":[{"type":"fileExists","path":"relative/path"},{"type":"fileContains","path":"relative/path","contains":"text"}]}.',
-        'The complete flag belongs only at the top level of your response. Never put complete inside action args.',
-        'All createWorkflowDraftIntent paths must be relative workspace paths like "note.txt" or "reports/note.txt". Never use absolute paths or runtimeEnvelope.workspaceRoot in a path.',
-        'createWorkflowDraftIntent does not support branching, conditions, arbitrary actions, next fields, templates, or workflow JSON.',
-        'If a ticket asks for a branching or conditional workflow, do not fake it by writing YAML, JSON, prose, or another workflow definition file through createWorkflowDraftIntent. Return no actions, complete:false, and explain that branching workflow drafts are not available to normal agents.',
+        ...workflowDraftIntentGuidance,
         'To hand one bounded write task to another agent, emit createHandoffTask. It executes directly through runtime authority; the executor model will not receive prose or make a model call.',
         'createHandoffTask is only for one writeFile operation to one existing executor. Args shape: {"executor":"agent name","operation":"writeFile","args":{"path":"relative/path.md","content":"exact content"}}. Do not include task descriptions, action lists, branches, or workflow JSON.',
         ...canonicalWorkflowDraftGuidance,
@@ -8315,10 +8336,10 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'If runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.',
         'Each action must be exactly {"operation":"operationName","args":{...}} with no extra fields.',
         'Required args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path "" only for the workspace root in listDirectory.',
-        'createWorkflowDraftIntent args: { "id":"string", "name":"string", "writes":[{"path":"string","content":"string"}],"postconditions":[{"type":"fileExists","path":"string"},{"type":"fileContains","path":"string","contains":"string"}] }.',
+        ...(workflowDraftIntentArgReminder ? [workflowDraftIntentArgReminder] : []),
         'createHandoffTask args: { "executor":"agent name", "operation":"writeFile", "args":{"path":"relative/path","content":"exact content"} }.',
         'Respond only as JSON with this shape:',
-        `{"message":"short summary","actions":[{"operation":"${allowedOperationList}","args":{"path":"relative/path","content":"for writeFile only","nextPath":"for renamePath only"${workflowDraftArgShape},"id":"for createWorkflowDraftIntent","name":"for createWorkflowDraftIntent","writes":"for createWorkflowDraftIntent","postconditions":"for createWorkflowDraftIntent","executor":"for createHandoffTask","operation":"writeFile for createHandoffTask","args":"nested args for createHandoffTask"}}],"complete":true|false}`
+        `{"message":"short summary","actions":[{"operation":"${allowedOperationList}","args":{"path":"relative/path","content":"for writeFile only","nextPath":"for renamePath only"${workflowDraftArgShape}${workflowDraftIntentResponseFields},"executor":"for createHandoffTask","operation":"writeFile for createHandoffTask","args":"nested args for createHandoffTask"}}],"complete":true|false}`
       ].join('\n')
     },
     {
