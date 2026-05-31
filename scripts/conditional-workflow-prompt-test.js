@@ -253,6 +253,15 @@ async function main() {
   const canonicalEnabled = 'Trusted canonical workflow draft mode is enabled.';
   const handoffProse = 'To hand one bounded write task to another agent, emit createHandoffTask.';
   const handoffArgs = 'createHandoffTask args:';
+  const budgetPrompt = defaultScenario.ordinaryPrompt;
+
+  assert(budgetPrompt.includes('runtimeEnvelope.maxExecutionSteps'), 'compact budget guidance should include max steps');
+  assert(budgetPrompt.includes('runtimeEnvelope.maxActionsPerResponse'), 'compact budget guidance should include max actions');
+  assert(budgetPrompt.includes('runtimeEnvelope.maxMutatingActionsPerResponse'), 'compact budget guidance should include max mutating actions');
+  assert(budgetPrompt.includes('every response consumes one step, including retries'), 'compact budget guidance should state retries consume budget');
+  assert(budgetPrompt.includes('bounded batch'), 'compact budget guidance should preserve batching guidance');
+  assert(budgetPrompt.includes('complete:false'), 'compact budget guidance should preserve continuation discipline');
+  assert(!budgetPrompt.includes('Do not fail or return an error just because the total task exceeds one response.'), 'verbose budget prose should be compacted');
 
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentProse), 'ordinary prompt should not include workflow draft intent prose');
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentArgs), 'ordinary prompt should not include workflow draft intent args reminder');
