@@ -392,6 +392,98 @@ async function main() {
     assert(persistedEventTypes.includes('scheduler.tick'), 'events.jsonl should include scheduler.tick');
     assert(persistedEventTypes.length >= eventsPayload.events.length, 'events.jsonl should persist event lines');
 
+    const invalidBranchWorkflow = {
+      id: `workflow-invalid-branch-${Date.now()}`,
+      name: 'Invalid branch workflow',
+      inputSchema: { route: 'string' },
+      actions: [
+        {
+          id: 'choose',
+          action: 'condition',
+          input: { value: '{{workflow.input.route}}', equals: 'a' },
+          trueNext: 'missing-write',
+          falseNext: 'write-b'
+        },
+        {
+          id: 'write-b',
+          action: 'writeFile',
+          input: { path: 'workflow-output/branch-b.txt', content: 'B' },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: {} }
+      ]
+    };
+    const invalidBranchResponse = await createWorkflow(cookie, invalidBranchWorkflow);
+    assert(invalidBranchResponse.statusCode === 400, 'invalid trueNext reference should be rejected');
+    assert(invalidBranchResponse.body.includes('points to unknown next action'), 'invalid trueNext rejection should name the branch reference problem');
+
+    const branchWorkflow = {
+      id: `workflow-branch-v1-${Date.now()}`,
+      name: 'Branch V1 workflow',
+      inputSchema: { route: 'string' },
+      actions: [
+        {
+          id: 'choose',
+          action: 'condition',
+          input: { value: '{{workflow.input.route}}', equals: 'a' },
+          trueNext: 'write-a',
+          falseNext: 'write-b'
+        },
+        {
+          id: 'write-a',
+          action: 'writeFile',
+          input: { path: 'workflow-output/branch-a.txt', content: 'A' },
+          next: 'done'
+        },
+        {
+          id: 'write-b',
+          action: 'writeFile',
+          input: { path: 'workflow-output/branch-b.txt', content: 'B' },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { branched: true } } }
+      ]
+    };
+    const branchResponse = await createWorkflow(cookie, branchWorkflow);
+    assert(branchResponse.statusCode === 302, `branch workflow save returned HTTP ${branchResponse.statusCode}`);
+
+    const branchTrueTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run branch workflow true path',
+        capabilityType: 'workflow',
+        workflowId: branchWorkflow.id,
+        workflowInput: JSON.stringify({ route: 'a' }),
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(branchTrueTicketResponse.statusCode === 302, `branch true ticket create returned HTTP ${branchTrueTicketResponse.statusCode}`);
+    const branchTrueTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const branchTrueRun = await waitForCompletedRun(branchTrueTicket.id);
+    assert(branchTrueRun.status === 'completed', 'branch true path should complete');
+    assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/branch-a.txt'), 'utf8') === 'A', 'trueNext path should write branch A file');
+    assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/branch-b.txt')), 'trueNext path should not write branch B file');
+
+    const branchFalseTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run branch workflow false path',
+        capabilityType: 'workflow',
+        workflowId: branchWorkflow.id,
+        workflowInput: JSON.stringify({ route: 'b' }),
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(branchFalseTicketResponse.statusCode === 302, `branch false ticket create returned HTTP ${branchFalseTicketResponse.statusCode}`);
+    const branchFalseTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const branchFalseRun = await waitForCompletedRun(branchFalseTicket.id);
+    assert(branchFalseRun.status === 'completed', 'branch false path should complete');
+    assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/branch-b.txt'), 'utf8') === 'B', 'falseNext path should write branch B file');
+
     const failingPostconditionWorkflow = {
       id: `workflow-failing-postcondition-${Date.now()}`,
       name: 'Failing postcondition workflow',
