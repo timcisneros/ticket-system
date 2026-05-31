@@ -369,6 +369,9 @@ async function main() {
   const workflowIntentArgs = 'createWorkflowDraftIntent args:';
   const workflowIntentField = '"writes":"for createWorkflowDraftIntent"';
   const workflowIntentIdGuidance = 'never use a bare number';
+  const workflowIntentTopLevelPostconditions = 'postconditions is required as a top-level sibling of id, name, and writes';
+  const workflowIntentForbiddenNestedFields = 'Never put complete, next, nextPath, or postconditions inside createWorkflowDraftIntent args.writes';
+  const workflowIntentExample = 'Minimal valid createWorkflowDraftIntent example:';
   const canonicalDisabled = 'Do not emit createWorkflowDraft. Normal agents are not allowed to submit canonical workflow JSON.';
   const canonicalEnabled = 'Trusted canonical workflow draft mode is enabled.';
   const handoffProse = 'To hand one bounded write task to another agent, emit createHandoffTask.';
@@ -410,6 +413,9 @@ async function main() {
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentArgs), 'ordinary prompt should not include workflow draft intent args reminder');
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentField), 'ordinary prompt should not include workflow draft intent response schema fields');
   assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentIdGuidance), 'ordinary prompt should not include workflow draft intent id guidance');
+  assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentTopLevelPostconditions), 'ordinary prompt should not include workflow draft intent postconditions guidance');
+  assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentForbiddenNestedFields), 'ordinary prompt should not include workflow draft intent nested-field guidance');
+  assert(!defaultScenario.ordinaryPrompt.includes(workflowIntentExample), 'ordinary prompt should not include workflow draft intent example');
   assert(!defaultScenario.ordinaryPrompt.includes(canonicalDisabled), 'ordinary prompt should not include canonical disabled warning');
   assert(defaultScenario.ordinaryAllowedOperations.includes('createWorkflowDraftIntent'), 'ordinary runtimeEnvelope.allowedOperations should still include createWorkflowDraftIntent');
   assert(defaultScenario.ordinaryAllowedOperations.includes('createHandoffTask'), 'ordinary runtimeEnvelope.allowedOperations should still include createHandoffTask');
@@ -420,6 +426,9 @@ async function main() {
   assert(defaultScenario.workflowPrompt.includes(workflowIntentArgs), 'workflow prompt should include workflow draft intent args reminder');
   assert(defaultScenario.workflowPrompt.includes(workflowIntentField), 'workflow prompt should include workflow draft intent response schema fields');
   assert(defaultScenario.workflowPrompt.includes(workflowIntentIdGuidance), 'workflow prompt should include workflow draft intent id guidance');
+  assert(defaultScenario.workflowPrompt.includes(workflowIntentTopLevelPostconditions), 'workflow prompt should include workflow draft intent top-level postconditions guidance');
+  assert(defaultScenario.workflowPrompt.includes(workflowIntentForbiddenNestedFields), 'workflow prompt should include workflow draft intent nested-field prohibition');
+  assert(defaultScenario.workflowPrompt.includes(workflowIntentExample), 'workflow prompt should include minimal workflow draft intent example');
   assert(defaultScenario.workflowPrompt.includes(canonicalDisabled), 'workflow prompt should include canonical disabled warning when canonical env is off');
   assert(!defaultScenario.workflowPrompt.includes(handoffProse), 'workflow prompt should not include handoff prose');
   assert(!defaultScenario.workflowPrompt.includes(handoffArgs), 'workflow prompt should not include handoff args reminder');
@@ -432,6 +441,9 @@ async function main() {
   assert(!canonicalScenario.ordinaryPrompt.includes(canonicalEnabled), 'canonical ordinary prompt should not include canonical enabled guidance');
   assert(!canonicalScenario.ordinaryPrompt.includes(canonicalDisabled), 'canonical ordinary prompt should not include canonical disabled warning');
   assert(!canonicalScenario.ordinaryPrompt.includes(workflowIntentIdGuidance), 'canonical ordinary prompt should not include workflow draft intent id guidance');
+  assert(!canonicalScenario.ordinaryPrompt.includes(workflowIntentTopLevelPostconditions), 'canonical ordinary prompt should not include workflow draft intent postconditions guidance');
+  assert(!canonicalScenario.ordinaryPrompt.includes(workflowIntentForbiddenNestedFields), 'canonical ordinary prompt should not include workflow draft intent nested-field guidance');
+  assert(!canonicalScenario.ordinaryPrompt.includes(workflowIntentExample), 'canonical ordinary prompt should not include workflow draft intent example');
   assert(canonicalScenario.ordinaryAllowedOperations.includes('createWorkflowDraftIntent'), 'canonical ordinary allowedOperations should still include createWorkflowDraftIntent');
   assert(canonicalScenario.ordinaryAllowedOperations.includes('createHandoffTask'), 'canonical ordinary allowedOperations should still include createHandoffTask');
   assert(!canonicalScenario.ordinaryPrompt.includes(handoffProse), 'canonical ordinary prompt should not include handoff prose');
@@ -440,6 +452,9 @@ async function main() {
   assert(canonicalScenario.workflowPrompt.includes(workflowIntentProse), 'canonical workflow prompt should include workflow draft intent prose');
   assert(canonicalScenario.workflowPrompt.includes(canonicalEnabled), 'canonical workflow prompt should include canonical enabled guidance');
   assert(canonicalScenario.workflowPrompt.includes(workflowIntentIdGuidance), 'canonical workflow prompt should include workflow draft intent id guidance');
+  assert(canonicalScenario.workflowPrompt.includes(workflowIntentTopLevelPostconditions), 'canonical workflow prompt should include workflow draft intent top-level postconditions guidance');
+  assert(canonicalScenario.workflowPrompt.includes(workflowIntentForbiddenNestedFields), 'canonical workflow prompt should include workflow draft intent nested-field prohibition');
+  assert(canonicalScenario.workflowPrompt.includes(workflowIntentExample), 'canonical workflow prompt should include minimal workflow draft intent example');
   assert(canonicalScenario.workflowPrompt.includes('"workflow":"for createWorkflowDraft only"'), 'canonical workflow response schema should include canonical workflow field');
   assert(!canonicalScenario.workflowPrompt.includes(handoffProse), 'canonical workflow prompt should not include handoff prose');
   assert(!canonicalScenario.workflowPrompt.includes(handoffArgs), 'canonical workflow prompt should not include handoff args reminder');

@@ -8319,7 +8319,9 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
     ? [
         'If the ticket asks to create, draft, define, or repair a simple workflow that writes files, use createWorkflowDraftIntent. Do not perform the workflow output actions directly. Emit exactly one workflow draft action and no writeFile/createFolder/readFile/listDirectory actions for that response.',
         'For workflow draft tickets, creating the disabled draft may satisfy the ticket if the objective was only to create that draft. Executing the workflow output actions directly does not satisfy a workflow draft objective.',
-        'createWorkflowDraftIntent is only for flat simple write workflows. Args shape: {"id":"descriptive-non-numeric-slug","name":"string","writes":[{"path":"relative/path","content":"text"}],"postconditions":[{"type":"fileExists","path":"relative/path"},{"type":"fileContains","path":"relative/path","contains":"text"}]}. Use ids such as draft-summary-file-123 or draft-verified-output-123; never use a bare number.',
+        'createWorkflowDraftIntent is only for flat simple write workflows. Args shape: {"id":"descriptive-non-numeric-slug","name":"string","writes":[{"path":"relative/path","content":"text"}],"postconditions":[{"type":"fileExists","path":"relative/path"},{"type":"fileContains","path":"relative/path","contains":"text"}]}. postconditions is required as a top-level sibling of id, name, and writes. Use ids such as draft-summary-file-123 or draft-verified-output-123; never use a bare number.',
+        'Never put complete, next, nextPath, or postconditions inside createWorkflowDraftIntent args.writes. Never put complete, next, or nextPath anywhere inside createWorkflowDraftIntent args.',
+        'Minimal valid createWorkflowDraftIntent example: {"operation":"createWorkflowDraftIntent","args":{"id":"draft-summary-file-123","name":"Draft summary file","writes":[{"path":"summary.txt","content":"ok"}],"postconditions":[{"type":"fileExists","path":"summary.txt"},{"type":"fileContains","path":"summary.txt","contains":"ok"}]}}.',
         'The complete flag belongs only at the top level of your response. Never put complete inside action args.',
         'All createWorkflowDraftIntent paths must be relative workspace paths like "note.txt" or "reports/note.txt". Never use absolute paths or runtimeEnvelope.workspaceRoot in a path.',
         'createWorkflowDraftIntent does not support branching, conditions, arbitrary actions, next fields, templates, or workflow JSON.',
@@ -8339,7 +8341,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'Do not emit createWorkflowDraft. Normal agents are not allowed to submit canonical workflow JSON.'
       ];
   const workflowDraftIntentArgReminder = includeWorkflowDraftPromptGuidance
-    ? 'createWorkflowDraftIntent args: { "id":"descriptive non-numeric slug, e.g. draft-summary-file-123", "name":"string", "writes":[{"path":"string","content":"string"}],"postconditions":[{"type":"fileExists","path":"string"},{"type":"fileContains","path":"string","contains":"string"}] }.'
+    ? 'createWorkflowDraftIntent args: { "id":"descriptive non-numeric slug, e.g. draft-summary-file-123", "name":"string", "writes":[{"path":"string","content":"string"}], "postconditions":"required top-level array beside id/name/writes" }. Do not put complete, next, nextPath, or nested postconditions inside args.'
     : null;
   const workflowDraftIntentResponseFields = includeWorkflowDraftPromptGuidance
     ? ',"id":"for createWorkflowDraftIntent","name":"for createWorkflowDraftIntent","writes":"for createWorkflowDraftIntent","postconditions":"for createWorkflowDraftIntent"'
