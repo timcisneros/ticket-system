@@ -3667,6 +3667,85 @@ function getOperationHistoryForTicket(ticketId, history = readOperationHistory()
   return history.filter(record => record.ticketId === ticketId);
 }
 
+function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns = []) {
+  const runIds = new Set(ticketRuns.map(run => run.id));
+  const artifacts = [];
+
+  operationHistory.forEach(record => {
+    if (!record || record.error) return;
+    if (!runIds.has(record.runId)) return;
+
+    const args = record.args || {};
+    const result = record.result || {};
+    const base = {
+      id: `operation:${record.id}`,
+      runId: record.runId,
+      source: `Operation #${record.id}`,
+      timestamp: record.timestamp || null
+    };
+
+    if (record.operation === 'writeFile') {
+      artifacts.push({
+        ...base,
+        type: 'file',
+        artifact: result.path || args.path || '-',
+        status: 'written'
+      });
+      return;
+    }
+
+    if (record.operation === 'createFolder' && result.status === 'created') {
+      artifacts.push({
+        ...base,
+        type: 'folder',
+        artifact: result.path || args.path || '-',
+        status: 'created'
+      });
+      return;
+    }
+
+    if (record.operation === 'renamePath') {
+      const sourcePath = args.path || '-';
+      const destinationPath = result.path || args.nextPath || '-';
+      artifacts.push({
+        ...base,
+        type: 'renamed',
+        artifact: `${sourcePath} -> ${destinationPath}`,
+        status: 'renamed'
+      });
+      return;
+    }
+
+    if (record.operation === 'deletePath' && result.status === 'deleted') {
+      artifacts.push({
+        ...base,
+        type: 'deleted',
+        artifact: result.path || args.path || '-',
+        status: 'deleted'
+      });
+    }
+  });
+
+  workflows.forEach(workflow => {
+    if (!workflow || workflow.createdByType !== 'agent') return;
+    if (!runIds.has(workflow.createdByRunId)) return;
+
+    const actionCount = Array.isArray(workflow.actions) ? workflow.actions.length : 0;
+    const postconditionCount = Array.isArray(workflow.postconditions) ? workflow.postconditions.length : 0;
+    artifacts.push({
+      id: `workflow:${workflow.id}`,
+      type: 'workflow draft',
+      artifact: workflow.id || workflow.name || '-',
+      status: workflow.enabled ? 'enabled' : 'disabled',
+      runId: workflow.createdByRunId,
+      source: `${actionCount} action${actionCount === 1 ? '' : 's'}, ${postconditionCount} postcondition${postconditionCount === 1 ? '' : 's'}`,
+      timestamp: workflow.createdAt || workflow.updatedAt || null
+    });
+  });
+
+  return artifacts.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+}
+
 function findOperationHistoryRecord(recordId) {
   return readOperationHistory().find(record => record.id === recordId) || null;
 }
@@ -9829,6 +9908,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   const history = readOperationHistory();
   const ticketRuns = getTicketRuns(ticketId, history);
   const agents = readAgents();
+  const operationHistory = getOperationHistoryForTicket(ticketId, history);
 
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
@@ -9836,8 +9916,9 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     allocationPlan,
     ticketRuns,
     agents,
+    artifacts: buildTicketArtifacts(operationHistory, readWorkflows(), ticketRuns),
     recentLogs: getRecentLogsForTicket(ticketId),
-    operationHistory: enrichOperationHistoryForDisplay(getOperationHistoryForTicket(ticketId, history)),
+    operationHistory: enrichOperationHistoryForDisplay(operationHistory),
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
 });

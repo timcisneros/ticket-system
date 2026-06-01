@@ -189,6 +189,45 @@
   <% } %>
 </section>
 
+<section class="detail-section">
+  <h2>Artifacts</h2>
+  <% const ticketArtifacts = typeof artifacts === 'undefined' ? [] : artifacts; %>
+  <% if (ticketArtifacts.length === 0) { %>
+    <p class="text-muted">No artifacts produced yet.</p>
+  <% } else { %>
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Artifact</th>
+          <th>Status</th>
+          <th>Run</th>
+          <th>Source</th>
+          <th>Timestamp</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% ticketArtifacts.forEach(artifact => { %>
+          <tr>
+            <td><%= artifact.type %></td>
+            <td><code class="owned-path"><%= artifact.artifact %></code></td>
+            <td><span class="status-badge"><%= artifact.status %></span></td>
+            <td>
+              <% if (artifact.runId) { %>
+                <a href="/runs/<%= artifact.runId %>">Run #<%= artifact.runId %></a>
+              <% } else { %>
+                -
+              <% } %>
+            </td>
+            <td><%= artifact.source || '-' %></td>
+            <td><%= artifact.timestamp ? new Date(artifact.timestamp).toLocaleString() : '-' %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  <% } %>
+</section>
+
 <% const ticketRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
 <% if (ticketRecentLogs.length > 0) { %>
 <section class="detail-section">
