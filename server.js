@@ -9935,12 +9935,30 @@ fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }
     return { error: 'Only open tickets can be assigned to an agent run' };
   }
 
+  let assignmentAudit = null;
+
   if (assignmentChanged) {
+    const changedBy = request.user ? request.user.username : String(request.session.userId);
+    const changedAt = new Date().toISOString();
+    const previousAssignment = {
+      assignmentTargetType: ticket.assignmentTargetType,
+      assignmentTargetId: ticket.assignmentTargetId,
+      assignmentMode: ticket.assignmentMode
+    };
+
     ticket.assignmentTargetType = 'agent';
     ticket.assignmentTargetId = agent.id;
     ticket.assignmentMode = 'individual';
-    ticket.updatedAt = new Date().toISOString();
+    ticket.updatedAt = changedAt;
+    ticket.changedBy = changedBy;
+    ticket.changedAt = changedAt;
     writeTickets(tickets);
+    const nextAssignment = {
+      assignmentTargetType: ticket.assignmentTargetType,
+      assignmentTargetId: ticket.assignmentTargetId,
+      assignmentMode: ticket.assignmentMode
+    };
+    assignmentAudit = { changedBy, changedAt };
     appendEvent({
       type: 'ticket.updated',
       ticketId: ticket.id,
@@ -9949,13 +9967,33 @@ fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }
         assignmentTargetType: ticket.assignmentTargetType,
         assignmentTargetId: ticket.assignmentTargetId,
         assignmentMode: ticket.assignmentMode,
-        updatedAt: ticket.updatedAt
+        updatedAt: ticket.updatedAt,
+        changedBy,
+        changedAt
       }
+    });
+    appendSystemLog('ticket:assignment_change', `Ticket #${ticket.id} assignment changed by ${changedBy}`, null, {
+      ticketId: ticket.id,
+      changedBy,
+      changedAt,
+      previousAssignment,
+      nextAssignment
     });
     broadcastTicketChange();
   }
 
   createRunsForTicket(ticket);
+
+  if (assignmentAudit) {
+    const updatedTickets = readTickets();
+    const updatedTicket = updatedTickets.find(item => item.id === ticket.id);
+    if (updatedTicket) {
+      updatedTicket.changedBy = assignmentAudit.changedBy;
+      updatedTicket.changedAt = assignmentAudit.changedAt;
+      updatedTicket.updatedAt = assignmentAudit.changedAt;
+      writeTickets(updatedTickets);
+    }
+  }
 
   return { ticket };
 });
