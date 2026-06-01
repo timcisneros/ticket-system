@@ -47,6 +47,64 @@
   </details>
 </section>
 
+<%
+  const activeRuntimeRun = ticketRuns
+    .filter(run => ['pending', 'running'].includes(run.status))
+    .sort((a, b) => new Date(b.updatedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.startedAt || a.createdAt || 0))[0] || null;
+  const latestRuntimeRun = ticketRuns
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0))[0] || null;
+  const visibleRuntimeRun = activeRuntimeRun || latestRuntimeRun;
+  const initialRuntimeStart = visibleRuntimeRun ? (visibleRuntimeRun.startedAt || visibleRuntimeRun.createdAt || '') : '';
+  const initialRuntimeComplete = visibleRuntimeRun ? (visibleRuntimeRun.completedAt || '') : '';
+  const initialLeaseState = visibleRuntimeRun && visibleRuntimeRun.leaseOwner
+    ? (visibleRuntimeRun.leaseOwner + (visibleRuntimeRun.leaseExpiresAt ? ' until ' + visibleRuntimeRun.leaseExpiresAt : ''))
+    : '-';
+%>
+<section class="detail-section" id="ticket-runtime-section" data-ticket-runtime-id="<%= ticket.id %>" data-ticket-runtime-active="<%= activeRuntimeRun ? 'true' : 'false' %>">
+  <h2>Runtime</h2>
+  <dl class="detail-grid">
+    <div>
+      <dt>Ticket Status</dt>
+      <dd><span id="ticket-live-status" class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span></dd>
+    </div>
+    <div>
+      <dt>Run</dt>
+      <dd id="ticket-live-run">
+        <% if (visibleRuntimeRun) { %>
+          <a href="/runs/<%= visibleRuntimeRun.id %>">Run #<%= visibleRuntimeRun.id %></a>
+        <% } else { %>
+          -
+        <% } %>
+      </dd>
+    </div>
+    <div>
+      <dt>Run Status</dt>
+      <dd><span id="ticket-live-run-status" class="status-badge <%= visibleRuntimeRun ? 'status-' + visibleRuntimeRun.status : '' %>"><%= visibleRuntimeRun ? visibleRuntimeRun.status : '-' %></span></dd>
+    </div>
+    <div>
+      <dt>Current Message</dt>
+      <dd id="ticket-live-message"><%= ticket.currentMessage || '-' %></dd>
+    </div>
+    <div>
+      <dt>Current Step</dt>
+      <dd id="ticket-live-step"><%= visibleRuntimeRun && visibleRuntimeRun.currentStepId ? visibleRuntimeRun.currentStepId : '-' %></dd>
+    </div>
+    <div>
+      <dt>Lease State</dt>
+      <dd id="ticket-live-lease"><%= initialLeaseState %></dd>
+    </div>
+    <div>
+      <dt>Elapsed Time</dt>
+      <dd id="ticket-live-elapsed" data-started-at="<%= initialRuntimeStart %>" data-completed-at="<%= initialRuntimeComplete %>">-</dd>
+    </div>
+    <div>
+      <dt>Latest Outcome</dt>
+      <dd id="ticket-live-outcome"><%= visibleRuntimeRun && visibleRuntimeRun.operationalOutcome ? visibleRuntimeRun.operationalOutcome : '-' %></dd>
+    </div>
+  </dl>
+</section>
+
 <% if (allocationPlan) { %>
 <section class="detail-section">
   <details class="collapsible">
@@ -343,6 +401,155 @@
   </div>
 </section>
 <% } %>
+
+<script>
+(() => {
+  const section = document.getElementById('ticket-runtime-section');
+  if (!section) return;
+
+  const ticketId = section.dataset.ticketRuntimeId;
+  const activeStatuses = new Set(['pending', 'running']);
+  const terminalStatuses = new Set(['completed', 'failed', 'interrupted']);
+  let hadActiveRun = section.dataset.ticketRuntimeActive === 'true';
+  let currentRunStatus = document.getElementById('ticket-live-run-status')?.textContent || '';
+  let polling = null;
+  let terminalReloaded = false;
+
+  const ticketStatusEl = document.getElementById('ticket-live-status');
+  const runEl = document.getElementById('ticket-live-run');
+  const runStatusEl = document.getElementById('ticket-live-run-status');
+  const messageEl = document.getElementById('ticket-live-message');
+  const stepEl = document.getElementById('ticket-live-step');
+  const leaseEl = document.getElementById('ticket-live-lease');
+  const elapsedEl = document.getElementById('ticket-live-elapsed');
+  const outcomeEl = document.getElementById('ticket-live-outcome');
+
+  function formatElapsed(ms) {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    if (seconds < 60) return seconds + ' second' + (seconds === 1 ? '' : 's');
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    if (rest === 0) return minutes + ' minute' + (minutes === 1 ? '' : 's');
+    return minutes + ' minute' + (minutes === 1 ? '' : 's') + ' ' + rest + ' second' + (rest === 1 ? '' : 's');
+  }
+
+  function setText(el, value) {
+    if (!el) return;
+    el.textContent = value || '-';
+  }
+
+  function updateBadge(el, status) {
+    if (!el) return;
+    el.className = 'status-badge' + (status ? ' status-' + status : '');
+    el.textContent = status || '-';
+  }
+
+  function updateRunLink(run) {
+    if (!runEl) return;
+    if (!run || !run.id) {
+      runEl.textContent = '-';
+      return;
+    }
+    runEl.innerHTML = '';
+    const link = document.createElement('a');
+    link.href = '/runs/' + encodeURIComponent(run.id);
+    link.textContent = 'Run #' + run.id;
+    runEl.appendChild(link);
+  }
+
+  function formatStep(step, run) {
+    if (step && step.stepId) {
+      const detail = [step.action, step.status].filter(Boolean).join(' ');
+      return detail ? step.stepId + ' (' + detail + ')' : step.stepId;
+    }
+    return run && run.currentStepId ? run.currentStepId : '-';
+  }
+
+  function formatLease(lease) {
+    if (!lease || !lease.leaseOwner) return '-';
+    const parts = [lease.leaseOwner];
+    if (lease.expired) parts.push('expired');
+    else if (lease.heldByCurrentProcess) parts.push('held');
+    if (lease.leaseExpiresAt) parts.push('until ' + lease.leaseExpiresAt);
+    return parts.join(' · ');
+  }
+
+  function updateElapsed(startedAt, completedAt, status) {
+    if (!elapsedEl) return;
+    const startText = startedAt || elapsedEl.dataset.startedAt || '';
+    const completeText = completedAt || elapsedEl.dataset.completedAt || '';
+    const startMs = Date.parse(startText);
+    if (Number.isNaN(startMs)) {
+      elapsedEl.textContent = '-';
+      return;
+    }
+
+    elapsedEl.dataset.startedAt = startText;
+    if (completeText) {
+      const completeMs = Date.parse(completeText);
+      if (!Number.isNaN(completeMs)) {
+        elapsedEl.dataset.completedAt = completeText;
+        elapsedEl.textContent = formatElapsed(completeMs - startMs);
+        return;
+      }
+    }
+
+    if (activeStatuses.has(status)) {
+      elapsedEl.textContent = (status === 'pending' ? 'queued for ' : 'running for ') + formatElapsed(Date.now() - startMs);
+    } else {
+      elapsedEl.textContent = formatElapsed(Date.now() - startMs);
+    }
+  }
+
+  function applyRuntimeState(state) {
+    const ticket = state.ticket || {};
+    const run = state.currentRun || state.latestRun || null;
+
+    updateBadge(ticketStatusEl, ticket.status);
+    updateRunLink(run);
+    updateBadge(runStatusEl, run && run.status);
+    currentRunStatus = run && run.status ? run.status : '';
+    setText(messageEl, state.currentMessage || (run && run.currentMessage));
+    setText(stepEl, formatStep(state.currentStep, run));
+    setText(leaseEl, formatLease(state.leaseState || (run && run.lease)));
+    setText(outcomeEl, state.outcomeLabel || (run && run.outcomeLabel) || state.outcome);
+    updateElapsed(run && (run.startedAt || run.createdAt), run && run.completedAt, run && run.status);
+
+    const activeRun = state.currentRun && activeStatuses.has(state.currentRun.status);
+    if (activeRun) {
+      hadActiveRun = true;
+      return;
+    }
+
+    if (polling) {
+      window.clearInterval(polling);
+      polling = null;
+    }
+    if (hadActiveRun && run && terminalStatuses.has(run.status) && !terminalReloaded) {
+      terminalReloaded = true;
+      window.location.reload();
+    }
+  }
+
+  async function refreshTicketRuntime() {
+    if (!hadActiveRun && !activeStatuses.has(currentRunStatus)) return;
+    const response = await fetch('/api/tickets/' + encodeURIComponent(ticketId) + '/runtime', {
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) return;
+    applyRuntimeState(await response.json());
+  }
+
+  updateElapsed(elapsedEl && elapsedEl.dataset.startedAt, elapsedEl && elapsedEl.dataset.completedAt, currentRunStatus);
+  if (hadActiveRun || activeStatuses.has(currentRunStatus)) {
+    polling = window.setInterval(() => {
+      updateElapsed(elapsedEl && elapsedEl.dataset.startedAt, elapsedEl && elapsedEl.dataset.completedAt, currentRunStatus);
+      refreshTicketRuntime().catch(() => {});
+    }, 1000);
+    refreshTicketRuntime().catch(() => {});
+  }
+})();
+</script>
 
 <% if (canUpdateTickets) { %>
 <script>
