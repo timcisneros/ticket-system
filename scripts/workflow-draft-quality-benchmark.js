@@ -642,7 +642,7 @@ async function main() {
       },
       {
         case: 'canonical-branch',
-        prompt: `create a canonical branching workflow where route="a" takes the true branch, the true branch writes exactly branch-a-${STAMP}.txt, the false branch writes exactly branch-b-${STAMP}.txt, and postconditions check branch-a-${STAMP}.txt ${STAMP}`,
+        prompt: `create a canonical branching workflow where route="a" takes the true branch, the true branch writes exactly branch-a-${STAMP}.txt, the false branch writes exactly branch-b-${STAMP}.txt, and postconditions check branch-a-${STAMP}.txt. Use createWorkflowDraft, not createWorkflowDraftIntent. ${STAMP}`,
         workflowId: `draft-canonical-branch-${STAMP}`,
         workflowInput: {
           route: 'a'
