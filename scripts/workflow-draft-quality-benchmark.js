@@ -661,8 +661,16 @@ async function main() {
       }
     ];
 
+    const requestedCase = String(process.env.BENCHMARK_CASE || '').trim();
+    const selectedCases = requestedCase
+      ? cases.filter(benchmarkCase => benchmarkCase.case === requestedCase)
+      : cases;
+    if (requestedCase && selectedCases.length === 0) {
+      throw new Error(`Unknown BENCHMARK_CASE "${requestedCase}". Valid cases: ${cases.map(benchmarkCase => benchmarkCase.case).join(', ')}`);
+    }
+
     const results = [];
-    for (const benchmarkCase of cases) {
+    for (const benchmarkCase of selectedCases) {
       const result = await runBenchmarkCase(cookie, agent, benchmarkCase);
       appendBenchmarkResult(result);
       results.push(result);
