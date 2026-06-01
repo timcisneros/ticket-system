@@ -8342,7 +8342,9 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'The complete flag belongs only at the top level of your response. Never put complete inside action args.',
         'All createWorkflowDraftIntent paths must be relative workspace paths like "note.txt" or "reports/note.txt". Never use absolute paths or runtimeEnvelope.workspaceRoot in a path.',
         'createWorkflowDraftIntent does not support branching, conditions, arbitrary actions, next fields, templates, or workflow JSON.',
-        'If a ticket asks for a branching or conditional workflow, do not fake it by writing YAML, JSON, prose, or another workflow definition file through createWorkflowDraftIntent. Return no actions, complete:false, and explain that branching workflow drafts are not available to normal agents.'
+        AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED
+          ? 'If a ticket asks for a branching or conditional workflow, do not use createWorkflowDraftIntent; use canonical createWorkflowDraft instead.'
+          : 'If a ticket asks for a branching or conditional workflow, do not fake it by writing YAML, JSON, prose, or another workflow definition file through createWorkflowDraftIntent. Return no actions, complete:false, and explain that branching workflow drafts are not available to normal agents.'
       ]
     : [];
   const canonicalWorkflowDraftGuidance = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED && includeWorkflowDraftPromptGuidance
@@ -8350,8 +8352,10 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'Trusted canonical workflow draft mode is enabled. You may emit createWorkflowDraft only when the ticket explicitly asks for operator-authored workflow JSON or a canonical workflow definition.',
         'For createWorkflowDraft, args must have exactly one key: workflow. Do not put postconditions beside workflow in args.',
         'For workflow drafts, the workflow object must have top-level keys id, name, inputSchema, actions, and postconditions. Each workflow step must use id, action, input, and optional next/trueNext/falseNext. Do not use type or args inside workflow.actions. Put postconditions only at args.workflow.postconditions. Never put postconditions inside a workflow action step or beside args.workflow.',
-        'Before returning createWorkflowDraft, check: workflow.postconditions is present and non-empty when any workflow action is writeFile/createFolder/renamePath/deletePath; step.next is a sibling of step.input, not inside step.input.',
+        'For branching canonical workflows, use a condition step with trueNext and falseNext as siblings of input. trueNext and falseNext must reference action ids in workflow.actions. Do not use createWorkflowDraftIntent for branching workflows.',
+        'Before returning createWorkflowDraft, check: workflow.postconditions is present and non-empty when any workflow action is writeFile/createFolder/renamePath/deletePath; step.next/trueNext/falseNext are siblings of step.input, not inside step.input.',
         'Minimal valid createWorkflowDraft example: {"operation":"createWorkflowDraft","args":{"workflow":{"id":"write-note","name":"Write note","inputSchema":{},"actions":[{"id":"write","action":"writeFile","input":{"path":"note.txt","content":"ok"},"next":"done"},{"id":"done","action":"stop","input":{"result":{"path":"note.txt"}}}],"postconditions":[{"id":"file-exists","type":"fileExists","path":"note.txt"},{"id":"file-contains","type":"fileContains","path":"note.txt","contains":"ok"}]}}}',
+        'Minimal valid branching createWorkflowDraft example: {"operation":"createWorkflowDraft","args":{"workflow":{"id":"branch-note","name":"Branch note","inputSchema":{"route":"string"},"actions":[{"id":"choose","action":"condition","input":{"value":"{{workflow.input.route}}","equals":"a"},"trueNext":"write-a","falseNext":"write-b"},{"id":"write-a","action":"writeFile","input":{"path":"branch-a.txt","content":"A"},"next":"done"},{"id":"write-b","action":"writeFile","input":{"path":"branch-b.txt","content":"B"},"next":"done"},{"id":"done","action":"stop","input":{"result":{"branched":true}}}],"postconditions":[{"id":"branch-a-exists","type":"fileExists","path":"branch-a.txt"}]}}}',
         'createWorkflowDraft args: { "workflow": { "id":"string", "name":"string", "inputSchema":{}, "actions":[], "postconditions":[] } }.'
       ]
     : !includeWorkflowDraftPromptGuidance ? [] : [

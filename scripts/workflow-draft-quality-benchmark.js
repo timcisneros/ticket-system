@@ -209,6 +209,7 @@ function createFakeOpenAIPreload() {
   const summaryWorkflowId = `draft-summary-${STAMP}`;
   const urgencyWorkflowId = `draft-urgency-${STAMP}`;
   const verifiedWorkflowId = `draft-verified-${STAMP}`;
+  const canonicalBranchWorkflowId = `draft-canonical-branch-${STAMP}`;
   const source = `
 function okResponse(plan) {
   return {
@@ -275,6 +276,33 @@ global.fetch = async function(_url, options = {}) {
               { id: 'urgent-file-exists', type: 'fileExists', path: 'urgent-summary-${STAMP}.md' },
               { id: 'urgent-file-contains', type: 'fileContains', path: 'urgent-summary-${STAMP}.md', contains: '{{workflow.input.summary}}' },
               { id: 'output-urgency', type: 'outputFieldEquals', field: 'urgency', equals: 'high' }
+            ]
+          }
+        }
+      }],
+      complete: true
+    });
+  }
+
+  if (combined.includes('create a canonical branching workflow that writes branch A when route is a')) {
+    return okResponse({
+      message: 'Creating disabled canonical branch workflow draft.',
+      actions: [{
+        operation: 'createWorkflowDraft',
+        args: {
+          workflow: {
+            id: '${canonicalBranchWorkflowId}',
+            name: 'Draft benchmark canonical branch',
+            inputSchema: { route: 'string' },
+            actions: [
+              { id: 'choose', action: 'condition', input: { value: '{{workflow.input.route}}', equals: 'a' }, trueNext: 'write_a', falseNext: 'write_b' },
+              { id: 'write_a', action: 'writeFile', input: { path: 'branch-a-${STAMP}.txt', content: 'A' }, next: 'done' },
+              { id: 'write_b', action: 'writeFile', input: { path: 'branch-b-${STAMP}.txt', content: 'B' }, next: 'done' },
+              { id: 'done', action: 'stop', input: { result: { branched: true, path: 'branch-a-${STAMP}.txt' } } }
+            ],
+            postconditions: [
+              { id: 'branch-a-exists', type: 'fileExists', path: 'branch-a-${STAMP}.txt' },
+              { id: 'branch-a-contains', type: 'fileContains', path: 'branch-a-${STAMP}.txt', contains: 'A' }
             ]
           }
         }
@@ -421,6 +449,13 @@ function assertMutatingWorkflowHasPostconditions(workflow) {
   assert(!hasMutatingAction || (Array.isArray(workflow.postconditions) && workflow.postconditions.length > 0), `Mutating workflow ${workflow.id} lacks postconditions`);
 }
 
+function assertCanonicalBranchWorkflow(workflow) {
+  const conditionStep = workflow.actions.find(step => step && step.action === 'condition');
+  assert(conditionStep, `Workflow ${workflow.id} does not contain a condition action`);
+  assert(typeof conditionStep.trueNext === 'string' && conditionStep.trueNext, `Workflow ${workflow.id} condition lacks trueNext`);
+  assert(typeof conditionStep.falseNext === 'string' && conditionStep.falseNext, `Workflow ${workflow.id} condition lacks falseNext`);
+}
+
 async function enableWorkflow(cookie, workflow) {
   const response = await request('POST', `/admin/workflows/${encodeURIComponent(workflow.id)}`, {
     cookie,
@@ -493,6 +528,9 @@ async function runBenchmarkCase(cookie, agent, benchmarkCase) {
     evidence.validation.actionValidationPassed = true;
     assertMutatingWorkflowHasPostconditions(draft);
     evidence.validation.postconditionValidationPassed = true;
+    if (benchmarkCase.expectCanonicalBranch) {
+      assertCanonicalBranchWorkflow(draft);
+    }
 
     const enabledDraft = await enableWorkflow(cookie, draft);
     const enabledByOperator = Boolean(enabledDraft && enabledDraft.enabled === true);
@@ -508,6 +546,9 @@ async function runBenchmarkCase(cookie, agent, benchmarkCase) {
     );
     const executionRun = await waitForTerminalRun(executionTicket.id);
     const runState = await getRunState(cookie, executionRun.id);
+    if (benchmarkCase.expectedArtifactPath) {
+      assert(fs.existsSync(path.join(WORKSPACE_ROOT, benchmarkCase.expectedArtifactPath)), `Expected branch artifact missing: ${benchmarkCase.expectedArtifactPath}`);
+    }
     evidence.validation.executionRunCompleted = executionRun.status === 'completed';
     evidence.validation.postconditionsPassed = Boolean(runState.runEvaluation &&
       runState.runEvaluation.effectiveness &&
@@ -598,6 +639,16 @@ async function main() {
           urgency: 'high',
           summary: 'Urgent benchmark content'
         }
+      },
+      {
+        case: 'canonical-branch',
+        prompt: `create a canonical branching workflow that writes branch A when route is a and branch B otherwise ${STAMP}`,
+        workflowId: `draft-canonical-branch-${STAMP}`,
+        workflowInput: {
+          route: 'a'
+        },
+        expectCanonicalBranch: true,
+        expectedArtifactPath: `branch-a-${STAMP}.txt`
       },
       {
         case: 'verified-output',
