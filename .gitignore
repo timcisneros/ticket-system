@@ -1,9 +1,11 @@
 .env
 .env.local
 .env.test.local
-workpace-root/*
+workspace-root/
 node_modules/
 data-backup-*/
+data/replay-snapshots/
+data/benchmark-artifacts/
 
 # Logs
 logs
