@@ -1356,7 +1356,7 @@ function getDisplayMessageFromRunLog(log) {
   if (!log || typeof log.message !== 'string') return null;
   if (log.type === 'run:runtime') return null;
   if (log.type === 'run:queued') return 'queued';
-  if (log.type === 'model:request') return 'waiting on local model';
+  if (log.type === 'model:request') return 'waiting on model response';
   if (log.type && log.type.startsWith('workspace:')) return 'running actions';
   if (log.type === 'run:timeout') return 'timed out';
 
@@ -1385,7 +1385,7 @@ function getRunDisplayState(run, logsByRunId) {
     return {
       state: 'queued',
       label: 'queued',
-      detail: 'waiting for local model capacity',
+      detail: 'waiting to start',
       elapsedMs: Math.max(0, Date.now() - new Date(run.createdAt || Date.now()).getTime()),
       timeoutLimit: formatDurationHuman(limits.maxRuntimeDurationMs)
     };
@@ -1428,7 +1428,7 @@ function getRunDisplayState(run, logsByRunId) {
   if (latestModelRequestIndex > latestModelResponseIndex) {
     return {
       state: 'waiting_on_local_model',
-      label: 'waiting on local model',
+      label: 'waiting on model response',
       detail: `waiting ${formatDurationHuman(elapsedMs)} of ${formatDurationHuman(limits.maxRuntimeDurationMs)}`,
       elapsedMs,
       timeoutLimit: formatDurationHuman(limits.maxRuntimeDurationMs)
@@ -1965,9 +1965,9 @@ function displayLogMessage(log) {
   if (!log) return '';
   if (log.type === 'run:timeout') return `Timed out after ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}`;
   if (log.type === 'run:failed' && /runtime duration limit/i.test(log.message || '')) return `Failed after timing out at ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}`;
-  if (log.type === 'model:request') return 'Waiting for local model response';
+  if (log.type === 'model:request') return 'Waiting for model response';
   if (log.type === 'model:no_progress') return 'The model repeated an inspection without making progress';
-  if (log.type === 'run:queued') return 'Waiting for local model capacity';
+  if (log.type === 'run:queued') return 'Waiting to start';
   if (log.type === 'run:capability_started') return String(log.message || '').replace(/^Capability started:/, 'Workflow started:');
   if (log.type === 'run:capability_completed') return String(log.message || '').replace(/^Capability completed:/, 'Workflow completed:');
   return log.message || '';

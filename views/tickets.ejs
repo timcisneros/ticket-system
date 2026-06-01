@@ -319,9 +319,9 @@ function refreshRunElapsedLabels() {
     const limit = el.dataset.runTimeoutLimit || '';
 
     if (state === 'waiting_on_local_model') {
-      el.textContent = 'waiting on local model: waiting ' + elapsed + (limit ? ' of ' + limit : '');
+      el.textContent = 'waiting on model response: waiting ' + elapsed + (limit ? ' of ' + limit : '');
     } else if (state === 'queued') {
-      el.textContent = 'queued: waiting ' + elapsed + ' for local model capacity';
+      el.textContent = 'queued: waiting ' + elapsed + ' to start';
     } else if (state === 'running_actions') {
       el.textContent = 'running actions: working for ' + elapsed;
     } else {
