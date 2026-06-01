@@ -8670,6 +8670,7 @@ async function runAgentTicket(runId) {
     let readFileCount = 0;
     const listedDirectoryPaths = new Set();
     let completed = false;
+    let resumedFromPersistedState = false;
     const limits = getAgentRuntimeLimits(ticket.objective);
     const runStartedAtMs = Date.now();
 
@@ -8705,6 +8706,7 @@ async function runAgentTicket(runId) {
         throw error;
       }
       // Reconstruct execution state from prior events
+      resumedFromPersistedState = true;
       workspaceOperationCount = resumeState.workspaceOperationCount;
       for (const p of resumeState.listedDirectoryPaths) listedDirectoryPaths.add(p);
       if (resumeState.currentPhase) {
@@ -8727,16 +8729,18 @@ async function runAgentTicket(runId) {
         const fs2 = require('fs');
       } catch(e) { 
       }
-      const obviousPostcondition = checkObviousTicketPostcondition(ticket);
-      if (obviousPostcondition) {
-        recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
-          step,
-          mutatingActionCount: 0,
-          checkedPaths: obviousPostcondition.checkedPaths,
-          source: 'pre_model'
-        });
-        completed = true;
-        break;
+      if (!resumedFromPersistedState) {
+        const obviousPostcondition = checkObviousTicketPostcondition(ticket);
+        if (obviousPostcondition) {
+          recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
+            step,
+            mutatingActionCount: 0,
+            checkedPaths: obviousPostcondition.checkedPaths,
+            source: 'pre_model'
+          });
+          completed = true;
+          break;
+        }
       }
 
       const currentEnvelope = buildRuntimeEnvelope(run, step, ticket.objective);
