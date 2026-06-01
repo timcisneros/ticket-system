@@ -10,7 +10,8 @@ require('dotenv').config()
 const PORT = process.env.PORT || 3099;
 
 // Data file paths
-const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, 'data');
+const REPO_DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : REPO_DATA_DIR;
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -33,6 +34,54 @@ const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'closed'];
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, 'workspace-root'));
+
+function isRepoDataDir() {
+  return path.resolve(DATA_DIR) === path.resolve(REPO_DATA_DIR);
+}
+
+function writeMissingFile(fileName, content) {
+  const targetPath = path.join(DATA_DIR, fileName);
+  if (fs.existsSync(targetPath)) return;
+  fs.writeFileSync(targetPath, content);
+}
+
+function copyMissingSeedFile(fileName, fallbackContent = '[]') {
+  const targetPath = path.join(DATA_DIR, fileName);
+  if (fs.existsSync(targetPath)) return;
+
+  const sourcePath = path.join(REPO_DATA_DIR, fileName);
+  if (fs.existsSync(sourcePath)) {
+    fs.copyFileSync(sourcePath, targetPath);
+    return;
+  }
+
+  fs.writeFileSync(targetPath, fallbackContent);
+}
+
+function seedOperationalDataDir() {
+  if (isRepoDataDir()) return;
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+
+  [
+    'users.json',
+    'agents.json',
+    'groups.json',
+    'memberships.json',
+    'permissions.json',
+    'workflows.json',
+    'protected-paths.json'
+  ].forEach(fileName => copyMissingSeedFile(fileName, '[]'));
+
+  [
+    'tickets.json',
+    'runs.json',
+    'logs.json',
+    'operation-history.json',
+    'allocation-plans.json'
+  ].forEach(fileName => writeMissingFile(fileName, '[]'));
+
+  writeMissingFile('events.jsonl', '');
+}
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT === '1';
 const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
@@ -11717,6 +11766,7 @@ function normalizeDataIntegrity() {
 }
 
 async function createDefaultData() {
+  seedOperationalDataDir();
   normalizeDataIntegrity();
 
   const users = readUsers();

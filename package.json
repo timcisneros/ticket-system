@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "NODE_ENV=production node server.js",
-    "dev": "NODE_ENV=development node server.js",
+    "dev": "NODE_ENV=development DATA_DIR=.local-data WORKSPACE_ROOT=.local-workspace node server.js",
     "build": "node --check server.js",
     "preview": "NODE_ENV=production node server.js",
     "codex:bootstrap": "node scripts/codex-bootstrap.js",
