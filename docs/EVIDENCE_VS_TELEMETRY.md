@@ -26,8 +26,8 @@ The substrate has three distinct output classes with different durability, consu
 |------------|-------------------|
 | `run.created` | Required to derive agent assignment and initial run state in projection rebuilders. |
 | `run.started` | Required to set `status = 'running'`, derive `startedAt`, and establish lifecycle phase. |
-| `run.execution_completed` | Required to detect terminal state and distinguish completed from interrupted runs. |
-| `run.terminalized` | Required for terminalization-correctness invariant (`terminalizedCount <= executionCompletedCount`). |
+| `run.execution_completed` | Required to record that the execution loop ended and the intended terminal status is known; reconciliation may still be pending. |
+| `run.terminalized` | Required to prove terminal reconciliation completed and support the terminalization-correctness invariant (`terminalizedCount <= executionCompletedCount`). |
 | `run.snapshot_finalized` | Required to know whether replay snapshot was sealed before restart. |
 | `run.evaluation_completed` | Required for lifecycle phase reconstruction (`evaluation_completed` vs `snapshot_finalized`). |
 | `run.consequence_recorded` | Required for lifecycle phase reconstruction and consequence audit. |

@@ -4,25 +4,37 @@
 
 | Event | Phase | Meaning |
 |-------|-------|---------|
-| `run.execution_completed` | Execution done | Model/tool loop ended (all agent steps consumed, or error/interrupt occurred) |
+| `run.execution_completed` | Execution done | Model/tool loop ended and intended terminal status is known; reconciliation is still pending |
 | `run.snapshot_finalized` | Snapshot written | Replay snapshot persisted to disk |
 | `run.evaluation_completed` | Evaluation done | `runEvaluation` recorded |
 | `run.consequence_recorded` | Consequence done | `runConsequence` recorded |
-| `run.terminalized` | Terminal | **Sole authoritative final lifecycle event** |
+| `run.terminalized` | Reconciliation done | Final lifecycle evidence that terminal reconciliation completed |
 
 ## Emission Order
 
-Normal completion / failure / interruption all follow the same pipeline:
+Normal completion / failure follow this pipeline:
 
 ```
 run.execution_completed
-    → postconditions check  (completed/failed only, not interrupted)
     → run.snapshot_finalized
-    → violations check
+    → run.postconditions_checked  (when applicable)
+    → run.violations_checked
     → run.evaluation_completed
     → run.consequence_recorded
     → run.terminalized
     → finalizeTicketForRun
+```
+
+Interruption follows the same reconciliation pipeline without postcondition checking:
+
+```
+run.execution_completed
+    → run.snapshot_finalized
+    → run.violations_checked
+    → run.evaluation_completed
+    → run.consequence_recorded
+    → run.terminalized
+    → updateTicketAfterRunInterrupted
 ```
 
 Reconciliation (`reconcileTerminalRun`) emits only missing steps with the same terminalization:
@@ -35,11 +47,12 @@ Reconciliation (`reconcileTerminalRun`) emits only missing steps with the same t
 
 ## Finality Rules
 
-1. **Only `run.terminalized` is authoritative.** No other event makes a run terminal.
-2. `run.execution_completed` is explicitly **not final** — it means the execution loop finished but reconciliation (evaluation, consequence, terminalization) is still pending.
-3. `run.snapshot_finalized` is explicitly **not final** — snapshot is written but evaluation and consequence may not have run yet.
-4. `run.evaluation_completed` and `run.consequence_recorded` are explicitly **not final** — they precede terminalization.
-5. A run with `run.terminalized` is fully done. The scheduler, recovery, and execution engine must treat it as immutable.
+1. `run.status` is the materialized run state used by the runtime, UI, APIs, scheduler, and recovery logic.
+2. Current terminal `run.status` values are `completed`, `failed`, and `interrupted`.
+3. `run.execution_completed` means execution is complete and the intended terminal status is known.
+4. `run.execution_completed` is explicitly **not fully reconciled** — snapshot, evaluation, consequence, and terminalization may still be pending.
+5. `run.terminalized` is lifecycle reconciliation evidence, not a `run.status` value.
+6. A terminal `run.status` plus `run.terminalized` means the run is fully reconciled and immutable.
 
 ## Disposition Rules
 
@@ -54,7 +67,8 @@ Reconciliation (`reconcileTerminalRun`) emits only missing steps with the same t
 ## Legacy Compatibility
 
 - `run.completed`, `run.failed`, `run.interrupted` are legacy terminal event names.
-- Readers treat them as equivalent to `run.terminalized` for backward compatibility (`isTerminal = true`).
+- Terminal statuses `completed`, `failed`, and `interrupted` are current runtime truth, not legacy states.
+- Readers treat legacy event names as equivalent to `run.terminalized` for backward compatibility (`isTerminal = true`).
 - They are also treated as equivalent to `run.execution_completed` (`hasExecutionCompleted = true`).
 - No new code may emit `run.completed`/`run.failed`/`run.interrupted`. They are read-only legacy formats.
 - No new code may classify `run.execution_completed` or `run.snapshot_finalized` as terminal.
@@ -62,20 +76,25 @@ Reconciliation (`reconcileTerminalRun`) emits only missing steps with the same t
 ## State Machine
 
 ```
-States: pending → running → terminalized
-                           ↘ completed / failed / interrupted (legacy terminal)
+Materialized run.status:
+
+pending → running → completed
+                 ↘ failed
+                 ↘ interrupted
+
+Lifecycle reconciliation evidence:
+
+run.execution_completed → run.snapshot_finalized → run.evaluation_completed
+    → run.consequence_recorded → run.terminalized
 
 run.created          → pending
 run.lease_acquired   → pending
 run.started          → running
-run.execution_completed → running (no state change — still needs reconciliation)
-run.completed        → completed (legacy terminal)
-run.failed           → failed (legacy terminal)
-run.interrupted      → interrupted (legacy terminal)
-run.terminalized     → terminalized (authoritative terminal)
+run.execution_completed → terminal status known, still needs reconciliation
+run.terminalized     → reconciliation complete (not a run.status value)
 ```
 
-Transitions out of terminal states are invalid. Events permitted after terminal state:
+Transitions out of terminal statuses are invalid. Events permitted after terminal status:
 `run.evaluation_completed`, `run.consequence_recorded`, `run.violations_checked`, `run.snapshot_finalized`, `run.execution_completed`, `run.terminalized`.
 
 ## Invariants (Enforced by Test)
