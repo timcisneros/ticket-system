@@ -121,11 +121,11 @@
   <dl class="detail-grid">
     <div>
       <dt>Status</dt>
-      <dd><span class="status-badge status-<%= run.status %>"><%= typeof runStatusLabel === 'undefined' ? run.status : runStatusLabel %></span></dd>
+      <dd><span id="run-live-status" class="status-badge status-<%= run.status %>"><%= typeof runStatusLabel === 'undefined' ? run.status : runStatusLabel %></span></dd>
     </div>
     <div>
       <dt>Run Outcome</dt>
-      <dd><%= viewOperationalOutcome || '-' %></dd>
+      <dd id="run-live-outcome"><%= viewOperationalOutcome || '-' %></dd>
     </div>
     <div>
       <dt>Agent</dt>
@@ -137,17 +137,23 @@
     </div>
     <div>
       <dt>Completed</dt>
-      <dd><%= run.completedAt || '-' %></dd>
+      <dd id="run-live-completed"><%= run.completedAt || '-' %></dd>
     </div>
     <div>
       <dt>Duration</dt>
-      <dd>
+      <dd id="run-live-duration" data-started-at="<%= run.startedAt || run.createdAt || '' %>" data-completed-at="<%= run.completedAt || '' %>">
         <% if (run.startedAt && run.completedAt) { %>
           <%= typeof formatDurationHuman === 'function' ? formatDurationHuman(Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt)))) : Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt))) + 'ms' %>
+        <% } else if (['pending', 'running'].includes(run.status) && (run.startedAt || run.createdAt)) { %>
+          running for 0 seconds
         <% } else { %>
           -
         <% } %>
       </dd>
+    </div>
+    <div>
+      <dt>Current Message</dt>
+      <dd id="run-live-message">-</dd>
     </div>
     <div>
       <dt>Mutations</dt>
@@ -156,7 +162,7 @@
     <% if (typeof eventSummary !== 'undefined' && eventSummary) { %>
       <div>
         <dt>Event Status</dt>
-        <dd><%= eventSummary.latestStatus ? eventSummary.latestStatus.status : '-' %></dd>
+        <dd id="run-live-event-status"><%= eventSummary.latestStatus ? eventSummary.latestStatus.status : '-' %></dd>
       </div>
       <div>
         <dt>Latest Workflow Step</dt>
@@ -184,7 +190,7 @@
       </div>
       <div>
         <dt>Latest Event Error</dt>
-        <dd><%= eventSummary.latestError && eventSummary.latestError.message ? eventSummary.latestError.message : '-' %></dd>
+        <dd id="run-live-event-error"><%= eventSummary.latestError && eventSummary.latestError.message ? eventSummary.latestError.message : '-' %></dd>
       </div>
     <% } %>
   </dl>
@@ -755,6 +761,104 @@
       if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
   });
+})();
+</script>
+
+
+<script>
+(() => {
+  const runId = <%= JSON.stringify(run.id) %>;
+  let currentStatus = <%- JSON.stringify(run.status || '') %>;
+  let terminalReloaded = false;
+  let polling = null;
+  const terminalStatuses = new Set(['completed', 'failed', 'interrupted']);
+  const activeStatuses = new Set(['pending', 'running']);
+
+  const statusEl = document.getElementById('run-live-status');
+  const outcomeEl = document.getElementById('run-live-outcome');
+  const completedEl = document.getElementById('run-live-completed');
+  const durationEl = document.getElementById('run-live-duration');
+  const messageEl = document.getElementById('run-live-message');
+  const eventStatusEl = document.getElementById('run-live-event-status');
+  const eventErrorEl = document.getElementById('run-live-event-error');
+
+  function formatElapsed(ms) {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    if (seconds < 60) return seconds + ' second' + (seconds === 1 ? '' : 's');
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    if (rest === 0) return minutes + ' minute' + (minutes === 1 ? '' : 's');
+    return minutes + ' minute' + (minutes === 1 ? '' : 's') + ' ' + rest + ' second' + (rest === 1 ? '' : 's');
+  }
+
+  function updateDuration(startedAt, completedAt, status) {
+    if (!durationEl) return;
+    const startText = startedAt || durationEl.dataset.startedAt || '';
+    const completeText = completedAt || durationEl.dataset.completedAt || '';
+    const startMs = Date.parse(startText);
+    if (Number.isNaN(startMs)) return;
+
+    if (completeText) {
+      const completeMs = Date.parse(completeText);
+      if (!Number.isNaN(completeMs)) {
+        durationEl.textContent = formatElapsed(completeMs - startMs);
+        durationEl.dataset.completedAt = completeText;
+        return;
+      }
+    }
+
+    if (activeStatuses.has(status)) {
+      durationEl.textContent = (status === 'pending' ? 'queued for ' : 'running for ') + formatElapsed(Date.now() - startMs);
+    }
+  }
+
+  function setText(el, value) {
+    if (!el) return;
+    el.textContent = value || '-';
+  }
+
+  function updateStatus(status) {
+    if (!statusEl || !status) return;
+    statusEl.className = 'status-badge status-' + status;
+    statusEl.textContent = status;
+    currentStatus = status;
+  }
+
+  async function refreshRunState() {
+    if (!activeStatuses.has(currentStatus)) return;
+
+    const response = await fetch('/api/runs/' + encodeURIComponent(runId) + '/state', {
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) return;
+
+    const state = await response.json();
+    updateStatus(state.status || currentStatus);
+    setText(outcomeEl, state.outcomeLabel || state.outcome);
+    setText(completedEl, state.completedAt);
+    setText(messageEl, state.currentMessage);
+    setText(eventStatusEl, state.eventSummary && state.eventSummary.latestStatus ? state.eventSummary.latestStatus.status : null);
+    setText(eventErrorEl, state.eventSummary && state.eventSummary.latestError ? state.eventSummary.latestError.message : null);
+    updateDuration(state.startedAt || state.createdAt, state.completedAt, state.status || currentStatus);
+
+    if (terminalStatuses.has(state.status)) {
+      window.clearInterval(polling);
+      polling = null;
+      if (!state.completedAt && !terminalReloaded) {
+        terminalReloaded = true;
+        window.location.reload();
+      }
+    }
+  }
+
+  updateDuration(durationEl && durationEl.dataset.startedAt, durationEl && durationEl.dataset.completedAt, currentStatus);
+  if (activeStatuses.has(currentStatus)) {
+    polling = window.setInterval(() => {
+      updateDuration(durationEl && durationEl.dataset.startedAt, durationEl && durationEl.dataset.completedAt, currentStatus);
+      refreshRunState().catch(() => {});
+    }, 1000);
+    refreshRunState().catch(() => {});
+  }
 })();
 </script>
 
