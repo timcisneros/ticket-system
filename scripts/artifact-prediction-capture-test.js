@@ -120,6 +120,14 @@ global.fetch = async function(_url, options = {}) {
     });
   }
 
+  if (combined.includes('PREDICT-MISSING-' + stamp)) {
+    return okResponse({
+      message: 'Predict a protected write that will fail.',
+      actions: [{ operation: 'writeFile', args: { path: 'package.json', content: 'blocked' } }],
+      complete: true
+    });
+  }
+
   return okResponse({ message: 'No matching prediction fixture.', actions: [], complete: true });
 };
 `;
@@ -232,14 +240,15 @@ function readReplay(run) {
   return JSON.parse(fs.readFileSync(path.join(DATA_DIR, run.replaySnapshotPath), 'utf8'));
 }
 
-async function runPredictionCase(cookie, marker, expectedArtifacts) {
+async function runPredictionCase(cookie, marker, expectedArtifacts, expectedStatus = 'completed') {
   const objective = marker + ': create artifact prediction fixture ' + STAMP;
   const { run } = await createTicket(cookie, objective);
   const finalRun = await waitForTerminalRun(run.id);
-  assert(finalRun.status === 'completed', marker + ' should complete, got ' + finalRun.status + ': ' + (finalRun.error || ''));
+  assert(finalRun.status === expectedStatus, marker + ' should end as ' + expectedStatus + ', got ' + finalRun.status + ': ' + (finalRun.error || ''));
   const snapshot = readReplay(finalRun);
   const prediction = snapshot.artifactPrediction;
   assert(prediction, marker + ' should capture artifactPrediction');
+  assert(!snapshot.artifactPredictionComparison, marker + ' should not persist artifactPredictionComparison');
   assert(prediction.version === 1, marker + ' prediction version should be 1');
   assert(prediction.source === 'parsedModelPlans', marker + ' prediction source should be parsedModelPlans');
   assert(prediction.firstPredictedAtStep === 0, marker + ' prediction should capture step 0');
@@ -269,16 +278,49 @@ async function main() {
       { type: 'file', artifact: 'prediction-bundle-' + STAMP + '/b.txt', operation: 'writeFile' }
     ]);
 
-    await runPredictionCase(cookie, 'PREDICT-WORKFLOW-' + STAMP, [
+    const workflow = await runPredictionCase(cookie, 'PREDICT-WORKFLOW-' + STAMP, [
       { type: 'workflowDraft', artifact: 'draft-prediction-' + STAMP, operation: 'createWorkflowDraftIntent' }
     ]);
+
+    const missing = await runPredictionCase(cookie, 'PREDICT-MISSING-' + STAMP, [
+      { type: 'file', artifact: 'package.json', operation: 'writeFile' }
+    ], 'failed');
+
+    const history = readJson('operation-history.json');
+    history.push({
+      id: 999001,
+      timestamp: new Date().toISOString(),
+      ticketId: simple.run.ticketId,
+      runId: simple.run.id,
+      step: 0,
+      operation: 'writeFile',
+      args: { path: 'prediction-unexpected-' + STAMP + '.txt', content: 'unexpected' },
+      preState: { existed: false },
+      postState: { existed: true, type: 'file' },
+      result: { path: 'prediction-unexpected-' + STAMP + '.txt' },
+      error: null
+    });
+    writeJson('operation-history.json', history);
 
     const runDetail = await httpReq('GET', '/runs/' + simple.run.id, { cookie });
     assert(runDetail.status === 200, 'run detail should render, got HTTP ' + runDetail.status);
     assert(runDetail.body.includes('Artifact Prediction'), 'run detail should show Artifact Prediction section');
     assert(runDetail.body.includes('prediction-simple-' + STAMP + '.txt'), 'run detail should show predicted simple file');
+    assert(runDetail.body.includes('matched'), 'run detail should show matched prediction state');
+    assert(runDetail.body.includes('Unexpected Actual Artifacts'), 'run detail should show unexpected actual artifacts');
+    assert(runDetail.body.includes('prediction-unexpected-' + STAMP + '.txt'), 'run detail should show unexpected file artifact');
 
-    console.log(JSON.stringify({ artifactPredictionCapture: true, simpleRunId: simple.run.id }));
+    const missingDetail = await httpReq('GET', '/runs/' + missing.run.id, { cookie });
+    assert(missingDetail.status === 200, 'missing run detail should render, got HTTP ' + missingDetail.status);
+    assert(missingDetail.body.includes('package.json'), 'missing run detail should show predicted protected file');
+    assert(missingDetail.body.includes('missing'), 'missing run detail should show missing prediction state');
+
+    const workflowDetail = await httpReq('GET', '/runs/' + workflow.run.id, { cookie });
+    assert(workflowDetail.status === 200, 'workflow run detail should render, got HTTP ' + workflowDetail.status);
+    assert(workflowDetail.body.includes('draft-prediction-' + STAMP), 'workflow run detail should show predicted workflow draft');
+    assert(workflowDetail.body.includes('matched'), 'workflow draft prediction should match actual draft artifact');
+
+    console.log(JSON.stringify({ artifactPredictionCapture: true, artifactPredictionComparison: true, simpleRunId: simple.run.id }));
   } finally {
     await stopServer();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });

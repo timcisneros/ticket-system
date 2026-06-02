@@ -281,10 +281,28 @@
   <h2>Artifact Prediction</h2>
   <% const artifactPrediction = snapshot && snapshot.artifactPrediction ? snapshot.artifactPrediction : null; %>
   <% const predictedArtifacts = artifactPrediction && Array.isArray(artifactPrediction.artifacts) ? artifactPrediction.artifacts : []; %>
+  <% const predictionComparison = typeof artifactPredictionComparison === 'undefined' || !artifactPredictionComparison ? { matched: [], missing: [], unexpected: [] } : artifactPredictionComparison; %>
+  <% const matchedPredictionKeys = new Set((predictionComparison.matched || []).map(item => item.key)); %>
+  <% const missingPredictionKeys = new Set((predictionComparison.missing || []).map(item => item.key)); %>
+  <% function predictionKey(item) { const type = item && item.type === 'workflow draft' ? 'workflowDraft' : (item && item.type ? item.type : 'unknown'); const artifact = String(item && item.artifact ? item.artifact : '').trim().replace(/^\.\//, ''); return type + ':' + artifact; } %>
   <% if (predictedArtifacts.length === 0) { %>
     <p class="text-muted">No artifact prediction captured.</p>
   <% } else { %>
     <p class="text-muted">Captured from the first accepted model plan with artifact-producing actions.</p>
+    <dl class="detail-grid">
+      <div>
+        <dt>Matched</dt>
+        <dd><%= (predictionComparison.matched || []).length %></dd>
+      </div>
+      <div>
+        <dt>Missing</dt>
+        <dd><%= (predictionComparison.missing || []).length %></dd>
+      </div>
+      <div>
+        <dt>Unexpected</dt>
+        <dd><%= (predictionComparison.unexpected || []).length %></dd>
+      </div>
+    </dl>
     <div class="table-wrap">
       <table>
         <thead>
@@ -293,20 +311,56 @@
             <th>Artifact</th>
             <th>Operation</th>
             <th>Step</th>
+            <th>Actual</th>
           </tr>
         </thead>
         <tbody>
           <% predictedArtifacts.forEach(function(prediction) { %>
+            <% const key = predictionKey(prediction); %>
+            <% const matched = matchedPredictionKeys.has(key); %>
+            <% const missing = missingPredictionKeys.has(key); %>
             <tr>
               <td><%= prediction.type || '-' %></td>
               <td><code class="owned-path"><%= prediction.artifact || '-' %></code></td>
               <td><code><%= prediction.operation || '-' %></code></td>
               <td><%= prediction.step !== undefined ? prediction.step : '-' %></td>
+              <td>
+                <% if (matched) { %>
+                  <span class="badge badge--outcome-success">matched</span>
+                <% } else if (missing) { %>
+                  <span class="badge badge--outcome-error">missing</span>
+                <% } else { %>
+                  <span class="badge badge--outcome-noop">unknown</span>
+                <% } %>
+              </td>
             </tr>
           <% }) %>
         </tbody>
       </table>
     </div>
+    <% if ((predictionComparison.unexpected || []).length > 0) { %>
+      <h3>Unexpected Actual Artifacts</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Artifact</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% (predictionComparison.unexpected || []).forEach(function(actual) { %>
+              <tr>
+                <td><%= actual.type || '-' %></td>
+                <td><code class="owned-path"><%= actual.artifact || '-' %></code></td>
+                <td><%= actual.source || '-' %></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    <% } %>
     <div style="margin-top: 10px;">
       <span class="text-muted">Source:</span>
       <code><%= artifactPrediction.source || '-' %></code>

@@ -3765,6 +3765,115 @@ function buildWriteFileArtifactStatus(record, operationHistory = [], runIds = ne
   return 'written';
 }
 
+function normalizeArtifactComparisonPath(value) {
+  return String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function normalizeArtifactComparisonType(value) {
+  const type = String(value || '').trim();
+  if (type === 'workflow draft' || type === 'workflowDraft') return 'workflowDraft';
+  if (type === 'handoffFile') return 'handoffFile';
+  if (['file', 'folder', 'renamed', 'deleted'].includes(type)) return type;
+  return type || 'unknown';
+}
+
+function buildArtifactComparisonItem(type, artifact, details = {}) {
+  const normalizedType = normalizeArtifactComparisonType(type);
+  const normalizedArtifact = normalizeArtifactComparisonPath(artifact);
+  return {
+    type: normalizedType,
+    artifact: normalizedArtifact,
+    key: normalizedType + ':' + normalizedArtifact,
+    ...details
+  };
+}
+
+function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = [], snapshot = null) {
+  if (!run || run.id == null) return [];
+  const actual = [];
+
+  operationHistory.forEach(record => {
+    if (!record || record.runId !== run.id || record.error) return;
+    const args = record.args || {};
+    const result = record.result || {};
+
+    if (record.operation === 'writeFile') {
+      actual.push(buildArtifactComparisonItem('file', result.path || args.path, {
+        operation: 'writeFile',
+        source: record.id != null ? 'Operation #' + record.id : 'operation-history'
+      }));
+      return;
+    }
+
+    if (record.operation === 'createFolder' && result.status === 'created') {
+      actual.push(buildArtifactComparisonItem('folder', result.path || args.path, {
+        operation: 'createFolder',
+        source: record.id != null ? 'Operation #' + record.id : 'operation-history'
+      }));
+      return;
+    }
+
+    if (record.operation === 'renamePath') {
+      actual.push(buildArtifactComparisonItem('renamed', result.path || args.nextPath, {
+        operation: 'renamePath',
+        source: record.id != null ? 'Operation #' + record.id : 'operation-history'
+      }));
+      return;
+    }
+
+    if (record.operation === 'deletePath' && result.status === 'deleted') {
+      actual.push(buildArtifactComparisonItem('deleted', result.path || args.path, {
+        operation: 'deletePath',
+        source: record.id != null ? 'Operation #' + record.id : 'operation-history'
+      }));
+    }
+  });
+
+  workflows.forEach(workflow => {
+    if (!workflow || workflow.createdByRunId !== run.id) return;
+    actual.push(buildArtifactComparisonItem('workflowDraft', workflow.id || workflow.name, {
+      operation: 'workflowDraft',
+      source: 'Workflow draft'
+    }));
+  });
+
+  const workspaceOperations = snapshot && Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
+  workspaceOperations.forEach((item, index) => {
+    if (!item || item.error || !item.handoffTask) return;
+    const operation = item.operation && typeof item.operation === 'object' ? item.operation.operation : item.operation;
+    const args = item.operation && typeof item.operation === 'object' ? item.operation.args || {} : {};
+    const result = item.result || {};
+    if (operation !== 'writeFile') return;
+    actual.push(buildArtifactComparisonItem('handoffFile', result.path || args.path, {
+      operation: 'createHandoffTask',
+      source: 'Handoff workspace operation #' + (index + 1)
+    }));
+  });
+
+  return actual.filter(item => item.artifact && item.artifact !== '-');
+}
+
+function buildArtifactPredictionComparison(run, snapshot, operationHistory = [], workflows = []) {
+  const prediction = snapshot && snapshot.artifactPrediction ? snapshot.artifactPrediction : null;
+  const predicted = prediction && Array.isArray(prediction.artifacts)
+    ? prediction.artifacts.map(item => buildArtifactComparisonItem(item.type, item.artifact, {
+      operation: item.operation || null,
+      source: 'artifactPrediction',
+      step: item.step,
+      actionIndex: item.actionIndex
+    })).filter(item => item.artifact && item.artifact !== '-')
+    : [];
+  const actual = buildRunActualArtifactEvidence(run, operationHistory, workflows, snapshot);
+  const predictedKeys = new Set(predicted.map(item => item.key));
+  const actualKeys = new Set(actual.map(item => item.key));
+
+  return {
+    matched: predicted.filter(item => actualKeys.has(item.key)),
+    missing: predicted.filter(item => !actualKeys.has(item.key)),
+    unexpected: actual.filter(item => !predictedKeys.has(item.key))
+  };
+}
+
 function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns = []) {
   const runIds = new Set(ticketRuns.map(run => run.id));
   const artifacts = [];
@@ -10714,6 +10823,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     record.errorInfo = buildOperationErrorInfo(record);
   });
   const failureSummary = buildRunFailureSummary(run, snapshot, enrichedHistory, runPartialMutationCount, authorityContext.controls.recoveryAvailable);
+  const workflows = readWorkflows();
+  const artifactPredictionComparison = buildArtifactPredictionComparison(run, snapshot, history, workflows);
   const displaySnapshot = createDisplaySnapshot(snapshot);
   const operationalOutcome = classifyRunOperationalOutcome(run);
   const runEvents = getRunEvents(runId);
@@ -10731,6 +10842,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     failureSummary,
     recentLogs: getRecentLogsForRun(runId),
     operationHistory: enrichedHistory,
+    artifactPredictionComparison,
     partialMutationCount: runPartialMutationCount,
     operationalOutcome,
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
