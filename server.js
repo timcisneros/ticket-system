@@ -316,6 +316,34 @@ function mutationAlreadyCommitted(runId, operation, args) {
   return !!findCommittedMutation(runId, operation, args);
 }
 
+function normalizeArtifactOwnershipPath(value) {
+  const normalized = path.posix.normalize(String(value || '').replace(/\\/g, '/').trim()).replace(/^\/+/, '');
+  if (!normalized || normalized === '.' || normalized.includes('\0')) return null;
+  if (normalized.split('/').some(segment => segment === '..')) return null;
+  return normalized;
+}
+
+function getSuccessfulArtifactOwnershipPath(record) {
+  if (!record || record.error) return null;
+  const args = record.args || {};
+  const result = record.result || {};
+  if (record.operation === 'writeFile') return normalizeArtifactOwnershipPath(result.path || args.path);
+  if (record.operation === 'createFolder') return normalizeArtifactOwnershipPath(result.path || args.path);
+  if (record.operation === 'renamePath') return normalizeArtifactOwnershipPath(args.nextPath);
+  return null;
+}
+
+function findPriorSuccessfulArtifactOwner(operationHistory, run, targetPath) {
+  if (!run) return null;
+  const normalizedTarget = normalizeArtifactOwnershipPath(targetPath);
+  if (!normalizedTarget) return null;
+  return (operationHistory || []).find(record => {
+    if (!record || record.error) return false;
+    if (record.ticketId === run.ticketId) return false;
+    return getSuccessfulArtifactOwnershipPath(record) === normalizedTarget;
+  }) || null;
+}
+
 // ── Phase-aware execution helpers ─────────────────────────────────
 
 function inferPhaseFromActions(actions) {
@@ -7723,6 +7751,24 @@ function executeWorkspaceOperation(run, action, step = 0) {
     if (conflict) {
       const error = new Error(`Conflicting mutation already committed on ${pathValue}: ${conflict.operation} (historyId: ${conflict.id})`);
       error.code = 'MUTATION_CONFLICT';
+      throw error;
+    }
+
+    const priorOwner = findPriorSuccessfulArtifactOwner(readOperationHistory(), run, pathValue);
+    if (priorOwner) {
+      const error = new Error(`Workspace write conflict: path was previously produced by ticket ${priorOwner.ticketId}, run ${priorOwner.runId}`);
+      error.code = 'WORKSPACE_WRITE_CONFLICT';
+      error.failureKind = 'invalid_action';
+      error.workspaceAction = {
+        operation,
+        args: { path: pathValue, content },
+        path: pathValue,
+        blocked: true,
+        reason: 'prior_artifact_owner',
+        conflictingTicketId: priorOwner.ticketId,
+        conflictingRunId: priorOwner.runId,
+        conflictingHistoryId: priorOwner.id || null
+      };
       throw error;
     }
 
