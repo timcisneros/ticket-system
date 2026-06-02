@@ -3744,6 +3744,27 @@ function getOperationHistoryForTicket(ticketId, history = readOperationHistory()
   return history.filter(record => record.ticketId === ticketId);
 }
 
+function buildWriteFileArtifactStatus(record, operationHistory = [], runIds = new Set()) {
+  if (record && record.preState && record.preState.existed === false) return 'created';
+  const args = record && record.args ? record.args : {};
+  const result = record && record.result ? record.result : {};
+  const artifactPath = result.path || args.path || '';
+  if (record && record.preState && record.preState.existed === true) {
+    const hasEarlierSameTicketWrite = (operationHistory || []).some(item => {
+      if (!item || item === record || item.error || item.operation !== 'writeFile') return false;
+      if (!runIds.has(item.runId) || item.runId === record.runId) return false;
+      const itemArgs = item.args || {};
+      const itemResult = item.result || {};
+      const itemPath = itemResult.path || itemArgs.path || '';
+      if (itemPath !== artifactPath) return false;
+      if (Number.isFinite(Number(item.id)) && Number.isFinite(Number(record.id))) return Number(item.id) < Number(record.id);
+      return String(item.timestamp || '') < String(record.timestamp || '');
+    });
+    return hasEarlierSameTicketWrite ? 'rewritten' : 'updated';
+  }
+  return 'written';
+}
+
 function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns = []) {
   const runIds = new Set(ticketRuns.map(run => run.id));
   const artifacts = [];
@@ -3766,7 +3787,7 @@ function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns 
         ...base,
         type: 'file',
         artifact: result.path || args.path || '-',
-        status: 'written'
+        status: buildWriteFileArtifactStatus(record, operationHistory, runIds)
       });
       return;
     }
