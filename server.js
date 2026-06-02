@@ -4403,6 +4403,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     capabilityOutputs: [],
     workflowInvocation: [],
     authorityChecks: [],
+    artifactPrediction: null,
     workflowDrafts: [],
     workflowDraftIntents: [],
     handoffTasks: [],
@@ -4435,6 +4436,80 @@ function appendRunReplaySnapshotItem(runId, key, item) {
     return {
       ...snapshot,
       [key]: [...items, { ...item, capturedAt: new Date().toISOString() }]
+    };
+  });
+}
+
+function buildArtifactPredictionFromActions(actions = [], step = 0) {
+  if (!Array.isArray(actions) || actions.length === 0) return null;
+  const artifacts = [];
+
+  actions.forEach((action, actionIndex) => {
+    if (!action || typeof action !== 'object') return;
+    const operation = action.operation;
+    const args = action.args && typeof action.args === 'object' && !Array.isArray(action.args)
+      ? action.args
+      : {};
+
+    if (operation === 'writeFile' && typeof args.path === 'string' && args.path.trim()) {
+      artifacts.push({ type: 'file', artifact: args.path, operation, step, actionIndex });
+      return;
+    }
+
+    if (operation === 'createFolder' && typeof args.path === 'string' && args.path.trim()) {
+      artifacts.push({ type: 'folder', artifact: args.path, operation, step, actionIndex });
+      return;
+    }
+
+    if (operation === 'renamePath' && typeof args.nextPath === 'string' && args.nextPath.trim()) {
+      artifacts.push({ type: 'renamed', artifact: args.nextPath, operation, step, actionIndex });
+      return;
+    }
+
+    if (operation === 'deletePath' && typeof args.path === 'string' && args.path.trim()) {
+      artifacts.push({ type: 'deleted', artifact: args.path, operation, step, actionIndex });
+      return;
+    }
+
+    if (operation === 'createWorkflowDraftIntent' && typeof args.id === 'string' && args.id.trim()) {
+      artifacts.push({ type: 'workflowDraft', artifact: args.id, operation, step, actionIndex });
+      return;
+    }
+
+    const workflow = args.workflow && typeof args.workflow === 'object' && !Array.isArray(args.workflow)
+      ? args.workflow
+      : null;
+    if (operation === 'createWorkflowDraft' && workflow && typeof workflow.id === 'string' && workflow.id.trim()) {
+      artifacts.push({ type: 'workflowDraft', artifact: workflow.id, operation, step, actionIndex });
+      return;
+    }
+
+    const handoffArgs = args.args && typeof args.args === 'object' && !Array.isArray(args.args)
+      ? args.args
+      : {};
+    if (operation === 'createHandoffTask' && args.operation === 'writeFile' && typeof handoffArgs.path === 'string' && handoffArgs.path.trim()) {
+      artifacts.push({ type: 'handoffFile', artifact: handoffArgs.path, operation, step, actionIndex });
+    }
+  });
+
+  if (artifacts.length === 0) return null;
+  return {
+    version: 1,
+    source: 'parsedModelPlans',
+    capturedAt: new Date().toISOString(),
+    firstPredictedAtStep: step,
+    artifacts
+  };
+}
+
+function captureRunArtifactPrediction(runId, actions = [], step = 0) {
+  const prediction = buildArtifactPredictionFromActions(actions, step);
+  if (!prediction) return;
+  updateRunReplaySnapshot(runId, snapshot => {
+    if (!snapshot || snapshot.artifactPrediction) return snapshot;
+    return {
+      ...snapshot,
+      artifactPrediction: prediction
     };
   });
 }
@@ -8894,6 +8969,7 @@ async function runAgentTicket(runId) {
         complete: modelPlan.complete,
         step
       });
+      captureRunArtifactPrediction(run.id, modelPlan.actions, step);
       broadcastTicketChange();
       actionResults = [];
       const actions = modelPlan.actions;

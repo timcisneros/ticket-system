@@ -278,6 +278,45 @@
 </section>
 
 <section class="detail-section">
+  <h2>Artifact Prediction</h2>
+  <% const artifactPrediction = snapshot && snapshot.artifactPrediction ? snapshot.artifactPrediction : null; %>
+  <% const predictedArtifacts = artifactPrediction && Array.isArray(artifactPrediction.artifacts) ? artifactPrediction.artifacts : []; %>
+  <% if (predictedArtifacts.length === 0) { %>
+    <p class="text-muted">No artifact prediction captured.</p>
+  <% } else { %>
+    <p class="text-muted">Captured from the first accepted model plan with artifact-producing actions.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Artifact</th>
+            <th>Operation</th>
+            <th>Step</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% predictedArtifacts.forEach(function(prediction) { %>
+            <tr>
+              <td><%= prediction.type || '-' %></td>
+              <td><code class="owned-path"><%= prediction.artifact || '-' %></code></td>
+              <td><code><%= prediction.operation || '-' %></code></td>
+              <td><%= prediction.step !== undefined ? prediction.step : '-' %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+    <div style="margin-top: 10px;">
+      <span class="text-muted">Source:</span>
+      <code><%= artifactPrediction.source || '-' %></code>
+      <span class="text-muted"> · Captured:</span>
+      <span><%= artifactPrediction.capturedAt || '-' %></span>
+    </div>
+  <% } %>
+</section>
+
+<section class="detail-section">
   <details class="collapsible" open>
     <summary>Authority &amp; Scope</summary>
     <div class="collapsible__content">
