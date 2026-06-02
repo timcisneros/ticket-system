@@ -261,6 +261,119 @@ async function runPredictionCase(cookie, marker, expectedArtifacts, expectedStat
   return { run: finalRun, snapshot };
 }
 
+function writeReplaySnapshot(runId, snapshot) {
+  const relativePath = path.join('replay-snapshots', 'run-' + runId + '.json');
+  fs.writeFileSync(path.join(DATA_DIR, relativePath), JSON.stringify(snapshot, null, 2));
+  return relativePath;
+}
+
+function appendJsonRecord(file, record) {
+  const records = readJson(file);
+  records.push(record);
+  writeJson(file, records);
+}
+
+function addAccuracyFixtureRun(name, predictions, actualArtifacts) {
+  const fixtureNumber = addAccuracyFixtureRun.nextId++;
+  const ticketId = 9000 + fixtureNumber;
+  const runId = 9100 + fixtureNumber;
+  const now = new Date().toISOString();
+  appendJsonRecord('tickets.json', {
+    id: ticketId,
+    objective: 'Artifact accuracy fixture ' + name,
+    assignmentTargetType: 'agent',
+    assignmentTargetId: 9901,
+    assignmentMode: 'individual',
+    executionMode: 'agent',
+    capabilityType: 'directAction',
+    capabilityId: 'agent-selected-actions',
+    status: 'completed',
+    createdBy: 'test',
+    changedBy: 'test',
+    changedAt: now,
+    createdAt: now,
+    updatedAt: now
+  });
+
+  const replaySnapshotPath = writeReplaySnapshot(runId, {
+    runId,
+    ticketId,
+    assignedAgentId: 9901,
+    agentNameSnapshot: 'Prediction Agent',
+    providerRequests: [],
+    modelResponses: [],
+    parsedModelPlans: [],
+    workspaceOperations: [],
+    events: [],
+    artifactPrediction: predictions
+      ? {
+        version: 1,
+        source: 'parsedModelPlans',
+        capturedAt: now,
+        firstPredictedAtStep: 0,
+        artifacts: predictions.map((artifact, actionIndex) => ({
+          type: 'file',
+          artifact,
+          operation: 'writeFile',
+          step: 0,
+          actionIndex
+        }))
+      }
+      : null,
+    terminalStatus: 'completed',
+    createdAt: now
+  });
+
+  appendJsonRecord('runs.json', {
+    id: runId,
+    ticketId,
+    agentId: 9901,
+    agentName: 'Prediction Agent',
+    executionWorkspaceType: 'main',
+    ownedOutputPaths: [],
+    executionMode: 'agent',
+    capabilityType: 'directAction',
+    capabilityId: 'agent-selected-actions',
+    status: 'completed',
+    ticketOpenedAt: now,
+    createdAt: now,
+    updatedAt: now,
+    startedAt: now,
+    completedAt: now,
+    replaySnapshotPath,
+    replaySummary: { steps: 0, providerRequests: 0, modelResponses: 0, workspaceOperations: actualArtifacts.length, mutationCount: actualArtifacts.length }
+  });
+
+  const history = readJson('operation-history.json');
+  actualArtifacts.forEach((artifact, index) => {
+    history.push({
+      id: 990000 + fixtureNumber * 10 + index,
+      timestamp: now,
+      ticketId,
+      runId,
+      step: 0,
+      operation: 'writeFile',
+      args: { path: artifact, content: 'fixture' },
+      preState: { existed: false },
+      postState: { existed: true, type: 'file' },
+      result: { path: artifact },
+      error: null
+    });
+  });
+  writeJson('operation-history.json', history);
+  return { ticketId, runId };
+}
+addAccuracyFixtureRun.nextId = 1;
+
+async function assertRunDetailContains(cookie, runId, expected) {
+  const res = await httpReq('GET', '/runs/' + runId, { cookie });
+  assert(res.status === 200, 'fixture run detail should render, got HTTP ' + res.status);
+  expected.forEach(text => {
+    assert(res.body.includes(text), 'run detail for ' + runId + ' should include ' + JSON.stringify(text));
+  });
+  return res;
+}
+
 async function main() {
   seedData();
   const preloadPath = createFakeOpenAIPreload();
@@ -320,7 +433,52 @@ async function main() {
     assert(workflowDetail.body.includes('draft-prediction-' + STAMP), 'workflow run detail should show predicted workflow draft');
     assert(workflowDetail.body.includes('matched'), 'workflow draft prediction should match actual draft artifact');
 
-    console.log(JSON.stringify({ artifactPredictionCapture: true, artifactPredictionComparison: true, simpleRunId: simple.run.id }));
+    const perfectFixture = addAccuracyFixtureRun('perfect', [
+      'accuracy-perfect-' + STAMP + '-a.txt',
+      'accuracy-perfect-' + STAMP + '-b.txt'
+    ], [
+      'accuracy-perfect-' + STAMP + '-a.txt',
+      'accuracy-perfect-' + STAMP + '-b.txt'
+    ]);
+    await assertRunDetailContains(cookie, perfectFixture.runId, ['100% · 2/2 matched']);
+
+    const missingFixture = addAccuracyFixtureRun('missing', [
+      'accuracy-missing-' + STAMP + '-a.txt',
+      'accuracy-missing-' + STAMP + '-b.txt',
+      'accuracy-missing-' + STAMP + '-c.txt'
+    ], [
+      'accuracy-missing-' + STAMP + '-a.txt',
+      'accuracy-missing-' + STAMP + '-b.txt'
+    ]);
+    await assertRunDetailContains(cookie, missingFixture.runId, ['67% · 2/3 matched', 'missing']);
+
+    const unexpectedFixture = addAccuracyFixtureRun('unexpected', [
+      'accuracy-unexpected-' + STAMP + '-a.txt',
+      'accuracy-unexpected-' + STAMP + '-b.txt'
+    ], [
+      'accuracy-unexpected-' + STAMP + '-a.txt',
+      'accuracy-unexpected-' + STAMP + '-b.txt',
+      'accuracy-unexpected-' + STAMP + '-c.txt'
+    ]);
+    await assertRunDetailContains(cookie, unexpectedFixture.runId, ['67% · 2/3 matched', 'Unexpected Actual Artifacts']);
+
+    const mixedFixture = addAccuracyFixtureRun('mixed', [
+      'accuracy-mixed-' + STAMP + '-a.txt',
+      'accuracy-mixed-' + STAMP + '-b.txt',
+      'accuracy-mixed-' + STAMP + '-c.txt'
+    ], [
+      'accuracy-mixed-' + STAMP + '-a.txt',
+      'accuracy-mixed-' + STAMP + '-b.txt',
+      'accuracy-mixed-' + STAMP + '-d.txt'
+    ]);
+    await assertRunDetailContains(cookie, mixedFixture.runId, ['50% · 2/4 matched', 'Unexpected Actual Artifacts', 'missing']);
+
+    const noPredictionFixture = addAccuracyFixtureRun('no-prediction', null, [
+      'accuracy-no-prediction-' + STAMP + '.txt'
+    ]);
+    await assertRunDetailContains(cookie, noPredictionFixture.runId, ['Artifact Accuracy:</strong> Not scored', 'No artifact prediction captured.']);
+
+    console.log(JSON.stringify({ artifactPredictionCapture: true, artifactPredictionComparison: true, artifactAccuracy: true, simpleRunId: simple.run.id }));
   } finally {
     await stopServer();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });

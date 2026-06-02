@@ -3874,6 +3874,38 @@ function buildArtifactPredictionComparison(run, snapshot, operationHistory = [],
   };
 }
 
+function buildArtifactAccuracy(snapshot, comparison = {}) {
+  const prediction = snapshot && snapshot.artifactPrediction ? snapshot.artifactPrediction : null;
+  const predictedArtifacts = prediction && Array.isArray(prediction.artifacts) ? prediction.artifacts : [];
+  const matched = Array.isArray(comparison.matched) ? comparison.matched.length : 0;
+  const missing = Array.isArray(comparison.missing) ? comparison.missing.length : 0;
+  const unexpected = Array.isArray(comparison.unexpected) ? comparison.unexpected.length : 0;
+  const total = matched + missing + unexpected;
+
+  if (predictedArtifacts.length === 0 || total === 0) {
+    return {
+      scored: false,
+      score: null,
+      percent: null,
+      matched,
+      total,
+      missing,
+      unexpected
+    };
+  }
+
+  const score = matched / total;
+  return {
+    scored: true,
+    score,
+    percent: Math.round(score * 100),
+    matched,
+    total,
+    missing,
+    unexpected
+  };
+}
+
 function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns = []) {
   const runIds = new Set(ticketRuns.map(run => run.id));
   const artifacts = [];
@@ -10825,6 +10857,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const failureSummary = buildRunFailureSummary(run, snapshot, enrichedHistory, runPartialMutationCount, authorityContext.controls.recoveryAvailable);
   const workflows = readWorkflows();
   const artifactPredictionComparison = buildArtifactPredictionComparison(run, snapshot, history, workflows);
+  const artifactAccuracy = buildArtifactAccuracy(snapshot, artifactPredictionComparison);
   const displaySnapshot = createDisplaySnapshot(snapshot);
   const operationalOutcome = classifyRunOperationalOutcome(run);
   const runEvents = getRunEvents(runId);
@@ -10843,6 +10876,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     recentLogs: getRecentLogsForRun(runId),
     operationHistory: enrichedHistory,
     artifactPredictionComparison,
+    artifactAccuracy,
     partialMutationCount: runPartialMutationCount,
     operationalOutcome,
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
