@@ -100,9 +100,18 @@ global.fetch = async function(_url, options = {}) {
   if (combined.includes('restart recovery obvious postcondition regression')) {
     if (exists(folder) && !exists(fileA)) {
       return okResponse({
-        message: 'Resume by writing both missing files.',
+        message: 'Resume by writing the first missing file.',
         actions: [
-          { operation: 'writeFile', args: { path: fileA, content: contentA } },
+          { operation: 'writeFile', args: { path: fileA, content: contentA } }
+        ],
+        complete: false
+      });
+    }
+
+    if (exists(folder) && exists(fileA) && !exists(fileB)) {
+      return okResponse({
+        message: 'Continue resumed execution by writing the second missing file.',
+        actions: [
           { operation: 'writeFile', args: { path: fileB, content: contentB } }
         ],
         complete: true
@@ -261,14 +270,21 @@ async function main() {
     const fileAContent = fs.existsSync(path.join(WORKSPACE_ROOT, FILE_A)) ? fs.readFileSync(path.join(WORKSPACE_ROOT, FILE_A), 'utf8') : null;
     const fileBContent = fs.existsSync(path.join(WORKSPACE_ROOT, FILE_B)) ? fs.readFileSync(path.join(WORKSPACE_ROOT, FILE_B), 'utf8') : null;
     const preModelPostcondition = events.some(event => event.type === 'run:postcondition_completed' && event.payload && event.payload.source === 'pre_model');
+    const workspaceObjectiveSatisfied = events.some(event => event.type === 'workspace.objective_satisfied');
+    const writeFileHistory = history.filter(item => item.operation === 'writeFile');
+    const firstWrite = writeFileHistory[0];
+    const secondWrite = writeFileHistory[1];
 
     assert(finalRun.status === 'completed', 'run should complete after resumed execution, got ' + finalRun.status);
     assert(workspaceFolder, 'folder should exist after first committed mutation');
     assert(fileAContent === CONTENT_A, 'resumed execution should write file A');
     assert(fileBContent === CONTENT_B, 'resumed execution should write file B');
     assert(history.filter(item => item.operation === 'createFolder' && item.args && item.args.path === FOLDER).length === 1, 'createFolder should be committed exactly once');
-    assert(history.filter(item => item.operation === 'writeFile').length === 2, 'two writeFile mutations should be committed after resume');
+    assert(writeFileHistory.length === 2, 'two writeFile mutations should be committed after resume');
+    assert(firstWrite && firstWrite.args && firstWrite.args.path === FILE_A, 'file A should be the first resumed write');
+    assert(secondWrite && secondWrite.args && secondWrite.args.path === FILE_B, 'file B should only be written after the run continues past the partial mutation point');
     assert(!preModelPostcondition, 'resumed run must not complete through pre-model obvious postcondition shortcut');
+    assert(!workspaceObjectiveSatisfied, 'resumed run must not complete through post-action workspace objective satisfaction shortcut');
 
     console.log(JSON.stringify({
       resumeObviousPostconditionRegression: true,

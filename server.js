@@ -9186,7 +9186,7 @@ async function runAgentTicket(runId) {
         break;
       }
 
-      if (!modelPlan.complete && isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
+      if (!resumedFromPersistedState && !modelPlan.complete && isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
         recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
           step,
           source: 'successful_workspace_mutation',
