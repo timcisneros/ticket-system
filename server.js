@@ -6089,6 +6089,29 @@ function countMutatingActions(actions) {
   ).length;
 }
 
+function normalizeActionPathForBundle(value) {
+  const normalized = path.posix.normalize(String(value || '').replace(/\\/g, '/').trim()).replace(/^\/+/, '');
+  if (!normalized || normalized === '.' || normalized.includes('\0')) return null;
+  if (normalized.split('/').some(segment => segment === '..')) return null;
+  return normalized;
+}
+
+function isAllowedFolderWriteBundle(actions) {
+  if (!Array.isArray(actions) || actions.length !== 3) return false;
+  const createActions = actions.filter(action => action && action.operation === 'createFolder');
+  const writeActions = actions.filter(action => action && action.operation === 'writeFile');
+  if (createActions.length !== 1 || writeActions.length !== 2) return false;
+
+  const folderPath = normalizeActionPathForBundle(createActions[0].args && createActions[0].args.path);
+  if (!folderPath) return false;
+  const folderPrefix = folderPath.endsWith('/') ? folderPath : folderPath + '/';
+
+  return writeActions.every(action => {
+    const writePath = normalizeActionPathForBundle(action.args && action.args.path);
+    return Boolean(writePath && writePath.startsWith(folderPrefix));
+  });
+}
+
 function parseTicketShapeSuggestion(text) {
   try {
     const parsed = JSON.parse(text);
@@ -8876,7 +8899,7 @@ async function runAgentTicket(runId) {
       }
 
       const mutatingActionCount = countMutatingActions(actions);
-      if (mutatingActionCount > MAX_MUTATING_ACTIONS_PER_RESPONSE) {
+      if (mutatingActionCount > MAX_MUTATING_ACTIONS_PER_RESPONSE && !isAllowedFolderWriteBundle(actions)) {
         const message = `Model returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}`;
         const mutatingActionLimitSignature = actions
           .filter(action => action && typeof action === 'object' && AGENT_MUTATING_OPERATIONS.includes(action.operation))
