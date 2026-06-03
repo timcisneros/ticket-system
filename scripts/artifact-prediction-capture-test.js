@@ -531,6 +531,32 @@ async function main() {
     });
     await assertRunDetailContains(cookie, fullPathCoverageFixture.runId, ['Objective Path Coverage:</strong> 100% · 2/2 covered']);
 
+    const workflowCoverageFixture = addAccuracyFixtureRun('workflow-path-coverage', [
+      { type: 'workflowDraft', artifact: 'coverage-workflow-draft-' + STAMP, operation: 'createWorkflowDraftIntent' }
+    ], [], {
+      objective: 'Create a workflow draft that writes coverage-workflow-output-' + STAMP + '.txt'
+    });
+    const workflowCoverageSnapshot = readReplay({ replaySnapshotPath: path.join('replay-snapshots', 'run-' + workflowCoverageFixture.runId + '.json') });
+    workflowCoverageSnapshot.parsedModelPlans = [{
+      message: 'Create workflow draft coverage fixture.',
+      actions: [{
+        operation: 'createWorkflowDraftIntent',
+        args: {
+          id: 'coverage-workflow-draft-' + STAMP,
+          name: 'Coverage Workflow Draft ' + STAMP,
+          writes: [{ path: 'coverage-workflow-output-' + STAMP + '.txt', content: 'ok' }],
+          postconditions: [{ type: 'fileExists', path: 'coverage-workflow-output-' + STAMP + '.txt' }]
+        }
+      }],
+      complete: true,
+      step: 0
+    }];
+    writeReplaySnapshot(workflowCoverageFixture.runId, workflowCoverageSnapshot);
+    await assertRunDetailContains(cookie, workflowCoverageFixture.runId, [
+      'Objective Path Coverage:</strong> 100% · 1/1 covered',
+      'Artifact Accuracy:</strong> 0% · 0/1 matched'
+    ]);
+
     const noPathCoverageFixture = addAccuracyFixtureRun('no-path-coverage', [
       'coverage-no-path-' + STAMP + '.txt'
     ], [

@@ -3932,13 +3932,75 @@ function buildObjectiveSuccess(run) {
   return { scored: false, status: 'unknown', score: null, percent: null, reason: 'Run is not terminal' };
 }
 
-function buildObjectivePathCoverage(ticket, snapshot) {
-  const objectivePaths = extractObjectivePathTokens(ticket && ticket.objective);
+function addCoveragePath(pathSet, value) {
+  const normalized = normalizeObjectivePathToken(value);
+  if (normalized) pathSet.add(normalized);
+}
+
+function collectWorkflowDraftCoveragePathsFromWorkflow(pathSet, workflow) {
+  if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) return;
+
+  if (Array.isArray(workflow.actions)) {
+    workflow.actions.forEach(action => {
+      if (!action || typeof action !== 'object') return;
+      const input = action.input && typeof action.input === 'object' && !Array.isArray(action.input)
+        ? action.input
+        : {};
+      addCoveragePath(pathSet, input.path);
+    });
+  }
+
+  if (Array.isArray(workflow.postconditions)) {
+    workflow.postconditions.forEach(postcondition => {
+      if (!postcondition || typeof postcondition !== 'object') return;
+      addCoveragePath(pathSet, postcondition.path);
+    });
+  }
+}
+
+function buildObjectiveCoveragePlannedPaths(snapshot) {
+  const pathSet = new Set();
   const prediction = snapshot && snapshot.artifactPrediction ? snapshot.artifactPrediction : null;
   const predictedArtifacts = prediction && Array.isArray(prediction.artifacts) ? prediction.artifacts : [];
-  const plannedPaths = Array.from(new Set(predictedArtifacts
-    .map(item => normalizeObjectivePathToken(item && item.artifact))
-    .filter(Boolean)));
+  predictedArtifacts.forEach(item => addCoveragePath(pathSet, item && item.artifact));
+
+  const parsedPlans = snapshot && Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
+  const firstPlan = parsedPlans[0] || null;
+  const actions = firstPlan && Array.isArray(firstPlan.actions) ? firstPlan.actions : [];
+  actions.forEach(action => {
+    if (!action || typeof action !== 'object') return;
+    const operation = action.operation;
+    const args = action.args && typeof action.args === 'object' && !Array.isArray(action.args)
+      ? action.args
+      : {};
+
+    if (operation === 'createWorkflowDraftIntent') {
+      if (Array.isArray(args.writes)) {
+        args.writes.forEach(write => {
+          if (!write || typeof write !== 'object') return;
+          addCoveragePath(pathSet, write.path);
+        });
+      }
+      if (Array.isArray(args.postconditions)) {
+        args.postconditions.forEach(postcondition => {
+          if (!postcondition || typeof postcondition !== 'object') return;
+          addCoveragePath(pathSet, postcondition.path);
+        });
+      }
+      return;
+    }
+
+    if (operation === 'createWorkflowDraft') {
+      collectWorkflowDraftCoveragePathsFromWorkflow(pathSet, args.workflow);
+    }
+  });
+
+  return Array.from(pathSet);
+}
+
+function buildObjectivePathCoverage(ticket, snapshot) {
+  const objectivePaths = extractObjectivePathTokens(ticket && ticket.objective);
+  const plannedPaths = buildObjectiveCoveragePlannedPaths(snapshot);
 
   if (objectivePaths.length === 0) {
     return {
