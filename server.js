@@ -7228,160 +7228,6 @@ function hashContent(content) {
   return crypto.createHash('sha256').update(String(content || '')).digest('hex');
 }
 
-// ── ExpectedStateContract helpers ─────────────────────────────────
-//
-// Pure derived layer for mutating workspace operations.
-// Build an ExpectedStateContract from the action and preState,
-// an ObservedStateContract from the postState,
-// and compare them operation-agnostically.
-
-function buildExpectedStateContract(operation, args, preState) {
-  const contract = { paths: {} };
-  if (operation === 'writeFile') {
-    const path = normalizeObjectivePathToken(args.path);
-    if (path) {
-      contract.paths[path] = {
-        exists: true,
-        type: 'file',
-        contentHash: hashContent(args.content)
-      };
-    }
-  } else if (operation === 'createFolder') {
-    const path = normalizeObjectivePathToken(args.path);
-    if (path) {
-      contract.paths[path] = {
-        exists: true,
-        type: 'directory',
-        contentHash: null
-      };
-    }
-  } else if (operation === 'deletePath') {
-    const path = normalizeObjectivePathToken(args.path);
-    if (path) {
-      contract.paths[path] = {
-        exists: false,
-        type: null,
-        contentHash: null
-      };
-    }
-  } else if (operation === 'renamePath') {
-    const source = normalizeObjectivePathToken(args.path);
-    const dest = normalizeObjectivePathToken(args.nextPath);
-    if (source) {
-      contract.paths[source] = {
-        exists: false,
-        type: null,
-        contentHash: null
-      };
-    }
-    if (dest) {
-      const destContentHash = preState && preState.source && preState.source.contentHash
-        ? preState.source.contentHash
-        : null;
-      const destType = preState && preState.source && preState.source.type
-        ? preState.source.type
-        : null;
-      contract.paths[dest] = {
-        exists: true,
-        type: destType,
-        contentHash: destContentHash
-      };
-    }
-  }
-  return contract;
-}
-
-function buildObservedStateContract(operation, args, postState) {
-  const contract = { paths: {} };
-  if (operation === 'writeFile') {
-    const path = normalizeObjectivePathToken(args.path);
-    if (path && postState) {
-      contract.paths[path] = {
-        exists: postState.existed === true,
-        type: postState.type || null,
-        contentHash: postState.contentHash || null
-      };
-    }
-  } else if (operation === 'createFolder') {
-    const path = normalizeObjectivePathToken(args.path);
-    if (path && postState) {
-      contract.paths[path] = {
-        exists: postState.existed === true,
-        type: postState.type || null,
-        contentHash: null
-      };
-    }
-  } else if (operation === 'deletePath') {
-    const path = normalizeObjectivePathToken(args.path);
-    if (path && postState) {
-      contract.paths[path] = {
-        exists: postState.existed === true,
-        type: postState.type || null,
-        contentHash: null
-      };
-    }
-  } else if (operation === 'renamePath') {
-    const source = normalizeObjectivePathToken(args.path);
-    const dest = normalizeObjectivePathToken(args.nextPath);
-    if (source && postState && postState.source) {
-      contract.paths[source] = {
-        exists: postState.source.existed === true,
-        type: postState.source.type || null,
-        contentHash: null
-      };
-    }
-    if (dest && postState && postState.destination) {
-      contract.paths[dest] = {
-        exists: postState.destination.existed === true,
-        type: postState.destination.type || null,
-        contentHash: postState.destination.contentHash || null
-      };
-    }
-  }
-  return contract;
-}
-
-function compareStateContracts(expected, observed) {
-  const mismatches = [];
-  for (const [path, expectedState] of Object.entries(expected.paths)) {
-    const observedState = observed.paths[path];
-    if (!observedState) {
-      mismatches.push({
-        path,
-        field: 'exists',
-        expected: expectedState.exists,
-        observed: undefined
-      });
-      continue;
-    }
-    if (expectedState.exists !== observedState.exists) {
-      mismatches.push({
-        path,
-        field: 'exists',
-        expected: expectedState.exists,
-        observed: observedState.exists
-      });
-    }
-    if (expectedState.type !== null && expectedState.type !== observedState.type) {
-      mismatches.push({
-        path,
-        field: 'type',
-        expected: expectedState.type,
-        observed: observedState.type
-      });
-    }
-    if (expectedState.contentHash !== null && expectedState.contentHash !== observedState.contentHash) {
-      mismatches.push({
-        path,
-        field: 'contentHash',
-        expected: expectedState.contentHash,
-        observed: observedState.contentHash
-      });
-    }
-  }
-  return { matched: mismatches.length === 0, mismatches };
-}
-
 function captureWorkspacePreState(runWorkspaceProvider, operation, args) {
   if (operation === 'createFolder') {
     const info = runWorkspaceProvider.getPathInfo(args.path);
@@ -8568,6 +8414,21 @@ function verifyBatchOperation(run, action, result) {
     }
     if (!destExists) {
       checks.push({ check: 'destination_missing', path: args.nextPath, severity: 'error' });
+    } else {
+      // Direct preservation check: destination must match source pre-state type and contentHash.
+      // ContentHash is only evaluated when type matches, because contentHash comparison
+      // is undefined for non-file destinations (getPathInfo returns undefined contentHash
+      // for directories, and comparing undefined to a hash string would be a false positive).
+      const histories = readOperationHistory();
+      const record = histories.find(h => h.id === result.historyId);
+      if (record && record.preState && record.preState.source && record.postState && record.postState.destination) {
+        const destInfo = runWorkspaceProvider.getPathInfo(args.nextPath);
+        if (record.preState.source.type && destInfo.type !== record.preState.source.type) {
+          checks.push({ check: 'destination_type_mismatch', path: args.nextPath, severity: 'error', expected: record.preState.source.type, actual: destInfo.type });
+        } else if (record.preState.source.contentHash && destInfo.contentHash !== record.preState.source.contentHash) {
+          checks.push({ check: 'destination_content_mismatch', path: args.nextPath, severity: 'error' });
+        }
+      }
     }
   }
 
