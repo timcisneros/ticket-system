@@ -4489,9 +4489,88 @@ function average(values) {
   return numericValues.reduce((total, value) => total + value, 0) / numericValues.length;
 }
 
+function isTerminalRun(run) {
+  return Boolean(run && ['completed', 'failed', 'interrupted'].includes(run.status));
+}
+
+function getRunModelName(run, snapshot, agentsById = new Map()) {
+  if (snapshot && typeof snapshot.model === 'string' && snapshot.model.trim()) return snapshot.model.trim();
+  if (run && run.replaySummary && typeof run.replaySummary.model === 'string' && run.replaySummary.model.trim()) return run.replaySummary.model.trim();
+  const agent = run ? agentsById.get(run.agentId) : null;
+  if (agent && typeof agent.model === 'string' && agent.model.trim()) return agent.model.trim();
+  return 'unknown';
+}
+
+function buildRunQualityMetrics(run, ticket, operationHistory = [], workflows = []) {
+  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const comparison = buildArtifactPredictionComparison(run, snapshot, operationHistory, workflows);
+  return {
+    artifactAccuracy: buildArtifactAccuracy(snapshot, comparison),
+    objectiveSuccess: buildObjectiveSuccess(run),
+    objectivePathCoverage: buildObjectivePathCoverage(ticket, snapshot)
+  };
+}
+
+function buildEmptyQualityAggregation() {
+  return {
+    runs: 0,
+    artifactAccuracyAvg: null,
+    objectiveSuccessRate: null,
+    objectivePathCoverageAvg: null,
+    disagreements: {
+      accuracyVsSuccess: 0,
+      successVsCoverage: 0,
+      accuracyVsCoverage: 0
+    }
+  };
+}
+
+function aggregateQualityMetrics(runQualityItems = []) {
+  const aggregation = buildEmptyQualityAggregation();
+  aggregation.runs = runQualityItems.length;
+
+  const artifactValues = [];
+  const successValues = [];
+  const coverageValues = [];
+
+  runQualityItems.forEach(item => {
+    const artifact = item && item.artifactAccuracy;
+    const success = item && item.objectiveSuccess;
+    const coverage = item && item.objectivePathCoverage;
+
+    if (artifact && artifact.scored && typeof artifact.percent === 'number' && Number.isFinite(artifact.percent)) {
+      artifactValues.push(artifact.percent);
+    }
+    if (success && success.scored && typeof success.percent === 'number' && Number.isFinite(success.percent)) {
+      successValues.push(success.percent);
+    }
+    if (coverage && coverage.scored && typeof coverage.percent === 'number' && Number.isFinite(coverage.percent)) {
+      coverageValues.push(coverage.percent);
+    }
+
+    if (artifact && artifact.scored && success && success.scored && artifact.percent !== success.percent) {
+      aggregation.disagreements.accuracyVsSuccess += 1;
+    }
+    if (success && success.scored && coverage && coverage.scored && success.percent !== coverage.percent) {
+      aggregation.disagreements.successVsCoverage += 1;
+    }
+    if (artifact && artifact.scored && coverage && coverage.scored && artifact.percent !== coverage.percent) {
+      aggregation.disagreements.accuracyVsCoverage += 1;
+    }
+  });
+
+  aggregation.artifactAccuracyAvg = artifactValues.length > 0 ? Math.round(average(artifactValues)) : null;
+  aggregation.objectiveSuccessRate = successValues.length > 0 ? Math.round(average(successValues)) : null;
+  aggregation.objectivePathCoverageAvg = coverageValues.length > 0 ? Math.round(average(coverageValues)) : null;
+  return aggregation;
+}
+
 function getAgentPerformanceMetrics() {
   const runs = readRuns();
   const logs = readLogs();
+  const ticketsById = new Map(readTickets().map(ticket => [ticket.id, ticket]));
+  const workflows = readWorkflows();
+  const operationHistory = readOperationHistory();
   const runsByAgentId = groupBy(runs, run => run.agentId);
   const logsByRunId = groupBy(logs, log => log.runId);
   const workspaceActionTypes = new Set([
@@ -4505,10 +4584,14 @@ function getAgentPerformanceMetrics() {
 
   return readAgents().map(agent => {
     const agentRuns = runsByAgentId.get(agent.id) || [];
+    const terminalRuns = agentRuns.filter(isTerminalRun);
     const runMetrics = agentRuns.map(run => buildRunMetrics(run, logsByRunId.get(run.id) || []));
     const completedRuns = runMetrics.filter(run => run.status === 'completed');
     const failedRuns = runMetrics.filter(run => run.status === 'failed');
     const activeRuns = runMetrics.filter(run => ['pending', 'running'].includes(run.status));
+    const qualityAggregation = aggregateQualityMetrics(terminalRuns.map(run =>
+      buildRunQualityMetrics(run, ticketsById.get(run.ticketId), operationHistory, workflows)
+    ));
     const totalWorkspaceActions = agentRuns.reduce((total, run) => {
       return total + (logsByRunId.get(run.id) || []).filter(log => workspaceActionTypes.has(log.type)).length;
     }, 0);
@@ -4527,9 +4610,33 @@ function getAgentPerformanceMetrics() {
       averageTokenUsage: average(runMetrics.map(run => run.totalTokensUsed)),
       averageEstimatedCost: null,
       totalWorkspaceActions,
-      lastRunTimestamp: lastRun ? (lastRun.completedAt || lastRun.startedAt || lastRun.createdAt || null) : null
+      lastRunTimestamp: lastRun ? (lastRun.completedAt || lastRun.startedAt || lastRun.createdAt || null) : null,
+      quality: qualityAggregation
     };
   });
+}
+
+function getModelPerformanceMetrics() {
+  const runs = readRuns();
+  const ticketsById = new Map(readTickets().map(ticket => [ticket.id, ticket]));
+  const workflows = readWorkflows();
+  const operationHistory = readOperationHistory();
+  const agentsById = new Map(readAgents().map(agent => [agent.id, agent]));
+  const models = new Map();
+
+  runs.filter(isTerminalRun).forEach(run => {
+    const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+    const model = getRunModelName(run, snapshot, agentsById);
+    if (!models.has(model)) models.set(model, []);
+    models.get(model).push(buildRunQualityMetrics(run, ticketsById.get(run.ticketId), operationHistory, workflows));
+  });
+
+  return Array.from(models.entries())
+    .map(([model, qualityItems]) => ({
+      model,
+      ...aggregateQualityMetrics(qualityItems)
+    }))
+    .sort((a, b) => b.runs - a.runs || a.model.localeCompare(b.model));
 }
 
 function getTicketAssignableGroups() {
@@ -11154,7 +11261,8 @@ fastify.get('/agents', { preHandler: fastify.requireAuth }, async (request, repl
 
   return reply.view('agents.ejs', viewData({
     user: request.user,
-    agentMetrics: getAgentPerformanceMetrics()
+    agentMetrics: getAgentPerformanceMetrics(),
+    modelMetrics: getModelPerformanceMetrics()
   }, request.session.userId));
 });
 

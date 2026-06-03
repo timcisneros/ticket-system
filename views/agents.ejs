@@ -1,6 +1,9 @@
 <h1>Agents</h1>
 
+<% function metricPercent(value) { return value === null || value === undefined ? '-' : String(value) + '%'; } %>
+
 <section class="admin-block">
+  <h2>Agent Quality Metrics</h2>
   <div class="agent-cards">
     <% if (agentMetrics.length === 0) { %>
       <div class="text-muted agent-cards__empty">No agents found.</div>
@@ -54,8 +57,67 @@
               <% } %>
             </div>
           </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Quality Runs</div>
+            <div class="agent-metric__value"><%= metric.quality ? metric.quality.runs : 0 %></div>
+          </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Artifact Avg</div>
+            <div class="agent-metric__value"><%= metricPercent(metric.quality && metric.quality.artifactAccuracyAvg) %></div>
+          </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Objective Success</div>
+            <div class="agent-metric__value"><%= metricPercent(metric.quality && metric.quality.objectiveSuccessRate) %></div>
+          </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Path Coverage</div>
+            <div class="agent-metric__value"><%= metricPercent(metric.quality && metric.quality.objectivePathCoverageAvg) %></div>
+          </div>
+          <div class="agent-metric">
+            <div class="agent-metric__label">Disagreements</div>
+            <div class="agent-metric__value"><%= metric.quality ? metric.quality.disagreements.accuracyVsSuccess + '/' + metric.quality.disagreements.successVsCoverage + '/' + metric.quality.disagreements.accuracyVsCoverage : '0/0/0' %></div>
+          </div>
         </div>
       </div>
     <% }); %>
   </div>
+</section>
+
+<section class="admin-block">
+  <h2>Model Quality Metrics</h2>
+  <% const modelQualityMetrics = typeof modelMetrics === 'undefined' || !modelMetrics ? [] : modelMetrics; %>
+  <% if (modelQualityMetrics.length === 0) { %>
+    <p class="text-muted">No terminal model runs found.</p>
+  <% } else { %>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Runs</th>
+            <th>Artifact Avg</th>
+            <th>Objective Success</th>
+            <th>Path Coverage</th>
+            <th>Disagreements A/S</th>
+            <th>Disagreements S/C</th>
+            <th>Disagreements A/C</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% modelQualityMetrics.forEach(metric => { %>
+            <tr>
+              <td><%= metric.model %></td>
+              <td><%= metric.runs %></td>
+              <td><%= metricPercent(metric.artifactAccuracyAvg) %></td>
+              <td><%= metricPercent(metric.objectiveSuccessRate) %></td>
+              <td><%= metricPercent(metric.objectivePathCoverageAvg) %></td>
+              <td><%= metric.disagreements.accuracyVsSuccess %></td>
+              <td><%= metric.disagreements.successVsCoverage %></td>
+              <td><%= metric.disagreements.accuracyVsCoverage %></td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
 </section>
