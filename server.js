@@ -3805,7 +3805,10 @@ function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = 
       return;
     }
 
-    if (record.operation === 'createFolder' && result.status === 'created') {
+    if (record.operation === 'createFolder' && (
+      result.status === 'created' ||
+      (result.status === 'already_exists_noop' && record.preState && record.preState.type === 'directory')
+    )) {
       actual.push(buildArtifactComparisonItem('folder', result.path || args.path, {
         operation: 'createFolder',
         source: record.id != null ? 'Operation #' + record.id : 'operation-history'

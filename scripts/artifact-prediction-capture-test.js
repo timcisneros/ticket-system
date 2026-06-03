@@ -273,6 +273,65 @@ function appendJsonRecord(file, record) {
   writeJson(file, records);
 }
 
+function normalizePredictedFixtureArtifact(value, actionIndex) {
+  if (value && typeof value === 'object') {
+    return {
+      type: value.type || 'file',
+      artifact: value.artifact || value.path,
+      operation: value.operation || (value.type === 'folder' ? 'createFolder' : 'writeFile'),
+      step: 0,
+      actionIndex
+    };
+  }
+  return {
+    type: 'file',
+    artifact: value,
+    operation: 'writeFile',
+    step: 0,
+    actionIndex
+  };
+}
+
+function normalizeActualFixtureRecord(value, fixtureNumber, index, ticketId, runId, now) {
+  if (value && typeof value === 'object') {
+    const operation = value.operation || (value.type === 'folder' ? 'createFolder' : 'writeFile');
+    const artifact = value.artifact || value.path;
+    const status = value.status || (operation === 'createFolder' ? 'created' : undefined);
+    return {
+      id: 990000 + fixtureNumber * 10 + index,
+      timestamp: now,
+      ticketId,
+      runId,
+      step: 0,
+      operation,
+      args: operation === 'renamePath'
+        ? { path: value.path || artifact, nextPath: value.nextPath || artifact }
+        : { path: artifact, ...(operation === 'writeFile' ? { content: 'fixture' } : {}) },
+      preState: value.preState || (operation === 'createFolder'
+        ? { existed: status === 'already_exists_noop', type: status === 'already_exists_noop' ? 'directory' : undefined }
+        : { existed: false }),
+      postState: value.postState || (operation === 'createFolder'
+        ? { existed: true, type: 'directory' }
+        : { existed: true, type: 'file' }),
+      result: value.result || { path: artifact, ...(status ? { status } : {}) },
+      error: value.error || null
+    };
+  }
+  return {
+    id: 990000 + fixtureNumber * 10 + index,
+    timestamp: now,
+    ticketId,
+    runId,
+    step: 0,
+    operation: 'writeFile',
+    args: { path: value, content: 'fixture' },
+    preState: { existed: false },
+    postState: { existed: true, type: 'file' },
+    result: { path: value },
+    error: null
+  };
+}
+
 function addAccuracyFixtureRun(name, predictions, actualArtifacts) {
   const fixtureNumber = addAccuracyFixtureRun.nextId++;
   const ticketId = 9000 + fixtureNumber;
@@ -311,13 +370,7 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts) {
         source: 'parsedModelPlans',
         capturedAt: now,
         firstPredictedAtStep: 0,
-        artifacts: predictions.map((artifact, actionIndex) => ({
-          type: 'file',
-          artifact,
-          operation: 'writeFile',
-          step: 0,
-          actionIndex
-        }))
+        artifacts: predictions.map((artifact, actionIndex) => normalizePredictedFixtureArtifact(artifact, actionIndex))
       }
       : null,
     terminalStatus: 'completed',
@@ -346,19 +399,7 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts) {
 
   const history = readJson('operation-history.json');
   actualArtifacts.forEach((artifact, index) => {
-    history.push({
-      id: 990000 + fixtureNumber * 10 + index,
-      timestamp: now,
-      ticketId,
-      runId,
-      step: 0,
-      operation: 'writeFile',
-      args: { path: artifact, content: 'fixture' },
-      preState: { existed: false },
-      postState: { existed: true, type: 'file' },
-      result: { path: artifact },
-      error: null
-    });
+    history.push(normalizeActualFixtureRecord(artifact, fixtureNumber, index, ticketId, runId, now));
   });
   writeJson('operation-history.json', history);
   return { ticketId, runId };
@@ -478,7 +519,35 @@ async function main() {
     ]);
     await assertRunDetailContains(cookie, noPredictionFixture.runId, ['Artifact Accuracy:</strong> Not scored', 'No artifact prediction captured.']);
 
-    console.log(JSON.stringify({ artifactPredictionCapture: true, artifactPredictionComparison: true, artifactAccuracy: true, simpleRunId: simple.run.id }));
+    const newFolderFixture = addAccuracyFixtureRun('new-folder', [
+      { type: 'folder', artifact: 'accuracy-new-folder-' + STAMP, operation: 'createFolder' }
+    ], [
+      { type: 'folder', artifact: 'accuracy-new-folder-' + STAMP, operation: 'createFolder', status: 'created' }
+    ]);
+    await assertRunDetailContains(cookie, newFolderFixture.runId, ['100% · 1/1 matched']);
+
+    const existingFolderFixture = addAccuracyFixtureRun('existing-folder', [
+      { type: 'folder', artifact: 'accuracy-existing-folder-' + STAMP, operation: 'createFolder' },
+      { type: 'file', artifact: 'accuracy-existing-folder-' + STAMP + '/note.txt', operation: 'writeFile' }
+    ], [
+      {
+        type: 'folder',
+        artifact: 'accuracy-existing-folder-' + STAMP,
+        operation: 'createFolder',
+        status: 'already_exists_noop',
+        preState: { existed: true, type: 'directory' },
+        postState: { existed: true, type: 'directory' }
+      },
+      'accuracy-existing-folder-' + STAMP + '/note.txt'
+    ]);
+    await assertRunDetailContains(cookie, existingFolderFixture.runId, ['100% · 2/2 matched']);
+
+    const missingFolderFixture = addAccuracyFixtureRun('missing-folder', [
+      { type: 'folder', artifact: 'accuracy-missing-folder-' + STAMP, operation: 'createFolder' }
+    ], []);
+    await assertRunDetailContains(cookie, missingFolderFixture.runId, ['0% · 0/1 matched', 'missing']);
+
+    console.log(JSON.stringify({ artifactPredictionCapture: true, artifactPredictionComparison: true, artifactAccuracy: true, satisfiedFolderPredictions: true, simpleRunId: simple.run.id }));
   } finally {
     await stopServer();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
