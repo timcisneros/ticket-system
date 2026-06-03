@@ -332,11 +332,13 @@ function normalizeActualFixtureRecord(value, fixtureNumber, index, ticketId, run
   };
 }
 
-function addAccuracyFixtureRun(name, predictions, actualArtifacts) {
+function addAccuracyFixtureRun(name, predictions, actualArtifacts, options = {}) {
   const fixtureNumber = addAccuracyFixtureRun.nextId++;
   const ticketId = 9000 + fixtureNumber;
   const runId = 9100 + fixtureNumber;
   const now = new Date().toISOString();
+  const status = options.status || 'completed';
+  const error = options.error || null;
   appendJsonRecord('tickets.json', {
     id: ticketId,
     objective: 'Artifact accuracy fixture ' + name,
@@ -346,7 +348,7 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts) {
     executionMode: 'agent',
     capabilityType: 'directAction',
     capabilityId: 'agent-selected-actions',
-    status: 'completed',
+    status,
     createdBy: 'test',
     changedBy: 'test',
     changedAt: now,
@@ -373,7 +375,8 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts) {
         artifacts: predictions.map((artifact, actionIndex) => normalizePredictedFixtureArtifact(artifact, actionIndex))
       }
       : null,
-    terminalStatus: 'completed',
+    terminalStatus: status,
+    failureReason: error,
     createdAt: now
   });
 
@@ -387,14 +390,15 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts) {
     executionMode: 'agent',
     capabilityType: 'directAction',
     capabilityId: 'agent-selected-actions',
-    status: 'completed',
+    status,
     ticketOpenedAt: now,
     createdAt: now,
     updatedAt: now,
     startedAt: now,
-    completedAt: now,
+    completedAt: ['completed', 'failed', 'interrupted'].includes(status) ? now : null,
+    error,
     replaySnapshotPath,
-    replaySummary: { steps: 0, providerRequests: 0, modelResponses: 0, workspaceOperations: actualArtifacts.length, mutationCount: actualArtifacts.length }
+    replaySummary: { steps: 0, providerRequests: 0, modelResponses: 0, workspaceOperations: actualArtifacts.length, mutationCount: actualArtifacts.length, terminalStatus: status, failureReason: error }
   });
 
   const history = readJson('operation-history.json');
@@ -482,7 +486,30 @@ async function main() {
       'accuracy-perfect-' + STAMP + '-a.txt',
       'accuracy-perfect-' + STAMP + '-b.txt'
     ]);
-    await assertRunDetailContains(cookie, perfectFixture.runId, ['100% · 2/2 matched']);
+    await assertRunDetailContains(cookie, perfectFixture.runId, ['Objective Success:</strong> 100% · succeeded', '100% · 2/2 matched']);
+
+    const failedFixture = addAccuracyFixtureRun('failed-objective', [
+      'accuracy-failed-' + STAMP + '-a.txt'
+    ], [], { status: 'failed', error: 'Fixture failure' });
+    await assertRunDetailContains(cookie, failedFixture.runId, ['Objective Success:</strong> 0% · failed', '0% · 0/1 matched']);
+
+    const interruptedFixture = addAccuracyFixtureRun('interrupted-objective', [
+      'accuracy-interrupted-' + STAMP + '-a.txt'
+    ], [], { status: 'interrupted', error: 'Fixture interrupted' });
+    await assertRunDetailContains(cookie, interruptedFixture.runId, ['Objective Success:</strong> 0% · interrupted', '0% · 0/1 matched']);
+
+    const pendingFixture = addAccuracyFixtureRun('pending-objective', [
+      'accuracy-pending-' + STAMP + '-a.txt'
+    ], [], { status: 'running' });
+    await assertRunDetailContains(cookie, pendingFixture.runId, ['Objective Success:</strong> Not scored']);
+
+    const partialFailedFixture = addAccuracyFixtureRun('partial-failed-objective', [
+      'accuracy-partial-' + STAMP + '-source.txt',
+      { type: 'renamed', artifact: 'accuracy-partial-' + STAMP + '-final.txt', operation: 'renamePath' }
+    ], [
+      'accuracy-partial-' + STAMP + '-source.txt'
+    ], { status: 'failed', error: 'Fixture rename failed' });
+    await assertRunDetailContains(cookie, partialFailedFixture.runId, ['Objective Success:</strong> 0% · failed', '50% · 1/2 matched', 'missing']);
 
     const missingFixture = addAccuracyFixtureRun('missing', [
       'accuracy-missing-' + STAMP + '-a.txt',

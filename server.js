@@ -3912,6 +3912,26 @@ function buildArtifactAccuracy(snapshot, comparison = {}) {
   };
 }
 
+function buildObjectiveSuccess(run) {
+  if (!run || !run.status) {
+    return { scored: false, status: 'unknown', score: null, percent: null, reason: 'No run status available' };
+  }
+
+  if (run.status === 'completed') {
+    return { scored: true, status: 'succeeded', score: 1, percent: 100, reason: 'Run completed' };
+  }
+
+  if (run.status === 'failed') {
+    return { scored: true, status: 'failed', score: 0, percent: 0, reason: run.error || 'Run failed' };
+  }
+
+  if (run.status === 'interrupted') {
+    return { scored: true, status: 'interrupted', score: 0, percent: 0, reason: run.error || 'Run interrupted' };
+  }
+
+  return { scored: false, status: 'unknown', score: null, percent: null, reason: 'Run is not terminal' };
+}
+
 function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns = []) {
   const runIds = new Set(ticketRuns.map(run => run.id));
   const artifacts = [];
@@ -10864,6 +10884,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const workflows = readWorkflows();
   const artifactPredictionComparison = buildArtifactPredictionComparison(run, snapshot, history, workflows);
   const artifactAccuracy = buildArtifactAccuracy(snapshot, artifactPredictionComparison);
+  const objectiveSuccess = buildObjectiveSuccess(run);
   const displaySnapshot = createDisplaySnapshot(snapshot);
   const operationalOutcome = classifyRunOperationalOutcome(run);
   const runEvents = getRunEvents(runId);
@@ -10883,6 +10904,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     operationHistory: enrichedHistory,
     artifactPredictionComparison,
     artifactAccuracy,
+    objectiveSuccess,
     partialMutationCount: runPartialMutationCount,
     operationalOutcome,
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),

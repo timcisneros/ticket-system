@@ -283,9 +283,11 @@
   <% const predictedArtifacts = artifactPrediction && Array.isArray(artifactPrediction.artifacts) ? artifactPrediction.artifacts : []; %>
   <% const predictionComparison = typeof artifactPredictionComparison === 'undefined' || !artifactPredictionComparison ? { matched: [], missing: [], unexpected: [] } : artifactPredictionComparison; %>
   <% const predictionAccuracy = typeof artifactAccuracy === 'undefined' || !artifactAccuracy ? { scored: false, score: null, percent: null, matched: 0, total: 0, missing: 0, unexpected: 0 } : artifactAccuracy; %>
+  <% const runObjectiveSuccess = typeof objectiveSuccess === 'undefined' || !objectiveSuccess ? { scored: false, status: 'unknown', score: null, percent: null, reason: null } : objectiveSuccess; %>
   <% const matchedPredictionKeys = new Set((predictionComparison.matched || []).map(item => item.key)); %>
   <% const missingPredictionKeys = new Set((predictionComparison.missing || []).map(item => item.key)); %>
   <% function predictionKey(item) { const type = item && item.type === 'workflow draft' ? 'workflowDraft' : (item && item.type ? item.type : 'unknown'); const artifact = String(item && item.artifact ? item.artifact : '').trim().replace(/^\.\//, ''); return type + ':' + artifact; } %>
+  <p><strong>Objective Success:</strong> <% if (runObjectiveSuccess.scored) { %><%= runObjectiveSuccess.percent %>% · <%= runObjectiveSuccess.status %><% } else { %>Not scored<% } %></p>
   <p><strong>Artifact Accuracy:</strong> <% if (predictionAccuracy.scored) { %><%= predictionAccuracy.percent %>% · <%= predictionAccuracy.matched %>/<%= predictionAccuracy.total %> matched<% } else { %>Not scored<% } %></p>
   <% if (predictedArtifacts.length === 0) { %>
     <p class="text-muted">No artifact prediction captured.</p>
