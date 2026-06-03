@@ -341,7 +341,7 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts, options = {})
   const error = options.error || null;
   appendJsonRecord('tickets.json', {
     id: ticketId,
-    objective: 'Artifact accuracy fixture ' + name,
+    objective: options.objective || ('Artifact accuracy fixture ' + name),
     assignmentTargetType: 'agent',
     assignmentTargetId: 9901,
     assignmentMode: 'individual',
@@ -510,6 +510,35 @@ async function main() {
       'accuracy-partial-' + STAMP + '-source.txt'
     ], { status: 'failed', error: 'Fixture rename failed' });
     await assertRunDetailContains(cookie, partialFailedFixture.runId, ['Objective Success:</strong> 0% · failed', '50% · 1/2 matched', 'missing']);
+
+    const partialPathCoverageFixture = addAccuracyFixtureRun('partial-path-coverage', [
+      'coverage-source-' + STAMP + '.txt'
+    ], [
+      'coverage-source-' + STAMP + '.txt'
+    ], {
+      objective: 'Create coverage-source-' + STAMP + '.txt then rename it to coverage-final-' + STAMP + '.txt'
+    });
+    await assertRunDetailContains(cookie, partialPathCoverageFixture.runId, ['Objective Path Coverage:</strong> 50% · 1/2 covered']);
+
+    const fullPathCoverageFixture = addAccuracyFixtureRun('full-path-coverage', [
+      'coverage-full-a-' + STAMP + '.txt',
+      'coverage-full-b-' + STAMP + '.txt'
+    ], [
+      'coverage-full-a-' + STAMP + '.txt',
+      'coverage-full-b-' + STAMP + '.txt'
+    ], {
+      objective: 'Write coverage-full-a-' + STAMP + '.txt and coverage-full-b-' + STAMP + '.txt'
+    });
+    await assertRunDetailContains(cookie, fullPathCoverageFixture.runId, ['Objective Path Coverage:</strong> 100% · 2/2 covered']);
+
+    const noPathCoverageFixture = addAccuracyFixtureRun('no-path-coverage', [
+      'coverage-no-path-' + STAMP + '.txt'
+    ], [
+      'coverage-no-path-' + STAMP + '.txt'
+    ], {
+      objective: 'Write a brief status note for this task'
+    });
+    await assertRunDetailContains(cookie, noPathCoverageFixture.runId, ['Objective Path Coverage:</strong> Not scored']);
 
     const missingFixture = addAccuracyFixtureRun('missing', [
       'accuracy-missing-' + STAMP + '-a.txt',

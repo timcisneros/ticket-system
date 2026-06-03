@@ -3932,6 +3932,41 @@ function buildObjectiveSuccess(run) {
   return { scored: false, status: 'unknown', score: null, percent: null, reason: 'Run is not terminal' };
 }
 
+function buildObjectivePathCoverage(ticket, snapshot) {
+  const objectivePaths = extractObjectivePathTokens(ticket && ticket.objective);
+  const prediction = snapshot && snapshot.artifactPrediction ? snapshot.artifactPrediction : null;
+  const predictedArtifacts = prediction && Array.isArray(prediction.artifacts) ? prediction.artifacts : [];
+  const plannedPaths = Array.from(new Set(predictedArtifacts
+    .map(item => normalizeObjectivePathToken(item && item.artifact))
+    .filter(Boolean)));
+
+  if (objectivePaths.length === 0) {
+    return {
+      scored: false,
+      percent: null,
+      covered: 0,
+      total: 0,
+      missing: [],
+      objectivePaths,
+      plannedPaths
+    };
+  }
+
+  const plannedPathSet = new Set(plannedPaths);
+  const missing = objectivePaths.filter(pathItem => !plannedPathSet.has(pathItem));
+  const covered = objectivePaths.length - missing.length;
+
+  return {
+    scored: true,
+    percent: Math.round((covered / objectivePaths.length) * 100),
+    covered,
+    total: objectivePaths.length,
+    missing,
+    objectivePaths,
+    plannedPaths
+  };
+}
+
 function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns = []) {
   const runIds = new Set(ticketRuns.map(run => run.id));
   const artifacts = [];
@@ -10885,6 +10920,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const artifactPredictionComparison = buildArtifactPredictionComparison(run, snapshot, history, workflows);
   const artifactAccuracy = buildArtifactAccuracy(snapshot, artifactPredictionComparison);
   const objectiveSuccess = buildObjectiveSuccess(run);
+  const objectivePathCoverage = buildObjectivePathCoverage(ticket, snapshot);
   const displaySnapshot = createDisplaySnapshot(snapshot);
   const operationalOutcome = classifyRunOperationalOutcome(run);
   const runEvents = getRunEvents(runId);
@@ -10905,6 +10941,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     artifactPredictionComparison,
     artifactAccuracy,
     objectiveSuccess,
+    objectivePathCoverage,
     partialMutationCount: runPartialMutationCount,
     operationalOutcome,
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
