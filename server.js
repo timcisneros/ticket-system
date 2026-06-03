@@ -294,11 +294,16 @@ function findConflictingMutation(runId, operation, args) {
   const histories = readOperationHistory();
   const pathFingerprint = computePathFingerprint(operation, args);
   if (!pathFingerprint) return null;
-  return histories.find(h =>
-    h.runId === runId &&
-    computePathFingerprint(h.operation, h.args) === pathFingerprint &&
-    computeMutationFingerprint(h.operation, h.args) !== computeMutationFingerprint(operation, args)
-  );
+  return histories.find(h => {
+    if (h.runId !== runId) return false;
+    if (computePathFingerprint(h.operation, h.args) !== pathFingerprint) return false;
+    if (computeMutationFingerprint(h.operation, h.args) === computeMutationFingerprint(operation, args)) return false;
+    // Allow writeFile -> renamePath and createFolder -> renamePath sequences
+    if (operation === 'renamePath' && ['writeFile', 'createFolder'].includes(h.operation)) {
+      return false;
+    }
+    return true;
+  });
 }
 
 function findCommittedMutation(runId, operation, args) {
