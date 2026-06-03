@@ -4,6 +4,7 @@
 
 <section class="admin-block">
   <h2>Agent Quality Metrics</h2>
+  <p class="text-muted">A/S = Artifact Accuracy vs Objective Success · S/C = Objective Success vs Path Coverage · A/C = Artifact Accuracy vs Path Coverage</p>
   <div class="agent-cards">
     <% if (agentMetrics.length === 0) { %>
       <div class="text-muted agent-cards__empty">No agents found.</div>
@@ -75,7 +76,7 @@
           </div>
           <div class="agent-metric">
             <div class="agent-metric__label">Disagreements</div>
-            <div class="agent-metric__value"><%= metric.quality ? metric.quality.disagreements.accuracyVsSuccess + '/' + metric.quality.disagreements.successVsCoverage + '/' + metric.quality.disagreements.accuracyVsCoverage : '0/0/0' %></div>
+            <div class="agent-metric__value"><% if (metric.quality) { %>A/S: <%= metric.quality.disagreements.accuracyVsSuccess %> · S/C: <%= metric.quality.disagreements.successVsCoverage %> · A/C: <%= metric.quality.disagreements.accuracyVsCoverage %><% } else { %>A/S: 0 · S/C: 0 · A/C: 0<% } %></div>
           </div>
         </div>
       </div>
