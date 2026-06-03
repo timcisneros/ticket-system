@@ -3832,9 +3832,12 @@ function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = 
     }
   });
 
-  workflows.forEach(workflow => {
-    if (!workflow || workflow.createdByRunId !== run.id) return;
-    actual.push(buildArtifactComparisonItem('workflowDraft', workflow.id || workflow.name, {
+  const workflowDrafts = snapshot && Array.isArray(snapshot.workflowDrafts) ? snapshot.workflowDrafts : [];
+  workflowDrafts.forEach(draft => {
+    if (!draft) return;
+    const workflowId = draft.workflowId || draft.id;
+    const workflow = workflowId ? workflows.find(item => item && item.id === workflowId) : null;
+    actual.push(buildArtifactComparisonItem('workflowDraft', workflowId || draft.name || (workflow && workflow.name), {
       operation: 'workflowDraft',
       source: 'Workflow draft'
     }));

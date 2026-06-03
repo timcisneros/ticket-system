@@ -473,6 +473,7 @@ async function main() {
     assert(workflowDetail.status === 200, 'workflow run detail should render, got HTTP ' + workflowDetail.status);
     assert(workflowDetail.body.includes('draft-prediction-' + STAMP), 'workflow run detail should show predicted workflow draft');
     assert(workflowDetail.body.includes('matched'), 'workflow draft prediction should match actual draft artifact');
+    assert(workflowDetail.body.includes('100% · 1/1 matched'), 'workflow draft created during current run should score as matched');
 
     const perfectFixture = addAccuracyFixtureRun('perfect', [
       'accuracy-perfect-' + STAMP + '-a.txt',
@@ -514,6 +515,29 @@ async function main() {
     ]);
     await assertRunDetailContains(cookie, mixedFixture.runId, ['50% · 2/4 matched', 'Unexpected Actual Artifacts', 'missing']);
 
+    const staleWorkflowFixture = addAccuracyFixtureRun('stale-workflow-attribution', [
+      'accuracy-stale-workflow-' + STAMP + '.txt'
+    ], [
+      'accuracy-stale-workflow-' + STAMP + '.txt'
+    ]);
+    const workflows = readJson('workflows.json');
+    workflows.push({
+      id: 'stale-workflow-' + STAMP,
+      name: 'Stale Workflow ' + STAMP,
+      enabled: false,
+      createdByType: 'agent',
+      createdByAgentId: 9901,
+      createdByRunId: staleWorkflowFixture.runId,
+      createdAt: new Date(Date.now() - 86400000).toISOString(),
+      updatedAt: new Date(Date.now() - 86400000).toISOString(),
+      inputSchema: {},
+      actions: [],
+      postconditions: []
+    });
+    writeJson('workflows.json', workflows);
+    const staleWorkflowDetail = await assertRunDetailContains(cookie, staleWorkflowFixture.runId, ['100% · 1/1 matched']);
+    assert(!staleWorkflowDetail.body.includes('Unexpected Actual Artifacts'), 'stale workflow with matching createdByRunId should not appear as an unexpected actual artifact');
+
     const noPredictionFixture = addAccuracyFixtureRun('no-prediction', null, [
       'accuracy-no-prediction-' + STAMP + '.txt'
     ]);
@@ -547,7 +571,7 @@ async function main() {
     ], []);
     await assertRunDetailContains(cookie, missingFolderFixture.runId, ['0% · 0/1 matched', 'missing']);
 
-    console.log(JSON.stringify({ artifactPredictionCapture: true, artifactPredictionComparison: true, artifactAccuracy: true, satisfiedFolderPredictions: true, simpleRunId: simple.run.id }));
+    console.log(JSON.stringify({ artifactPredictionCapture: true, artifactPredictionComparison: true, artifactAccuracy: true, satisfiedFolderPredictions: true, workflowAttribution: true, simpleRunId: simple.run.id }));
   } finally {
     await stopServer();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
