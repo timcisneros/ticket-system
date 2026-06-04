@@ -9260,7 +9260,10 @@ async function runAgentTicket(runId) {
         throw error;
       }
       // Reconstruct execution state from prior events
-      resumedFromPersistedState = true;
+      // Only treat as resumed if there is actual prior execution evidence
+      if (resumeState.workspaceOperationCount > 0) {
+        resumedFromPersistedState = true;
+      }
       workspaceOperationCount = resumeState.workspaceOperationCount;
       for (const p of resumeState.listedDirectoryPaths) listedDirectoryPaths.add(p);
       if (resumeState.currentPhase) {
