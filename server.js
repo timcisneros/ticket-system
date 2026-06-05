@@ -9363,6 +9363,7 @@ async function runAgentTicket(runId) {
       });
       captureRunArtifactPrediction(run.id, modelPlan.actions, step);
       broadcastTicketChange();
+      const priorStepActionResults = actionResults;
       actionResults = [];
       const actions = modelPlan.actions;
 
@@ -9443,10 +9444,11 @@ async function runAgentTicket(runId) {
           throw error;
         }
 
-        actionResults = [{
-          warning: 'model:mutating_action_limit',
-          message: `You returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Retry with at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} createFolder/writeFile/renamePath/deletePath action(s). You may include read/list actions if needed. If more work remains, set complete:false and continue in the next response.`
-        }];
+        actionResults = [
+          ...priorStepActionResults,
+          { warning: 'model:mutating_action_limit',
+            message: `You returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Retry with at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} createFolder/writeFile/renamePath/deletePath action(s). You may include read/list actions if needed. If more work remains, set complete:false and continue in the next response.` }
+        ];
         continue;
       }
 
