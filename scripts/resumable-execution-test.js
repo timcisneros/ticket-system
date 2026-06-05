@@ -351,19 +351,32 @@ async function scenarioBeforeReplayFinalized() {
   const finalRun = await waitForRunTerminal(runId, 30000);
   console.log(`  Final status: ${finalRun ? finalRun.status : 'not found'}`);
 
-  // Check that replay snapshot was finalized
+  // Check that replay snapshot and terminal evidence were finalized.
   const replayPath = path.join(TEST_DATA_DIR, 'replay-snapshots', `run-${runId}.json`);
   let replayFinalized = false;
   try {
     const replay = JSON.parse(fs.readFileSync(replayPath, 'utf8'));
     replayFinalized = !!replay.finalizedAt;
   } catch (e) {}
+  const runEvents = readEvents().filter(event => event.runId === runId);
+  const snapshotFinalized = runEvents.some(event => event.type === 'run.snapshot_finalized');
+  const terminalized = runEvents.some(event => event.type === 'run.terminalized');
+  const storedRun = readJson(path.join(TEST_DATA_DIR, 'runs.json')).find(run => run.id === runId);
+  const leaseCleared = storedRun && !storedRun.leaseOwner && !storedRun.leaseExpiresAt;
+  const evaluationRecorded = storedRun && !!storedRun.runEvaluation;
+  const consequenceRecorded = storedRun && !!storedRun.runConsequence;
   console.log(`  Replay finalized: ${replayFinalized}`);
+  console.log(`  Snapshot finalized event: ${snapshotFinalized}`);
+  console.log(`  Terminalized event: ${terminalized}`);
 
-  result.passed = finalRun && finalRun.status === 'completed';
+  result.passed = finalRun && finalRun.status === 'completed' && replayFinalized && snapshotFinalized && terminalized && leaseCleared && evaluationRecorded && consequenceRecorded;
   result.notes.push(`status=${finalRun ? finalRun.status : 'missing'}`);
   result.notes.push(`replay_finalized=${replayFinalized}`);
-  if (!replayFinalized) result.notes.push('st8_replay_finalization_bug=true');
+  result.notes.push(`snapshot_finalized=${snapshotFinalized}`);
+  result.notes.push(`terminalized=${terminalized}`);
+  result.notes.push(`lease_cleared=${leaseCleared}`);
+  result.notes.push(`evaluation_recorded=${evaluationRecorded}`);
+  result.notes.push(`consequence_recorded=${consequenceRecorded}`);
   return result;
 }
 

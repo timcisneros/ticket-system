@@ -6350,14 +6350,34 @@ function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retr
   return reopenedTicket;
 }
 
+function hasIncompleteTerminalEvidence(run) {
+  if (!run || !['completed', 'failed', 'interrupted'].includes(run.status)) return false;
+  const events = getRunEvents(run.id);
+  const hasExecutionCompleted = events.some(event => event.type === 'run.execution_completed' || event.type === 'run.execution_failed');
+  if (!hasExecutionCompleted) return false;
+  const hasSnapshotFinalized = events.some(event => event.type === 'run.snapshot_finalized' || event.type === 'replay.snapshot.finalized');
+  const hasTerminalized = events.some(event => event.type === 'run.terminalized');
+  return !hasSnapshotFinalized || !hasTerminalized;
+}
+
 function interruptStaleRunsOnStartup() {
-  const staleRuns = readRuns().filter(run => ['pending', 'running'].includes(run.status));
+  const allRuns = readRuns();
+  const staleRuns = allRuns.filter(run => ['pending', 'running'].includes(run.status));
+  const terminalRunsNeedingReconciliation = allRuns.filter(hasIncompleteTerminalEvidence);
   let interruptedCount = 0;
   let resumedCount = 0;
   let reconciledCount = 0;
 
   if (staleRuns.length > 0) {
   }
+
+  terminalRunsNeedingReconciliation.forEach(run => {
+    const resumeState = reconstructResumableState(run);
+    if (resumeState && resumeState.safeToReconcileTerminalState) {
+      reconcileTerminalRun(run);
+      reconciledCount++;
+    }
+  });
 
   staleRuns.forEach(run => {
     const runEvents = readEvents().filter(e => e.runId === run.id);
