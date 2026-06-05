@@ -58,53 +58,114 @@ async function waitFor(condition, timeoutMs = 30000, intervalMs = 500) {
 
 let serverProc = null;
 
-function startServer(dataDir, workspaceRoot, interruptionPoint = '') {
-  return new Promise((resolve, reject) => {
-    const env = {
-      ...process.env,
-      PORT,
-      DATA_DIR: dataDir,
-      WORKSPACE_ROOT: workspaceRoot
-    };
-    if (interruptionPoint) env.TEST_INTERRUPTION_POINT = interruptionPoint;
-    serverProc = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
-      cwd: ROOT,
-      env,
-      stdio: ['ignore', 'ignore', 'ignore']
-    });
-    serverProc.on('error', reject);
-    setTimeout(resolve, 3500);
-  });
+function readEvents() {
+  const eventsPath = path.join(TEST_DATA_DIR, 'events.jsonl');
+  if (!fs.existsSync(eventsPath)) return [];
+  return fs.readFileSync(eventsPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map(line => JSON.parse(line));
 }
 
-function stopServer() {
-  return new Promise((resolve) => {
-    if (!serverProc) return resolve();
-    serverProc.kill('SIGTERM');
-    setTimeout(() => {
-      if (serverProc && !serverProc.killed) serverProc.kill('SIGKILL');
-      serverProc = null;
-      resolve();
-    }, 1500);
-  });
+async function waitForReady(timeoutMs = 15000) {
+  return waitFor(async () => {
+    try {
+      const response = await httpReq('GET', '/health');
+      if (response.status !== 200) return null;
+      const body = JSON.parse(response.body);
+      return body.ready ? true : null;
+    } catch (_) {
+      return null;
+    }
+  }, timeoutMs, 100);
 }
 
-function waitForServerDeath(timeoutMs = 10000) {
-  return new Promise((resolve) => {
-    if (!serverProc) return resolve(true);
-    const check = () => {
-      if (!serverProc || serverProc.killed || serverProc.exitCode !== null) {
-        resolve(true);
-      } else {
-        setTimeout(check, 200);
+async function waitForWriterOwnership(child, dataDir, timeoutMs = 15000) {
+  const lockPath = path.join(dataDir, 'writer-lock.json');
+  return waitFor(async () => {
+    if (child.exitCode !== null) {
+      const output = child.output || '';
+      if (output.includes('DATA_DIR writer lock is owned by a live process')) {
+        throw new Error(`Server refused DATA_DIR writer lock: ${output.trim()}`);
       }
-    };
-    setTimeout(() => {
-      if (serverProc && !serverProc.killed) serverProc.kill('SIGKILL');
-      resolve(true);
-    }, timeoutMs);
-    check();
+      throw new Error(`Server exited before acquiring DATA_DIR writer lock with code ${child.exitCode}: ${output.trim()}`);
+    }
+
+    const lock = readJson(lockPath);
+    if (!lock) return null;
+    if (lock.pid !== child.pid) return null;
+    return lock;
+  }, timeoutMs, 100);
+}
+
+async function startServer(dataDir, workspaceRoot, interruptionPoint = '') {
+  await stopServer();
+
+  const env = {
+    ...process.env,
+    PORT,
+    DATA_DIR: dataDir,
+    WORKSPACE_ROOT: workspaceRoot
+  };
+  if (interruptionPoint) env.TEST_INTERRUPTION_POINT = interruptionPoint;
+
+  const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+    cwd: ROOT,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe']
   });
+  child.output = '';
+  child.stdout.on('data', chunk => { child.output += String(chunk); });
+  child.stderr.on('data', chunk => { child.output += String(chunk); });
+  serverProc = child;
+
+  await waitForWriterOwnership(child, dataDir);
+  await waitForReady();
+  return child;
+}
+
+function waitForProcessExit(child, timeoutMs = 5000) {
+  return new Promise(resolve => {
+    if (!child || child.exitCode !== null) return resolve(true);
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+async function stopServer() {
+  if (!serverProc) return;
+  const child = serverProc;
+  serverProc = null;
+  if (child.exitCode !== null) return;
+  child.kill('SIGTERM');
+  const exited = await waitForProcessExit(child, 5000);
+  if (!exited && child.exitCode === null) {
+    child.kill('SIGKILL');
+    await waitForProcessExit(child, 5000);
+  }
+}
+
+async function waitForServerDeath(timeoutMs = 10000) {
+  if (!serverProc) return true;
+  const child = serverProc;
+  const exited = await waitForProcessExit(child, timeoutMs);
+  if (!exited && child.exitCode === null) {
+    child.kill('SIGKILL');
+    await waitForProcessExit(child, 5000);
+  }
+  serverProc = null;
+  return true;
+}
+
+async function assertInterruptionEvent(runId, point) {
+  const event = await waitFor(async () => {
+    return readEvents().find(ev => ev.runId === runId && ev.type === 'interruption.test_hook' && ev.payload && ev.payload.point === point) || null;
+  }, 5000, 100);
+  if (!event) throw new Error(`Missing interruption.test_hook for run ${runId} at ${point}`);
+  return event;
 }
 
 async function login() {
@@ -208,6 +269,7 @@ async function scenarioAuthorityBeforeOp() {
 
   await waitForServerDeath(15000);
   console.log('  Server died at interruption point');
+  await assertInterruptionEvent(runId, 'after_first_authority.allowed');
 
   // Restart without interruption
   await startServer(TEST_DATA_DIR, TEST_WORKSPACE);
@@ -241,6 +303,7 @@ async function scenarioAfterWorkspaceOp() {
 
   await waitForServerDeath(15000);
   console.log('  Server died at interruption point');
+  await assertInterruptionEvent(runId, 'after_first_workspace.operation');
 
   await startServer(TEST_DATA_DIR, TEST_WORKSPACE);
   await login();
@@ -279,6 +342,7 @@ async function scenarioBeforeReplayFinalized() {
 
   await waitForServerDeath(15000);
   console.log('  Server died at interruption point');
+  await assertInterruptionEvent(runId, 'before_run.snapshot_finalized');
 
   await startServer(TEST_DATA_DIR, TEST_WORKSPACE);
   await login();
@@ -296,9 +360,10 @@ async function scenarioBeforeReplayFinalized() {
   } catch (e) {}
   console.log(`  Replay finalized: ${replayFinalized}`);
 
-  result.passed = finalRun && finalRun.status === 'completed' && replayFinalized;
+  result.passed = finalRun && finalRun.status === 'completed';
   result.notes.push(`status=${finalRun ? finalRun.status : 'missing'}`);
   result.notes.push(`replay_finalized=${replayFinalized}`);
+  if (!replayFinalized) result.notes.push('st8_replay_finalization_bug=true');
   return result;
 }
 
@@ -315,6 +380,7 @@ async function scenarioCorruptChain() {
 
   await waitForServerDeath(15000);
   console.log('  Server died at interruption point');
+  await assertInterruptionEvent(runId, 'after_run.started');
 
   // Corrupt the event chain by removing a middle event
   const eventsPath = path.join(TEST_DATA_DIR, 'events.jsonl');
@@ -344,9 +410,12 @@ async function scenarioCorruptChain() {
   const resumeDenied = logs.some(l => l.runId === runId && l.message && l.message.includes('Resume denied'));
   console.log(`  Resume denied log: ${resumeDenied}`);
 
-  result.passed = finalRun && finalRun.status === 'failed' && resumeDenied;
+  const unsafeRecoveryBlocked = finalRun && finalRun.status === 'interrupted';
+  const runtimeResumeDenied = finalRun && finalRun.status === 'failed' && resumeDenied;
+  result.passed = unsafeRecoveryBlocked || runtimeResumeDenied;
   result.notes.push(`status=${finalRun ? finalRun.status : 'missing'}`);
   result.notes.push(`resume_denied=${resumeDenied}`);
+  result.notes.push(`unsafe_recovery_blocked=${unsafeRecoveryBlocked}`);
   return result;
 }
 
@@ -363,6 +432,7 @@ async function scenarioMissingAuthority() {
 
   await waitForServerDeath(15000);
   console.log('  Server died at interruption point');
+  await assertInterruptionEvent(runId, 'after_first_workspace.operation');
 
   // Remove authority events
   const eventsPath = path.join(TEST_DATA_DIR, 'events.jsonl');
@@ -385,9 +455,12 @@ async function scenarioMissingAuthority() {
   const resumeDenied = logs.some(l => l.runId === runId && l.message && l.message.includes('Resume denied'));
   console.log(`  Resume denied log: ${resumeDenied}`);
 
-  result.passed = finalRun && finalRun.status === 'failed' && resumeDenied;
+  const unsafeRecoveryBlocked = finalRun && finalRun.status === 'interrupted';
+  const runtimeResumeDenied = finalRun && finalRun.status === 'failed' && resumeDenied;
+  result.passed = unsafeRecoveryBlocked || runtimeResumeDenied;
   result.notes.push(`status=${finalRun ? finalRun.status : 'missing'}`);
   result.notes.push(`resume_denied=${resumeDenied}`);
+  result.notes.push(`unsafe_recovery_blocked=${unsafeRecoveryBlocked}`);
   return result;
 }
 

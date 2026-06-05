@@ -24,6 +24,7 @@ const MEMBERSHIPS_FILE = path.join(DATA_DIR, 'memberships.json');
 const RUNS_FILE = path.join(DATA_DIR, 'runs.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
+const DATA_DIR_WRITER_LOCK_FILE = path.join(DATA_DIR, 'writer-lock.json');
 const ALLOCATION_PLANS_FILE = path.join(DATA_DIR, 'allocation-plans.json');
 const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
 const WORKFLOWS_FILE = path.join(DATA_DIR, 'workflows.json');
@@ -82,6 +83,102 @@ function seedOperationalDataDir() {
 
   writeMissingFile('events.jsonl', '');
 }
+function readDataDirWriterLock() {
+  try {
+    return JSON.parse(fs.readFileSync(DATA_DIR_WRITER_LOCK_FILE, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function isProcessAlive(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) return false;
+  try {
+    process.kill(numericPid, 0);
+    return true;
+  } catch (error) {
+    return error && error.code === 'EPERM';
+  }
+}
+
+function buildDataDirWriterLock(now = new Date()) {
+  const timestamp = now.toISOString();
+  return {
+    pid: process.pid,
+    startedAt: timestamp,
+    dataDir: DATA_DIR,
+    workspaceRoot: WORKSPACE_ROOT,
+    heartbeatAt: timestamp
+  };
+}
+
+function writeDataDirWriterLock(lock) {
+  fs.writeFileSync(DATA_DIR_WRITER_LOCK_FILE, JSON.stringify(lock, null, 2));
+}
+
+function acquireDataDirWriterLock() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const lock = buildDataDirWriterLock();
+
+  try {
+    const fd = fs.openSync(DATA_DIR_WRITER_LOCK_FILE, 'wx');
+    try {
+      fs.writeFileSync(fd, JSON.stringify(lock, null, 2));
+    } finally {
+      fs.closeSync(fd);
+    }
+    dataDirWriterLock = lock;
+    return { acquired: true, lock };
+  } catch (error) {
+    if (!error || error.code !== 'EEXIST') throw error;
+  }
+
+  const existingLock = readDataDirWriterLock();
+  if (existingLock && isProcessAlive(existingLock.pid)) {
+    return { acquired: false, lock: existingLock };
+  }
+
+  try {
+    fs.unlinkSync(DATA_DIR_WRITER_LOCK_FILE);
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') throw error;
+  }
+
+  return acquireDataDirWriterLock();
+}
+
+function heartbeatDataDirWriterLock() {
+  if (!dataDirWriterLock) return;
+  const currentLock = readDataDirWriterLock();
+  if (!currentLock || currentLock.pid !== process.pid) return;
+  dataDirWriterLock = {
+    ...dataDirWriterLock,
+    heartbeatAt: new Date().toISOString()
+  };
+  writeDataDirWriterLock(dataDirWriterLock);
+}
+
+function startDataDirWriterLockHeartbeat() {
+  if (!dataDirWriterLock || dataDirWriterLockHeartbeatTimer) return;
+  dataDirWriterLockHeartbeatTimer = setInterval(heartbeatDataDirWriterLock, 5000);
+}
+
+function releaseDataDirWriterLock() {
+  if (dataDirWriterLockHeartbeatTimer) clearInterval(dataDirWriterLockHeartbeatTimer);
+  dataDirWriterLockHeartbeatTimer = null;
+
+  const currentLock = readDataDirWriterLock();
+  if (currentLock && currentLock.pid === process.pid) {
+    try {
+      fs.unlinkSync(DATA_DIR_WRITER_LOCK_FILE);
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+  }
+  dataDirWriterLock = null;
+}
+
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT === '1';
 const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
@@ -1011,6 +1108,8 @@ const RUN_LEASE_OWNER = `${process.pid}:${crypto.randomUUID()}`;
 const DEFAULT_RUN_LEASE_DURATION_MS = 180000;
 let lastLogTimestampNs = 0n;
 let serverReady = false;
+let dataDirWriterLock = null;
+let dataDirWriterLockHeartbeatTimer = null;
 let dataVersion = 0;
 const pageRenderCache = new Map();
 const pageRenderInFlight = new Map();
@@ -12588,6 +12687,16 @@ async function createDefaultData() {
 // Start server
 async function start() {
   try {
+    const writerLockResult = acquireDataDirWriterLock();
+    if (!writerLockResult.acquired) {
+      const owner = writerLockResult.lock || {};
+      throw new Error(
+        'DATA_DIR writer lock is owned by a live process; refusing startup. ' +
+        `pid=${owner.pid || 'unknown'} dataDir=${owner.dataDir || DATA_DIR}`
+      );
+    }
+    startDataDirWriterLockHeartbeat();
+
     await createDefaultData();
     interruptStaleRunsOnStartup();
     startRuntimeScheduler();
@@ -12595,9 +12704,28 @@ async function start() {
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`Server running on http://localhost:${PORT}`);
   } catch (err) {
+    releaseDataDirWriterLock();
+    console.error(err && err.message ? err.message : err);
     fastify.log.error(err);
     process.exit(1);
   }
 }
+
+function shutdown(signal) {
+  try {
+    if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
+    releaseDataDirWriterLock();
+  } finally {
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+  }
+}
+
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('exit', () => {
+  try {
+    releaseDataDirWriterLock();
+  } catch (_) {}
+});
 
 start();
