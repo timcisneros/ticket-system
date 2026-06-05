@@ -32,7 +32,7 @@ const PROTECTED_PATHS_FILE = path.join(__dirname, 'config', 'protected-paths.jso
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
-const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'closed'];
+const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed'];
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, 'workspace-root'));
 
 function isRepoDataDir() {
@@ -5720,6 +5720,98 @@ function assertAllocatedTicketCanStart(ticket, agents) {
   return planDraft;
 }
 
+function inferObjectiveRequiredWritableRoots(ticket) {
+  const objective = String(ticket && ticket.objective || '').toLowerCase();
+  if (!objective.includes('quarter') || !objective.includes('month')) return [];
+
+  const rootListing = workspaceProvider.list('');
+  return rootListing.entries
+    .filter(entry => entry && entry.type === 'folder' && /^Q\d+$/i.test(entry.name))
+    .map(entry => normalizeWorkspaceOwnershipPath(entry.path))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function getTicketGrantedWritableRoots(ticket, agents) {
+  const planDraft = buildAllocatedOwnershipPlan(ticket, agents);
+  return planDraft.items
+    .flatMap(item => item.ownedOutputPaths || [])
+    .map(normalizeWorkspaceOwnershipPath)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function createTicketFeasibilityError(missingAuthorityGrants, requiredWritableRoots, grantedWritableRoots) {
+  const missing = missingAuthorityGrants.map(normalizeWorkspaceOwnershipPath).filter(Boolean);
+  const error = new Error('Ticket objective requires paths not granted by authority:' + String.fromCharCode(10) + missing.join(String.fromCharCode(10)));
+  error.code = 'TICKET_FEASIBILITY_MISSING_GRANTS';
+  error.kind = 'impossible_authority_scope';
+  error.missingAuthorityGrants = missing;
+  error.requiredWritableRoots = requiredWritableRoots;
+  error.grantedWritableRoots = grantedWritableRoots;
+  return error;
+}
+
+function assertTicketObjectiveWithinGrantedWritableRoots(ticket, agents) {
+  const requiredWritableRoots = inferObjectiveRequiredWritableRoots(ticket);
+  if (requiredWritableRoots.length === 0) return null;
+
+  const grantedWritableRoots = getTicketGrantedWritableRoots(ticket, agents);
+  const missingAuthorityGrants = requiredWritableRoots.filter(requiredRoot =>
+    !isPathInsideOwnedOutputPaths(requiredRoot, grantedWritableRoots)
+  );
+
+  if (missingAuthorityGrants.length > 0) {
+    throw createTicketFeasibilityError(missingAuthorityGrants, requiredWritableRoots, grantedWritableRoots);
+  }
+
+  return { requiredWritableRoots, grantedWritableRoots, missingAuthorityGrants: [] };
+}
+
+function blockTicketForFeasibility(ticket, error, context = {}) {
+  const tickets = readTickets();
+  const persistedTicket = tickets.find(item => item.id === ticket.id);
+  if (!persistedTicket) return null;
+
+  const now = new Date().toISOString();
+  persistedTicket.status = 'blocked';
+  persistedTicket.blockedReason = error.message;
+  persistedTicket.feasibility = {
+    status: 'blocked',
+    reason: error.message,
+    code: error.code || 'TICKET_FEASIBILITY_ERROR',
+    kind: error.kind || 'impossible_authority_scope',
+    requiredWritableRoots: error.requiredWritableRoots || [],
+    grantedWritableRoots: error.grantedWritableRoots || [],
+    missingAuthorityGrants: error.missingAuthorityGrants || []
+  };
+  persistedTicket.updatedAt = now;
+  persistedTicket.changedAt = now;
+  if (context.changedBy) persistedTicket.changedBy = context.changedBy;
+  writeTickets(tickets);
+
+  appendEvent({
+    type: 'ticket.blocked',
+    ticketId: persistedTicket.id,
+    payload: {
+      status: persistedTicket.status,
+      reason: persistedTicket.blockedReason,
+      feasibility: persistedTicket.feasibility,
+      updatedAt: persistedTicket.updatedAt
+    }
+  });
+  appendSystemLog('ticket:feasibility_blocked', error.message, null, {
+    ticketId: persistedTicket.id,
+    code: persistedTicket.feasibility.code,
+    kind: persistedTicket.feasibility.kind,
+    missingAuthorityGrants: persistedTicket.feasibility.missingAuthorityGrants,
+    requiredWritableRoots: persistedTicket.feasibility.requiredWritableRoots,
+    grantedWritableRoots: persistedTicket.feasibility.grantedWritableRoots,
+    changedBy: context.changedBy || null
+  });
+  broadcastTicketChange();
+  return persistedTicket;
+}
+
 function assertAllocatedObjectiveSupported(objective) {
   const normalizedObjective = String(objective || '').toLowerCase();
   const destructivePattern = /\b(delete|remove|rename|move|refactor|fix|modify|overwrite|update existing|edit|cleanup|clean up|restructure|reorganize|replace)\b/;
@@ -6410,6 +6502,13 @@ function createRunsForTicket(ticket) {
 
   if (usesOwnedScopeAllocation(ticket)) {
     const agents = getAgentsInGroup(ticket.assignmentTargetId);
+    try {
+      assertTicketObjectiveWithinGrantedWritableRoots(ticket, agents);
+    } catch (error) {
+      blockTicketForFeasibility(ticket, error);
+      return [];
+    }
+
     const existingRuns = readRuns();
     const agentsToRun = agents.filter(agent => {
       const pendingRunKey = `${ticket.id}:${agent.id}`;
