@@ -1,0 +1,152 @@
+[
+  {
+    "index": 0,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 1,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 2,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 3,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 4,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 5,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 6,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 7,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 8,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 9,
+    "category": "legal-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 10,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 11,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 12,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 13,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 14,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 15,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 16,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 17,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 18,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 19,
+    "category": "support-single",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 20,
+    "category": "legal-batch-csv",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 21,
+    "category": "legal-batch-reports",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 22,
+    "category": "support-batch-triage",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 23,
+    "category": "legal-small-batch",
+    "status": "timeout",
+    "ticketId": null
+  },
+  {
+    "index": 24,
+    "category": "support-small-batch",
+    "status": "timeout",
+    "ticketId": null
+  }
+]

@@ -1,0 +1,88 @@
+[
+  {
+    "runId": 170,
+    "ticketId": 168,
+    "ticketObjective": "put items 1-5 in a folder called A",
+    "step": 2,
+    "suppressedBatch": [
+      "createFolder",
+      "renamePath",
+      "renamePath"
+    ],
+    "mutatingCount": 3,
+    "limit": 2,
+    "repeatedViolations": 1,
+    "nextResponse": [
+      {
+        "operation": "listDirectory",
+        "path": ""
+      }
+    ],
+    "nextResponseOps": [
+      "listDirectory"
+    ],
+    "classification": "inspection_fallback",
+    "terminalOutcome": "failed"
+  },
+  {
+    "runId": 171,
+    "ticketId": 168,
+    "ticketObjective": "put items 1-5 in a folder called A",
+    "step": 2,
+    "suppressedBatch": [
+      "createFolder",
+      "renamePath",
+      "renamePath"
+    ],
+    "mutatingCount": 3,
+    "limit": 2,
+    "repeatedViolations": 1,
+    "nextResponse": [
+      {
+        "operation": "listDirectory",
+        "path": ""
+      }
+    ],
+    "nextResponseOps": [
+      "listDirectory"
+    ],
+    "classification": "inspection_fallback",
+    "terminalOutcome": "failed"
+  },
+  {
+    "runId": 181,
+    "ticketId": 178,
+    "ticketObjective": "create folder batch-X and create 5 files",
+    "step": 0,
+    "suppressedBatch": [
+      "createFolder",
+      "writeFile",
+      "writeFile",
+      "writeFile"
+    ],
+    "mutatingCount": 4,
+    "limit": 3,
+    "repeatedViolations": 1,
+    "nextResponse": [
+      {
+        "operation": "createFolder",
+        "path": "batch-X"
+      },
+      {
+        "operation": "writeFile",
+        "path": "batch-X/file1.txt"
+      },
+      {
+        "operation": "writeFile",
+        "path": "batch-X/file2.txt"
+      }
+    ],
+    "nextResponseOps": [
+      "createFolder",
+      "writeFile",
+      "writeFile"
+    ],
+    "classification": "reduced_but_still_oversized",
+    "terminalOutcome": "completed"
+  }
+]

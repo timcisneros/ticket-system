@@ -1,0 +1,1971 @@
+{
+  "events": [
+    {
+      "runId": 1,
+      "ticketId": 1,
+      "ticketObjective": "Operational restart validation 1780310000001: create folder restart-validation-1",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "writeFile"
+      ],
+      "classification": "legal_retry",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-01T19:32:50.342Z",
+      "snapshotFinalized": "2026-06-01T19:33:03.148Z"
+    },
+    {
+      "runId": 2,
+      "ticketId": 2,
+      "ticketObjective": "Operational restart validation recheck 1780400000001: create folder restart-rech",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "writeFile"
+      ],
+      "classification": "legal_retry",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-02T05:21:37.956Z",
+      "snapshotFinalized": "2026-06-02T05:22:06.883Z"
+    },
+    {
+      "runId": 2,
+      "ticketId": 2,
+      "ticketObjective": "Operational restart validation recheck 1780400000001: create folder restart-rech",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "writeFile"
+      ],
+      "classification": "legal_retry",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-02T05:21:37.956Z",
+      "snapshotFinalized": "2026-06-02T05:22:06.883Z"
+    },
+    {
+      "runId": 3,
+      "ticketId": 3,
+      "ticketObjective": "Create 3 folders A, B, and G",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "createFolder",
+        "createFolder"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "createFolder"
+      ],
+      "classification": "legal_retry",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-02T07:22:40.001Z",
+      "snapshotFinalized": "2026-06-02T07:22:47.880Z"
+    },
+    {
+      "runId": 92,
+      "ticketId": 90,
+      "ticketObjective": "Delete all files in the workspace root whose names contain timestamps like 1780,",
+      "step": 1,
+      "suppressedOps": [
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath"
+      ],
+      "mutatingCount": 8,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T16:30:29.085Z",
+      "snapshotFinalized": "2026-06-04T16:30:45.376Z"
+    },
+    {
+      "runId": 105,
+      "ticketId": 103,
+      "ticketObjective": "Create folder batch-1780600094 and write batch-1780600094/a.txt, batch-178060009",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-04T19:08:15.779Z",
+      "snapshotFinalized": "2026-06-04T19:08:28.126Z"
+    },
+    {
+      "runId": 165,
+      "ticketId": 163,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T21:55:15.559Z",
+      "snapshotFinalized": "2026-06-04T21:55:28.814Z"
+    },
+    {
+      "runId": 166,
+      "ticketId": 164,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:01:34.292Z",
+      "snapshotFinalized": "2026-06-04T22:01:47.284Z"
+    },
+    {
+      "runId": 168,
+      "ticketId": 166,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:02:32.940Z",
+      "snapshotFinalized": "2026-06-04T22:02:49.652Z"
+    },
+    {
+      "runId": 169,
+      "ticketId": 167,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:06:03.031Z",
+      "snapshotFinalized": "2026-06-04T22:06:14.320Z"
+    },
+    {
+      "runId": 170,
+      "ticketId": 168,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:09:35.695Z",
+      "snapshotFinalized": "2026-06-04T22:09:51.540Z"
+    },
+    {
+      "runId": 171,
+      "ticketId": 168,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:10:45.553Z",
+      "snapshotFinalized": "2026-06-04T22:10:58.248Z"
+    },
+    {
+      "runId": 172,
+      "ticketId": 169,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-1\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:45:07.190Z",
+      "snapshotFinalized": "2026-06-04T23:45:23.221Z"
+    },
+    {
+      "runId": 173,
+      "ticketId": 170,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-1\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:45:14.391Z",
+      "snapshotFinalized": "2026-06-04T23:45:28.949Z"
+    },
+    {
+      "runId": 174,
+      "ticketId": 171,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-2\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:46:03.494Z",
+      "snapshotFinalized": "2026-06-04T23:46:18.306Z"
+    },
+    {
+      "runId": 175,
+      "ticketId": 172,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-3\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:46:21.948Z",
+      "snapshotFinalized": "2026-06-04T23:46:35.270Z"
+    },
+    {
+      "runId": 176,
+      "ticketId": 173,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-4\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:46:38.933Z",
+      "snapshotFinalized": "2026-06-04T23:46:51.827Z"
+    },
+    {
+      "runId": 177,
+      "ticketId": 174,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-5\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 6,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:46:58.045Z",
+      "snapshotFinalized": "2026-06-04T23:47:08.017Z"
+    },
+    {
+      "runId": 181,
+      "ticketId": 178,
+      "ticketObjective": "create folder batch-X and create 5 files",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-05T01:18:47.386Z",
+      "snapshotFinalized": "2026-06-05T01:18:57.623Z"
+    },
+    {
+      "runId": 182,
+      "ticketId": 179,
+      "ticketObjective": "move items 1-5 into folder ALPHA-0",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:44.353Z",
+      "snapshotFinalized": "2026-06-05T01:23:04.773Z"
+    },
+    {
+      "runId": 184,
+      "ticketId": 181,
+      "ticketObjective": "create folder PROJECT-0 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:48.668Z",
+      "snapshotFinalized": "2026-06-05T01:22:58.435Z"
+    },
+    {
+      "runId": 184,
+      "ticketId": 181,
+      "ticketObjective": "create folder PROJECT-0 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:48.668Z",
+      "snapshotFinalized": "2026-06-05T01:22:58.435Z"
+    },
+    {
+      "runId": 186,
+      "ticketId": 183,
+      "ticketObjective": "move items 1-5 into folder ALPHA-1",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:52.633Z",
+      "snapshotFinalized": "2026-06-05T01:23:16.712Z"
+    },
+    {
+      "runId": 188,
+      "ticketId": 185,
+      "ticketObjective": "create folder PROJECT-1 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:56.931Z",
+      "snapshotFinalized": "2026-06-05T01:23:19.438Z"
+    },
+    {
+      "runId": 188,
+      "ticketId": 185,
+      "ticketObjective": "create folder PROJECT-1 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:56.931Z",
+      "snapshotFinalized": "2026-06-05T01:23:19.438Z"
+    },
+    {
+      "runId": 191,
+      "ticketId": 188,
+      "ticketObjective": "move items 1-10 into folder BETA-2",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:22.484Z",
+      "snapshotFinalized": "2026-06-05T01:23:40.282Z"
+    },
+    {
+      "runId": 192,
+      "ticketId": 189,
+      "ticketObjective": "create folder PROJECT-2 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:27.405Z",
+      "snapshotFinalized": "2026-06-05T01:23:43.141Z"
+    },
+    {
+      "runId": 192,
+      "ticketId": 189,
+      "ticketObjective": "create folder PROJECT-2 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:27.405Z",
+      "snapshotFinalized": "2026-06-05T01:23:43.141Z"
+    },
+    {
+      "runId": 194,
+      "ticketId": 191,
+      "ticketObjective": "move items 1-5 into folder ALPHA-3",
+      "step": 3,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:34.707Z",
+      "snapshotFinalized": "2026-06-05T01:23:52.813Z"
+    },
+    {
+      "runId": 195,
+      "ticketId": 192,
+      "ticketObjective": "move items 1-10 into folder BETA-3",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:36.620Z",
+      "snapshotFinalized": "2026-06-05T01:24:01.526Z"
+    },
+    {
+      "runId": 196,
+      "ticketId": 193,
+      "ticketObjective": "create folder PROJECT-3 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-05T01:23:38.530Z",
+      "snapshotFinalized": "2026-06-05T01:23:56.370Z"
+    },
+    {
+      "runId": 198,
+      "ticketId": 195,
+      "ticketObjective": "move items 1-5 into folder ALPHA-4",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:48.336Z",
+      "snapshotFinalized": "2026-06-05T01:24:11.242Z"
+    },
+    {
+      "runId": 200,
+      "ticketId": 197,
+      "ticketObjective": "create folder PROJECT-4 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-05T01:24:04.868Z",
+      "snapshotFinalized": "2026-06-05T01:24:19.721Z"
+    },
+    {
+      "runId": 203,
+      "ticketId": 200,
+      "ticketObjective": "move items 1-10 into folder BETA-5",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:23.116Z",
+      "snapshotFinalized": "2026-06-05T01:24:40.200Z"
+    },
+    {
+      "runId": 204,
+      "ticketId": 201,
+      "ticketObjective": "create folder PROJECT-5 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:25.558Z",
+      "snapshotFinalized": "2026-06-05T01:24:42.817Z"
+    },
+    {
+      "runId": 204,
+      "ticketId": 201,
+      "ticketObjective": "create folder PROJECT-5 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:25.558Z",
+      "snapshotFinalized": "2026-06-05T01:24:42.817Z"
+    },
+    {
+      "runId": 206,
+      "ticketId": 203,
+      "ticketObjective": "move items 1-5 into folder ALPHA-6",
+      "step": 3,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:33.234Z",
+      "snapshotFinalized": "2026-06-05T01:24:59.401Z"
+    },
+    {
+      "runId": 208,
+      "ticketId": 205,
+      "ticketObjective": "create folder PROJECT-6 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:45.750Z",
+      "snapshotFinalized": "2026-06-05T01:25:05.501Z"
+    },
+    {
+      "runId": 208,
+      "ticketId": 205,
+      "ticketObjective": "create folder PROJECT-6 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:45.750Z",
+      "snapshotFinalized": "2026-06-05T01:25:05.501Z"
+    },
+    {
+      "runId": 211,
+      "ticketId": 208,
+      "ticketObjective": "move items 1-10 into folder BETA-7",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:55.649Z",
+      "snapshotFinalized": "2026-06-05T01:25:25.438Z"
+    },
+    {
+      "runId": 211,
+      "ticketId": 208,
+      "ticketObjective": "move items 1-10 into folder BETA-7",
+      "step": 3,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:55.649Z",
+      "snapshotFinalized": "2026-06-05T01:25:25.438Z"
+    },
+    {
+      "runId": 212,
+      "ticketId": 209,
+      "ticketObjective": "create folder PROJECT-7 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:57.781Z",
+      "snapshotFinalized": "2026-06-05T01:25:20.955Z"
+    },
+    {
+      "runId": 212,
+      "ticketId": 209,
+      "ticketObjective": "create folder PROJECT-7 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:57.781Z",
+      "snapshotFinalized": "2026-06-05T01:25:20.955Z"
+    },
+    {
+      "runId": 216,
+      "ticketId": 213,
+      "ticketObjective": "create folder PROJECT-8 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-05T01:25:23.768Z",
+      "snapshotFinalized": "2026-06-05T01:25:41.335Z"
+    },
+    {
+      "runId": 220,
+      "ticketId": 217,
+      "ticketObjective": "create folder PROJECT-9 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:25:50.083Z",
+      "snapshotFinalized": "2026-06-05T01:26:00.454Z"
+    },
+    {
+      "runId": 220,
+      "ticketId": 217,
+      "ticketObjective": "create folder PROJECT-9 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:25:50.083Z",
+      "snapshotFinalized": "2026-06-05T01:26:00.454Z"
+    }
+  ],
+  "preTM1": [
+    {
+      "runId": 1,
+      "ticketId": 1,
+      "ticketObjective": "Operational restart validation 1780310000001: create folder restart-validation-1",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "writeFile"
+      ],
+      "classification": "legal_retry",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-01T19:32:50.342Z",
+      "snapshotFinalized": "2026-06-01T19:33:03.148Z"
+    },
+    {
+      "runId": 2,
+      "ticketId": 2,
+      "ticketObjective": "Operational restart validation recheck 1780400000001: create folder restart-rech",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "writeFile"
+      ],
+      "classification": "legal_retry",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-02T05:21:37.956Z",
+      "snapshotFinalized": "2026-06-02T05:22:06.883Z"
+    },
+    {
+      "runId": 2,
+      "ticketId": 2,
+      "ticketObjective": "Operational restart validation recheck 1780400000001: create folder restart-rech",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "writeFile"
+      ],
+      "classification": "legal_retry",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-02T05:21:37.956Z",
+      "snapshotFinalized": "2026-06-02T05:22:06.883Z"
+    },
+    {
+      "runId": 3,
+      "ticketId": 3,
+      "ticketObjective": "Create 3 folders A, B, and G",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "createFolder",
+        "createFolder"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "createFolder"
+      ],
+      "classification": "legal_retry",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-02T07:22:40.001Z",
+      "snapshotFinalized": "2026-06-02T07:22:47.880Z"
+    },
+    {
+      "runId": 92,
+      "ticketId": 90,
+      "ticketObjective": "Delete all files in the workspace root whose names contain timestamps like 1780,",
+      "step": 1,
+      "suppressedOps": [
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath",
+        "deletePath"
+      ],
+      "mutatingCount": 8,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T16:30:29.085Z",
+      "snapshotFinalized": "2026-06-04T16:30:45.376Z"
+    },
+    {
+      "runId": 105,
+      "ticketId": 103,
+      "ticketObjective": "Create folder batch-1780600094 and write batch-1780600094/a.txt, batch-178060009",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 2,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-04T19:08:15.779Z",
+      "snapshotFinalized": "2026-06-04T19:08:28.126Z"
+    }
+  ],
+  "duringTM1": [
+    {
+      "runId": 165,
+      "ticketId": 163,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T21:55:15.559Z",
+      "snapshotFinalized": "2026-06-04T21:55:28.814Z"
+    },
+    {
+      "runId": 166,
+      "ticketId": 164,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:01:34.292Z",
+      "snapshotFinalized": "2026-06-04T22:01:47.284Z"
+    },
+    {
+      "runId": 168,
+      "ticketId": 166,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:02:32.940Z",
+      "snapshotFinalized": "2026-06-04T22:02:49.652Z"
+    },
+    {
+      "runId": 169,
+      "ticketId": 167,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:06:03.031Z",
+      "snapshotFinalized": "2026-06-04T22:06:14.320Z"
+    },
+    {
+      "runId": 170,
+      "ticketId": 168,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:09:35.695Z",
+      "snapshotFinalized": "2026-06-04T22:09:51.540Z"
+    },
+    {
+      "runId": 171,
+      "ticketId": 168,
+      "ticketObjective": "put items 1-5 in a folder called A",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 3,
+      "limit": 2,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T22:10:45.553Z",
+      "snapshotFinalized": "2026-06-04T22:10:58.248Z"
+    },
+    {
+      "runId": 172,
+      "ticketId": 169,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-1\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:45:07.190Z",
+      "snapshotFinalized": "2026-06-04T23:45:23.221Z"
+    },
+    {
+      "runId": 173,
+      "ticketId": 170,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-1\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:45:14.391Z",
+      "snapshotFinalized": "2026-06-04T23:45:28.949Z"
+    },
+    {
+      "runId": 174,
+      "ticketId": 171,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-2\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:46:03.494Z",
+      "snapshotFinalized": "2026-06-04T23:46:18.306Z"
+    },
+    {
+      "runId": 175,
+      "ticketId": 172,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-3\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:46:21.948Z",
+      "snapshotFinalized": "2026-06-04T23:46:35.270Z"
+    },
+    {
+      "runId": 176,
+      "ticketId": 173,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-4\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:46:38.933Z",
+      "snapshotFinalized": "2026-06-04T23:46:51.827Z"
+    },
+    {
+      "runId": 177,
+      "ticketId": 174,
+      "ticketObjective": "{\"objective\":\"put items 1-5 in a folder called A\",\"title\":\"replay-mut3-5\"}",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 6,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-04T23:46:58.045Z",
+      "snapshotFinalized": "2026-06-04T23:47:08.017Z"
+    }
+  ],
+  "postTM1": [
+    {
+      "runId": 181,
+      "ticketId": 178,
+      "ticketObjective": "create folder batch-X and create 5 files",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-05T01:18:47.386Z",
+      "snapshotFinalized": "2026-06-05T01:18:57.623Z"
+    },
+    {
+      "runId": 182,
+      "ticketId": 179,
+      "ticketObjective": "move items 1-5 into folder ALPHA-0",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:44.353Z",
+      "snapshotFinalized": "2026-06-05T01:23:04.773Z"
+    },
+    {
+      "runId": 184,
+      "ticketId": 181,
+      "ticketObjective": "create folder PROJECT-0 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:48.668Z",
+      "snapshotFinalized": "2026-06-05T01:22:58.435Z"
+    },
+    {
+      "runId": 184,
+      "ticketId": 181,
+      "ticketObjective": "create folder PROJECT-0 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:48.668Z",
+      "snapshotFinalized": "2026-06-05T01:22:58.435Z"
+    },
+    {
+      "runId": 186,
+      "ticketId": 183,
+      "ticketObjective": "move items 1-5 into folder ALPHA-1",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:52.633Z",
+      "snapshotFinalized": "2026-06-05T01:23:16.712Z"
+    },
+    {
+      "runId": 188,
+      "ticketId": 185,
+      "ticketObjective": "create folder PROJECT-1 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:56.931Z",
+      "snapshotFinalized": "2026-06-05T01:23:19.438Z"
+    },
+    {
+      "runId": 188,
+      "ticketId": 185,
+      "ticketObjective": "create folder PROJECT-1 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:22:56.931Z",
+      "snapshotFinalized": "2026-06-05T01:23:19.438Z"
+    },
+    {
+      "runId": 191,
+      "ticketId": 188,
+      "ticketObjective": "move items 1-10 into folder BETA-2",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:22.484Z",
+      "snapshotFinalized": "2026-06-05T01:23:40.282Z"
+    },
+    {
+      "runId": 192,
+      "ticketId": 189,
+      "ticketObjective": "create folder PROJECT-2 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:27.405Z",
+      "snapshotFinalized": "2026-06-05T01:23:43.141Z"
+    },
+    {
+      "runId": 192,
+      "ticketId": 189,
+      "ticketObjective": "create folder PROJECT-2 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:27.405Z",
+      "snapshotFinalized": "2026-06-05T01:23:43.141Z"
+    },
+    {
+      "runId": 194,
+      "ticketId": 191,
+      "ticketObjective": "move items 1-5 into folder ALPHA-3",
+      "step": 3,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:34.707Z",
+      "snapshotFinalized": "2026-06-05T01:23:52.813Z"
+    },
+    {
+      "runId": 195,
+      "ticketId": 192,
+      "ticketObjective": "move items 1-10 into folder BETA-3",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:36.620Z",
+      "snapshotFinalized": "2026-06-05T01:24:01.526Z"
+    },
+    {
+      "runId": 196,
+      "ticketId": 193,
+      "ticketObjective": "create folder PROJECT-3 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-05T01:23:38.530Z",
+      "snapshotFinalized": "2026-06-05T01:23:56.370Z"
+    },
+    {
+      "runId": 198,
+      "ticketId": 195,
+      "ticketObjective": "move items 1-5 into folder ALPHA-4",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:23:48.336Z",
+      "snapshotFinalized": "2026-06-05T01:24:11.242Z"
+    },
+    {
+      "runId": 200,
+      "ticketId": 197,
+      "ticketObjective": "create folder PROJECT-4 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-05T01:24:04.868Z",
+      "snapshotFinalized": "2026-06-05T01:24:19.721Z"
+    },
+    {
+      "runId": 203,
+      "ticketId": 200,
+      "ticketObjective": "move items 1-10 into folder BETA-5",
+      "step": 2,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:23.116Z",
+      "snapshotFinalized": "2026-06-05T01:24:40.200Z"
+    },
+    {
+      "runId": 204,
+      "ticketId": 201,
+      "ticketObjective": "create folder PROJECT-5 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:25.558Z",
+      "snapshotFinalized": "2026-06-05T01:24:42.817Z"
+    },
+    {
+      "runId": 204,
+      "ticketId": 201,
+      "ticketObjective": "create folder PROJECT-5 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:25.558Z",
+      "snapshotFinalized": "2026-06-05T01:24:42.817Z"
+    },
+    {
+      "runId": 206,
+      "ticketId": 203,
+      "ticketObjective": "move items 1-5 into folder ALPHA-6",
+      "step": 3,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:33.234Z",
+      "snapshotFinalized": "2026-06-05T01:24:59.401Z"
+    },
+    {
+      "runId": 208,
+      "ticketId": 205,
+      "ticketObjective": "create folder PROJECT-6 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:45.750Z",
+      "snapshotFinalized": "2026-06-05T01:25:05.501Z"
+    },
+    {
+      "runId": 208,
+      "ticketId": 205,
+      "ticketObjective": "create folder PROJECT-6 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:45.750Z",
+      "snapshotFinalized": "2026-06-05T01:25:05.501Z"
+    },
+    {
+      "runId": 211,
+      "ticketId": 208,
+      "ticketObjective": "move items 1-10 into folder BETA-7",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "listDirectory"
+      ],
+      "classification": "inspection_fallback",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:55.649Z",
+      "snapshotFinalized": "2026-06-05T01:25:25.438Z"
+    },
+    {
+      "runId": 211,
+      "ticketId": 208,
+      "ticketObjective": "move items 1-10 into folder BETA-7",
+      "step": 3,
+      "suppressedOps": [
+        "createFolder",
+        "renamePath",
+        "renamePath",
+        "renamePath"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:55.649Z",
+      "snapshotFinalized": "2026-06-05T01:25:25.438Z"
+    },
+    {
+      "runId": 212,
+      "ticketId": 209,
+      "ticketObjective": "create folder PROJECT-7 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:57.781Z",
+      "snapshotFinalized": "2026-06-05T01:25:20.955Z"
+    },
+    {
+      "runId": 212,
+      "ticketId": 209,
+      "ticketObjective": "create folder PROJECT-7 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:24:57.781Z",
+      "snapshotFinalized": "2026-06-05T01:25:20.955Z"
+    },
+    {
+      "runId": 216,
+      "ticketId": 213,
+      "ticketObjective": "create folder PROJECT-8 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "reduced_but_still_oversized",
+      "terminalOutcome": "completed",
+      "snapshotCreated": "2026-06-05T01:25:23.768Z",
+      "snapshotFinalized": "2026-06-05T01:25:41.335Z"
+    },
+    {
+      "runId": 220,
+      "ticketId": 217,
+      "ticketObjective": "create folder PROJECT-9 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 0,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "classification": "repeat_exact_batch",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:25:50.083Z",
+      "snapshotFinalized": "2026-06-05T01:26:00.454Z"
+    },
+    {
+      "runId": 220,
+      "ticketId": 217,
+      "ticketObjective": "create folder PROJECT-9 and in it create files task-1.txt, task-2.txt, task-3.tx",
+      "step": 1,
+      "suppressedOps": [
+        "createFolder",
+        "writeFile",
+        "writeFile",
+        "writeFile"
+      ],
+      "mutatingCount": 4,
+      "limit": 3,
+      "nextOps": [],
+      "classification": "abandonment",
+      "terminalOutcome": "failed",
+      "snapshotCreated": "2026-06-05T01:25:50.083Z",
+      "snapshotFinalized": "2026-06-05T01:26:00.454Z"
+    }
+  ],
+  "distribution": {
+    "legal_retry": 4,
+    "inspection_fallback": 20,
+    "reduced_but_still_oversized": 5,
+    "repeat_exact_batch": 7,
+    "abandonment": 10
+  }
+}
