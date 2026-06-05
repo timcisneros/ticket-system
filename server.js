@@ -102,6 +102,7 @@ const AGENT_OPERATION_ARGS = {
 const ACTION_TYPES = ['workspaceAction', 'agentAction', 'conditionAction', 'systemAction', 'stopAction', 'workflowAction'];
 const MAX_AGENT_ACTIONS_PER_RESPONSE = 8;
 const MAX_MUTATING_ACTIONS_PER_RESPONSE = parseInt(process.env.AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE || '2', 10) || 2;
+const ENABLE_PREFIX_TRUNCATION = process.env.ENABLE_PREFIX_TRUNCATION === 'true';
 const DEFAULT_AGENT_RUNTIME_LIMITS = {
   maxExecutionSteps: 4,
   maxWorkspaceOperationsPerRun: 32,
@@ -9365,7 +9366,7 @@ async function runAgentTicket(runId) {
       broadcastTicketChange();
       const priorStepActionResults = actionResults;
       actionResults = [];
-      const actions = modelPlan.actions;
+      let actions = modelPlan.actions;
 
       if (isRunInterrupted(run.id)) {
         const error = new Error('Run interrupted');
@@ -9390,66 +9391,128 @@ async function runAgentTicket(runId) {
 
       const mutatingActionCount = countMutatingActions(actions);
       if (mutatingActionCount > MAX_MUTATING_ACTIONS_PER_RESPONSE && !isAllowedFolderWriteBundle(actions)) {
-        const message = `Model returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}`;
-        const mutatingActionLimitSignature = actions
-          .filter(action => action && typeof action === 'object' && AGENT_MUTATING_OPERATIONS.includes(action.operation))
-          .map(action => `${action.operation}:${action.args && action.args.path ? action.args.path : ''}:${action.args && action.args.nextPath ? action.args.nextPath : ''}`)
-          .join('|');
+        if (ENABLE_PREFIX_TRUNCATION) {
+          // ── Prefix truncation path ──────────────────────────────
+          const originalActions = [...actions];
+          const executedActions = [];
+          const droppedActions = [];
+          let mutatingSeen = 0;
 
-        repeatedMutatingActionLimitViolations = mutatingActionLimitSignature === lastMutatingActionLimitSignature
-          ? repeatedMutatingActionLimitViolations + 1
-          : 1;
-        lastMutatingActionLimitSignature = mutatingActionLimitSignature;
-
-        recordRunEvent(run, 'model:mutating_action_limit', message, {
-          actionCount: actions.length,
-          mutatingActionCount,
-          maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
-          maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
-          repeatedViolationCount: repeatedMutatingActionLimitViolations,
-          step
-        });
-
-        appendEvent({
-          type: 'action.suppressed',
-          ticketId: run.ticketId,
-          runId: run.id,
-          stepId: String(step),
-          payload: {
-            reason: 'mutating_action_limit',
-            proposedCount: actions.length,
-            mutatingCount: mutatingActionCount,
-            limit: MAX_MUTATING_ACTIONS_PER_RESPONSE,
-            repeatedViolationCount: repeatedMutatingActionLimitViolations,
-            droppedActions: actions
-              .filter(a => a && typeof a === 'object' && AGENT_MUTATING_OPERATIONS.includes(a.operation))
-              .map(a => ({ operation: a.operation, path: a.args && a.args.path, nextPath: a.args && a.args.nextPath }))
-          }
-        });
-
-        if (repeatedMutatingActionLimitViolations >= 2) {
-          const error = createRunLimitError(
-            run,
-            'mutating_action',
-            'Model repeatedly proposed too many mutating actions; no workspace mutations were executed.',
-            {
-              currentValue: repeatedMutatingActionLimitViolations,
-              configuredLimit: 1,
-              mutatingActionCount,
-              maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
-              step
+          for (const a of originalActions) {
+            if (a && typeof a === 'object' && AGENT_MUTATING_OPERATIONS.includes(a.operation)) {
+              if (mutatingSeen < MAX_MUTATING_ACTIONS_PER_RESPONSE) {
+                executedActions.push(a);
+                mutatingSeen++;
+              } else {
+                droppedActions.push(a);
+              }
+            } else {
+              executedActions.push(a);
             }
-          );
-          error.failureKind = 'invalid_action';
-          throw error;
-        }
+          }
 
-        actionResults = [
-          ...priorStepActionResults,
-          { warning: 'model:mutating_action_limit',
-            message: `You returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Retry with at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} createFolder/writeFile/renamePath/deletePath action(s). You may include read/list actions if needed. If more work remains, set complete:false and continue in the next response.` }
-        ];
-        continue;
+          const truncatedMessage = `Model returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Executed the first ${MAX_MUTATING_ACTIONS_PER_RESPONSE} mutating action(s) and dropped ${droppedActions.length}. Non-mutating actions were preserved.`;
+
+          recordRunEvent(run, 'model:mutating_action_truncated', truncatedMessage, {
+            actionCount: originalActions.length,
+            mutatingActionCount,
+            maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+            maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+            executedCount: mutatingSeen,
+            truncatedCount: droppedActions.length,
+            step
+          });
+
+          appendEvent({
+            type: 'action.truncated',
+            ticketId: run.ticketId,
+            runId: run.id,
+            stepId: String(step),
+            payload: {
+              reason: 'mutating_action_limit',
+              proposedCount: originalActions.length,
+              mutatingCount: mutatingActionCount,
+              limit: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+              executedCount: mutatingSeen,
+              truncatedCount: droppedActions.length,
+              droppedActions: droppedActions.map(a => ({
+                operation: a.operation,
+                path: a.args && a.args.path,
+                nextPath: a.args && a.args.nextPath
+              }))
+            }
+          });
+
+          actionResults = [
+            ...priorStepActionResults,
+            { warning: 'model:mutating_action_limit',
+              message: truncatedMessage }
+          ];
+
+          actions = executedActions;
+        } else {
+          // ── Suppression path (flag disabled) ────────────────────
+          const message = `Model returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}`;
+          const mutatingActionLimitSignature = actions
+            .filter(action => action && typeof action === 'object' && AGENT_MUTATING_OPERATIONS.includes(action.operation))
+            .map(action => `${action.operation}:${action.args && action.args.path ? action.args.path : ''}:${action.args && action.args.nextPath ? action.args.nextPath : ''}`)
+            .join('|');
+
+          repeatedMutatingActionLimitViolations = mutatingActionLimitSignature === lastMutatingActionLimitSignature
+            ? repeatedMutatingActionLimitViolations + 1
+            : 1;
+          lastMutatingActionLimitSignature = mutatingActionLimitSignature;
+
+          recordRunEvent(run, 'model:mutating_action_limit', message, {
+            actionCount: actions.length,
+            mutatingActionCount,
+            maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+            maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+            repeatedViolationCount: repeatedMutatingActionLimitViolations,
+            step
+          });
+
+          appendEvent({
+            type: 'action.suppressed',
+            ticketId: run.ticketId,
+            runId: run.id,
+            stepId: String(step),
+            payload: {
+              reason: 'mutating_action_limit',
+              proposedCount: actions.length,
+              mutatingCount: mutatingActionCount,
+              limit: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+              repeatedViolationCount: repeatedMutatingActionLimitViolations,
+              droppedActions: actions
+                .filter(a => a && typeof a === 'object' && AGENT_MUTATING_OPERATIONS.includes(a.operation))
+                .map(a => ({ operation: a.operation, path: a.args && a.args.path, nextPath: a.args && a.args.nextPath }))
+            }
+          });
+
+          if (repeatedMutatingActionLimitViolations >= 2) {
+            const error = createRunLimitError(
+              run,
+              'mutating_action',
+              'Model repeatedly proposed too many mutating actions; no workspace mutations were executed.',
+              {
+                currentValue: repeatedMutatingActionLimitViolations,
+                configuredLimit: 1,
+                mutatingActionCount,
+                maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+                step
+              }
+            );
+            error.failureKind = 'invalid_action';
+            throw error;
+          }
+
+          actionResults = [
+            ...priorStepActionResults,
+            { warning: 'model:mutating_action_limit',
+              message: `You returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Retry with at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} createFolder/writeFile/renamePath/deletePath action(s). You may include read/list actions if needed. If more work remains, set complete:false and continue in the next response.` }
+          ];
+          continue;
+        }
       }
 
       // ── Phase-aware execution enforcement ─────────────────────────

@@ -37,6 +37,8 @@ This repo is a server-rendered ticketing system for bounded agent work. A ticket
 - Real repair benchmark: `REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-repair`
 - Real ambiguous benchmark: `REAL_MODEL_BENCHMARK=1 npm run benchmark:ambiguous-operational`
 - Schema teaching experiment: `npm run experiment:workflow-schema-teaching`
+- Prefix truncation regression: `npm run test:truncation`
+- TM-3 counterfactual replay: `npm run validate:truncation`
 
 ## Preferred Ticket CLI Flow
 
@@ -99,3 +101,4 @@ Use `--agent <id|name>` for Agent 1, Mike, or another configured agent. Use `--j
 - Outer action JSON can work with Mike/Ollama.
 - Local `gemma3:latest` latency is high; the 5 second real benchmark runtime is too short for workflow drafting.
 - Workflow schema generation quality is weak; one-shot examples did not produce a valid workflow through the full runtime path in the latest diagnostic.
+- TM-3 Prefix Truncation is available behind `ENABLE_PREFIX_TRUNCATION=true` (default `false`). When enabled, exceeding the mutating action limit truncates the batch (keep non-mutating + first N mutating, drop the rest) instead of suppressing the entire batch. Safety validated for observed corpus patterns only (createFolder+writeFile, createFolder+independent renamePath, deletePath). Dependent mutation graphs **not validated**.
