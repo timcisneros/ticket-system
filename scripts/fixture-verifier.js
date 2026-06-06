@@ -222,6 +222,10 @@ function verifyVendorCompliance() {
   const manifest = loadManifest(fixturePath);
   if (!manifest) return fail('No fixture-manifest.json found in vendors/');
 
+  if (args['failure-chain']) {
+    return verifyVendorFailureHandoff(fixturePath, manifest);
+  }
+
   const passed = [];
   const failed = [];
 
@@ -289,6 +293,109 @@ function verifyVendorCompliance() {
 
   if (args.chain) {
     verifyVendorRemediationChain(fixturePath, manifest, register, passed, failed);
+  }
+
+  return {
+    passed: failed.length === 0,
+    checks: [...passed.map(p => ({ status: 'pass', message: p })), ...failed.map(f => ({ status: 'fail', message: f }))],
+    count: { passed: passed.length, failed: failed.length }
+  };
+}
+
+
+function readRunRecordFromEnv(runId) {
+  const dataDir = process.env.DATA_DIR;
+  if (!dataDir || !runId) return null;
+  const runsPath = path.join(dataDir, 'runs.json');
+  if (!fs.existsSync(runsPath)) return null;
+  const runs = JSON.parse(fs.readFileSync(runsPath, 'utf8'));
+  return runs.find(run => String(run.id) === String(runId)) || null;
+}
+
+function readReplaySnapshotByRunId(runId) {
+  const dataDir = process.env.DATA_DIR;
+  if (!dataDir || !runId) return null;
+  const snapshotPath = path.join(dataDir, 'replay-snapshots', 'run-' + runId + '.json');
+  if (!fs.existsSync(snapshotPath)) return null;
+  return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+}
+
+function verifyVendorFailureHandoff(fixturePath, manifest) {
+  const passed = [];
+  const failed = [];
+  const expectedHeader = 'vendor_id,vendor_name,disposition,remediation_action,due_days,owner';
+
+  if (fs.existsSync(path.join(fixturePath, 'vendor-decision-register.csv'))) {
+    failed.push('Stage 1 decision register should be absent for missing-source failure handoff');
+  } else {
+    passed.push('Stage 1 decision register absent');
+  }
+
+  if (fs.existsSync(path.join(fixturePath, 'compliance-review.md'))) {
+    failed.push('Stage 1 compliance review should be absent for missing-source failure handoff');
+  } else {
+    passed.push('Stage 1 compliance review absent');
+  }
+
+  const blockersPath = path.join(fixturePath, 'remediation-blockers.md');
+  if (!fs.existsSync(blockersPath)) {
+    failed.push('Missing remediation-blockers.md');
+  } else {
+    const content = fs.readFileSync(blockersPath, 'utf8');
+    if (content.length < 150) failed.push('remediation-blockers.md too short (likely insufficient detail)');
+    if (!/stage\s*1/i.test(content)) failed.push('remediation-blockers.md does not mention Stage 1');
+    if (!/failed|failure|not completed/i.test(content)) failed.push('remediation-blockers.md does not state Stage 1 failed or did not complete');
+    if (!content.includes('vendors/incoming/vendor-008.md')) failed.push('remediation-blockers.md missing controlled missing source path');
+    if (!/cannot|blocked|not proceed|unavailable/i.test(content)) failed.push('remediation-blockers.md does not block completion');
+    if (failed.length === 0 || fs.existsSync(blockersPath)) passed.push('remediation-blockers.md present (' + content.length + ' chars)');
+  }
+
+  const tasks = readCSV(path.join(fixturePath, 'remediation-tasks.csv'));
+  if (!tasks) {
+    failed.push('Missing remediation-tasks.csv');
+  } else {
+    const actualHeader = tasks.headers.join(',');
+    if (actualHeader !== expectedHeader) failed.push('remediation-tasks.csv header mismatch: ' + actualHeader);
+    else passed.push('remediation-tasks.csv has blocker-mode header');
+    if (tasks.rows.length !== 0) failed.push('remediation-tasks.csv should have zero data rows when Stage 1 failed, found ' + tasks.rows.length);
+    else passed.push('remediation-tasks.csv has zero data rows');
+  }
+
+  const stage1RunId = process.env.STAGE1_RUN_ID;
+  const stage1Run = readRunRecordFromEnv(stage1RunId);
+  if (!stage1Run) {
+    failed.push('Stage 1 run record unavailable');
+  } else if (stage1Run.status !== 'failed') {
+    failed.push('Expected Stage 1 status failed, got ' + stage1Run.status);
+  } else {
+    passed.push('Stage 1 run status failed');
+  }
+
+  const stage1Snapshot = readReplaySnapshotByRunId(stage1RunId);
+  if (!stage1Snapshot) {
+    failed.push('Stage 1 replay snapshot unavailable');
+  } else {
+    const invocation = (stage1Snapshot.workflowInvocation || []).find(item => item.workflowId === 'vendor-compliance');
+    if (!invocation) failed.push('Stage 1 replay missing vendor-compliance invocation');
+    else passed.push('Stage 1 replay workflow invocation present');
+    const failedRead = (stage1Snapshot.workflowActions || []).find(item => item.stepId === 'read_008' && item.error);
+    if (!failedRead) failed.push('Stage 1 replay missing failed read_008 evidence');
+    else passed.push('Stage 1 replay records failed read_008');
+  }
+
+  const stage2Snapshot = readReplaySnapshotFromEnv();
+  const requireReplay = process.env.REQUIRE_REPLAY_EVIDENCE === '1' || process.env.REQUIRE_REPLAY_EVIDENCE === 'true';
+  if (stage2Snapshot) {
+    const invocation = (stage2Snapshot.workflowInvocation || []).find(item => item.workflowId === 'vendor-remediation-failure-handoff');
+    if (!invocation) failed.push('Replay missing vendor-remediation-failure-handoff workflow invocation');
+    else {
+      const missing = ['workflowVersion', 'policyId', 'policyVersion', 'policyTextHash', 'verifierContractId', 'verifierContractVersion']
+        .filter(key => !invocation[key]);
+      if (missing.length) failed.push('Replay failure handoff invocation missing metadata: ' + missing.join(', '));
+      else passed.push('Replay failure handoff workflow/policy/verifier metadata present');
+    }
+  } else if (requireReplay) {
+    failed.push('Replay evidence required but DATA_DIR/RUN_ID snapshot was not available');
   }
 
   return {

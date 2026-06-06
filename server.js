@@ -1656,6 +1656,107 @@ function createVendorRemediationWorkflowDefinition(now = new Date().toISOString(
 }
 
 
+const VENDOR_REMEDIATION_FAILURE_HANDOFF_POLICY_TEXT = [
+  'Failure handoff rules:',
+  '- If Stage 1 status is not completed, do not claim remediation is complete.',
+  '- Write remediation-blockers.md describing the failed Stage 1 run, missing or unavailable evidence, and why remediation cannot proceed.',
+  '- Write remediation-tasks.csv with only the header row when Stage 1 did not produce a usable vendor-decision-register.csv.',
+  '- The remediation-tasks.csv columns must be exactly: vendor_id,vendor_name,disposition,remediation_action,due_days,owner.',
+  '- The blockers document must include the Stage 1 run id, Stage 1 status, and missing source path when provided.'
+].join('\n');
+
+function createVendorRemediationFailureHandoffWorkflowDefinition(now = new Date().toISOString()) {
+  return {
+    id: 'vendor-remediation-failure-handoff',
+    name: 'Vendor Remediation Failure Handoff',
+    version: '1',
+    description: 'Consumes Stage 1 failure evidence and writes deterministic remediation blockers.',
+    enabled: true,
+    policy: {
+      id: 'vendor-remediation-failure-handoff-policy',
+      version: '1',
+      text: VENDOR_REMEDIATION_FAILURE_HANDOFF_POLICY_TEXT
+    },
+    taskPromptTemplate: [
+      'Use the Stage 1 status evidence from workflow input.',
+      'If Stage 1 failed or did not produce a complete vendor decision register, write blockers instead of pretending remediation is complete.',
+      'Write remediation-blockers.md and remediation-tasks.csv using workflow.policy.text.'
+    ].join('\n'),
+    verifierContract: {
+      id: 'vendor-remediation-failure-handoff-verifier',
+      version: '1',
+      fixture: 'vendor-compliance',
+      expectedArtifacts: [
+        'vendors/remediation-blockers.md',
+        'vendors/remediation-tasks.csv'
+      ]
+    },
+    inputSchema: {
+      basePath: 'string',
+      stage1RunId: 'string',
+      stage1Status: 'string',
+      stage1Error: 'string',
+      missingSourcePath: 'string'
+    },
+    actions: [
+      {
+        id: 'prepare_handoff',
+        action: 'agentStructuredOutput',
+        input: {
+          instruction: '{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}',
+          input: {
+            stage1RunId: '{{workflow.input.stage1RunId}}',
+            stage1Status: '{{workflow.input.stage1Status}}',
+            stage1Error: '{{workflow.input.stage1Error}}',
+            missingSourcePath: '{{workflow.input.missingSourcePath}}'
+          },
+          outputSchema: {
+            remediationBlockersMd: 'string',
+            remediationTasksCsv: 'string'
+          }
+        },
+        saveAs: 'handoff',
+        next: 'write_blockers'
+      },
+      {
+        id: 'write_blockers',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.basePath}}/remediation-blockers.md',
+          content: '{{handoff.remediationBlockersMd}}'
+        },
+        next: 'write_tasks'
+      },
+      {
+        id: 'write_tasks',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.basePath}}/remediation-tasks.csv',
+          content: '{{handoff.remediationTasksCsv}}'
+        },
+        next: 'done'
+      },
+      {
+        id: 'done',
+        action: 'stop',
+        input: {
+          result: {
+            remediationBlockersPath: '{{workflow.input.basePath}}/remediation-blockers.md',
+            remediationTasksPath: '{{workflow.input.basePath}}/remediation-tasks.csv'
+          }
+        }
+      }
+    ],
+    postconditions: [
+      { id: 'remediation-blockers-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/remediation-blockers.md' },
+      { id: 'remediation-tasks-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/remediation-tasks.csv' }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+
 const SHARED_DRIVE_CLEANUP_WORKFLOW_POLICY_TEXT = [
   'Decision rules:',
   '- Preserve active files and files with active references in their original paths.',
@@ -13397,6 +13498,12 @@ async function createDefaultData() {
     workflows.push(createVendorRemediationWorkflowDefinition());
     writeWorkflows(workflows);
     console.log('Created workflow: vendor-remediation-plan');
+  }
+
+  if (!workflows.some(workflow => workflow.id === 'vendor-remediation-failure-handoff')) {
+    workflows.push(createVendorRemediationFailureHandoffWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created workflow: vendor-remediation-failure-handoff');
   }
 
   if (!workflows.some(workflow => workflow.id === 'shared-drive-cleanup')) {
