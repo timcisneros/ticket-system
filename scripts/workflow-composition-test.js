@@ -528,6 +528,59 @@ async function main() {
     const exactMutationCapSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, exactMutationCapRun.replaySnapshotPath), 'utf8'));
     assert(exactMutationCapSnapshot.workflowActions.some(item => item.stepId === 'done' && item.action === 'stop'), 'exact mutation cap replay should record stop step');
 
+
+    fs.writeFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/rename-source.txt'), 'rename me', 'utf8');
+    const renameOutputWorkflow = {
+      id: `workflow-rename-output-contract-${Date.now()}`,
+      name: 'Rename output contract workflow',
+      inputSchema: {},
+      actions: [
+        {
+          id: 'rename-file',
+          action: 'renamePath',
+          input: {
+            path: 'workflow-output/rename-source.txt',
+            nextPath: 'workflow-output/rename-destination.txt'
+          },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ],
+      postconditions: [
+        { id: 'renamed-file-exists', type: 'fileExists', path: 'workflow-output/rename-destination.txt' }
+      ]
+    };
+    const renameOutputResponse = await createWorkflow(cookie, renameOutputWorkflow);
+    assert(renameOutputResponse.statusCode === 302, `rename output workflow save returned HTTP ${renameOutputResponse.statusCode}`);
+    const renameOutputTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run rename output contract workflow',
+        capabilityType: 'workflow',
+        workflowId: renameOutputWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(renameOutputTicketResponse.statusCode === 302, `rename output ticket create returned HTTP ${renameOutputTicketResponse.statusCode}`);
+    const renameOutputTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const renameOutputRun = await waitForCompletedRun(renameOutputTicket.id);
+    assert(renameOutputRun.status === 'completed', `renamePath workflow should complete, got ${renameOutputRun.status}: ${renameOutputRun.error || ''}`);
+    assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/rename-source.txt')), 'renamePath workflow should move source file');
+    assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/rename-destination.txt'), 'utf8') === 'rename me', 'renamePath workflow should preserve file content');
+    const renameOutputSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, renameOutputRun.replaySnapshotPath), 'utf8'));
+    const renameWorkflowAction = renameOutputSnapshot.workflowActions.find(item => item.stepId === 'rename-file' && item.action === 'renamePath');
+    assert(renameWorkflowAction, 'renamePath workflow action should be recorded in replay');
+    assert(renameWorkflowAction.result.status === 'renamed', 'renamePath workflow action result should satisfy status contract');
+    assert(renameWorkflowAction.result.path === 'workflow-output/rename-destination.txt', 'renamePath workflow action result should preserve destination path');
+    assert(renameWorkflowAction.result.historyId, 'renamePath workflow action result should preserve historyId');
+    const renameHistory = readJson('operation-history.json').find(item => item.runId === renameOutputRun.id && item.operation === 'renamePath');
+    assert(renameHistory, 'renamePath workflow should persist operation history');
+    assert(renameHistory.result.status === 'renamed', 'renamePath operation history should preserve status');
+    assert(renameHistory.result.path === 'workflow-output/rename-destination.txt', 'renamePath operation history should preserve destination path');
+
     const overMutationCapWorkflow = {
       id: `workflow-over-mutation-cap-${Date.now()}`,
       name: 'Over mutation cap workflow',

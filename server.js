@@ -8789,7 +8789,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
         status: 'already_committed_noop',
         ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
       });
-      return { ...committed.result, historyId: committed.id, skipped: true };
+      return { ...committed.result, status: committed.result.status || 'renamed', historyId: committed.id, skipped: true };
     }
 
     // Reject if a different mutation already committed on the same path
@@ -8803,7 +8803,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
     try {
-      result = runWorkspaceProvider.rename(pathValue, nextPath);
+      result = { ...runWorkspaceProvider.rename(pathValue, nextPath), status: 'renamed' };
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
       historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null);
     } catch (error) {
