@@ -581,6 +581,206 @@ async function main() {
     assert(renameHistory.result.status === 'renamed', 'renamePath operation history should preserve status');
     assert(renameHistory.result.path === 'workflow-output/rename-destination.txt', 'renamePath operation history should preserve destination path');
 
+
+    fs.writeFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/plan-source.txt'), 'plan move', 'utf8');
+    const actionPlanWorkflow = {
+      id: `workflow-action-plan-valid-${Date.now()}`,
+      name: 'Valid action plan workflow',
+      inputSchema: {},
+      actions: [
+        {
+          id: 'execute-plan',
+          action: 'executeActionPlan',
+          input: {
+            actions: [
+              { operation: 'createFolder', args: { path: 'workflow-output/plan-dest' }, reason: 'prepare destination' },
+              { operation: 'renamePath', args: { path: 'workflow-output/plan-source.txt', nextPath: 'workflow-output/plan-dest/plan-source.txt' }, reason: 'move selected file' }
+            ],
+            allowedOperations: ['createFolder', 'renamePath'],
+            maxActions: 8,
+            maxMutations: 6
+          },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ],
+      postconditions: [
+        { id: 'plan-destination-exists', type: 'fileExists', path: 'workflow-output/plan-dest/plan-source.txt' }
+      ]
+    };
+    const actionPlanResponse = await createWorkflow(cookie, actionPlanWorkflow);
+    assert(actionPlanResponse.statusCode === 302, `action plan workflow save returned HTTP ${actionPlanResponse.statusCode}`);
+    const actionPlanTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run valid action plan workflow',
+        capabilityType: 'workflow',
+        workflowId: actionPlanWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(actionPlanTicketResponse.statusCode === 302, `action plan ticket create returned HTTP ${actionPlanTicketResponse.statusCode}`);
+    const actionPlanTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const actionPlanRun = await waitForCompletedRun(actionPlanTicket.id);
+    assert(actionPlanRun.status === 'completed', `valid executeActionPlan workflow should complete, got ${actionPlanRun.status}: ${actionPlanRun.error || ''}`);
+    assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/plan-source.txt')), 'executeActionPlan should move source file');
+    assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/plan-dest/plan-source.txt'), 'utf8') === 'plan move', 'executeActionPlan should preserve moved file content');
+    const actionPlanSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, actionPlanRun.replaySnapshotPath), 'utf8'));
+    const actionPlanEvidence = (actionPlanSnapshot.workflowActionPlans || []).find(item => item.stepId === 'execute-plan');
+    assert(actionPlanEvidence, 'executeActionPlan should record workflowActionPlans evidence');
+    assert(actionPlanEvidence.proposedActions.length === 2, 'executeActionPlan replay should record proposed actions');
+    assert(actionPlanEvidence.acceptedActions.length === 2, 'executeActionPlan replay should record accepted actions');
+    assert(actionPlanEvidence.rejectedActions.length === 0, 'valid executeActionPlan should not reject actions');
+    assert(actionPlanEvidence.executedActions.length === 2, 'executeActionPlan replay should record executed actions');
+    const actionPlanWorkflowAction = actionPlanSnapshot.workflowActions.find(item => item.stepId === 'execute-plan' && item.action === 'executeActionPlan');
+    assert(actionPlanWorkflowAction.result.status === 'executed', 'executeActionPlan workflow action should report executed status');
+    const actionPlanRenamed = actionPlanSnapshot.workspaceOperations.find(item => item.workflowStepId === 'execute-plan' && item.operation.operation === 'renamePath');
+    assert(actionPlanRenamed && actionPlanRenamed.result.status === 'renamed', 'executeActionPlan renamePath should preserve status/path/historyId result');
+
+    fs.writeFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/reject-delete.txt'), 'keep me', 'utf8');
+    const invalidActionPlanWorkflow = {
+      id: `workflow-action-plan-invalid-${Date.now()}`,
+      name: 'Invalid action plan workflow',
+      inputSchema: {},
+      actions: [
+        {
+          id: 'execute-plan',
+          action: 'executeActionPlan',
+          input: {
+            actions: [
+              { operation: 'deletePath', args: { path: 'workflow-output/reject-delete.txt' }, reason: 'not allowed' }
+            ],
+            allowedOperations: ['createFolder', 'renamePath'],
+            maxActions: 8,
+            maxMutations: 6
+          },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ]
+    };
+    await createWorkflow(cookie, invalidActionPlanWorkflow);
+    const invalidPlanTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run invalid action plan workflow',
+        capabilityType: 'workflow',
+        workflowId: invalidActionPlanWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(invalidPlanTicketResponse.statusCode === 302, `invalid action plan ticket create returned HTTP ${invalidPlanTicketResponse.statusCode}`);
+    const invalidPlanTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const invalidPlanRun = await waitForCompletedRun(invalidPlanTicket.id);
+    assert(invalidPlanRun.status === 'completed', 'invalid operation should be rejected without failing workflow execution');
+    assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/reject-delete.txt')), 'rejected deletePath should not execute');
+    const invalidPlanSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, invalidPlanRun.replaySnapshotPath), 'utf8'));
+    const invalidPlanEvidence = (invalidPlanSnapshot.workflowActionPlans || []).find(item => item.stepId === 'execute-plan');
+    assert(invalidPlanEvidence.acceptedActions.length === 0, 'invalid action plan should accept no actions');
+    assert(invalidPlanEvidence.rejectedActions.length === 1, 'invalid action plan should record rejected action');
+    assert(invalidPlanEvidence.rejectedActions[0].validationReasons.some(reason => reason.includes('not in allowedOperations')), 'rejection should explain allowed operation failure');
+    assert(!invalidPlanSnapshot.workspaceOperations.some(item => item.operation.operation === 'deletePath'), 'rejected operation should not appear as workspace execution');
+
+    const overMaxActionPlanWorkflow = {
+      id: `workflow-action-plan-over-max-${Date.now()}`,
+      name: 'Over max action plan workflow',
+      inputSchema: {},
+      actions: [
+        {
+          id: 'execute-plan',
+          action: 'executeActionPlan',
+          input: {
+            actions: [
+              { operation: 'createFolder', args: { path: 'workflow-output/over-max-a' }, reason: 'one' },
+              { operation: 'createFolder', args: { path: 'workflow-output/over-max-b' }, reason: 'two' }
+            ],
+            allowedOperations: ['createFolder', 'renamePath'],
+            maxActions: 1,
+            maxMutations: 6
+          },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ]
+    };
+    await createWorkflow(cookie, overMaxActionPlanWorkflow);
+    const overMaxPlanTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run over max action plan workflow',
+        capabilityType: 'workflow',
+        workflowId: overMaxActionPlanWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(overMaxPlanTicketResponse.statusCode === 302, `over max action plan ticket create returned HTTP ${overMaxPlanTicketResponse.statusCode}`);
+    const overMaxPlanTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const overMaxPlanRun = await waitForCompletedRun(overMaxPlanTicket.id);
+    assert(overMaxPlanRun.status === 'completed', 'over max action plan should reject deterministically without executing actions');
+    assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-max-a')), 'over max action plan should not execute first action');
+    assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-max-b')), 'over max action plan should not execute second action');
+    const overMaxPlanSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, overMaxPlanRun.replaySnapshotPath), 'utf8'));
+    const overMaxPlanEvidence = (overMaxPlanSnapshot.workflowActionPlans || []).find(item => item.stepId === 'execute-plan');
+    assert(overMaxPlanEvidence.acceptedActions.length === 0, 'over max action plan should accept no actions');
+    assert(overMaxPlanEvidence.rejectedActions.length === 2, 'over max action plan should reject all proposed actions');
+
+    fs.writeFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/budget-source.txt'), 'budget move', 'utf8');
+    const budgetActionPlanWorkflow = {
+      id: `workflow-action-plan-budget-${Date.now()}`,
+      name: 'Budget action plan workflow',
+      inputSchema: {},
+      actions: [
+        {
+          id: 'execute-plan',
+          action: 'executeActionPlan',
+          input: {
+            actions: [
+              { operation: 'createFolder', args: { path: 'workflow-output/budget-dest' }, reason: 'prepare' },
+              { operation: 'renamePath', args: { path: 'workflow-output/budget-source.txt', nextPath: 'workflow-output/budget-dest/budget-source.txt' }, reason: 'move' }
+            ],
+            allowedOperations: ['createFolder', 'renamePath'],
+            maxActions: 8,
+            maxMutations: 1
+          },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ]
+    };
+    await createWorkflow(cookie, budgetActionPlanWorkflow);
+    const budgetPlanTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run budget action plan workflow',
+        capabilityType: 'workflow',
+        workflowId: budgetActionPlanWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(budgetPlanTicketResponse.statusCode === 302, `budget action plan ticket create returned HTTP ${budgetPlanTicketResponse.statusCode}`);
+    const budgetPlanTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const budgetPlanRun = await waitForCompletedRun(budgetPlanTicket.id);
+    assert(budgetPlanRun.status === 'completed', 'budget-limited action plan should complete with rejected excess mutation');
+    assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/budget-dest')), 'budget action plan should execute first accepted mutation');
+    assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/budget-source.txt')), 'budget action plan should not execute mutation rejected by maxMutations');
+    const budgetPlanSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, budgetPlanRun.replaySnapshotPath), 'utf8'));
+    const budgetPlanEvidence = (budgetPlanSnapshot.workflowActionPlans || []).find(item => item.stepId === 'execute-plan');
+    assert(budgetPlanEvidence.acceptedActions.length === 1, 'budget action plan should accept only one mutation');
+    assert(budgetPlanEvidence.rejectedActions.length === 1, 'budget action plan should reject mutation over maxMutations');
+    assert(budgetPlanEvidence.rejectedActions[0].validationReasons.some(reason => reason.includes('maxMutations')), 'budget rejection should mention maxMutations');
+
     const overMutationCapWorkflow = {
       id: `workflow-over-mutation-cap-${Date.now()}`,
       name: 'Over mutation cap workflow',

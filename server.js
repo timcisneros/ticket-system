@@ -810,6 +810,16 @@ const GENERATED_AGENT_ACTIONS = AGENT_ALLOWED_OPERATIONS.map(op => ({
 const ACTIONS_CATALOG = [
   ...GENERATED_AGENT_ACTIONS,
   {
+    name: 'executeActionPlan', displayName: 'Execute Action Plan', category: 'workspace', type: 'workflowAction', invoker: 'workflow', mutating: true,
+    requestShape: { actions: [], allowedOperations: ['string'], maxActions: 'number', maxMutations: 'number' },
+    inputSchema: { actions: [{}], allowedOperations: ['string'], maxActions: 'number', maxMutations: 'number' },
+    optionalShape: null,
+    responseShape: { proposedActions: [{}], acceptedActions: [{}], rejectedActions: [{}], executedActions: [{}], status: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Workflow-only bounded dynamic workspace action plan; catalog actions only; existing authority checks apply',
+    provenanceSurface: 'Run replay snapshot workflowActionPlans, workflowActions, workspaceOperations, operation-history, events'
+  },
+  {
     name: 'agentStructuredOutput', displayName: 'Agent Structured Output', category: 'agent', type: 'agentAction', invoker: 'workflow', mutating: false,
     requestShape: { instruction: 'string', input: {}, outputSchema: {} },
     optionalShape: { context: {}, temperature: 'number' },
@@ -1094,6 +1104,7 @@ function isWorkflowUsableAction(action) {
   if (!action.outputSchema || typeof action.outputSchema !== 'object' || Array.isArray(action.outputSchema)) return false;
 
   return action.type === 'workspaceAction' ||
+    action.name === 'executeActionPlan' ||
     action.name === 'agentStructuredOutput' ||
     action.name === 'condition' ||
     action.name === 'stop';
@@ -5247,6 +5258,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     workflowDraftIntents: [],
     handoffTasks: [],
     workflowActions: [],
+    workflowActionPlans: [],
     workspaceOperations: [],
     events: [],
     terminalStatus: null,
@@ -9219,6 +9231,172 @@ async function executeAgentStructuredOutputAction(run, agent, input, counters, s
   };
 }
 
+const EXECUTE_ACTION_PLAN_ALLOWED_OPERATIONS = new Set(['createFolder', 'renamePath']);
+
+function normalizeActionPlanReason(reason) {
+  return typeof reason === 'string' ? reason : '';
+}
+
+function buildRejectedPlanAction(action, index, reasons) {
+  return {
+    index,
+    operation: action && typeof action.operation === 'string' ? action.operation : null,
+    args: action && action.args && typeof action.args === 'object' && !Array.isArray(action.args) ? action.args : null,
+    reason: normalizeActionPlanReason(action && action.reason),
+    validationReasons: reasons
+  };
+}
+
+function validateActionPlanInput(input, limits, counters) {
+  const actions = Array.isArray(input.actions) ? input.actions : [];
+  const allowedOperations = Array.isArray(input.allowedOperations)
+    ? input.allowedOperations.filter(item => typeof item === 'string')
+    : [];
+  const maxActions = Number.isInteger(input.maxActions) && input.maxActions >= 0 ? input.maxActions : 0;
+  const maxMutations = Number.isInteger(input.maxMutations) && input.maxMutations >= 0 ? input.maxMutations : 0;
+  const allowedSet = new Set(allowedOperations);
+  const proposedActions = actions.map((action, index) => ({
+    index,
+    operation: action && typeof action.operation === 'string' ? action.operation : null,
+    args: action && action.args && typeof action.args === 'object' && !Array.isArray(action.args) ? action.args : null,
+    reason: normalizeActionPlanReason(action && action.reason)
+  }));
+  const acceptedActions = [];
+  const rejectedActions = [];
+  let acceptedMutations = 0;
+
+  if (!Array.isArray(input.actions)) {
+    return {
+      proposedActions,
+      acceptedActions,
+      rejectedActions: [buildRejectedPlanAction(null, null, ['executeActionPlan.actions must be an array'])]
+    };
+  }
+
+  if (actions.length > maxActions) {
+    return {
+      proposedActions,
+      acceptedActions,
+      rejectedActions: proposedActions.map(action => ({
+        ...action,
+        validationReasons: ['plan length ' + actions.length + ' exceeds maxActions ' + maxActions]
+      }))
+    };
+  }
+
+  actions.forEach((action, index) => {
+    const reasons = [];
+    const operation = action && typeof action.operation === 'string' ? action.operation : null;
+    const args = action && action.args && typeof action.args === 'object' && !Array.isArray(action.args) ? action.args : null;
+    const reason = normalizeActionPlanReason(action && action.reason);
+    const contract = operation ? getActionContract(operation) : null;
+
+    if (!operation) reasons.push('operation is required');
+    if (!args) reasons.push('args must be an object');
+    if (operation && !allowedSet.has(operation)) reasons.push('operation ' + operation + ' is not in allowedOperations');
+    if (operation && !EXECUTE_ACTION_PLAN_ALLOWED_OPERATIONS.has(operation)) reasons.push('operation ' + operation + ' is not supported by executeActionPlan');
+    if (operation && !contract) reasons.push('unknown action: ' + operation);
+    if (contract && !isWorkflowUsableAction(contract)) reasons.push('operation ' + operation + ' is not workflow-usable');
+    if (contract && contract.type !== 'workspaceAction') reasons.push('operation ' + operation + ' is not a workspace action');
+    if (contract && args) {
+      reasons.push(...validateActionInput(operation, args).map(error => 'schema: ' + error));
+    }
+
+    const isMutating = contract && contract.mutating === true;
+    if (isMutating) {
+      if (acceptedMutations + 1 > maxMutations) reasons.push('plan mutation count exceeds maxMutations ' + maxMutations);
+      if (counters.mutations + acceptedMutations + 1 > limits.maxMutations) reasons.push('workflow mutation budget exceeded: ' + limits.maxMutations);
+    }
+
+    if (reasons.length > 0) {
+      rejectedActions.push(buildRejectedPlanAction(action, index, reasons));
+      return;
+    }
+
+    if (isMutating) acceptedMutations += 1;
+    acceptedActions.push({ index, operation, args, reason });
+  });
+
+  return { proposedActions, acceptedActions, rejectedActions };
+}
+
+function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, startedAt, counters) {
+  appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+    operation: { operation: action.operation, args: action.args, reason: action.reason || null },
+    result,
+    startedAt: new Date(startedAt).toISOString(),
+    durationMs: Date.now() - startedAt,
+    historyId: result && result.historyId ? result.historyId : null,
+    workspaceRoot: getRunWorkspaceProvider(run).root,
+    executionWorkspaceType: run.executionWorkspaceType || 'main',
+    allocationPlanId: run.allocationPlanId || null,
+    allocationItemId: run.allocationItemId || null,
+    ownedOutputPaths: getRunOwnedOutputPaths(run),
+    workflowId: workflow.id,
+    workflowStepId: step.id,
+    actionPlanIndex: action.index
+  });
+  appendEvent({
+    type: 'workspace.operation',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: step.id,
+    payload: {
+      workflowId: workflow.id,
+      operation: action.operation,
+      path: action.args && action.args.path ? action.args.path : null,
+      mutating: true,
+      input: sanitizeSnapshotValue(action.args),
+      result: sanitizeSnapshotValue(result),
+      actionPlanIndex: action.index,
+      reason: action.reason || null
+    }
+  });
+  counters.workspaceOperations += 1;
+  counters.mutations += 1;
+}
+
+async function executeActionPlanWorkflowAction(run, workflow, step, input, counters, limits) {
+  const startedAt = Date.now();
+  const validation = validateActionPlanInput(input, limits, counters);
+  const executedActions = [];
+
+  for (const action of validation.acceptedActions) {
+    assertRunWorkspaceOperationAllowed(run, counters.workspaceOperations, 1, limits);
+    const actionStartedAt = Date.now();
+    const result = executeWorkspaceOperation(run, { operation: action.operation, args: action.args }, counters.transitions);
+    appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, actionStartedAt, counters);
+    executedActions.push({
+      index: action.index,
+      operation: action.operation,
+      args: action.args,
+      reason: action.reason || null,
+      result
+    });
+  }
+
+  const result = {
+    proposedActions: validation.proposedActions,
+    acceptedActions: validation.acceptedActions,
+    rejectedActions: validation.rejectedActions,
+    executedActions,
+    status: validation.rejectedActions.length > 0 ? 'partial' : 'executed'
+  };
+
+  appendRunReplaySnapshotItem(run.id, 'workflowActionPlans', {
+    workflowId: workflow.id,
+    stepId: step.id,
+    proposedActions: sanitizeSnapshotValue(validation.proposedActions),
+    acceptedActions: sanitizeSnapshotValue(validation.acceptedActions),
+    rejectedActions: sanitizeSnapshotValue(validation.rejectedActions),
+    executedActions: sanitizeSnapshotValue(executedActions),
+    startedAt: new Date(startedAt).toISOString(),
+    durationMs: Date.now() - startedAt
+  });
+
+  return result;
+}
+
 async function executeWorkflowAction(run, workflow, step, input, context, counters, startedAtMs, limits, agent) {
   const contract = getActionContract(step.action);
   if (!contract) throw new Error(`Unknown workflow action: ${step.action}`);
@@ -9280,6 +9458,8 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
           result: sanitizeSnapshotValue(result)
         }
       });
+    } else if (step.action === 'executeActionPlan') {
+      result = await executeActionPlanWorkflowAction(run, workflow, step, input, counters, limits);
     } else if (step.action === 'agentStructuredOutput') {
       result = await executeAgentStructuredOutputAction(run, agent, input, counters, startedAtMs, limits);
     } else if (step.action === 'condition') {
