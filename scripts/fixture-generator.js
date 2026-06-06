@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..');
 const FIXTURE_MARKER = '.fixture-workspace';
@@ -55,7 +56,7 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(EVALUATION_DATE) || Number.isNaN(EVALUATION_BASE
 }
 const DRY_RUN = args['dry-run'] === true || args['dry-run'] === 'true';
 const OVERWRITE = args.overwrite === true || args.overwrite === 'true';
-const COUNT = parseInt(args.count, 10) || (['legal-intake', 'vendor-compliance'].includes(FIXTURE) ? 8 : 10);
+const COUNT = parseInt(args.count, 10) || (['legal-intake', 'vendor-compliance', 'shared-drive'].includes(FIXTURE) ? 8 : 10);
 const COMPLETE_RATE = parseFloat(args['complete-rate']) || 0.6;
 const CRITICAL_RATE = parseFloat(args['critical-urgency-rate']) || 0.2;
 
@@ -795,153 +796,209 @@ const NAMING_ISSUES = [
   (name) => name + '-copy'
 ];
 
+function sha256(content) {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+function renderSharedDriveFile(item) {
+  return [
+    '# Shared Drive Source File',
+    '',
+    'File ID: ' + item.id,
+    'Source Path: ' + item.sourcePath,
+    'Title: ' + item.title,
+    'Business Area: ' + item.businessArea,
+    'Status: ' + item.status,
+    'Last Modified: ' + item.lastModified,
+    'Active Reference: ' + item.activeReference,
+    'Duplicate Group: ' + (item.duplicateGroup || 'none'),
+    'Canonical File: ' + (item.canonical ? 'yes' : 'no'),
+    'Naming Status: ' + item.namingStatus,
+    '',
+    'Content:',
+    item.body
+  ].join('\n');
+}
+
 function generateSharedDrive() {
   const drivePath = path.join(WORKSPACE_ROOT, 'shared-drive');
-  const rand = seededRandom(SEED);
-  const fileCount = parseInt(args['file-count'], 10) || 500;
-  const duplicateRate = parseFloat(args['duplicate-rate']) || 0.15;
-  const staleRate = parseFloat(args['stale-rate']) || 0.2;
-  const namingIssueRate = parseFloat(args['naming-rate']) || 0.1;
+  const incomingDir = path.join(drivePath, 'incoming');
+  planMkdir(incomingDir);
 
-  // Build cumulative weight table for dir selection
-  const totalWeight = DRIVE_DIRS.reduce((s, d) => s + d.weight, 0);
-  let cumWeight = 0;
-  for (const dir of DRIVE_DIRS) {
-    cumWeight += dir.weight;
-    dir.cumWeight = cumWeight / totalWeight;
-  }
-  function pickDir(r) {
-    for (const dir of DRIVE_DIRS) {
-      if (r <= dir.cumWeight) return dir.name;
+  const cases = [
+    {
+      id: 'active-001',
+      filename: 'active-roadmap.md',
+      title: 'Active Product Roadmap',
+      businessArea: 'Product',
+      status: 'active',
+      lastModified: EVALUATION_DATE,
+      activeReference: 'current roadmap index',
+      namingStatus: 'ok',
+      expectedAction: 'preserve',
+      body: 'Current product roadmap used by the leadership team. Preserve in place.'
+    },
+    {
+      id: 'active-002',
+      filename: 'active-support-runbook.md',
+      title: 'Active Support Runbook',
+      businessArea: 'Support',
+      status: 'active',
+      lastModified: EVALUATION_DATE,
+      activeReference: 'support operations checklist',
+      namingStatus: 'ok',
+      expectedAction: 'preserve',
+      body: 'Current support runbook referenced by on-call staff. Preserve in place.'
+    },
+    {
+      id: 'stale-001',
+      filename: '2024-01-15-retired-launch-plan.md',
+      title: 'Retired Launch Plan',
+      businessArea: 'Marketing',
+      status: 'stale',
+      lastModified: '2024-01-15',
+      activeReference: 'none',
+      namingStatus: 'ok',
+      expectedAction: 'move_to_archive',
+      targetPath: 'shared-drive/archive/2024-01-15-retired-launch-plan.md',
+      body: 'Retired launch plan. No active reference remains. Move to archive.'
+    },
+    {
+      id: 'stale-002',
+      filename: '2024-03-02-old-budget-notes.md',
+      title: 'Old Budget Notes',
+      businessArea: 'Finance',
+      status: 'stale',
+      lastModified: '2024-03-02',
+      activeReference: 'none',
+      namingStatus: 'ok',
+      expectedAction: 'move_to_archive',
+      targetPath: 'shared-drive/archive/2024-03-02-old-budget-notes.md',
+      body: 'Old budget notes from a closed planning cycle. Move to archive.'
+    },
+    {
+      id: 'duplicate-001',
+      filename: 'vendor-review.md',
+      title: 'Vendor Review',
+      businessArea: 'Compliance',
+      status: 'current',
+      lastModified: EVALUATION_DATE,
+      activeReference: 'vendor review packet',
+      duplicateGroup: 'vendor-review',
+      canonical: true,
+      namingStatus: 'ok',
+      expectedAction: 'preserve',
+      body: 'vendor review canonical copy. Preserve this canonical source.'
+    },
+    {
+      id: 'duplicate-002',
+      filename: 'vendor-review-copy.md',
+      title: 'Vendor Review Copy',
+      businessArea: 'Compliance',
+      status: 'duplicate',
+      lastModified: EVALUATION_DATE,
+      activeReference: 'none',
+      duplicateGroup: 'vendor-review',
+      canonical: false,
+      namingStatus: 'ok',
+      expectedAction: 'move_duplicate',
+      targetPath: 'shared-drive/duplicates/vendor-review-copy.md',
+      body: 'vendor review canonical copy. Preserve this canonical source.'
+    },
+    {
+      id: 'naming-001',
+      filename: 'Team_Status_FINAL.md',
+      title: 'Team Status Final',
+      businessArea: 'Operations',
+      status: 'current',
+      lastModified: EVALUATION_DATE,
+      activeReference: 'none',
+      namingStatus: 'needs kebab-case normalization',
+      expectedAction: 'normalize_name',
+      targetPath: 'shared-drive/normalized/team-status.md',
+      body: 'Current team status note with inconsistent filename. Normalize the name.'
+    },
+    {
+      id: 'noaction-001',
+      filename: 'reference-checklist.md',
+      title: 'Reference Checklist',
+      businessArea: 'Operations',
+      status: 'current',
+      lastModified: EVALUATION_DATE,
+      activeReference: 'none',
+      namingStatus: 'ok',
+      expectedAction: 'no_action',
+      body: 'Current reference checklist. No cleanup action is needed.'
     }
-    return DRIVE_DIRS[DRIVE_DIRS.length - 1].name;
-  }
+  ].slice(0, Math.min(COUNT, 8));
 
-  // Create directory structure
-  for (const dir of DRIVE_DIRS) {
-    planMkdir(path.join(drivePath, dir.name));
-  }
+  const files = cases.map(item => {
+    const sourcePath = path.join('shared-drive', 'incoming', item.filename);
+    const content = renderSharedDriveFile({ ...item, sourcePath });
+    const absolutePath = path.join(WORKSPACE_ROOT, sourcePath);
+    planWriteFile(absolutePath, content);
+    const mtime = item.expectedAction === 'move_to_archive'
+      ? evaluationDateAtOffset(-450)
+      : evaluationDateAtOffset(-30);
+    planUtimes(absolutePath, mtime);
+    return {
+      id: item.id,
+      sourcePath,
+      expectedAction: item.expectedAction,
+      targetPath: item.targetPath || null,
+      contentHash: sha256(content),
+      duplicateGroup: item.duplicateGroup || null,
+      canonical: item.canonical === true,
+      shouldRemainInPlace: ['preserve', 'no_action'].includes(item.expectedAction),
+      lastModified: item.lastModified,
+      activeReference: item.activeReference,
+      namingStatus: item.namingStatus
+    };
+  });
 
-  // Generate files
-  const fileTemplates = Object.keys(FILE_TEMPLATES);
-  const allFiles = [];
-
-  for (let i = 0; i < fileCount; i++) {
-    const dir = pickDir(rand());
-    const type = pick(fileTemplates, rand);
-    const nameBase = pick(FILE_NAMES[type] || ['file'], rand);
-    const ext = pick(['.md', '.txt', '.md'], rand);
-
-    const contentFn = FILE_TEMPLATES[type];
-    const projectNames = ['alpha', 'beta', 'gamma', 'delta', 'platform', 'mobile', 'api', 'web'];
-    const topicNames = ['Design Review', 'Sprint Planning', 'Architecture Sync', 'Bug Triage', 'Release Planning',
-      'Customer Research', 'Technical Spec', 'Performance Review'];
-    const reportTypes = ['Quarterly', 'Monthly', 'Annual', 'Operational'];
-
-    const project = pick(projectNames, rand);
-    const topic = pick(topicNames, rand);
-    const reportType = pick(reportTypes, rand);
-    const component = pick(['Header', 'Footer', 'Sidebar', 'Search', 'Dashboard', 'Settings', 'Profile'], rand);
-
-    let content;
-    if (type === 'status-report') content = contentFn(i, project);
-    else if (type === 'meeting-notes') content = contentFn(i, topic);
-    else if (type === 'report') content = contentFn(i, reportType);
-    else if (type === 'design-doc') content = contentFn(i, component);
-    else content = contentFn(i, topic);
-
-    // Determine if this file is stale
-    const isStale = rand() < staleRate;
-    const isDuplicateSource = !isStale && rand() < duplicateRate;
-    const hasNamingIssue = !isStale && !isDuplicateSource && rand() < namingIssueRate;
-
-    let filename = `${nameBase}-${pad(i + 1, 4)}${ext}`;
-    if (hasNamingIssue) {
-      const issueFn = pick(NAMING_ISSUES, rand);
-      filename = `${issueFn(nameBase)}-${pad(i + 1, 4)}${ext}`;
-    }
-
-    // For stale files, use dated filenames
-    const staleDate = `${2023 + Math.floor(rand() * 2)}-${pad(1 + Math.floor(rand() * 12), 2)}-${pad(1 + Math.floor(rand() * 28), 2)}`;
-    if (isStale) {
-      filename = `${staleDate}_${filename}`;
-    }
-
-    const filepath = path.join(drivePath, dir, filename);
-    planWriteFile(filepath, content);
-
-    // Set mtime for stale files to >12 months ago
-    if (isStale) {
-      const pastDate = evaluationDateAtOffset(-365 - Math.floor(rand() * 365));
-      planUtimes(filepath, pastDate);
-    }
-
-    allFiles.push({
-      dir,
-      type,
-      filename,
-      nameBase,
-      content,
-      isStale,
-      isDuplicateSource,
-      hasNamingIssue,
-      filepath
-    });
-  }
-
-  // Create duplicates (same content, different names)
-  const duplicateTargets = allFiles.filter(f => f.isDuplicateSource);
-  const duplicates = [];
-  for (const source of duplicateTargets) {
-    const dupName = `${source.nameBase}-copy-${pad(Math.floor(rand() * 9999), 4)}.md`;
-    const dupDir = pickDir(rand());
-    const dupPath = path.join(drivePath, dupDir, dupName);
-    planWriteFile(dupPath, source.content);
-    duplicates.push({
-      sourceDir: source.dir,
-      sourceFilename: source.filename,
-      dupDir,
-      dupFilename: dupName
-    });
-  }
+  const expectedMutations = files
+    .filter(item => item.targetPath)
+    .map(item => ({
+      originalPath: item.sourcePath,
+      action: item.expectedAction,
+      newPath: item.targetPath,
+      contentHash: item.contentHash
+    }));
 
   const manifest = buildManifest(
     'shared-drive-cleanup',
-    { fileCount, duplicateRate, staleRate, namingIssueRate },
+    { fileCount: files.length, staleThresholdDays: 365 },
     {
-      files: allFiles.map(f => ({
-        sourcePath: path.join('shared-drive', f.dir, f.filename),
-        type: f.type,
-        isStale: f.isStale,
-        isDuplicateSource: f.isDuplicateSource,
-        hasNamingIssue: f.hasNamingIssue
-      })),
-      duplicates,
-      activeFiles: allFiles.filter(f => f.dir === 'active' && !f.isStale).map(f => ({
-        path: path.join('shared-drive', f.dir, f.filename)
-      })),
+      files,
+      expectedMutations,
+      expectedPreserved: files.filter(item => item.shouldRemainInPlace).map(item => item.sourcePath),
+      expectedFolders: ['shared-drive/archive', 'shared-drive/duplicates', 'shared-drive/normalized'],
       summary: {
-        total: allFiles.length,
-        stale: allFiles.filter(f => f.isStale).length,
-        hasNamingIssue: allFiles.filter(f => f.hasNamingIssue).length,
-        duplicatePairs: duplicates.length
+        total: files.length,
+        preserve: files.filter(item => item.expectedAction === 'preserve').length,
+        noAction: files.filter(item => item.expectedAction === 'no_action').length,
+        archive: files.filter(item => item.expectedAction === 'move_to_archive').length,
+        duplicates: files.filter(item => item.expectedAction === 'move_duplicate').length,
+        normalize: files.filter(item => item.expectedAction === 'normalize_name').length
       }
     },
     {
-      directories: DRIVE_DIRS.map(d => d.name),
-      canonicalFileSelection: 'first generated source file is canonical for each duplicate pair',
       staleThreshold: 'mtime before evaluationDate minus 365 days',
-      duplicateHandling: 'duplicate copies are candidates for duplicates folder; source files are canonical',
-      namingPolicy: 'normalize selected naming variants to kebab-case when the cleanup task requests mutation',
-      allowedMutationSet: ['createFolder', 'renamePath'],
-      exactFilesInScope: allFiles.map(f => path.join('shared-drive', f.dir, f.filename)).concat(duplicates.map(d => path.join('shared-drive', d.dupDir, d.dupFilename))),
-      note: 'Content scenarios are not yet fully aligned with BUSINESS_FIXTURE_SPEC.md scale and policy requirements.'
+      canonicalFileSelection: 'manifest-designated canonical file remains in place for duplicate groups',
+      duplicateHandling: 'move only non-canonical duplicate copies to shared-drive/duplicates/',
+      namingPolicy: 'move naming-inconsistent files to shared-drive/normalized/ using manifest target path',
+      activeFileProtection: 'active files and files with active references must remain in place',
+      allowedMutationSet: ['createFolder', 'renamePath', 'writeFile'],
+      requiredCleanupLogColumns: ['original_path', 'action', 'new_path', 'reason'],
+      exactFilesInScope: files.map(item => item.sourcePath),
+      policyLocation: 'workflow metadata',
+      noDelete: true,
+      noOverwrite: true
     },
     ARTIFACT_SCHEMAS['shared-drive-cleanup']
   );
 
   writeManifest(path.join(drivePath, 'fixture-manifest.json'), manifest);
-
   return manifest;
 }
 

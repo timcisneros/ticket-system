@@ -1540,6 +1540,134 @@ function createVendorComplianceWorkflowDefinition(now = new Date().toISOString()
   };
 }
 
+
+const SHARED_DRIVE_CLEANUP_WORKFLOW_POLICY_TEXT = [
+  'Decision rules:',
+  '- Preserve active files and files with active references in their original paths.',
+  '- Move stale files to shared-drive/archive/. A stale file has Status: stale or no active reference with an old retired/closed planning date.',
+  '- For duplicate groups, keep the file marked Canonical File: yes in place. Move only the non-canonical duplicate copy to shared-drive/duplicates/.',
+  '- Normalize files whose Naming Status says they need kebab-case normalization by moving them to shared-drive/normalized/ with the normalized filename stated by the task evidence.',
+  '- Leave ordinary current files with Naming Status: ok in place.',
+  '- Do not delete files. Do not overwrite files. Do not move active files.',
+  '',
+  'Required cleanup-log.csv columns exactly: original_path,action,new_path,reason.',
+  'Use only these cleanup log action values exactly: move_to_archive, move_duplicate, normalize_name.',
+  'Reason values must be short and must not contain commas.',
+  'Write one cleanup-log.csv row for each moved file only.',
+  'The migration report must summarize preserved, archived, duplicate, normalized, and no-action files in at least 200 characters.'
+].join('\n');
+
+function createSharedDriveCleanupWorkflowDefinition(now = new Date().toISOString()) {
+  return {
+    id: 'shared-drive-cleanup',
+    name: 'Shared Drive Cleanup',
+    version: '1',
+    description: 'Cleans a bounded shared-drive fixture using attached workflow policy and writes audit artifacts.',
+    enabled: true,
+    policy: {
+      id: 'shared-drive-cleanup-policy',
+      version: '1',
+      text: SHARED_DRIVE_CLEANUP_WORKFLOW_POLICY_TEXT
+    },
+    taskPromptTemplate: [
+      'Inspect every provided shared-drive source file using workflow.policy.text.',
+      'Return exact move paths for only the files that policy requires moving.',
+      'Use exact Source Path values from each file as original paths. Do not remove the incoming/ path segment.',
+      'Use exact required target paths from workflow input as new paths.',
+      'Do not invent files. Do not move active files. Do not include policy artifacts in the workspace.',
+      'Produce cleanup-log.csv with exact columns: original_path,action,new_path,reason',
+      'Use action values exactly: move_to_archive, move_duplicate, normalize_name',
+      'Reasons must not contain commas.'
+    ].join('\n'),
+    verifierContract: {
+      id: 'shared-drive-cleanup-verifier',
+      version: '1',
+      fixture: 'shared-drive',
+      expectedArtifacts: [
+        'shared-drive/migration-report.md',
+        'shared-drive/cleanup-log.csv'
+      ]
+    },
+    inputSchema: {
+      basePath: 'string'
+    },
+    actions: [
+      { id: 'read_001', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/active-roadmap.md' }, saveAs: 'file001', next: 'read_002' },
+      { id: 'read_002', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/active-support-runbook.md' }, saveAs: 'file002', next: 'read_003' },
+      { id: 'read_003', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/2024-01-15-retired-launch-plan.md' }, saveAs: 'file003', next: 'read_004' },
+      { id: 'read_004', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/2024-03-02-old-budget-notes.md' }, saveAs: 'file004', next: 'read_005' },
+      { id: 'read_005', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-review.md' }, saveAs: 'file005', next: 'read_006' },
+      { id: 'read_006', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-review-copy.md' }, saveAs: 'file006', next: 'read_007' },
+      { id: 'read_007', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/Team_Status_FINAL.md' }, saveAs: 'file007', next: 'read_008' },
+      { id: 'read_008', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/reference-checklist.md' }, saveAs: 'file008', next: 'plan_cleanup' },
+      {
+        id: 'plan_cleanup',
+        action: 'agentStructuredOutput',
+        input: {
+          instruction: '{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}',
+          input: {
+            files: {
+              'active-roadmap.md': '{{file001.content}}',
+              'active-support-runbook.md': '{{file002.content}}',
+              '2024-01-15-retired-launch-plan.md': '{{file003.content}}',
+              '2024-03-02-old-budget-notes.md': '{{file004.content}}',
+              'vendor-review.md': '{{file005.content}}',
+              'vendor-review-copy.md': '{{file006.content}}',
+              'Team_Status_FINAL.md': '{{file007.content}}',
+              'reference-checklist.md': '{{file008.content}}'
+            },
+            requiredMoves: {
+              archive1: { originalPath: '{{workflow.input.basePath}}/incoming/2024-01-15-retired-launch-plan.md', newPath: '{{workflow.input.basePath}}/archive/2024-01-15-retired-launch-plan.md' },
+              archive2: { originalPath: '{{workflow.input.basePath}}/incoming/2024-03-02-old-budget-notes.md', newPath: '{{workflow.input.basePath}}/archive/2024-03-02-old-budget-notes.md' },
+              duplicate: { originalPath: '{{workflow.input.basePath}}/incoming/vendor-review-copy.md', newPath: '{{workflow.input.basePath}}/duplicates/vendor-review-copy.md' },
+              normalized: { originalPath: '{{workflow.input.basePath}}/incoming/Team_Status_FINAL.md', newPath: '{{workflow.input.basePath}}/normalized/team-status.md' }
+            }
+          },
+          outputSchema: {
+            archive1OriginalPath: 'string',
+            archive1NewPath: 'string',
+            archive2OriginalPath: 'string',
+            archive2NewPath: 'string',
+            duplicateOriginalPath: 'string',
+            duplicateNewPath: 'string',
+            normalizeOriginalPath: 'string',
+            normalizeNewPath: 'string',
+            cleanupLogCsv: 'string',
+            migrationReportMd: 'string'
+          }
+        },
+        saveAs: 'cleanup',
+        next: 'create_archive'
+      },
+      { id: 'create_archive', action: 'createFolder', input: { path: '{{workflow.input.basePath}}/archive' }, next: 'create_duplicates' },
+      { id: 'create_duplicates', action: 'createFolder', input: { path: '{{workflow.input.basePath}}/duplicates' }, next: 'create_normalized' },
+      { id: 'create_normalized', action: 'createFolder', input: { path: '{{workflow.input.basePath}}/normalized' }, next: 'move_archive_1' },
+      { id: 'move_archive_1', action: 'renamePath', input: { path: '{{cleanup.archive1OriginalPath}}', nextPath: '{{cleanup.archive1NewPath}}' }, next: 'move_archive_2' },
+      { id: 'move_archive_2', action: 'renamePath', input: { path: '{{cleanup.archive2OriginalPath}}', nextPath: '{{cleanup.archive2NewPath}}' }, next: 'move_duplicate' },
+      { id: 'move_duplicate', action: 'renamePath', input: { path: '{{cleanup.duplicateOriginalPath}}', nextPath: '{{cleanup.duplicateNewPath}}' }, next: 'move_normalized' },
+      { id: 'move_normalized', action: 'renamePath', input: { path: '{{cleanup.normalizeOriginalPath}}', nextPath: '{{cleanup.normalizeNewPath}}' }, next: 'write_log' },
+      { id: 'write_log', action: 'writeFile', input: { path: '{{workflow.input.basePath}}/cleanup-log.csv', content: '{{cleanup.cleanupLogCsv}}' }, next: 'write_report' },
+      { id: 'write_report', action: 'writeFile', input: { path: '{{workflow.input.basePath}}/migration-report.md', content: '{{cleanup.migrationReportMd}}' }, next: 'done' },
+      {
+        id: 'done',
+        action: 'stop',
+        input: {
+          result: {
+            cleanupLogPath: '{{workflow.input.basePath}}/cleanup-log.csv',
+            migrationReportPath: '{{workflow.input.basePath}}/migration-report.md'
+          }
+        }
+      }
+    ],
+    postconditions: [
+      { id: 'cleanup-log-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/cleanup-log.csv' },
+      { id: 'migration-report-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/migration-report.md' }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 function readWorkflows() {
   return readJsonArrayCached(WORKFLOWS_FILE);
 }
@@ -12979,6 +13107,12 @@ async function createDefaultData() {
     workflows.push(createVendorComplianceWorkflowDefinition());
     writeWorkflows(workflows);
     console.log('Created workflow: vendor-compliance');
+  }
+
+  if (!workflows.some(workflow => workflow.id === 'shared-drive-cleanup')) {
+    workflows.push(createSharedDriveCleanupWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created workflow: shared-drive-cleanup');
   }
 }
 

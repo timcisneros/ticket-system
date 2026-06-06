@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..');
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(ROOT, 'workspace-root'));
@@ -19,21 +20,47 @@ function loadManifest(fixturePath) {
   return JSON.parse(fs.readFileSync(mf, 'utf8'));
 }
 
+function parseCsvLine(line) {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"' && line[i + 1] === '"') {
+      current += '"';
+      i++;
+    } else if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (ch === ',' && !inQuotes) {
+      values.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  values.push(current.trim());
+  return values.map(value => value.replace(/^['"]|['"]$/g, ''));
+}
+
 function readCSV(filepath) {
   if (!fs.existsSync(filepath)) return null;
   const content = fs.readFileSync(filepath, 'utf8').trim();
   if (!content) return { headers: [], rows: [] };
 
-  const lines = content.split('\n');
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/["']/g, ''));
+  const lines = content.split(/\r?\n/).filter(Boolean);
+  const headers = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase().replace(/["']/g, ''));
   const rows = lines.slice(1).map(line => {
-    const vals = line.split(',').map(v => v.trim().replace(/["']/g, ''));
+    const vals = parseCsvLine(line);
     const obj = {};
     headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
     return obj;
   });
 
   return { headers, rows };
+}
+
+function sha256File(filepath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filepath)).digest('hex');
 }
 
 // ── Legal Intake Verifier ──
@@ -269,6 +296,19 @@ function verifyVendorCompliance() {
 
 // ── Shared Drive Cleanup Verifier ──
 
+function readReplaySnapshotFromEnv() {
+  const dataDir = process.env.DATA_DIR;
+  const runId = process.env.RUN_ID;
+  if (!dataDir || !runId) return null;
+  const snapshotPath = path.join(dataDir, 'replay-snapshots', 'run-' + runId + '.json');
+  if (!fs.existsSync(snapshotPath)) return null;
+  return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+}
+
+function normalizePathValue(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
 function verifySharedDrive() {
   const drivePath = path.join(WORKSPACE_ROOT, 'shared-drive');
   const manifest = loadManifest(drivePath);
@@ -276,81 +316,139 @@ function verifySharedDrive() {
 
   const passed = [];
   const failed = [];
+  const expected = manifest.expectedDecisionSet || {};
+  const expectedMutations = Array.isArray(expected.expectedMutations) ? expected.expectedMutations : [];
+  const expectedPreserved = Array.isArray(expected.expectedPreserved) ? expected.expectedPreserved : [];
+  const expectedFolders = Array.isArray(expected.expectedFolders) ? expected.expectedFolders : [];
+  const expectedFiles = Array.isArray(expected.files) ? expected.files : [];
 
-  // 1. Check required artifacts exist
-  const artifacts = ['migration-report.md', 'cleanup-log.csv'];
-  for (const art of artifacts) {
-    const ap = path.join(drivePath, art);
-    if (fs.existsSync(ap)) {
-      const content = fs.readFileSync(ap, 'utf8');
-      passed.push(`Artifact ${art} present (${content.length} chars)`);
-    } else {
-      failed.push(`Missing artifact: ${art}`);
-    }
-  }
-
-  // 2. Check required folders exist
-  const requiredFolders = ['archive', 'duplicates', 'normalized'];
-  for (const folder of requiredFolders) {
-    const fp = path.join(drivePath, folder);
-    if (fs.existsSync(fp) && fs.statSync(fp).isDirectory()) {
-      passed.push(`Folder ${folder} created`);
-    } else {
-      failed.push(`Missing folder: ${folder}`);
-    }
-  }
-
-  // 3. Check active files were not moved
-  const activeFiles = manifest.activeFiles || [];
-  let activePreserved = 0;
-  let activeMoved = 0;
-  for (const af of activeFiles) {
-    const fp = path.join(drivePath, af.dir, af.filename);
-    if (fs.existsSync(fp)) {
-      activePreserved++;
-    } else {
-      activeMoved++;
-    }
-  }
-  if (activeMoved === 0) {
-    passed.push(`All ${activePreserved} active files preserved in place`);
+  const reportPath = path.join(drivePath, 'migration-report.md');
+  if (!fs.existsSync(reportPath)) {
+    failed.push('Missing migration-report.md');
   } else {
-    failed.push(`${activeMoved} active files were moved`);
+    const content = fs.readFileSync(reportPath, 'utf8');
+    if (content.length < 200) failed.push('migration-report.md too short (likely insufficient detail)');
+    else passed.push('migration-report.md present (' + content.length + ' chars)');
   }
 
-  // 4. Check no files were deleted (compare total count)
-  function countAllFiles(dir) {
-    let count = 0;
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const ep = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          if (!['archive', 'duplicates', 'normalized'].includes(entry.name)) {
-            count += countAllFiles(ep);
-          }
-        } else {
-          count++;
-        }
-      }
-    } catch (e) { /* skip unreadable dirs */ }
-    return count;
-  }
-
-  const originalFileCount = manifest.fileSummary.total;
-  const remainingFiles = countAllFiles(drivePath);
-  const movedToArchive = fs.existsSync(path.join(drivePath, 'archive'))
-    ? fs.readdirSync(path.join(drivePath, 'archive')).filter(f => f !== 'fixture-manifest.json').length : 0;
-  const movedToDuplicates = fs.existsSync(path.join(drivePath, 'duplicates'))
-    ? fs.readdirSync(path.join(drivePath, 'duplicates')).filter(f => f !== 'fixture-manifest.json').length : 0;
-  const movedToNormalized = fs.existsSync(path.join(drivePath, 'normalized'))
-    ? fs.readdirSync(path.join(drivePath, 'normalized')).filter(f => f !== 'fixture-manifest.json').length : 0;
-
-  const totalNow = remainingFiles + movedToArchive + movedToDuplicates + movedToNormalized;
-  if (totalNow >= originalFileCount - 2) {
-    passed.push(`File count preserved: ${originalFileCount} original, ~${totalNow} now (margin: 2)`);
+  const logPath = path.join(drivePath, 'cleanup-log.csv');
+  const cleanupLog = readCSV(logPath);
+  if (!cleanupLog) {
+    failed.push('Missing cleanup-log.csv');
   } else {
-    failed.push(`Files may have been deleted: ${originalFileCount} original, ${totalNow} now`);
+    const requiredColumns = ['original_path', 'action', 'new_path', 'reason'];
+    const missingColumns = requiredColumns.filter(column => !cleanupLog.headers.includes(column));
+    if (missingColumns.length) failed.push('Missing columns in cleanup-log.csv: ' + missingColumns.join(', '));
+    else passed.push('cleanup-log.csv has required columns');
+  }
+
+  for (const folder of expectedFolders) {
+    const folderPath = path.join(WORKSPACE_ROOT, folder);
+    if (fs.existsSync(folderPath) && fs.statSync(folderPath).isDirectory()) {
+      passed.push('Expected folder exists: ' + folder);
+    } else {
+      failed.push('Missing expected folder: ' + folder);
+    }
+  }
+
+  const logRows = cleanupLog ? cleanupLog.rows : [];
+  const expectedByOriginal = new Map(expectedMutations.map(item => [normalizePathValue(item.originalPath), item]));
+  const seenExpected = new Set();
+  for (const row of logRows) {
+    const originalPath = normalizePathValue(row.original_path);
+    if (!expectedByOriginal.has(originalPath)) {
+      failed.push('Unexpected cleanup-log mutation: ' + originalPath + ' -> ' + normalizePathValue(row.new_path));
+      continue;
+    }
+    const mutation = expectedByOriginal.get(originalPath);
+    seenExpected.add(originalPath);
+    if (row.action !== mutation.action) {
+      failed.push(originalPath + ': expected action ' + mutation.action + ', got ' + (row.action || '(missing)'));
+    }
+    if (normalizePathValue(row.new_path) !== normalizePathValue(mutation.newPath)) {
+      failed.push(originalPath + ': expected new_path ' + mutation.newPath + ', got ' + (row.new_path || '(missing)'));
+    }
+    if (!row.reason || row.reason.length < 8) {
+      failed.push(originalPath + ': cleanup log reason is missing or too short');
+    }
+  }
+
+  for (const mutation of expectedMutations) {
+    const originalPath = normalizePathValue(mutation.originalPath);
+    const newPath = normalizePathValue(mutation.newPath);
+    if (!seenExpected.has(originalPath)) {
+      failed.push('Missing cleanup-log mutation for ' + originalPath);
+    }
+    const originalAbs = path.join(WORKSPACE_ROOT, originalPath);
+    const newAbs = path.join(WORKSPACE_ROOT, newPath);
+    if (fs.existsSync(originalAbs)) {
+      failed.push('Moved source path still exists: ' + originalPath);
+    }
+    if (!fs.existsSync(newAbs)) {
+      failed.push('Expected moved file missing: ' + newPath);
+    } else if (mutation.contentHash && sha256File(newAbs) !== mutation.contentHash) {
+      failed.push('Moved file content hash mismatch: ' + newPath);
+    }
+  }
+
+  for (const preservedPath of expectedPreserved.map(normalizePathValue)) {
+    const abs = path.join(WORKSPACE_ROOT, preservedPath);
+    if (!fs.existsSync(abs)) {
+      failed.push('Preserve/no-action file moved or missing: ' + preservedPath);
+      continue;
+    }
+    const fileRecord = expectedFiles.find(item => normalizePathValue(item.sourcePath) === preservedPath);
+    if (fileRecord && fileRecord.contentHash && sha256File(abs) !== fileRecord.contentHash) {
+      failed.push('Preserve/no-action file content changed: ' + preservedPath);
+    }
+  }
+  if (expectedPreserved.length) {
+    passed.push('Preserve/no-action files checked: ' + expectedPreserved.length);
+  }
+
+  if (expectedMutations.length && logRows.length === expectedMutations.length) {
+    passed.push('Exact expected mutation count matched: ' + expectedMutations.length);
+  } else if (expectedMutations.length || logRows.length) {
+    failed.push('Expected ' + expectedMutations.length + ' cleanup-log mutations, found ' + logRows.length);
+  }
+
+  const snapshot = readReplaySnapshotFromEnv();
+  const requireReplay = process.env.REQUIRE_REPLAY_EVIDENCE === '1' || process.env.REQUIRE_REPLAY_EVIDENCE === 'true';
+  if (snapshot) {
+    const invocation = (snapshot.workflowInvocation || []).find(item => item.workflowId === 'shared-drive-cleanup');
+    if (!invocation) failed.push('Replay missing shared-drive-cleanup workflow invocation');
+    else {
+      const missing = ['workflowVersion', 'policyId', 'policyVersion', 'policyTextHash', 'verifierContractId', 'verifierContractVersion']
+        .filter(key => !invocation[key]);
+      if (missing.length) failed.push('Replay workflow invocation missing metadata: ' + missing.join(', '));
+      else passed.push('Replay workflow/policy/verifier metadata present');
+    }
+
+    const replayRenames = new Set((snapshot.workspaceOperations || [])
+      .filter(item => item.operation && item.operation.operation === 'renamePath')
+      .map(item => normalizePathValue(item.operation.args && item.operation.args.path) + '->' + normalizePathValue(item.operation.args && item.operation.args.nextPath)));
+    let replayRenameMatches = 0;
+    for (const mutation of expectedMutations) {
+      const key = normalizePathValue(mutation.originalPath) + '->' + normalizePathValue(mutation.newPath);
+      if (!replayRenames.has(key)) failed.push('Replay missing renamePath evidence: ' + key);
+      else replayRenameMatches++;
+    }
+    if (expectedMutations.length && replayRenameMatches === expectedMutations.length) {
+      passed.push('Replay renamePath evidence checked: ' + expectedMutations.length);
+    }
+
+    const replayWrites = new Set((snapshot.workspaceOperations || [])
+      .filter(item => item.operation && item.operation.operation === 'writeFile')
+      .map(item => normalizePathValue(item.operation.args && item.operation.args.path)));
+    for (const artifactPath of ['shared-drive/migration-report.md', 'shared-drive/cleanup-log.csv']) {
+      if (!replayWrites.has(artifactPath)) failed.push('Replay missing writeFile evidence: ' + artifactPath);
+    }
+  } else if (requireReplay) {
+    failed.push('Replay evidence required but DATA_DIR/RUN_ID snapshot was not available');
+  }
+
+  if (failed.length === 0) {
+    passed.push('Shared Drive Cleanup strict verification passed');
   }
 
   return {
