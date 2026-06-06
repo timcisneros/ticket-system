@@ -55,7 +55,7 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(EVALUATION_DATE) || Number.isNaN(EVALUATION_BASE
 }
 const DRY_RUN = args['dry-run'] === true || args['dry-run'] === 'true';
 const OVERWRITE = args.overwrite === true || args.overwrite === 'true';
-const COUNT = parseInt(args.count, 10) || 10;
+const COUNT = parseInt(args.count, 10) || (FIXTURE === 'legal-intake' ? 8 : 10);
 const COMPLETE_RATE = parseFloat(args['complete-rate']) || 0.6;
 const CRITICAL_RATE = parseFloat(args['critical-urgency-rate']) || 0.2;
 
@@ -174,18 +174,6 @@ const LEGAL_FILLER = [
     jurisdiction: 'Delaware, USA',
     businessUnit: 'Sales',
     description: 'Review SaaS subscription agreement renewal, including liability cap and data processing terms.',
-    urgency: 'Standard',
-    expectedDisposition: 'Open Matter',
-    reasonCode: 'complete_intake',
-    expectedNextActionKind: 'assign'
-  },
-  {
-    matterType: 'NDA Review',
-    requestingParty: 'Beta Industries',
-    contactEmail: 'procurement@beta.example.com',
-    jurisdiction: 'California, USA',
-    businessUnit: 'Procurement',
-    description: 'Review mutual NDA for vendor evaluation and product roadmap discussions.',
     urgency: 'Standard',
     expectedDisposition: 'Open Matter',
     reasonCode: 'complete_intake',
