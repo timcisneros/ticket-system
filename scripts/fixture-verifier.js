@@ -287,11 +287,106 @@ function verifyVendorCompliance() {
     passed.push(`All ${checked} vendor dispositions match expected pattern`);
   }
 
+  if (args.chain) {
+    verifyVendorRemediationChain(fixturePath, manifest, register, passed, failed);
+  }
+
   return {
     passed: failed.length === 0,
     checks: [...passed.map(p => ({ status: 'pass', message: p })), ...failed.map(f => ({ status: 'fail', message: f }))],
     count: { passed: passed.length, failed: failed.length }
   };
+}
+
+function verifyVendorRemediationChain(fixturePath, manifest, register, passed, failed) {
+  const remediationPlanPath = path.join(fixturePath, 'remediation-plan.md');
+  if (!fs.existsSync(remediationPlanPath)) {
+    failed.push('Missing remediation-plan.md');
+  } else {
+    const content = fs.readFileSync(remediationPlanPath, 'utf8');
+    if (content.length < 200) failed.push('remediation-plan.md too short (likely insufficient detail)');
+    else passed.push('remediation-plan.md present (' + content.length + ' chars)');
+  }
+
+  const remediationTasks = readCSV(path.join(fixturePath, 'remediation-tasks.csv'));
+  if (!remediationTasks) {
+    failed.push('Missing remediation-tasks.csv');
+    return;
+  }
+
+  const requiredColumns = ['vendor_id', 'vendor_name', 'disposition', 'remediation_action', 'due_days', 'owner'];
+  const missingColumns = requiredColumns.filter(column => !remediationTasks.headers.includes(column));
+  if (missingColumns.length) {
+    failed.push('Missing columns in remediation-tasks.csv: ' + missingColumns.join(', '));
+  } else {
+    passed.push('remediation-tasks.csv has required columns');
+  }
+
+  const expectedItems = manifest.expectedDecisionSet && Array.isArray(manifest.expectedDecisionSet.files)
+    ? manifest.expectedDecisionSet.files
+    : [];
+  const expectedRemediation = expectedItems.filter(item =>
+    item.expectedDisposition === 'Conditional Approve' || item.expectedDisposition === 'Reject'
+  );
+  const expectedApprove = expectedItems.filter(item => item.expectedDisposition === 'Approve');
+  const rowsByVendorId = new Map(remediationTasks.rows.map(row => [row.vendor_id, row]));
+
+  for (const expected of expectedRemediation) {
+    const row = rowsByVendorId.get(expected.vendorId);
+    if (!row) {
+      failed.push(expected.vendorName + ': missing remediation task');
+      continue;
+    }
+    if (row.disposition !== expected.expectedDisposition) {
+      failed.push(expected.vendorName + ': expected remediation disposition ' + expected.expectedDisposition + ', got ' + (row.disposition || '(missing)'));
+    }
+    const action = String(row.remediation_action || '').toLowerCase();
+    if (expected.reasonCode === 'expired_certification' && !action.includes('recert')) {
+      failed.push(expected.vendorName + ': expected recertification remediation action');
+    }
+    if (expected.reasonCode === 'active_incident' && !(action.includes('monitor') || action.includes('incident'))) {
+      failed.push(expected.vendorName + ': expected monitoring or incident remediation action');
+    }
+    if (expected.reasonCode === 'missing_security_certification' && !(action.includes('certification') || action.includes('cert'))) {
+      failed.push(expected.vendorName + ': expected security certification remediation action');
+    }
+    if (expected.reasonCode === 'missing_dpa' && !(action.includes('dpa') || action.includes('data processing'))) {
+      failed.push(expected.vendorName + ': expected DPA remediation action');
+    }
+    if (!row.due_days || !/^\d+$/.test(String(row.due_days))) {
+      failed.push(expected.vendorName + ': due_days must be numeric');
+    }
+    if (!row.owner || row.owner.length < 3) {
+      failed.push(expected.vendorName + ': owner missing or too short');
+    }
+  }
+
+  for (const expected of expectedApprove) {
+    if (rowsByVendorId.has(expected.vendorId)) {
+      failed.push(expected.vendorName + ': Approve vendor should not have remediation task');
+    }
+  }
+
+  if (remediationTasks.rows.length !== expectedRemediation.length) {
+    failed.push('Expected ' + expectedRemediation.length + ' remediation tasks, found ' + remediationTasks.rows.length);
+  } else if (expectedRemediation.length) {
+    passed.push('Exact remediation task count matched: ' + expectedRemediation.length);
+  }
+
+  const snapshot = readReplaySnapshotFromEnv();
+  const requireReplay = process.env.REQUIRE_REPLAY_EVIDENCE === '1' || process.env.REQUIRE_REPLAY_EVIDENCE === 'true';
+  if (snapshot) {
+    const invocation = (snapshot.workflowInvocation || []).find(item => item.workflowId === 'vendor-remediation-plan');
+    if (!invocation) failed.push('Replay missing vendor-remediation-plan workflow invocation');
+    else {
+      const missing = ['workflowVersion', 'policyId', 'policyVersion', 'policyTextHash', 'verifierContractId', 'verifierContractVersion']
+        .filter(key => !invocation[key]);
+      if (missing.length) failed.push('Replay vendor remediation invocation missing metadata: ' + missing.join(', '));
+      else passed.push('Replay vendor remediation workflow/policy/verifier metadata present');
+    }
+  } else if (requireReplay) {
+    failed.push('Replay evidence required but DATA_DIR/RUN_ID snapshot was not available');
+  }
 }
 
 // ── Shared Drive Cleanup Verifier ──

@@ -1552,6 +1552,110 @@ function createVendorComplianceWorkflowDefinition(now = new Date().toISOString()
 }
 
 
+const VENDOR_REMEDIATION_WORKFLOW_POLICY_TEXT = [
+  'Remediation rules:',
+  '- Include only vendors whose Stage 1 disposition is Conditional Approve or Reject.',
+  '- Do not include vendors whose Stage 1 disposition is Approve.',
+  '- Conditional Approve due to expired certification requires recertification within 90 days.',
+  '- Conditional Approve due to an active incident requires security monitoring and incident review within 30 days.',
+  '- Reject due to missing security certification requires certification evidence before approval can proceed.',
+  '- Reject due to missing Data Processing Agreement requires a signed DPA before approval can proceed.',
+  '',
+  'Use the Stage 1 vendor-decision-register.csv as the source of truth for dispositions.',
+  'The remediation plan must summarize every Conditional Approve and Reject vendor.',
+  'The remediation tasks CSV columns must be exactly: vendor_id,vendor_name,disposition,remediation_action,due_days,owner.',
+  'due_days must always be numeric for every row: use 90 for expired certification, 30 for active incident monitoring, and 0 for Reject rows that are blocked until missing evidence is provided.'
+].join('\n');
+
+function createVendorRemediationWorkflowDefinition(now = new Date().toISOString()) {
+  return {
+    id: 'vendor-remediation-plan',
+    name: 'Vendor Remediation Plan',
+    version: '1',
+    description: 'Consumes vendor compliance review outputs and writes remediation artifacts.',
+    enabled: true,
+    policy: {
+      id: 'vendor-remediation-policy',
+      version: '1',
+      text: VENDOR_REMEDIATION_WORKFLOW_POLICY_TEXT
+    },
+    taskPromptTemplate: [
+      'Read the Stage 1 vendor decision register and compliance review.',
+      'Identify every vendor marked Conditional Approve or Reject.',
+      'Write a complete remediation plan and remediation task CSV using workflow.policy.text.',
+      'Do not include vendors marked Approve in remediation tasks.'
+    ].join('\n'),
+    verifierContract: {
+      id: 'vendor-remediation-verifier',
+      version: '1',
+      fixture: 'vendor-compliance',
+      expectedArtifacts: [
+        'vendors/remediation-plan.md',
+        'vendors/remediation-tasks.csv'
+      ]
+    },
+    inputSchema: {
+      basePath: 'string'
+    },
+    actions: [
+      { id: 'read_register', action: 'readFile', input: { path: '{{workflow.input.basePath}}/vendor-decision-register.csv' }, saveAs: 'register', next: 'read_review' },
+      { id: 'read_review', action: 'readFile', input: { path: '{{workflow.input.basePath}}/compliance-review.md' }, saveAs: 'review', next: 'plan_remediation' },
+      {
+        id: 'plan_remediation',
+        action: 'agentStructuredOutput',
+        input: {
+          instruction: '{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}',
+          input: {
+            vendorDecisionRegisterCsv: '{{register.content}}',
+            complianceReviewMd: '{{review.content}}'
+          },
+          outputSchema: {
+            remediationPlanMd: 'string',
+            remediationTasksCsv: 'string'
+          }
+        },
+        saveAs: 'remediation',
+        next: 'write_plan'
+      },
+      {
+        id: 'write_plan',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.basePath}}/remediation-plan.md',
+          content: '{{remediation.remediationPlanMd}}'
+        },
+        next: 'write_tasks'
+      },
+      {
+        id: 'write_tasks',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.basePath}}/remediation-tasks.csv',
+          content: '{{remediation.remediationTasksCsv}}'
+        },
+        next: 'done'
+      },
+      {
+        id: 'done',
+        action: 'stop',
+        input: {
+          result: {
+            remediationPlanPath: '{{workflow.input.basePath}}/remediation-plan.md',
+            remediationTasksPath: '{{workflow.input.basePath}}/remediation-tasks.csv'
+          }
+        }
+      }
+    ],
+    postconditions: [
+      { id: 'remediation-plan-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/remediation-plan.md' },
+      { id: 'remediation-tasks-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/remediation-tasks.csv' }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+
 const SHARED_DRIVE_CLEANUP_WORKFLOW_POLICY_TEXT = [
   'Decision rules:',
   '- Preserve active files and files with active references in their original paths.',
@@ -13287,6 +13391,12 @@ async function createDefaultData() {
     workflows.push(createVendorComplianceWorkflowDefinition());
     writeWorkflows(workflows);
     console.log('Created workflow: vendor-compliance');
+  }
+
+  if (!workflows.some(workflow => workflow.id === 'vendor-remediation-plan')) {
+    workflows.push(createVendorRemediationWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created workflow: vendor-remediation-plan');
   }
 
   if (!workflows.some(workflow => workflow.id === 'shared-drive-cleanup')) {
