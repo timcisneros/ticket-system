@@ -484,6 +484,101 @@ async function main() {
     assert(branchFalseRun.status === 'completed', 'branch false path should complete');
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/branch-b.txt'), 'utf8') === 'B', 'falseNext path should write branch B file');
 
+    const exactMutationCapWorkflow = {
+      id: `workflow-exact-mutation-cap-${Date.now()}`,
+      name: 'Exact mutation cap workflow',
+      inputSchema: {},
+      actions: [
+        {
+          id: 'write-a',
+          action: 'writeFile',
+          input: { path: 'workflow-output/exact-cap-a.txt', content: 'A' },
+          next: 'write-b'
+        },
+        {
+          id: 'write-b',
+          action: 'writeFile',
+          input: { path: 'workflow-output/exact-cap-b.txt', content: 'B' },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ]
+    };
+    const exactMutationCapResponse = await createWorkflow(cookie, exactMutationCapWorkflow);
+    assert(exactMutationCapResponse.statusCode === 302, `exact mutation cap workflow save returned HTTP ${exactMutationCapResponse.statusCode}`);
+    const exactMutationCapTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run exact mutation cap workflow',
+        capabilityType: 'workflow',
+        workflowId: exactMutationCapWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(exactMutationCapTicketResponse.statusCode === 302, `exact mutation cap ticket create returned HTTP ${exactMutationCapTicketResponse.statusCode}`);
+    const exactMutationCapTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const exactMutationCapRun = await waitForCompletedRun(exactMutationCapTicket.id);
+    assert(exactMutationCapRun.status === 'completed', `exactly two mutating workflow writes followed by stop should complete, got ${exactMutationCapRun.status}: ${exactMutationCapRun.error || ''}`);
+    assert(exactMutationCapRun.currentWorkflowAction === 'stop', 'exact mutation cap workflow should execute non-mutating stop after two writes');
+    assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/exact-cap-a.txt'), 'utf8') === 'A', 'exact mutation cap workflow should write first file');
+    assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/exact-cap-b.txt'), 'utf8') === 'B', 'exact mutation cap workflow should write second file');
+    const exactMutationCapSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, exactMutationCapRun.replaySnapshotPath), 'utf8'));
+    assert(exactMutationCapSnapshot.workflowActions.some(item => item.stepId === 'done' && item.action === 'stop'), 'exact mutation cap replay should record stop step');
+
+    const overMutationCapWorkflow = {
+      id: `workflow-over-mutation-cap-${Date.now()}`,
+      name: 'Over mutation cap workflow',
+      inputSchema: {},
+      actions: [
+        {
+          id: 'write-a',
+          action: 'writeFile',
+          input: { path: 'workflow-output/over-cap-a.txt', content: 'A' },
+          next: 'write-b'
+        },
+        {
+          id: 'write-b',
+          action: 'writeFile',
+          input: { path: 'workflow-output/over-cap-b.txt', content: 'B' },
+          next: 'write-c'
+        },
+        {
+          id: 'write-c',
+          action: 'writeFile',
+          input: { path: 'workflow-output/over-cap-c.txt', content: 'C' },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: {} }
+      ]
+    };
+    const overMutationCapResponse = await createWorkflow(cookie, overMutationCapWorkflow);
+    assert(overMutationCapResponse.statusCode === 302, `over mutation cap workflow save returned HTTP ${overMutationCapResponse.statusCode}`);
+    const overMutationCapTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run over mutation cap workflow',
+        capabilityType: 'workflow',
+        workflowId: overMutationCapWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(overMutationCapTicketResponse.statusCode === 302, `over mutation cap ticket create returned HTTP ${overMutationCapTicketResponse.statusCode}`);
+    const overMutationCapTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const overMutationCapRun = await waitForRunStatus(
+      Math.max(0, ...readJson('runs.json').filter(item => item.ticketId === overMutationCapTicket.id).map(item => item.id || 0)),
+      'failed'
+    );
+    assert(overMutationCapRun.error && overMutationCapRun.error.includes('Workflow exceeded mutation limit of 2'), 'third mutating workflow write should be blocked by mutation cap');
+    assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-cap-a.txt'), 'utf8') === 'A', 'over mutation cap workflow should execute first write');
+    assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-cap-b.txt'), 'utf8') === 'B', 'over mutation cap workflow should execute second write');
+    assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-cap-c.txt')), 'over mutation cap workflow should block third write');
+
     const failingPostconditionWorkflow = {
       id: `workflow-failing-postcondition-${Date.now()}`,
       name: 'Failing postcondition workflow',

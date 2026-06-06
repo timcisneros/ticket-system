@@ -9055,7 +9055,8 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
       });
     }
 
-    if (counters.mutations >= limits.maxMutations) {
+    const currentContract = getActionContract(currentStep.action);
+    if (currentContract && currentContract.mutating === true && counters.mutations >= limits.maxMutations) {
       throw createRunLimitError(run, 'mutating_action', `Workflow exceeded mutation limit of ${limits.maxMutations}`, {
         currentValue: counters.mutations,
         configuredLimit: limits.maxMutations,
