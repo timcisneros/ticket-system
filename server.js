@@ -1264,91 +1264,161 @@ function createDemoWorkflowDefinition(now = new Date().toISOString()) {
   };
 }
 
+const LEGAL_INTAKE_WORKFLOW_POLICY_TEXT = [
+  'Decision rules:',
+  '- Open Matter: all required fields are present and the description is specific enough to act on.',
+  '- Request Information: missing Contact Email, missing Jurisdiction, missing Description, or Description is too vague to identify the requested legal work.',
+  '- Decline: missing Requesting Party, missing Matter Type, or matter is outside company legal scope such as personal legal advice.',
+  '- Duplicate: only later submissions in the same Duplicate Group should be Duplicate. The earliest intake in a Duplicate Group remains Open Matter unless another rule applies.',
+  '',
+  'Required source fields: Matter Type, Requesting Party, Contact Email, Jurisdiction, Business Unit, Description, Urgency.',
+  'Use only these dispositions exactly: Open Matter, Request Information, Decline, Duplicate.',
+  'The phrase "Help with contract" is too vague and requires Request Information.'
+].join('\n');
+
 function createLegalIntakeWorkflowDefinition(now = new Date().toISOString()) {
   return {
-    id: 'legal-intake-summary',
-    name: 'Legal intake summary',
-    description: 'Extract legal intake fields, branch on urgency, write a case summary, and stop with the extracted fields.',
+    id: 'legal-intake',
+    name: 'Legal Intake',
+    version: '1',
+    description: 'Classifies fixture legal intake files with an attached workflow policy and writes register artifacts.',
     enabled: true,
+    policy: {
+      id: 'legal-intake-decision-policy',
+      version: '1',
+      text: LEGAL_INTAKE_WORKFLOW_POLICY_TEXT
+    },
+    taskPromptTemplate: [
+      'Classify every provided legal intake using workflow.policy.text.',
+      'Return a complete CSV and Markdown summary only after considering every intake input.',
+      'CSV columns must be exactly: intake_id,matter_type,requesting_party,disposition,reason,next_action'
+    ].join('\n'),
+    verifierContract: {
+      id: 'legal-intake-verifier',
+      version: '1',
+      fixture: 'legal-intake',
+      expectedArtifacts: [
+        'legal-intake/intake-register.csv',
+        'legal-intake/matter-summary.md'
+      ]
+    },
     inputSchema: {
-      intakeText: 'string'
+      basePath: 'string'
     },
     actions: [
       {
-        id: 'extract',
+        id: 'read_001',
+        action: 'readFile',
+        input: { path: '{{workflow.input.basePath}}/incoming/intake-2026-001.md' },
+        saveAs: 'intake001',
+        next: 'read_002'
+      },
+      {
+        id: 'read_002',
+        action: 'readFile',
+        input: { path: '{{workflow.input.basePath}}/incoming/intake-2026-002.md' },
+        saveAs: 'intake002',
+        next: 'read_003'
+      },
+      {
+        id: 'read_003',
+        action: 'readFile',
+        input: { path: '{{workflow.input.basePath}}/incoming/intake-2026-003.md' },
+        saveAs: 'intake003',
+        next: 'read_004'
+      },
+      {
+        id: 'read_004',
+        action: 'readFile',
+        input: { path: '{{workflow.input.basePath}}/incoming/intake-2026-004.md' },
+        saveAs: 'intake004',
+        next: 'read_005'
+      },
+      {
+        id: 'read_005',
+        action: 'readFile',
+        input: { path: '{{workflow.input.basePath}}/incoming/intake-2026-005.md' },
+        saveAs: 'intake005',
+        next: 'read_006'
+      },
+      {
+        id: 'read_006',
+        action: 'readFile',
+        input: { path: '{{workflow.input.basePath}}/incoming/intake-2026-006.md' },
+        saveAs: 'intake006',
+        next: 'read_007'
+      },
+      {
+        id: 'read_007',
+        action: 'readFile',
+        input: { path: '{{workflow.input.basePath}}/incoming/intake-2026-007.md' },
+        saveAs: 'intake007',
+        next: 'read_008'
+      },
+      {
+        id: 'read_008',
+        action: 'readFile',
+        input: { path: '{{workflow.input.basePath}}/incoming/intake-2026-008.md' },
+        saveAs: 'intake008',
+        next: 'classify'
+      },
+      {
+        id: 'classify',
         action: 'agentStructuredOutput',
         input: {
-          instruction: 'Extract legal intake fields from the provided intake text. Return only JSON. Use urgency value exactly high or normal. Use high when there is an immediate deadline, active court date, lockout, arrest, restraining order, or urgent filing risk; otherwise use normal.',
+          instruction: '{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}',
           input: {
-            intakeText: '{{workflow.input.intakeText}}'
+            intakes: {
+              'intake-2026-001': '{{intake001.content}}',
+              'intake-2026-002': '{{intake002.content}}',
+              'intake-2026-003': '{{intake003.content}}',
+              'intake-2026-004': '{{intake004.content}}',
+              'intake-2026-005': '{{intake005.content}}',
+              'intake-2026-006': '{{intake006.content}}',
+              'intake-2026-007': '{{intake007.content}}',
+              'intake-2026-008': '{{intake008.content}}'
+            }
           },
           outputSchema: {
-            clientName: 'string',
-            matterType: 'string',
-            urgency: 'string',
-            summary: 'string',
-            recommendedNextStep: 'string'
+            intakeRegisterCsv: 'string',
+            matterSummaryMd: 'string'
           }
         },
-        saveAs: 'intake',
-        next: 'urgency_check'
+        saveAs: 'classification',
+        next: 'write_register'
       },
       {
-        id: 'urgency_check',
-        action: 'condition',
-        input: {
-          value: '{{intake.urgency}}',
-          equals: 'high'
-        },
-        trueNext: 'write_urgent',
-        falseNext: 'write_standard'
-      },
-      {
-        id: 'write_urgent',
+        id: 'write_register',
         action: 'writeFile',
         input: {
-          path: 'urgent-case-summary.md',
-          content: '# Urgent Case Summary\n\nClient: {{intake.clientName}}\nMatter Type: {{intake.matterType}}\nUrgency: {{intake.urgency}}\n\nSummary:\n{{intake.summary}}\n\nRecommended Next Step:\n{{intake.recommendedNextStep}}\n'
+          path: '{{workflow.input.basePath}}/intake-register.csv',
+          content: '{{classification.intakeRegisterCsv}}'
         },
-        next: 'stop_urgent'
+        next: 'write_summary'
       },
       {
-        id: 'write_standard',
+        id: 'write_summary',
         action: 'writeFile',
         input: {
-          path: 'case-summary.md',
-          content: '# Case Summary\n\nClient: {{intake.clientName}}\nMatter Type: {{intake.matterType}}\nUrgency: {{intake.urgency}}\n\nSummary:\n{{intake.summary}}\n\nRecommended Next Step:\n{{intake.recommendedNextStep}}\n'
+          path: '{{workflow.input.basePath}}/matter-summary.md',
+          content: '{{classification.matterSummaryMd}}'
         },
-        next: 'stop_standard'
+        next: 'done'
       },
       {
-        id: 'stop_urgent',
+        id: 'done',
         action: 'stop',
         input: {
           result: {
-            path: 'urgent-case-summary.md',
-            clientName: '{{intake.clientName}}',
-            matterType: '{{intake.matterType}}',
-            urgency: '{{intake.urgency}}',
-            summary: '{{intake.summary}}',
-            recommendedNextStep: '{{intake.recommendedNextStep}}'
-          }
-        }
-      },
-      {
-        id: 'stop_standard',
-        action: 'stop',
-        input: {
-          result: {
-            path: 'case-summary.md',
-            clientName: '{{intake.clientName}}',
-            matterType: '{{intake.matterType}}',
-            urgency: '{{intake.urgency}}',
-            summary: '{{intake.summary}}',
-            recommendedNextStep: '{{intake.recommendedNextStep}}'
+            intakeRegisterPath: '{{workflow.input.basePath}}/intake-register.csv',
+            matterSummaryPath: '{{workflow.input.basePath}}/matter-summary.md'
           }
         }
       }
+    ],
+    postconditions: [
+      { id: 'register-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/intake-register.csv' },
+      { id: 'summary-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/matter-summary.md' }
     ],
     createdAt: now,
     updatedAt: now
@@ -1451,6 +1521,48 @@ function writeTickets(tickets) {
   writeFileAtomic(DATA_FILE, JSON.stringify(normalizeTickets(tickets), null, 2));
 }
 
+function normalizeWorkflowPolicy(policy) {
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return null;
+  const id = typeof policy.id === 'string' ? policy.id.trim() : '';
+  const version = typeof policy.version === 'string' ? policy.version.trim() : '';
+  const text = typeof policy.text === 'string' ? policy.text : '';
+  if (!id && !version && !text) return null;
+  return { id, version, text };
+}
+
+function normalizeWorkflowVerifierContract(contract) {
+  if (!contract || typeof contract !== 'object' || Array.isArray(contract)) return null;
+  const id = typeof contract.id === 'string' ? contract.id.trim() : '';
+  const version = typeof contract.version === 'string' ? contract.version.trim() : '';
+  const fixture = typeof contract.fixture === 'string' ? contract.fixture.trim() : '';
+  const expectedArtifacts = Array.isArray(contract.expectedArtifacts)
+    ? contract.expectedArtifacts.map(item => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (!id && !version && !fixture && expectedArtifacts.length === 0) return null;
+  return { id, version, fixture, expectedArtifacts };
+}
+
+function hashWorkflowPolicyText(policy) {
+  const text = policy && typeof policy.text === 'string' ? policy.text : '';
+  return text ? crypto.createHash('sha256').update(text).digest('hex') : null;
+}
+
+function buildWorkflowContractEvidence(workflow) {
+  const policy = workflow && workflow.policy && typeof workflow.policy === 'object' ? workflow.policy : null;
+  const verifierContract = workflow && workflow.verifierContract && typeof workflow.verifierContract === 'object'
+    ? workflow.verifierContract
+    : null;
+  return {
+    workflowId: workflow ? workflow.id : null,
+    workflowVersion: workflow && typeof workflow.version === 'string' ? workflow.version : null,
+    policyId: policy && typeof policy.id === 'string' ? policy.id : null,
+    policyVersion: policy && typeof policy.version === 'string' ? policy.version : null,
+    policyTextHash: hashWorkflowPolicyText(policy),
+    verifierContractId: verifierContract && typeof verifierContract.id === 'string' ? verifierContract.id : null,
+    verifierContractVersion: verifierContract && typeof verifierContract.version === 'string' ? verifierContract.version : null
+  };
+}
+
 function normalizeWorkflows(workflows) {
   const seenWorkflowIds = new Set();
   const now = new Date().toISOString();
@@ -1465,6 +1577,14 @@ function normalizeWorkflows(workflows) {
     workflow.id = workflowId;
     workflow.name = typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim() : workflow.id;
     workflow.description = typeof workflow.description === 'string' ? workflow.description : '';
+    workflow.version = typeof workflow.version === 'string' && workflow.version.trim() ? workflow.version.trim() : '1';
+    const normalizedPolicy = normalizeWorkflowPolicy(workflow.policy);
+    if (normalizedPolicy) workflow.policy = normalizedPolicy;
+    else delete workflow.policy;
+    workflow.taskPromptTemplate = typeof workflow.taskPromptTemplate === 'string' ? workflow.taskPromptTemplate : '';
+    const normalizedVerifierContract = normalizeWorkflowVerifierContract(workflow.verifierContract);
+    if (normalizedVerifierContract) workflow.verifierContract = normalizedVerifierContract;
+    else delete workflow.verifierContract;
     workflow.enabled = workflow.enabled !== false;
     workflow.inputSchema = workflow.inputSchema && typeof workflow.inputSchema === 'object' && !Array.isArray(workflow.inputSchema)
       ? workflow.inputSchema
@@ -7710,6 +7830,33 @@ function validateWorkflowDefinition(workflow) {
   if (workflow.postconditions !== undefined && !Array.isArray(workflow.postconditions)) {
     errors.push('workflow.postconditions must be an array when provided');
   }
+  if (workflow.version !== undefined && typeof workflow.version !== 'string') {
+    errors.push('workflow.version must be a string when provided');
+  }
+  if (workflow.taskPromptTemplate !== undefined && typeof workflow.taskPromptTemplate !== 'string') {
+    errors.push('workflow.taskPromptTemplate must be a string when provided');
+  }
+  if (workflow.policy !== undefined) {
+    if (!workflow.policy || typeof workflow.policy !== 'object' || Array.isArray(workflow.policy)) {
+      errors.push('workflow.policy must be an object when provided');
+    } else {
+      if (typeof workflow.policy.id !== 'string' || !workflow.policy.id.trim()) errors.push('workflow.policy.id is required');
+      if (typeof workflow.policy.version !== 'string' || !workflow.policy.version.trim()) errors.push('workflow.policy.version is required');
+      if (typeof workflow.policy.text !== 'string' || !workflow.policy.text.trim()) errors.push('workflow.policy.text is required');
+    }
+  }
+  if (workflow.verifierContract !== undefined) {
+    if (!workflow.verifierContract || typeof workflow.verifierContract !== 'object' || Array.isArray(workflow.verifierContract)) {
+      errors.push('workflow.verifierContract must be an object when provided');
+    } else {
+      if (typeof workflow.verifierContract.id !== 'string' || !workflow.verifierContract.id.trim()) errors.push('workflow.verifierContract.id is required');
+      if (typeof workflow.verifierContract.version !== 'string' || !workflow.verifierContract.version.trim()) errors.push('workflow.verifierContract.version is required');
+      if (workflow.verifierContract.fixture !== undefined && typeof workflow.verifierContract.fixture !== 'string') errors.push('workflow.verifierContract.fixture must be a string when provided');
+      if (workflow.verifierContract.expectedArtifacts !== undefined && !Array.isArray(workflow.verifierContract.expectedArtifacts)) {
+        errors.push('workflow.verifierContract.expectedArtifacts must be an array when provided');
+      }
+    }
+  }
 
   const stepIds = new Set();
   workflow.actions.forEach((step, index) => {
@@ -9022,7 +9169,15 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
     maxMutations: options.maxMutations || getPositiveIntegerEnv('WORKFLOW_MAX_MUTATIONS', MAX_MUTATING_ACTIONS_PER_RESPONSE)
   };
   const counters = { transitions: 0, workspaceOperations: 0, modelRequests: 0, mutations: 0 };
-  const context = { workflow: { input: workflowInput || {} } };
+  const context = {
+    workflow: {
+      input: workflowInput || {},
+      version: typeof workflow.version === 'string' ? workflow.version : null,
+      policy: workflow.policy || null,
+      taskPromptTemplate: typeof workflow.taskPromptTemplate === 'string' ? workflow.taskPromptTemplate : '',
+      verifierContract: workflow.verifierContract || null
+    }
+  };
   const stepsById = new Map(workflow.actions.map(step => [step.id, step]));
   const visitsByStepId = new Map();
   let currentStep = workflow.actions[0];
@@ -9031,6 +9186,7 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
   appendRunReplaySnapshotItem(run.id, 'workflowInvocation', {
     workflowId: workflow.id,
     workflowName: workflow.name,
+    ...buildWorkflowContractEvidence(workflow),
     input: sanitizeSnapshotValue(workflowInput || {})
   });
 
@@ -12698,10 +12854,10 @@ async function createDefaultData() {
     console.log('Created demo workflow: demo-agent-write-if-approved');
   }
 
-  if (!workflows.some(workflow => workflow.id === 'legal-intake-summary')) {
+  if (!workflows.some(workflow => workflow.id === 'legal-intake')) {
     workflows.push(createLegalIntakeWorkflowDefinition());
     writeWorkflows(workflows);
-    console.log('Created demo workflow: legal-intake-summary');
+    console.log('Created workflow: legal-intake');
   }
 }
 
