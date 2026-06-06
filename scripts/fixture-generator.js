@@ -55,7 +55,7 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(EVALUATION_DATE) || Number.isNaN(EVALUATION_BASE
 }
 const DRY_RUN = args['dry-run'] === true || args['dry-run'] === 'true';
 const OVERWRITE = args.overwrite === true || args.overwrite === 'true';
-const COUNT = parseInt(args.count, 10) || (FIXTURE === 'legal-intake' ? 8 : 10);
+const COUNT = parseInt(args.count, 10) || (['legal-intake', 'vendor-compliance'].includes(FIXTURE) ? 8 : 10);
 const COMPLETE_RATE = parseFloat(args['complete-rate']) || 0.6;
 const CRITICAL_RATE = parseFloat(args['critical-urgency-rate']) || 0.2;
 
@@ -573,238 +573,95 @@ function generateSupportFixtures() {
 
 // ── Vendor Compliance Fixture ──
 
-const VENDOR_NAMES = [
-  'CloudHost Inc', 'DataSync Corp', 'SecureMail Ltd', 'AnalyticsPro',
-  'InfraServe', 'LogiStack', 'CertiVault', 'NetBridge', 'ComplyFirst', 'ZenData'
+const VENDOR_CASES = [
+  { vendorName: 'CloudHost Inc', service: 'Cloud infrastructure hosting and CDN for customer-facing applications', criticality: 'Critical', annualSpend: '$420K', dpaStatus: 'Signed and current', certification: 'SOC2 Type II', certificationExpiry: '2027-06-30', certificationStatus: 'Current', incidentStatus: 'None reported', dataAccess: 'Customer account data and usage logs', expectedDisposition: 'Approve', reasonCode: 'current_cert_no_incident', expectedNextActionKind: 'approve' },
+  { vendorName: 'DataSync Corp', service: 'Data pipeline and analytics storage for product telemetry', criticality: 'High', annualSpend: '$260K', dpaStatus: 'Signed and current', certification: 'ISO 27001', certificationExpiry: '2024-11-15', certificationStatus: 'Expired', incidentStatus: 'None reported', dataAccess: 'Product analytics and account metadata', expectedDisposition: 'Conditional Approve', reasonCode: 'expired_certification', expectedNextActionKind: 'recertification_90_days' },
+  { vendorName: 'SecureMail Ltd', service: 'Email security, encryption, and archiving', criticality: 'High', annualSpend: '$180K', dpaStatus: 'Signed and current', certification: 'SOC2 Type II', certificationExpiry: '2027-03-31', certificationStatus: 'Current', incidentStatus: 'Open high severity phishing infrastructure incident under review', dataAccess: 'Employee email headers and quarantine metadata', expectedDisposition: 'Conditional Approve', reasonCode: 'active_incident', expectedNextActionKind: 'monitoring_condition' },
+  { vendorName: 'AnalyticsPro', service: 'Business intelligence dashboards and reporting', criticality: 'Medium', annualSpend: '$95K', dpaStatus: 'Signed and current', certification: 'Not provided', certificationExpiry: 'Not applicable', certificationStatus: 'Missing', incidentStatus: 'None reported', dataAccess: 'Aggregated sales reporting data', expectedDisposition: 'Reject', reasonCode: 'missing_security_certification', expectedNextActionKind: 'request_certification_before_approval' },
+  { vendorName: 'InfraServe', service: 'Infrastructure monitoring and alerting', criticality: 'Critical', annualSpend: '$310K', dpaStatus: 'Missing', certification: 'SOC2 Type II', certificationExpiry: '2027-08-15', certificationStatus: 'Current', incidentStatus: 'None reported', dataAccess: 'Infrastructure metrics and hostnames', expectedDisposition: 'Reject', reasonCode: 'missing_dpa', expectedNextActionKind: 'obtain_dpa_before_approval' },
+  { vendorName: 'LogiStack', service: 'Log aggregation and search for application diagnostics', criticality: 'High', annualSpend: '$205K', dpaStatus: 'Signed and current', certification: 'ISO 27001', certificationExpiry: '2026-12-01', certificationStatus: 'Current', incidentStatus: 'Resolved medium severity credential rotation event', dataAccess: 'Application logs with limited customer identifiers', expectedDisposition: 'Approve', reasonCode: 'resolved_incident_current_cert', expectedNextActionKind: 'approve_with_audit_note' },
+  { vendorName: 'CertiVault', service: 'Certificate lifecycle management', criticality: 'Medium', annualSpend: '$120K', dpaStatus: 'Signed and current', certification: 'SOC2 Type II', certificationExpiry: '2025-01-10', certificationStatus: 'Expired', incidentStatus: 'None reported', dataAccess: 'Certificate metadata and service owner contacts', expectedDisposition: 'Conditional Approve', reasonCode: 'expired_certification', expectedNextActionKind: 'recertification_90_days' },
+  { vendorName: 'NetBridge', service: 'Network peering and secure connectivity', criticality: 'Critical', annualSpend: '$375K', dpaStatus: 'Signed and current', certification: 'FedRAMP', certificationExpiry: '2027-10-20', certificationStatus: 'Current', incidentStatus: 'None reported', dataAccess: 'Network routing metadata only', expectedDisposition: 'Approve', reasonCode: 'current_cert_no_incident', expectedNextActionKind: 'approve' }
 ];
 
-const CERT_TYPES = ['SOC2 Type II', 'ISO 27001', 'HIPAA', 'PCI DSS', 'FedRAMP'];
+function renderVendorPacket(vendorId, item) {
+  return [
+    '# Vendor Compliance Packet',
+    '',
+    '## Vendor ID', vendorId,
+    '',
+    '## Vendor Name', item.vendorName,
+    '',
+    '## Service', item.service,
+    '',
+    '## Criticality', item.criticality,
+    '',
+    '## Annual Spend', item.annualSpend,
+    '',
+    '## Data Access', item.dataAccess,
+    '',
+    '## Data Processing Agreement', item.dpaStatus,
+    '',
+    '## Security Certification', item.certification,
+    '',
+    '## Certification Expiry Date', item.certificationExpiry,
+    '',
+    '## Certification Status', item.certificationStatus,
+    '',
+    '## Incident Status', item.incidentStatus,
+    '',
+    '## Evidence Notes',
+    'Use this packet as the vendor source of truth. Apply the workflow policy to decide Approve, Conditional Approve, or Reject.'
+  ].join('\n');
+}
 
 function generateVendorFixtures() {
   const fixtureDir = path.join(WORKSPACE_ROOT, 'vendors');
   const incomingDir = path.join(fixtureDir, 'incoming');
-  const policiesDir = path.join(fixtureDir);
   planMkdir(incomingDir);
 
-  const rand = seededRandom(SEED);
-
-  const vendorResults = [];
-
-  for (let i = 0; i < COUNT && i < VENDOR_NAMES.length; i++) {
-    const vendorDir = path.join(incomingDir, `vendor-${pad(i + 1, 3)}`);
-    planMkdir(vendorDir);
-
-    const vendorName = VENDOR_NAMES[i];
-    const hasCert = rand() < COMPLETE_RATE;
-    const certExpired = hasCert && rand() < 0.3;
-    const hasIncident = rand() < 0.15;
-    const certType = pick(CERT_TYPES, rand);
-
-    const profile = [
-      `# Vendor Profile: ${vendorName}`,
-      ``,
-      `## Legal Name`,
-      `${vendorName}`,
-      ``,
-      `## DBA`,
-      pick([vendorName, `${vendorName} Technologies`, `${vendorName} Global`], rand),
-      ``,
-      `## Tax ID`,
-      `${pad(Math.floor(rand() * 100000000), 9)}`,
-      ``,
-      `## Services`,
-      pick([
-        'Cloud infrastructure, managed hosting, CDN',
-        'Data pipeline, ETL, analytics storage',
-        'Email security, encryption, archiving',
-        'Business intelligence, dashboards, reporting',
-        'IT infrastructure monitoring and alerting'
-      ], rand),
-      ``,
-      `## Point of Contact`,
-      `${pick(['Alice', 'Bob', 'Carol', 'David', 'Eve'], rand)} ${pick(['Johnson', 'Williams', 'Brown', 'Jones', 'Garcia'], rand)}`,
-      ``,
-      `## Contact Email`,
-      `vendor-ops@${vendorName.toLowerCase().replace(/[^a-z]/g, '')}.com`,
-      ``,
-      `## Vendor Since`,
-      `${2018 + Math.floor(rand() * 6)}-${pad(1 + Math.floor(rand() * 12), 2)}-01`,
-      ``,
-      `## Annual Spend`,
-      `$${Math.floor(rand() * 500 + 50)}K`
-    ].join('\n');
-
-    const dpa = [
-      `# Data Processing Agreement`,
-      ``,
-      `## Parties`,
-      `Customer (Controller) and ${vendorName} (Processor)`,
-      ``,
-      `## Effective Date`,
-      `${2020 + Math.floor(rand() * 4)}-${pad(1 + Math.floor(rand() * 12), 2)}-01`,
-      ``,
-      `## Data Categories`,
-      `Customer name, email, organization, usage logs, billing history`,
-      ``,
-      `## Processing Location`,
-      pick(['US-East', 'EU-West', 'US-West, EU-West', 'APAC-Southeast', 'Global (multi-region)'], rand),
-      ``,
-      `## Subprocessors`,
-      pick([
-        'AWS, GCP',
-        'Azure, DigitalOcean',
-        'AWS only',
-        'None listed',
-        'AWS, GCP, Cloudflare'
-      ], rand),
-      ``,
-      `## Security Measures`,
-      `Encryption at rest (AES-256), encryption in transit (TLS 1.3), quarterly penetration testing, SOC2 annual audit`
-    ].join('\n');
-
-    let certContent = '# Security Certification\n\nNot provided.\n';
-    let certExpiry = null;
-    if (hasCert) {
-      const issueYear = 2022 + Math.floor(rand() * 3);
-      const expiryYear = certExpired ? 2024 + Math.floor(rand() * 2) : 2026 + Math.floor(rand() * 2);
-      certExpiry = `${expiryYear}-${pad(1 + Math.floor(rand() * 12), 2)}-${pad(1 + Math.floor(rand() * 28), 2)}`;
-      certContent = [
-        `# Security Certification: ${certType}`,
-        ``,
-        `## Issued By`,
-        pick(['A-LIGN', 'Bureau Veritas', 'Schellman', 'Coalfire', 'Prescient Security'], rand),
-        ``,
-        `## Issue Date`,
-        `${issueYear}-${pad(1 + Math.floor(rand() * 12), 2)}-01`,
-        ``,
-        `## Expiry Date`,
-        certExpiry,
-        ``,
-        `## Scope`,
-        pick([
-          'All systems and services',
-          'Core platform and API',
-          'Infrastructure and data storage',
-          'Customer-facing applications'
-        ], rand),
-        ``,
-        `## Status`,
-        certExpired ? 'Expired' : 'Active'
-      ].join('\n');
-    }
-
-    let incidentContent = null;
-    if (hasIncident) {
-      incidentContent = [
-        `# Security Incident Report`,
-        ``,
-        `## Date Discovered`,
-        `${2025}-${pad(1 + Math.floor(rand() * 12), 2)}-${pad(1 + Math.floor(rand() * 28), 2)}`,
-        ``,
-        `## Severity`,
-        pick(['Low', 'Medium', 'High'], rand),
-        ``,
-        `## Description`,
-        pick([
-          'Unauthorized access to staging environment by external IP scan',
-          'Employee credentials found in public code repository',
-          'Misconfigured S3 bucket exposed test data',
-          'Phishing campaign targeting vendor employees'
-        ], rand),
-        ``,
-        `## Status`,
-        pick(['Resolved', 'In Progress', 'Under Review'], rand),
-        ``,
-        `## Remediation`,
-        pick([
-          'Access revoked, environment hardened, monitoring added',
-          'Credentials rotated, repo scanned, employee training updated',
-          'Bucket locked, access logs reviewed, no customer data exposed',
-          'Campaign blocked, affected accounts notified, filters updated'
-        ], rand)
-      ].join('\n');
-    }
-
-    const isComplete = hasCert && !certExpired && !hasIncident;
-    const expectedDisposition = !hasCert ? 'Reject (missing security certification)' :
-      certExpired ? 'Conditional Approve (certification expired)' :
-      hasIncident ? 'Conditional Approve (active security incident under review)' :
-      'Approve';
-
-    const files = { 'vendor-profile.md': profile, 'dpa.md': dpa, 'security-cert.md': certContent };
-    if (incidentContent) {
-      files['incident-report.md'] = incidentContent;
-    }
-
-    for (const [fname, fcontent] of Object.entries(files)) {
-      planWriteFile(path.join(vendorDir, fname), fcontent);
-    }
-
-    vendorResults.push({
-      vendorId: `vendor-${pad(i + 1, 3)}`,
-      vendorName,
-      hasCert,
-      certExpired,
-      hasIncident,
-      isComplete,
-      expectedDisposition
-    });
-  }
-
-  const policyContent = [
-    `# Vendor Onboarding Policy`,
-    ``,
-    `## Required Documents`,
-    `1. Vendor profile (vendor-profile.md)`,
-    `2. Data Processing Agreement (dpa.md)`,
-    `3. Security certification (security-cert.md) — must be valid and current`,
-    ``,
-    `## Approval Rules`,
-    ``,
-    `### Approve`,
-    `All required documents present, certification is current (not expired), and no active security incidents.`,
-    ``,
-    `### Conditional Approve`,
-    `- Certification is expired but all other documents present → recommend recertification within 90 days`,
-    `- Active security incident under review → approve with monitoring condition`,
-    `- Minor documentation gaps → approve subject to remediation`,
-    ``,
-    `### Reject`,
-    `- Missing required document(s)`,
-    `- Major compliance gap (no certification, no DPA)`,
-    `- Vendor declined to provide required documentation`,
-    ``,
-    `## Review Period`,
-    `Standard: 30 days. Conditional approvals: 90 day remediation window.`
-  ].join('\n');
-  planWriteFile(path.join(policiesDir, 'vendor-onboarding-policy.md'), policyContent);
+  const selected = VENDOR_CASES.slice(0, Math.min(COUNT, VENDOR_CASES.length));
+  const vendorResults = selected.map((item, index) => {
+    const vendorId = 'vendor-' + pad(index + 1, 3);
+    const packetPath = path.join(incomingDir, vendorId + '.md');
+    planWriteFile(packetPath, renderVendorPacket(vendorId, item));
+    return {
+      vendorId,
+      vendorName: item.vendorName,
+      sourcePath: path.join('vendors', 'incoming', vendorId + '.md'),
+      expectedDisposition: item.expectedDisposition,
+      acceptableDispositions: [item.expectedDisposition],
+      reasonCode: item.reasonCode,
+      expectedNextActionKind: item.expectedNextActionKind,
+      sourceFields: { criticality: item.criticality, annualSpend: item.annualSpend, dpaStatus: item.dpaStatus, certification: item.certification, certificationExpiry: item.certificationExpiry, certificationStatus: item.certificationStatus, incidentStatus: item.incidentStatus, dataAccess: item.dataAccess }
+    };
+  });
 
   const manifest = buildManifest(
     'vendor-compliance',
-    { vendorCount: COUNT, completeRate: COMPLETE_RATE },
+    { vendorCount: selected.length },
     {
-      files: vendorResults.map(v => ({
-        sourcePath: path.join('vendors', 'incoming', v.vendorId),
-        vendorId: v.vendorId,
-        vendorName: v.vendorName,
-        expectedDisposition: v.expectedDisposition,
-        isComplete: v.isComplete,
-        hasCert: v.hasCert,
-        certExpired: v.certExpired,
-        hasIncident: v.hasIncident
-      }))
+      dispositions: ['Approve', 'Conditional Approve', 'Reject'],
+      files: vendorResults,
+      summary: {
+        total: vendorResults.length,
+        Approve: vendorResults.filter(v => v.expectedDisposition === 'Approve').length,
+        'Conditional Approve': vendorResults.filter(v => v.expectedDisposition === 'Conditional Approve').length,
+        Reject: vendorResults.filter(v => v.expectedDisposition === 'Reject').length
+      }
     },
     {
-      policyFiles: ['vendors/vendor-onboarding-policy.md'],
       dispositionSet: ['Approve', 'Conditional Approve', 'Reject'],
       sourcePreservation: true,
-      note: 'Content scenarios are not yet fully aligned with BUSINESS_FIXTURE_SPEC.md policy and edge-case requirements.'
+      requiredSourceFields: ['Vendor ID', 'Vendor Name', 'Criticality', 'Data Processing Agreement', 'Security Certification', 'Certification Expiry Date', 'Certification Status', 'Incident Status'],
+      seededEdgeCases: ['missing_security_certification', 'missing_dpa', 'expired_certification', 'active_incident', 'resolved_incident_current_cert'],
+      policyLocation: 'workflow metadata',
+      note: 'Policy is intentionally not emitted into the workspace.'
     },
     ARTIFACT_SCHEMAS['vendor-compliance']
   );
 
   writeManifest(path.join(fixtureDir, 'fixture-manifest.json'), manifest);
-
   return manifest;
 }
 

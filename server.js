@@ -1425,6 +1425,121 @@ function createLegalIntakeWorkflowDefinition(now = new Date().toISOString()) {
   };
 }
 
+
+const VENDOR_COMPLIANCE_WORKFLOW_POLICY_TEXT = [
+  'Decision rules:',
+  '- Approve: DPA is signed/current, Security Certification is provided, Certification Status is Current, and there is no active security incident.',
+  '- Conditional Approve: Certification Status is Expired but DPA is signed/current; require recertification within 90 days.',
+  '- Conditional Approve: active security incident is under review but required documents are present; require monitoring condition.',
+  '- Reject: Security Certification is missing/not provided or Certification Status is Missing.',
+  '- Reject: Data Processing Agreement is missing.',
+  '',
+  'Resolved incidents do not require conditional approval when DPA is signed/current and Certification Status is Current.',
+  'Use only these dispositions exactly: Approve, Conditional Approve, Reject.',
+  'Each row must cite packet evidence and a policy reference.'
+].join('\n');
+
+function createVendorComplianceWorkflowDefinition(now = new Date().toISOString()) {
+  return {
+    id: 'vendor-compliance',
+    name: 'Vendor Compliance',
+    version: '1',
+    description: 'Classifies vendor compliance packets with attached workflow policy and writes audit artifacts.',
+    enabled: true,
+    policy: {
+      id: 'vendor-compliance-decision-policy',
+      version: '1',
+      text: VENDOR_COMPLIANCE_WORKFLOW_POLICY_TEXT
+    },
+    taskPromptTemplate: [
+      'Classify every provided vendor compliance packet using workflow.policy.text.',
+      'Return a complete CSV and Markdown audit summary only after considering every vendor packet.',
+      'CSV columns must be exactly: vendor_id,vendor_name,disposition,reason,policy_reference,next_action'
+    ].join('\n'),
+    verifierContract: {
+      id: 'vendor-compliance-verifier',
+      version: '1',
+      fixture: 'vendor-compliance',
+      expectedArtifacts: [
+        'vendors/vendor-decision-register.csv',
+        'vendors/compliance-review.md'
+      ]
+    },
+    inputSchema: {
+      basePath: 'string'
+    },
+    actions: [
+      { id: 'read_001', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-001.md' }, saveAs: 'vendor001', next: 'read_002' },
+      { id: 'read_002', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-002.md' }, saveAs: 'vendor002', next: 'read_003' },
+      { id: 'read_003', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-003.md' }, saveAs: 'vendor003', next: 'read_004' },
+      { id: 'read_004', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-004.md' }, saveAs: 'vendor004', next: 'read_005' },
+      { id: 'read_005', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-005.md' }, saveAs: 'vendor005', next: 'read_006' },
+      { id: 'read_006', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-006.md' }, saveAs: 'vendor006', next: 'read_007' },
+      { id: 'read_007', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-007.md' }, saveAs: 'vendor007', next: 'read_008' },
+      { id: 'read_008', action: 'readFile', input: { path: '{{workflow.input.basePath}}/incoming/vendor-008.md' }, saveAs: 'vendor008', next: 'classify' },
+      {
+        id: 'classify',
+        action: 'agentStructuredOutput',
+        input: {
+          instruction: '{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}',
+          input: {
+            vendors: {
+              'vendor-001': '{{vendor001.content}}',
+              'vendor-002': '{{vendor002.content}}',
+              'vendor-003': '{{vendor003.content}}',
+              'vendor-004': '{{vendor004.content}}',
+              'vendor-005': '{{vendor005.content}}',
+              'vendor-006': '{{vendor006.content}}',
+              'vendor-007': '{{vendor007.content}}',
+              'vendor-008': '{{vendor008.content}}'
+            }
+          },
+          outputSchema: {
+            vendorDecisionRegisterCsv: 'string',
+            complianceReviewMd: 'string'
+          }
+        },
+        saveAs: 'classification',
+        next: 'write_register'
+      },
+      {
+        id: 'write_register',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.basePath}}/vendor-decision-register.csv',
+          content: '{{classification.vendorDecisionRegisterCsv}}'
+        },
+        next: 'write_review'
+      },
+      {
+        id: 'write_review',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.basePath}}/compliance-review.md',
+          content: '{{classification.complianceReviewMd}}'
+        },
+        next: 'done'
+      },
+      {
+        id: 'done',
+        action: 'stop',
+        input: {
+          result: {
+            vendorDecisionRegisterPath: '{{workflow.input.basePath}}/vendor-decision-register.csv',
+            complianceReviewPath: '{{workflow.input.basePath}}/compliance-review.md'
+          }
+        }
+      }
+    ],
+    postconditions: [
+      { id: 'register-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/vendor-decision-register.csv' },
+      { id: 'review-exists', type: 'fileExists', path: '{{workflow.input.basePath}}/compliance-review.md' }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 function readWorkflows() {
   return readJsonArrayCached(WORKFLOWS_FILE);
 }
@@ -12858,6 +12973,12 @@ async function createDefaultData() {
     workflows.push(createLegalIntakeWorkflowDefinition());
     writeWorkflows(workflows);
     console.log('Created workflow: legal-intake');
+  }
+
+  if (!workflows.some(workflow => workflow.id === 'vendor-compliance')) {
+    workflows.push(createVendorComplianceWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created workflow: vendor-compliance');
   }
 }
 

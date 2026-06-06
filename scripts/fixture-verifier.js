@@ -228,9 +228,12 @@ function verifyVendorCompliance() {
   }
 
   // Compare dispositions against manifest expectations
+  const expectedItems = manifest.expectedDecisionSet && Array.isArray(manifest.expectedDecisionSet.files)
+    ? manifest.expectedDecisionSet.files
+    : (Array.isArray(manifest.files) ? manifest.files : []);
   let checked = 0;
   let matched = 0;
-  for (const expected of manifest.files) {
+  for (const expected of expectedItems) {
     const match = register.rows.find(r =>
       r.vendor_id === expected.vendorId || r.vendor_name === expected.vendorName
     );
