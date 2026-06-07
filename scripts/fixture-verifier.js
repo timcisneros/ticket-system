@@ -226,6 +226,10 @@ function verifyVendorCompliance() {
     return verifyVendorFailureHandoff(fixturePath, manifest);
   }
 
+  if (args['ticket-plan']) {
+    return verifyVendorTicketPlan(fixturePath, manifest);
+  }
+
   const passed = [];
   const failed = [];
 
@@ -318,6 +322,92 @@ function readReplaySnapshotByRunId(runId) {
   const snapshotPath = path.join(dataDir, 'replay-snapshots', 'run-' + runId + '.json');
   if (!fs.existsSync(snapshotPath)) return null;
   return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+}
+
+
+function readTicketsFromEnv() {
+  const dataDir = process.env.DATA_DIR;
+  if (!dataDir) return [];
+  const ticketsPath = path.join(dataDir, 'tickets.json');
+  if (!fs.existsSync(ticketsPath)) return [];
+  return JSON.parse(fs.readFileSync(ticketsPath, 'utf8'));
+}
+
+function verifyVendorTicketPlan(fixturePath, manifest) {
+  const passed = [];
+  const failed = [];
+  const runId = process.env.RUN_ID;
+  const expectedItems = manifest.expectedDecisionSet && Array.isArray(manifest.expectedDecisionSet.files)
+    ? manifest.expectedDecisionSet.files
+    : [];
+  const expectedRemediation = expectedItems.filter(item =>
+    item.expectedDisposition === 'Conditional Approve' || item.expectedDisposition === 'Reject'
+  );
+  const expectedApprove = expectedItems.filter(item => item.expectedDisposition === 'Approve');
+  const tickets = readTicketsFromEnv();
+  const childTickets = tickets.filter(ticket => String(ticket.parentRunId || '') === String(runId || ''));
+  const childByVendorId = new Map(childTickets.map(ticket => [ticket.workflowInput && ticket.workflowInput.vendorId, ticket]));
+
+  if (childTickets.length === expectedRemediation.length) {
+    passed.push('Child ticket count matched expected remediation vendors: ' + childTickets.length);
+  } else {
+    failed.push('Expected ' + expectedRemediation.length + ' child tickets, found ' + childTickets.length);
+  }
+
+  for (const expected of expectedRemediation) {
+    const ticket = childByVendorId.get(expected.vendorId);
+    if (!ticket) {
+      failed.push(expected.vendorName + ': missing remediation child ticket');
+      continue;
+    }
+    if (ticket.workflowId !== 'vendor-remediation-task') failed.push(expected.vendorName + ': child workflowId mismatch: ' + ticket.workflowId);
+    if (!ticket.workflowInput || ticket.workflowInput.vendorId !== expected.vendorId) failed.push(expected.vendorName + ': child workflowInput vendorId mismatch');
+    if (!ticket.parentTicketId || !ticket.parentRunId || !ticket.parentWorkflowId || !ticket.spawnedByStepId || !ticket.spawnPlanId) {
+      failed.push(expected.vendorName + ': child ticket missing parent/spawn metadata');
+    }
+    if (!ticket.spawnIdempotencyKey) failed.push(expected.vendorName + ': child ticket missing idempotency key');
+  }
+
+  for (const expected of expectedApprove) {
+    if (childByVendorId.has(expected.vendorId)) {
+      failed.push(expected.vendorName + ': Approve vendor should not have child ticket');
+    }
+  }
+
+  if (expectedRemediation.length && expectedRemediation.every(item => childByVendorId.has(item.vendorId))) {
+    passed.push('All remediation vendor child tickets present');
+  }
+  if (expectedApprove.length && expectedApprove.every(item => !childByVendorId.has(item.vendorId))) {
+    passed.push('No child tickets for Approve vendors');
+  }
+  if (childTickets.every(ticket => ticket.workflowId === 'vendor-remediation-task')) {
+    passed.push('All child tickets use vendor-remediation-task workflow');
+  }
+  if (childTickets.every(ticket => ticket.parentTicketId && ticket.parentRunId && ticket.parentWorkflowId && ticket.spawnedByStepId && ticket.spawnPlanId)) {
+    passed.push('All child tickets record parent metadata');
+  }
+
+  const snapshot = readReplaySnapshotFromEnv();
+  const requireReplay = process.env.REQUIRE_REPLAY_EVIDENCE === '1' || process.env.REQUIRE_REPLAY_EVIDENCE === 'true';
+  if (snapshot) {
+    const plan = (snapshot.workflowTicketPlans || []).find(item => item.workflowId === 'vendor-compliance-remediation-ticket-plan');
+    if (!plan) failed.push('Replay missing vendor-compliance-remediation-ticket-plan workflowTicketPlans evidence');
+    else {
+      if (!Array.isArray(plan.proposedTickets) || plan.proposedTickets.length !== expectedRemediation.length) failed.push('Replay proposed ticket count mismatch');
+      if (!Array.isArray(plan.acceptedTickets) || plan.acceptedTickets.length !== expectedRemediation.length) failed.push('Replay accepted ticket count mismatch');
+      if (Array.isArray(plan.rejectedTickets) && plan.rejectedTickets.length > 0) failed.push('Replay should not contain rejected ticket proposals');
+      if (!Array.isArray(plan.createdTicketIds) || plan.createdTicketIds.length !== expectedRemediation.length) failed.push('Replay created ticket count mismatch');
+      if (plan.spawnPlanId) passed.push('Replay ticket-plan evidence present');
+    }
+  } else if (requireReplay) {
+    failed.push('Replay evidence required but DATA_DIR/RUN_ID snapshot was not available');
+  }
+
+  return {
+    passed: failed.length === 0,
+    checks: [...passed.map(p => ({ status: 'pass', message: p })), ...failed.map(f => ({ status: 'fail', message: f }))],
+    count: { passed: passed.length, failed: failed.length }
+  };
 }
 
 function verifyVendorFailureHandoff(fixturePath, manifest) {

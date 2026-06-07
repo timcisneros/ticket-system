@@ -781,6 +781,239 @@ async function main() {
     assert(budgetPlanEvidence.rejectedActions.length === 1, 'budget action plan should reject mutation over maxMutations');
     assert(budgetPlanEvidence.rejectedActions[0].validationReasons.some(reason => reason.includes('maxMutations')), 'budget rejection should mention maxMutations');
 
+
+    const childWorkflow = {
+      id: `workflow-ticket-plan-child-${Date.now()}`,
+      name: 'Ticket plan child workflow',
+      enabled: true,
+      inputSchema: { basePath: 'string', vendorId: 'string' },
+      actions: [
+        { id: 'done', action: 'stop', input: { result: { child: true, vendorId: '{{workflow.input.vendorId}}' } } }
+      ]
+    };
+    const childWorkflowResponse = await createWorkflow(cookie, childWorkflow);
+    assert(childWorkflowResponse.statusCode === 302, `child workflow save returned HTTP ${childWorkflowResponse.statusCode}`);
+
+    const ticketPlanWorkflow = {
+      id: `workflow-ticket-plan-valid-${Date.now()}`,
+      name: 'Valid ticket plan workflow',
+      enabled: true,
+      inputSchema: {},
+      actions: [
+        {
+          id: 'execute-ticket-plan',
+          action: 'executeTicketPlan',
+          input: {
+            tickets: [
+              {
+                workflowId: childWorkflow.id,
+                objective: 'Vendor Remediation Task - DataSync Corp',
+                workflowInput: { basePath: 'vendors', vendorId: 'vendor-002' },
+                reason: 'Conditional Approve due to expired certification'
+              },
+              {
+                workflowId: childWorkflow.id,
+                objective: 'Vendor Remediation Task - SecureMail Ltd',
+                workflowInput: { basePath: 'vendors', vendorId: 'vendor-003' },
+                reason: 'Conditional Approve due to active incident'
+              }
+            ],
+            allowedWorkflowIds: [childWorkflow.id],
+            maxTickets: 5
+          },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ]
+    };
+    const ticketPlanResponse = await createWorkflow(cookie, ticketPlanWorkflow);
+    assert(ticketPlanResponse.statusCode === 302, `ticket plan workflow save returned HTTP ${ticketPlanResponse.statusCode}: ${ticketPlanResponse.body}`);
+    const ticketPlanTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run valid ticket plan workflow',
+        capabilityType: 'workflow',
+        workflowId: ticketPlanWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(ticketPlanTicketResponse.statusCode === 302, `ticket plan ticket create returned HTTP ${ticketPlanTicketResponse.statusCode}`);
+    const ticketPlanParentTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const ticketPlanRun = await waitForCompletedRun(ticketPlanParentTicket.id);
+    assert(ticketPlanRun.status === 'completed', `valid executeTicketPlan workflow should complete, got ${ticketPlanRun.status}: ${ticketPlanRun.error || ''}`);
+    const ticketPlanSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, ticketPlanRun.replaySnapshotPath), 'utf8'));
+    const ticketPlanEvidence = (ticketPlanSnapshot.workflowTicketPlans || []).find(item => item.stepId === 'execute-ticket-plan');
+    assert(ticketPlanEvidence, 'executeTicketPlan should record workflowTicketPlans evidence');
+    assert(ticketPlanEvidence.proposedTickets.length === 2, 'executeTicketPlan replay should record proposed tickets');
+    assert(ticketPlanEvidence.acceptedTickets.length === 2, 'executeTicketPlan replay should record accepted tickets');
+    assert(ticketPlanEvidence.rejectedTickets.length === 0, 'valid executeTicketPlan should not reject tickets');
+    assert(ticketPlanEvidence.createdTicketIds.length === 2, 'executeTicketPlan should record created ticket ids');
+    const ticketPlanWorkflowAction = ticketPlanSnapshot.workflowActions.find(item => item.stepId === 'execute-ticket-plan' && item.action === 'executeTicketPlan');
+    assert(ticketPlanWorkflowAction.result.status === 'created', 'executeTicketPlan workflow action should report created status');
+    const childTickets = readJson('tickets.json').filter(item => ticketPlanEvidence.createdTicketIds.includes(item.id));
+    assert(childTickets.length === 2, 'executeTicketPlan should persist two child tickets');
+    assert(childTickets.every(item => item.workflowId === childWorkflow.id), 'child tickets should use requested workflow id');
+    assert(childTickets.every(item => item.status === 'blocked'), 'child tickets should not auto-run in v1');
+    assert(childTickets.every(item => item.blockedReason && item.blockedReason.includes('not automatic')), 'child tickets should explain blocked execution state');
+    assert(childTickets.every(item => item.parentTicketId === ticketPlanParentTicket.id), 'child tickets should record parent ticket id');
+    assert(childTickets.every(item => item.parentRunId === ticketPlanRun.id), 'child tickets should record parent run id');
+    assert(childTickets.every(item => item.parentWorkflowId === ticketPlanWorkflow.id), 'child tickets should record parent workflow id');
+    assert(childTickets.every(item => item.spawnedByStepId === 'execute-ticket-plan'), 'child tickets should record spawning step id');
+    assert(childTickets.some(item => item.workflowInput.vendorId === 'vendor-002'), 'child ticket should preserve vendor-002 workflow input');
+    assert(childTickets.some(item => item.workflowInput.vendorId === 'vendor-003'), 'child ticket should preserve vendor-003 workflow input');
+    assert(!readJson('runs.json').some(item => childTickets.map(ticket => ticket.id).includes(item.ticketId)), 'executeTicketPlan v1 should not create child runs');
+
+    const invalidTicketPlanWorkflow = {
+      id: `workflow-ticket-plan-invalid-${Date.now()}`,
+      name: 'Invalid ticket plan workflow',
+      enabled: true,
+      inputSchema: {},
+      actions: [
+        {
+          id: 'execute-ticket-plan',
+          action: 'executeTicketPlan',
+          input: {
+            tickets: [
+              { workflowId: 'missing-child-workflow', objective: 'Invalid child', workflowInput: { basePath: 'vendors', vendorId: 'vendor-999' }, reason: 'invalid workflow' }
+            ],
+            allowedWorkflowIds: [childWorkflow.id],
+            maxTickets: 5
+          },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ]
+    };
+    await createWorkflow(cookie, invalidTicketPlanWorkflow);
+    const invalidTicketPlanTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run invalid ticket plan workflow',
+        capabilityType: 'workflow',
+        workflowId: invalidTicketPlanWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(invalidTicketPlanTicketResponse.statusCode === 302, `invalid ticket plan ticket create returned HTTP ${invalidTicketPlanTicketResponse.statusCode}`);
+    const invalidTicketPlanParentTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const invalidTicketPlanRun = await waitForCompletedRun(invalidTicketPlanParentTicket.id);
+    assert(invalidTicketPlanRun.status === 'completed', 'invalid workflowId should be rejected without failing workflow execution');
+    const invalidTicketPlanSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, invalidTicketPlanRun.replaySnapshotPath), 'utf8'));
+    const invalidTicketPlanEvidence = (invalidTicketPlanSnapshot.workflowTicketPlans || []).find(item => item.stepId === 'execute-ticket-plan');
+    assert(invalidTicketPlanEvidence.acceptedTickets.length === 0, 'invalid ticket plan should accept no tickets');
+    assert(invalidTicketPlanEvidence.rejectedTickets.length === 1, 'invalid ticket plan should record rejected ticket');
+    assert(invalidTicketPlanEvidence.rejectedTickets[0].validationReasons.some(reason => reason.includes('not in allowedWorkflowIds')), 'invalid ticket rejection should explain allowed workflow failure');
+    assert(invalidTicketPlanEvidence.createdTicketIds.length === 0, 'invalid ticket plan should create no tickets');
+
+    const overMaxTicketPlanWorkflow = {
+      id: `workflow-ticket-plan-over-max-${Date.now()}`,
+      name: 'Over max ticket plan workflow',
+      enabled: true,
+      inputSchema: {},
+      actions: [
+        {
+          id: 'execute-ticket-plan',
+          action: 'executeTicketPlan',
+          input: {
+            tickets: [
+              { workflowId: childWorkflow.id, objective: 'Child A', workflowInput: { basePath: 'vendors', vendorId: 'vendor-010' }, reason: 'one' },
+              { workflowId: childWorkflow.id, objective: 'Child B', workflowInput: { basePath: 'vendors', vendorId: 'vendor-011' }, reason: 'two' }
+            ],
+            allowedWorkflowIds: [childWorkflow.id],
+            maxTickets: 1
+          },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ]
+    };
+    await createWorkflow(cookie, overMaxTicketPlanWorkflow);
+    const overMaxTicketPlanTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run over max ticket plan workflow',
+        capabilityType: 'workflow',
+        workflowId: overMaxTicketPlanWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(overMaxTicketPlanTicketResponse.statusCode === 302, `over max ticket plan ticket create returned HTTP ${overMaxTicketPlanTicketResponse.statusCode}`);
+    const overMaxTicketPlanParentTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const overMaxTicketPlanRun = await waitForCompletedRun(overMaxTicketPlanParentTicket.id);
+    assert(overMaxTicketPlanRun.status === 'completed', 'over max ticket plan should reject deterministically without creating tickets');
+    const overMaxTicketPlanSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, overMaxTicketPlanRun.replaySnapshotPath), 'utf8'));
+    const overMaxTicketPlanEvidence = (overMaxTicketPlanSnapshot.workflowTicketPlans || []).find(item => item.stepId === 'execute-ticket-plan');
+    assert(overMaxTicketPlanEvidence.acceptedTickets.length === 0, 'over max ticket plan should accept no tickets');
+    assert(overMaxTicketPlanEvidence.rejectedTickets.length === 2, 'over max ticket plan should reject all proposed tickets');
+    assert(overMaxTicketPlanEvidence.createdTicketIds.length === 0, 'over max ticket plan should create no tickets');
+
+    const duplicateTicketPlanWorkflow = {
+      id: `workflow-ticket-plan-duplicate-${Date.now()}`,
+      name: 'Duplicate ticket plan workflow',
+      enabled: true,
+      inputSchema: {},
+      actions: [
+        {
+          id: 'execute-ticket-plan-a',
+          action: 'executeTicketPlan',
+          input: {
+            tickets: [
+              { workflowId: childWorkflow.id, objective: 'Vendor Remediation Task - Duplicate Vendor', workflowInput: { basePath: 'vendors', vendorId: 'vendor-012' }, reason: 'first proposal' }
+            ],
+            allowedWorkflowIds: [childWorkflow.id],
+            maxTickets: 5
+          },
+          next: 'execute-ticket-plan-b'
+        },
+        {
+          id: 'execute-ticket-plan-b',
+          action: 'executeTicketPlan',
+          input: {
+            tickets: [
+              { workflowId: childWorkflow.id, objective: 'Vendor Remediation Task - Duplicate Vendor Again', workflowInput: { basePath: 'vendors', vendorId: 'vendor-012' }, reason: 'duplicate proposal' }
+            ],
+            allowedWorkflowIds: [childWorkflow.id],
+            maxTickets: 5
+          },
+          next: 'done'
+        },
+        { id: 'done', action: 'stop', input: { result: { completed: true } } }
+      ]
+    };
+    await createWorkflow(cookie, duplicateTicketPlanWorkflow);
+    const duplicateTicketPlanTicketResponse = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Run duplicate ticket plan workflow',
+        capabilityType: 'workflow',
+        workflowId: duplicateTicketPlanWorkflow.id,
+        workflowInput: '{}',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(duplicateTicketPlanTicketResponse.statusCode === 302, `duplicate ticket plan ticket create returned HTTP ${duplicateTicketPlanTicketResponse.statusCode}`);
+    const duplicateTicketPlanParentTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    const duplicateTicketPlanRun = await waitForCompletedRun(duplicateTicketPlanParentTicket.id);
+    assert(duplicateTicketPlanRun.status === 'completed', 'duplicate ticket plan workflow should complete with deterministic rejection');
+    const duplicateTicketPlanSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, duplicateTicketPlanRun.replaySnapshotPath), 'utf8'));
+    const duplicatePlanA = (duplicateTicketPlanSnapshot.workflowTicketPlans || []).find(item => item.stepId === 'execute-ticket-plan-a');
+    const duplicatePlanB = (duplicateTicketPlanSnapshot.workflowTicketPlans || []).find(item => item.stepId === 'execute-ticket-plan-b');
+    assert(duplicatePlanA.createdTicketIds.length === 1, 'first duplicate plan step should create one child ticket');
+    assert(duplicatePlanB.createdTicketIds.length === 0, 'second duplicate plan step should create no duplicate child ticket');
+    assert(duplicatePlanB.rejectedTickets.length === 1, 'second duplicate plan step should reject duplicate child ticket');
+    assert(duplicatePlanB.rejectedTickets[0].validationReasons.some(reason => reason.includes('duplicate child ticket already exists')), 'duplicate rejection should explain idempotency');
+
     const overMutationCapWorkflow = {
       id: `workflow-over-mutation-cap-${Date.now()}`,
       name: 'Over mutation cap workflow',

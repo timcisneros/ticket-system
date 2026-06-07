@@ -820,6 +820,16 @@ const ACTIONS_CATALOG = [
     provenanceSurface: 'Run replay snapshot workflowActionPlans, workflowActions, workspaceOperations, operation-history, events'
   },
   {
+    name: 'executeTicketPlan', displayName: 'Execute Ticket Plan', category: 'workflow', type: 'workflowAction', invoker: 'workflow', mutating: false,
+    requestShape: { tickets: [{}], allowedWorkflowIds: ['string'], maxTickets: 'number' },
+    inputSchema: { tickets: [{}], allowedWorkflowIds: ['string'], maxTickets: 'number' },
+    optionalShape: null,
+    responseShape: { proposedTickets: [{}], acceptedTickets: [{}], rejectedTickets: [{}], createdTicketIds: ['number'], status: 'string' },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Workflow-only bounded child workflow ticket creation; child workflows only; no child execution in v1',
+    provenanceSurface: 'Run replay snapshot workflowTicketPlans, workflowActions, ticket records, events'
+  },
+  {
     name: 'agentStructuredOutput', displayName: 'Agent Structured Output', category: 'agent', type: 'agentAction', invoker: 'workflow', mutating: false,
     requestShape: { instruction: 'string', input: {}, outputSchema: {} },
     optionalShape: { context: {}, temperature: 'number' },
@@ -1105,6 +1115,7 @@ function isWorkflowUsableAction(action) {
 
   return action.type === 'workspaceAction' ||
     action.name === 'executeActionPlan' ||
+    action.name === 'executeTicketPlan' ||
     action.name === 'agentStructuredOutput' ||
     action.name === 'condition' ||
     action.name === 'stop';
@@ -5464,6 +5475,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     handoffTasks: [],
     workflowActions: [],
     workflowActionPlans: [],
+    workflowTicketPlans: [],
     workspaceOperations: [],
     events: [],
     terminalStatus: null,
@@ -9602,6 +9614,235 @@ async function executeActionPlanWorkflowAction(run, workflow, step, input, count
   return result;
 }
 
+
+function normalizeTicketPlanReason(reason) {
+  return typeof reason === 'string' ? reason : '';
+}
+
+function getTicketPlanVendorId(ticket) {
+  const input = ticket && ticket.workflowInput && typeof ticket.workflowInput === 'object' && !Array.isArray(ticket.workflowInput)
+    ? ticket.workflowInput
+    : {};
+  const vendorId = input.vendorId;
+  return typeof vendorId === 'string' && vendorId.trim() ? vendorId.trim() : null;
+}
+
+function buildTicketPlanIdempotencyKey(run, ticket) {
+  const vendorId = getTicketPlanVendorId(ticket) || 'no-vendor';
+  return [run.id, ticket.workflowId || 'no-workflow', vendorId].join(':');
+}
+
+function normalizeProposedTicketPlanItem(ticket, index) {
+  const workflowInput = ticket && ticket.workflowInput && typeof ticket.workflowInput === 'object' && !Array.isArray(ticket.workflowInput)
+    ? ticket.workflowInput
+    : null;
+  return {
+    index,
+    workflowId: ticket && typeof ticket.workflowId === 'string' ? ticket.workflowId : null,
+    objective: ticket && typeof ticket.objective === 'string' ? ticket.objective : '',
+    workflowInput,
+    reason: normalizeTicketPlanReason(ticket && ticket.reason)
+  };
+}
+
+function buildRejectedTicketPlanItem(ticket, index, reasons) {
+  return {
+    ...normalizeProposedTicketPlanItem(ticket, index),
+    validationReasons: reasons
+  };
+}
+
+function workflowContainsTicketPlanAction(workflow) {
+  return Boolean(workflow && Array.isArray(workflow.actions) && workflow.actions.some(step => step && step.action === 'executeTicketPlan'));
+}
+
+function validateTicketPlanInput(run, input) {
+  const tickets = Array.isArray(input.tickets) ? input.tickets : [];
+  const allowedWorkflowIds = Array.isArray(input.allowedWorkflowIds)
+    ? input.allowedWorkflowIds.filter(item => typeof item === 'string')
+    : [];
+  const allowedSet = new Set(allowedWorkflowIds);
+  const maxTickets = Number.isInteger(input.maxTickets) && input.maxTickets >= 0 ? input.maxTickets : 0;
+  const proposedTickets = tickets.map((ticket, index) => normalizeProposedTicketPlanItem(ticket, index));
+  const acceptedTickets = [];
+  const rejectedTickets = [];
+
+  if (!Array.isArray(input.tickets)) {
+    return {
+      proposedTickets,
+      acceptedTickets,
+      rejectedTickets: [buildRejectedTicketPlanItem(null, null, ['executeTicketPlan.tickets must be an array'])]
+    };
+  }
+
+  if (tickets.length > maxTickets) {
+    return {
+      proposedTickets,
+      acceptedTickets,
+      rejectedTickets: proposedTickets.map(ticket => ({
+        ...ticket,
+        validationReasons: ['ticket plan length ' + tickets.length + ' exceeds maxTickets ' + maxTickets]
+      }))
+    };
+  }
+
+  const existingTickets = readTickets();
+  const seenKeys = new Set();
+
+  tickets.forEach((ticket, index) => {
+    const reasons = [];
+    const proposed = normalizeProposedTicketPlanItem(ticket, index);
+    const workflowId = proposed.workflowId;
+    const workflow = workflowId ? getWorkflowById(workflowId) : null;
+    const objective = typeof proposed.objective === 'string' ? proposed.objective.trim() : '';
+    const workflowInput = proposed.workflowInput;
+
+    if (!workflowId) reasons.push('workflowId is required');
+    if (workflowId && !allowedSet.has(workflowId)) reasons.push('workflowId ' + workflowId + ' is not in allowedWorkflowIds');
+    if (workflowId && !workflow) reasons.push('workflow not found: ' + workflowId);
+    if (workflow && workflow.enabled === false) reasons.push('workflow is disabled: ' + workflowId);
+    if (workflow && workflowContainsTicketPlanAction(workflow)) reasons.push('recursive executeTicketPlan child workflows are not allowed in v1');
+    if (!workflowInput) reasons.push('workflowInput must be an object');
+    if (workflow && workflowInput) {
+      reasons.push(...validateSchemaValue(workflow.inputSchema || {}, workflowInput, 'workflowInput').map(error => 'schema: ' + error));
+    }
+    if (!objective) reasons.push('objective is required');
+    if (objective.length > 240) reasons.push('objective exceeds 240 characters');
+
+    const idempotencyKey = buildTicketPlanIdempotencyKey(run, proposed);
+    if (seenKeys.has(idempotencyKey)) reasons.push('duplicate ticket plan item: ' + idempotencyKey);
+    if (existingTickets.some(item => item && item.spawnIdempotencyKey === idempotencyKey)) reasons.push('duplicate child ticket already exists: ' + idempotencyKey);
+
+    if (reasons.length > 0) {
+      rejectedTickets.push({ ...proposed, idempotencyKey, validationReasons: reasons });
+      return;
+    }
+
+    seenKeys.add(idempotencyKey);
+    acceptedTickets.push({ ...proposed, objective, workflowInput, idempotencyKey });
+  });
+
+  return { proposedTickets, acceptedTickets, rejectedTickets };
+}
+
+function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket, spawnPlanId) {
+  const tickets = readTickets();
+  const existing = tickets.find(ticket => ticket && ticket.spawnIdempotencyKey === planTicket.idempotencyKey);
+  if (existing) return existing;
+
+  const now = new Date().toISOString();
+  const childTicket = {
+    id: nextId(tickets),
+    objective: planTicket.objective,
+    status: 'blocked',
+    blockedReason: 'Created by executeTicketPlan; child workflow execution is not automatic in v1.',
+    assignmentTargetType: 'agent',
+    assignmentTargetId: run.agentId,
+    assignmentMode: 'individual',
+    executionMode: 'workflow',
+    workflowId: planTicket.workflowId,
+    workflowInput: planTicket.workflowInput,
+    capabilityType: 'workflow',
+    capabilityId: planTicket.workflowId,
+    capabilityInput: planTicket.workflowInput,
+    parentTicketId: run.ticketId,
+    parentRunId: run.id,
+    parentWorkflowId: workflow.id,
+    spawnedByStepId: step.id,
+    spawnPlanId,
+    spawnIdempotencyKey: planTicket.idempotencyKey,
+    spawnReason: planTicket.reason || null,
+    createdBy: 'workflow:' + workflow.id,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  tickets.push(childTicket);
+  writeTickets(tickets);
+  appendEvent({
+    type: 'ticket.created',
+    ticketId: childTicket.id,
+    runId: run.id,
+    payload: {
+      objective: childTicket.objective,
+      assignmentTargetType: childTicket.assignmentTargetType,
+      assignmentTargetId: childTicket.assignmentTargetId,
+      assignmentMode: childTicket.assignmentMode,
+      executionMode: childTicket.executionMode,
+      workflowId: childTicket.workflowId,
+      blockedReason: childTicket.blockedReason || null,
+      parentTicketId: childTicket.parentTicketId,
+      parentRunId: childTicket.parentRunId,
+      parentWorkflowId: childTicket.parentWorkflowId,
+      spawnedByStepId: childTicket.spawnedByStepId,
+      spawnPlanId: childTicket.spawnPlanId,
+      spawnIdempotencyKey: childTicket.spawnIdempotencyKey,
+      createdBy: childTicket.createdBy,
+      createdAt: childTicket.createdAt
+    }
+  });
+  broadcastTicketChange();
+  return childTicket;
+}
+
+async function executeTicketPlanWorkflowAction(run, workflow, step, input) {
+  const startedAt = Date.now();
+  const spawnPlanId = [run.id, workflow.id, step.id, startedAt].join(':');
+  const validation = validateTicketPlanInput(run, input);
+  const createdTickets = [];
+
+  for (const ticket of validation.acceptedTickets) {
+    const childTicket = createChildWorkflowTicketFromPlan(run, workflow, step, ticket, spawnPlanId);
+    createdTickets.push({
+      index: ticket.index,
+      ticketId: childTicket.id,
+      workflowId: childTicket.workflowId,
+      objective: childTicket.objective,
+      workflowInput: childTicket.workflowInput,
+      idempotencyKey: childTicket.spawnIdempotencyKey
+    });
+  }
+
+  const result = {
+    proposedTickets: validation.proposedTickets,
+    acceptedTickets: validation.acceptedTickets,
+    rejectedTickets: validation.rejectedTickets,
+    createdTicketIds: createdTickets.map(ticket => ticket.ticketId),
+    status: validation.rejectedTickets.length > 0 ? 'partial' : 'created'
+  };
+
+  appendRunReplaySnapshotItem(run.id, 'workflowTicketPlans', {
+    workflowId: workflow.id,
+    stepId: step.id,
+    spawnPlanId,
+    proposedTickets: sanitizeSnapshotValue(validation.proposedTickets),
+    acceptedTickets: sanitizeSnapshotValue(validation.acceptedTickets),
+    rejectedTickets: sanitizeSnapshotValue(validation.rejectedTickets),
+    createdTickets: sanitizeSnapshotValue(createdTickets),
+    createdTicketIds: createdTickets.map(ticket => ticket.ticketId),
+    validationReasons: sanitizeSnapshotValue(validation.rejectedTickets.flatMap(ticket => ticket.validationReasons || [])),
+    startedAt: new Date(startedAt).toISOString(),
+    durationMs: Date.now() - startedAt
+  });
+
+  appendEvent({
+    type: 'workflow.ticket_plan.executed',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: step.id,
+    payload: {
+      workflowId: workflow.id,
+      spawnPlanId,
+      proposedCount: validation.proposedTickets.length,
+      acceptedCount: validation.acceptedTickets.length,
+      rejectedCount: validation.rejectedTickets.length,
+      createdTicketIds: createdTickets.map(ticket => ticket.ticketId)
+    }
+  });
+
+  return result;
+}
+
 async function executeWorkflowAction(run, workflow, step, input, context, counters, startedAtMs, limits, agent) {
   const contract = getActionContract(step.action);
   if (!contract) throw new Error(`Unknown workflow action: ${step.action}`);
@@ -9665,6 +9906,8 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
       });
     } else if (step.action === 'executeActionPlan') {
       result = await executeActionPlanWorkflowAction(run, workflow, step, input, counters, limits);
+    } else if (step.action === 'executeTicketPlan') {
+      result = await executeTicketPlanWorkflowAction(run, workflow, step, input);
     } else if (step.action === 'agentStructuredOutput') {
       result = await executeAgentStructuredOutputAction(run, agent, input, counters, startedAtMs, limits);
     } else if (step.action === 'condition') {
