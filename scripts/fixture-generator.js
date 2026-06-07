@@ -577,6 +577,117 @@ const SUPPORT_CASES = [
   }
 ];
 
+function buildGeneratedSupportCase(index) {
+  const ticketId = 'SUP-2026-' + pad(index, 3);
+  const filename = 'ticket-' + pad(index, 3) + '.md';
+  const base = {
+    ticketId,
+    filename,
+    customerName: 'Customer ' + pad(index, 2),
+    customerTier: index % 5 === 0 ? 'Enterprise' : (index % 3 === 0 ? 'Premium' : 'Standard'),
+    reportedOffsetMinutes: -60 - index * 11,
+    duplicateGroup: 'none',
+    expectedEscalation: 'No',
+    expectedSla: '2 business days',
+    expectedNextActionKind: 'product_feedback'
+  };
+
+  const special = {
+    9: {
+      subject: 'US API service down for checkout callbacks', customerName: 'Meridian Foods', customerTier: 'Premium', issueType: 'Incident',
+      impact: 'Checkout callback API returns 500 for most US requests.', description: 'Customer says orders are stuck because callback delivery fails after payment capture.', escalationSignals: 'Production outage; order processing blocked.', duplicateGroup: 'us-callback-outage',
+      expectedPriority: 'P1', expectedTeam: 'On-Call', expectedEscalation: 'Yes', expectedSla: '15 minutes', expectedNextActionKind: 'page_on_call'
+    },
+    10: {
+      subject: 'Conflicting report: US callback failures only on retries', customerName: 'Meridian Foods', customerTier: 'Premium', issueType: 'Incident',
+      impact: 'Second report says first callback sometimes succeeds but retries fail.', description: 'Conflicts with SUP-2026-009 on scope, but points to the same production incident window.', escalationSignals: 'Conflicting incident report; same customer and service as SUP-2026-009.', duplicateGroup: 'us-callback-outage',
+      expectedPriority: 'P1', expectedTeam: 'On-Call', expectedEscalation: 'Yes', expectedSla: '15 minutes', expectedNextActionKind: 'page_on_call'
+    },
+    11: {
+      subject: 'Admin export timeout for enterprise renewal report', customerName: 'Aster Telecom', customerTier: 'Enterprise', issueType: 'Bug',
+      impact: 'Renewal operations team cannot export quarterly account report.', description: 'Enterprise customer reports export timeout for a report needed by the renewal desk today.', escalationSignals: 'Enterprise tier; revenue renewal deadline; degraded business-critical workflow.',
+      expectedPriority: 'P2', expectedTeam: 'Engineering', expectedEscalation: 'Yes', expectedSla: '1 hour', expectedNextActionKind: 'engineering_triage_enterprise'
+    },
+    12: {
+      subject: 'Billing contact cannot update invoice address', customerName: 'Harbor Robotics', customerTier: 'Standard', issueType: 'Billing',
+      impact: 'Invoice address update fails before monthly billing close.', description: 'Customer billing admin cannot save the new invoice address and needs help before close.', escalationSignals: 'Account and billing issue; no service outage.',
+      expectedPriority: 'P3', expectedTeam: 'Customer Success', expectedEscalation: 'No', expectedSla: '1 business day', expectedNextActionKind: 'billing_account_followup'
+    },
+    13: {
+      subject: 'Possible session cookie exposure in shared browser', customerName: 'Kestrel Legal', customerTier: 'Enterprise', issueType: 'Security Concern',
+      impact: 'User reports seeing another employee account after using a shared kiosk browser.', description: 'Customer cannot confirm data exposure but requests security review and session invalidation guidance.', escalationSignals: 'Possible security issue; enterprise customer; session data involved.',
+      expectedPriority: 'P1', expectedTeam: 'Security', expectedEscalation: 'Yes', expectedSla: '15 minutes', expectedNextActionKind: 'security_escalation'
+    },
+    14: {
+      subject: 'Need custom fields on saved views', customerName: 'Juniper Supply', customerTier: 'Standard', issueType: 'Feature Request',
+      impact: 'Would reduce manual filtering for account managers.', description: 'Customer requests custom fields on saved list views and is willing to discuss roadmap fit.', escalationSignals: 'Feature request; no incident.',
+      expectedPriority: 'P3', expectedTeam: 'Product', expectedEscalation: 'No', expectedSla: '2 business days', expectedNextActionKind: 'product_feedback'
+    },
+    15: {
+      subject: 'Question about webhook retry schedule', customerName: 'Lakeview Apps', customerTier: 'Premium', issueType: 'Question',
+      impact: 'Developer needs retry timing before integration launch.', description: 'Customer asks how often failed webhooks retry and whether retries can be paused.', escalationSignals: 'How-to request; no malfunction.',
+      expectedPriority: 'P3', expectedTeam: 'Customer Success', expectedEscalation: 'No', expectedSla: '1 business day', expectedNextActionKind: 'send_how_to_guidance'
+    },
+    16: {
+      subject: 'Bug maybe in reports', customerName: 'Monarch Labs', customerTier: 'Premium', issueType: 'Bug',
+      impact: 'Reporter says numbers look wrong but provides no report ID or reproduction steps.', description: 'Partial bug report with vague evidence. Needs report name, time range, and expected value before engineering can act.', escalationSignals: 'Partial bug report; missing reproduction details.',
+      expectedPriority: 'P3', expectedTeam: 'Customer Success', expectedEscalation: 'No', expectedSla: '1 business day', expectedNextActionKind: 'request_reproduction_details'
+    },
+    17: {
+      subject: 'asdf urgent please call me', customerName: 'Unknown Sender', customerTier: 'Unknown', issueType: 'Noisy',
+      impact: 'No product, account, or customer impact stated.', description: 'Short noisy request without actionable support context.', escalationSignals: 'No customer or product evidence.',
+      expectedPriority: 'P4', expectedTeam: 'Internal Triage', expectedEscalation: 'No', expectedSla: 'Backlog', expectedNextActionKind: 'request_customer_context'
+    },
+    18: {
+      subject: 'Enterprise sandbox import failed before demo', customerName: 'Orion Energy', customerTier: 'Enterprise', issueType: 'Bug',
+      impact: 'Sandbox import failed before executive demo; production unaffected.', description: 'Ambiguous escalation case because the account is enterprise but impact is a sandbox demo, not production.', escalationSignals: 'Enterprise tier; executive demo; non-production environment.',
+      expectedPriority: 'P2', expectedTeam: 'Engineering', expectedEscalation: 'Yes', expectedSla: '1 hour', expectedNextActionKind: 'engineering_triage_enterprise'
+    },
+    19: {
+      subject: 'Duplicate 1: webhook signature mismatch', customerName: 'Pioneer Media', customerTier: 'Premium', issueType: 'Bug',
+      impact: 'Webhook validation fails in production for one integration.', description: 'Primary report for webhook signature mismatch in integration PM-72.', escalationSignals: 'Single integration; reproducible customer-impacting bug.', duplicateGroup: 'webhook-signature-chain',
+      expectedPriority: 'P2', expectedTeam: 'Engineering', expectedEscalation: 'No', expectedSla: '4 business hours', expectedNextActionKind: 'bug_triage'
+    },
+    20: {
+      subject: 'Duplicate 2: webhook signature mismatch', customerName: 'Pioneer Media', customerTier: 'Premium', issueType: 'Bug',
+      impact: 'Same integration failure as SUP-2026-019.', description: 'Second user reports same webhook signature mismatch for integration PM-72.', escalationSignals: 'Duplicate chain member for webhook-signature-chain.', duplicateGroup: 'webhook-signature-chain',
+      expectedPriority: 'P2', expectedTeam: 'Engineering', expectedEscalation: 'No', expectedSla: '4 business hours', expectedNextActionKind: 'link_duplicate_to_primary'
+    },
+    21: {
+      subject: 'Duplicate 3: webhook signature mismatch', customerName: 'Pioneer Media', customerTier: 'Premium', issueType: 'Bug',
+      impact: 'Third report for same integration failure.', description: 'Third duplicate report for webhook signature mismatch in integration PM-72.', escalationSignals: 'Duplicate chain member for webhook-signature-chain.', duplicateGroup: 'webhook-signature-chain',
+      expectedPriority: 'P2', expectedTeam: 'Engineering', expectedEscalation: 'No', expectedSla: '4 business hours', expectedNextActionKind: 'link_duplicate_to_primary'
+    }
+  };
+  if (special[index]) return { ...base, ...special[index] };
+
+  const cycle = index % 6;
+  if (cycle === 0) {
+    return { ...base, subject: 'Saved report needs additional filter option', issueType: 'Feature Request', impact: 'Would improve account workflow but no current failure.', description: 'Customer requests an enhancement to saved reports for operational convenience.', escalationSignals: 'Feature request; no outage.', expectedPriority: 'P3', expectedTeam: 'Product', expectedEscalation: 'No', expectedSla: '2 business days', expectedNextActionKind: 'product_feedback' };
+  }
+  if (cycle === 1) {
+    return { ...base, subject: 'How to invite contractors with limited permissions', issueType: 'Question', impact: 'Admin needs configuration guidance.', description: 'Customer asks how to invite contractors without granting billing access.', escalationSignals: 'How-to request; no product failure.', expectedPriority: 'P3', expectedTeam: 'Customer Success', expectedEscalation: 'No', expectedSla: '1 business day', expectedNextActionKind: 'send_how_to_guidance' };
+  }
+  if (cycle === 2) {
+    return { ...base, subject: 'Search results slow for archived projects', issueType: 'Bug', impact: 'Archived project search takes 12 seconds for one workspace.', description: 'Customer can complete work but search latency affects archived projects.', escalationSignals: 'Non-enterprise degraded workflow; workaround available.', expectedPriority: 'P2', expectedTeam: 'Engineering', expectedEscalation: 'No', expectedSla: '4 business hours', expectedNextActionKind: 'bug_triage' };
+  }
+  if (cycle === 3) {
+    return { ...base, subject: 'Internal sales note sent to support queue', customerName: 'Internal Sales', customerTier: 'Internal', issueType: 'Internal', impact: 'Internal routing note only; no customer request.', description: 'Sales team accidentally forwarded a CRM note into support.', escalationSignals: 'Internal-only; no customer impact.', expectedPriority: 'P4', expectedTeam: 'Internal Triage', expectedEscalation: 'No', expectedSla: 'Backlog', expectedNextActionKind: 'route_internal_backlog' };
+  }
+  if (cycle === 4) {
+    return { ...base, subject: 'Enterprise scheduled import delayed', customerTier: 'Enterprise', issueType: 'Bug', impact: 'Scheduled import finished 40 minutes late for a business review.', description: 'Enterprise account reports delayed import completion but no data loss.', escalationSignals: 'Enterprise tier; business-critical workflow degradation.', expectedPriority: 'P2', expectedTeam: 'Engineering', expectedEscalation: 'Yes', expectedSla: '1 hour', expectedNextActionKind: 'engineering_triage_enterprise' };
+  }
+  return { ...base, subject: 'Account owner needs billing role changed', issueType: 'Billing', impact: 'Billing admin needs role update for renewal paperwork.', description: 'Customer requests help changing billing owner before renewal paperwork is sent.', escalationSignals: 'Billing/account issue; no service failure.', expectedPriority: 'P3', expectedTeam: 'Customer Success', expectedEscalation: 'No', expectedSla: '1 business day', expectedNextActionKind: 'billing_account_followup' };
+}
+
+function buildSupportCases(count) {
+  const cases = [];
+  for (let index = 1; index <= count; index++) {
+    cases.push(SUPPORT_CASES[index - 1] || buildGeneratedSupportCase(index));
+  }
+  return cases;
+}
+
 function renderSupportTicket(item) {
   return [
     '# Support Ticket',
@@ -598,7 +709,7 @@ function generateSupportFixtures() {
   const fixtureDir = path.join(WORKSPACE_ROOT, 'support-inbox');
   planMkdir(fixtureDir);
 
-  const selected = SUPPORT_CASES.slice(0, COUNT);
+  const selected = buildSupportCases(COUNT);
   for (const item of selected) {
     planWriteFile(path.join(fixtureDir, item.filename), renderSupportTicket(item));
     planUtimes(path.join(fixtureDir, item.filename), evaluationDateAtOffset(-1));
