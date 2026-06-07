@@ -56,7 +56,7 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(EVALUATION_DATE) || Number.isNaN(EVALUATION_BASE
 }
 const DRY_RUN = args['dry-run'] === true || args['dry-run'] === 'true';
 const OVERWRITE = args.overwrite === true || args.overwrite === 'true';
-const COUNT = parseInt(args.count, 10) || (['legal-intake', 'vendor-compliance', 'shared-drive'].includes(FIXTURE) ? 8 : 10);
+const COUNT = parseInt(args.count, 10) || (['legal-intake', 'vendor-compliance', 'shared-drive', 'customer-support'].includes(FIXTURE) ? 8 : 10);
 const COMPLETE_RATE = parseFloat(args['complete-rate']) || 0.6;
 const CRITICAL_RATE = parseFloat(args['critical-urgency-rate']) || 0.2;
 
@@ -430,145 +430,221 @@ function generateLegalIntake() {
 
 // ── Customer Support Fixture ──
 
-const CUSTOMER_TIERS = ['Standard', 'Premium', 'Enterprise'];
-const TICKET_CATEGORIES = ['Bug', 'Question', 'Feature Request', 'Incident'];
-const TEAMS = ['Engineering', 'Customer Success', 'Product', 'Security', 'On-Call'];
-
-const TICKET_TITLES = {
-  'Bug': [
-    'Login button unresponsive on Safari',
-    'Export CSV missing column headers',
-    'Dashboard widget not loading data',
-    'Email notification sending duplicate alerts',
-    'Search results return stale cached entries'
-  ],
-  'Question': [
-    'How do I reset my API key?',
-    'What is the rate limit for the public API?',
-    'Can you explain the billing cycle?',
-    'How do I invite team members to my workspace?',
-    'What file formats are supported for import?'
-  ],
-  'Feature Request': [
-    'Add dark mode support',
-    'Webhook integration for Slack notifications',
-    'Batch operations in the admin panel',
-    'Export to PDF with custom templates',
-    'Role-based access control for reports'
-  ],
-  'Incident': [
-    'Service is down for all users in EU region',
-    'Possible data leak in audit logs',
-    'Payment processing failing intermittently',
-    'Login page returns 502 error',
-    'Customer data not persisting after save'
-  ]
-};
-
-function buildSupportTicket(index, rand) {
-  const category = pick(TICKET_CATEGORIES, rand);
-  const tier = pick(CUSTOMER_TIERS, rand);
-  const isEnterprise = tier === 'Enterprise';
-  const isP1 = category === 'Incident' || (isEnterprise && rand() < 0.4);
-  const title = pick(TICKET_TITLES[category], rand);
-
-  const lines = [
-    `# Support Ticket`,
-    ``,
-    `## Title`,
-    title,
-    ``,
-    `## Category`,
-    category,
-    ``,
-    `## Customer Tier`,
-    tier,
-    ``,
-    `## Description`,
-    generateTicketDescription(category, title, rand),
-    ``,
-    `## Reported By`,
-    pick(['end-user@client.com', 'tech-lead@client.com', 'ops-manager@client.com', 'ceo@enterprise-client.com'], rand),
-    ``,
-    `## Timestamp`,
-    toIsoFromEvaluation(-Math.floor(rand() * 86400000 * 7))
-  ];
-
-  const expectedPriority = isP1 ? 'P1' : (category === 'Bug' ? 'P2' : 'P3');
-  const expectedTeam = isP1 ? 'On-Call' :
-    category === 'Bug' ? 'Engineering' :
-    category === 'Question' ? 'Customer Success' : 'Product';
-  const needsEscalation = isP1;
-
-  return {
-    title,
-    category,
-    tier,
-    priority: expectedPriority,
-    team: expectedTeam,
-    needsEscalation,
-    content: lines.join('\n')
-  };
-}
-
-function generateTicketDescription(category, title, rand) {
-  if (category === 'Bug') {
-    return `Steps to reproduce:\n1. Go to ${pick(['settings page', 'dashboard', 'reports tab'], rand)}\n2. Click ${pick(['save', 'submit', 'export', 'refresh'], rand)}\n3. Error message appears: "${pick(['Internal error', 'Timeout', 'Access denied', 'Invalid response'], rand)}"\n\nExpected: Action completes successfully.\nActual: ${pick(['Nothing happens', 'Wrong data displayed', 'Page crashes', 'Spinner spins forever'], rand)}.`;
+const SUPPORT_CASES = [
+  {
+    ticketId: 'SUP-2026-001',
+    filename: 'ticket-001.md',
+    subject: 'Checkout service down for all EU customers',
+    customerName: 'Acme Retail',
+    customerTier: 'Enterprise',
+    reportedOffsetMinutes: -45,
+    issueType: 'Incident',
+    impact: 'All EU storefront checkout requests return 503. Revenue-impacting production outage.',
+    description: 'Customer reports that every EU shopper receives a 503 during checkout. Their status page and synthetic monitor confirm the failure started after the 09:00 UTC deploy.',
+    escalationSignals: 'Production outage; all users in region affected; enterprise customer; revenue impact.',
+    duplicateGroup: 'none',
+    expectedPriority: 'P1',
+    expectedTeam: 'On-Call',
+    expectedEscalation: 'Yes',
+    expectedSla: '15 minutes',
+    expectedNextActionKind: 'page_on_call'
+  },
+  {
+    ticketId: 'SUP-2026-002',
+    filename: 'ticket-002.md',
+    subject: 'Intermittent dashboard latency for enterprise admin users',
+    customerName: 'Northstar Bank',
+    customerTier: 'Enterprise',
+    reportedOffsetMinutes: -95,
+    issueType: 'Bug',
+    impact: 'Admin dashboard intermittently takes 20-30 seconds to load for finance users. Core transaction processing is unaffected.',
+    description: 'Enterprise admin users see slow dashboard loading during month-end reporting. The customer is asking whether this should block their finance close process.',
+    escalationSignals: 'Enterprise tier; ambiguous severity; high business impact but partial feature degradation.',
+    duplicateGroup: 'none',
+    expectedPriority: 'P2',
+    expectedTeam: 'Engineering',
+    expectedEscalation: 'Yes',
+    expectedSla: '1 hour',
+    expectedNextActionKind: 'engineering_triage_enterprise'
+  },
+  {
+    ticketId: 'SUP-2026-003',
+    filename: 'ticket-003.md',
+    subject: 'CSV export missing February invoices',
+    customerName: 'Bluebird Logistics',
+    customerTier: 'Premium',
+    reportedOffsetMinutes: -130,
+    issueType: 'Bug',
+    impact: 'One reporting export omits February invoices for a single account. UI totals are correct.',
+    description: 'The customer can view invoices in the UI, but CSV export excludes February rows. Reproducible with account BL-443.',
+    escalationSignals: 'Single account; workaround available through UI; no data loss indicated.',
+    duplicateGroup: 'csv-export-february',
+    expectedPriority: 'P2',
+    expectedTeam: 'Engineering',
+    expectedEscalation: 'No',
+    expectedSla: '4 business hours',
+    expectedNextActionKind: 'bug_triage'
+  },
+  {
+    ticketId: 'SUP-2026-004',
+    filename: 'ticket-004.md',
+    subject: 'Duplicate report: CSV export missing February invoices',
+    customerName: 'Bluebird Logistics',
+    customerTier: 'Premium',
+    reportedOffsetMinutes: -120,
+    issueType: 'Bug',
+    impact: 'Same export problem as SUP-2026-003, reported by a second user on the same account.',
+    description: 'Another user from Bluebird reports February invoices missing from the CSV export for account BL-443. This appears to duplicate SUP-2026-003.',
+    escalationSignals: 'Duplicate of SUP-2026-003; same customer, account, and symptom.',
+    duplicateGroup: 'csv-export-february',
+    expectedPriority: 'P2',
+    expectedTeam: 'Engineering',
+    expectedEscalation: 'No',
+    expectedSla: '4 business hours',
+    expectedNextActionKind: 'link_duplicate_to_sup_2026_003'
+  },
+  {
+    ticketId: 'SUP-2026-005',
+    filename: 'ticket-005.md',
+    subject: 'Possible unauthorized API token access',
+    customerName: 'Cedar Health',
+    customerTier: 'Enterprise',
+    reportedOffsetMinutes: -35,
+    issueType: 'Security Concern',
+    impact: 'Customer security team observed API calls from an unfamiliar ASN using a production token.',
+    description: 'The customer has not confirmed data exposure, but requests immediate review of access logs and token revocation guidance.',
+    escalationSignals: 'Potential security incident; enterprise customer; production token involved.',
+    duplicateGroup: 'none',
+    expectedPriority: 'P1',
+    expectedTeam: 'Security',
+    expectedEscalation: 'Yes',
+    expectedSla: '15 minutes',
+    expectedNextActionKind: 'security_escalation'
+  },
+  {
+    ticketId: 'SUP-2026-006',
+    filename: 'ticket-006.md',
+    subject: 'Request for saved dashboard templates',
+    customerName: 'Delta Manufacturing',
+    customerTier: 'Standard',
+    reportedOffsetMinutes: -300,
+    issueType: 'Feature Request',
+    impact: 'Would reduce manual reporting setup for a 25-person operations team. No current production issue.',
+    description: 'Customer asks whether dashboard layouts can be saved and reused across teams. They are willing to discuss beta participation.',
+    escalationSignals: 'Feature request; no outage; no SLA risk.',
+    duplicateGroup: 'none',
+    expectedPriority: 'P3',
+    expectedTeam: 'Product',
+    expectedEscalation: 'No',
+    expectedSla: '2 business days',
+    expectedNextActionKind: 'product_feedback'
+  },
+  {
+    ticketId: 'SUP-2026-007',
+    filename: 'ticket-007.md',
+    subject: 'How do I rotate a service account API key?',
+    customerName: 'Evergreen Studios',
+    customerTier: 'Standard',
+    reportedOffsetMinutes: -260,
+    issueType: 'Question',
+    impact: 'Administrator needs guidance before scheduled maintenance. No product malfunction reported.',
+    description: 'Customer asks for steps to rotate a service account API key without interrupting their nightly import job.',
+    escalationSignals: 'How-to request; no incident; no customer outage.',
+    duplicateGroup: 'none',
+    expectedPriority: 'P3',
+    expectedTeam: 'Customer Success',
+    expectedEscalation: 'No',
+    expectedSla: '1 business day',
+    expectedNextActionKind: 'send_key_rotation_steps'
+  },
+  {
+    ticketId: 'SUP-2026-008',
+    filename: 'ticket-008.md',
+    subject: 'Internal QA note about staging banner color',
+    customerName: 'Internal QA',
+    customerTier: 'Internal',
+    reportedOffsetMinutes: -420,
+    issueType: 'Internal',
+    impact: 'Staging-only banner color does not match design review screenshot. No customer impact.',
+    description: 'Internal QA noticed a visual mismatch in staging. This is not customer-reported and should not enter customer escalation.',
+    escalationSignals: 'Internal-only; staging environment; no customer impact.',
+    duplicateGroup: 'none',
+    expectedPriority: 'P4',
+    expectedTeam: 'Internal Triage',
+    expectedEscalation: 'No',
+    expectedSla: 'Backlog',
+    expectedNextActionKind: 'route_internal_backlog'
   }
-  if (category === 'Question') {
-    return `I've looked through the docs but couldn't find clear guidance on this. Can you help? We're on the ${pick(['Professional', 'Enterprise', 'Starter'], rand)} plan.`;
-  }
-  if (category === 'Feature Request') {
-    return `This would greatly improve our workflow. Our team of ${Math.floor(rand() * 100 + 5)} users would benefit from this capability. Happy to join a beta.`;
-  }
-  return `Impact: ${pick(['All users affected', 'Partial outage (EU region)', 'Single customer', 'Degraded performance'], rand)}.\n\nCurrent status: ${pick(['Investigating', 'Not yet reproducible', 'Ongoing', 'Newly reported'], rand)}.\n\n${isP1Indicator(title) ? 'URGENT: This appears to affect customer-facing functionality.' : 'Please advise on next steps.'}`;
-}
+];
 
-function isP1Indicator(title) {
-  return /down|data leak|502|fail|not persist|outage/i.test(title);
+function renderSupportTicket(item) {
+  return [
+    '# Support Ticket',
+    '',
+    'Ticket ID: ' + item.ticketId,
+    'Subject: ' + item.subject,
+    'Customer: ' + item.customerName,
+    'Customer Tier: ' + item.customerTier,
+    'Reported Time: ' + toIsoFromEvaluation(item.reportedOffsetMinutes * 60000),
+    'Issue Type: ' + item.issueType,
+    'Impact: ' + item.impact,
+    'Description: ' + item.description,
+    'Escalation Signals: ' + item.escalationSignals,
+    'Duplicate Group: ' + item.duplicateGroup
+  ].join('\n');
 }
 
 function generateSupportFixtures() {
   const fixtureDir = path.join(WORKSPACE_ROOT, 'support-inbox');
   planMkdir(fixtureDir);
 
-  const rand = seededRandom(SEED);
-  const tickets = [];
-  for (let i = 1; i <= COUNT; i++) {
-    const ticket = buildSupportTicket(i, rand);
-    const filename = `ticket-${pad(i, 3)}.md`;
-    const filepath = path.join(fixtureDir, filename);
-    planWriteFile(filepath, ticket.content);
-    tickets.push({ filename, ...ticket });
+  const selected = SUPPORT_CASES.slice(0, COUNT);
+  for (const item of selected) {
+    planWriteFile(path.join(fixtureDir, item.filename), renderSupportTicket(item));
+    planUtimes(path.join(fixtureDir, item.filename), evaluationDateAtOffset(-1));
   }
 
   const manifest = buildManifest(
     'customer-support',
-    { count: COUNT },
+    { count: selected.length },
     {
-      files: tickets.map(t => ({
-        sourcePath: path.join('support-inbox', t.filename),
-        expectedPriority: t.priority,
-        expectedTeam: t.team,
-        needsEscalation: t.needsEscalation
+      files: selected.map(item => ({
+        ticketId: item.ticketId,
+        sourcePath: path.join('support-inbox', item.filename),
+        customerName: item.customerName,
+        customerTier: item.customerTier,
+        issueType: item.issueType,
+        duplicateGroup: item.duplicateGroup,
+        expectedPriority: item.expectedPriority,
+        expectedTeam: item.expectedTeam,
+        expectedEscalation: item.expectedEscalation,
+        expectedSla: item.expectedSla,
+        expectedNextActionKind: item.expectedNextActionKind
       })),
-      summary: {
-        p1: tickets.filter(t => t.priority === 'P1').length,
-        p2: tickets.filter(t => t.priority === 'P2').length,
-        p3: tickets.filter(t => t.priority === 'P3').length
-      }
+      expectedEscalationTicketIds: selected.filter(item => item.expectedEscalation === 'Yes').map(item => item.ticketId),
+      duplicateGroups: selected
+        .filter(item => item.duplicateGroup && item.duplicateGroup !== 'none')
+        .reduce((groups, item) => {
+          groups[item.duplicateGroup] = [...(groups[item.duplicateGroup] || []), item.ticketId];
+          return groups;
+        }, {})
     },
     {
-      prioritySet: ['P1', 'P2', 'P3'],
+      prioritySet: ['P1', 'P2', 'P3', 'P4'],
+      escalationValues: ['Yes', 'No'],
       sourcePreservation: true,
-      note: 'Content scenarios are not yet fully aligned with BUSINESS_FIXTURE_SPEC.md edge-case requirements.'
+      noWorkspacePolicyArtifacts: true,
+      decisionRules: [
+        'P1: production outage or potential security incident; escalate immediately.',
+        'P2: customer-impacting bug, enterprise ambiguity, or degraded business-critical workflow.',
+        'P3: feature request or how-to question without incident signals.',
+        'P4: internal-only or non-customer work without customer impact.'
+      ]
     },
     ARTIFACT_SCHEMAS['customer-support']
   );
 
-  const manifestPath = path.join(fixtureDir, 'fixture-manifest.json');
-  writeManifest(manifestPath, manifest);
-
+  writeManifest(path.join(fixtureDir, 'fixture-manifest.json'), manifest);
   return manifest;
 }
 

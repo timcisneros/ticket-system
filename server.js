@@ -1448,6 +1448,132 @@ function createLegalIntakeWorkflowDefinition(now = new Date().toISOString()) {
 }
 
 
+const CUSTOMER_SUPPORT_TRIAGE_WORKFLOW_POLICY_TEXT = [
+  'Decision rules:',
+  '- P1: production outage, service-down report, or possible security incident. Escalate immediately.',
+  '- P2: customer-impacting bug, enterprise-customer ambiguous issue, or degraded business-critical workflow.',
+  '- P3: feature request or how-to question without incident/security/outage signals.',
+  '- P4: internal-only or non-customer work without customer impact.',
+  '- Assign outage P1 tickets to On-Call with SLA 15 minutes and next_action token page_on_call.',
+  '- Assign possible security issues to Security with priority P1, escalation Yes, SLA 15 minutes, and next_action token security_escalation.',
+  '- Assign enterprise ambiguous degraded issues to Engineering with priority P2, escalation Yes, SLA 1 hour, and next_action token engineering_triage_enterprise.',
+  '- Assign customer-impacting bugs to Engineering with priority P2, escalation No, SLA 4 business hours, and next_action token bug_triage.',
+  '- For duplicate groups, the earliest ticket remains the primary ticket. Later reports in the same Duplicate Group must set duplicate_of to the earliest ticket ID and use next_action token link_duplicate_to_sup_2026_003 when the duplicate group is csv-export-february.',
+  '- Assign feature requests to Product with priority P3, escalation No, SLA 2 business days, and next_action token product_feedback.',
+  '- Assign how-to questions to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token send_key_rotation_steps.',
+  '- Assign internal-only/non-customer tickets to Internal Triage with priority P4, escalation No, SLA Backlog, and next_action token route_internal_backlog.',
+  '',
+  'The triage plan must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, assignee_team, escalation, sla, next_action, duplicate_of.',
+  'Use escalation values exactly: Yes or No.',
+  'The escalation list must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, reason, owner.',
+  'The escalation list must include only tickets whose triage row has escalation Yes.',
+  'Do not invent ticket IDs, customers, priorities, teams, facts, or source evidence.'
+].join('\n');
+
+function createCustomerSupportTriageWorkflowDefinition(now = new Date().toISOString()) {
+  return {
+    id: 'customer-support-triage',
+    name: 'Customer Support Triage',
+    version: '1',
+    description: 'Classifies customer support tickets with attached workflow policy and writes triage artifacts.',
+    enabled: true,
+    policy: {
+      id: 'customer-support-triage-policy',
+      version: '1',
+      text: CUSTOMER_SUPPORT_TRIAGE_WORKFLOW_POLICY_TEXT
+    },
+    taskPromptTemplate: [
+      'Read every provided support ticket using workflow.policy.text.',
+      'Return complete Markdown artifacts only after considering every support ticket.',
+      'The triage plan table columns must be exactly: ticket_id, customer_name, priority, assignee_team, escalation, sla, next_action, duplicate_of.',
+      'The escalation list table columns must be exactly: ticket_id, customer_name, priority, reason, owner.'
+    ].join('\n'),
+    verifierContract: {
+      id: 'customer-support-triage-verifier',
+      version: '1',
+      fixture: 'customer-support',
+      expectedArtifacts: [
+        'support-queue/triage-plan.md',
+        'support-queue/escalation-list.md'
+      ]
+    },
+    inputSchema: {
+      sourcePath: 'string',
+      outputPath: 'string'
+    },
+    actions: [
+      { id: 'read_001', action: 'readFile', input: { path: '{{workflow.input.sourcePath}}/ticket-001.md' }, saveAs: 'ticket001', next: 'read_002' },
+      { id: 'read_002', action: 'readFile', input: { path: '{{workflow.input.sourcePath}}/ticket-002.md' }, saveAs: 'ticket002', next: 'read_003' },
+      { id: 'read_003', action: 'readFile', input: { path: '{{workflow.input.sourcePath}}/ticket-003.md' }, saveAs: 'ticket003', next: 'read_004' },
+      { id: 'read_004', action: 'readFile', input: { path: '{{workflow.input.sourcePath}}/ticket-004.md' }, saveAs: 'ticket004', next: 'read_005' },
+      { id: 'read_005', action: 'readFile', input: { path: '{{workflow.input.sourcePath}}/ticket-005.md' }, saveAs: 'ticket005', next: 'read_006' },
+      { id: 'read_006', action: 'readFile', input: { path: '{{workflow.input.sourcePath}}/ticket-006.md' }, saveAs: 'ticket006', next: 'read_007' },
+      { id: 'read_007', action: 'readFile', input: { path: '{{workflow.input.sourcePath}}/ticket-007.md' }, saveAs: 'ticket007', next: 'read_008' },
+      { id: 'read_008', action: 'readFile', input: { path: '{{workflow.input.sourcePath}}/ticket-008.md' }, saveAs: 'ticket008', next: 'triage' },
+      {
+        id: 'triage',
+        action: 'agentStructuredOutput',
+        input: {
+          instruction: '{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}',
+          input: {
+            tickets: {
+              'SUP-2026-001': '{{ticket001.content}}',
+              'SUP-2026-002': '{{ticket002.content}}',
+              'SUP-2026-003': '{{ticket003.content}}',
+              'SUP-2026-004': '{{ticket004.content}}',
+              'SUP-2026-005': '{{ticket005.content}}',
+              'SUP-2026-006': '{{ticket006.content}}',
+              'SUP-2026-007': '{{ticket007.content}}',
+              'SUP-2026-008': '{{ticket008.content}}'
+            }
+          },
+          outputSchema: {
+            triagePlanMd: 'string',
+            escalationListMd: 'string'
+          }
+        },
+        saveAs: 'triage',
+        next: 'write_triage_plan'
+      },
+      {
+        id: 'write_triage_plan',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.outputPath}}/triage-plan.md',
+          content: '{{triage.triagePlanMd}}'
+        },
+        next: 'write_escalation_list'
+      },
+      {
+        id: 'write_escalation_list',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.outputPath}}/escalation-list.md',
+          content: '{{triage.escalationListMd}}'
+        },
+        next: 'done'
+      },
+      {
+        id: 'done',
+        action: 'stop',
+        input: {
+          result: {
+            triagePlanPath: '{{workflow.input.outputPath}}/triage-plan.md',
+            escalationListPath: '{{workflow.input.outputPath}}/escalation-list.md'
+          }
+        }
+      }
+    ],
+    postconditions: [
+      { id: 'triage-plan-exists', type: 'fileExists', path: '{{workflow.input.outputPath}}/triage-plan.md' },
+      { id: 'escalation-list-exists', type: 'fileExists', path: '{{workflow.input.outputPath}}/escalation-list.md' }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+
 const VENDOR_COMPLIANCE_WORKFLOW_POLICY_TEXT = [
   'Decision rules:',
   '- Approve: DPA is signed/current, Security Certification is provided, Certification Status is Current, and there is no active security incident.',
@@ -13729,6 +13855,12 @@ async function createDefaultData() {
     workflows.push(createLegalIntakeWorkflowDefinition());
     writeWorkflows(workflows);
     console.log('Created workflow: legal-intake');
+  }
+
+  if (!workflows.some(workflow => workflow.id === 'customer-support-triage')) {
+    workflows.push(createCustomerSupportTriageWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created workflow: customer-support-triage');
   }
 
   if (!workflows.some(workflow => workflow.id === 'vendor-compliance')) {

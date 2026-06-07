@@ -155,6 +155,31 @@ function verifyLegalIntake() {
 
 // ── Customer Support Verifier ──
 
+function findArtifact(relativePath) {
+  const fp = path.join(WORKSPACE_ROOT, relativePath);
+  return fs.existsSync(fp) ? fp : null;
+}
+
+function listWorkspaceFiles(rootDir) {
+  const files = [];
+  function visit(dir) {
+    if (!fs.existsSync(dir)) return;
+    for (const name of fs.readdirSync(dir)) {
+      const fullPath = path.join(dir, name);
+      const rel = path.relative(rootDir, fullPath).replace(/\\/g, '/');
+      const stat = fs.statSync(fullPath);
+      if (stat.isDirectory()) visit(fullPath);
+      else files.push(rel);
+    }
+  }
+  visit(rootDir);
+  return files;
+}
+
+function normalizeCell(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
 function verifyCustomerSupport() {
   const fixturePath = path.join(WORKSPACE_ROOT, 'support-inbox');
   const manifest = loadManifest(fixturePath);
@@ -162,57 +187,127 @@ function verifyCustomerSupport() {
 
   const passed = [];
   const failed = [];
+  const expectedItems = manifest.expectedDecisionSet && Array.isArray(manifest.expectedDecisionSet.files)
+    ? manifest.expectedDecisionSet.files
+    : [];
 
-  // Check triage-plan.md exists
-  const triagePath = path.join(fixturePath, '..', 'support-queue', 'triage-plan.md');
-  const triageAlt = path.join(WORKSPACE_ROOT, 'support-queue', 'triage-plan.md');
-  const triageFile = fs.existsSync(triagePath) ? triagePath :
-    fs.existsSync(triageAlt) ? triageAlt : null;
+  const triagePath = findArtifact('support-queue/triage-plan.md');
+  const escalationPath = findArtifact('support-queue/escalation-list.md');
 
-  if (!triageFile) {
+  if (!triagePath) {
     failed.push('Missing support-queue/triage-plan.md');
-  } else {
-    const content = fs.readFileSync(triageFile, 'utf8');
-    passed.push(`triage-plan.md present (${content.length} chars)`);
+  }
+  if (!escalationPath) {
+    failed.push('Missing support-queue/escalation-list.md');
   }
 
-  // Check escalation-list.md exists (for P1 tickets)
-  const escPath = path.join(fixturePath, '..', 'support-queue', 'escalation-list.md');
-  const escAlt = path.join(WORKSPACE_ROOT, 'support-queue', 'escalation-list.md');
-  const escFile = fs.existsSync(escPath) ? escPath :
-    fs.existsSync(escAlt) ? escAlt : null;
+  const triageContent = triagePath ? fs.readFileSync(triagePath, 'utf8') : '';
+  const escalationContent = escalationPath ? fs.readFileSync(escalationPath, 'utf8') : '';
+  if (triagePath) passed.push('triage-plan.md present (' + triageContent.length + ' chars)');
+  if (escalationPath) passed.push('escalation-list.md present (' + escalationContent.length + ' chars)');
 
-  if (!escFile) {
-    if (manifest.p1Count > 0) {
-      failed.push(`Missing escalation-list.md (${manifest.p1Count} P1 tickets expected escalation)`);
-    } else {
-      passed.push('No escalation-list.md needed (no P1 tickets)');
+  const triageCsv = readCSV(path.join(WORKSPACE_ROOT, 'support-queue', 'triage-plan.csv'));
+  const register = triageCsv || extractSupportRowsFromMarkdown(triageContent);
+  const requiredColumns = ['ticket_id', 'customer_name', 'priority', 'assignee_team', 'escalation', 'sla', 'next_action'];
+  const missingColumns = requiredColumns.filter(column => !register.headers.includes(column));
+  if (missingColumns.length > 0) failed.push('Missing triage columns: ' + missingColumns.join(', '));
+  else passed.push('Triage plan has required structured columns');
+
+  const rowsByTicketId = new Map(register.rows.map(row => [row.ticket_id, row]));
+  for (const expected of expectedItems) {
+    const row = rowsByTicketId.get(expected.ticketId);
+    if (!row) {
+      failed.push(expected.ticketId + ': missing from triage plan');
+      continue;
     }
-  } else {
-    const content = fs.readFileSync(escFile, 'utf8');
-    passed.push(`escalation-list.md present (${content.length} chars)`);
+    if (row.customer_name !== expected.customerName) failed.push(expected.ticketId + ': customer mismatch, expected ' + expected.customerName + ', got ' + (row.customer_name || '(missing)'));
+    if (row.priority !== expected.expectedPriority) failed.push(expected.ticketId + ': priority mismatch, expected ' + expected.expectedPriority + ', got ' + (row.priority || '(missing)'));
+    if (row.assignee_team !== expected.expectedTeam) failed.push(expected.ticketId + ': assignee team mismatch, expected ' + expected.expectedTeam + ', got ' + (row.assignee_team || '(missing)'));
+    if (row.escalation !== expected.expectedEscalation) failed.push(expected.ticketId + ': escalation mismatch, expected ' + expected.expectedEscalation + ', got ' + (row.escalation || '(missing)'));
+    if (row.sla !== expected.expectedSla) failed.push(expected.ticketId + ': SLA mismatch, expected ' + expected.expectedSla + ', got ' + (row.sla || '(missing)'));
+    if (!normalizeCell(row.next_action).includes(normalizeCell(expected.expectedNextActionKind))) failed.push(expected.ticketId + ': next_action should reference ' + expected.expectedNextActionKind);
   }
 
-  // Check coverage in triage plan
-  if (triageFile) {
-    const content = fs.readFileSync(triageFile, 'utf8').toLowerCase();
-    const incomingFiles = fs.readdirSync(fixturePath).filter(f => f.endsWith('.md') && f !== 'fixture-manifest.json');
-    const uncovered = incomingFiles.filter(f => {
-      const id = f.replace(/\.md$/, '');
-      return !content.includes(id);
-    });
-    if (uncovered.length > 0) {
-      failed.push(`Tickets not mentioned in triage plan: ${uncovered.join(', ')}`);
-    } else {
-      passed.push(`All ${incomingFiles.length} tickets covered in triage plan`);
-    }
+  const sourceTicketIds = new Set(expectedItems.map(item => item.ticketId));
+  for (const row of register.rows) {
+    if (row.ticket_id && !sourceTicketIds.has(row.ticket_id)) failed.push('Hallucinated ticket ID in triage plan: ' + row.ticket_id);
+    const expected = expectedItems.find(item => item.ticketId === row.ticket_id);
+    if (expected && row.customer_name && row.customer_name !== expected.customerName) failed.push(row.ticket_id + ': hallucinated customer name ' + row.customer_name);
   }
+
+  if (expectedItems.length > 0 && expectedItems.every(item => rowsByTicketId.has(item.ticketId))) {
+    passed.push('All ' + expectedItems.length + ' source tickets accounted for');
+  }
+
+  const expectedEscalations = manifest.expectedDecisionSet && Array.isArray(manifest.expectedDecisionSet.expectedEscalationTicketIds)
+    ? manifest.expectedDecisionSet.expectedEscalationTicketIds
+    : [];
+  for (const ticketId of expectedEscalations) {
+    if (!escalationContent.includes(ticketId)) failed.push(ticketId + ': missing from escalation list');
+  }
+  const nonEscalations = expectedItems.filter(item => item.expectedEscalation === 'No').map(item => item.ticketId);
+  for (const ticketId of nonEscalations) {
+    if (escalationContent.includes(ticketId)) failed.push(ticketId + ': non-escalation ticket should not appear in escalation list');
+  }
+  if (expectedEscalations.length > 0 && expectedEscalations.every(ticketId => escalationContent.includes(ticketId))) {
+    passed.push('All escalation tickets present in escalation list');
+  }
+
+  const duplicateGroups = manifest.expectedDecisionSet && manifest.expectedDecisionSet.duplicateGroups && typeof manifest.expectedDecisionSet.duplicateGroups === 'object'
+    ? manifest.expectedDecisionSet.duplicateGroups
+    : {};
+  for (const [group, ticketIds] of Object.entries(duplicateGroups)) {
+    if (!ticketIds.every(ticketId => triageContent.includes(ticketId))) failed.push('Duplicate group ' + group + ' missing one or more ticket IDs from triage plan');
+    if (!normalizeCell(triageContent).includes('duplicate')) failed.push('Duplicate group ' + group + ' not recognized in triage plan');
+  }
+  if (Object.keys(duplicateGroups).length > 0 && normalizeCell(triageContent).includes('duplicate')) passed.push('Duplicate pair recognized');
+
+  const workspaceFiles = listWorkspaceFiles(WORKSPACE_ROOT);
+  const workspacePolicyArtifacts = workspaceFiles.filter(p => /(^|\/)(policy|verifier|oracle)(\/|\.|-|_)/i.test(p) && p !== 'support-inbox/fixture-manifest.json');
+  if (workspacePolicyArtifacts.length > 0) failed.push('Workspace contains policy/verifier artifacts: ' + workspacePolicyArtifacts.join(', '));
+  else passed.push('No policy/verifier artifacts in workspace');
+
+  const requireReplay = process.env.REQUIRE_REPLAY_EVIDENCE === '1' || process.env.REQUIRE_REPLAY_EVIDENCE === 'true';
+  const snapshot = readReplaySnapshotFromEnv();
+  if (snapshot) {
+    const invocation = (snapshot.workflowInvocation || []).find(item => item.workflowId === 'customer-support-triage');
+    if (!invocation) failed.push('Replay missing customer-support-triage workflow invocation');
+    else {
+      const missing = ['workflowVersion', 'policyId', 'policyVersion', 'policyTextHash', 'verifierContractId', 'verifierContractVersion']
+        .filter(field => !invocation[field]);
+      if (missing.length > 0) failed.push('Replay missing workflow/policy/verifier metadata: ' + missing.join(', '));
+      else passed.push('Replay workflow/policy/verifier metadata present');
+    }
+  } else if (requireReplay) {
+    failed.push('Replay evidence required but DATA_DIR/RUN_ID snapshot was not available');
+  }
+
+  if (failed.length === 0) passed.push('Customer Support strict verification passed');
 
   return {
     passed: failed.length === 0,
     checks: [...passed.map(p => ({ status: 'pass', message: p })), ...failed.map(f => ({ status: 'fail', message: f }))],
     count: { passed: passed.length, failed: failed.length }
   };
+}
+
+function extractSupportRowsFromMarkdown(content) {
+  const lines = String(content || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const headerIndex = lines.findIndex(line => /^\|\s*ticket_id\s*\|/i.test(line));
+  if (headerIndex < 0) return { headers: [], rows: [] };
+  const headers = lines[headerIndex].split('|').map(cell => cell.trim().toLowerCase()).filter(Boolean);
+  const rows = [];
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith('|')) break;
+    const cells = line.split('|').map(cell => cell.trim()).filter((_, index, arr) => index > 0 && index < arr.length - 1);
+    if (cells.every(cell => /^-+$/.test(cell.replace(/\s/g, '')))) continue;
+    if (cells.length !== headers.length) continue;
+    const row = {};
+    headers.forEach((header, index) => { row[header] = cells[index] || ''; });
+    rows.push(row);
+  }
+  return { headers, rows };
 }
 
 // ── Vendor Compliance Verifier ──
