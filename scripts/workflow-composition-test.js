@@ -214,7 +214,19 @@ async function main() {
     const workflowDefinition = {
       id: 'test-write-file-workflow',
       name: 'Test write file workflow',
+      version: '1',
       enabled: true,
+      policy: {
+        id: 'test-workflow-policy',
+        version: '1',
+        text: 'Write the requested workflow output exactly as provided.'
+      },
+      verifierContract: {
+        id: 'test-workflow-verifier',
+        version: '1',
+        fixture: 'workflow-composition',
+        expectedArtifacts: ['workflow-output/result.txt']
+      },
       inputSchema: {
         path: 'string',
         content: 'string'
@@ -293,7 +305,14 @@ async function main() {
     const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
     assert(snapshot.capabilitySelection.some(item => item.capability && item.capability.id === workflowDefinition.id), 'workflow run should record selected capability');
     assert(snapshot.capabilityOutputs.some(item => item.capabilityId === workflowDefinition.id && item.output), 'workflow run should record capability output');
-    assert(snapshot.workflowInvocation.some(item => item.workflowId === workflowDefinition.id), 'workflow run should record workflow invocation');
+    const workflowInvocation = snapshot.workflowInvocation.find(item => item.workflowId === workflowDefinition.id);
+    assert(workflowInvocation, 'workflow run should record workflow invocation');
+    assert(workflowInvocation.workflowVersion === '1', 'workflow invocation should record workflow version');
+    assert(workflowInvocation.policyId === 'test-workflow-policy', 'workflow invocation should record policy id');
+    assert(workflowInvocation.policyVersion === '1', 'workflow invocation should record policy version');
+    assert(typeof workflowInvocation.policyTextHash === 'string' && workflowInvocation.policyTextHash.length === 64, 'workflow invocation should record policy text hash');
+    assert(workflowInvocation.verifierContractId === 'test-workflow-verifier', 'workflow invocation should record verifier contract id');
+    assert(workflowInvocation.verifierContractVersion === '1', 'workflow invocation should record verifier contract version');
     assert(snapshot.workflowActions.some(item => item.action === 'writeFile'), 'workflow run should record writeFile workflow action');
     assert(snapshot.workflowActions.some(item => item.action === 'stop'), 'workflow run should record stop workflow action');
     assert(snapshot.authorityChecks.some(item => item.status === 'allowed' && item.operation === 'writeFile' && item.path === workflowInput.path), 'workflow run should record allowed authority evidence');
@@ -682,8 +701,10 @@ async function main() {
     assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/reject-delete.txt')), 'rejected deletePath should not execute');
     const invalidPlanSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, invalidPlanRun.replaySnapshotPath), 'utf8'));
     const invalidPlanEvidence = (invalidPlanSnapshot.workflowActionPlans || []).find(item => item.stepId === 'execute-plan');
+    assert(invalidPlanEvidence.proposedActions.length === 1, 'invalid action plan should record proposed action');
     assert(invalidPlanEvidence.acceptedActions.length === 0, 'invalid action plan should accept no actions');
     assert(invalidPlanEvidence.rejectedActions.length === 1, 'invalid action plan should record rejected action');
+    assert(invalidPlanEvidence.executedActions.length === 0, 'invalid action plan should execute no actions');
     assert(invalidPlanEvidence.rejectedActions[0].validationReasons.some(reason => reason.includes('not in allowedOperations')), 'rejection should explain allowed operation failure');
     assert(!invalidPlanSnapshot.workspaceOperations.some(item => item.operation.operation === 'deletePath'), 'rejected operation should not appear as workspace execution');
 
@@ -862,6 +883,8 @@ async function main() {
     assert(childTickets.every(item => item.parentRunId === ticketPlanRun.id), 'child tickets should record parent run id');
     assert(childTickets.every(item => item.parentWorkflowId === ticketPlanWorkflow.id), 'child tickets should record parent workflow id');
     assert(childTickets.every(item => item.spawnedByStepId === 'execute-ticket-plan'), 'child tickets should record spawning step id');
+    assert(childTickets.every(item => item.spawnPlanId && item.spawnPlanId.includes(ticketPlanRun.id + ':' + ticketPlanWorkflow.id + ':execute-ticket-plan')), 'child tickets should record spawn plan id');
+    assert(childTickets.every(item => item.spawnIdempotencyKey && item.spawnIdempotencyKey.startsWith(ticketPlanParentTicket.id + ':' + childWorkflow.id + ':')), 'child tickets should record parent-ticket-scoped idempotency key');
     assert(childTickets.some(item => item.workflowInput.vendorId === 'vendor-002'), 'child ticket should preserve vendor-002 workflow input');
     assert(childTickets.some(item => item.workflowInput.vendorId === 'vendor-003'), 'child ticket should preserve vendor-003 workflow input');
     assert(!readJson('runs.json').some(item => childTickets.map(ticket => ticket.id).includes(item.ticketId)), 'executeTicketPlan v1 should not create child runs');
@@ -883,6 +906,7 @@ async function main() {
     assert(ticketPlanRerunEvidence.acceptedTickets.length === 0, 'parent rerun should accept no duplicate child tickets');
     assert(ticketPlanRerunEvidence.rejectedTickets.length === 2, 'parent rerun should reject duplicate child tickets');
     assert(ticketPlanRerunEvidence.createdTicketIds.length === 0, 'parent rerun should create no duplicate child tickets');
+    assert(ticketPlanRerunEvidence.rejectedTickets.every(ticket => ticket.idempotencyKey && ticket.idempotencyKey.startsWith(ticketPlanParentTicket.id + ':' + childWorkflow.id + ':')), 'parent rerun duplicate rejections should preserve parent-ticket-scoped idempotency key');
     assert(ticketPlanRerunEvidence.rejectedTickets.every(ticket => (ticket.validationReasons || []).some(reason => reason.includes('duplicate child ticket already exists'))), 'parent rerun duplicate rejections should explain existing child tickets');
     assert(!readJson('runs.json').some(item => childTicketsAfterParentRerun.map(ticket => ticket.id).includes(item.ticketId)), 'parent rerun should not auto-create child runs');
 
