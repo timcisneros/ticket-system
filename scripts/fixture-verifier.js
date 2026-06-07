@@ -180,6 +180,22 @@ function normalizeCell(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function acceptableValues(expected, fieldName, fallbackFieldName) {
+  const values = Array.isArray(expected[fieldName]) && expected[fieldName].length > 0
+    ? expected[fieldName]
+    : [expected[fallbackFieldName]];
+  return values.map(value => String(value || ''));
+}
+
+function valueAllowed(actual, allowed) {
+  return allowed.includes(String(actual || ''));
+}
+
+function nextActionAllowed(actual, allowed) {
+  const normalizedActual = normalizeCell(actual);
+  return allowed.some(value => normalizedActual.includes(normalizeCell(value)));
+}
+
 function verifyCustomerSupport() {
   const fixturePath = path.join(WORKSPACE_ROOT, 'support-inbox');
   const manifest = loadManifest(fixturePath);
@@ -208,7 +224,7 @@ function verifyCustomerSupport() {
 
   const triageCsv = readCSV(path.join(WORKSPACE_ROOT, 'support-queue', 'triage-plan.csv'));
   const register = triageCsv || extractSupportRowsFromMarkdown(triageContent);
-  const requiredColumns = ['ticket_id', 'customer_name', 'priority', 'assignee_team', 'escalation', 'sla', 'next_action'];
+  const requiredColumns = ['ticket_id', 'customer_name', 'priority', 'assignee_team', 'escalation', 'sla', 'next_action', 'duplicate_of'];
   const missingColumns = requiredColumns.filter(column => !register.headers.includes(column));
   if (missingColumns.length > 0) failed.push('Missing triage columns: ' + missingColumns.join(', '));
   else passed.push('Triage plan has required structured columns');
@@ -221,11 +237,16 @@ function verifyCustomerSupport() {
       continue;
     }
     if (row.customer_name !== expected.customerName) failed.push(expected.ticketId + ': customer mismatch, expected ' + expected.customerName + ', got ' + (row.customer_name || '(missing)'));
-    if (row.priority !== expected.expectedPriority) failed.push(expected.ticketId + ': priority mismatch, expected ' + expected.expectedPriority + ', got ' + (row.priority || '(missing)'));
-    if (row.assignee_team !== expected.expectedTeam) failed.push(expected.ticketId + ': assignee team mismatch, expected ' + expected.expectedTeam + ', got ' + (row.assignee_team || '(missing)'));
-    if (row.escalation !== expected.expectedEscalation) failed.push(expected.ticketId + ': escalation mismatch, expected ' + expected.expectedEscalation + ', got ' + (row.escalation || '(missing)'));
-    if (row.sla !== expected.expectedSla) failed.push(expected.ticketId + ': SLA mismatch, expected ' + expected.expectedSla + ', got ' + (row.sla || '(missing)'));
-    if (!normalizeCell(row.next_action).includes(normalizeCell(expected.expectedNextActionKind))) failed.push(expected.ticketId + ': next_action should reference ' + expected.expectedNextActionKind);
+    const allowedPriorities = acceptableValues(expected, 'acceptablePriority', 'expectedPriority');
+    const allowedTeams = acceptableValues(expected, 'acceptableTeam', 'expectedTeam');
+    const allowedEscalations = acceptableValues(expected, 'acceptableEscalation', 'expectedEscalation');
+    const allowedSlas = acceptableValues(expected, 'acceptableSla', 'expectedSla');
+    const allowedNextActions = acceptableValues(expected, 'acceptableNextActionKind', 'expectedNextActionKind');
+    if (!valueAllowed(row.priority, allowedPriorities)) failed.push(expected.ticketId + ': priority mismatch, expected ' + allowedPriorities.join(' or ') + ', got ' + (row.priority || '(missing)'));
+    if (!valueAllowed(row.assignee_team, allowedTeams)) failed.push(expected.ticketId + ': assignee team mismatch, expected ' + allowedTeams.join(' or ') + ', got ' + (row.assignee_team || '(missing)'));
+    if (!valueAllowed(row.escalation, allowedEscalations)) failed.push(expected.ticketId + ': escalation mismatch, expected ' + allowedEscalations.join(' or ') + ', got ' + (row.escalation || '(missing)'));
+    if (!valueAllowed(row.sla, allowedSlas)) failed.push(expected.ticketId + ': SLA mismatch, expected ' + allowedSlas.join(' or ') + ', got ' + (row.sla || '(missing)'));
+    if (!nextActionAllowed(row.next_action, allowedNextActions)) failed.push(expected.ticketId + ': next_action should reference ' + allowedNextActions.join(' or '));
   }
 
   const sourceTicketIds = new Set(expectedItems.map(item => item.ticketId));
@@ -245,7 +266,12 @@ function verifyCustomerSupport() {
   for (const ticketId of expectedEscalations) {
     if (!escalationContent.includes(ticketId)) failed.push(ticketId + ': missing from escalation list');
   }
-  const nonEscalations = expectedItems.filter(item => item.expectedEscalation === 'No').map(item => item.ticketId);
+  const nonEscalations = expectedItems
+    .filter(item => {
+      const allowed = acceptableValues(item, 'acceptableEscalation', 'expectedEscalation');
+      return allowed.length === 1 && allowed[0] === 'No';
+    })
+    .map(item => item.ticketId);
   for (const ticketId of nonEscalations) {
     if (escalationContent.includes(ticketId)) failed.push(ticketId + ': non-escalation ticket should not appear in escalation list');
   }
@@ -259,8 +285,16 @@ function verifyCustomerSupport() {
   for (const [group, ticketIds] of Object.entries(duplicateGroups)) {
     if (!ticketIds.every(ticketId => triageContent.includes(ticketId))) failed.push('Duplicate group ' + group + ' missing one or more ticket IDs from triage plan');
     if (!normalizeCell(triageContent).includes('duplicate')) failed.push('Duplicate group ' + group + ' not recognized in triage plan');
+    const primaryTicketId = ticketIds[0];
+    for (const duplicateTicketId of ticketIds.slice(1)) {
+      const duplicateRow = rowsByTicketId.get(duplicateTicketId);
+      if (!duplicateRow) continue;
+      if (duplicateRow.duplicate_of !== primaryTicketId) {
+        failed.push(duplicateTicketId + ': expected duplicate_of ' + primaryTicketId + ', got ' + (duplicateRow.duplicate_of || '(blank)'));
+      }
+    }
   }
-  if (Object.keys(duplicateGroups).length > 0 && normalizeCell(triageContent).includes('duplicate')) passed.push('Duplicate pair recognized');
+  if (Object.keys(duplicateGroups).length > 0 && normalizeCell(triageContent).includes('duplicate')) passed.push('Duplicate chains recognized');
 
   const workspaceFiles = listWorkspaceFiles(WORKSPACE_ROOT);
   const workspacePolicyArtifacts = workspaceFiles.filter(p => /(^|\/)(policy|verifier|oracle)(\/|\.|-|_)/i.test(p) && p !== 'support-inbox/fixture-manifest.json');
@@ -268,15 +302,27 @@ function verifyCustomerSupport() {
   else passed.push('No policy/verifier artifacts in workspace');
 
   const requireReplay = process.env.REQUIRE_REPLAY_EVIDENCE === '1' || process.env.REQUIRE_REPLAY_EVIDENCE === 'true';
+  const snapshots = readReplaySnapshotsFromEnv();
   const snapshot = readReplaySnapshotFromEnv();
-  if (snapshot) {
-    const invocation = (snapshot.workflowInvocation || []).find(item => item.workflowId === 'customer-support-triage');
-    if (!invocation) failed.push('Replay missing customer-support-triage workflow invocation');
-    else {
+  const replaySnapshots = snapshots.length > 0 ? snapshots : (snapshot ? [snapshot] : []);
+  if (replaySnapshots.length > 0) {
+    const invocations = replaySnapshots.flatMap(item => item.workflowInvocation || []);
+    const requiredWorkflowIds = String(process.env.SUPPORT_REQUIRED_WORKFLOW_IDS || 'customer-support-triage')
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean);
+    for (const workflowId of requiredWorkflowIds) {
+      const invocation = invocations.find(item => item.workflowId === workflowId);
+      if (!invocation) {
+        failed.push('Replay missing ' + workflowId + ' workflow invocation');
+        continue;
+      }
       const missing = ['workflowVersion', 'policyId', 'policyVersion', 'policyTextHash', 'verifierContractId', 'verifierContractVersion']
         .filter(field => !invocation[field]);
-      if (missing.length > 0) failed.push('Replay missing workflow/policy/verifier metadata: ' + missing.join(', '));
-      else passed.push('Replay workflow/policy/verifier metadata present');
+      if (missing.length > 0) failed.push('Replay missing workflow/policy/verifier metadata for ' + workflowId + ': ' + missing.join(', '));
+    }
+    if (!requiredWorkflowIds.some(workflowId => !invocations.find(item => item.workflowId === workflowId))) {
+      passed.push('Replay workflow/policy/verifier metadata present');
     }
   } else if (requireReplay) {
     failed.push('Replay evidence required but DATA_DIR/RUN_ID snapshot was not available');
@@ -690,6 +736,16 @@ function readReplaySnapshotFromEnv() {
   const snapshotPath = path.join(dataDir, 'replay-snapshots', 'run-' + runId + '.json');
   if (!fs.existsSync(snapshotPath)) return null;
   return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+}
+
+function readReplaySnapshotsFromEnv() {
+  const dataDir = process.env.DATA_DIR;
+  const runIds = String(process.env.RUN_IDS || '').split(',').map(item => item.trim()).filter(Boolean);
+  if (!dataDir || runIds.length === 0) return [];
+  return runIds.map(runId => {
+    const snapshotPath = path.join(dataDir, 'replay-snapshots', 'run-' + runId + '.json');
+    return fs.existsSync(snapshotPath) ? JSON.parse(fs.readFileSync(snapshotPath, 'utf8')) : null;
+  }).filter(Boolean);
 }
 
 function normalizePathValue(value) {

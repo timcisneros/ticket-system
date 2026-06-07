@@ -1452,15 +1452,23 @@ const CUSTOMER_SUPPORT_TRIAGE_WORKFLOW_POLICY_TEXT = [
   'Decision rules:',
   '- P1: production outage, service-down report, or possible security incident. Escalate immediately.',
   '- P2: customer-impacting bug, enterprise-customer ambiguous issue, or degraded business-critical workflow.',
-  '- P3: feature request or how-to question without incident/security/outage signals.',
+  '- P3: feature request, how-to question, partial bug, or low-impact bug with workaround available and no incident/security/outage signals.',
   '- P4: internal-only or non-customer work without customer impact.',
   '- Assign outage P1 tickets to On-Call with SLA 15 minutes and next_action token page_on_call.',
   '- Assign possible security issues to Security with priority P1, escalation Yes, SLA 15 minutes, and next_action token security_escalation.',
-  '- Assign enterprise ambiguous degraded issues to Engineering with priority P2, escalation Yes, SLA 1 hour, and next_action token engineering_triage_enterprise.',
-  '- Assign customer-impacting bugs to Engineering with priority P2, escalation No, SLA 4 business hours, and next_action token bug_triage.',
-  '- For duplicate groups, the earliest ticket remains the primary ticket. Later reports in the same Duplicate Group must set duplicate_of to the earliest ticket ID and use next_action token link_duplicate_to_sup_2026_003 when the duplicate group is csv-export-february.',
+  '- Assign enterprise ambiguous degraded production or business-critical issues to Engineering with priority P2, escalation Yes, SLA 1 hour, and next_action token engineering_triage_enterprise.',
+  '- Enterprise sandbox or demo issues with production unaffected may be Engineering P2 with either escalation Yes/1 hour/engineering_triage_enterprise or escalation No/4 business hours/bug_triage depending on stated urgency.',
+  '- Assign customer-impacting actionable bugs to Engineering with priority P2, escalation No, SLA 4 business hours, and next_action token bug_triage.',
+  '- Bugs with workaround available, narrow archived-project scope, missing reproduction details, or contradictory low-impact metadata may be P3 and may route to Customer Success with next_action token request_reproduction_details.',
+  '- If ticket metadata conflicts, prefer concrete impact and escalation signals over customer tier alone.',
+  '- For duplicate groups, the earliest ticket remains the primary ticket. Later reports in the same Duplicate Group must set duplicate_of to the earliest ticket ID. Duplicate_of primary ID is mandatory even when another rule also applies.',
+  '- If a duplicate ticket is also an incident, keep priority/escalation/SLA from the incident rule; next_action may use the incident action or duplicate-link action when both are defensible.',
+  '- Use next_action token link_duplicate_to_sup_2026_003 for csv-export-february and link_duplicate_to_primary for other duplicate chains when choosing the duplicate-link action.',
+  '- Assign billing/account issues to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token billing_account_followup.',
   '- Assign feature requests to Product with priority P3, escalation No, SLA 2 business days, and next_action token product_feedback.',
-  '- Assign how-to questions to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token send_key_rotation_steps.',
+  '- Assign how-to questions to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token send_how_to_guidance unless the ticket specifically asks about service account API key rotation, then use send_key_rotation_steps.',
+  '- Assign partial bug reports with missing reproduction details to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token request_reproduction_details.',
+  '- Assign noisy or unknown-customer tickets to Internal Triage with priority P4, escalation No, SLA Backlog, and next_action token request_customer_context.',
   '- Assign internal-only/non-customer tickets to Internal Triage with priority P4, escalation No, SLA Backlog, and next_action token route_internal_backlog.',
   '',
   'The triage plan must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, assignee_team, escalation, sla, next_action, duplicate_of.',
@@ -1550,6 +1558,298 @@ function createCustomerSupportTriageWorkflowDefinition(now = new Date().toISOStr
         input: {
           path: '{{workflow.input.outputPath}}/escalation-list.md',
           content: '{{triage.escalationListMd}}'
+        },
+        next: 'done'
+      },
+      {
+        id: 'done',
+        action: 'stop',
+        input: {
+          result: {
+            triagePlanPath: '{{workflow.input.outputPath}}/triage-plan.md',
+            escalationListPath: '{{workflow.input.outputPath}}/escalation-list.md'
+          }
+        }
+      }
+    ],
+    postconditions: [
+      { id: 'triage-plan-exists', type: 'fileExists', path: '{{workflow.input.outputPath}}/triage-plan.md' },
+      { id: 'escalation-list-exists', type: 'fileExists', path: '{{workflow.input.outputPath}}/escalation-list.md' }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+
+function buildSupportTicketPlanChunks() {
+  const semanticBundles = [
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    [11, 12, 13, 14, 15, 16, 17, 19, 20, 21],
+    [18, 22, 23, 24, 25, 26, 27, 28, 29, 30],
+    [31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
+    [41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+  ];
+  return semanticBundles.map((ticketIndexes, chunkIndex) => {
+    const chunkNumber = String(chunkIndex + 1).padStart(3, '0');
+    const workflowInput = {
+      sourcePath: 'support-inbox',
+      outputPath: 'support-queue/chunks/triage-' + chunkNumber + '.csv',
+      chunkId: 'chunk-' + chunkNumber,
+      vendorId: 'support-chunk-' + chunkNumber
+    };
+    ticketIndexes.forEach((index, offset) => {
+      const slot = String(offset + 1).padStart(2, '0');
+      const padded = String(index).padStart(3, '0');
+      workflowInput['path' + slot] = 'support-inbox/ticket-' + padded + '.md';
+      workflowInput['id' + slot] = 'SUP-2026-' + padded;
+    });
+    return {
+      workflowId: 'customer-support-triage-chunk',
+      objective: 'Customer Support Triage Chunk ' + chunkNumber,
+      workflowInput,
+      reason: 'Triage semantic support bundle ' + chunkNumber + ' preserving duplicate and incident groups'
+    };
+  });
+}
+
+function createCustomerSupportTicketPlanWorkflowDefinition(now = new Date().toISOString()) {
+  return {
+    id: 'customer-support-triage-ticket-plan',
+    name: 'Customer Support Triage Ticket Plan',
+    version: '1',
+    description: 'Creates bounded child support triage workflow tickets for a 50-ticket queue.',
+    enabled: true,
+    policy: {
+      id: 'customer-support-triage-ticket-plan-policy',
+      version: '1',
+      text: 'Create one child support triage ticket per bounded 10-ticket chunk. Do not auto-run children.'
+    },
+    verifierContract: {
+      id: 'customer-support-triage-ticket-plan-verifier',
+      version: '1',
+      fixture: 'customer-support',
+      expectedArtifacts: []
+    },
+    inputSchema: {},
+    actions: [
+      {
+        id: 'create_child_chunks',
+        action: 'executeTicketPlan',
+        input: {
+          tickets: buildSupportTicketPlanChunks(),
+          allowedWorkflowIds: ['customer-support-triage-chunk'],
+          maxTickets: 5
+        },
+        saveAs: 'ticketPlan',
+        next: 'done'
+      },
+      {
+        id: 'done',
+        action: 'stop',
+        input: {
+          result: {
+            childTicketIds: '{{ticketPlan.createdTicketIds}}'
+          }
+        }
+      }
+    ],
+    postconditions: [],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function createCustomerSupportChunkWorkflowDefinition(now = new Date().toISOString()) {
+  const readActions = [];
+  for (let offset = 1; offset <= 10; offset += 1) {
+    const slot = String(offset).padStart(2, '0');
+    readActions.push({
+      id: 'read_' + slot,
+      action: 'readFile',
+      input: { path: '{{workflow.input.path' + slot + '}}' },
+      saveAs: 'ticket' + slot,
+      next: offset === 10 ? 'triage_chunk' : 'read_' + String(offset + 1).padStart(2, '0')
+    });
+  }
+  return {
+    id: 'customer-support-triage-chunk',
+    name: 'Customer Support Triage Chunk',
+    version: '1',
+    description: 'Classifies one bounded 10-ticket customer support chunk.',
+    enabled: true,
+    policy: {
+      id: 'customer-support-triage-policy',
+      version: '1',
+      text: CUSTOMER_SUPPORT_TRIAGE_WORKFLOW_POLICY_TEXT
+    },
+    taskPromptTemplate: [
+      'Classify exactly the 10 provided support tickets using workflow.policy.text.',
+      'Return CSV only, no Markdown fence.',
+      'CSV columns exactly: ticket_id,customer_name,priority,assignee_team,escalation,sla,next_action,duplicate_of',
+      'Include one row for every provided ticket ID.'
+    ].join('\n'),
+    verifierContract: {
+      id: 'customer-support-triage-chunk-verifier',
+      version: '1',
+      fixture: 'customer-support',
+      expectedArtifacts: ['support-queue/chunks/*.csv']
+    },
+    inputSchema: {
+      sourcePath: 'string',
+      outputPath: 'string',
+      chunkId: 'string',
+      vendorId: 'string',
+      path01: 'string', id01: 'string',
+      path02: 'string', id02: 'string',
+      path03: 'string', id03: 'string',
+      path04: 'string', id04: 'string',
+      path05: 'string', id05: 'string',
+      path06: 'string', id06: 'string',
+      path07: 'string', id07: 'string',
+      path08: 'string', id08: 'string',
+      path09: 'string', id09: 'string',
+      path10: 'string', id10: 'string'
+    },
+    actions: [
+      ...readActions,
+      {
+        id: 'triage_chunk',
+        action: 'agentStructuredOutput',
+        input: {
+          instruction: '{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}',
+          input: {
+            chunkId: '{{workflow.input.chunkId}}',
+            tickets: {
+              '{{workflow.input.id01}}': '{{ticket01.content}}',
+              '{{workflow.input.id02}}': '{{ticket02.content}}',
+              '{{workflow.input.id03}}': '{{ticket03.content}}',
+              '{{workflow.input.id04}}': '{{ticket04.content}}',
+              '{{workflow.input.id05}}': '{{ticket05.content}}',
+              '{{workflow.input.id06}}': '{{ticket06.content}}',
+              '{{workflow.input.id07}}': '{{ticket07.content}}',
+              '{{workflow.input.id08}}': '{{ticket08.content}}',
+              '{{workflow.input.id09}}': '{{ticket09.content}}',
+              '{{workflow.input.id10}}': '{{ticket10.content}}'
+            }
+          },
+          outputSchema: {
+            chunkCsv: 'string'
+          }
+        },
+        saveAs: 'classification',
+        next: 'write_chunk'
+      },
+      {
+        id: 'write_chunk',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.outputPath}}',
+          content: '{{classification.chunkCsv}}'
+        },
+        next: 'done'
+      },
+      {
+        id: 'done',
+        action: 'stop',
+        input: {
+          result: {
+            chunkPath: '{{workflow.input.outputPath}}'
+          }
+        }
+      }
+    ],
+    postconditions: [
+      { id: 'chunk-exists', type: 'fileExists', path: '{{workflow.input.outputPath}}' }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function createCustomerSupportAggregateWorkflowDefinition(now = new Date().toISOString()) {
+  return {
+    id: 'customer-support-triage-aggregate',
+    name: 'Customer Support Triage Aggregate',
+    version: '1',
+    description: 'Aggregates support triage chunk artifacts into final queue artifacts.',
+    enabled: true,
+    policy: {
+      id: 'customer-support-triage-aggregate-policy',
+      version: '1',
+      text: [
+        'Combine the five chunk CSV artifacts into final Customer Support triage artifacts.',
+        'Do not change ticket IDs, customer names, priorities, teams, escalation values, SLA values, next_action values, or duplicate_of values from the chunk CSV rows.',
+        'The triage plan must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, assignee_team, escalation, sla, next_action, duplicate_of.',
+        'The escalation list must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, reason, owner.',
+        'The escalation list must include only rows where escalation is Yes.'
+      ].join('\n')
+    },
+    taskPromptTemplate: [
+      'Read all five chunk CSV artifacts and aggregate them into final support queue artifacts.',
+      'Preserve every row from every chunk exactly except Markdown table formatting.',
+      'Return only the two artifact contents.'
+    ].join('\n'),
+    verifierContract: {
+      id: 'customer-support-triage-aggregate-verifier',
+      version: '1',
+      fixture: 'customer-support',
+      expectedArtifacts: [
+        'support-queue/triage-plan.md',
+        'support-queue/escalation-list.md'
+      ]
+    },
+    inputSchema: {
+      outputPath: 'string',
+      chunkPath01: 'string',
+      chunkPath02: 'string',
+      chunkPath03: 'string',
+      chunkPath04: 'string',
+      chunkPath05: 'string'
+    },
+    actions: [
+      { id: 'read_chunk_01', action: 'readFile', input: { path: '{{workflow.input.chunkPath01}}' }, saveAs: 'chunk01', next: 'read_chunk_02' },
+      { id: 'read_chunk_02', action: 'readFile', input: { path: '{{workflow.input.chunkPath02}}' }, saveAs: 'chunk02', next: 'read_chunk_03' },
+      { id: 'read_chunk_03', action: 'readFile', input: { path: '{{workflow.input.chunkPath03}}' }, saveAs: 'chunk03', next: 'read_chunk_04' },
+      { id: 'read_chunk_04', action: 'readFile', input: { path: '{{workflow.input.chunkPath04}}' }, saveAs: 'chunk04', next: 'read_chunk_05' },
+      { id: 'read_chunk_05', action: 'readFile', input: { path: '{{workflow.input.chunkPath05}}' }, saveAs: 'chunk05', next: 'aggregate' },
+      {
+        id: 'aggregate',
+        action: 'agentStructuredOutput',
+        input: {
+          instruction: '{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}',
+          input: {
+            chunks: {
+              chunk01: '{{chunk01.content}}',
+              chunk02: '{{chunk02.content}}',
+              chunk03: '{{chunk03.content}}',
+              chunk04: '{{chunk04.content}}',
+              chunk05: '{{chunk05.content}}'
+            }
+          },
+          outputSchema: {
+            triagePlanMd: 'string',
+            escalationListMd: 'string'
+          }
+        },
+        saveAs: 'aggregateOutput',
+        next: 'write_triage_plan'
+      },
+      {
+        id: 'write_triage_plan',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.outputPath}}/triage-plan.md',
+          content: '{{aggregateOutput.triagePlanMd}}'
+        },
+        next: 'write_escalation_list'
+      },
+      {
+        id: 'write_escalation_list',
+        action: 'writeFile',
+        input: {
+          path: '{{workflow.input.outputPath}}/escalation-list.md',
+          content: '{{aggregateOutput.escalationListMd}}'
         },
         next: 'done'
       },
@@ -13861,6 +14161,24 @@ async function createDefaultData() {
     workflows.push(createCustomerSupportTriageWorkflowDefinition());
     writeWorkflows(workflows);
     console.log('Created workflow: customer-support-triage');
+  }
+
+  if (!workflows.some(workflow => workflow.id === 'customer-support-triage-ticket-plan')) {
+    workflows.push(createCustomerSupportTicketPlanWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created workflow: customer-support-triage-ticket-plan');
+  }
+
+  if (!workflows.some(workflow => workflow.id === 'customer-support-triage-chunk')) {
+    workflows.push(createCustomerSupportChunkWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created workflow: customer-support-triage-chunk');
+  }
+
+  if (!workflows.some(workflow => workflow.id === 'customer-support-triage-aggregate')) {
+    workflows.push(createCustomerSupportAggregateWorkflowDefinition());
+    writeWorkflows(workflows);
+    console.log('Created workflow: customer-support-triage-aggregate');
   }
 
   if (!workflows.some(workflow => workflow.id === 'vendor-compliance')) {

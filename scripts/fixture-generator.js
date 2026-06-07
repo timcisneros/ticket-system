@@ -688,6 +688,55 @@ function buildSupportCases(count) {
   return cases;
 }
 
+function buildSupportExpectation(item) {
+  const expectation = {
+    ticketId: item.ticketId,
+    sourcePath: path.join('support-inbox', item.filename),
+    customerName: item.customerName,
+    customerTier: item.customerTier,
+    issueType: item.issueType,
+    duplicateGroup: item.duplicateGroup,
+    expectedPriority: item.expectedPriority,
+    expectedTeam: item.expectedTeam,
+    expectedEscalation: item.expectedEscalation,
+    expectedSla: item.expectedSla,
+    expectedNextActionKind: item.expectedNextActionKind
+  };
+
+  const isArchivedSearchSlowdown = item.subject === 'Search results slow for archived projects';
+  if (isArchivedSearchSlowdown) {
+    expectation.acceptablePriority = ['P2', 'P3'];
+    expectation.acceptableTeam = ['Engineering', 'Customer Success'];
+    expectation.acceptableSla = ['4 business hours', '1 business day'];
+    expectation.acceptableNextActionKind = ['bug_triage', 'request_reproduction_details'];
+  }
+
+  if (item.ticketId === 'SUP-2026-003') {
+    expectation.acceptablePriority = ['P2', 'P3'];
+    expectation.acceptableTeam = ['Engineering', 'Customer Success'];
+    expectation.acceptableSla = ['4 business hours', '1 business day'];
+    expectation.acceptableNextActionKind = ['bug_triage', 'request_reproduction_details'];
+  }
+
+  if (item.ticketId === 'SUP-2026-004') {
+    expectation.acceptablePriority = ['P2', 'P3'];
+    expectation.acceptableTeam = ['Engineering', 'Customer Success'];
+    expectation.acceptableSla = ['4 business hours', '1 business day'];
+  }
+
+  if (['SUP-2026-010', 'SUP-2026-020', 'SUP-2026-021'].includes(item.ticketId)) {
+    expectation.acceptableNextActionKind = [item.expectedNextActionKind, 'bug_triage', 'page_on_call', 'link_duplicate_to_primary'];
+  }
+
+  if (item.ticketId === 'SUP-2026-018') {
+    expectation.acceptableEscalation = ['Yes', 'No'];
+    expectation.acceptableSla = ['1 hour', '4 business hours'];
+    expectation.acceptableNextActionKind = ['engineering_triage_enterprise', 'bug_triage'];
+  }
+
+  return expectation;
+}
+
 function renderSupportTicket(item) {
   return [
     '# Support Ticket',
@@ -719,20 +768,11 @@ function generateSupportFixtures() {
     'customer-support',
     { count: selected.length },
     {
-      files: selected.map(item => ({
-        ticketId: item.ticketId,
-        sourcePath: path.join('support-inbox', item.filename),
-        customerName: item.customerName,
-        customerTier: item.customerTier,
-        issueType: item.issueType,
-        duplicateGroup: item.duplicateGroup,
-        expectedPriority: item.expectedPriority,
-        expectedTeam: item.expectedTeam,
-        expectedEscalation: item.expectedEscalation,
-        expectedSla: item.expectedSla,
-        expectedNextActionKind: item.expectedNextActionKind
-      })),
-      expectedEscalationTicketIds: selected.filter(item => item.expectedEscalation === 'Yes').map(item => item.ticketId),
+      files: selected.map(buildSupportExpectation),
+      expectedEscalationTicketIds: selected
+        .map(buildSupportExpectation)
+        .filter(item => (item.acceptableEscalation || [item.expectedEscalation]).length === 1 && (item.acceptableEscalation || [item.expectedEscalation])[0] === 'Yes')
+        .map(item => item.ticketId),
       duplicateGroups: selected
         .filter(item => item.duplicateGroup && item.duplicateGroup !== 'none')
         .reduce((groups, item) => {
@@ -748,7 +788,7 @@ function generateSupportFixtures() {
       decisionRules: [
         'P1: production outage or potential security incident; escalate immediately.',
         'P2: customer-impacting bug, enterprise ambiguity, or degraded business-critical workflow.',
-        'P3: feature request or how-to question without incident signals.',
+        'P3: feature request, how-to question, partial bug, or low-impact bug with workaround available.',
         'P4: internal-only or non-customer work without customer impact.'
       ]
     },
