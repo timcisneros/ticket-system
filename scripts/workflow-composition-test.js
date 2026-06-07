@@ -866,6 +866,26 @@ async function main() {
     assert(childTickets.some(item => item.workflowInput.vendorId === 'vendor-003'), 'child ticket should preserve vendor-003 workflow input');
     assert(!readJson('runs.json').some(item => childTickets.map(ticket => ticket.id).includes(item.ticketId)), 'executeTicketPlan v1 should not create child runs');
 
+    const ticketPlanRerunResponse = await request('POST', `/api/tickets/${ticketPlanParentTicket.id}/rerun`, {
+      cookie,
+      body: { mode: 'retry' }
+    });
+    assert(ticketPlanRerunResponse.statusCode === 200, `ticket plan parent rerun returned HTTP ${ticketPlanRerunResponse.statusCode}: ${ticketPlanRerunResponse.body}`);
+    const ticketPlanRerun = await waitForCompletedRun(ticketPlanParentTicket.id);
+    assert(ticketPlanRerun.id !== ticketPlanRun.id, 'ticket plan parent rerun should create a new parent run');
+    assert(ticketPlanRerun.status === 'completed', `ticket plan parent rerun should complete, got ${ticketPlanRerun.status}: ${ticketPlanRerun.error || ''}`);
+    const childTicketsAfterParentRerun = readJson('tickets.json').filter(item => item.parentTicketId === ticketPlanParentTicket.id);
+    assert(childTicketsAfterParentRerun.length === 2, `parent rerun should not create duplicate child tickets, found ${childTicketsAfterParentRerun.length}`);
+    const ticketPlanRerunSnapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, ticketPlanRerun.replaySnapshotPath), 'utf8'));
+    const ticketPlanRerunEvidence = (ticketPlanRerunSnapshot.workflowTicketPlans || []).find(item => item.stepId === 'execute-ticket-plan');
+    assert(ticketPlanRerunEvidence, 'executeTicketPlan parent rerun should record workflowTicketPlans evidence');
+    assert(ticketPlanRerunEvidence.proposedTickets.length === 2, 'parent rerun should record proposed child tickets');
+    assert(ticketPlanRerunEvidence.acceptedTickets.length === 0, 'parent rerun should accept no duplicate child tickets');
+    assert(ticketPlanRerunEvidence.rejectedTickets.length === 2, 'parent rerun should reject duplicate child tickets');
+    assert(ticketPlanRerunEvidence.createdTicketIds.length === 0, 'parent rerun should create no duplicate child tickets');
+    assert(ticketPlanRerunEvidence.rejectedTickets.every(ticket => (ticket.validationReasons || []).some(reason => reason.includes('duplicate child ticket already exists'))), 'parent rerun duplicate rejections should explain existing child tickets');
+    assert(!readJson('runs.json').some(item => childTicketsAfterParentRerun.map(ticket => ticket.id).includes(item.ticketId)), 'parent rerun should not auto-create child runs');
+
     const invalidTicketPlanWorkflow = {
       id: `workflow-ticket-plan-invalid-${Date.now()}`,
       name: 'Invalid ticket plan workflow',

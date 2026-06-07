@@ -9629,7 +9629,7 @@ function getTicketPlanVendorId(ticket) {
 
 function buildTicketPlanIdempotencyKey(run, ticket) {
   const vendorId = getTicketPlanVendorId(ticket) || 'no-vendor';
-  return [run.id, ticket.workflowId || 'no-workflow', vendorId].join(':');
+  return [run.ticketId, ticket.workflowId || 'no-workflow', vendorId].join(':');
 }
 
 function normalizeProposedTicketPlanItem(ticket, index) {
