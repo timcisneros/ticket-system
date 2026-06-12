@@ -1,0 +1,1280 @@
+{
+  "fixture": "vendor-compliance",
+  "version": 1,
+  "seed": 42000,
+  "evaluationDate": "2026-06-07",
+  "parameters": {
+    "vendorCount": 40
+  },
+  "generatedPaths": [
+    {
+      "type": "directory",
+      "path": "vendors/incoming"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-001.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-002.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-003.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-004.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-005.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-006.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-007.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-008.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-009.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-010.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-011.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-012.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-013.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-014.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-015.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-016.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-017.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-018.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-019.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-020.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-021.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-022.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-023.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-024.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-025.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-026.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-027.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-028.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-029.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-030.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-031.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-032.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-033.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-034.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-035.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-036.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-037.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-038.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-039.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/incoming/vendor-040.md"
+    },
+    {
+      "type": "file",
+      "path": "vendors/fixture-manifest.json"
+    }
+  ],
+  "expectedArtifactSchema": {
+    "files": [
+      "vendors/vendor-decision-register.csv",
+      "vendors/compliance-review.md"
+    ],
+    "registerColumns": [
+      "vendor_id",
+      "vendor_name",
+      "disposition",
+      "reason",
+      "policy_reference",
+      "next_action"
+    ]
+  },
+  "expectedDecisionSet": {
+    "dispositions": [
+      "Approve",
+      "Conditional Approve",
+      "Reject"
+    ],
+    "files": [
+      {
+        "vendorId": "vendor-001",
+        "vendorName": "CloudHost Inc (parent entity of CloudHost EU, CloudHost APAC, CloudHost Americas)",
+        "sourcePath": "vendors/incoming/vendor-001.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "subsidiary_certification_gap",
+        "expectedNextActionKind": "apac_compliance_verification",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$420K (distributed across 3 subsidiaries: EU $180K, APAC $120K, Americas $120K)",
+          "dpaStatus": "Signed and current — parent-level DPA states coverage for all subsidiaries and affiliated entities",
+          "certification": "CloudHost Americas: SOC 2 Type II (expires 2027-04-05, current). CloudHost EU: ISO 27001 (expires 2027-08-15, current). CloudHost APAC: No certification on file.",
+          "certificationExpiry": "2027-04-05 (Americas SOC 2) / 2027-08-15 (EU ISO 27001) / No cert (APAC)",
+          "certificationStatus": "Partial — 2 of 3 subsidiaries have current certifications. APAC subsidiary has no certification evidence.",
+          "incidentStatus": "Resolved high severity config incident (Americas, Q1 2026). No incidents reported for EU or APAC entities.",
+          "dataAccess": "Customer account data, usage logs, and deployment configurations across all regions",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-002",
+        "vendorName": "DataSync Corp",
+        "sourcePath": "vendors/incoming/vendor-002.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "conflicting_audit_evidence",
+        "expectedNextActionKind": "audit_scope_clarification",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$260K",
+          "dpaStatus": "Signed and current",
+          "certification": "ISO 27001",
+          "certificationExpiry": "2029-07-09",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Product analytics and account metadata",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "External SOC2 clean opinion vs internal audit 4 material findings — scopes differ",
+          "incompleteNote": null,
+          "ambiguityNote": "Conflicting audit evidence — external clean, internal material findings in excluded scope"
+        }
+      },
+      {
+        "vendorId": "vendor-003",
+        "vendorName": "SecureMail Ltd (recently acquired by CertGlobal Corp)",
+        "sourcePath": "vendors/incoming/vendor-003.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "inherited_cert_not_contractual",
+        "expectedNextActionKind": "verify_parent_coverage",
+        "sourceFields": {
+          "criticality": "Medium",
+          "annualSpend": "$180K",
+          "dpaStatus": "Pre-acquisition DPA (SecureMail Ltd) signed and current. CertGlobal Corp parent DPA does not list SecureMail as covered entity.",
+          "certification": "SecureMail SOC2 Type II expired 2026-03-15. CertGlobal parent SOC2 Type II expires 2027-11-30 claims subsidiary coverage.",
+          "certificationExpiry": "2026-03-15 (SecureMail). 2027-11-30 (CertGlobal parent).",
+          "certificationStatus": "SecureMail cert: Expired. CertGlobal parent cert: Current. No contractual confirmation of subsidiary coverage.",
+          "incidentStatus": "None reported",
+          "dataAccess": "Employee email headers and quarantine metadata",
+          "acquisitionNote": "Acquired by CertGlobal Corp 2026-04-01. SecureMail expired cert during acquisition. Parent DPA not amended.",
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": "Parent claims cert coverage for subsidiary but DPA not updated"
+        }
+      },
+      {
+        "vendorId": "vendor-004",
+        "vendorName": "AnalyticsPro",
+        "sourcePath": "vendors/incoming/vendor-004.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "grandfathered_exception_no_documentation",
+        "expectedNextActionKind": "formal_exception_documentation",
+        "sourceFields": {
+          "criticality": "Low",
+          "annualSpend": "$310K",
+          "dpaStatus": "Signed — originally executed 2022-03-15 under prior policy version. Not reviewed or updated since onboarding.",
+          "certification": "SOC 2 Type I (expired 2025-01-12). No current certification.",
+          "certificationExpiry": "2025-01-12",
+          "certificationStatus": "Expired — no recertification submitted",
+          "incidentStatus": "None reported",
+          "dataAccess": "Aggregated sales reporting data",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": "No current certification, no written exception documentation, DPA not reviewed in 4 years",
+          "ambiguityNote": "Verbal grandfather agreement — no written exception under current policy"
+        }
+      },
+      {
+        "vendorId": "vendor-005",
+        "vendorName": "InfraServe (disputed: Inc vs LLC)",
+        "sourcePath": "vendors/incoming/vendor-005.md",
+        "expectedDisposition": "Reject",
+        "acceptableDispositions": [
+          "Reject"
+        ],
+        "reasonCode": "unsigned_dpa_disputed_ownership",
+        "expectedNextActionKind": "resolve_ownership_before_dpa",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$205K",
+          "dpaStatus": "Unsigned — disputed between InfraServe Technologies Inc and InfraServe Cloud LLC. Neither entity accepts signing responsibility.",
+          "certification": "PCI DSS (current, expires 2027-10-13) — issued to InfraServe Technologies Inc. Scope does not mention Cloud LLC.",
+          "certificationExpiry": "2027-10-13",
+          "certificationStatus": "Current — but issued to different legal entity than service operator",
+          "incidentStatus": "None reported",
+          "dataAccess": "Infrastructure metrics, hostnames, and production environment topology data",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "Cert entity vs service operator entity mismatch",
+          "incompleteNote": null,
+          "ambiguityNote": "Disputed legal ownership between Inc entity (contract+cert) and LLC entity (service operator)"
+        }
+      },
+      {
+        "vendorId": "vendor-006",
+        "vendorName": "LogiStack",
+        "sourcePath": "vendors/incoming/vendor-006.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Reject"
+        ],
+        "reasonCode": "expired_certification",
+        "expectedNextActionKind": "recertification_90_days",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$120K",
+          "dpaStatus": "Missing",
+          "certification": "HIPAA",
+          "certificationExpiry": "2028-11-10",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Application logs with limited customer identifiers",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-007",
+        "vendorName": "DataBridge Logistics",
+        "sourcePath": "vendors/incoming/vendor-007.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "subcontractor_unverified",
+        "expectedNextActionKind": "subcontractor_dpa_verify",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$680K",
+          "dpaStatus": "Signed and current (covers DataBridge only)",
+          "certification": "SOC 2 Type II",
+          "certificationExpiry": "2027-03-15",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Customer order data, inventory levels, and shipping manifests"
+        }
+      },
+      {
+        "vendorId": "vendor-008",
+        "vendorName": "EuroHost Solutions",
+        "sourcePath": "vendors/incoming/vendor-008.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "data_residency_not_explicit",
+        "expectedNextActionKind": "data_residency_clarify",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$520K",
+          "dpaStatus": "Signed and current",
+          "certification": "ISO 27001",
+          "certificationExpiry": "2027-08-22",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Customer account data, transaction records, and support ticket contents"
+        }
+      },
+      {
+        "vendorId": "vendor-009",
+        "vendorName": "AuthFlow Systems",
+        "sourcePath": "vendors/incoming/vendor-009.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "contradictory_operational_timeline",
+        "expectedNextActionKind": "timeline_review",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$150K",
+          "dpaStatus": "Signed — dated June 1, 2026",
+          "certification": "ISO 27001 (covers January-December 2025, recertification in progress)",
+          "certificationExpiry": "2025-12-31",
+          "certificationStatus": "Current (submitted for recertification, under review)",
+          "incidentStatus": "None reported",
+          "dataAccess": "User directory and group membership data",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "Service started 45 days before contract signed, 90 days before DPA signed",
+          "incompleteNote": null,
+          "ambiguityNote": "Services provided before contractual authorization existed — all current docs in order but historical timeline irregular"
+        }
+      },
+      {
+        "vendorId": "vendor-010",
+        "vendorName": "ComplianceMate",
+        "sourcePath": "vendors/incoming/vendor-010.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "partial_audit_evidence_missing_exceptions",
+        "expectedNextActionKind": "request_missing_exceptions",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$85K",
+          "dpaStatus": "Signed and current",
+          "certification": "SOC 2 Type II (qualified opinion — Appendix B: Exceptions missing from packet)",
+          "certificationExpiry": "2025-07-05",
+          "certificationStatus": "Expired — most recent report has qualified opinion with missing exceptions appendix",
+          "incidentStatus": "Open medium severity audit finding under review",
+          "dataAccess": "Audit logs with system event data",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": "SOC2 Appendix B (exceptions) missing from submitted packet — management response present but exceptions themselves not documented",
+          "ambiguityNote": "Cannot verify remediation claims without seeing the original exceptions"
+        }
+      },
+      {
+        "vendorId": "vendor-011",
+        "vendorName": "ShieldOps (UK subsidiary of DataGuard GmbH)",
+        "sourcePath": "vendors/incoming/vendor-011.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "combined_compliance_gaps",
+        "expectedNextActionKind": "coordinated_review",
+        "sourceFields": {
+          "criticality": "Medium",
+          "annualSpend": "$240K",
+          "dpaStatus": "Signed — parent-level DPA (DataGuard GmbH) claims subsidiary coverage. Subsidiary-specific addendum not signed.",
+          "certification": "SOC 2 Type I (current, expires 2027-05-01, ShieldOps UK). Parent: ISO 27001 + BCR (renewal grace period).",
+          "certificationExpiry": "2027-05-01 (ShieldOps SOC2). Parent BCR technically expired September 2025 (renewal grace period).",
+          "certificationStatus": "Current with caveats: ShieldOps SOC2 current. Parent BCR in renewal grace period.",
+          "incidentStatus": "None reported",
+          "dataAccess": "Security alert metadata and indicator hashes; limited EU personal data per legal team",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "Internal security team says no EU PII processed; legal team says limited EU PII processed — contradictory attestations",
+          "incompleteNote": "Parent DPA addendum not signed. BCR renewal not confirmed by regulator.",
+          "ambiguityNote": "Cross-regulatory claim (GDPR adequacy through parent BCR) + inherited cert claim + contradictory internal attestations on PII processing"
+        }
+      },
+      {
+        "vendorId": "vendor-012",
+        "sourcePath": "vendors/incoming/vendor-012.md",
+        "vendorName": "DataJuris",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "regulatory_compliance_conflict",
+        "expectedNextActionKind": "regulatory_clarification",
+        "sourceFields": {
+          "criticality": "Low",
+          "annualSpend": "$55K",
+          "dpaStatus": "Signed and current — standard DPA",
+          "certification": "PCI DSS",
+          "certificationExpiry": "2025-09-18",
+          "certificationStatus": "Expired",
+          "incidentStatus": "None reported",
+          "dataAccess": "Replicated database snapshots containing customer data subject to both EU GDPR and California Consumer Privacy Act (CCPA)",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "EU data retention laws vs CCPA deletion rights — cannot simultaneously comply with both regulatory frameworks",
+          "incompleteNote": null,
+          "ambiguityNote": "Policy does not address conflicting regulatory requirements across jurisdictions"
+        }
+      },
+      {
+        "vendorId": "vendor-013",
+        "vendorName": "PolicyCore",
+        "sourcePath": "vendors/incoming/vendor-013.md",
+        "expectedDisposition": "Reject",
+        "acceptableDispositions": [
+          "Reject",
+          "Conditional Approve"
+        ],
+        "reasonCode": "missing_security_certification",
+        "expectedNextActionKind": "request_clarification",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$330K",
+          "dpaStatus": "Signed and current",
+          "certification": "Not provided",
+          "certificationExpiry": "Not applicable",
+          "certificationStatus": "Missing",
+          "incidentStatus": "None reported",
+          "dataAccess": "Policy version history and exception records",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "Data Processing Agreement status is \"Signed and current\" but Security Certification is \"Not provided\" and Certification Status is \"Missing\". These fields contradict each other — a signed DPA should not exist alongside a missing certification.",
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-014",
+        "vendorName": "HealthData Sync",
+        "sourcePath": "vendors/incoming/vendor-014.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "cross_regulatory_incomplete",
+        "expectedNextActionKind": "gdpr_adequacy_assessment",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$1.2M",
+          "dpaStatus": "Signed and current",
+          "certification": "SOC 2 Type II",
+          "certificationExpiry": "2027-06-30",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "PHI (protected health information) for US patients and EU healthcare data subject to GDPR"
+        }
+      },
+      {
+        "vendorId": "vendor-015",
+        "vendorName": "TrustLayer",
+        "sourcePath": "vendors/incoming/vendor-015.md",
+        "expectedDisposition": "Approve",
+        "acceptableDispositions": [
+          "Approve",
+          "Conditional Approve"
+        ],
+        "reasonCode": "current_cert_no_incident",
+        "expectedNextActionKind": "approve_with_acquisition_review",
+        "sourceFields": {
+          "criticality": "Medium",
+          "annualSpend": "$290K",
+          "dpaStatus": "Signed and current",
+          "certification": "SOC2 Type II",
+          "certificationExpiry": "2028-06-15",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Vendor risk scores and assessment documents",
+          "acquisitionNote": "This vendor was acquired by CloudHost Inc (vendor-001) in Q1 2026. Existing DPA and certifications remain under TrustLayer's name pending legal merger.",
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-016",
+        "sourcePath": "vendors/incoming/vendor-016.md",
+        "vendorName": "VeriShield Technologies",
+        "expectedDisposition": "Reject",
+        "acceptableDispositions": [
+          "Reject"
+        ],
+        "reasonCode": "entity_identity_mismatch",
+        "expectedNextActionKind": "identity_verification",
+        "sourceFields": {
+          "criticality": "Low",
+          "annualSpend": "$45K",
+          "dpaStatus": "Signed — references VeriShield Technologies Corp",
+          "certification": "ISO 27001 — issued to VeriShield Security Inc",
+          "certificationExpiry": "2024-12-18",
+          "certificationStatus": "Expired",
+          "incidentStatus": "None reported",
+          "dataAccess": "Encrypted secrets and key metadata",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "DPA entity (Tech Corp), cert entity (Security Inc), invoicing entity (Tech LLC) — three different legal entities",
+          "incompleteNote": "No single document references more than one entity. No entity relationship documented.",
+          "ambiguityNote": "Cannot determine which legal entity is the actual counterparty"
+        }
+      },
+      {
+        "vendorId": "vendor-017",
+        "vendorName": "NexGen Analytics (formerly DataStream Analytics)",
+        "sourcePath": "vendors/incoming/vendor-017.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "entity_name_inconsistency",
+        "expectedNextActionKind": "entity_verification",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$450K",
+          "dpaStatus": "Signed and current (under former legal name: DataStream Analytics Inc.)",
+          "certification": "ISO 27001",
+          "certificationExpiry": "2026-12-15",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Customer business metrics, sales data, and operational KPIs"
+        }
+      },
+      {
+        "vendorId": "vendor-018",
+        "vendorName": "SecureVault Systems",
+        "sourcePath": "vendors/incoming/vendor-018.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Reject"
+        ],
+        "reasonCode": "competitor_acquisition_risk",
+        "expectedNextActionKind": "ownership_review",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$890K",
+          "dpaStatus": "Signed and current",
+          "certification": "SOC 2 Type II",
+          "certificationExpiry": "2027-04-30",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Customer encryption keys and security configuration data"
+        }
+      },
+      {
+        "vendorId": "vendor-019",
+        "vendorName": "ComplianceCheck Pro",
+        "sourcePath": "vendors/incoming/vendor-019.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "audit_in_progress_minor_findings",
+        "expectedNextActionKind": "audit_remediation_track",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$310K",
+          "dpaStatus": "Signed and current",
+          "certification": "SOC 2 Type II",
+          "certificationExpiry": "2027-09-30",
+          "certificationStatus": "Current",
+          "incidentStatus": "Scheduled SOC 2 recertification audit in progress as of 2026-06-01. Preliminary findings: 2 minor control deficiencies (access review cadence, vendor onboarding documentation). Remediation plan submitted and accepted by auditors.",
+          "dataAccess": "Customer compliance configurations and audit log metadata"
+        }
+      },
+      {
+        "vendorId": "vendor-020",
+        "vendorName": "OmniCloud Services",
+        "sourcePath": "vendors/incoming/vendor-020.md",
+        "expectedDisposition": "Reject",
+        "acceptableDispositions": [
+          "Reject"
+        ],
+        "reasonCode": "iaas_tier_missing_dpa",
+        "expectedNextActionKind": "obtain_iaas_dpa_before_approval",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$1.8M",
+          "dpaStatus": "Signed and current (covers SaaS analytics tier only)",
+          "certification": "ISO 27001",
+          "certificationExpiry": "2027-11-30",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "SaaS tier: customer analytics data and dashboard configurations. IaaS tier: customer virtual machine images and network configurations."
+        }
+      },
+      {
+        "vendorId": "vendor-021",
+        "sourcePath": "vendors/incoming/vendor-021.md",
+        "vendorName": "SecureBridge Infrastructure",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Approve"
+        ],
+        "reasonCode": "pending_litigation_risk",
+        "expectedNextActionKind": "litigation_monitoring",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$275K",
+          "dpaStatus": "Signed and current",
+          "certification": "GDPR Compliance Report",
+          "certificationExpiry": "2029-06-27",
+          "certificationStatus": "Current",
+          "incidentStatus": "Resolved high severity config incident",
+          "dataAccess": "Customer account data and usage logs",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": "Pending litigation at another client for data breach. Policy does not address litigation as a compliance factor. Current documentation is in-order per policy."
+        }
+      },
+      {
+        "vendorId": "vendor-022",
+        "sourcePath": "vendors/incoming/vendor-022.md",
+        "vendorName": "GlobalVault Data Services",
+        "expectedDisposition": "Reject",
+        "acceptableDispositions": [
+          "Reject"
+        ],
+        "reasonCode": "dpa_compliance_legally_impossible",
+        "expectedNextActionKind": "jurisdiction_change_required",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$130K",
+          "dpaStatus": "Signed — Section 3.1 promises no third-party access. This is legally impossible under Country X National Data Access Act.",
+          "certification": "SOC 2 Type II",
+          "certificationExpiry": "2027-05-04",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Product analytics and account metadata, including personally identifiable information",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "DPA promises no third-party access but Country X law grants government data access rights",
+          "incompleteNote": null,
+          "ambiguityNote": "Vendor cannot legally comply with DPA terms while operating from current jurisdiction. Policy does not address legal impossibility of contractual compliance."
+        }
+      },
+      {
+        "vendorId": "vendor-023",
+        "sourcePath": "vendors/incoming/vendor-023.md",
+        "vendorName": "MergerCorp Compliance (formerly EthosVault + DataGuard Solutions)",
+        "expectedDisposition": "Reject",
+        "acceptableDispositions": [
+          "Reject"
+        ],
+        "reasonCode": "no_accountable_compliance_party",
+        "expectedNextActionKind": "resolve_post_merger_ownership",
+        "sourceFields": {
+          "criticality": "Medium",
+          "annualSpend": "$400K",
+          "dpaStatus": "Unsigned — merged entity has no DPA. Both pre-merger DPAs expired under old entity names.",
+          "certification": "EthosVault SOC 2 Type II expired 2025-08-15. DataGuard Solutions ISO 27001 expired 2026-01-30. No merged-entity certification.",
+          "certificationExpiry": "2025-08-15 / 2026-01-30",
+          "certificationStatus": "Both expired. No merged-entity certification in progress.",
+          "incidentStatus": "None reported",
+          "dataAccess": "Employee email headers and quarantine metadata",
+          "acquisitionNote": "Merged Q1 2026 — integration incomplete. Entity Security claims cert responsibility, Entity Legal claims DPA responsibility. Neither accepts merged-entity ownership.",
+          "duplicateNote": null,
+          "conflictingFields": "Two pre-merger entities each claim different compliance responsibility. Neither accepts merged-entity compliance ownership.",
+          "incompleteNote": "No DPA, no cert, no accountable party for merged entity"
+        }
+      },
+      {
+        "vendorId": "vendor-024",
+        "vendorName": "PolicyStream",
+        "sourcePath": "vendors/incoming/vendor-024.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Approve"
+        ],
+        "reasonCode": "conflicting_certifications",
+        "expectedNextActionKind": "conditional_approve",
+        "sourceFields": {
+          "criticality": "varies",
+          "annualSpend": "varies",
+          "dpaStatus": "varies",
+          "certification": "varies",
+          "certificationExpiry": "varies",
+          "certificationStatus": "varies",
+          "incidentStatus": "varies",
+          "dataAccess": "varies",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "present",
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-025",
+        "vendorName": "AuditSphere",
+        "sourcePath": "vendors/incoming/vendor-025.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Approve"
+        ],
+        "reasonCode": "incomplete_packet",
+        "expectedNextActionKind": "request_missing_fields",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$320K",
+          "dpaStatus": "Signed and current",
+          "certification": "Not specified",
+          "certificationExpiry": "2027-03-01",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Infrastructure metrics and hostnames",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": "The Data Access field and annual spend were not provided in the original submission. The certification document is dated but the certification type field is blank.",
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-026",
+        "sourcePath": "vendors/incoming/vendor-026.md",
+        "vendorName": "SubContractWare Logistics",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Reject"
+        ],
+        "reasonCode": "undisclosed_subcontractor_no_dpa",
+        "expectedNextActionKind": "subcontractor_compliance_verification",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$160K",
+          "dpaStatus": "Signed and current — between us and SubContractWare only. No DPA between SubContractWare and subcontracted CloudIndex Processing Ltd.",
+          "certification": "PCI DSS — issued to SubContractWare Logistics. CloudIndex Processing Ltd holds no certification.",
+          "certificationExpiry": "2027-11-22",
+          "certificationStatus": "Current (SubContractWare only)",
+          "incidentStatus": "Resolved high severity credential incident (SubContractWare systems only)",
+          "dataAccess": "Application logs containing limited customer identifiers — ALL data processing performed by CloudIndex Processing Ltd",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "SubContractWare compliance docs cover only SubContractWare. All processing done by undisclosed CloudIndex with no DPA or cert.",
+          "incompleteNote": "Subcontractor disclosed only during site visit. No subcontractor DPA. No subcontractor cert.",
+          "ambiguityNote": "Policy does not require subcontractor disclosure or sub-tier compliance verification"
+        }
+      },
+      {
+        "vendorId": "vendor-027",
+        "vendorName": "PolicyAlign Corp",
+        "sourcePath": "vendors/incoming/vendor-027.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "contradictory_regulatory_filings",
+        "expectedNextActionKind": "regulatory_clarification",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$280K",
+          "dpaStatus": "Signed and current",
+          "certification": "ISO 27001",
+          "certificationExpiry": "2027-02-28",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Customer policy documents and compliance status metadata"
+        }
+      },
+      {
+        "vendorId": "vendor-028",
+        "sourcePath": "vendors/incoming/vendor-028.md",
+        "vendorName": "AIDecide Analytics",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "ai_governance_gap_missing_cert",
+        "expectedNextActionKind": "ai_governance_assessment",
+        "sourceFields": {
+          "criticality": "Low",
+          "annualSpend": "$105K",
+          "dpaStatus": "Signed and current — covers data storage and security. Does not address automated decision-making or AI-specific data use.",
+          "certification": "Not provided",
+          "certificationExpiry": "Not applicable",
+          "certificationStatus": "Missing",
+          "incidentStatus": "None reported",
+          "dataAccess": "Customer personal data used for automated decision-making without human review",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": "No certification provided. DPA does not address AI/automated decision-making despite vendor using AI to make decisions affecting customers."
+        }
+      },
+      {
+        "vendorId": "vendor-029",
+        "sourcePath": "vendors/incoming/vendor-029.md",
+        "vendorName": "DualReport Audit Services",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve"
+        ],
+        "reasonCode": "conflicting_document_versions",
+        "expectedNextActionKind": "report_authenticity_verification",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$340K",
+          "dpaStatus": "Signed and current",
+          "certification": "Two SOC 2 Type II reports — Version A: unqualified. Version B: qualified with 3 material findings. Same auditor, same period.",
+          "certificationExpiry": "2024-11-11 (Version B)",
+          "certificationStatus": "Disputed — two versions of same report with different conclusions",
+          "incidentStatus": "None reported",
+          "dataAccess": "User directory and group membership data",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "Version A says clean opinion. Version B says 3 material findings. Same auditor, same period, different dates and cert expiry.",
+          "incompleteNote": null,
+          "ambiguityNote": "Two authentic-looking reports from same auditor with opposite conclusions. Vendor claims Version A is official, Version B was draft — but Version B is dated later and labeled FINAL."
+        }
+      },
+      {
+        "vendorId": "vendor-030",
+        "vendorName": "RiskApex",
+        "sourcePath": "vendors/incoming/vendor-030.md",
+        "expectedDisposition": "Approve",
+        "acceptableDispositions": [
+          "Approve"
+        ],
+        "reasonCode": "current_cert_no_incident",
+        "expectedNextActionKind": "approve",
+        "sourceFields": {
+          "criticality": "High",
+          "annualSpend": "$75K",
+          "dpaStatus": "Signed and current",
+          "certification": "ISO 27001",
+          "certificationExpiry": "2028-07-16",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Audit logs with system event data",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-031",
+        "vendorName": "VaultBridge",
+        "sourcePath": "vendors/incoming/vendor-031.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Approve"
+        ],
+        "reasonCode": "duplicate_submission",
+        "expectedNextActionKind": "deduplication_review",
+        "sourceFields": {
+          "criticality": "Medium",
+          "annualSpend": "$410K",
+          "dpaStatus": "Signed and current",
+          "certification": "ISO 27001",
+          "certificationExpiry": "2026-11-20",
+          "certificationStatus": "Current",
+          "incidentStatus": "None reported",
+          "dataAccess": "Security alert metadata and indicator hashes",
+          "acquisitionNote": null,
+          "duplicateNote": "This vendor appears to be a duplicate submission of \"VaultEdge\" (vendor-016). Both packets list secrets management services with similar contact domains. This submission has an older certification expiry date.",
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-032",
+        "vendorName": "DataCert",
+        "sourcePath": "vendors/incoming/vendor-032.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Reject"
+        ],
+        "reasonCode": "incomplete_packet_severe",
+        "expectedNextActionKind": "conditional_approve",
+        "sourceFields": {
+          "criticality": "varies",
+          "annualSpend": "varies",
+          "dpaStatus": "varies",
+          "certification": "varies",
+          "certificationExpiry": "varies",
+          "certificationStatus": "varies",
+          "incidentStatus": "varies",
+          "dataAccess": "varies",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": "present",
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-033",
+        "vendorName": "PolicyVault Solutions",
+        "sourcePath": "vendors/incoming/vendor-033.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Approve"
+        ],
+        "reasonCode": "duplicate_submission",
+        "expectedNextActionKind": "conditional_approve",
+        "sourceFields": {
+          "criticality": "varies",
+          "annualSpend": "varies",
+          "dpaStatus": "varies",
+          "certification": "varies",
+          "certificationExpiry": "varies",
+          "certificationStatus": "varies",
+          "incidentStatus": "varies",
+          "dataAccess": "varies",
+          "acquisitionNote": null,
+          "duplicateNote": "present",
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-034",
+        "vendorName": "SecureHarbor (DataSync Subsidiary)",
+        "sourcePath": "vendors/incoming/vendor-034.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Approve"
+        ],
+        "reasonCode": "subsidiary",
+        "expectedNextActionKind": "conditional_approve",
+        "sourceFields": {
+          "criticality": "varies",
+          "annualSpend": "varies",
+          "dpaStatus": "varies",
+          "certification": "varies",
+          "certificationExpiry": "varies",
+          "certificationStatus": "varies",
+          "incidentStatus": "varies",
+          "dataAccess": "varies",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-035",
+        "vendorName": "TrustLine (Acquired by ComplyFirst)",
+        "sourcePath": "vendors/incoming/vendor-035.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Reject"
+        ],
+        "reasonCode": "acquisition_pending_integration",
+        "expectedNextActionKind": "conditional_approve",
+        "sourceFields": {
+          "criticality": "varies",
+          "annualSpend": "varies",
+          "dpaStatus": "varies",
+          "certification": "varies",
+          "certificationExpiry": "varies",
+          "certificationStatus": "varies",
+          "incidentStatus": "varies",
+          "dataAccess": "varies",
+          "acquisitionNote": "present",
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-036",
+        "vendorName": "CertWall",
+        "sourcePath": "vendors/incoming/vendor-036.md",
+        "expectedDisposition": "Reject",
+        "acceptableDispositions": [
+          "Reject",
+          "Conditional Approve"
+        ],
+        "reasonCode": "contradictory_dates",
+        "expectedNextActionKind": "reject",
+        "sourceFields": {
+          "criticality": "varies",
+          "annualSpend": "varies",
+          "dpaStatus": "varies",
+          "certification": "varies",
+          "certificationExpiry": "varies",
+          "certificationStatus": "varies",
+          "incidentStatus": "varies",
+          "dataAccess": "varies",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": "present",
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-037",
+        "vendorName": "GovernEdge",
+        "sourcePath": "vendors/incoming/vendor-037.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Reject"
+        ],
+        "reasonCode": "expired_cert_and_active_incident",
+        "expectedNextActionKind": "expedited_review",
+        "sourceFields": {
+          "criticality": "Critical",
+          "annualSpend": "$430K",
+          "dpaStatus": "Signed and current",
+          "certification": "FedRAMP",
+          "certificationExpiry": "2025-01-15",
+          "certificationStatus": "Expired",
+          "incidentStatus": "Open medium severity security review",
+          "dataAccess": "Vulnerability report data and remediation status",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": "This vendor has two indicator types that normally lead to different dispositions: Certification Status is Expired (normally Conditional Approve with recertification) AND there is an Open security incident under review (normally Conditional Approve with monitoring). The policy provides rules for each in isolation but does not specify which takes priority when both apply simultaneously."
+        }
+      },
+      {
+        "vendorId": "vendor-038",
+        "vendorName": "CompliantCloud",
+        "sourcePath": "vendors/incoming/vendor-038.md",
+        "expectedDisposition": "Reject",
+        "acceptableDispositions": [
+          "Reject"
+        ],
+        "reasonCode": "all_evidence_expired",
+        "expectedNextActionKind": "reject",
+        "sourceFields": {
+          "criticality": "varies",
+          "annualSpend": "varies",
+          "dpaStatus": "varies",
+          "certification": "varies",
+          "certificationExpiry": "varies",
+          "certificationStatus": "varies",
+          "incidentStatus": "varies",
+          "dataAccess": "varies",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-039",
+        "vendorName": "AuditNest (fka LegacyAudit Inc)",
+        "sourcePath": "vendors/incoming/vendor-039.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Approve"
+        ],
+        "reasonCode": "renamed_entity",
+        "expectedNextActionKind": "conditional_approve",
+        "sourceFields": {
+          "criticality": "varies",
+          "annualSpend": "varies",
+          "dpaStatus": "varies",
+          "certification": "varies",
+          "certificationExpiry": "varies",
+          "certificationStatus": "varies",
+          "incidentStatus": "varies",
+          "dataAccess": "varies",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": null,
+          "ambiguityNote": null
+        }
+      },
+      {
+        "vendorId": "vendor-040",
+        "vendorName": "CrestShield (RiskShield + CertLogic Merger)",
+        "sourcePath": "vendors/incoming/vendor-040.md",
+        "expectedDisposition": "Conditional Approve",
+        "acceptableDispositions": [
+          "Conditional Approve",
+          "Reject"
+        ],
+        "reasonCode": "merged_entity_incomplete",
+        "expectedNextActionKind": "conditional_approve",
+        "sourceFields": {
+          "criticality": "varies",
+          "annualSpend": "varies",
+          "dpaStatus": "varies",
+          "certification": "varies",
+          "certificationExpiry": "varies",
+          "certificationStatus": "varies",
+          "incidentStatus": "varies",
+          "dataAccess": "varies",
+          "acquisitionNote": null,
+          "duplicateNote": null,
+          "conflictingFields": null,
+          "incompleteNote": "present",
+          "ambiguityNote": null
+        }
+      }
+    ],
+    "summary": {
+      "total": 40,
+      "Approve": 9,
+      "Conditional Approve": 20,
+      "Reject": 11
+    }
+  },
+  "fixturePolicy": {
+    "dispositionSet": [
+      "Approve",
+      "Conditional Approve",
+      "Reject"
+    ],
+    "sourcePreservation": true,
+    "requiredSourceFields": [
+      "Vendor ID",
+      "Vendor Name",
+      "Criticality",
+      "Data Processing Agreement",
+      "Security Certification",
+      "Certification Expiry Date",
+      "Certification Status",
+      "Incident Status"
+    ],
+    "seededEdgeCases": [
+      "missing_security_certification",
+      "missing_dpa",
+      "expired_certification",
+      "active_incident",
+      "resolved_incident_current_cert",
+      "conflicting_paperwork",
+      "acquisition",
+      "incomplete_packet",
+      "duplicate_submission",
+      "ambiguous_combined_condition",
+      "conflicting_certifications",
+      "incomplete_packet_severe",
+      "subsidiary",
+      "acquisition_pending_integration",
+      "contradictory_dates",
+      "all_evidence_expired",
+      "renamed_entity",
+      "merged_entity_incomplete"
+    ],
+    "policyLocation": "workflow metadata",
+    "note": "Policy is intentionally not emitted into the workspace.",
+    "edgeCaseNotes": {
+      "conflicting_paperwork": "Vendor-013 (PolicyCore): DPA status says \"Signed and current\" but Security Certification is \"Not provided\" with status \"Missing\". This tests whether the model detects contradictory documentation and flags it for review rather than blindly following one field.",
+      "acquisition": "Vendor-015 (TrustLayer): Acquired by CloudHost Inc (vendor-001) in Q1 2026. All certifications are current. Tests whether the model considers acquisition context when approving.",
+      "incomplete_packet": "Vendor-025 (AuditSphere): Missing Data Access and certification type fields. Tests whether the model notices missing information and adjusts disposition accordingly.",
+      "duplicate_submission": "Vendor-031 (VaultBridge): Appears to be a duplicate submission of VaultEdge (vendor-016). Tests whether the model detects duplicate submissions by name or service similarity.",
+      "ambiguous_combined_condition": "Vendor-037 (GovernEdge): Has both Expired Certification AND Open security incident simultaneously. Policy provides rules for each in isolation but not in combination. Tests how the model resolves competing conditions.",
+      "subsidiary_group": "Vendors 028-030 (ShieldGate, CompliCheck, RiskApex): Marked as a common parent group (ParentCorp-Group-1). Tests whether the model applies consistent group-level reasoning.",
+      "dual_submission": "Vendor-006 (LogiStack): Submitted with expired certification and an unusual acceptableDispositions range. Tests model handling of borderline cases.",
+      "conflicting_certifications": "Vendor-024 (PolicyStream): Holds two security certifications with conflicting statuses — SOC2 Type II current, ISO 27001 expired. Tests whether the model detects conflicting certification signals and applies the most conservative assessment.",
+      "incomplete_packet_severe": "Vendor-032 (DataCert): Severely incomplete submission — Criticality, Annual Spend, Data Access, certification type, and expiry date all missing. DPA is signed. Tests whether the model correctly flags insufficient information for a full compliance decision.",
+      "subsidiary": "Vendor-034 (SecureHarbor): Wholly owned subsidiary of DataSync Corp (vendor-002). DPA covered under parent, independent SOC2 Type I certification. Tests whether the model evaluates subsidiary risk separately from parent coverage.",
+      "acquisition_pending_integration": "Vendor-035 (TrustLine): Acquired by ComplyFirst (external entity not in registry) in Q2 2026. Pre-acquisition DPA, integration in progress. Tests whether the model flags acquisition-related compliance gaps.",
+      "contradictory_dates": "Vendor-036 (CertWall): Certification expiry date (2025-08-01) precedes issue date (2026-01-15). Chronologically impossible. Tests whether the model detects data integrity issues and rejects on evidence quality grounds.",
+      "all_evidence_expired": "Vendor-038 (CompliantCloud): DPA expired 2025-01-01, certification expired 2025-06-01. No renewal evidence. Tests whether the model correctly rejects vendors with no current compliance evidence.",
+      "renamed_entity": "Vendor-039 (AuditNest fka LegacyAudit Inc): Recently renamed. DPA and certification still under former legal name. Tests whether the model detects entity name discrepancies and conditions approval on documentation updates.",
+      "merged_entity_incomplete": "Vendor-040 (CrestShield): Merger of RiskShield (vendor-017) and CertLogic (vendor-018). Combined DPA but certification only covers one legacy entity. Tests whether the model identifies incomplete post-merger compliance consolidation."
+    }
+  }
+}
