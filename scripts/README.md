@@ -1,0 +1,62 @@
+# Scripts Inventory
+
+All scripts live flat in this directory. Naming conventions:
+
+- `*-test.js` — deterministic verification/regression scripts (`NODE_ENV=test`, exit nonzero on regression)
+- `*-experiment.js` — one-off research experiments (observational; kept for provenance)
+- `*-benchmark.js` — mocked-by-default benchmarks (see root README for real-model mode)
+- `run-*.js` — investigation harnesses that drive full fixture corpora through the live server
+- Everything else — operator CLI tools and maintenance utilities
+
+Shared library modules (required by other scripts; **not** entrypoints — do not move or rename without updating dependents):
+
+| Module | Dependents |
+|---|---|
+| `test-workspace.js` | 52 scripts (`createTempWorkspaceRoot` helper) |
+| `replay-workspace.js` | 5 scripts |
+| `projection-rebuilder.js` | 5 scripts (also a CLI) |
+| `telemetry-report.js` | 2 scripts (also a CLI) |
+
+## Operator CLI tools
+
+- `oquery.js` — primary ticket CLI: login, create-ticket, query (see AGENTS.md "Preferred Ticket CLI Flow")
+- `op-session.js` — interactive operator session helper
+- `batch-tickets.js` — create tickets in bulk
+- `ticket-lint.js` — lint ticket objectives before submission
+- `codex-bootstrap.js` / `codex-trace.js` / `codex-verify.js` — orientation, single-run trace, deterministic health suite (`npm run codex:bootstrap|codex:trace|codex:verify`)
+- `demo-legal-workflow.js` — end-to-end demo (`npm run demo:legal-workflow`)
+
+## Maintenance / forensics utilities
+
+- `telemetry-report.js`, `pressure-report.js`, `pressure-suite.js` — operational telemetry and pressure reporting
+- `projection-rebuilder.js`, `rebuild-runs-projection.js`, `rebuild-tickets-projection.js`, `projection-integrity-audit.js` — rebuild/audit JSON projections from `data/events.jsonl`
+- `replay-export.js`, `replay-reconstructor.js`, `replay-verifier.js`, `extract-replay-snapshots.js` — replay snapshot tooling
+- `recovery-verifier.js`, `resume-analyzer.js`, `event-chain-verify.js` — recovery and event-chain forensics
+- `create-snapshot.js`, `verify-snapshot.js` — workspace snapshot tooling
+- `auto-classify-failures.js` — failure classification per `docs/FAILURE_CLASSIFICATION_WORKFLOW.md`
+- `harvest-benchmark-cases.js` — harvest failed runs into repair-benchmark fixtures (`npm run harvest:benchmark-cases`)
+- `workload-validation-report.js` — workload validation reporting
+
+## Fixture tooling
+
+- `fixture-generator.js`, `fixture-verifier.js`, `fixture-evaluation.js`, `replay-fixture-generator.js`
+- `expand-{vendor,support,legal-intake,shared-drive,shared-drive-v2}-fixture.js` — fixture corpus expanders (2026-06 evidence corpus)
+
+## Verification (npm-wired)
+
+`agent-regression-test`, `allocated-regression-test`, `allocated-live-openai-test`, `live-openai-test`, `recovery-regression-test`, `runtime-budget-test`, `postcondition-completion-test`, `workflow-composition-test`, `prefix-truncation-regression-test`, `tm3-replay-validation` (see `package.json` for the `test:*`/`validate:*` mappings). `codex-verify.js` additionally runs `catalog-consistency-test.js` and `page-render-regression-test.js`.
+
+All other `*-test.js` files are targeted regression suites, run manually when the touched surface is relevant (AGENTS.md "Verification Workflow", step 7).
+
+## Investigation harnesses (2026-06 evidence corpus)
+
+`run-customer-support-test`, `run-legal-intake-test`, `run-shared-drive-test`, `run-vendor-compliance-test`, `run-vendor-chunk-test`, `run-ticket-plan-test`, `run-er-validation`, `run-vc1-pipeline`, `recheck-er-cases`, `needs-arms-census`, `test-legal-impossibility`, `test-policy-gap-single`, `unverified-evaluation-test`, `verifier-contract-test`, `vendor-realism-benchmark` — harnesses behind the root evidence corpus (`evidence-ledger.md`, `failure-cluster-report.md`, etc.). Kept for provenance.
+
+Closed-investigation leftovers kept in place for the same reason: `tm1-inspection-productivity-test.js`, `tm2-evidence-preservation-test.js` (siblings archived under `ARCHIVE/TM-ST-INVESTIGATIONS/`), and the five `er1*/er2*` error-recoverability probes.
+
+## Report generators that write into docs/
+
+- `operational-pressure-validation.js` → `docs/OPERATIONAL_PRESSURE_VALIDATION.md`
+- `real-model-adversarial-validation.js` → `docs/REAL_MODEL_ADVERSARIAL_VALIDATION.md`
+
+Past generated snapshots are preserved in `docs/archive/`; rerunning these scripts writes a fresh report to `docs/`.

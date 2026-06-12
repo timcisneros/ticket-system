@@ -36,3 +36,9 @@ dist-ssr
 *.tsbuildinfo
 next-env.d.ts
 .opercookie
+
+# Vite cache (not a project dependency; stale artifact)
+.vite/
+
+# Runtime writer lock sidecar
+data/writer-lock.json

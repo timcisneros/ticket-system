@@ -13,7 +13,7 @@ What is the correct architectural role of `runtimeEnvelope.allowedOperations`?
 ## Evidence Sources
 
 - `docs/ARCHITECTURE_INVARIANTS.md` — substrate invariants
-- `docs/PHASE_GATED_ENVELOPE_ANALYSIS.md` — code paths, downstream consumers, risks
+- `docs/archive/PHASE_GATED_ENVELOPE_ANALYSIS.md` — code paths, downstream consumers, risks
 - Direct inspection of `server.js` `buildRuntimeEnvelope`, `buildAgentPrompt`, replay snapshot shapes, and test assertions
 
 ---

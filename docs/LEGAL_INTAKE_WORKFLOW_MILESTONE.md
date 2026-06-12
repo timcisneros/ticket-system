@@ -40,8 +40,8 @@ Replay `workflowInvocation` recorded:
 ## Remaining Untracked Docs
 
 - `anchored-summary.md`
-- `docs/BUSINESS_FIXTURE_PLAN.md`
-- `docs/BUSINESS_FIXTURE_PLAN_V2.md`
+- `docs/archive/BUSINESS_FIXTURE_PLAN.md`
+- `docs/archive/BUSINESS_FIXTURE_PLAN_V2.md`
 - `docs/BUSINESS_FIXTURE_REALISM_AUDIT.md`
 - `docs/decision-memo-same-run-conflict-scope.md`
 - `docs/decision-record-truthfulness-over-boundedness.md`

@@ -1,5 +1,23 @@
 # Ticket System
 
+## Documentation Map
+
+**Canonical docs** (live, describe the current system — left in place):
+
+- `AGENTS.md` — operational guide: commands, verification workflow, evidence locations, boundaries
+- Root operations canon: `OPERATIONS.md`, `OPERATOR_CONTRACT.md`, `OPERATIONAL_PRESSURES.md`, `DIRECTION.md`, `STRATEGY.md`, `STATE_SURFACES.md`
+- `docs/` — system semantics and contracts, e.g. `ARCHITECTURE_INVARIANTS.md`, `EXECUTION_MODEL.md`, `EXECUTION_PHASES.md`, `EXECUTION_SEMANTICS.md`, `BOUNDED_OPERATION_BATCHES.md`, `LIFECYCLE_EVENTS.md`, `WORKLOAD_PROFILES.md`, `OPERATIONAL_TELEMETRY.md`, `FAILURE_TAXONOMY.md`, `FAILURE_CLASSIFICATION_WORKFLOW.md`, `DECISION_LOG.md`, `KNOWN_LIMITATIONS.md`, `BUSINESS_FIXTURE_SPEC.md`, `PRODUCT_SYNTHESIS.md`
+- Root evidence corpus (active research, 2026-06): `evidence-ledger.md`, `evidence-consolidation.md`, `failure-cluster-report.md`, `anchored-summary.md`, `terminal-classification.md`, `evidence-memo.md`, `evidence-reconciliation-validation.md`
+
+**Archived docs**: closed investigations, superseded plans, generated validation
+reports, and early exploratory documents live in `docs/archive/` (see its README
+for the index). Frozen investigation evidence bundles (data + harnesses) live in
+`ARCHIVE/` (see its README).
+
+**Scripts inventory**: `scripts/README.md` categorizes all scripts (operator CLI,
+maintenance utilities, verification, benchmarks, experiments, investigation
+harnesses) and lists the shared modules other scripts depend on.
+
 ## Workflow Benchmarks
 
 Mocked mode is the default and is suitable for CI:

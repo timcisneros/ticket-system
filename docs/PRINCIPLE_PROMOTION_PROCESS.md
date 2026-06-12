@@ -305,20 +305,20 @@ Before promoting any principle, verify:
 
 This process was exercised in the following document chain:
 
-1. `docs/RUN_77_POSTMORTEM.md` — Observation and initial analysis
-2. `docs/PHASE_GATED_ENVELOPE_ANALYSIS.md` — Hypothesis testing
+1. `docs/archive/RUN_77_POSTMORTEM.md` — Observation and initial analysis
+2. `docs/archive/PHASE_GATED_ENVELOPE_ANALYSIS.md` — Hypothesis testing
 3. `docs/ALLOWED_OPERATIONS_AUTHORITY.md` — Authority hypothesis elimination
-4. `docs/PROMPT_AUTHORITY_ALIGNMENT.md` — Prompt contradiction analysis
-5. `docs/PROMPT_AUTHORITY_ALIGNMENT_RESULTS.md` — Experiment (prompt fix only)
-6. `docs/PHASE_AUTHORITY_OPTIONS.md` — Response validation analysis
-7. `docs/INSPECTION_TO_MUTATION_ANALYSIS.md` — Root cause identification
-8. `docs/INSPECTION_COMPLETION_SEMANTICS.md` — Option evaluation
-9. `docs/OPTION_B_RESULTS.md` — Experiment (evidence preservation)
+4. `docs/archive/PROMPT_AUTHORITY_ALIGNMENT.md` — Prompt contradiction analysis
+5. `docs/archive/PROMPT_AUTHORITY_ALIGNMENT_RESULTS.md` — Experiment (prompt fix only)
+6. `docs/archive/PHASE_AUTHORITY_OPTIONS.md` — Response validation analysis
+7. `docs/archive/INSPECTION_TO_MUTATION_ANALYSIS.md` — Root cause identification
+8. `docs/archive/INSPECTION_COMPLETION_SEMANTICS.md` — Option evaluation
+9. `docs/archive/OPTION_B_RESULTS.md` — Experiment (evidence preservation)
 10. `docs/EVIDENCE_PRESERVATION_PRINCIPLE.md` — Candidate principle formulation
-11. `docs/EVIDENCE_PRESERVATION_DECISION_MATRIX.md` — Remaining candidate analysis
+11. `docs/archive/EVIDENCE_PRESERVATION_DECISION_MATRIX.md` — Remaining candidate analysis
 12. `docs/SUBSTRATE_DESIGN_PRINCIPLES.md` — Principle consolidation
-13. `docs/INVARIANT_PROMOTION_REVIEW.md` — Promotion review
-14. `docs/INVARIANT_ACCEPTANCE_DECISION.md` — Acceptance decision
+13. `docs/archive/INVARIANT_PROMOTION_REVIEW.md` — Promotion review
+14. `docs/archive/INVARIANT_ACCEPTANCE_DECISION.md` — Acceptance decision
 
 ---
 

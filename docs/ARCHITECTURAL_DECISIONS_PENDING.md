@@ -7,7 +7,7 @@
 | **Status** | Unresolved inconsistency |
 | **Documentation** | Recoverable |
 | **Implementation** | Terminal |
-| **Evidence** | See `docs/DOCUMENTATION_IMPLEMENTATION_DIVERGENCE.md` |
+| **Evidence** | See `docs/archive/DOCUMENTATION_IMPLEMENTATION_DIVERGENCE.md` |
 | **Decision required** | Which behavior is authoritative? |
 
 **Description:**

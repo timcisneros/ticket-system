@@ -6,10 +6,10 @@ This document is the authoritative specification for business fixtures.
 
 It replaces the planning intent in:
 
-- `docs/BUSINESS_FIXTURE_PLAN_V2.md`
+- `docs/archive/BUSINESS_FIXTURE_PLAN_V2.md`
 - `docs/BUSINESS_FIXTURE_REALISM_AUDIT.md`
 
-`docs/BUSINESS_FIXTURE_PLAN.md` is superseded. Its file-routing model is not authoritative.
+`docs/archive/BUSINESS_FIXTURE_PLAN.md` is superseded. Its file-routing model is not authoritative.
 
 ## Purpose
 
