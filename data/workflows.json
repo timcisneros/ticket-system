@@ -65,25 +65,149 @@
         }
       }
     ],
-    "createdAt": "2026-05-24T00:00:00.000Z",
-    "updatedAt": "2026-05-24T00:00:00.000Z",
+    "createdAt": "2026-06-11T01:30:04.301Z",
+    "updatedAt": "2026-06-11T01:30:04.301Z",
+    "version": "1",
+    "taskPromptTemplate": "",
     "postconditions": []
   },
   {
-    "id": "verify-mike-write-file",
-    "name": "Verify Mike write file",
+    "id": "legal-intake",
+    "name": "Legal Intake",
+    "version": "1",
+    "description": "Classifies fixture legal intake files with an attached workflow policy and writes register artifacts.",
     "enabled": true,
+    "policy": {
+      "id": "legal-intake-decision-policy",
+      "version": "1",
+      "text": "Decision rules:\n- Open Matter: all required fields are present and the description is specific enough to act on.\n- Request Information: missing Contact Email, missing Jurisdiction, missing Description, or Description is too vague to identify the requested legal work.\n- Decline: missing Requesting Party, missing Matter Type, or matter is outside company legal scope such as personal legal advice.\n- Duplicate: only later submissions in the same Duplicate Group should be Duplicate. The earliest intake in a Duplicate Group remains Open Matter unless another rule applies.\n\nRequired source fields: Matter Type, Requesting Party, Contact Email, Jurisdiction, Business Unit, Description, Urgency.\nUse only these dispositions exactly: Open Matter, Request Information, Decline, Duplicate.\nThe phrase \"Help with contract\" is too vague and requires Request Information."
+    },
+    "taskPromptTemplate": "Classify every provided legal intake using workflow.policy.text.\nReturn a complete CSV and Markdown summary only after considering every intake input.\nCSV columns must be exactly: intake_id,matter_type,requesting_party,disposition,reason,next_action",
+    "verifierContract": {
+      "id": "legal-intake-verifier",
+      "version": "1",
+      "fixture": "legal-intake",
+      "expectedArtifacts": [
+        "legal-intake/intake-register.csv",
+        "legal-intake/matter-summary.md"
+      ]
+    },
     "inputSchema": {
-      "path": "string",
-      "content": "string"
+      "basePath": "string"
     },
     "actions": [
       {
-        "id": "write",
+        "id": "read_001",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/intake-2026-001.md"
+        },
+        "saveAs": "intake001",
+        "next": "read_002"
+      },
+      {
+        "id": "read_002",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/intake-2026-002.md"
+        },
+        "saveAs": "intake002",
+        "next": "read_003"
+      },
+      {
+        "id": "read_003",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/intake-2026-003.md"
+        },
+        "saveAs": "intake003",
+        "next": "read_004"
+      },
+      {
+        "id": "read_004",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/intake-2026-004.md"
+        },
+        "saveAs": "intake004",
+        "next": "read_005"
+      },
+      {
+        "id": "read_005",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/intake-2026-005.md"
+        },
+        "saveAs": "intake005",
+        "next": "read_006"
+      },
+      {
+        "id": "read_006",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/intake-2026-006.md"
+        },
+        "saveAs": "intake006",
+        "next": "read_007"
+      },
+      {
+        "id": "read_007",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/intake-2026-007.md"
+        },
+        "saveAs": "intake007",
+        "next": "read_008"
+      },
+      {
+        "id": "read_008",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/intake-2026-008.md"
+        },
+        "saveAs": "intake008",
+        "next": "classify"
+      },
+      {
+        "id": "classify",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
+          "input": {
+            "intakes": {
+              "intake-2026-001": "{{intake001.content}}",
+              "intake-2026-002": "{{intake002.content}}",
+              "intake-2026-003": "{{intake003.content}}",
+              "intake-2026-004": "{{intake004.content}}",
+              "intake-2026-005": "{{intake005.content}}",
+              "intake-2026-006": "{{intake006.content}}",
+              "intake-2026-007": "{{intake007.content}}",
+              "intake-2026-008": "{{intake008.content}}"
+            }
+          },
+          "outputSchema": {
+            "intakeRegisterCsv": "string",
+            "matterSummaryMd": "string"
+          }
+        },
+        "saveAs": "classification",
+        "next": "write_register"
+      },
+      {
+        "id": "write_register",
         "action": "writeFile",
         "input": {
-          "path": "{{workflow.input.path}}",
-          "content": "{{workflow.input.content}}"
+          "path": "{{workflow.input.basePath}}/intake-register.csv",
+          "content": "{{classification.intakeRegisterCsv}}"
+        },
+        "next": "write_summary"
+      },
+      {
+        "id": "write_summary",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/matter-summary.md",
+          "content": "{{classification.matterSummaryMd}}"
         },
         "next": "done"
       },
@@ -92,245 +216,1927 @@
         "action": "stop",
         "input": {
           "result": {
-            "written": true,
-            "path": "{{workflow.input.path}}"
+            "intakeRegisterPath": "{{workflow.input.basePath}}/intake-register.csv",
+            "matterSummaryPath": "{{workflow.input.basePath}}/matter-summary.md"
           }
         }
       }
     ],
-    "createdAt": "2026-05-25T01:37:31.753Z",
-    "updatedAt": "2026-05-25T01:37:31.753Z",
-    "description": "",
-    "postconditions": []
+    "postconditions": [
+      {
+        "id": "register-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/intake-register.csv"
+      },
+      {
+        "id": "summary-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/matter-summary.md"
+      },
+      {
+        "id": "register-contains-request-information",
+        "type": "fileContains",
+        "path": "{{workflow.input.basePath}}/intake-register.csv",
+        "contains": "Request Information"
+      }
+    ],
+    "createdAt": "2026-06-11T01:30:04.302Z",
+    "updatedAt": "2026-06-11T01:30:04.302Z"
   },
   {
-    "id": "legal-intake-summary",
-    "name": "Legal intake summary",
-    "description": "Extract legal intake fields, branch on urgency, write a case summary, and stop with the extracted fields.",
+    "id": "customer-support-triage",
+    "name": "Customer Support Triage",
+    "version": "1",
+    "description": "Classifies customer support tickets with attached workflow policy and writes triage artifacts.",
     "enabled": true,
+    "policy": {
+      "id": "customer-support-triage-policy",
+      "version": "1",
+      "text": "Decision rules:\n- P1: production outage, service-down report, or possible security incident. Escalate immediately.\n- P2: customer-impacting bug, enterprise-customer ambiguous issue, or degraded business-critical workflow.\n- P3: feature request, how-to question, partial bug, or low-impact bug with workaround available and no incident/security/outage signals.\n- P4: internal-only or non-customer work without customer impact.\n- Assign outage P1 tickets to On-Call with SLA 15 minutes and next_action token page_on_call.\n- Assign possible security issues to Security with priority P1, escalation Yes, SLA 15 minutes, and next_action token security_escalation.\n- Assign enterprise ambiguous degraded production or business-critical issues to Engineering with priority P2, escalation Yes, SLA 1 hour, and next_action token engineering_triage_enterprise.\n- Enterprise sandbox or demo issues with production unaffected may be Engineering P2 with either escalation Yes/1 hour/engineering_triage_enterprise or escalation No/4 business hours/bug_triage depending on stated urgency.\n- Assign customer-impacting actionable bugs to Engineering with priority P2, escalation No, SLA 4 business hours, and next_action token bug_triage.\n- Bugs with workaround available, narrow archived-project scope, missing reproduction details, or contradictory low-impact metadata may be P3 and may route to Customer Success with next_action token request_reproduction_details.\n- If ticket metadata conflicts, prefer concrete impact and escalation signals over customer tier alone.\n- For duplicate groups, the earliest ticket remains the primary ticket. Later reports in the same Duplicate Group must set duplicate_of to the earliest ticket ID. Duplicate_of primary ID is mandatory even when another rule also applies.\n- If a duplicate ticket is also an incident, keep priority/escalation/SLA from the incident rule; next_action may use the incident action or duplicate-link action when both are defensible.\n- Use next_action token link_duplicate_to_sup_2026_003 for csv-export-february and link_duplicate_to_primary for other duplicate chains when choosing the duplicate-link action.\n- Assign billing/account issues to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token billing_account_followup.\n- Assign feature requests to Product with priority P3, escalation No, SLA 2 business days, and next_action token product_feedback.\n- Assign how-to questions to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token send_how_to_guidance unless the ticket specifically asks about service account API key rotation, then use send_key_rotation_steps.\n- Assign partial bug reports with missing reproduction details to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token request_reproduction_details.\n- Assign noisy or unknown-customer tickets to Internal Triage with priority P4, escalation No, SLA Backlog, and next_action token request_customer_context.\n- Assign internal-only/non-customer tickets to Internal Triage with priority P4, escalation No, SLA Backlog, and next_action token route_internal_backlog.\n\nThe triage plan must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, assignee_team, escalation, sla, next_action, duplicate_of.\nUse escalation values exactly: Yes or No.\nThe escalation list must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, reason, owner.\nThe escalation list must include only tickets whose triage row has escalation Yes.\nDo not invent ticket IDs, customers, priorities, teams, facts, or source evidence."
+    },
+    "taskPromptTemplate": "Read every provided support ticket using workflow.policy.text.\nReturn complete Markdown artifacts only after considering every support ticket.\nThe triage plan table columns must be exactly: ticket_id, customer_name, priority, assignee_team, escalation, sla, next_action, duplicate_of.\nThe escalation list table columns must be exactly: ticket_id, customer_name, priority, reason, owner.",
+    "verifierContract": {
+      "id": "customer-support-triage-verifier",
+      "version": "1",
+      "fixture": "customer-support",
+      "expectedArtifacts": [
+        "support-queue/triage-plan.md",
+        "support-queue/escalation-list.md"
+      ]
+    },
     "inputSchema": {
-      "intakeText": "string"
+      "sourcePath": "string",
+      "outputPath": "string"
     },
     "actions": [
       {
-        "id": "extract",
+        "id": "read_001",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.sourcePath}}/ticket-001.md"
+        },
+        "saveAs": "ticket001",
+        "next": "read_002"
+      },
+      {
+        "id": "read_002",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.sourcePath}}/ticket-002.md"
+        },
+        "saveAs": "ticket002",
+        "next": "read_003"
+      },
+      {
+        "id": "read_003",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.sourcePath}}/ticket-003.md"
+        },
+        "saveAs": "ticket003",
+        "next": "read_004"
+      },
+      {
+        "id": "read_004",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.sourcePath}}/ticket-004.md"
+        },
+        "saveAs": "ticket004",
+        "next": "read_005"
+      },
+      {
+        "id": "read_005",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.sourcePath}}/ticket-005.md"
+        },
+        "saveAs": "ticket005",
+        "next": "read_006"
+      },
+      {
+        "id": "read_006",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.sourcePath}}/ticket-006.md"
+        },
+        "saveAs": "ticket006",
+        "next": "read_007"
+      },
+      {
+        "id": "read_007",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.sourcePath}}/ticket-007.md"
+        },
+        "saveAs": "ticket007",
+        "next": "read_008"
+      },
+      {
+        "id": "read_008",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.sourcePath}}/ticket-008.md"
+        },
+        "saveAs": "ticket008",
+        "next": "triage"
+      },
+      {
+        "id": "triage",
         "action": "agentStructuredOutput",
         "input": {
-          "instruction": "Extract legal intake fields from the provided intake text. Return only JSON. Use urgency value exactly high or normal. Use high when there is an immediate deadline, active court date, lockout, arrest, restraining order, or urgent filing risk; otherwise use normal.",
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
           "input": {
-            "intakeText": "{{workflow.input.intakeText}}"
+            "tickets": {
+              "SUP-2026-001": "{{ticket001.content}}",
+              "SUP-2026-002": "{{ticket002.content}}",
+              "SUP-2026-003": "{{ticket003.content}}",
+              "SUP-2026-004": "{{ticket004.content}}",
+              "SUP-2026-005": "{{ticket005.content}}",
+              "SUP-2026-006": "{{ticket006.content}}",
+              "SUP-2026-007": "{{ticket007.content}}",
+              "SUP-2026-008": "{{ticket008.content}}"
+            }
           },
           "outputSchema": {
-            "clientName": "string",
-            "matterType": "string",
-            "urgency": "string",
-            "summary": "string",
-            "recommendedNextStep": "string"
+            "triagePlanMd": "string",
+            "escalationListMd": "string"
           }
         },
-        "saveAs": "intake",
-        "next": "urgency_check"
+        "saveAs": "triage",
+        "next": "write_triage_plan"
       },
       {
-        "id": "urgency_check",
-        "action": "condition",
-        "input": {
-          "value": "{{intake.urgency}}",
-          "equals": "high"
-        },
-        "trueNext": "write_urgent",
-        "falseNext": "write_standard"
-      },
-      {
-        "id": "write_urgent",
+        "id": "write_triage_plan",
         "action": "writeFile",
         "input": {
-          "path": "urgent-case-summary.md",
-          "content": "# Urgent Case Summary\n\nClient: {{intake.clientName}}\nMatter Type: {{intake.matterType}}\nUrgency: {{intake.urgency}}\n\nSummary:\n{{intake.summary}}\n\nRecommended Next Step:\n{{intake.recommendedNextStep}}\n"
+          "path": "{{workflow.input.outputPath}}/triage-plan.md",
+          "content": "{{triage.triagePlanMd}}"
         },
-        "next": "stop_urgent"
+        "next": "write_escalation_list"
       },
       {
-        "id": "write_standard",
+        "id": "write_escalation_list",
         "action": "writeFile",
         "input": {
-          "path": "case-summary.md",
-          "content": "# Case Summary\n\nClient: {{intake.clientName}}\nMatter Type: {{intake.matterType}}\nUrgency: {{intake.urgency}}\n\nSummary:\n{{intake.summary}}\n\nRecommended Next Step:\n{{intake.recommendedNextStep}}\n"
+          "path": "{{workflow.input.outputPath}}/escalation-list.md",
+          "content": "{{triage.escalationListMd}}"
         },
-        "next": "stop_standard"
+        "next": "done"
       },
       {
-        "id": "stop_urgent",
+        "id": "done",
         "action": "stop",
         "input": {
           "result": {
-            "path": "urgent-case-summary.md",
-            "clientName": "{{intake.clientName}}",
-            "matterType": "{{intake.matterType}}",
-            "urgency": "{{intake.urgency}}",
-            "summary": "{{intake.summary}}",
-            "recommendedNextStep": "{{intake.recommendedNextStep}}"
-          }
-        }
-      },
-      {
-        "id": "stop_standard",
-        "action": "stop",
-        "input": {
-          "result": {
-            "path": "case-summary.md",
-            "clientName": "{{intake.clientName}}",
-            "matterType": "{{intake.matterType}}",
-            "urgency": "{{intake.urgency}}",
-            "summary": "{{intake.summary}}",
-            "recommendedNextStep": "{{intake.recommendedNextStep}}"
-          }
-        }
-      }
-    ],
-    "createdAt": "2026-05-25T01:56:04.368Z",
-    "updatedAt": "2026-05-25T02:21:29.861Z",
-    "postconditions": []
-  },
-  {
-    "id": "status-note-123",
-    "name": "Status Note",
-    "inputSchema": {},
-    "actions": [
-      {
-        "id": "write_1",
-        "action": "writeFile",
-        "input": {
-          "path": "status-note.txt",
-          "content": "Status: ok"
-        },
-        "next": "stop"
-      },
-      {
-        "id": "stop",
-        "action": "stop",
-        "input": {
-          "result": {
-            "paths": [
-              "status-note.txt"
-            ]
+            "triagePlanPath": "{{workflow.input.outputPath}}/triage-plan.md",
+            "escalationListPath": "{{workflow.input.outputPath}}/escalation-list.md"
           }
         }
       }
     ],
     "postconditions": [
       {
-        "id": "postcondition_1",
+        "id": "triage-plan-exists",
         "type": "fileExists",
-        "path": "status-note.txt"
+        "path": "{{workflow.input.outputPath}}/triage-plan.md"
       },
       {
-        "id": "postcondition_2",
+        "id": "escalation-list-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.outputPath}}/escalation-list.md"
+      },
+      {
+        "id": "triage-plan-contains-confirm-false-alarm",
         "type": "fileContains",
-        "path": "status-note.txt",
-        "contains": "Status: ok"
+        "path": "{{workflow.input.outputPath}}/triage-plan.md",
+        "contains": "confirm_false_alarm"
       }
     ],
-    "enabled": false,
-    "createdByType": "agent",
-    "createdByAgentId": 3,
-    "createdByRunId": 20,
-    "createdAt": "2026-05-26T04:32:42.353Z",
-    "updatedAt": "2026-05-26T04:32:42.353Z",
-    "description": ""
+    "createdAt": "2026-06-11T01:30:04.302Z",
+    "updatedAt": "2026-06-11T01:30:04.302Z"
   },
   {
-    "id": "bug-triage-summary-draft",
-    "name": "Bug Triage Summary",
+    "id": "customer-support-triage-ticket-plan",
+    "name": "Customer Support Triage Ticket Plan",
+    "version": "1",
+    "description": "Creates bounded child support triage workflow tickets for a 50-ticket queue.",
+    "enabled": true,
+    "policy": {
+      "id": "customer-support-triage-ticket-plan-policy",
+      "version": "1",
+      "text": "Create one child support triage ticket per bounded 10-ticket chunk. Do not auto-run children."
+    },
+    "verifierContract": {
+      "id": "customer-support-triage-ticket-plan-verifier",
+      "version": "1",
+      "fixture": "customer-support",
+      "expectedArtifacts": []
+    },
     "inputSchema": {},
     "actions": [
       {
-        "id": "write_1",
-        "action": "writeFile",
+        "id": "create_child_chunks",
+        "action": "executeTicketPlan",
         "input": {
-          "path": "bug-triage-summary.md",
-          "content": "Bug triage summary: reproduce, impact, next step"
+          "tickets": [
+            {
+              "workflowId": "customer-support-triage-chunk",
+              "objective": "Customer Support Triage Chunk 001",
+              "workflowInput": {
+                "sourcePath": "support-inbox",
+                "outputPath": "support-queue/chunks/triage-001.csv",
+                "chunkId": "chunk-001",
+                "vendorId": "support-chunk-001",
+                "path01": "support-inbox/ticket-001.md",
+                "id01": "SUP-2026-001",
+                "path02": "support-inbox/ticket-002.md",
+                "id02": "SUP-2026-002",
+                "path03": "support-inbox/ticket-003.md",
+                "id03": "SUP-2026-003",
+                "path04": "support-inbox/ticket-004.md",
+                "id04": "SUP-2026-004",
+                "path05": "support-inbox/ticket-005.md",
+                "id05": "SUP-2026-005",
+                "path06": "support-inbox/ticket-006.md",
+                "id06": "SUP-2026-006",
+                "path07": "support-inbox/ticket-007.md",
+                "id07": "SUP-2026-007",
+                "path08": "support-inbox/ticket-008.md",
+                "id08": "SUP-2026-008",
+                "path09": "support-inbox/ticket-009.md",
+                "id09": "SUP-2026-009",
+                "path10": "support-inbox/ticket-010.md",
+                "id10": "SUP-2026-010"
+              },
+              "reason": "Triage semantic support bundle 001 preserving duplicate and incident groups"
+            },
+            {
+              "workflowId": "customer-support-triage-chunk",
+              "objective": "Customer Support Triage Chunk 002",
+              "workflowInput": {
+                "sourcePath": "support-inbox",
+                "outputPath": "support-queue/chunks/triage-002.csv",
+                "chunkId": "chunk-002",
+                "vendorId": "support-chunk-002",
+                "path01": "support-inbox/ticket-011.md",
+                "id01": "SUP-2026-011",
+                "path02": "support-inbox/ticket-012.md",
+                "id02": "SUP-2026-012",
+                "path03": "support-inbox/ticket-013.md",
+                "id03": "SUP-2026-013",
+                "path04": "support-inbox/ticket-014.md",
+                "id04": "SUP-2026-014",
+                "path05": "support-inbox/ticket-015.md",
+                "id05": "SUP-2026-015",
+                "path06": "support-inbox/ticket-016.md",
+                "id06": "SUP-2026-016",
+                "path07": "support-inbox/ticket-017.md",
+                "id07": "SUP-2026-017",
+                "path08": "support-inbox/ticket-019.md",
+                "id08": "SUP-2026-019",
+                "path09": "support-inbox/ticket-020.md",
+                "id09": "SUP-2026-020",
+                "path10": "support-inbox/ticket-021.md",
+                "id10": "SUP-2026-021"
+              },
+              "reason": "Triage semantic support bundle 002 preserving duplicate and incident groups"
+            },
+            {
+              "workflowId": "customer-support-triage-chunk",
+              "objective": "Customer Support Triage Chunk 003",
+              "workflowInput": {
+                "sourcePath": "support-inbox",
+                "outputPath": "support-queue/chunks/triage-003.csv",
+                "chunkId": "chunk-003",
+                "vendorId": "support-chunk-003",
+                "path01": "support-inbox/ticket-018.md",
+                "id01": "SUP-2026-018",
+                "path02": "support-inbox/ticket-022.md",
+                "id02": "SUP-2026-022",
+                "path03": "support-inbox/ticket-023.md",
+                "id03": "SUP-2026-023",
+                "path04": "support-inbox/ticket-024.md",
+                "id04": "SUP-2026-024",
+                "path05": "support-inbox/ticket-025.md",
+                "id05": "SUP-2026-025",
+                "path06": "support-inbox/ticket-026.md",
+                "id06": "SUP-2026-026",
+                "path07": "support-inbox/ticket-027.md",
+                "id07": "SUP-2026-027",
+                "path08": "support-inbox/ticket-028.md",
+                "id08": "SUP-2026-028",
+                "path09": "support-inbox/ticket-029.md",
+                "id09": "SUP-2026-029",
+                "path10": "support-inbox/ticket-030.md",
+                "id10": "SUP-2026-030"
+              },
+              "reason": "Triage semantic support bundle 003 preserving duplicate and incident groups"
+            },
+            {
+              "workflowId": "customer-support-triage-chunk",
+              "objective": "Customer Support Triage Chunk 004",
+              "workflowInput": {
+                "sourcePath": "support-inbox",
+                "outputPath": "support-queue/chunks/triage-004.csv",
+                "chunkId": "chunk-004",
+                "vendorId": "support-chunk-004",
+                "path01": "support-inbox/ticket-031.md",
+                "id01": "SUP-2026-031",
+                "path02": "support-inbox/ticket-032.md",
+                "id02": "SUP-2026-032",
+                "path03": "support-inbox/ticket-033.md",
+                "id03": "SUP-2026-033",
+                "path04": "support-inbox/ticket-034.md",
+                "id04": "SUP-2026-034",
+                "path05": "support-inbox/ticket-035.md",
+                "id05": "SUP-2026-035",
+                "path06": "support-inbox/ticket-036.md",
+                "id06": "SUP-2026-036",
+                "path07": "support-inbox/ticket-037.md",
+                "id07": "SUP-2026-037",
+                "path08": "support-inbox/ticket-038.md",
+                "id08": "SUP-2026-038",
+                "path09": "support-inbox/ticket-039.md",
+                "id09": "SUP-2026-039",
+                "path10": "support-inbox/ticket-040.md",
+                "id10": "SUP-2026-040"
+              },
+              "reason": "Triage semantic support bundle 004 preserving duplicate and incident groups"
+            },
+            {
+              "workflowId": "customer-support-triage-chunk",
+              "objective": "Customer Support Triage Chunk 005",
+              "workflowInput": {
+                "sourcePath": "support-inbox",
+                "outputPath": "support-queue/chunks/triage-005.csv",
+                "chunkId": "chunk-005",
+                "vendorId": "support-chunk-005",
+                "path01": "support-inbox/ticket-041.md",
+                "id01": "SUP-2026-041",
+                "path02": "support-inbox/ticket-042.md",
+                "id02": "SUP-2026-042",
+                "path03": "support-inbox/ticket-043.md",
+                "id03": "SUP-2026-043",
+                "path04": "support-inbox/ticket-044.md",
+                "id04": "SUP-2026-044",
+                "path05": "support-inbox/ticket-045.md",
+                "id05": "SUP-2026-045",
+                "path06": "support-inbox/ticket-046.md",
+                "id06": "SUP-2026-046",
+                "path07": "support-inbox/ticket-047.md",
+                "id07": "SUP-2026-047",
+                "path08": "support-inbox/ticket-048.md",
+                "id08": "SUP-2026-048",
+                "path09": "support-inbox/ticket-049.md",
+                "id09": "SUP-2026-049",
+                "path10": "support-inbox/ticket-050.md",
+                "id10": "SUP-2026-050"
+              },
+              "reason": "Triage semantic support bundle 005 preserving duplicate and incident groups"
+            }
+          ],
+          "allowedWorkflowIds": [
+            "customer-support-triage-chunk"
+          ],
+          "maxTickets": 5
         },
-        "next": "stop"
+        "saveAs": "ticketPlan",
+        "next": "done"
       },
       {
-        "id": "stop",
+        "id": "done",
         "action": "stop",
         "input": {
           "result": {
-            "paths": [
-              "bug-triage-summary.md"
-            ]
+            "childTicketIds": "{{ticketPlan.createdTicketIds}}"
+          }
+        }
+      }
+    ],
+    "postconditions": [],
+    "createdAt": "2026-06-11T01:30:04.302Z",
+    "updatedAt": "2026-06-11T01:30:04.302Z",
+    "taskPromptTemplate": ""
+  },
+  {
+    "id": "customer-support-triage-chunk",
+    "name": "Customer Support Triage Chunk",
+    "version": "1",
+    "description": "Classifies one bounded 10-ticket customer support chunk.",
+    "enabled": true,
+    "policy": {
+      "id": "customer-support-triage-policy",
+      "version": "1",
+      "text": "Decision rules:\n- P1: production outage, service-down report, or possible security incident. Escalate immediately.\n- P2: customer-impacting bug, enterprise-customer ambiguous issue, or degraded business-critical workflow.\n- P3: feature request, how-to question, partial bug, or low-impact bug with workaround available and no incident/security/outage signals.\n- P4: internal-only or non-customer work without customer impact.\n- Assign outage P1 tickets to On-Call with SLA 15 minutes and next_action token page_on_call.\n- Assign possible security issues to Security with priority P1, escalation Yes, SLA 15 minutes, and next_action token security_escalation.\n- Assign enterprise ambiguous degraded production or business-critical issues to Engineering with priority P2, escalation Yes, SLA 1 hour, and next_action token engineering_triage_enterprise.\n- Enterprise sandbox or demo issues with production unaffected may be Engineering P2 with either escalation Yes/1 hour/engineering_triage_enterprise or escalation No/4 business hours/bug_triage depending on stated urgency.\n- Assign customer-impacting actionable bugs to Engineering with priority P2, escalation No, SLA 4 business hours, and next_action token bug_triage.\n- Bugs with workaround available, narrow archived-project scope, missing reproduction details, or contradictory low-impact metadata may be P3 and may route to Customer Success with next_action token request_reproduction_details.\n- If ticket metadata conflicts, prefer concrete impact and escalation signals over customer tier alone.\n- For duplicate groups, the earliest ticket remains the primary ticket. Later reports in the same Duplicate Group must set duplicate_of to the earliest ticket ID. Duplicate_of primary ID is mandatory even when another rule also applies.\n- If a duplicate ticket is also an incident, keep priority/escalation/SLA from the incident rule; next_action may use the incident action or duplicate-link action when both are defensible.\n- Use next_action token link_duplicate_to_sup_2026_003 for csv-export-february and link_duplicate_to_primary for other duplicate chains when choosing the duplicate-link action.\n- Assign billing/account issues to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token billing_account_followup.\n- Assign feature requests to Product with priority P3, escalation No, SLA 2 business days, and next_action token product_feedback.\n- Assign how-to questions to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token send_how_to_guidance unless the ticket specifically asks about service account API key rotation, then use send_key_rotation_steps.\n- Assign partial bug reports with missing reproduction details to Customer Success with priority P3, escalation No, SLA 1 business day, and next_action token request_reproduction_details.\n- Assign noisy or unknown-customer tickets to Internal Triage with priority P4, escalation No, SLA Backlog, and next_action token request_customer_context.\n- Assign internal-only/non-customer tickets to Internal Triage with priority P4, escalation No, SLA Backlog, and next_action token route_internal_backlog.\n\nThe triage plan must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, assignee_team, escalation, sla, next_action, duplicate_of.\nUse escalation values exactly: Yes or No.\nThe escalation list must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, reason, owner.\nThe escalation list must include only tickets whose triage row has escalation Yes.\nDo not invent ticket IDs, customers, priorities, teams, facts, or source evidence."
+    },
+    "taskPromptTemplate": "Classify exactly the 10 provided support tickets using workflow.policy.text.\nReturn CSV only, no Markdown fence.\nCSV columns exactly: ticket_id,customer_name,priority,assignee_team,escalation,sla,next_action,duplicate_of\nInclude one row for every provided ticket ID.",
+    "verifierContract": {
+      "id": "customer-support-triage-chunk-verifier",
+      "version": "1",
+      "fixture": "customer-support",
+      "expectedArtifacts": [
+        "support-queue/chunks/*.csv"
+      ]
+    },
+    "inputSchema": {
+      "sourcePath": "string",
+      "outputPath": "string",
+      "chunkId": "string",
+      "vendorId": "string",
+      "path01": "string",
+      "id01": "string",
+      "path02": "string",
+      "id02": "string",
+      "path03": "string",
+      "id03": "string",
+      "path04": "string",
+      "id04": "string",
+      "path05": "string",
+      "id05": "string",
+      "path06": "string",
+      "id06": "string",
+      "path07": "string",
+      "id07": "string",
+      "path08": "string",
+      "id08": "string",
+      "path09": "string",
+      "id09": "string",
+      "path10": "string",
+      "id10": "string"
+    },
+    "actions": [
+      {
+        "id": "read_01",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path01}}"
+        },
+        "saveAs": "ticket01",
+        "next": "read_02"
+      },
+      {
+        "id": "read_02",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path02}}"
+        },
+        "saveAs": "ticket02",
+        "next": "read_03"
+      },
+      {
+        "id": "read_03",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path03}}"
+        },
+        "saveAs": "ticket03",
+        "next": "read_04"
+      },
+      {
+        "id": "read_04",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path04}}"
+        },
+        "saveAs": "ticket04",
+        "next": "read_05"
+      },
+      {
+        "id": "read_05",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path05}}"
+        },
+        "saveAs": "ticket05",
+        "next": "read_06"
+      },
+      {
+        "id": "read_06",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path06}}"
+        },
+        "saveAs": "ticket06",
+        "next": "read_07"
+      },
+      {
+        "id": "read_07",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path07}}"
+        },
+        "saveAs": "ticket07",
+        "next": "read_08"
+      },
+      {
+        "id": "read_08",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path08}}"
+        },
+        "saveAs": "ticket08",
+        "next": "read_09"
+      },
+      {
+        "id": "read_09",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path09}}"
+        },
+        "saveAs": "ticket09",
+        "next": "read_10"
+      },
+      {
+        "id": "read_10",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path10}}"
+        },
+        "saveAs": "ticket10",
+        "next": "triage_chunk"
+      },
+      {
+        "id": "triage_chunk",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
+          "input": {
+            "chunkId": "{{workflow.input.chunkId}}",
+            "tickets": {
+              "{{workflow.input.id01}}": "{{ticket01.content}}",
+              "{{workflow.input.id02}}": "{{ticket02.content}}",
+              "{{workflow.input.id03}}": "{{ticket03.content}}",
+              "{{workflow.input.id04}}": "{{ticket04.content}}",
+              "{{workflow.input.id05}}": "{{ticket05.content}}",
+              "{{workflow.input.id06}}": "{{ticket06.content}}",
+              "{{workflow.input.id07}}": "{{ticket07.content}}",
+              "{{workflow.input.id08}}": "{{ticket08.content}}",
+              "{{workflow.input.id09}}": "{{ticket09.content}}",
+              "{{workflow.input.id10}}": "{{ticket10.content}}"
+            }
+          },
+          "outputSchema": {
+            "chunkCsv": "string"
+          }
+        },
+        "saveAs": "classification",
+        "next": "write_chunk"
+      },
+      {
+        "id": "write_chunk",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.outputPath}}",
+          "content": "{{classification.chunkCsv}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "chunkPath": "{{workflow.input.outputPath}}"
           }
         }
       }
     ],
     "postconditions": [
       {
-        "id": "postcondition_1",
+        "id": "chunk-exists",
         "type": "fileExists",
-        "path": "bug-triage-summary.md"
-      },
-      {
-        "id": "postcondition_2",
-        "type": "fileContains",
-        "path": "bug-triage-summary.md",
-        "contains": "Bug triage summary"
+        "path": "{{workflow.input.outputPath}}"
       }
     ],
-    "enabled": false,
-    "createdByType": "agent",
-    "createdByAgentId": 3,
-    "createdByRunId": 21,
-    "createdAt": "2026-05-26T04:34:53.876Z",
-    "updatedAt": "2026-05-26T04:34:53.876Z",
-    "description": ""
+    "createdAt": "2026-06-11T01:30:04.303Z",
+    "updatedAt": "2026-06-11T01:30:04.303Z"
   },
   {
-    "id": "daily-status",
-    "name": "Daily Status Workflow",
-    "inputSchema": {},
+    "id": "customer-support-triage-aggregate",
+    "name": "Customer Support Triage Aggregate",
+    "version": "1",
+    "description": "Aggregates support triage chunk artifacts into final queue artifacts.",
+    "enabled": true,
+    "policy": {
+      "id": "customer-support-triage-aggregate-policy",
+      "version": "1",
+      "text": "Combine the five chunk CSV artifacts into final Customer Support triage artifacts.\nDo not change ticket IDs, customer names, priorities, teams, escalation values, SLA values, next_action values, or duplicate_of values from the chunk CSV rows.\nThe triage plan must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, assignee_team, escalation, sla, next_action, duplicate_of.\nThe escalation list must be a Markdown table with exactly these columns: ticket_id, customer_name, priority, reason, owner.\nThe escalation list must include only rows where escalation is Yes."
+    },
+    "taskPromptTemplate": "Read all five chunk CSV artifacts and aggregate them into final support queue artifacts.\nPreserve every row from every chunk exactly except Markdown table formatting.\nReturn only the two artifact contents.",
+    "verifierContract": {
+      "id": "customer-support-triage-aggregate-verifier",
+      "version": "1",
+      "fixture": "customer-support",
+      "expectedArtifacts": [
+        "support-queue/triage-plan.md",
+        "support-queue/escalation-list.md"
+      ]
+    },
+    "inputSchema": {
+      "outputPath": "string",
+      "chunkPath01": "string",
+      "chunkPath02": "string",
+      "chunkPath03": "string",
+      "chunkPath04": "string",
+      "chunkPath05": "string"
+    },
     "actions": [
       {
-        "id": "write_1",
-        "action": "writeFile",
+        "id": "read_chunk_01",
+        "action": "readFile",
         "input": {
-          "path": "daily-status.md",
-          "content": "Daily status: review queue, check failures, note next action"
+          "path": "{{workflow.input.chunkPath01}}"
         },
-        "next": "stop"
+        "saveAs": "chunk01",
+        "next": "read_chunk_02"
       },
       {
-        "id": "stop",
+        "id": "read_chunk_02",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.chunkPath02}}"
+        },
+        "saveAs": "chunk02",
+        "next": "read_chunk_03"
+      },
+      {
+        "id": "read_chunk_03",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.chunkPath03}}"
+        },
+        "saveAs": "chunk03",
+        "next": "read_chunk_04"
+      },
+      {
+        "id": "read_chunk_04",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.chunkPath04}}"
+        },
+        "saveAs": "chunk04",
+        "next": "read_chunk_05"
+      },
+      {
+        "id": "read_chunk_05",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.chunkPath05}}"
+        },
+        "saveAs": "chunk05",
+        "next": "aggregate"
+      },
+      {
+        "id": "aggregate",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
+          "input": {
+            "chunks": {
+              "chunk01": "{{chunk01.content}}",
+              "chunk02": "{{chunk02.content}}",
+              "chunk03": "{{chunk03.content}}",
+              "chunk04": "{{chunk04.content}}",
+              "chunk05": "{{chunk05.content}}"
+            }
+          },
+          "outputSchema": {
+            "triagePlanMd": "string",
+            "escalationListMd": "string"
+          }
+        },
+        "saveAs": "aggregateOutput",
+        "next": "write_triage_plan"
+      },
+      {
+        "id": "write_triage_plan",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.outputPath}}/triage-plan.md",
+          "content": "{{aggregateOutput.triagePlanMd}}"
+        },
+        "next": "write_escalation_list"
+      },
+      {
+        "id": "write_escalation_list",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.outputPath}}/escalation-list.md",
+          "content": "{{aggregateOutput.escalationListMd}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
         "action": "stop",
         "input": {
           "result": {
-            "paths": [
-              "daily-status.md"
-            ]
+            "triagePlanPath": "{{workflow.input.outputPath}}/triage-plan.md",
+            "escalationListPath": "{{workflow.input.outputPath}}/escalation-list.md"
           }
         }
       }
     ],
     "postconditions": [
       {
-        "id": "postcondition_1",
+        "id": "triage-plan-exists",
         "type": "fileExists",
-        "path": "daily-status.md"
+        "path": "{{workflow.input.outputPath}}/triage-plan.md"
       },
       {
-        "id": "postcondition_2",
-        "type": "fileContains",
-        "path": "daily-status.md",
-        "contains": "Daily status"
+        "id": "escalation-list-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.outputPath}}/escalation-list.md"
       }
     ],
-    "enabled": false,
-    "createdByType": "agent",
-    "createdByAgentId": 3,
-    "createdByRunId": 26,
-    "createdAt": "2026-05-26T05:07:49.022Z",
-    "updatedAt": "2026-05-26T05:07:49.022Z",
-    "description": ""
+    "createdAt": "2026-06-11T01:30:04.303Z",
+    "updatedAt": "2026-06-11T01:30:04.303Z"
+  },
+  {
+    "id": "vendor-compliance",
+    "name": "Vendor Compliance",
+    "version": "1",
+    "description": "Classifies vendor compliance packets with attached workflow policy and writes audit artifacts.",
+    "enabled": true,
+    "policy": {
+      "id": "vendor-compliance-decision-policy",
+      "version": "1",
+      "text": "Decision rules:\n- Approve: DPA is signed/current, Security Certification is provided, Certification Status is Current, and there is no active security incident.\n- Conditional Approve: Certification Status is Expired but DPA is signed/current; require recertification within 90 days.\n- Conditional Approve: active security incident is under review but required documents are present; require monitoring condition.\n- Reject: Security Certification is missing/not provided or Certification Status is Missing.\n- Reject: Data Processing Agreement is missing.\n\nResolved incidents do not require conditional approval when DPA is signed/current and Certification Status is Current.\nUse only these dispositions exactly: Approve, Conditional Approve, Reject.\nEach row must cite packet evidence and a policy reference."
+    },
+    "taskPromptTemplate": "Classify every provided vendor compliance packet using workflow.policy.text.\nReturn a complete CSV and Markdown audit summary only after considering every vendor packet.\nCSV columns must be exactly: vendor_id,vendor_name,disposition,reason,policy_reference,next_action",
+    "verifierContract": {
+      "id": "vendor-compliance-verifier",
+      "version": "1",
+      "fixture": "vendor-compliance",
+      "expectedArtifacts": [
+        "vendors/vendor-decision-register.csv",
+        "vendors/compliance-review.md"
+      ]
+    },
+    "inputSchema": {
+      "basePath": "string"
+    },
+    "actions": [
+      {
+        "id": "read_001",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-001.md"
+        },
+        "saveAs": "vendor001",
+        "next": "read_002"
+      },
+      {
+        "id": "read_002",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-002.md"
+        },
+        "saveAs": "vendor002",
+        "next": "read_003"
+      },
+      {
+        "id": "read_003",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-003.md"
+        },
+        "saveAs": "vendor003",
+        "next": "read_004"
+      },
+      {
+        "id": "read_004",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-004.md"
+        },
+        "saveAs": "vendor004",
+        "next": "read_005"
+      },
+      {
+        "id": "read_005",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-005.md"
+        },
+        "saveAs": "vendor005",
+        "next": "read_006"
+      },
+      {
+        "id": "read_006",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-006.md"
+        },
+        "saveAs": "vendor006",
+        "next": "read_007"
+      },
+      {
+        "id": "read_007",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-007.md"
+        },
+        "saveAs": "vendor007",
+        "next": "read_008"
+      },
+      {
+        "id": "read_008",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-008.md"
+        },
+        "saveAs": "vendor008",
+        "next": "classify"
+      },
+      {
+        "id": "classify",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
+          "input": {
+            "vendors": {
+              "vendor-001": "{{vendor001.content}}",
+              "vendor-002": "{{vendor002.content}}",
+              "vendor-003": "{{vendor003.content}}",
+              "vendor-004": "{{vendor004.content}}",
+              "vendor-005": "{{vendor005.content}}",
+              "vendor-006": "{{vendor006.content}}",
+              "vendor-007": "{{vendor007.content}}",
+              "vendor-008": "{{vendor008.content}}"
+            }
+          },
+          "outputSchema": {
+            "vendorDecisionRegisterCsv": "string",
+            "complianceReviewMd": "string"
+          }
+        },
+        "saveAs": "classification",
+        "next": "write_register"
+      },
+      {
+        "id": "write_register",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/vendor-decision-register.csv",
+          "content": "{{classification.vendorDecisionRegisterCsv}}"
+        },
+        "next": "write_review"
+      },
+      {
+        "id": "write_review",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/compliance-review.md",
+          "content": "{{classification.complianceReviewMd}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "vendorDecisionRegisterPath": "{{workflow.input.basePath}}/vendor-decision-register.csv",
+            "complianceReviewPath": "{{workflow.input.basePath}}/compliance-review.md"
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "register-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/vendor-decision-register.csv"
+      },
+      {
+        "id": "review-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/compliance-review.md"
+      },
+      {
+        "id": "register-contains-globalvault-reject",
+        "type": "fileContains",
+        "path": "{{workflow.input.basePath}}/vendor-decision-register.csv",
+        "contains": "vendor-001,GlobalVault Data Services,Reject"
+      }
+    ],
+    "createdAt": "2026-06-11T01:30:04.304Z",
+    "updatedAt": "2026-06-11T01:30:04.304Z"
+  },
+  {
+    "id": "vendor-remediation-plan",
+    "name": "Vendor Remediation Plan",
+    "version": "1",
+    "description": "Consumes vendor compliance review outputs and writes remediation artifacts.",
+    "enabled": true,
+    "policy": {
+      "id": "vendor-remediation-policy",
+      "version": "1",
+      "text": "Remediation rules:\n- Include only vendors whose Stage 1 disposition is Conditional Approve or Reject.\n- Do not include vendors whose Stage 1 disposition is Approve.\n- Conditional Approve due to expired certification requires recertification within 90 days.\n- Conditional Approve due to an active incident requires security monitoring and incident review within 30 days.\n- Reject due to missing security certification requires certification evidence before approval can proceed.\n- Reject due to missing Data Processing Agreement requires a signed DPA before approval can proceed.\n\nUse the Stage 1 vendor-decision-register.csv as the source of truth for dispositions.\nThe remediation plan must summarize every Conditional Approve and Reject vendor.\nThe remediation tasks CSV columns must be exactly: vendor_id,vendor_name,disposition,remediation_action,due_days,owner.\ndue_days must always be numeric for every row: use 90 for expired certification, 30 for active incident monitoring, and 0 for Reject rows that are blocked until missing evidence is provided."
+    },
+    "taskPromptTemplate": "Read the Stage 1 vendor decision register and compliance review.\nIdentify every vendor marked Conditional Approve or Reject.\nWrite a complete remediation plan and remediation task CSV using workflow.policy.text.\nDo not include vendors marked Approve in remediation tasks.",
+    "verifierContract": {
+      "id": "vendor-remediation-verifier",
+      "version": "1",
+      "fixture": "vendor-compliance",
+      "expectedArtifacts": [
+        "vendors/remediation-plan.md",
+        "vendors/remediation-tasks.csv"
+      ]
+    },
+    "inputSchema": {
+      "basePath": "string"
+    },
+    "actions": [
+      {
+        "id": "read_register",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/vendor-decision-register.csv"
+        },
+        "saveAs": "register",
+        "next": "read_review"
+      },
+      {
+        "id": "read_review",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/compliance-review.md"
+        },
+        "saveAs": "review",
+        "next": "plan_remediation"
+      },
+      {
+        "id": "plan_remediation",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
+          "input": {
+            "vendorDecisionRegisterCsv": "{{register.content}}",
+            "complianceReviewMd": "{{review.content}}"
+          },
+          "outputSchema": {
+            "remediationPlanMd": "string",
+            "remediationTasksCsv": "string"
+          }
+        },
+        "saveAs": "remediation",
+        "next": "write_plan"
+      },
+      {
+        "id": "write_plan",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/remediation-plan.md",
+          "content": "{{remediation.remediationPlanMd}}"
+        },
+        "next": "write_tasks"
+      },
+      {
+        "id": "write_tasks",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/remediation-tasks.csv",
+          "content": "{{remediation.remediationTasksCsv}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "remediationPlanPath": "{{workflow.input.basePath}}/remediation-plan.md",
+            "remediationTasksPath": "{{workflow.input.basePath}}/remediation-tasks.csv"
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "remediation-plan-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/remediation-plan.md"
+      },
+      {
+        "id": "remediation-tasks-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/remediation-tasks.csv"
+      }
+    ],
+    "createdAt": "2026-06-11T01:30:04.304Z",
+    "updatedAt": "2026-06-11T01:30:04.304Z"
+  },
+  {
+    "id": "vendor-remediation-failure-handoff",
+    "name": "Vendor Remediation Failure Handoff",
+    "version": "1",
+    "description": "Consumes Stage 1 failure evidence and writes deterministic remediation blockers.",
+    "enabled": true,
+    "policy": {
+      "id": "vendor-remediation-failure-handoff-policy",
+      "version": "1",
+      "text": "Failure handoff rules:\n- If Stage 1 status is not completed, do not claim remediation is complete.\n- Write remediation-blockers.md describing the failed Stage 1 run, missing or unavailable evidence, and why remediation cannot proceed.\n- Write remediation-tasks.csv with only the header row when Stage 1 did not produce a usable vendor-decision-register.csv.\n- The remediation-tasks.csv columns must be exactly: vendor_id,vendor_name,disposition,remediation_action,due_days,owner.\n- The blockers document must include the Stage 1 run id, Stage 1 status, and missing source path when provided."
+    },
+    "taskPromptTemplate": "Use the Stage 1 status evidence from workflow input.\nIf Stage 1 failed or did not produce a complete vendor decision register, write blockers instead of pretending remediation is complete.\nWrite remediation-blockers.md and remediation-tasks.csv using workflow.policy.text.",
+    "verifierContract": {
+      "id": "vendor-remediation-failure-handoff-verifier",
+      "version": "1",
+      "fixture": "vendor-compliance",
+      "expectedArtifacts": [
+        "vendors/remediation-blockers.md",
+        "vendors/remediation-tasks.csv"
+      ]
+    },
+    "inputSchema": {
+      "basePath": "string",
+      "stage1RunId": "string",
+      "stage1Status": "string",
+      "stage1Error": "string",
+      "missingSourcePath": "string"
+    },
+    "actions": [
+      {
+        "id": "prepare_handoff",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
+          "input": {
+            "stage1RunId": "{{workflow.input.stage1RunId}}",
+            "stage1Status": "{{workflow.input.stage1Status}}",
+            "stage1Error": "{{workflow.input.stage1Error}}",
+            "missingSourcePath": "{{workflow.input.missingSourcePath}}"
+          },
+          "outputSchema": {
+            "remediationBlockersMd": "string",
+            "remediationTasksCsv": "string"
+          }
+        },
+        "saveAs": "handoff",
+        "next": "write_blockers"
+      },
+      {
+        "id": "write_blockers",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/remediation-blockers.md",
+          "content": "{{handoff.remediationBlockersMd}}"
+        },
+        "next": "write_tasks"
+      },
+      {
+        "id": "write_tasks",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/remediation-tasks.csv",
+          "content": "{{handoff.remediationTasksCsv}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "remediationBlockersPath": "{{workflow.input.basePath}}/remediation-blockers.md",
+            "remediationTasksPath": "{{workflow.input.basePath}}/remediation-tasks.csv"
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "remediation-blockers-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/remediation-blockers.md"
+      },
+      {
+        "id": "remediation-tasks-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/remediation-tasks.csv"
+      }
+    ],
+    "createdAt": "2026-06-11T01:30:04.305Z",
+    "updatedAt": "2026-06-11T01:30:04.305Z"
+  },
+  {
+    "id": "vendor-compliance-ticket-plan",
+    "name": "Vendor Compliance Ticket Plan",
+    "version": "1",
+    "description": "Creates bounded child vendor compliance chunk tickets for a multi-vendor queue.",
+    "enabled": true,
+    "policy": {
+      "id": "vendor-compliance-ticket-plan-policy",
+      "version": "1",
+      "text": "Create one child vendor compliance chunk ticket per bounded 10-vendor chunk. Do not auto-run children."
+    },
+    "verifierContract": {
+      "id": "vendor-compliance-ticket-plan-verifier",
+      "version": "1",
+      "fixture": "vendor-compliance",
+      "expectedArtifacts": []
+    },
+    "inputSchema": {},
+    "actions": [
+      {
+        "id": "create_child_chunks",
+        "action": "executeTicketPlan",
+        "input": {
+          "tickets": [
+            {
+              "workflowId": "vendor-compliance-medium-chunk",
+              "objective": "Vendor Compliance Chunk 001",
+              "workflowInput": {
+                "sourcePath": "vendors/incoming",
+                "outputPath": "vendors/chunks/compliance-chunk-001.csv",
+                "chunkId": "vendor-chunk-001",
+                "vendorId": "vendor-chunk-001",
+                "path01": "vendors/incoming/vendor-001.md",
+                "id01": "vendor-001",
+                "path02": "vendors/incoming/vendor-002.md",
+                "id02": "vendor-002",
+                "path03": "vendors/incoming/vendor-003.md",
+                "id03": "vendor-003",
+                "path04": "vendors/incoming/vendor-004.md",
+                "id04": "vendor-004",
+                "path05": "vendors/incoming/vendor-005.md",
+                "id05": "vendor-005",
+                "path06": "vendors/incoming/vendor-006.md",
+                "id06": "vendor-006",
+                "path07": "vendors/incoming/vendor-007.md",
+                "id07": "vendor-007",
+                "path08": "vendors/incoming/vendor-008.md",
+                "id08": "vendor-008",
+                "path09": "vendors/incoming/vendor-009.md",
+                "id09": "vendor-009",
+                "path10": "vendors/incoming/vendor-010.md",
+                "id10": "vendor-010"
+              },
+              "reason": "Vendor compliance chunk 001 (1-10)"
+            },
+            {
+              "workflowId": "vendor-compliance-medium-chunk",
+              "objective": "Vendor Compliance Chunk 002",
+              "workflowInput": {
+                "sourcePath": "vendors/incoming",
+                "outputPath": "vendors/chunks/compliance-chunk-002.csv",
+                "chunkId": "vendor-chunk-002",
+                "vendorId": "vendor-chunk-002",
+                "path01": "vendors/incoming/vendor-011.md",
+                "id01": "vendor-011",
+                "path02": "vendors/incoming/vendor-012.md",
+                "id02": "vendor-012",
+                "path03": "vendors/incoming/vendor-013.md",
+                "id03": "vendor-013",
+                "path04": "vendors/incoming/vendor-014.md",
+                "id04": "vendor-014",
+                "path05": "vendors/incoming/vendor-015.md",
+                "id05": "vendor-015",
+                "path06": "vendors/incoming/vendor-016.md",
+                "id06": "vendor-016",
+                "path07": "vendors/incoming/vendor-017.md",
+                "id07": "vendor-017",
+                "path08": "vendors/incoming/vendor-018.md",
+                "id08": "vendor-018",
+                "path09": "vendors/incoming/vendor-019.md",
+                "id09": "vendor-019",
+                "path10": "vendors/incoming/vendor-020.md",
+                "id10": "vendor-020"
+              },
+              "reason": "Vendor compliance chunk 002 (11-20)"
+            },
+            {
+              "workflowId": "vendor-compliance-medium-chunk",
+              "objective": "Vendor Compliance Chunk 003",
+              "workflowInput": {
+                "sourcePath": "vendors/incoming",
+                "outputPath": "vendors/chunks/compliance-chunk-003.csv",
+                "chunkId": "vendor-chunk-003",
+                "vendorId": "vendor-chunk-003",
+                "path01": "vendors/incoming/vendor-021.md",
+                "id01": "vendor-021",
+                "path02": "vendors/incoming/vendor-022.md",
+                "id02": "vendor-022",
+                "path03": "vendors/incoming/vendor-023.md",
+                "id03": "vendor-023",
+                "path04": "vendors/incoming/vendor-024.md",
+                "id04": "vendor-024",
+                "path05": "vendors/incoming/vendor-025.md",
+                "id05": "vendor-025",
+                "path06": "vendors/incoming/vendor-026.md",
+                "id06": "vendor-026",
+                "path07": "vendors/incoming/vendor-027.md",
+                "id07": "vendor-027",
+                "path08": "vendors/incoming/vendor-028.md",
+                "id08": "vendor-028",
+                "path09": "vendors/incoming/vendor-029.md",
+                "id09": "vendor-029",
+                "path10": "vendors/incoming/vendor-030.md",
+                "id10": "vendor-030"
+              },
+              "reason": "Vendor compliance chunk 003 (21-30)"
+            },
+            {
+              "workflowId": "vendor-compliance-medium-chunk",
+              "objective": "Vendor Compliance Chunk 004",
+              "workflowInput": {
+                "sourcePath": "vendors/incoming",
+                "outputPath": "vendors/chunks/compliance-chunk-004.csv",
+                "chunkId": "vendor-chunk-004",
+                "vendorId": "vendor-chunk-004",
+                "path01": "vendors/incoming/vendor-031.md",
+                "id01": "vendor-031",
+                "path02": "vendors/incoming/vendor-032.md",
+                "id02": "vendor-032",
+                "path03": "vendors/incoming/vendor-033.md",
+                "id03": "vendor-033",
+                "path04": "vendors/incoming/vendor-034.md",
+                "id04": "vendor-034",
+                "path05": "vendors/incoming/vendor-035.md",
+                "id05": "vendor-035",
+                "path06": "vendors/incoming/vendor-036.md",
+                "id06": "vendor-036",
+                "path07": "vendors/incoming/vendor-037.md",
+                "id07": "vendor-037",
+                "path08": "vendors/incoming/vendor-038.md",
+                "id08": "vendor-038",
+                "path09": "vendors/incoming/vendor-039.md",
+                "id09": "vendor-039",
+                "path10": "vendors/incoming/vendor-040.md",
+                "id10": "vendor-040"
+              },
+              "reason": "Vendor compliance chunk 004 (31-40)"
+            }
+          ],
+          "allowedWorkflowIds": [
+            "vendor-compliance-medium-chunk"
+          ],
+          "maxTickets": 5
+        },
+        "saveAs": "ticketPlan",
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "childTicketIds": "{{ticketPlan.createdTicketIds}}"
+          }
+        }
+      }
+    ],
+    "postconditions": [],
+    "createdAt": "2026-06-11T01:30:04.305Z",
+    "updatedAt": "2026-06-11T01:30:04.305Z",
+    "taskPromptTemplate": ""
+  },
+  {
+    "id": "vendor-compliance-medium-chunk",
+    "name": "Vendor Compliance Medium Chunk",
+    "version": "1",
+    "description": "Classifies one bounded 10-vendor compliance chunk.",
+    "enabled": true,
+    "policy": {
+      "id": "vendor-compliance-medium-policy",
+      "version": "4",
+      "text": "Decision rules:\n- Approve: DPA is signed/current, Security Certification is provided, Certification Status is Current, and there is no active security incident.\n- Conditional Approve: Certification Status is Expired but DPA is signed/current; require recertification within 90 days.\n- Conditional Approve: active security incident is under review but required documents are present; require monitoring condition.\n- Reject: Security Certification is missing/not provided or Certification Status is Missing.\n- Reject: Data Processing Agreement is missing.\n- Resolved incidents do not require conditional approval when DPA is signed/current and Certification Status is Current.\n- If both DPA and Security Certification are missing, Reject and cite both issues in the reason.\n- Subsidiary vendors under the same parent group may share parent-level certifications; note the parent relationship in the reason.\n- Duplicate submissions: if the same vendor appears twice, mark the later submission as a duplicate entry in the reason field.\n- Reject: the Data Processing Agreement does not cover all service tiers we actually use. A DPA that covers only some tiers (for example, \"covers SaaS tier only\") or that explicitly excludes a used service (such as IaaS or infrastructure hosting) counts as a missing DPA for the uncovered tier; Reject and require a DPA covering all used service tiers before approval.\n- Conditional Approve: vendor processes children's or minors' data (students, data subjects under 18); base criteria notwithstanding, require a children's data protection addendum.\n- Conditional Approve: vendor processes biometric data (fingerprint, facial recognition, voiceprint, or other biometric identifiers); require a biometric data safeguard review.\n- Conditional Approve: vendor processes genetic data (DNA, genetic test results, pharmacogenomic profiles); require a genetic data protection review.\n- Conditional Approve: vendor processes precise geolocation data (real-time GPS or location tracking); require a geolocation data safeguard review.\n- Conditional Approve: vendor performs automated decision-making about individuals (automated screening, performance evaluation, or promotion recommendations); require an automated-decision impact review.\n- Conditional Approve: vendor processes wellness or health data (health risk assessments, biometric screening, medical or wellness information); require a health data protection review.\n- Conditional Approve: vendor processes data across multiple regulatory jurisdictions (such as EU and US healthcare) without complete cross-regulatory documentation; require completion of cross-regulatory evidence.\n- These sensitive-data rules take priority over Approve: when a base-Approve vendor also matches a sensitive-data rule, the disposition is Conditional Approve.\nReasoning rules (apply literally; the packet may state misleading labels — these rules override surface labels):\n- Treat the certification as Expired if the Certification Expiry Date is in the past relative to today's date, even if Certification Status says Current.\n- Treat the DPA as missing if any note indicates it was rescinded, terminated, withdrawn, or is no longer in force, even if the DPA field says Signed and current.\n- Treat the certification as not provided if it was issued by an unaccredited or unrecognized certification body.\n- Treat the certification as Missing if any note, addendum, or appendix states it was suspended or revoked, even if Certification Status says Current.\n- An incident counts as resolved only if its resolution date is in the past; a future resolution date means the incident is still active and under review.\n- An active security incident affecting any service tier we actually use counts as an active incident for the whole vendor, even if the headline Incident Status says None reported.\n- The DPA is required regardless of vendor criticality; a low-criticality justification does not waive the DPA requirement.\n- The certification requirement is met if the vendor holds at least one current, recognized certification, even if another listed certification is expired.\n- Reject conditions take priority: if any Reject condition is met, the disposition is Reject even when a Conditional Approve condition is also present.\n- Today's date is 2026-06-10 for all temporal comparisons.\nUse only these dispositions exactly: Approve, Conditional Approve, Reject.\nEach row must cite packet evidence and a policy reference.\nCSV columns must be exactly: vendor_id,vendor_name,disposition,reason,policy_reference,next_action"
+    },
+    "taskPromptTemplate": "Classify exactly the 10 provided vendor compliance packets using workflow.policy.text.\nReturn CSV only, no Markdown fence.\nCSV columns exactly: vendor_id,vendor_name,disposition,reason,policy_reference,next_action\nInclude one row for every provided vendor ID.\nDo not include extra columns beyond the required six.",
+    "verifierContract": {
+      "id": "vendor-compliance-medium-chunk-verifier",
+      "version": "1",
+      "fixture": "vendor-compliance",
+      "expectedArtifacts": [
+        "vendors/chunks/*.csv"
+      ]
+    },
+    "inputSchema": {
+      "sourcePath": "string",
+      "outputPath": "string",
+      "chunkId": "string",
+      "vendorId": "string",
+      "path01": "string",
+      "id01": "string",
+      "path02": "string",
+      "id02": "string",
+      "path03": "string",
+      "id03": "string",
+      "path04": "string",
+      "id04": "string",
+      "path05": "string",
+      "id05": "string",
+      "path06": "string",
+      "id06": "string",
+      "path07": "string",
+      "id07": "string",
+      "path08": "string",
+      "id08": "string",
+      "path09": "string",
+      "id09": "string",
+      "path10": "string",
+      "id10": "string"
+    },
+    "actions": [
+      {
+        "id": "read_01",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path01}}"
+        },
+        "saveAs": "vendor01",
+        "next": "read_02"
+      },
+      {
+        "id": "read_02",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path02}}"
+        },
+        "saveAs": "vendor02",
+        "next": "read_03"
+      },
+      {
+        "id": "read_03",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path03}}"
+        },
+        "saveAs": "vendor03",
+        "next": "read_04"
+      },
+      {
+        "id": "read_04",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path04}}"
+        },
+        "saveAs": "vendor04",
+        "next": "read_05"
+      },
+      {
+        "id": "read_05",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path05}}"
+        },
+        "saveAs": "vendor05",
+        "next": "read_06"
+      },
+      {
+        "id": "read_06",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path06}}"
+        },
+        "saveAs": "vendor06",
+        "next": "read_07"
+      },
+      {
+        "id": "read_07",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path07}}"
+        },
+        "saveAs": "vendor07",
+        "next": "read_08"
+      },
+      {
+        "id": "read_08",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path08}}"
+        },
+        "saveAs": "vendor08",
+        "next": "read_09"
+      },
+      {
+        "id": "read_09",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path09}}"
+        },
+        "saveAs": "vendor09",
+        "next": "read_10"
+      },
+      {
+        "id": "read_10",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.path10}}"
+        },
+        "saveAs": "vendor10",
+        "next": "classify_chunk"
+      },
+      {
+        "id": "classify_chunk",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
+          "input": {
+            "chunkId": "{{workflow.input.chunkId}}",
+            "vendors": {
+              "{{workflow.input.id01}}": "{{vendor01.content}}",
+              "{{workflow.input.id02}}": "{{vendor02.content}}",
+              "{{workflow.input.id03}}": "{{vendor03.content}}",
+              "{{workflow.input.id04}}": "{{vendor04.content}}",
+              "{{workflow.input.id05}}": "{{vendor05.content}}",
+              "{{workflow.input.id06}}": "{{vendor06.content}}",
+              "{{workflow.input.id07}}": "{{vendor07.content}}",
+              "{{workflow.input.id08}}": "{{vendor08.content}}",
+              "{{workflow.input.id09}}": "{{vendor09.content}}",
+              "{{workflow.input.id10}}": "{{vendor10.content}}"
+            }
+          },
+          "outputSchema": {
+            "chunkCsv": "string"
+          }
+        },
+        "saveAs": "classification",
+        "next": "write_chunk"
+      },
+      {
+        "id": "write_chunk",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.outputPath}}",
+          "content": "{{classification.chunkCsv}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "chunkPath": "{{workflow.input.outputPath}}"
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "chunk-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.outputPath}}"
+      },
+      {
+        "id": "chunk-contains-vendor-041-conditional-approve",
+        "type": "fileContains",
+        "path": "{{workflow.input.outputPath}}",
+        "contains": "vendor-041,ChronoStat Analytics,Conditional Approve"
+      }
+    ],
+    "createdAt": "2026-06-11T01:30:04.306Z",
+    "updatedAt": "2026-06-11T01:30:04.306Z"
+  },
+  {
+    "id": "vendor-compliance-medium-aggregate",
+    "name": "Vendor Compliance Medium Aggregate",
+    "version": "1",
+    "description": "Aggregates vendor compliance chunk artifacts into final decision register and summary.",
+    "enabled": true,
+    "policy": {
+      "id": "vendor-compliance-medium-aggregate-policy",
+      "version": "1",
+      "text": "Combine the chunk CSV artifacts into final Vendor Compliance artifacts.\nDo not change vendor IDs, vendor names, dispositions, reasons, policy references, or next_action values from the chunk CSV rows.\nThe decision register must be a CSV with exactly these columns: vendor_id,vendor_name,disposition,reason,policy_reference,next_action.\nThe compliance summary must be a Markdown document covering all vendors.\nCount how many vendors received each disposition and report totals."
+    },
+    "taskPromptTemplate": "Read all chunk CSV artifacts and aggregate them into final vendor compliance artifacts.\nPreserve every row from every chunk exactly.\nReturn only the two artifact contents.",
+    "verifierContract": {
+      "id": "vendor-compliance-medium-aggregate-verifier",
+      "version": "1",
+      "fixture": "vendor-compliance",
+      "expectedArtifacts": [
+        "vendors/vendor-decision-register.csv",
+        "vendors/compliance-review.md"
+      ]
+    },
+    "inputSchema": {
+      "outputPath": "string"
+    },
+    "actions": [
+      {
+        "id": "read_chunk_001",
+        "action": "readFile",
+        "input": {
+          "path": "vendors/chunks/compliance-chunk-001.csv"
+        },
+        "saveAs": "chunk001",
+        "next": "read_chunk_002"
+      },
+      {
+        "id": "read_chunk_002",
+        "action": "readFile",
+        "input": {
+          "path": "vendors/chunks/compliance-chunk-002.csv"
+        },
+        "saveAs": "chunk002",
+        "next": "read_chunk_003"
+      },
+      {
+        "id": "read_chunk_003",
+        "action": "readFile",
+        "input": {
+          "path": "vendors/chunks/compliance-chunk-003.csv"
+        },
+        "saveAs": "chunk003",
+        "next": "read_chunk_004"
+      },
+      {
+        "id": "read_chunk_004",
+        "action": "readFile",
+        "input": {
+          "path": "vendors/chunks/compliance-chunk-004.csv"
+        },
+        "saveAs": "chunk004",
+        "next": "aggregate"
+      },
+      {
+        "id": "aggregate",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
+          "input": {
+            "chunks": {
+              "chunk001": "{{chunk001.content}}",
+              "chunk002": "{{chunk002.content}}",
+              "chunk003": "{{chunk003.content}}",
+              "chunk004": "{{chunk004.content}}"
+            }
+          },
+          "outputSchema": {
+            "decisionRegisterCsv": "string",
+            "complianceReviewMd": "string"
+          }
+        },
+        "saveAs": "aggregateOutput",
+        "next": "write_register"
+      },
+      {
+        "id": "write_register",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.outputPath}}/vendor-decision-register.csv",
+          "content": "{{aggregateOutput.decisionRegisterCsv}}"
+        },
+        "next": "write_review"
+      },
+      {
+        "id": "write_review",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.outputPath}}/compliance-review.md",
+          "content": "{{aggregateOutput.complianceReviewMd}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "decisionRegisterPath": "{{workflow.input.outputPath}}/vendor-decision-register.csv",
+            "complianceReviewPath": "{{workflow.input.outputPath}}/compliance-review.md"
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "register-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.outputPath}}/vendor-decision-register.csv"
+      },
+      {
+        "id": "review-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.outputPath}}/compliance-review.md"
+      }
+    ],
+    "createdAt": "2026-06-11T01:30:04.306Z",
+    "updatedAt": "2026-06-11T01:30:04.306Z"
+  },
+  {
+    "id": "shared-drive-cleanup",
+    "name": "Shared Drive Cleanup",
+    "version": "1",
+    "description": "Cleans a bounded shared-drive fixture using attached workflow policy and writes audit artifacts.",
+    "enabled": true,
+    "policy": {
+      "id": "shared-drive-cleanup-policy",
+      "version": "1",
+      "text": "Decision rules:\n- Preserve active files and files with active references in their original paths.\n- Move stale files to shared-drive/archive/. A stale file has Status: stale or no active reference with an old retired/closed planning date.\n- For duplicate groups, keep the file marked Canonical File: yes in place. Move only the non-canonical duplicate copy to shared-drive/duplicates/.\n- Normalize files whose Naming Status says they need kebab-case normalization by moving them to shared-drive/normalized/ with the normalized filename stated by the task evidence.\n- Leave ordinary current files with Naming Status: ok in place.\n- Do not delete files. Do not overwrite files. Do not move active files.\n\nRequired cleanup-log.csv columns exactly: original_path,action,new_path,reason.\nUse only these cleanup log action values exactly: move_to_archive, move_duplicate, normalize_name.\nReason values must be short and must not contain commas.\nWrite one cleanup-log.csv row for each moved file only.\nThe migration report must summarize preserved, archived, duplicate, normalized, and no-action files in at least 200 characters."
+    },
+    "taskPromptTemplate": "Inspect every provided shared-drive source file using workflow.policy.text.\nReturn exact move paths for only the files that policy requires moving.\nUse exact Source Path values from each file as original paths. Do not remove the incoming/ path segment.\nUse exact required target paths from workflow input as new paths.\nDo not invent files. Do not move active files. Do not include policy artifacts in the workspace.\nProduce cleanup-log.csv with exact columns: original_path,action,new_path,reason\nUse action values exactly: move_to_archive, move_duplicate, normalize_name\nReasons must not contain commas.",
+    "verifierContract": {
+      "id": "shared-drive-cleanup-verifier",
+      "version": "1",
+      "fixture": "shared-drive",
+      "expectedArtifacts": [
+        "shared-drive/migration-report.md",
+        "shared-drive/cleanup-log.csv"
+      ]
+    },
+    "inputSchema": {
+      "basePath": "string"
+    },
+    "actions": [
+      {
+        "id": "read_001",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/active-roadmap.md"
+        },
+        "saveAs": "file001",
+        "next": "read_002"
+      },
+      {
+        "id": "read_002",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/active-support-runbook.md"
+        },
+        "saveAs": "file002",
+        "next": "read_003"
+      },
+      {
+        "id": "read_003",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/2024-01-15-retired-launch-plan.md"
+        },
+        "saveAs": "file003",
+        "next": "read_004"
+      },
+      {
+        "id": "read_004",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/2024-03-02-old-budget-notes.md"
+        },
+        "saveAs": "file004",
+        "next": "read_005"
+      },
+      {
+        "id": "read_005",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-review.md"
+        },
+        "saveAs": "file005",
+        "next": "read_006"
+      },
+      {
+        "id": "read_006",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/vendor-review-copy.md"
+        },
+        "saveAs": "file006",
+        "next": "read_007"
+      },
+      {
+        "id": "read_007",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/Team_Status_FINAL.md"
+        },
+        "saveAs": "file007",
+        "next": "read_008"
+      },
+      {
+        "id": "read_008",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/incoming/reference-checklist.md"
+        },
+        "saveAs": "file008",
+        "next": "plan_cleanup"
+      },
+      {
+        "id": "plan_cleanup",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nPolicy:\n{{workflow.policy.text}}",
+          "input": {
+            "files": {
+              "active-roadmap.md": "{{file001.content}}",
+              "active-support-runbook.md": "{{file002.content}}",
+              "2024-01-15-retired-launch-plan.md": "{{file003.content}}",
+              "2024-03-02-old-budget-notes.md": "{{file004.content}}",
+              "vendor-review.md": "{{file005.content}}",
+              "vendor-review-copy.md": "{{file006.content}}",
+              "Team_Status_FINAL.md": "{{file007.content}}",
+              "reference-checklist.md": "{{file008.content}}"
+            },
+            "requiredMoves": {
+              "archive1": {
+                "originalPath": "{{workflow.input.basePath}}/incoming/2024-01-15-retired-launch-plan.md",
+                "newPath": "{{workflow.input.basePath}}/archive/2024-01-15-retired-launch-plan.md"
+              },
+              "archive2": {
+                "originalPath": "{{workflow.input.basePath}}/incoming/2024-03-02-old-budget-notes.md",
+                "newPath": "{{workflow.input.basePath}}/archive/2024-03-02-old-budget-notes.md"
+              },
+              "duplicate": {
+                "originalPath": "{{workflow.input.basePath}}/incoming/vendor-review-copy.md",
+                "newPath": "{{workflow.input.basePath}}/duplicates/vendor-review-copy.md"
+              },
+              "normalized": {
+                "originalPath": "{{workflow.input.basePath}}/incoming/Team_Status_FINAL.md",
+                "newPath": "{{workflow.input.basePath}}/normalized/team-status.md"
+              }
+            }
+          },
+          "outputSchema": {
+            "archive1OriginalPath": "string",
+            "archive1NewPath": "string",
+            "archive2OriginalPath": "string",
+            "archive2NewPath": "string",
+            "duplicateOriginalPath": "string",
+            "duplicateNewPath": "string",
+            "normalizeOriginalPath": "string",
+            "normalizeNewPath": "string",
+            "cleanupLogCsv": "string",
+            "migrationReportMd": "string"
+          }
+        },
+        "saveAs": "cleanup",
+        "next": "create_archive"
+      },
+      {
+        "id": "create_archive",
+        "action": "createFolder",
+        "input": {
+          "path": "{{workflow.input.basePath}}/archive"
+        },
+        "next": "create_duplicates"
+      },
+      {
+        "id": "create_duplicates",
+        "action": "createFolder",
+        "input": {
+          "path": "{{workflow.input.basePath}}/duplicates"
+        },
+        "next": "create_normalized"
+      },
+      {
+        "id": "create_normalized",
+        "action": "createFolder",
+        "input": {
+          "path": "{{workflow.input.basePath}}/normalized"
+        },
+        "next": "move_archive_1"
+      },
+      {
+        "id": "move_archive_1",
+        "action": "renamePath",
+        "input": {
+          "path": "{{cleanup.archive1OriginalPath}}",
+          "nextPath": "{{cleanup.archive1NewPath}}"
+        },
+        "next": "move_archive_2"
+      },
+      {
+        "id": "move_archive_2",
+        "action": "renamePath",
+        "input": {
+          "path": "{{cleanup.archive2OriginalPath}}",
+          "nextPath": "{{cleanup.archive2NewPath}}"
+        },
+        "next": "move_duplicate"
+      },
+      {
+        "id": "move_duplicate",
+        "action": "renamePath",
+        "input": {
+          "path": "{{cleanup.duplicateOriginalPath}}",
+          "nextPath": "{{cleanup.duplicateNewPath}}"
+        },
+        "next": "move_normalized"
+      },
+      {
+        "id": "move_normalized",
+        "action": "renamePath",
+        "input": {
+          "path": "{{cleanup.normalizeOriginalPath}}",
+          "nextPath": "{{cleanup.normalizeNewPath}}"
+        },
+        "next": "write_log"
+      },
+      {
+        "id": "write_log",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/cleanup-log.csv",
+          "content": "{{cleanup.cleanupLogCsv}}"
+        },
+        "next": "write_report"
+      },
+      {
+        "id": "write_report",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/migration-report.md",
+          "content": "{{cleanup.migrationReportMd}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "cleanupLogPath": "{{workflow.input.basePath}}/cleanup-log.csv",
+            "migrationReportPath": "{{workflow.input.basePath}}/migration-report.md"
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "cleanup-log-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/cleanup-log.csv"
+      },
+      {
+        "id": "migration-report-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/migration-report.md"
+      }
+    ],
+    "createdAt": "2026-06-11T01:30:04.307Z",
+    "updatedAt": "2026-06-11T01:30:04.307Z"
+  },
+  {
+    "id": "failure-classification",
+    "name": "Failure Classification",
+    "version": "1",
+    "description": "Classifies a failure dossier into S1-S5 using the frozen discriminator procedure.",
+    "enabled": true,
+    "policy": {
+      "id": "failure-classification-procedure",
+      "version": "1",
+      "text": "Classification procedure (apply rules in order; stop at the first that fires):\nR0. If the verifier output in the dossier is a typed runtime error code (RUN_LIMIT_*, WORKSPACE_*, AGENT_*, MODEL_MALFORMED_JSON, RUN_RESUME_UNSAFE, MUTATION_CONFLICT) -> classification S5, remediation \"runtime/config\", confidence High.\nR1. If the dossier shows repeated runs on the same input producing DIFFERENT dispositions AND each divergent disposition's stated reason cites a DIFFERENT existing rule from the policy text (each chain valid on its own) -> S2, remediation \"add one precedence/scoping line to the policy\", confidence High if >=10 runs else Medium. If runs disagree but the divergent outputs cite no covering policy rule (generic/default reasoning), treat as S1 suspect and continue to R2.\nR2. Derivability audit using ONLY the policy text in the dossier and the case input:\n   (a) Determine every disposition the policy text entails for this case.\n   (b) Is the EXPECTED output entailed? (c) Is the OBSERVED output entailed?\n   - If the expected output is NOT entailed (no rule chain produces it, or its required value/token/tuple does not exist in the policy vocabulary) and the observed output IS entailed -> the spec is missing the rule: S1, remediation \"add the missing rule (human supplies intent)\", confidence High; name the missing mapping in the signal. Exception: if the observed output is entailed AND the dossier shows the expected output comes only from the verifier manifest with no business-intent support, flag S4 instead with remediation \"adjudicate and fix the verifier/manifest\".\n   - If two or more conflicting dispositions are entailed -> S2 as in R1.\n   - If the expected output is uniquely entailed -> S3 candidate; continue to R3.\nR3. If the dossier contains spec-clarification arm results (semantically neutral clarification, repeated runs): clarification collapses the failure -> S1 or S2 per which edit fixed it, confidence High. Clarification does NOT collapse the failure -> continue to R4. If no arm results present, output classification NEEDS_ARMS with needsDiscriminatorArms true and an armSpec describing the required runs.\nR4. If the dossier contains cross-model arm results (original policy, strongest model): strong model correct where the configured model fails -> S3, remediation \"model selection for this case class\", confidence High. Strong model reproduces the observed output -> the output is spec-compliant; go to R5.\nR5. If the observed output is defensible under the policy and the verifier/manifest rejects it -> S4, remediation \"fix verifier/manifest\", confidence Medium until human adjudication. Otherwise classification ESCALATE.\nOutput exactly one classification."
+    },
+    "taskPromptTemplate": "Apply workflow.policy.text to the provided failure dossier and produce a single classification.\nReturn in classificationJson a JSON string with keys: classification (S1|S2|S3|S4|S5|NEEDS_ARMS|ESCALATE), confidence (High|Medium|Low), signal (one sentence: which rule fired and why), remediation (string), needsDiscriminatorArms (boolean), armSpec (string).",
+    "inputSchema": {
+      "basePath": "string"
+    },
+    "actions": [
+      {
+        "id": "read_dossier",
+        "action": "readFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/dossier.md"
+        },
+        "saveAs": "dossier",
+        "next": "classify"
+      },
+      {
+        "id": "classify",
+        "action": "agentStructuredOutput",
+        "input": {
+          "instruction": "{{workflow.taskPromptTemplate}}\n\nProcedure:\n{{workflow.policy.text}}",
+          "input": {
+            "dossier": "{{dossier.content}}"
+          },
+          "outputSchema": {
+            "classificationJson": "string"
+          }
+        },
+        "saveAs": "verdict",
+        "next": "write_classification"
+      },
+      {
+        "id": "write_classification",
+        "action": "writeFile",
+        "input": {
+          "path": "{{workflow.input.basePath}}/classification.json",
+          "content": "{{verdict.classificationJson}}"
+        },
+        "next": "done"
+      },
+      {
+        "id": "done",
+        "action": "stop",
+        "input": {
+          "result": {
+            "classificationPath": "{{workflow.input.basePath}}/classification.json"
+          }
+        }
+      }
+    ],
+    "postconditions": [
+      {
+        "id": "classification-exists",
+        "type": "fileExists",
+        "path": "{{workflow.input.basePath}}/classification.json"
+      }
+    ],
+    "createdAt": "2026-06-11T13:13:31.167Z",
+    "updatedAt": "2026-06-11T13:13:31.167Z"
   }
 ]
