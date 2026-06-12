@@ -2,8 +2,8 @@
   {
     "id": 1,
     "username": "admin",
-    "passwordHash": "$argon2id$v=19$m=65536,t=3,p=4$SeE86x2lbtBr1rW+vBvyYw$Vk7owQNnteofOEq3nnd1/M0nTvxpyl2wERBgJLK0zGc",
-    "createdAt": "2026-05-18T23:28:41.710Z",
+    "passwordHash": "$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g",
+    "createdAt": "2026-06-08T00:25:00.004Z",
     "type": "user"
   }
 ]

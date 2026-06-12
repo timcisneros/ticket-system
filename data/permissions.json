@@ -1,18 +1,1 @@
-[
-  "ticket:create",
-  "ticket:read",
-  "ticket:update",
-  "ticket:delete",
-  "user:create",
-  "user:read",
-  "user:update",
-  "user:delete",
-  "group:create",
-  "group:read",
-  "group:update",
-  "group:delete",
-  "permission:assign",
-  "workspace:read",
-  "workspace:write",
-  "workspace:reset"
-]
+["ticket:create","ticket:read","ticket:update"]
