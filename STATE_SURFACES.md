@@ -4,6 +4,7 @@
 > These surfaces describe what operators repeatedly reconstruct manually.
 > The environment should hold truthful operational state.
 > The model remains a transient reasoning/runtime process.
+> Implemented surfaces are documented in `docs/OPERATIONAL_TELEMETRY.md`; surfaces defined here without a telemetry counterpart remain unimplemented.
 
 ---
 

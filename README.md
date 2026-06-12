@@ -7,7 +7,7 @@
 - `AGENTS.md` — operational guide: commands, verification workflow, evidence locations, boundaries
 - Root operations canon: `OPERATIONS.md`, `OPERATOR_CONTRACT.md`, `OPERATIONAL_PRESSURES.md`, `DIRECTION.md`, `STRATEGY.md`, `STATE_SURFACES.md`
 - `docs/` — system semantics and contracts, e.g. `ARCHITECTURE_INVARIANTS.md`, `EXECUTION_MODEL.md`, `EXECUTION_PHASES.md`, `EXECUTION_SEMANTICS.md`, `BOUNDED_OPERATION_BATCHES.md`, `LIFECYCLE_EVENTS.md`, `WORKLOAD_PROFILES.md`, `OPERATIONAL_TELEMETRY.md`, `FAILURE_TAXONOMY.md`, `FAILURE_CLASSIFICATION_WORKFLOW.md`, `DECISION_LOG.md`, `KNOWN_LIMITATIONS.md`, `BUSINESS_FIXTURE_SPEC.md`, `PRODUCT_SYNTHESIS.md`
-- Root evidence corpus (active research, 2026-06): `evidence-ledger.md`, `evidence-consolidation.md`, `failure-cluster-report.md`, `anchored-summary.md`, `terminal-classification.md`, `evidence-memo.md`, `evidence-reconciliation-validation.md`
+- Root evidence corpus (active research, 2026-06): `evidence-ledger.md`, `evidence-consolidation.md`, `failure-cluster-report.md`, `anchored-summary.md`, `evidence-memo.md`, `evidence-reconciliation-validation.md`
 
 **Archived docs**: closed investigations, superseded plans, generated validation
 reports, and early exploratory documents live in `docs/archive/` (see its README

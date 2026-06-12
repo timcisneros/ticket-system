@@ -5,6 +5,8 @@ the ticket-system harness. It is not architecture documentation. It is not a
 specification. It is a set of learned practices for operating a bounded,
 runtime-enforced execution system.
 
+> Companion: `docs/OPERATOR_WORKFLOW.md` is the step-by-step operator loop procedure; this document is the heuristics and learned practices behind it.
+
 ---
 
 ## Ground Truth: What the Substrate Guarantees

@@ -46,7 +46,7 @@ Replay `workflowInvocation` recorded:
 - `docs/decision-memo-same-run-conflict-scope.md`
 - `docs/decision-record-truthfulness-over-boundedness.md`
 - `docs/evidence-boundary-same-run-conflict-scope.md`
-- `terminal-classification.md`
+- `docs/archive/terminal-classification.md`
 
 ## Next Recommended Tranche
 

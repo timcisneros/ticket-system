@@ -4,6 +4,8 @@
 
 This document describes the operator loop for managing tickets through the system. A human operator creates tickets, observes run progress, inspects failures, decides on remediation, and confirms outcomes.
 
+> Companion: root `OPERATIONS.md` holds the sizing heuristics, ticket-quality guidance, and learned practices behind this procedure.
+
 ## Operator Loop
 
 ### 1. Create a Ticket

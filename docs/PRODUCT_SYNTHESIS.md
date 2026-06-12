@@ -94,6 +94,8 @@ The layer exists. It is hardcoded, invisible, execution-mode-dependent, and inco
 
 ## 5. Abstractions That Remain Unproven
 
+> The detailed uncertainty register is `docs/REMAINING_PRODUCT_UNCERTAINTIES.md`; this section summarizes. That document is the authority on what remains unproven.
+
 ### User-authored Reusable Work Definitions
 **What is unproven:** Whether users would create, reuse, and benefit from configurable work definitions (playbooks) rather than writing one-off objectives.
 

@@ -1,5 +1,7 @@
 # Remaining Product Uncertainties
 
+> Detailed uncertainty register for the work-primitive investigation synthesized in `docs/PRODUCT_SYNTHESIS.md` (its §5 summarizes this document).
+
 ## Accepted Constraints
 
 - Ticket abstraction survived analysis.
