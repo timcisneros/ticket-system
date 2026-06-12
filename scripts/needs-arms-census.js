@@ -17,8 +17,12 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+require('dotenv').config(); // same resolution chain as server.js: explicit env > .env > repo defaults
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
 const WS = process.env.WORKSPACE_ROOT ? path.resolve(process.env.WORKSPACE_ROOT) : path.join(ROOT, 'workspace-root');
+console.error(`DATA_DIR=${DATA_DIR}`);
+console.error(`WORKSPACE_ROOT=${WS}`);
+console.error(`repo-store=${DATA_DIR === path.join(ROOT, 'data')}`);
 const REGISTER = path.join(WS, 'failure-classification', 'register.json');
 const OUT = path.join(WS, 'failure-classification', 'needs-arms-census.md');
 const PER_CASE_COST = 0.10;

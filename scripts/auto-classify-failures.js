@@ -22,10 +22,14 @@ const path = require('path');
 const http = require('http');
 
 const ROOT = path.resolve(__dirname, '..');
+require('dotenv').config(); // same resolution chain as server.js: explicit env > .env > repo defaults
 const PORT = process.env.PORT || 3000;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
 const WS = process.env.WORKSPACE_ROOT ? path.resolve(process.env.WORKSPACE_ROOT) : path.join(ROOT, 'workspace-root');
+console.log(`DATA_DIR=${DATA_DIR}`);
+console.log(`WORKSPACE_ROOT=${WS}`);
+console.log(`repo-store=${DATA_DIR === path.join(ROOT, 'data')}`);
 const FC_DIR = path.join(WS, 'failure-classification');
 const REGISTER = path.join(FC_DIR, 'register.json');
 const CHEAP_AGENT = '1';

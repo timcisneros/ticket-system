@@ -40,6 +40,10 @@ function isRepoDataDir() {
   return path.resolve(DATA_DIR) === path.resolve(REPO_DATA_DIR);
 }
 
+console.log(`DATA_DIR=${DATA_DIR}`);
+console.log(`WORKSPACE_ROOT=${WORKSPACE_ROOT}`);
+console.log(`repo-store=${isRepoDataDir()}`);
+
 function writeMissingFile(fileName, content) {
   const targetPath = path.join(DATA_DIR, fileName);
   if (fs.existsSync(targetPath)) return;
