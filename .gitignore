@@ -8,6 +8,7 @@ node_modules/
 data-backup-*/
 data/replay-snapshots/
 data/benchmark-artifacts/
+data/events.jsonl
 
 # Logs
 logs
