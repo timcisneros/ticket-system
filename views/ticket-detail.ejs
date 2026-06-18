@@ -172,6 +172,19 @@
       <dd id="ticket-live-outcome"><%= visibleRuntimeRun && visibleRuntimeRun.operationalOutcome ? visibleRuntimeRun.operationalOutcome : '-' %></dd>
     </div>
   </dl>
+  <% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
+    <div class="state-inconsistency-warning state-inconsistency-warning--inline" id="ticket-runtime-state-warning">
+      <strong>State Warning</strong>
+      <p><%= runStateInconsistency.message %></p>
+      <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %>
+        <ul>
+          <% runStateInconsistency.reasons.forEach(reason => { %>
+            <li><%= reason %></li>
+          <% }) %>
+        </ul>
+      <% } %>
+    </div>
+  <% } %>
   <%
     const detailIsOpen = ticket.status === 'open';
     const detailHasAssignment = Boolean(ticket.assignmentTargetId);

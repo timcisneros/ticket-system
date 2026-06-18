@@ -2689,6 +2689,74 @@ function getRunCurrentMessage(run, logsByRunId) {
   return null;
 }
 
+function detectRunStateInconsistency(run, {
+  logs = [],
+  events = null,
+  replaySnapshot = null,
+  recentEventSummary: suppliedEventSummary = null
+} = {}) {
+  if (!run || !['pending', 'running', 'in_progress'].includes(run.status)) return null;
+
+  const runLogs = Array.isArray(logs) ? logs.filter(log => log && log.runId === run.id) : [];
+  const runEvents = Array.isArray(events) ? events.filter(event => event && event.runId === run.id) : getRunEvents(run.id);
+  const snapshot = replaySnapshot || readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const eventSummary = suppliedEventSummary || recentEventSummary(run.id);
+  const providerRequestCount = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests.length : 0;
+  const modelResponseCount = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses.length : 0;
+  const replayWorkspaceCount = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations.length : 0;
+  const hasNoReplayExecution = providerRequestCount === 0 && modelResponseCount === 0;
+  const reasons = [];
+
+  const hasLegacyTerminalLog = runLogs.some(log =>
+    log.type === 'run:skip_terminal' ||
+    /Run already in terminal state \(legacy\)/i.test(String(log.message || ''))
+  );
+  const hasTerminalEvent = runEvents.some(event =>
+    ['run.completed', 'run.failed', 'run.interrupted', 'run.terminalized'].includes(event.type)
+  );
+  if (hasNoReplayExecution && (hasLegacyTerminalLog || hasTerminalEvent)) {
+    reasons.push('Terminal legacy event appears on a running run.');
+  }
+
+  const hasResumePriorEvents = runLogs.some(log => {
+    if (log.type !== 'run:resume_check') return false;
+    const message = String(log.message || '');
+    const match = message.match(/Resumable state detected:\s+(\d+)\s+prior events/i);
+    return match ? parseInt(match[1], 10) > 0 : /prior events/i.test(message);
+  });
+  if (hasNoReplayExecution && hasResumePriorEvents) {
+    reasons.push('Resume detected prior events before any provider request.');
+  }
+
+  if (eventSummary && eventSummary.latestWorkspaceMutation && replayWorkspaceCount === 0) {
+    reasons.push('Event-derived mutation exists but replay has no workspace operations.');
+  }
+
+  const runCreatedAtMs = Date.parse(run.createdAt || '');
+  if (!Number.isNaN(runCreatedAtMs)) {
+    const hasOlderRunEvidence = [...runEvents, ...runLogs].some(item => {
+      const timestamp = item.ts || item.timestamp;
+      const timestampMs = Date.parse(timestamp || '');
+      return !Number.isNaN(timestampMs) && timestampMs < runCreatedAtMs;
+    });
+    if (hasOlderRunEvidence && (hasLegacyTerminalLog || hasTerminalEvent || hasResumePriorEvents || (eventSummary && eventSummary.latestWorkspaceMutation))) {
+      reasons.push('Run evidence predates the current run creation time.');
+    }
+  }
+
+  if (!hasNoReplayExecution && replayWorkspaceCount > 0) {
+    return null;
+  }
+
+  const uniqueReasons = [...new Set(reasons)];
+  if (uniqueReasons.length === 0) return null;
+
+  return {
+    message: 'State inconsistency detected: this run may be reading stale historical event data. Inspect reset/run history before trusting this run.',
+    reasons: uniqueReasons
+  };
+}
+
 function enrichTicketForDisplay(ticket, context) {
   const target = ticket.assignmentTargetType === 'agent'
     ? context.agents.find(agent => agent.id === ticket.assignmentTargetId)
@@ -4676,6 +4744,8 @@ function serializeRunRuntimeState(run, logsByRunId = null) {
   const summary = recentEventSummary(run.id);
   const replaySummary = run.replaySummary || extractReplaySummary(readRunReplaySnapshot(run)) || null;
   const effectiveLogsByRunId = logsByRunId || groupBy(readLogs(), log => log.runId);
+  const runLogs = effectiveLogsByRunId.get(run.id) || [];
+  const replaySnapshot = readRunReplaySnapshot(run) || run.replaySnapshot || null;
 
   return {
     id: run.id,
@@ -4700,6 +4770,11 @@ function serializeRunRuntimeState(run, logsByRunId = null) {
     runEvaluation: run.runEvaluation || buildRunEvaluation(run),
     runConsequence: run.runConsequence || buildRunConsequence(run),
     currentMessage: getRunCurrentMessage(run, effectiveLogsByRunId),
+    stateInconsistency: detectRunStateInconsistency(run, {
+      logs: runLogs,
+      replaySnapshot,
+      recentEventSummary: summary
+    }),
     outcome: classifyRunOperationalOutcome(run),
     outcomeLabel: displayOperationalOutcome(classifyRunOperationalOutcome(run), countRunMutatingOperations(run.id)),
     createdAt: run.createdAt || null,
@@ -4764,6 +4839,12 @@ function serializeTicketRuntimeState(ticketId) {
   const visibleRun = currentRun || latestRun;
   const eventSummary = visibleRun ? recentEventSummary(visibleRun.id) : null;
   const outcome = latestRun ? classifyRunOperationalOutcome(latestRun) : null;
+  const runStateInconsistency = visibleRun
+    ? detectRunStateInconsistency(visibleRun, {
+      logs: logsByRunId.get(visibleRun.id) || [],
+      recentEventSummary: eventSummary
+    })
+    : null;
 
   return {
     ticket,
@@ -4772,6 +4853,7 @@ function serializeTicketRuntimeState(ticketId) {
     currentMessage: visibleRun ? getRunCurrentMessage(visibleRun, logsByRunId) : null,
     currentStep: eventSummary ? eventSummary.currentStep : null,
     leaseState: visibleRun ? serializeRunLease(visibleRun) : null,
+    runStateInconsistency,
     outcome,
     outcomeLabel: latestRun ? displayOperationalOutcome(outcome, countRunMutatingOperations(latestRun.id)) : null
   };
@@ -12427,6 +12509,19 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   const ticketRuns = getTicketRuns(ticketId, history);
   const agents = readAgents();
   const operationHistory = getOperationHistoryForTicket(ticketId, history);
+  const activeRuntimeRun = ticketRuns
+    .filter(run => ['pending', 'running'].includes(run.status))
+    .sort((a, b) => new Date(b.updatedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.startedAt || a.createdAt || 0))[0] || null;
+  const latestRuntimeRun = ticketRuns
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0))[0] || null;
+  const visibleRuntimeRun = activeRuntimeRun || latestRuntimeRun;
+  const runStateInconsistency = visibleRuntimeRun
+    ? detectRunStateInconsistency(visibleRuntimeRun, {
+      logs: readLogs().filter(log => log.runId === visibleRuntimeRun.id),
+      replaySnapshot: readRunReplaySnapshot(visibleRuntimeRun) || visibleRuntimeRun.replaySnapshot || null
+    })
+    : null;
 
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
@@ -12437,6 +12532,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     artifacts: buildTicketArtifacts(operationHistory, readWorkflows(), ticketRuns),
     recentLogs: getRecentLogsForTicket(ticketId),
     operationHistory: enrichOperationHistoryForDisplay(operationHistory),
+    runStateInconsistency,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
 });
@@ -13022,6 +13118,12 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const operationalOutcome = classifyRunOperationalOutcome(run);
   const runEvents = getRunEvents(runId);
   const eventSummary = recentEventSummary(runId);
+  const runStateInconsistency = detectRunStateInconsistency(run, {
+    logs: readLogs().filter(log => log.runId === runId),
+    events: runEvents,
+    replaySnapshot: snapshot,
+    recentEventSummary: eventSummary
+  });
 
   return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
@@ -13045,6 +13147,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     runStatusLabel: displayRunStatus(run.status),
     runEvents,
     eventSummary,
+    runStateInconsistency,
     formatDurationHuman,
     canUpdateRuns: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));

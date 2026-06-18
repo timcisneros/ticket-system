@@ -32,6 +32,20 @@
 </section>
 <% } %>
 
+<% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
+<section class="detail-section state-inconsistency-warning">
+  <h2>State Warning</h2>
+  <p><%= runStateInconsistency.message %></p>
+  <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %>
+    <ul>
+      <% runStateInconsistency.reasons.forEach(reason => { %>
+        <li><%= reason %></li>
+      <% }) %>
+    </ul>
+  <% } %>
+</section>
+<% } %>
+
 <% if (typeof failureSummary !== 'undefined' && failureSummary) { %>
 <section class="detail-section failure-summary">
   <h2>Failure Summary</h2>

@@ -307,6 +307,28 @@ code {
   font-size: 0.9rem;
 }
 
+.state-inconsistency-warning {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fcd34d;
+}
+
+.state-inconsistency-warning p {
+  margin: 0 0 10px;
+}
+
+.state-inconsistency-warning ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.state-inconsistency-warning--inline {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+}
+
 .help-text a {
   color: #111827;
   text-decoration: underline;
