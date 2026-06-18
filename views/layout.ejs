@@ -32,12 +32,39 @@
             <li><a href="/admin/actions">Actions</a></li>
           <% } %>
           <li><a href="/logout">Logout</a></li>
+          <% if (userPermissions.includes('ticket:read')) { %>
+            <li><span id="scheduler-indicator" class="scheduler-indicator" hidden></span></li>
+          <% } %>
         <% } else { %>
           <li><a href="/login">Login</a></li>
         <% } %>
       </ul>
     </div>
   </nav>
+  <% if (typeof user !== 'undefined' && user && userPermissions.includes('ticket:read')) { %>
+  <script>
+  (() => {
+    const indicator = document.getElementById('scheduler-indicator');
+    if (!indicator) return;
+    async function refreshSchedulerStatus() {
+      try {
+        const response = await fetch('/api/runtime/status', { headers: { Accept: 'application/json' } });
+        if (!response.ok) { indicator.hidden = true; return; }
+        const data = await response.json();
+        const running = Boolean(data.scheduler && data.scheduler.running);
+        document.body.dataset.schedulerRunning = running ? 'true' : 'false';
+        indicator.hidden = false;
+        indicator.textContent = running ? 'Scheduler running' : 'Scheduler stopped';
+        indicator.classList.toggle('scheduler-indicator--stopped', !running);
+      } catch (error) {
+        indicator.hidden = true;
+      }
+    }
+    refreshSchedulerStatus();
+    setInterval(refreshSchedulerStatus, 5000);
+  })();
+  </script>
+  <% } %>
 
   <main class="container">
     <%- body %>

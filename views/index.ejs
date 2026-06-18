@@ -86,7 +86,8 @@
     <input type="hidden" name="ownedOutputPaths" id="ownedOutputPathsInput" value="">
   </div>
 
-  <button type="submit" class="btn-submit">Create Ticket</button>
+  <p class="form-hint" id="createRunHint">Creating a ticket with a worker selected starts a run immediately.</p>
+  <button type="submit" class="btn-submit" id="createTicketSubmit">Create Ticket</button>
 </form>
 
 <script>
@@ -106,6 +107,13 @@ const ownedOutputPathsInput = document.getElementById('ownedOutputPathsInput');
 const objectiveInput = document.getElementById('objective');
 const shapeObjectiveButton = document.getElementById('shapeObjectiveButton');
 const ticketShapePanel = document.getElementById('ticketShapePanel');
+const createTicketSubmit = document.getElementById('createTicketSubmit');
+
+function updateSubmitLabel() {
+  if (!createTicketSubmit) return;
+  const hasWorker = Boolean(targetTypeSelect.value) && Boolean(targetSelect.value);
+  createTicketSubmit.textContent = hasWorker ? 'Create & Run' : 'Create Ticket';
+}
 
 const agentGroupMembers = <%- JSON.stringify(typeof agentGroupMembers === 'undefined' ? {} : agentGroupMembers) %>;
 const initialAgents = <%- JSON.stringify((agents || []).map(agent => ({ id: agent.id, name: agent.name }))) %>;
@@ -179,6 +187,8 @@ function updateAssignmentTargets() {
   targetSelect.querySelector('option[value=""]').textContent = selectedType
     ? 'Select ' + (selectedType === 'agent' ? 'an agent' : 'an agent group')
     : 'Select a target type first';
+
+  updateSubmitLabel();
 }
 
 function selectSingleAvailableWorker() {
@@ -274,6 +284,7 @@ async function suggestBoundedObjective() {
   }
 }
 
+targetSelect.addEventListener('change', updateSubmitLabel);
 targetTypeSelect.addEventListener('change', updateAssignmentTargets);
 targetSelect.addEventListener('change', updateOwnedPaths);
 assignmentModeSelect.addEventListener('change', updateOwnedPaths);
@@ -301,4 +312,5 @@ document.querySelector('.ticket-form').addEventListener('submit', function() {
 updateAssignmentTargets();
 updateWorkflowControls();
 selectSingleAvailableWorker();
+updateSubmitLabel();
 </script>

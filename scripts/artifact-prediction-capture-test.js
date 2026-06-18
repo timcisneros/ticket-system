@@ -486,22 +486,22 @@ async function main() {
       'accuracy-perfect-' + STAMP + '-a.txt',
       'accuracy-perfect-' + STAMP + '-b.txt'
     ]);
-    await assertRunDetailContains(cookie, perfectFixture.runId, ['Objective Success:</strong> 100% · succeeded', '100% · 2/2 matched']);
+    await assertRunDetailContains(cookie, perfectFixture.runId, ['Run Completed:</strong> Yes', '100% · 2/2 matched']);
 
     const failedFixture = addAccuracyFixtureRun('failed-objective', [
       'accuracy-failed-' + STAMP + '-a.txt'
     ], [], { status: 'failed', error: 'Fixture failure' });
-    await assertRunDetailContains(cookie, failedFixture.runId, ['Objective Success:</strong> 0% · failed', '0% · 0/1 matched']);
+    await assertRunDetailContains(cookie, failedFixture.runId, ['Run Completed:</strong> No · failed', '0% · 0/1 matched']);
 
     const interruptedFixture = addAccuracyFixtureRun('interrupted-objective', [
       'accuracy-interrupted-' + STAMP + '-a.txt'
     ], [], { status: 'interrupted', error: 'Fixture interrupted' });
-    await assertRunDetailContains(cookie, interruptedFixture.runId, ['Objective Success:</strong> 0% · interrupted', '0% · 0/1 matched']);
+    await assertRunDetailContains(cookie, interruptedFixture.runId, ['Run Completed:</strong> No · interrupted', '0% · 0/1 matched']);
 
     const pendingFixture = addAccuracyFixtureRun('pending-objective', [
       'accuracy-pending-' + STAMP + '-a.txt'
     ], [], { status: 'running' });
-    await assertRunDetailContains(cookie, pendingFixture.runId, ['Objective Success:</strong> Not scored']);
+    await assertRunDetailContains(cookie, pendingFixture.runId, ['Run Completed:</strong> Not scored']);
 
     const partialFailedFixture = addAccuracyFixtureRun('partial-failed-objective', [
       'accuracy-partial-' + STAMP + '-source.txt',
@@ -509,7 +509,7 @@ async function main() {
     ], [
       'accuracy-partial-' + STAMP + '-source.txt'
     ], { status: 'failed', error: 'Fixture rename failed' });
-    await assertRunDetailContains(cookie, partialFailedFixture.runId, ['Objective Success:</strong> 0% · failed', '50% · 1/2 matched', 'missing']);
+    await assertRunDetailContains(cookie, partialFailedFixture.runId, ['Run Completed:</strong> No · failed', '50% · 1/2 matched', 'missing']);
 
     const partialPathCoverageFixture = addAccuracyFixtureRun('partial-path-coverage', [
       'coverage-source-' + STAMP + '.txt'

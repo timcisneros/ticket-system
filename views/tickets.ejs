@@ -1,5 +1,12 @@
 <h1>Tickets</h1>
 <% const viewPagination = typeof pagination === 'undefined' ? null : pagination; %>
+<%
+  function statusOptionLabel(status) {
+    if (status === 'open') return 'open — starts run';
+    if (status === 'closed') return 'closed — stops active runs';
+    return status;
+  }
+%>
 
 <section class="admin-block">
   <% if (viewPagination && viewPagination.total > 0) { %>
@@ -40,7 +47,7 @@
               <form class="status-form" data-ticket-id="<%= ticket.id %>">
                 <select name="status" class="status-select" aria-label="Ticket status">
                   <% ticketStatuses.forEach(status => { %>
-                    <option value="<%= status %>" <%= ticket.status === status ? 'selected' : '' %>><%= status %></option>
+                    <option value="<%= status %>" <%= ticket.status === status ? 'selected' : '' %>><%= statusOptionLabel(status) %></option>
                   <% }) %>
                 </select>
               </form>
@@ -54,6 +61,13 @@
         </div>
         <%
           const metadataItems = [];
+          const isOpenTicket = ticket.status === 'open';
+          const hasActiveRun = ticket.activeRunIds && ticket.activeRunIds.length > 0;
+          if (isOpenTicket && !ticket.assignmentTargetName) {
+            metadataItems.push('Unassigned — not started');
+          } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel) {
+            metadataItems.push('No runnable target — assignment cannot start');
+          }
           if (ticket.currentMessage || (!ticket.currentRunDisplayLabel && ticket.activeRunIds && ticket.activeRunIds.length > 0)) metadataItems.push(ticket.currentMessage || 'No current output');
           if (ticket.assignmentTargetName) metadataItems.push(ticket.assignmentTargetName);
           if (ticket.assignmentMode) metadataItems.push(ticket.assignmentMode === 'allocated' ? 'manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'automatic folder scopes' : ticket.assignmentMode);
@@ -81,8 +95,8 @@
         <% if (canUpdateTickets && ticket.status === 'open') { %>
           <div class="ticket-card__actions">
             <form class="assign-form" data-ticket-id="<%= ticket.id %>">
-              <select name="agentId" class="agent-assign-select" aria-label="Assign agent">
-                <option value="">Select agent</option>
+              <select name="agentId" class="agent-assign-select" aria-label="Assign and run agent">
+                <option value="">Assign &amp; run agent</option>
                 <% agents.forEach(agent => { %>
                   <option value="<%= agent.id %>" <%= ticket.assignmentTargetType === 'agent' && ticket.assignmentTargetId === agent.id ? 'selected' : '' %>><%= agent.name %></option>
                 <% }) %>
@@ -110,6 +124,12 @@ function renderEmptyRow() {
   el.className = 'text-muted ticket-cards__empty';
   el.textContent = 'No tickets yet.';
   ticketsBody.appendChild(el);
+}
+
+function statusOptionLabel(status) {
+  if (status === 'open') return 'open — starts run';
+  if (status === 'closed') return 'closed — stops active runs';
+  return status;
 }
 
 function ticketSignature(ticket) {
@@ -172,7 +192,7 @@ function createTicketCard(ticket) {
     ticketStatuses.forEach(status => {
       const option = document.createElement('option');
       option.value = status;
-      option.textContent = status;
+      option.textContent = statusOptionLabel(status);
       option.selected = ticket.status === status;
       select.appendChild(option);
     });
@@ -201,6 +221,14 @@ function createTicketCard(ticket) {
 
   // Meta
   const metadataItems = [];
+
+  const isOpenTicket = ticket.status === 'open';
+  const hasActiveRun = activeRunIds.length > 0;
+  if (isOpenTicket && !ticket.assignmentTargetName) {
+    metadataItems.push({ text: 'Unassigned — not started' });
+  } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel) {
+    metadataItems.push({ text: 'No runnable target — assignment cannot start' });
+  }
 
   if (ticket.currentRunDisplayLabel) {
     const detail = ticket.currentRunDisplayState && ticket.currentRunDisplayState.detail
@@ -276,11 +304,11 @@ function createTicketCard(ticket) {
     const select = document.createElement('select');
     select.name = 'agentId';
     select.className = 'agent-assign-select';
-    select.setAttribute('aria-label', 'Assign agent');
+    select.setAttribute('aria-label', 'Assign and run agent');
 
     const emptyOption = document.createElement('option');
     emptyOption.value = '';
-    emptyOption.textContent = 'Select agent';
+    emptyOption.textContent = 'Assign & run agent';
     select.appendChild(emptyOption);
 
     agents.forEach(agent => {
@@ -321,7 +349,9 @@ function refreshRunElapsedLabels() {
     if (state === 'waiting_on_local_model') {
       el.textContent = 'waiting on model response: waiting ' + elapsed + (limit ? ' of ' + limit : '');
     } else if (state === 'queued') {
-      el.textContent = 'queued: waiting ' + elapsed + ' to start';
+      el.textContent = document.body.dataset.schedulerRunning === 'false'
+        ? 'queued — scheduler stopped (waiting ' + elapsed + ', not starting)'
+        : 'queued: waiting ' + elapsed + ' to start';
     } else if (state === 'running_actions') {
       el.textContent = 'running actions: working for ' + elapsed;
     } else {

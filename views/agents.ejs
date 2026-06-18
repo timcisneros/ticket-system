@@ -4,7 +4,7 @@
 
 <section class="admin-block">
   <h2>Agent Quality Metrics</h2>
-  <p class="text-muted">A/S = Artifact Accuracy vs Objective Success · S/C = Objective Success vs Path Coverage · A/C = Artifact Accuracy vs Path Coverage</p>
+  <p class="text-muted">A/S = Artifact Accuracy vs Completion Rate · S/C = Completion Rate vs Path Coverage · A/C = Artifact Accuracy vs Path Coverage</p>
   <div class="agent-cards">
     <% if (agentMetrics.length === 0) { %>
       <div class="text-muted agent-cards__empty">No agents found.</div>
@@ -67,7 +67,7 @@
             <div class="agent-metric__value"><%= metricPercent(metric.quality && metric.quality.artifactAccuracyAvg) %></div>
           </div>
           <div class="agent-metric">
-            <div class="agent-metric__label">Objective Success</div>
+            <div class="agent-metric__label">Completion Rate</div>
             <div class="agent-metric__value"><%= metricPercent(metric.quality && metric.quality.objectiveSuccessRate) %></div>
           </div>
           <div class="agent-metric">
@@ -97,7 +97,7 @@
             <th>Model</th>
             <th>Runs</th>
             <th>Artifact Avg</th>
-            <th>Objective Success</th>
+            <th>Completion Rate</th>
             <th>Path Coverage</th>
             <th>Disagreements A/S</th>
             <th>Disagreements S/C</th>

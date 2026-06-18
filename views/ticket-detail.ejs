@@ -14,6 +14,75 @@
     <% } %>
   </div>
 </div>
+<% if (canUpdateTickets && ticket.status !== 'open') { %>
+  <p class="form-hint"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %> starts a new run from the beginning.</p>
+<% } %>
+
+<%
+  const ticketFeasibility = ticket.feasibility || null;
+  const ticketBlockedReason = ticket.blockedReason || (ticketFeasibility && ticketFeasibility.reason) || null;
+%>
+<% if (ticketBlockedReason || ticketFeasibility) { %>
+<section class="detail-section failure-summary">
+  <h2>Why this ticket is blocked</h2>
+  <% if (ticketBlockedReason) { %>
+    <p class="failure-reason"><%= ticketBlockedReason %></p>
+  <% } %>
+  <% if (ticketFeasibility) { %>
+    <dl class="detail-grid">
+      <div>
+        <dt>Required folders</dt>
+        <dd>
+          <% if (ticketFeasibility.requiredWritableRoots && ticketFeasibility.requiredWritableRoots.length > 0) { %>
+            <% ticketFeasibility.requiredWritableRoots.forEach(root => { %>
+              <code class="owned-path"><%= root %></code>
+            <% }) %>
+          <% } else { %>
+            -
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Granted folders</dt>
+        <dd>
+          <% if (ticketFeasibility.grantedWritableRoots && ticketFeasibility.grantedWritableRoots.length > 0) { %>
+            <% ticketFeasibility.grantedWritableRoots.forEach(root => { %>
+              <code class="owned-path"><%= root %></code>
+            <% }) %>
+          <% } else { %>
+            -
+          <% } %>
+        </dd>
+      </div>
+      <% if (ticketFeasibility.missingAuthorityGrants && ticketFeasibility.missingAuthorityGrants.length > 0) { %>
+        <div>
+          <dt>Missing grants</dt>
+          <dd>
+            <% ticketFeasibility.missingAuthorityGrants.forEach(root => { %>
+              <code class="owned-path"><%= root %></code>
+            <% }) %>
+          </dd>
+        </div>
+      <% } %>
+    </dl>
+    <details class="collapsible">
+      <summary>Technical details</summary>
+      <div class="collapsible__content">
+        <dl class="detail-grid">
+          <div>
+            <dt>Code</dt>
+            <dd><code><%= ticketFeasibility.code || '-' %></code></dd>
+          </div>
+          <div>
+            <dt>Kind</dt>
+            <dd><code><%= ticketFeasibility.kind || '-' %></code></dd>
+          </div>
+        </dl>
+      </div>
+    </details>
+  <% } %>
+</section>
+<% } %>
 
 <section class="detail-section">
   <details class="collapsible">
@@ -103,6 +172,19 @@
       <dd id="ticket-live-outcome"><%= visibleRuntimeRun && visibleRuntimeRun.operationalOutcome ? visibleRuntimeRun.operationalOutcome : '-' %></dd>
     </div>
   </dl>
+  <%
+    const detailIsOpen = ticket.status === 'open';
+    const detailHasAssignment = Boolean(ticket.assignmentTargetId);
+    let openStateNote = null;
+    if (detailIsOpen && !detailHasAssignment) {
+      openStateNote = 'Unassigned — not started.';
+    } else if (detailIsOpen && detailHasAssignment && ticketRuns.length === 0) {
+      openStateNote = 'No runnable target — assignment cannot start.';
+    }
+  %>
+  <% if (openStateNote) { %>
+    <p class="text-muted"><%= openStateNote %></p>
+  <% } %>
 </section>
 
 <% if (allocationPlan) { %>
