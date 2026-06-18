@@ -183,6 +183,12 @@ function releaseDataDirWriterLock() {
   dataDirWriterLock = null;
 }
 
+function refreshDataDirWriterLockForDebugReset() {
+  if (!dataDirWriterLock) return;
+  dataDirWriterLock = buildDataDirWriterLock();
+  writeDataDirWriterLock(dataDirWriterLock);
+}
+
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT === '1';
 const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
@@ -3793,6 +3799,29 @@ function writeRunReplaySnapshot(runId, snapshot) {
   attachReplayMetadata(run, sanitizedSnapshot);
   writeRuns(runs);
   return sanitizedSnapshot;
+}
+
+function clearReplaySnapshotFiles() {
+  fs.rmSync(REPLAY_SNAPSHOTS_DIR, { recursive: true, force: true });
+  fs.mkdirSync(REPLAY_SNAPSHOTS_DIR, { recursive: true });
+  dataVersion += 1;
+  pageRenderCache.clear();
+  pageRenderInFlight.clear();
+}
+
+async function resetDebugEventState() {
+  pendingEventBuffer = [];
+  runEventChains.clear();
+
+  eventAppendChain = eventAppendChain
+    .catch(() => {})
+    .then(() => {
+      pendingEventBuffer = [];
+      runEventChains.clear();
+      writeFileAtomic(EVENTS_FILE, '');
+    });
+
+  await eventAppendChain;
 }
 
 function normalizeRuns(runs) {
@@ -12061,12 +12090,15 @@ function applyWorkspaceFixture(fixtureId) {
   }
 }
 
-function resetDebugData(changedBy = 'system') {
+async function resetDebugData(changedBy = 'system') {
+  await resetDebugEventState();
   writeFileAtomic(DATA_FILE, '[]');
   writeFileAtomic(RUNS_FILE, '[]');
   writeFileAtomic(LOGS_FILE, '[]');
   writeFileAtomic(ALLOCATION_PLANS_FILE, '[]');
   writeFileAtomic(OPERATION_HISTORY_FILE, '[]');
+  clearReplaySnapshotFiles();
+  refreshDataDirWriterLockForDebugReset();
 
   clearWorkspaceRoot();
   runningRunKeys.clear();
@@ -13428,7 +13460,7 @@ fastify.post('/admin/debug-reset', { preHandler: fastify.requireAuth }, async (r
   }
 
   try {
-    resetDebugData(request.user ? request.user.username : String(request.session.userId));
+    await resetDebugData(request.user ? request.user.username : String(request.session.userId));
     return reply.redirect('/admin?resetSuccess=1');
   } catch (error) {
     return reply.redirect('/admin?resetError=' + encodeURIComponent(error.message || 'Reset failed'));
