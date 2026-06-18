@@ -3004,6 +3004,8 @@ function buildRunFailureSummary(run, snapshot, operationHistory, mutationCount, 
   const rootCause = (snapshot && snapshot.failureReason) || run.error || getErrorMessageFromSource(firstFailedOperation) || (code ? explainErrorCode(code) : 'Run ended without a structured failure reason.');
   const timedOut = code === 'RUN_LIMIT_EXCEEDED' && snapshotFailure && snapshotFailure.kind === 'timeout' || /runtime duration limit/i.test(rootCause);
   const finalBlockingReason = timedOut ? `timed out after ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}` : rootCause;
+  const limitType = snapshotFailure && snapshotFailure.detail ? snapshotFailure.detail.limitType : null;
+  const stepLimitWithMutations = code === 'RUN_LIMIT_EXCEEDED' && limitType === 'step' && (mutationCount || 0) > 0;
   const ticket = run && run.ticketId ? readTickets().find(item => item.id === run.ticketId) : null;
 
   return {
@@ -3023,7 +3025,10 @@ function buildRunFailureSummary(run, snapshot, operationHistory, mutationCount, 
     lastProposedActions: lastPlan && Array.isArray(lastPlan.actions)
       ? lastPlan.actions.map(describeWorkspaceAction).filter(Boolean)
       : [],
-    outputSatisfaction: buildOutputSatisfactionSummary(ticket)
+    outputSatisfaction: buildOutputSatisfactionSummary(ticket),
+    retryGuidance: stepLimitWithMutations
+      ? 'Run hit the step limit after successful workspace changes. Review mutations before retrying; a retry starts from the current workspace state.'
+      : null
   };
 }
 
@@ -10738,10 +10743,25 @@ function compactRuntimeEnvelopeForPrompt(runtimeEnvelope) {
   return compact;
 }
 
-function compactTicketContextForPrompt(ticketObjective, previousActionResults, priorFailureContext) {
+function compactTicketContextForPrompt(ticketObjective, previousActionResults, priorFailureContext, workspaceContext) {
   const compact = {
     ticketObjective
   };
+
+  // Anchoring context: clearly separate the workspace as-of run start, the live
+  // workspace, and the mutations this run already performed, so the model does
+  // not re-interpret a relative objective against its own outputs.
+  if (workspaceContext) {
+    if (workspaceContext.initialWorkspaceSnapshot !== undefined) {
+      compact.initialWorkspaceSnapshot = workspaceContext.initialWorkspaceSnapshot;
+    }
+    if (workspaceContext.currentWorkspaceSnapshot !== undefined) {
+      compact.currentWorkspaceSnapshot = workspaceContext.currentWorkspaceSnapshot;
+    }
+    if (workspaceContext.mutationsByThisRun !== undefined) {
+      compact.mutationsByThisRun = workspaceContext.mutationsByThisRun;
+    }
+  }
 
   if (Array.isArray(previousActionResults) && previousActionResults.length > 0) {
     compact.previousActionResults = previousActionResults;
@@ -10753,7 +10773,26 @@ function compactTicketContextForPrompt(ticketObjective, previousActionResults, p
   return compact;
 }
 
-function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null) {
+const RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES = 200;
+
+// Bounded, display-only listing of the run's root workspace. Used to give the
+// model an initial (run-start) and current snapshot without spending a
+// listDirectory action. Captures only the root level to stay small.
+function captureRunWorkspaceRootSnapshot(run) {
+  try {
+    const listing = getRunWorkspaceProvider(run).list('');
+    const allEntries = Array.isArray(listing.entries) ? listing.entries : [];
+    return {
+      path: '',
+      entries: allEntries.slice(0, RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES).map(entry => ({ name: entry.name, type: entry.type })),
+      truncated: allEntries.length > RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES
+    };
+  } catch (error) {
+    return { path: '', entries: [], error: error.code || 'list_failed' };
+  }
+}
+
+function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null, workspaceContext = null) {
   const baseAllowedOps = runtimeEnvelope.allowedOperations || AGENT_DIRECT_OPERATIONS;
   const currentPhase = runtimeEnvelope.currentPhase || 'planning';
   const phaseGatedOps = buildPhaseGatedCatalog(currentPhase, baseAllowedOps);
@@ -10815,7 +10854,9 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'You are an agent working inside a contained workspace.',
         'You may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.',
         'Use runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.',
-        'Inspect workspace contents by requesting list or read actions. No prior logs, history, or workspace tree is included.',
+        'The ticket context may include initialWorkspaceSnapshot (the root workspace at the start of this run), currentWorkspaceSnapshot (the live root workspace now), and mutationsByThisRun (the changes you have already made). You may still request list or read actions for deeper or nested details. No prior logs or run history are included.',
+        'When a user objective refers to the current or existing workspace, interpret that relative to the workspace state at the start of the run (initialWorkspaceSnapshot). Do not treat files or folders created by this run (mutationsByThisRun) as pre-existing inputs for reinterpreting the same objective, unless the user explicitly asks you to continue from your own newly-created outputs.',
+        'When the requested target state is achieved, return complete: true. Do not continue creating additional files or folders merely because the live workspace has changed from your own actions.',
         'If the ticket requires creating or changing files, request the necessary workspace actions.',
         'Do not say you will do work later. Do not describe future work instead of performing it.',
         'If the task cannot be completed, explain the failure reason clearly in the message.',
@@ -10856,7 +10897,8 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         actionResults,
         actionResults.length === 0 && rerunMode === 'reassess'
           ? buildPriorFailureContext(ticket.id, runtimeEnvelope.runId)
-          : null
+          : null,
+        workspaceContext
       ))
     }
   ];
@@ -10976,6 +11018,10 @@ async function runAgentTicket(runId) {
     let resumedFromPersistedState = false;
     const limits = getAgentRuntimeLimits(ticket.objective);
     const runStartedAtMs = Date.now();
+    // Captured once at run start and never updated, so it does not absorb
+    // folders/files this run creates. Anchors relative objectives.
+    const initialWorkspaceSnapshot = captureRunWorkspaceRootSnapshot(run);
+    const mutationsByThisRun = [];
 
     // ── Resumable execution check ─────────────────────────────────
     const beforeEvents = readEvents();
@@ -11050,7 +11096,12 @@ async function runAgentTicket(runId) {
       }
 
       const currentEnvelope = buildRuntimeEnvelope(run, step, ticket.objective);
-      const input = buildAgentPrompt(ticket, currentEnvelope, actionResults, run.rerunMode);
+      const workspaceContext = {
+        initialWorkspaceSnapshot,
+        currentWorkspaceSnapshot: captureRunWorkspaceRootSnapshot(run),
+        mutationsByThisRun
+      };
+      const input = buildAgentPrompt(ticket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
       appendRunLog(run, 'model:request', `${providerConfig.provider} request sent with model ${providerConfig.model}`);
       modelRequestCount += 1;
       currentProviderRequestPersisted = false;
@@ -11395,6 +11446,17 @@ async function runAgentTicket(runId) {
           const opDurationMs = Date.now() - actionStartedAt;
           const isResumeSkipped = result && result.skipped === true;
           if (!isResumeSkipped && (AGENT_ALLOWED_OPERATIONS.includes(operation.operation) || operation.operation === 'createHandoffTask')) workspaceOperationCount += 1;
+
+          // Track mutations performed by this run so later steps can tell their
+          // own outputs apart from pre-existing inputs.
+          if (!isResumeSkipped && AGENT_MUTATING_OPERATIONS.includes(operation.operation)) {
+            mutationsByThisRun.push({
+              operation: operation.operation,
+              path: operation.args && operation.args.path,
+              ...(operation.args && operation.args.nextPath ? { nextPath: operation.args.nextPath } : {}),
+              status: result && result.status ? result.status : 'ok'
+            });
+          }
 
           actionResults.push({ action, result });
           // INVARIANT: Success replay entry shape must remain structurally

@@ -35,6 +35,9 @@
 <% if (typeof failureSummary !== 'undefined' && failureSummary) { %>
 <section class="detail-section failure-summary">
   <h2>Failure Summary</h2>
+  <% if (failureSummary.retryGuidance) { %>
+    <p class="failure-reason"><%= failureSummary.retryGuidance %></p>
+  <% } %>
   <dl class="detail-grid">
     <div>
       <dt>Run Ended As</dt>
