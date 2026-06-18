@@ -6346,6 +6346,56 @@ function cleanObjectiveContent(value) {
     .trim();
 }
 
+function parseSimpleFolderListObjective(text, command) {
+  const match = String(text || '').match(new RegExp(`^\\s*${command}\\s+folders?\\s+(.+?)\\s*[.!?]?\\s*$`, 'i'));
+  if (!match) return null;
+
+  let listText = match[1].trim();
+  if (!listText) return null;
+
+  if (command === 'ensure') {
+    listText = listText.replace(/\s+exists?\s*$/i, '').trim();
+  }
+
+  if (!listText) return null;
+
+  // Keep this shortcut intentionally narrow. Phrases with prose connectors or
+  // additional work should continue through the model instead of auto-completing.
+  if (/\b(?:for|named|called|with|inside|containing|write|file|note|summary|report|then|after|before|into|under)\b/i.test(listText)) {
+    return null;
+  }
+
+  const normalized = listText
+    .replace(/\s*,\s*/g, ' ')
+    .replace(/\s+and\s+/gi, ' ')
+    .trim();
+
+  if (!normalized || /[^A-Za-z0-9._/\-\s]/.test(normalized)) return null;
+
+  const paths = normalized
+    .split(/\s+/)
+    .map(cleanObjectivePath)
+    .filter(Boolean);
+
+  if (paths.length === 0) return null;
+  if (paths.some(folderPath => !/^[A-Za-z0-9._/-]+$/.test(folderPath))) return null;
+
+  return Array.from(new Set(paths));
+}
+
+function addFolderPostconditionChecks(checks, folderPaths) {
+  folderPaths.forEach(folderPath => {
+    checks.push({
+      type: 'folder',
+      path: folderPath,
+      satisfied: () => {
+        const info = workspaceProvider.getPathInfo(folderPath);
+        return info.exists && info.type === 'directory';
+      }
+    });
+  });
+}
+
 function readWorkspaceFileIfExists(relativePath) {
   const info = workspaceProvider.getPathInfo(relativePath);
   if (!info.exists || info.type !== 'file') return null;
@@ -6360,27 +6410,17 @@ function buildObviousPostconditionChecks(objective) {
   match = text.match(/\bensure folder\s+([A-Za-z0-9._/-]+)\s+exists\b/i);
   if (match) {
     const folderPath = cleanObjectivePath(match[1]);
-    checks.push({
-      type: 'folder',
-      path: folderPath,
-      satisfied: () => {
-        const info = workspaceProvider.getPathInfo(folderPath);
-        return info.exists && info.type === 'directory';
-      }
-    });
+    addFolderPostconditionChecks(checks, [folderPath]);
   }
 
-  match = text.match(/\bcreate folder\s+([A-Za-z0-9._/-]+)\b/i);
-  if (match) {
-    const folderPath = cleanObjectivePath(match[1]);
-    checks.push({
-      type: 'folder',
-      path: folderPath,
-      satisfied: () => {
-        const info = workspaceProvider.getPathInfo(folderPath);
-        return info.exists && info.type === 'directory';
-      }
-    });
+  const ensuredFolderPaths = parseSimpleFolderListObjective(text, 'ensure');
+  if (ensuredFolderPaths) {
+    addFolderPostconditionChecks(checks, ensuredFolderPaths);
+  }
+
+  const createdFolderPaths = parseSimpleFolderListObjective(text, 'create');
+  if (createdFolderPaths) {
+    addFolderPostconditionChecks(checks, createdFolderPaths);
   }
 
   match = text.match(/\binside it create file\s+([A-Za-z0-9._/-]+)\s+containing exactly\s+(.+?)(?:\.\s+Once\b|$)/i);
