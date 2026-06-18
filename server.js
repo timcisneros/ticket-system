@@ -7050,6 +7050,8 @@ function matchedOwnedRootForEntry(entryPath, ownedPaths) {
   const normalizedEntry = path.posix
     .normalize(String(entryPath || '').replace(/\\/g, '/').trim())
     .replace(/^\/+/, '');
+  // Never tag the workspace root itself from a child owned path (e.g. "Q1/").
+  if (!normalizedEntry || normalizedEntry === '.') return null;
   let best = null;
   for (const ownedPath of ownedPaths) {
     const normalizedOwned = normalizeWorkspaceOwnershipPath(ownedPath);
@@ -7092,12 +7094,16 @@ function annotateWorkspaceListingWithOwnership(listing) {
     }
     if (matches.length === 0) return entry;
 
-    const distinctRuns = new Set(matches.map(match => match.runId));
+    // Most-specific (deepest) owned path wins when deterministic. Only fall back
+    // to a neutral "multiple active owners" label when distinct active runs tie
+    // at the same deepest specificity. Never silently pick one of a tie.
+    const maxSpecificity = Math.max(...matches.map(match => match.ownedPath.length));
+    const deepestMatches = matches.filter(match => match.ownedPath.length === maxSpecificity);
+    const distinctRuns = new Set(deepestMatches.map(match => match.runId));
     if (distinctRuns.size === 1) {
-      const ownership = matches.reduce((a, b) => (b.ownedPath.length > a.ownedPath.length ? b : a));
-      return { ...entry, ownership };
+      return { ...entry, ownership: deepestMatches[0] };
     }
-    return { ...entry, ownership: { multiple: true, owners: matches } };
+    return { ...entry, ownership: { multiple: true, owners: deepestMatches } };
   });
 
   return { ...listing, entries };
