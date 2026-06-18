@@ -11277,6 +11277,10 @@ async function runAgentTicket(runId) {
       const priorStepActionResults = actionResults;
       actionResults = [];
       let actions = modelPlan.actions;
+      // Set when the mutating-action cap drops proposed actions this step. A
+      // truncated response must not complete the run, because some proposed
+      // actions were never applied.
+      let completionBlockedByActionTruncation = false;
 
       if (isRunInterrupted(run.id)) {
         const error = new Error('Run interrupted');
@@ -11321,7 +11325,11 @@ async function runAgentTicket(runId) {
             }
           }
 
-          const truncatedMessage = `Model returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Executed the first ${MAX_MUTATING_ACTIONS_PER_RESPONSE} mutating action(s) and dropped ${droppedActions.length}. Non-mutating actions were preserved.`;
+          if (droppedActions.length > 0) {
+            completionBlockedByActionTruncation = true;
+          }
+
+          const truncatedMessage = `Model returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Executed the first ${MAX_MUTATING_ACTIONS_PER_RESPONSE} mutating action(s) and dropped ${droppedActions.length}. Non-mutating actions were preserved.${droppedActions.length > 0 ? ` complete:true was not honored because ${droppedActions.length} proposed action(s) were not applied; continue from the executed state and re-emit the remaining action(s).` : ''}`;
 
           recordRunEvent(run, 'model:mutating_action_truncated', truncatedMessage, {
             actionCount: originalActions.length,
@@ -11800,7 +11808,9 @@ async function runAgentTicket(runId) {
         break;
       }
 
-      if (modelPlan.complete) {
+      if (modelPlan.complete && completionBlockedByActionTruncation) {
+        recordRunEvent(run, 'run:completion_deferred_truncation', 'complete:true not honored: response was truncated by the mutating-action cap and proposed actions were dropped', { step });
+      } else if (modelPlan.complete) {
         if (actions.length === 0) {
           recordRunEvent(run, 'run:completed_noop', 'Agent run completed with no workspace changes', { step });
         }
