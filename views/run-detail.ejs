@@ -535,16 +535,28 @@
     <p class="text-muted">No replay snapshot is available for this run.</p>
   </section>
 <% } else { %>
+  <%
+    const replayWorkspaceOps = snapshot.workspaceOperations || [];
+    const replayEvents = snapshot.events || [];
+    const replayMutationOps = ['createFolder', 'writeFile', 'renamePath', 'deletePath'];
+    const replayHasMutations = replayWorkspaceOps.some(op => op.operation && replayMutationOps.includes(op.operation.operation));
+    const replayHasFailures = replayWorkspaceOps.some(op => op.blocked || op.error)
+      || replayEvents.some(ev => ev.type && (ev.type.includes('fail') || ev.type.includes('error') || ev.type.includes('limit')));
+  %>
   <div class="replay-nav">
     <span class="replay-nav-label">Replay navigation:</span>
-    <button type="button" class="btn-small btn-secondary" data-replay-toggle-all>Toggle all</button>
-    <button type="button" class="btn-small btn-secondary" data-replay-filter="all">Show all</button>
-    <button type="button" class="btn-small btn-secondary" data-replay-filter="workspaceOperations">Workspace actions</button>
-    <button type="button" class="btn-small btn-secondary" data-replay-filter="providerRequests">Requests</button>
-    <button type="button" class="btn-small btn-secondary" data-replay-filter="modelResponses">Responses</button>
-    <button type="button" class="btn-small btn-secondary" data-replay-filter="events">Events</button>
-    <button type="button" class="btn-small btn-secondary" data-replay-jump="failure">Jump to failures</button>
-    <button type="button" class="btn-small btn-secondary" data-replay-jump="mutation">Jump to mutations</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-toggle-all>Expand details</button>
+    <button type="button" class="btn-small btn-secondary" data-replay-jump="workspace">Workspace actions</button>
+    <% if (replayHasFailures) { %>
+      <button type="button" class="btn-small btn-secondary" data-replay-jump="failure">Failures</button>
+    <% } else { %>
+      <button type="button" class="btn-small btn-secondary" disabled title="No failures in this run">Failures</button>
+    <% } %>
+    <% if (replayHasMutations) { %>
+      <button type="button" class="btn-small btn-secondary" data-replay-jump="mutation">Mutations</button>
+    <% } else { %>
+      <button type="button" class="btn-small btn-secondary" disabled title="No workspace mutations in this run">Mutations</button>
+    <% } %>
   </div>
 
   <section class="detail-section">
@@ -619,7 +631,7 @@
     </details>
   </section>
 
-  <section class="detail-section replay-section" data-replay-section="workspaceOperations">
+  <section class="detail-section replay-section" id="replay-workspace-actions" data-replay-section="workspaceOperations">
     <h2>Workspace Actions</h2>
     <% if (!snapshot.workspaceOperations || snapshot.workspaceOperations.length === 0) { %>
       <p class="text-muted">No workspace operations captured.</p>
@@ -831,28 +843,17 @@
       document.querySelectorAll('.replay-section details.collapsible').forEach(function(d) {
         d.open = allExpanded;
       });
-      toggleAllBtn.textContent = allExpanded ? 'Collapse all' : 'Toggle all';
+      toggleAllBtn.textContent = allExpanded ? 'Collapse details' : 'Expand details';
     });
   }
-
-  document.querySelectorAll('[data-replay-filter]').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      var target = btn.getAttribute('data-replay-filter');
-      document.querySelectorAll('.replay-section').forEach(function(section) {
-        if (target === 'all') {
-          section.style.display = '';
-        } else {
-          section.style.display = section.getAttribute('data-replay-section') === target ? '' : 'none';
-        }
-      });
-    });
-  });
 
   document.querySelectorAll('[data-replay-jump]').forEach(function(btn) {
     btn.addEventListener('click', function() {
       var jump = btn.getAttribute('data-replay-jump');
       var target = null;
-      if (jump === 'failure') {
+      if (jump === 'workspace') {
+        target = document.getElementById('replay-workspace-actions');
+      } else if (jump === 'failure') {
         target = document.querySelector('[data-op-failure="true"], [data-event-failure="true"]');
       } else if (jump === 'mutation') {
         target = document.querySelector('[data-op-mutation="true"]');
