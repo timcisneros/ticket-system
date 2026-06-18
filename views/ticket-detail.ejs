@@ -213,7 +213,9 @@
 </section>
 
 <section class="detail-section">
-  <h2>Work Units</h2>
+  <% const workUnitCount = allocationPlan.items ? allocationPlan.items.length : 0; %>
+  <h2>Work Units<%= workUnitCount > 0 ? ' (' + workUnitCount + ')' : '' %></h2>
+  <p class="text-muted">Group work — one work unit per assigned agent. Completes when all work units complete; fails if any required work unit fails.</p>
   <% if (!allocationPlan.items || allocationPlan.items.length === 0) { %>
     <p class="text-muted">No work units.</p>
   <% } else { %>

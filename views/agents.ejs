@@ -4,6 +4,7 @@
 
 <section class="admin-block">
   <h2>Agent Quality Metrics</h2>
+  <p class="text-muted">Observed counts are direct run facts. Derived rates are computed from scored runs only and may be absent (shown as -) when no runs are scored.</p>
   <p class="text-muted">A/S = Artifact Accuracy vs Completion Rate · S/C = Completion Rate vs Path Coverage · A/C = Artifact Accuracy vs Path Coverage</p>
   <div class="agent-cards">
     <% if (agentMetrics.length === 0) { %>
@@ -19,7 +20,11 @@
           <div class="agent-card__name"><%= metric.agent.name %></div>
           <div class="agent-card__model"><%= metric.agent.model || '-' %></div>
         </div>
+        <% if (isTroubled) { %>
+          <div class="agent-card__accent-note">More failed runs than completed runs.</div>
+        <% } %>
         <div class="agent-card__metrics">
+          <div class="agent-metric-group">Observed</div>
           <div class="agent-metric">
             <div class="agent-metric__label">Completed</div>
             <div class="agent-metric__value"><%= metric.successfulRuns %></div>
@@ -58,6 +63,7 @@
               <% } %>
             </div>
           </div>
+          <div class="agent-metric-group">Derived (from scored runs)</div>
           <div class="agent-metric">
             <div class="agent-metric__label">Quality Runs</div>
             <div class="agent-metric__value"><%= metric.quality ? metric.quality.runs : 0 %></div>

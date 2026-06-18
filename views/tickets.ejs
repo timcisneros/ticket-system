@@ -43,7 +43,7 @@
         <div class="ticket-card__header">
           <a href="/tickets/<%= ticket.id %>" class="ticket-card__objective"><%= ticket.objective %></a>
           <div class="ticket-card__status">
-            <% if (canUpdateTickets) { %>
+            <% if (canUpdateTickets && ticketStatuses.includes(ticket.status)) { %>
               <form class="status-form" data-ticket-id="<%= ticket.id %>">
                 <select name="status" class="status-select" aria-label="Ticket status">
                   <% ticketStatuses.forEach(status => { %>
@@ -53,6 +53,9 @@
               </form>
             <% } else { %>
               <span class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span>
+              <% if (ticket.status === 'interrupted') { %>
+                <span class="status-system-note" title="System status set by the runtime; not user-selectable">system status</span>
+              <% } %>
             <% } %>
             <% if (hasPartial) { %>
               <span class="partial-run-indicator" title="Last run performed <%= ticket.lastRunPartialMutationCount %> workspace mutation<%= ticket.lastRunPartialMutationCount === 1 ? '' : 's' %> before failing">&#9888;</span>
@@ -67,6 +70,10 @@
             metadataItems.push('Unassigned — not started');
           } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel) {
             metadataItems.push('No runnable target — assignment cannot start');
+          }
+          if (ticket.assignmentTargetType === 'group' && ticket.groupMemberCount != null) {
+            const groupMemberCount = ticket.groupMemberCount;
+            metadataItems.push('Group assignment — ' + groupMemberCount + ' group member' + (groupMemberCount === 1 ? '' : 's'));
           }
           if (ticket.currentMessage || (!ticket.currentRunDisplayLabel && ticket.activeRunIds && ticket.activeRunIds.length > 0)) metadataItems.push(ticket.currentMessage || 'No current output');
           if (ticket.assignmentTargetName) metadataItems.push(ticket.assignmentTargetName);
@@ -139,6 +146,8 @@ function ticketSignature(ticket) {
     ticket.assignmentMode,
     ticket.status,
     ticket.assignmentTargetId,
+    ticket.assignmentTargetType,
+    ticket.groupMemberCount == null ? '' : ticket.groupMemberCount,
     (ticket.activeRunIds || []).join(','),
     ticket.lastRunStatus || '',
     ticket.lastRunOperationalOutcome || '',
@@ -179,7 +188,7 @@ function createTicketCard(ticket) {
   const statusWrap = document.createElement('div');
   statusWrap.className = 'ticket-card__status';
 
-  if (canUpdateTickets) {
+  if (canUpdateTickets && ticketStatuses.includes(ticket.status)) {
     const form = document.createElement('form');
     form.className = 'status-form';
     form.dataset.ticketId = ticket.id;
@@ -204,6 +213,14 @@ function createTicketCard(ticket) {
     badge.className = 'status-badge status-' + ticket.status;
     badge.textContent = ticket.status;
     statusWrap.appendChild(badge);
+
+    if (ticket.status === 'interrupted') {
+      const systemNote = document.createElement('span');
+      systemNote.className = 'status-system-note';
+      systemNote.title = 'System status set by the runtime; not user-selectable';
+      systemNote.textContent = 'system status';
+      statusWrap.appendChild(systemNote);
+    }
   }
 
   if ((isFailed || isInterrupted) && ticket.lastRunHadPartialMutations) {
@@ -228,6 +245,11 @@ function createTicketCard(ticket) {
     metadataItems.push({ text: 'Unassigned — not started' });
   } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel) {
     metadataItems.push({ text: 'No runnable target — assignment cannot start' });
+  }
+
+  if (ticket.assignmentTargetType === 'group' && ticket.groupMemberCount != null) {
+    const groupMemberCount = ticket.groupMemberCount;
+    metadataItems.push({ text: 'Group assignment — ' + groupMemberCount + ' group member' + (groupMemberCount === 1 ? '' : 's') });
   }
 
   if (ticket.currentRunDisplayLabel) {

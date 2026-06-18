@@ -2699,10 +2699,14 @@ function enrichTicketForDisplay(ticket, context) {
   const currentRunDisplayState = primaryActiveRun ? getRunDisplayState(primaryActiveRun, context.logsByRunId) : null;
   const currentMessage = primaryActiveRun ? getRunCurrentMessage(primaryActiveRun, context.logsByRunId) : null;
   const lastRunOperationalOutcome = lastRun ? classifyRunOperationalOutcome(lastRun) : null;
+  const groupMemberCount = ticket.assignmentTargetType === 'group' && context.groupMembersById
+    ? (context.groupMembersById[ticket.assignmentTargetId] || []).length
+    : null;
 
   return {
     ...ticket,
     assignmentTargetName: target ? target.name : null,
+    groupMemberCount,
     activeRunIds: activeRuns.map(run => run.id),
     currentRunId: primaryActiveRun ? primaryActiveRun.id : null,
     currentRunDisplayState,
@@ -2742,6 +2746,7 @@ function getPaginatedTickets(query = {}) {
   const runsByTicketId = groupBy(runs, run => run.ticketId);
   const logsByRunId = groupBy(logs, log => log.runId);
   const mutationCountByRunId = buildMutationCountByRunId(history);
+  const groupMembersById = getAgentGroupMembers();
   const total = allTickets.length;
   const pageCount = Math.max(1, Math.ceil(total / limit));
   const currentPage = Math.min(page, pageCount);
@@ -2753,7 +2758,8 @@ function getPaginatedTickets(query = {}) {
       agentGroups,
       runsByTicketId,
       logsByRunId,
-      mutationCountByRunId
+      mutationCountByRunId,
+      groupMembersById
     }));
 
   return {
