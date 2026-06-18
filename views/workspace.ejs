@@ -40,7 +40,16 @@
 
       <% workspaceEntries.forEach(entry => { %>
         <tr>
-          <td><%= entry.name %></td>
+          <td>
+            <%= entry.name %>
+            <% if (entry.ownership) { %>
+              <% if (entry.ownership.multiple) { %>
+                <span class="ownership-tag" title="<%= entry.ownership.owners.map(owner => 'Owned by ' + (owner.agentName || ('Agent #' + owner.agentId)) + ' · Ticket #' + owner.ticketId + ' · ' + owner.ownedPath).join('; ') %>">Multiple active owners</span>
+              <% } else { %>
+                <span class="ownership-tag">Owned by <%= entry.ownership.agentName || ('Agent #' + entry.ownership.agentId) %> · Ticket #<%= entry.ownership.ticketId %> · <%= entry.ownership.ownedPath %></span>
+              <% } %>
+            <% } %>
+          </td>
           <td><%= entry.type %></td>
           <td class="actions">
             <% if (entry.type === 'folder') { %>
@@ -155,6 +164,21 @@ function renderEntries(entries) {
 
     const nameCell = document.createElement('td');
     nameCell.textContent = entry.name;
+    if (entry.ownership) {
+      const tag = document.createElement('span');
+      tag.className = 'ownership-tag';
+      if (entry.ownership.multiple) {
+        tag.textContent = 'Multiple active owners';
+        tag.title = entry.ownership.owners
+          .map(owner => 'Owned by ' + (owner.agentName || ('Agent #' + owner.agentId)) + ' · Ticket #' + owner.ticketId + ' · ' + owner.ownedPath)
+          .join('; ');
+      } else {
+        const o = entry.ownership;
+        tag.textContent = 'Owned by ' + (o.agentName || ('Agent #' + o.agentId)) + ' · Ticket #' + o.ticketId + ' · ' + o.ownedPath;
+      }
+      nameCell.appendChild(document.createTextNode(' '));
+      nameCell.appendChild(tag);
+    }
 
     const typeCell = document.createElement('td');
     typeCell.textContent = entry.type;

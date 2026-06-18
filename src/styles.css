@@ -1534,6 +1534,18 @@ code {
   white-space: nowrap;
 }
 
+.ownership-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 0.72rem;
+  color: #475569;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  vertical-align: middle;
+}
+
 .partial-run-indicator {
   display: inline-flex;
   align-items: center;

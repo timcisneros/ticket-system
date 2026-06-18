@@ -7043,6 +7043,66 @@ function getRunOwnedOutputPaths(run) {
   return run.ownedOutputPaths || [];
 }
 
+// Display-only: returns the most specific owned root (e.g. "Q1/") that contains
+// entryPath, using the same containment shape as isPathInsideOwnedOutputPaths,
+// or null if no owned path contains it.
+function matchedOwnedRootForEntry(entryPath, ownedPaths) {
+  const normalizedEntry = path.posix
+    .normalize(String(entryPath || '').replace(/\\/g, '/').trim())
+    .replace(/^\/+/, '');
+  let best = null;
+  for (const ownedPath of ownedPaths) {
+    const normalizedOwned = normalizeWorkspaceOwnershipPath(ownedPath);
+    if (!normalizedOwned) continue;
+    const isInside = normalizedEntry === normalizedOwned.slice(0, -1) || normalizedEntry.startsWith(normalizedOwned);
+    if (isInside && (!best || normalizedOwned.length > best.length)) best = normalizedOwned;
+  }
+  return best;
+}
+
+// Display-only: active (pending/running) runs that carry scoped owned output
+// paths. Runs without owned paths are unscoped (full workspace) and intentionally
+// excluded so the whole workspace is not falsely tagged.
+function buildActiveOwnershipRecords() {
+  return readRuns()
+    .filter(run => ['pending', 'running'].includes(run.status))
+    .map(run => {
+      const ownedPaths = getRunOwnedOutputPaths(run);
+      if (!Array.isArray(ownedPaths) || ownedPaths.length === 0) return null;
+      return { runId: run.id, ticketId: run.ticketId, agentId: run.agentId, agentName: run.agentName, ownedPaths };
+    })
+    .filter(Boolean);
+}
+
+// Display-only: annotate each workspace listing entry with ownership metadata
+// when its path falls inside an active run's owned output path. Does not change
+// permissions, enforcement, or workspace mutation behavior.
+function annotateWorkspaceListingWithOwnership(listing) {
+  if (!listing || !Array.isArray(listing.entries)) return listing;
+  const records = buildActiveOwnershipRecords();
+  if (records.length === 0) return listing;
+
+  const entries = listing.entries.map(entry => {
+    const matches = [];
+    for (const record of records) {
+      const ownedPath = matchedOwnedRootForEntry(entry.path, record.ownedPaths);
+      if (ownedPath) {
+        matches.push({ agentId: record.agentId, agentName: record.agentName, ticketId: record.ticketId, runId: record.runId, ownedPath });
+      }
+    }
+    if (matches.length === 0) return entry;
+
+    const distinctRuns = new Set(matches.map(match => match.runId));
+    if (distinctRuns.size === 1) {
+      const ownership = matches.reduce((a, b) => (b.ownedPath.length > a.ownedPath.length ? b : a));
+      return { ...entry, ownership };
+    }
+    return { ...entry, ownership: { multiple: true, owners: matches } };
+  });
+
+  return { ...listing, entries };
+}
+
 function getTicketAllocationPlan(ticketId) {
   return readAllocationPlans().find(plan => plan.ticketId === ticketId) || null;
 }
@@ -13094,7 +13154,7 @@ fastify.get('/workspace', { preHandler: fastify.requireAuth }, async (request, r
   }
 
   try {
-    const workspaceListing = workspaceProvider.list(request.query.path || '');
+    const workspaceListing = annotateWorkspaceListingWithOwnership(workspaceProvider.list(request.query.path || ''));
 
     return reply.view('workspace.ejs', viewData({
       user: request.user,
@@ -13116,7 +13176,7 @@ fastify.get('/workspace', { preHandler: fastify.requireAuth }, async (request, r
 fastify.get('/api/workspace/list', { preHandler: fastify.requireAuth }, async (request, reply) => {
   return workspaceApi(request, reply, 'workspace:read', () => {
     const relativePath = request.query.path || '';
-    return workspaceProvider.list(relativePath);
+    return annotateWorkspaceListingWithOwnership(workspaceProvider.list(relativePath));
   });
 });
 
