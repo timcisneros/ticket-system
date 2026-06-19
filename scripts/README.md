@@ -48,6 +48,31 @@ Shared library modules (required by other scripts; **not** entrypoints — do no
 
 All other `*-test.js` files are targeted regression suites, run manually when the touched surface is relevant (AGENTS.md "Verification Workflow", step 7).
 
+## v0.1.0 Internal Demo Release Checkpoint
+
+The current release-facing checkpoint uses a concise targeted set rather than
+every historical investigation harness:
+
+```sh
+node --check server.js
+
+NODE_PATH=./node_modules node scripts/catalog-consistency-test.js
+NODE_PATH=./node_modules node scripts/page-render-regression-test.js
+NODE_PATH=./node_modules node scripts/artifact-prediction-capture-test.js
+NODE_PATH=./node_modules node scripts/ticket-feasibility-gate-test.js
+NODE_PATH=./node_modules node scripts/moving-goalpost-regression-test.js
+NODE_PATH=./node_modules node scripts/complete-flag-truncation-guard-test.js
+NODE_PATH=./node_modules node scripts/direct-folder-postcondition-completeness-test.js
+NODE_PATH=./node_modules node scripts/debug-reset-contamination-test.js
+NODE_PATH=./node_modules node scripts/run-state-inconsistency-warning-test.js
+NODE_PATH=./node_modules node scripts/run-detail-evidence-clarity-test.js
+NODE_PATH=./node_modules node scripts/run-timeout-attribution-clarity-test.js
+NODE_PATH=./node_modules node scripts/ticket-execution-state-clarity-test.js
+```
+
+Several of these scripts start a local Fastify server on localhost and may need
+normal port-binding permission in sandboxed environments.
+
 ## Investigation harnesses (2026-06 evidence corpus)
 
 `run-customer-support-test`, `run-legal-intake-test`, `run-shared-drive-test`, `run-vendor-compliance-test`, `run-vendor-chunk-test`, `run-ticket-plan-test`, `run-er-validation`, `run-vc1-pipeline`, `recheck-er-cases`, `needs-arms-census`, `test-legal-impossibility`, `test-policy-gap-single`, `unverified-evaluation-test`, `verifier-contract-test`, `vendor-realism-benchmark` — harnesses behind the root evidence corpus (`evidence-ledger.md`, `failure-cluster-report.md`, etc.). Kept for provenance.

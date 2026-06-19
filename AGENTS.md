@@ -23,6 +23,7 @@ This repo is a server-rendered ticketing system for bounded agent work. A ticket
 ## Commands
 
 - Start app: `npm run dev`
+- Start app against tracked `data/`/`workspace-root` defaults: `npm start`
 - Syntax check: `npm run build`
 - Fast Codex orientation: `npm run codex:bootstrap`
 - Trace one run: `npm run codex:trace -- --run <id>`
@@ -39,6 +40,15 @@ This repo is a server-rendered ticketing system for bounded agent work. A ticket
 - Schema teaching experiment: `npm run experiment:workflow-schema-teaching`
 - Prefix truncation regression: `npm run test:truncation`
 - TM-3 counterfactual replay: `npm run validate:truncation`
+
+## Internal Demo Release Baseline
+
+- Proposed tag: `v0.1.0-internal-demo` after release docs are merged and a final checkpoint passes.
+- Use `npm run dev` for local demo/dev runs. It sets `DATA_DIR=.local-data` and `WORKSPACE_ROOT=.local-workspace`, both ignored by Git.
+- `data/*.json` files are tracked baseline/demo seed data. Runtime evidence includes events, logs, operation history, and replay snapshots.
+- Provider configuration is environment-driven: `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, and `OLLAMA_BASE_URL`. Keep secrets in ignored env files or the shell environment.
+- Admin debug reset is a destructive local demo/dev reset, disabled in production. It is not production recovery.
+- See `README.md` for first-demo setup, reset/rollback guidance, and the release checkpoint command list.
 
 ## Preferred Ticket CLI Flow
 
