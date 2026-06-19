@@ -12831,7 +12831,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
 });
 
 fastify.get('/api/health', async (request, reply) => {
-   return { status: 'ok', dataDir: 'data', workspaceRoot: 'workspace-root', port: PORT, uptime: Math.floor(process.uptime()) };
+   return { status: 'ok', dataDir: DATA_DIR, workspaceRoot: workspaceProvider.root, port: PORT, uptime: Math.floor(process.uptime()) };
 });
 
 fastify.get('/api/runtime/status', { preHandler: fastify.requireAuth }, async (request, reply) => {
