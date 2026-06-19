@@ -28,6 +28,11 @@ Provider keys and local secrets are user-managed. `.env`, `.env.local`, and
 `.env.test.local` are ignored by Git. Do not commit API keys, local provider
 credentials, or demo-only bootstrap secrets.
 
+Tracked seed agents do not contain provider API keys. Configure provider keys
+through ignored env files, shell environment, or the local Admin UI. If a real
+provider key was ever committed in historical data, revoke it at the provider;
+this repository does not rewrite release history.
+
 ## Local gemma3:latest Latency
 
 Local `gemma3:latest` latency is dominated by prompt evaluation cost, not runtime orchestration. Runtime-loop changes should not be assumed to materially improve ordinary-ticket latency without new evidence.

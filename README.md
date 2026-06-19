@@ -83,6 +83,11 @@ Provider variables:
   `OPENAI_MODEL` is not set, new agent forms default toward Ollama.
 - `OLLAMA_BASE_URL` - Ollama base URL. Defaults to `http://127.0.0.1:11434`.
 
+Tracked seed agents do not contain provider API keys. Configure provider keys
+through ignored env files, the shell environment, or the local Admin UI. If a
+real provider key was ever committed in historical data, revoke it at the
+provider; this repository does not rewrite release history.
+
 Runtime/test knobs used by current diagnostics:
 
 - `RUN_LEASE_DURATION_MS` - override run lease duration.
