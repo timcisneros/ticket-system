@@ -170,7 +170,10 @@ function computeTelemetry() {
   // Queue depth from scheduler.tick events
   const tickEvents = events.filter(e => e.type === 'scheduler.tick');
   const pendingRunsOverTime = tickEvents.map(e => e.payload && e.payload.pendingRuns).filter(Number.isFinite);
-  const maxQueueDepth = pendingRunsOverTime.length > 0 ? Math.max(...pendingRunsOverTime) : 0;
+  // Iterative reduce avoids spreading a large array into Math.max arguments,
+  // which overflows the call stack on long event logs (172k+ tick entries).
+  // Queue depths are non-negative, so an empty array yields 0 — same as before.
+  const maxQueueDepth = pendingRunsOverTime.reduce((max, value) => Math.max(max, value), 0);
   const avgQueueDepth = pendingRunsOverTime.length > 0 ? Math.round(pendingRunsOverTime.reduce((a, b) => a + b, 0) / pendingRunsOverTime.length) : 0;
 
   // Active runs: run.started events minus terminal events

@@ -40,12 +40,17 @@ function createRuntimeScheduler({
         .filter(run => run.status === 'pending')
         .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
 
-      appendEvent({
-        type: 'scheduler.tick',
-        payload: {
-          pendingRuns: pendingRuns.length
-        }
-      });
+      // Emit scheduler.tick only when there is pending work to observe.
+      // Idle ticks (pendingRuns === 0) are no-op heartbeat telemetry and are
+      // not written to the append-only evidence log.
+      if (pendingRuns.length > 0) {
+        appendEvent({
+          type: 'scheduler.tick',
+          payload: {
+            pendingRuns: pendingRuns.length
+          }
+        });
+      }
 
       for (const run of pendingRuns) {
         if (isRunStarting(run)) {

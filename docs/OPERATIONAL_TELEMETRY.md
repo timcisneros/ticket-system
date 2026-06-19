@@ -66,7 +66,12 @@ The telemetry engine detects the workload profile from each ticket objective and
 | Metric | Source | Computation |
 |--------|--------|-------------|
 | Max queue depth | events.jsonl `scheduler.tick` | Max `payload.pendingRuns` over all tick events |
-| Avg queue depth | events.jsonl `scheduler.tick` | Mean `payload.pendingRuns` over all tick events |
+| Avg queue depth | events.jsonl `scheduler.tick` | Mean `payload.pendingRuns` over all tick events (computed over emitted ticks; with no ticks the value is 0) |
+
+> **`scheduler.tick` emission contract:** `scheduler.tick` is emitted only when the
+> scheduler observes pending work (`pendingRuns.length > 0`). Idle ticks are not
+> written to the evidence log, so queue-depth metrics are derived from observed
+> non-empty ticks; an absence of ticks means the queue was empty (depth 0).
 | Active runs | events.jsonl | Count of `run.started` events |
 | Recovery count | events.jsonl | Count of `run.resumed` events |
 | Lease expired | events.jsonl | Count of `run.lease_expired` events |
