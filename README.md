@@ -141,26 +141,41 @@ attaching stale event/replay state after a destructive debug reset.
 
 ## First Demo Flow
 
-1. Start the server with `npm run dev`.
-2. Log in as the local admin user or another configured user.
-3. Create an agent-assigned ticket, for example: `Create folder A B C and D`.
-4. Open Ticket Detail to inspect assignment, auto-run eligibility, blocked state,
-   latest/current run state, and current message source.
-5. Open Run Detail to inspect why the run stopped, provider/model counts,
-   workspace actions, replay events, logs, and operation history.
-6. Inspect the workspace directory to confirm actual mutations.
-7. Use Admin debug reset only when intentionally clearing local demo/dev runtime
+`npm run dev` starts with ignored local demo data (`.local-data` /
+`.local-workspace`). On a fresh `.local-data` directory, only the bootstrap admin
+account is created automatically — there are no seeded agents. Create/configure
+an agent before creating an agent-assigned ticket.
+
+GUI demo steps:
+
+1. Set provider config through ignored env files / the shell environment, or use
+   a local Ollama model. Tracked seed agents do not include provider API keys;
+   use ignored env files, the shell environment, or the local Admin UI.
+2. Run `npm run dev`.
+3. Log in as the bootstrap admin user (default `admin` / `admin123`).
+4. Create/configure an agent on the Admin page (Create Account → Agent), choosing
+   a provider and model.
+5. Create a ticket assigned to that agent, for example: `Create folder A B C and D`.
+6. Open Ticket Detail to inspect assignment, auto-run eligibility, blocked state,
+   latest/current run state, and current message source; open Run Detail to
+   inspect why the run stopped, provider/model counts, workspace actions, replay
+   events, logs, and operation history.
+7. Inspect the workspace directory and the Logs page to confirm actual mutations.
+8. Use Admin debug reset only when intentionally clearing local demo/dev runtime
    state.
 
 For CLI-driven runs, prefer:
 
 ```sh
 node scripts/oquery.js login --url http://127.0.0.1:3099
-node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent Mike --wait --json "Create folder A B C and D"
+node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent <agent-name-or-id> --wait --json "Create folder A B C and D"
 npm run codex:trace -- --run <runId>
 ```
 
-Use an agent name/id that exists in the selected `DATA_DIR`.
+The CLI example requires an agent that exists in the selected `DATA_DIR`. The
+tracked seed may include example agents, but `npm run dev` uses `.local-data` by
+default, so create an agent first or replace `<agent-name-or-id>` with an agent
+name/id that exists in your local data.
 
 ## Release Checkpoint
 
