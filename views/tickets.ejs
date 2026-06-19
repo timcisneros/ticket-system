@@ -68,7 +68,7 @@
           const hasActiveRun = ticket.activeRunIds && ticket.activeRunIds.length > 0;
           if (isOpenTicket && !ticket.assignmentTargetName) {
             metadataItems.push('Unassigned — not started');
-          } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel) {
+          } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel && !ticket.latestRunId) {
             metadataItems.push('No run has been created yet; execution target is not visible from current data');
           }
           if (ticket.assignmentTargetType === 'group' && ticket.groupMemberCount != null) {
@@ -245,7 +245,7 @@ function createTicketCard(ticket) {
   const hasActiveRun = activeRunIds.length > 0;
   if (isOpenTicket && !ticket.assignmentTargetName) {
     metadataItems.push({ text: 'Unassigned — not started' });
-  } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel) {
+  } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel && !ticket.latestRunId) {
     metadataItems.push({ text: 'No run has been created yet; execution target is not visible from current data' });
   }
 

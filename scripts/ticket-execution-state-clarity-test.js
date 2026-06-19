@@ -47,6 +47,7 @@ let tid = Math.max(0, ...tickets.map(t => t.id || 0));
 let rid = Math.max(0, ...readJ('runs.json').map(r => r.id || 0));
 const C = {
   agentDone: { tid: ++tid, rid: ++rid },
+  openStopped: { tid: ++tid, rid: ++rid },
   blocked: { tid: ++tid },
   group: { tid: ++tid, rid: ++rid },
   plan: 9001
@@ -56,6 +57,8 @@ const newTickets = [
   ...tickets,
   // 1 + 4: agent-assigned, completed run with model-response message
   { id: C.agentDone.tid, objective: 'agent done case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'completed', createdBy: 'admin', createdAt: now, updatedAt: now },
+  // 6: open ticket with historical stopped run must not claim no run exists
+  { id: C.openStopped.tid, objective: 'open stopped case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'open', createdBy: 'admin', createdAt: now, updatedAt: now },
   // 2: blocked with feasibility reason
   { id: C.blocked.tid, objective: 'blocked case', assignmentTargetType: 'group', assignmentTargetId: group.id, assignmentMode: 'allocated', status: 'blocked', createdBy: 'admin', createdAt: now, updatedAt: now, blockedReason: 'Ticket objective requires paths not granted by authority:\nQ3/\nQ4/', feasibility: { status: 'blocked', reason: 'Ticket objective requires paths not granted by authority:\nQ3/\nQ4/', code: 'TICKET_FEASIBILITY_ERROR', kind: 'impossible_authority_scope', requiredWritableRoots: ['Q1/','Q2/','Q3/','Q4/'], grantedWritableRoots: ['Q1/','Q2/'], missingAuthorityGrants: ['Q3/','Q4/'] } },
   // 3: group-assigned with allocation plan / work units
@@ -68,7 +71,17 @@ writeJ('tickets.json', newTickets);
 // ticket status. The group case relies on the seeded allocation plan only.
 writeJ('runs.json', [
   ...readJ('runs.json'),
-  mkRun(C.agentDone.rid, C.agentDone.tid, 'completed')
+  mkRun(C.agentDone.rid, C.agentDone.tid, 'completed'),
+  mkRun(C.openStopped.rid, C.openStopped.tid, 'interrupted', {
+    error: 'process restarted before run completed',
+    replaySnapshot: snap(C.openStopped.rid, C.openStopped.tid, {
+      terminalStatus: 'interrupted',
+      failureReason: 'process restarted before run completed',
+      failure: { code: 'RUN_INTERRUPTED', kind: 'interrupted', detail: { reason: 'process restarted before run completed' } },
+      mutationCount: 0,
+      mutationOutcome: 'no_mutations'
+    })
+  })
 ]);
 
 writeJ('allocation-plans.json', [
@@ -121,6 +134,11 @@ const ok = (n, c) => c ? (pass++, console.log('  ✓ ' + n)) : (fail++, console.
     ok('list: shows "Execution: completed — rerun available" for completed ticket', list.includes('Execution: completed — rerun available'));
     ok('list: shows "Execution: blocked" for blocked ticket', list.includes('Execution: blocked'));
     ok('list: shows "Assigned to:" prefix', list.includes('Assigned to: ' + agent.name));
+    const stoppedIndex = list.indexOf('open stopped case');
+    const blockedIndex = list.indexOf('blocked case');
+    const stoppedCard = stoppedIndex === -1 ? '' : list.slice(stoppedIndex, blockedIndex === -1 ? stoppedIndex + 1200 : blockedIndex);
+    ok('list: open ticket with stopped latest run shows latest run status', stoppedCard.includes('latest run:') && stoppedCard.includes('stopped'));
+    ok('list: open ticket with stopped latest run does not claim no run exists', !stoppedCard.includes('No run has been created yet'));
 
     console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}: ticket execution-state clarity (${pass} passed, ${fail} failed)`);
   } catch (e) { console.error('ERROR', e.stack || e.message); fail++; }
