@@ -3106,6 +3106,85 @@ function buildRunFailureSummary(run, snapshot, operationHistory, mutationCount, 
   };
 }
 
+// Display-only: explains why a run stopped/completed and what evidence supports
+// it. Reads existing events/snapshot only; does not change runtime behavior.
+function buildRunCompletionSummary(run, snapshot, runEvents, operationHistory, failureSummary) {
+  const snapEvents = snapshot && Array.isArray(snapshot.events) ? snapshot.events : [];
+  const logEvents = Array.isArray(runEvents) ? runEvents : [];
+  const findSnap = type => snapEvents.find(event => event && event.type === type) || null;
+  const findLog = type => logEvents.find(event => event && event.type === type) || null;
+  // recordRunEvent flattens details onto the snapshot event; appendEvent nests
+  // them under .payload. Read either shape.
+  const detail = (event, key) => {
+    if (!event) return undefined;
+    if (event[key] !== undefined) return event[key];
+    if (event.payload && event.payload[key] !== undefined) return event.payload[key];
+    return undefined;
+  };
+
+  const evidence = {
+    providerRequests: snapshot && Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests.length : 0,
+    modelResponses: snapshot && Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses.length : 0,
+    workspaceOperations: snapshot && Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations.length : 0,
+    operationHistory: Array.isArray(operationHistory) ? operationHistory.length : 0,
+    replayEvents: snapEvents.length
+  };
+
+  // Per-response action-cap note (truncation or suppression), if it occurred.
+  const truncated = findSnap('model:mutating_action_truncated') || findLog('action.truncated');
+  const suppressed = findSnap('model:mutating_action_limit') || findLog('action.suppressed');
+  const deferred = findSnap('run:completion_deferred_truncation');
+  let capNote = null;
+  if (truncated) {
+    const proposed = detail(truncated, 'mutatingActionCount') ?? detail(truncated, 'mutatingCount');
+    const limit = detail(truncated, 'maxMutatingActionsPerResponse') ?? detail(truncated, 'limit') ?? MAX_MUTATING_ACTIONS_PER_RESPONSE;
+    const executed = detail(truncated, 'executedCount');
+    const dropped = detail(truncated, 'truncatedCount');
+    capNote = `Action cap applied: model proposed ${proposed} mutating action(s); runtime limit is ${limit}. Response was truncated (executed ${executed}, dropped ${dropped}) and the run continued.` +
+      (deferred ? ' complete:true was not honored for that response until the dropped actions were applied.' : '');
+  } else if (suppressed) {
+    const proposed = detail(suppressed, 'mutatingActionCount') ?? detail(suppressed, 'mutatingCount');
+    const limit = detail(suppressed, 'maxMutatingActionsPerResponse') ?? detail(suppressed, 'limit') ?? MAX_MUTATING_ACTIONS_PER_RESPONSE;
+    capNote = `Action cap applied: model proposed ${proposed} mutating action(s); runtime limit is ${limit}. Response was suppressed and the run continued.`;
+  }
+
+  let source = 'unknown';
+  let label = 'Run state could not be classified from available evidence.';
+  let checkedPaths = [];
+
+  if (run.status === 'failed' || run.status === 'interrupted') {
+    source = run.status;
+    label = run.status === 'interrupted'
+      ? 'Run was interrupted before it completed.'
+      : 'Run failed before completion.';
+    if (failureSummary && failureSummary.rootCause) label += ' Root cause: ' + failureSummary.rootCause;
+  } else if (run.status === 'completed') {
+    const postcondition = findSnap('run:postcondition_completed');
+    if (postcondition) {
+      source = 'postcondition';
+      label = 'Completed: required postconditions verified.' + (postcondition.message ? ' ' + postcondition.message : (postcondition.reason ? ' ' + postcondition.reason : ''));
+      if (Array.isArray(postcondition.checkedPaths)) checkedPaths = postcondition.checkedPaths;
+    } else if (findSnap('workspace.objective_satisfied')) {
+      source = 'workspace_objective';
+      label = 'Completed: workspace objective satisfied by successful mutation evidence.';
+    } else if (findSnap('workflow.draft_objective_satisfied')) {
+      source = 'workflow_draft';
+      label = 'Completed: workflow draft objective satisfied.';
+    } else if (findSnap('run:completed_noop')) {
+      source = 'completed_noop';
+      label = 'Completed with no workspace changes (model reported complete with no actions).';
+    } else {
+      source = 'model_complete';
+      label = 'Completed. The available run evidence points to a model complete:true completion; no more specific postcondition event was captured.';
+    }
+  } else {
+    source = 'in_progress';
+    label = 'Run is ' + run.status + '.';
+  }
+
+  return { state: run.status, source, label, checkedPaths, capNote, evidence };
+}
+
 function buildRunAuthorityContext(run, ticket, agent, snapshot) {
   const s = snapshot || {};
   const allocationItem = getRunAllocationItem(run);
@@ -13174,6 +13253,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     replaySnapshot: snapshot,
     recentEventSummary: eventSummary
   });
+  const completionSummary = buildRunCompletionSummary(run, snapshot, runEvents, enrichedHistory, failureSummary);
 
   return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
@@ -13198,6 +13278,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     runEvents,
     eventSummary,
     runStateInconsistency,
+    completionSummary,
     formatDurationHuman,
     canUpdateRuns: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));

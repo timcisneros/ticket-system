@@ -32,6 +32,45 @@
 </section>
 <% } %>
 
+<% if (typeof completionSummary !== 'undefined' && completionSummary) { %>
+<section class="detail-section completion-summary">
+  <h2>Why this run stopped</h2>
+  <dl class="detail-grid">
+    <div>
+      <dt>Outcome</dt>
+      <dd><span class="status-badge status-<%= completionSummary.state %>"><%= completionSummary.state %></span></dd>
+    </div>
+    <div>
+      <dt>Completion source</dt>
+      <dd><code><%= completionSummary.source %></code></dd>
+    </div>
+    <div>
+      <dt>Explanation</dt>
+      <dd><%= completionSummary.label %></dd>
+    </div>
+  </dl>
+  <% if (completionSummary.checkedPaths && completionSummary.checkedPaths.length > 0) { %>
+    <div class="allocation-item-row">
+      <span class="allocation-item-label">Checked paths</span>
+      <span class="allocation-item-value">
+        <% completionSummary.checkedPaths.forEach(check => { %>
+          <code class="owned-path"><%= check.path %></code><%= check.type ? ' (' + check.type + ')' : '' %>
+        <% }) %>
+      </span>
+    </div>
+  <% } %>
+  <% if (completionSummary.capNote) { %>
+    <p class="completion-summary__cap-note"><%= completionSummary.capNote %></p>
+  <% } %>
+  <p class="text-muted completion-summary__evidence">Evidence captured:
+    <%= completionSummary.evidence.providerRequests %> provider request(s),
+    <%= completionSummary.evidence.modelResponses %> model response(s),
+    <%= completionSummary.evidence.workspaceOperations %> workspace action(s),
+    <%= completionSummary.evidence.operationHistory %> operation-history record(s),
+    <%= completionSummary.evidence.replayEvents %> replay event(s).</p>
+</section>
+<% } %>
+
 <% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
 <section class="detail-section state-inconsistency-warning">
   <h2>State Warning</h2>
@@ -716,8 +755,18 @@
 
   <section class="detail-section replay-section" data-replay-section="events">
     <h2>Events</h2>
+    <p class="text-muted">Replay events record notable runtime conditions (limits, truncation, postconditions, no-progress). A clean run can have none even though provider, model, and workspace evidence exist.</p>
     <% if (!snapshot.events || snapshot.events.length === 0) { %>
-      <p class="text-muted">No replay events captured.</p>
+      <%
+        const hasOtherEvidence = (snapshot.providerRequests && snapshot.providerRequests.length > 0)
+          || (snapshot.modelResponses && snapshot.modelResponses.length > 0)
+          || (snapshot.workspaceOperations && snapshot.workspaceOperations.length > 0);
+      %>
+      <% if (hasOtherEvidence) { %>
+        <p class="text-muted">No replay events for this run. Replay events are a separate category from provider, model, and workspace evidence, which is shown in its own sections above (see the "Why this run stopped" evidence counts). Absent replay events do not mean the other evidence is missing.</p>
+      <% } else { %>
+        <p class="text-muted">No replay events captured.</p>
+      <% } %>
     <% } %>
     <% (snapshot.events || []).forEach((event, index) => { %>
       <%
