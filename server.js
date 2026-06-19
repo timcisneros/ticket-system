@@ -3145,12 +3145,15 @@ function buildRunCompletionSummary(run, snapshot, runEvents, operationHistory, f
   } else if (suppressed) {
     const proposed = detail(suppressed, 'mutatingActionCount') ?? detail(suppressed, 'mutatingCount');
     const limit = detail(suppressed, 'maxMutatingActionsPerResponse') ?? detail(suppressed, 'limit') ?? MAX_MUTATING_ACTIONS_PER_RESPONSE;
-    capNote = `Action cap applied: model proposed ${proposed} mutating action(s); runtime limit is ${limit}. Response was suppressed and the run continued.`;
+    capNote = `Action cap applied: model proposed ${proposed} mutating action(s); runtime limit is ${limit}. An over-cap model response was suppressed and not treated as completed; the run continued.`;
   }
 
   let source = 'unknown';
   let label = 'Run state could not be classified from available evidence.';
   let checkedPaths = [];
+  let timeoutNote = null;
+  let modelCallNote = null;
+  let progressNote = null;
 
   if (run.status === 'failed' || run.status === 'interrupted') {
     source = run.status;
@@ -3158,6 +3161,29 @@ function buildRunCompletionSummary(run, snapshot, runEvents, operationHistory, f
       ? 'Run was interrupted before it completed.'
       : 'Run failed before completion.';
     if (failureSummary && failureSummary.rootCause) label += ' Root cause: ' + failureSummary.rootCause;
+
+    const timedOut = failureSummary && failureSummary.rootCause === 'timed out';
+    if (timedOut) {
+      const latestPhase = evidence.providerRequests > evidence.modelResponses
+        ? 'waiting for model response'
+        : 'runtime timeout';
+      timeoutNote = `Run timed out after ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}. Latest observed phase: ${latestPhase}.`;
+      if (evidence.providerRequests > evidence.modelResponses) {
+        timeoutNote += ' Available evidence suggests the run timed out after the last model request and before a matching model response was recorded.';
+      }
+    }
+
+    if (evidence.providerRequests !== evidence.modelResponses) {
+      modelCallNote = `Model calls: ${evidence.providerRequests} request(s), ${evidence.modelResponses} response(s).`;
+      if (evidence.providerRequests > evidence.modelResponses) {
+        modelCallNote += ' Last request had no recorded response before timeout.';
+      }
+    }
+
+    const progressCount = Math.max(evidence.workspaceOperations, evidence.operationHistory);
+    if (progressCount > 0) {
+      progressNote = `Workspace progress before failure: ${progressCount} action(s).`;
+    }
   } else if (run.status === 'completed') {
     const postcondition = findSnap('run:postcondition_completed');
     if (postcondition) {
@@ -3182,7 +3208,7 @@ function buildRunCompletionSummary(run, snapshot, runEvents, operationHistory, f
     label = 'Run is ' + run.status + '.';
   }
 
-  return { state: run.status, source, label, checkedPaths, capNote, evidence };
+  return { state: run.status, source, label, checkedPaths, capNote, timeoutNote, modelCallNote, progressNote, evidence };
 }
 
 function buildRunAuthorityContext(run, ticket, agent, snapshot) {

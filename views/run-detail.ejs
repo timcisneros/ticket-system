@@ -62,6 +62,15 @@
   <% if (completionSummary.capNote) { %>
     <p class="completion-summary__cap-note"><%= completionSummary.capNote %></p>
   <% } %>
+  <% if (completionSummary.timeoutNote) { %>
+    <p class="completion-summary__cap-note"><%= completionSummary.timeoutNote %></p>
+  <% } %>
+  <% if (completionSummary.modelCallNote) { %>
+    <p class="completion-summary__cap-note"><%= completionSummary.modelCallNote %></p>
+  <% } %>
+  <% if (completionSummary.progressNote) { %>
+    <p class="completion-summary__cap-note"><%= completionSummary.progressNote %></p>
+  <% } %>
   <p class="text-muted completion-summary__evidence">Evidence captured:
     <%= completionSummary.evidence.providerRequests %> provider request(s),
     <%= completionSummary.evidence.modelResponses %> model response(s),
