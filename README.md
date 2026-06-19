@@ -179,9 +179,14 @@ name/id that exists in your local data.
 
 ## Release Checkpoint
 
-The latest release checkpoint for this baseline passed the following checks.
-Server-backed tests may need normal localhost binding permission in sandboxed
-environments.
+Run the whole checkpoint with the single runner (stops on the first failure):
+
+```sh
+NODE_PATH=./node_modules node scripts/release-checkpoint.js
+```
+
+The runner executes the following checks in order. Server-backed tests may need
+normal localhost binding permission in sandboxed environments.
 
 ```sh
 node --check server.js
@@ -198,6 +203,8 @@ NODE_PATH=./node_modules node scripts/run-state-inconsistency-warning-test.js
 NODE_PATH=./node_modules node scripts/run-detail-evidence-clarity-test.js
 NODE_PATH=./node_modules node scripts/run-timeout-attribution-clarity-test.js
 NODE_PATH=./node_modules node scripts/ticket-execution-state-clarity-test.js
+NODE_PATH=./node_modules node scripts/health-live-paths-test.js
+NODE_PATH=./node_modules node scripts/no-tracked-provider-keys-test.js
 ```
 
 ## Documentation Map

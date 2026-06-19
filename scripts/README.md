@@ -50,8 +50,16 @@ All other `*-test.js` files are targeted regression suites, run manually when th
 
 ## v0.1.0 Internal Demo Release Checkpoint
 
-The current release-facing checkpoint uses a concise targeted set rather than
-every historical investigation harness:
+Run the whole checkpoint with the single runner (`release-checkpoint.js` /
+`npm run checkpoint:release`); it prints each command, runs them in order, and
+stops on the first failure:
+
+```sh
+NODE_PATH=./node_modules node scripts/release-checkpoint.js
+```
+
+The runner executes this concise targeted set rather than every historical
+investigation harness:
 
 ```sh
 node --check server.js
@@ -68,6 +76,8 @@ NODE_PATH=./node_modules node scripts/run-state-inconsistency-warning-test.js
 NODE_PATH=./node_modules node scripts/run-detail-evidence-clarity-test.js
 NODE_PATH=./node_modules node scripts/run-timeout-attribution-clarity-test.js
 NODE_PATH=./node_modules node scripts/ticket-execution-state-clarity-test.js
+NODE_PATH=./node_modules node scripts/health-live-paths-test.js
+NODE_PATH=./node_modules node scripts/no-tracked-provider-keys-test.js
 ```
 
 Several of these scripts start a local Fastify server on localhost and may need

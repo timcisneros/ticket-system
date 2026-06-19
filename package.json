@@ -27,7 +27,8 @@
     "experiment:workflow-schema-teaching": "NODE_ENV=test node scripts/workflow-schema-teaching-experiment.js",
     "harvest:benchmark-cases": "node scripts/harvest-benchmark-cases.js",
     "test:truncation": "NODE_ENV=test node scripts/prefix-truncation-regression-test.js",
-    "validate:truncation": "node scripts/tm3-replay-validation.js"
+    "validate:truncation": "node scripts/tm3-replay-validation.js",
+    "checkpoint:release": "NODE_PATH=./node_modules node scripts/release-checkpoint.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
