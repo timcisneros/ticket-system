@@ -2689,6 +2689,126 @@ function getRunCurrentMessage(run, logsByRunId) {
   return null;
 }
 
+// Display-only: same fallback chain as getRunCurrentMessage, but also reports
+// which source the message came from so the UI can label freshness/derivation.
+function getRunCurrentMessageWithSource(run, logsByRunId) {
+  if (!run) return { message: null, source: 'unavailable' };
+
+  const eventSummary = recentEventSummary(run.id);
+  if (eventSummary.latestError && eventSummary.latestError.message) {
+    return { message: eventSummary.latestError.message, source: 'latest run error' };
+  }
+  if (eventSummary.currentStep && run.status === 'running') {
+    const action = eventSummary.currentStep.action || eventSummary.currentStep.stepId;
+    const status = eventSummary.currentStep.status;
+    const message = status === 'started' ? `workflow step started: ${action}`
+      : status === 'completed' ? `workflow step completed: ${action}`
+      : status === 'failed' ? `workflow step failed: ${action}`
+      : null;
+    if (message) return { message, source: 'latest workflow step' };
+  }
+  if (eventSummary.latestWorkspaceMutation && eventSummary.latestWorkspaceMutation.operation && run.status === 'running') {
+    return { message: `workspace action: ${eventSummary.latestWorkspaceMutation.operation}`, source: 'latest workspace action' };
+  }
+
+  const parsedPlanMessage = getRunLatestParsedPlanMessage(run);
+  if (parsedPlanMessage) return { message: parsedPlanMessage, source: 'latest model response' };
+
+  const runLogs = (logsByRunId && typeof logsByRunId.get === 'function' ? logsByRunId.get(run.id) : null) || [];
+  for (let index = runLogs.length - 1; index >= 0; index -= 1) {
+    const message = getDisplayMessageFromRunLog(runLogs[index]);
+    if (message) return { message, source: 'latest run log' };
+  }
+
+  return { message: null, source: 'unavailable' };
+}
+
+// Display-only: a single object summarizing a ticket's execution state for the
+// Ticket Detail page. Reads existing ticket/run/allocation data only; it does
+// not change scheduling, assignment, allocation, or rerun behavior.
+function buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, groups) {
+  const isGroup = ticket.assignmentTargetType === 'group';
+  const target = isGroup
+    ? (groups || []).find(group => group.id === ticket.assignmentTargetId)
+    : (agents || []).find(agent => agent.id === ticket.assignmentTargetId);
+  const assignmentTargetName = target ? target.name : null;
+  const assignmentTargetLabel = !ticket.assignmentTargetId
+    ? 'Unassigned'
+    : (isGroup ? 'Group: ' : 'Agent: ') + (assignmentTargetName || ('#' + ticket.assignmentTargetId));
+
+  const assignmentMode = ticket.assignmentMode || null;
+  const assignmentModeLabel = assignmentMode === 'allocated' ? 'allocated (manual folder scopes)'
+    : assignmentMode === 'dynamic' ? 'dynamic (automatic folder scopes)'
+    : assignmentMode === 'individual' ? 'individual'
+    : (assignmentMode || '-');
+
+  const activeRun = ticketRuns
+    .filter(run => ['pending', 'running'].includes(run.status))
+    .sort((a, b) => new Date(b.updatedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.startedAt || a.createdAt || 0))[0] || null;
+  const latestRun = ticketRuns
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0))[0] || null;
+
+  const blocked = ticket.status === 'blocked' || Boolean(ticket.blockedReason);
+  const blockedReason = ticket.blockedReason || (ticket.feasibility && ticket.feasibility.reason) || null;
+  const memberCount = isGroup ? (getAgentGroupMembers()[ticket.assignmentTargetId] || []).length : 0;
+
+  let autoRun;
+  if (blocked) {
+    autoRun = { state: 'blocked', label: 'Blocked — will not run until the blocking reason is resolved.' };
+  } else if (!ticket.assignmentTargetId) {
+    autoRun = { state: 'unassigned', label: 'No — unassigned. Assign an agent or group to enable a run.' };
+  } else if (activeRun) {
+    autoRun = { state: 'running', label: 'Running now (a run is active for this ticket).' };
+  } else if (ticket.status === 'open' && ticketRuns.length === 0) {
+    autoRun = { state: 'no_target', label: 'No run has been created yet. Execution target is not visible from the current ticket data.' };
+  } else if (ticket.status === 'open') {
+    autoRun = { state: 'auto', label: 'Execution behavior: this open assigned ticket is expected to auto-run under the current runtime rules.' };
+  } else {
+    autoRun = { state: 'manual', label: 'No — ticket is not open. Use Rerun to start a new run.' };
+  }
+
+  let group = null;
+  if (isGroup) {
+    const items = allocationPlan && Array.isArray(allocationPlan.items) ? allocationPlan.items : [];
+    group = {
+      memberCount,
+      workUnitsTotal: items.length,
+      workUnitsCompleted: items.filter(item => item.status === 'completed').length,
+      workUnitsFailed: items.filter(item => item.status === 'failed').length
+    };
+  }
+
+  const visibleRun = activeRun || latestRun;
+  let currentMessage = { text: null, source: 'unavailable' };
+  if (visibleRun) {
+    const logsForRun = readLogs().filter(log => log.runId === visibleRun.id);
+    const result = getRunCurrentMessageWithSource(visibleRun, new Map([[visibleRun.id, logsForRun]]));
+    currentMessage = { text: result.message, source: result.message ? result.source : 'unavailable' };
+  }
+
+  const lastOutcome = latestRun ? classifyRunOperationalOutcome(latestRun) : null;
+  const lastOutcomeLabel = latestRun ? displayOperationalOutcome(lastOutcome, getRunMutationCount(latestRun)) : null;
+
+  return {
+    isGroup,
+    assignmentTargetType: ticket.assignmentTargetType,
+    assignmentTargetId: ticket.assignmentTargetId || null,
+    assignmentTargetName,
+    assignmentTargetLabel,
+    assignmentMode,
+    assignmentModeLabel,
+    autoRun,
+    blocked,
+    blockedReason,
+    activeRun: activeRun ? { id: activeRun.id, status: activeRun.status } : null,
+    latestRun: latestRun ? { id: latestRun.id, status: latestRun.status } : null,
+    lastOutcomeLabel,
+    currentMessage,
+    group
+  };
+}
+
 function detectRunStateInconsistency(run, {
   logs = [],
   events = null,
@@ -2777,10 +2897,25 @@ function enrichTicketForDisplay(ticket, context) {
     ? (context.groupMembersById[ticket.assignmentTargetId] || []).length
     : null;
 
+  // Display-only compact execution summary for the card. Describes existing
+  // runtime behavior; does not change scheduling or assignment.
+  const ticketBlocked = ticket.status === 'blocked' || Boolean(ticket.blockedReason);
+  const hasRunnableTarget = ticket.assignmentTargetType === 'group'
+    ? (groupMemberCount || 0) > 0
+    : Boolean(target);
+  let executionSummaryLabel = null;
+  if (ticketBlocked) executionSummaryLabel = 'blocked';
+  else if (ticket.status === 'open' && hasRunnableTarget) executionSummaryLabel = 'eligible to auto-run under current rules';
+  else if (ticket.status === 'completed') executionSummaryLabel = 'completed — rerun available';
+  else if (ticket.status === 'failed') executionSummaryLabel = 'failed — retry available';
+
   return {
     ...ticket,
     assignmentTargetName: target ? target.name : null,
     groupMemberCount,
+    executionSummaryLabel,
+    latestRunId: lastRun ? lastRun.id : null,
+    latestRunStatus: lastRun ? lastRun.status : null,
     activeRunIds: activeRuns.map(run => run.id),
     currentRunId: primaryActiveRun ? primaryActiveRun.id : null,
     currentRunDisplayState,
@@ -12678,6 +12813,8 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     })
     : null;
 
+  const executionState = buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, readGroups());
+
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
     ticket,
@@ -12688,6 +12825,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     recentLogs: getRecentLogsForTicket(ticketId),
     operationHistory: enrichOperationHistoryForDisplay(operationHistory),
     runStateInconsistency,
+    executionState,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
 });

@@ -1583,6 +1583,12 @@ code {
   font-size: 0.8rem;
 }
 
+.message-source {
+  margin-left: 6px;
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+
 .partial-run-indicator {
   display: inline-flex;
   align-items: center;

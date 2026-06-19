@@ -15,7 +15,11 @@
   </div>
 </div>
 <% if (canUpdateTickets && ticket.status !== 'open') { %>
-  <p class="form-hint"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %> starts a new run from the beginning.</p>
+  <%
+    const isGroupTicket = typeof executionState !== 'undefined' && executionState && executionState.isGroup;
+    const rerunWord = ticket.status === 'failed' ? 'Retry' : 'Rerun';
+  %>
+  <p class="form-hint"><%= rerunWord %> interrupts any active run, reopens this ticket, and starts a new run from the current objective and assignment.<%= isGroupTicket ? ' For this group ticket it regenerates the work-unit allocation across group members.' : '' %></p>
 <% } %>
 
 <%
@@ -80,6 +84,62 @@
         </dl>
       </div>
     </details>
+  <% } %>
+</section>
+<% } %>
+
+<% if (typeof executionState !== 'undefined' && executionState) { %>
+<section class="detail-section">
+  <h2>Execution State</h2>
+  <dl class="detail-grid">
+    <div>
+      <dt>Assigned to</dt>
+      <dd><%= executionState.assignmentTargetLabel %></dd>
+    </div>
+    <% if (executionState.isGroup && executionState.assignmentMode) { %>
+      <div>
+        <dt>Assignment mode</dt>
+        <dd><%= executionState.assignmentModeLabel %></dd>
+      </div>
+    <% } %>
+    <div>
+      <dt>Auto-run behavior</dt>
+      <dd><%= executionState.autoRun.label %></dd>
+    </div>
+    <div>
+      <dt>Latest run</dt>
+      <dd>
+        <% if (executionState.latestRun) { %>
+          <a href="/runs/<%= executionState.latestRun.id %>">Run #<%= executionState.latestRun.id %></a>
+          <span class="status-badge status-<%= executionState.latestRun.status %>"><%= executionState.latestRun.status %></span>
+        <% } else { %>
+          - (no run yet)
+        <% } %>
+      </dd>
+    </div>
+    <div>
+      <dt>Last outcome</dt>
+      <dd><%= executionState.lastOutcomeLabel || '-' %></dd>
+    </div>
+    <div>
+      <dt>Current message</dt>
+      <dd>
+        <% if (executionState.currentMessage.text) { %>
+          <%= executionState.currentMessage.text %>
+          <span class="message-source">(source: <%= executionState.currentMessage.source %>)</span>
+        <% } else { %>
+          <span class="text-muted">none (source: <%= executionState.currentMessage.source %>)</span>
+        <% } %>
+      </dd>
+    </div>
+  </dl>
+  <% if (executionState.blocked && executionState.blockedReason) { %>
+    <p class="failure-reason"><%= executionState.blockedReason %></p>
+  <% } %>
+  <% if (executionState.group) { %>
+    <p class="text-muted">Group fan-out: <%= executionState.group.memberCount %> member<%= executionState.group.memberCount === 1 ? '' : 's' %> ·
+      work units: <%= executionState.group.workUnitsTotal %> generated, <%= executionState.group.workUnitsCompleted %> completed<%= executionState.group.workUnitsFailed > 0 ? ', ' + executionState.group.workUnitsFailed + ' failed' : '' %>.
+      Completes when all work units complete; fails if any required work unit fails.</p>
   <% } %>
 </section>
 <% } %>
@@ -192,7 +252,7 @@
     if (detailIsOpen && !detailHasAssignment) {
       openStateNote = 'Unassigned — not started.';
     } else if (detailIsOpen && detailHasAssignment && ticketRuns.length === 0) {
-      openStateNote = 'No runnable target — assignment cannot start.';
+      openStateNote = 'No run has been created yet. Execution target is not visible from the current ticket data.';
     }
   %>
   <% if (openStateNote) { %>

@@ -69,14 +69,15 @@
           if (isOpenTicket && !ticket.assignmentTargetName) {
             metadataItems.push('Unassigned — not started');
           } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel) {
-            metadataItems.push('No runnable target — assignment cannot start');
+            metadataItems.push('No run has been created yet; execution target is not visible from current data');
           }
           if (ticket.assignmentTargetType === 'group' && ticket.groupMemberCount != null) {
             const groupMemberCount = ticket.groupMemberCount;
             metadataItems.push('Group assignment — ' + groupMemberCount + ' group member' + (groupMemberCount === 1 ? '' : 's'));
           }
+          if (ticket.executionSummaryLabel) metadataItems.push('Execution: ' + ticket.executionSummaryLabel);
           if (ticket.currentMessage || (!ticket.currentRunDisplayLabel && ticket.activeRunIds && ticket.activeRunIds.length > 0)) metadataItems.push(ticket.currentMessage || 'No current output');
-          if (ticket.assignmentTargetName) metadataItems.push(ticket.assignmentTargetName);
+          if (ticket.assignmentTargetName) metadataItems.push('Assigned to: ' + ticket.assignmentTargetName);
           if (ticket.assignmentMode) metadataItems.push(ticket.assignmentMode === 'allocated' ? 'manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'automatic folder scopes' : ticket.assignmentMode);
           if (ticket.lastRunOperationalOutcomeLabel) metadataItems.push('latest run: ' + ticket.lastRunOperationalOutcomeLabel);
           if (ticket.updatedAt) metadataItems.push(new Date(ticket.updatedAt).toLocaleString());
@@ -148,6 +149,7 @@ function ticketSignature(ticket) {
     ticket.assignmentTargetId,
     ticket.assignmentTargetType,
     ticket.groupMemberCount == null ? '' : ticket.groupMemberCount,
+    ticket.executionSummaryLabel || '',
     (ticket.activeRunIds || []).join(','),
     ticket.lastRunStatus || '',
     ticket.lastRunOperationalOutcome || '',
@@ -244,7 +246,7 @@ function createTicketCard(ticket) {
   if (isOpenTicket && !ticket.assignmentTargetName) {
     metadataItems.push({ text: 'Unassigned — not started' });
   } else if (isOpenTicket && ticket.assignmentTargetName && !hasActiveRun && !ticket.currentRunDisplayLabel) {
-    metadataItems.push({ text: 'No runnable target — assignment cannot start' });
+    metadataItems.push({ text: 'No run has been created yet; execution target is not visible from current data' });
   }
 
   if (ticket.assignmentTargetType === 'group' && ticket.groupMemberCount != null) {
@@ -259,12 +261,16 @@ function createTicketCard(ticket) {
     metadataItems.push({ text: ticket.currentRunDisplayLabel + detail });
   }
 
+  if (ticket.executionSummaryLabel) {
+    metadataItems.push({ text: 'Execution: ' + ticket.executionSummaryLabel });
+  }
+
   if (ticket.currentMessage || (!ticket.currentRunDisplayLabel && activeRunIds.length > 0)) {
     metadataItems.push({ text: ticket.currentMessage || 'No current output' });
   }
 
   if (ticket.assignmentTargetName) {
-    metadataItems.push({ text: ticket.assignmentTargetName });
+    metadataItems.push({ text: 'Assigned to: ' + ticket.assignmentTargetName });
   }
 
   if (ticket.assignmentMode) {
