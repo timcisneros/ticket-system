@@ -50,6 +50,7 @@ const C = {
   openStopped: { tid: ++tid, rid: ++rid },
   blocked: { tid: ++tid },
   group: { tid: ++tid, rid: ++rid },
+  failed: { tid: ++tid, rid: ++rid },
   plan: 9001
 };
 
@@ -62,7 +63,9 @@ const newTickets = [
   // 2: blocked with feasibility reason
   { id: C.blocked.tid, objective: 'blocked case', assignmentTargetType: 'group', assignmentTargetId: group.id, assignmentMode: 'allocated', status: 'blocked', createdBy: 'admin', createdAt: now, updatedAt: now, blockedReason: 'Ticket objective requires paths not granted by authority:\nQ3/\nQ4/', feasibility: { status: 'blocked', reason: 'Ticket objective requires paths not granted by authority:\nQ3/\nQ4/', code: 'TICKET_FEASIBILITY_ERROR', kind: 'impossible_authority_scope', requiredWritableRoots: ['Q1/','Q2/','Q3/','Q4/'], grantedWritableRoots: ['Q1/','Q2/'], missingAuthorityGrants: ['Q3/','Q4/'] } },
   // 3: group-assigned with allocation plan / work units
-  { id: C.group.tid, objective: 'group case', assignmentTargetType: 'group', assignmentTargetId: group.id, assignmentMode: 'allocated', status: 'in_progress', createdBy: 'admin', createdAt: now, updatedAt: now }
+  { id: C.group.tid, objective: 'group case', assignmentTargetType: 'group', assignmentTargetId: group.id, assignmentMode: 'allocated', status: 'in_progress', createdBy: 'admin', createdAt: now, updatedAt: now },
+  // failed agent ticket: the list card must surface the failure reason, not just "failed — retry available"
+  { id: C.failed.tid, objective: 'failed reason case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'failed', createdBy: 'admin', createdAt: now, updatedAt: now }
 ];
 writeJ('tickets.json', newTickets);
 
@@ -81,8 +84,26 @@ writeJ('runs.json', [
       mutationCount: 0,
       mutationOutcome: 'no_mutations'
     })
+  }),
+  mkRun(C.failed.rid, C.failed.tid, 'failed', {
+    completedAt: now,
+    error: 'Agent API key is missing',
+    replaySnapshot: snap(C.failed.rid, C.failed.tid, {
+      terminalStatus: 'failed',
+      failureReason: 'Agent API key is missing',
+      mutationCount: 0,
+      mutationOutcome: 'no_mutations'
+    })
   })
 ]);
+
+// Seed a run.failed event so recentEventSummary().latestError surfaces the
+// reason (the same source Ticket Detail / Run Detail use). Written before the
+// server starts; the server's writeMissingFile leaves an existing log intact.
+fs.writeFileSync(
+  path.join(DATA_DIR, 'events.jsonl'),
+  JSON.stringify({ id: 'evt-failed-reason', ts: now, type: 'run.failed', ticketId: C.failed.tid, runId: C.failed.rid, stepId: null, payload: { error: 'Agent API key is missing' } }) + '\n'
+);
 
 writeJ('allocation-plans.json', [
   ...readJ('allocation-plans.json'),
@@ -139,6 +160,10 @@ const ok = (n, c) => c ? (pass++, console.log('  ✓ ' + n)) : (fail++, console.
     const stoppedCard = stoppedIndex === -1 ? '' : list.slice(stoppedIndex, blockedIndex === -1 ? stoppedIndex + 1200 : blockedIndex);
     ok('list: open ticket with stopped latest run shows latest run status', stoppedCard.includes('latest run:') && stoppedCard.includes('stopped'));
     ok('list: open ticket with stopped latest run does not claim no run exists', !stoppedCard.includes('No run has been created yet'));
+    const failedIndex = list.indexOf('failed reason case');
+    const failedCard = failedIndex === -1 ? '' : list.slice(failedIndex, failedIndex + 1200);
+    ok('list: failed ticket shows "failed — retry available"', failedCard.includes('Execution: failed — retry available'));
+    ok('list: failed ticket surfaces the failure reason on the card', failedCard.includes('Agent API key is missing'));
 
     console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}: ticket execution-state clarity (${pass} passed, ${fail} failed)`);
   } catch (e) { console.error('ERROR', e.stack || e.message); fail++; }

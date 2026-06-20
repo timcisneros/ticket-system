@@ -2890,7 +2890,15 @@ function enrichTicketForDisplay(ticket, context) {
     .slice()
     .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
   const currentRunDisplayState = primaryActiveRun ? getRunDisplayState(primaryActiveRun, context.logsByRunId) : null;
-  const currentMessage = primaryActiveRun ? getRunCurrentMessage(primaryActiveRun, context.logsByRunId) : null;
+  // For an active run show its live message; otherwise, for a terminally
+  // failed/interrupted ticket, surface the last run's failure reason (the same
+  // source Ticket Detail and Run Detail use) so the list card explains why,
+  // not just that it failed. Display-only; does not affect execution or retry.
+  const currentMessage = primaryActiveRun
+    ? getRunCurrentMessage(primaryActiveRun, context.logsByRunId)
+    : (lastRun && ['failed', 'interrupted'].includes(lastRun.status)
+        ? getRunCurrentMessage(lastRun, context.logsByRunId)
+        : null);
   const lastRunOperationalOutcome = lastRun ? classifyRunOperationalOutcome(lastRun) : null;
   const groupMemberCount = ticket.assignmentTargetType === 'group' && context.groupMembersById
     ? (context.groupMembersById[ticket.assignmentTargetId] || []).length
