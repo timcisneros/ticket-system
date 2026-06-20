@@ -2661,10 +2661,10 @@ function getRunDisplayState(run, logsByRunId) {
   };
 }
 
-function getRunCurrentMessage(run, logsByRunId) {
+function getRunCurrentMessage(run, logsByRunId, suppliedSummary = null) {
   if (!run) return null;
 
-  const eventSummary = recentEventSummary(run.id);
+  const eventSummary = suppliedSummary || recentEventSummary(run.id);
   if (eventSummary.latestError && eventSummary.latestError.message) return eventSummary.latestError.message;
   if (eventSummary.currentStep && run.status === 'running') {
     const action = eventSummary.currentStep.action || eventSummary.currentStep.stepId;
@@ -2690,10 +2690,10 @@ function getRunCurrentMessage(run, logsByRunId) {
 
 // Display-only: same fallback chain as getRunCurrentMessage, but also reports
 // which source the message came from so the UI can label freshness/derivation.
-function getRunCurrentMessageWithSource(run, logsByRunId) {
+function getRunCurrentMessageWithSource(run, logsByRunId, suppliedSummary = null) {
   if (!run) return { message: null, source: 'unavailable' };
 
-  const eventSummary = recentEventSummary(run.id);
+  const eventSummary = suppliedSummary || recentEventSummary(run.id);
   if (eventSummary.latestError && eventSummary.latestError.message) {
     return { message: eventSummary.latestError.message, source: 'latest run error' };
   }
@@ -3706,8 +3706,12 @@ function readRunScopedEvents(runId) {
   });
 }
 
-function recentEventSummary(runId) {
-  const events = getRunEvents(runId);
+// `suppliedEvents`, when an array, is used instead of re-reading the event log.
+// Callers that already hold getRunEvents(runId) for this run pass it in to avoid
+// a redundant full-log scan. The result is identical to computing from a fresh
+// getRunEvents(runId) read.
+function recentEventSummary(runId, suppliedEvents = null) {
+  const events = Array.isArray(suppliedEvents) ? suppliedEvents : getRunEvents(runId);
   const summary = {
     currentStep: null,
     latestStatus: null,
@@ -5016,9 +5020,13 @@ function getRunAuthorityEvidence(run) {
   });
 }
 
-function serializeRunRuntimeState(run, logsByRunId = null) {
+// `options.eventSummary`, when provided, is reused instead of recomputing the
+// run's event summary (and reused again for getRunCurrentMessage below), so a
+// single serialization scans the event log at most once. Callers serializing
+// the same run more than once per request supply it to avoid repeat scans.
+function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
   if (!run) return null;
-  const summary = recentEventSummary(run.id);
+  const summary = options.eventSummary || recentEventSummary(run.id);
   const replaySummary = run.replaySummary || extractReplaySummary(readRunReplaySnapshot(run)) || null;
   const effectiveLogsByRunId = logsByRunId || groupBy(readLogs(), log => log.runId);
   const runLogs = effectiveLogsByRunId.get(run.id) || [];
@@ -5046,7 +5054,7 @@ function serializeRunRuntimeState(run, logsByRunId = null) {
     authorityEvidence: getRunAuthorityEvidence(run),
     runEvaluation: run.runEvaluation || buildRunEvaluation(run),
     runConsequence: run.runConsequence || buildRunConsequence(run),
-    currentMessage: getRunCurrentMessage(run, effectiveLogsByRunId),
+    currentMessage: getRunCurrentMessage(run, effectiveLogsByRunId, summary),
     stateInconsistency: detectRunStateInconsistency(run, {
       logs: runLogs,
       replaySnapshot,
@@ -5070,6 +5078,15 @@ function getRuntimeStatusSnapshot() {
   const expiredLeases = runs.filter(run => run.status === 'running' && isRunLeaseExpired(run));
   const localAgentIds = new Set(readAgents().filter(isLocalModelAgent).map(agent => agent.id));
 
+  // The same run appears across activeRuns/pendingRuns/runningRuns/expiredLeases,
+  // so memoize its event summary once per request and reuse it for every
+  // serialization to avoid re-scanning the event log for the same run.
+  const summaryByRunId = new Map();
+  const serializeRunOnce = run => {
+    if (!summaryByRunId.has(run.id)) summaryByRunId.set(run.id, recentEventSummary(run.id));
+    return serializeRunRuntimeState(run, null, { eventSummary: summaryByRunId.get(run.id) });
+  };
+
   return {
     scheduler: {
       running: Boolean(runtimeScheduler && runtimeScheduler.isRunning()),
@@ -5081,10 +5098,10 @@ function getRuntimeStatusSnapshot() {
       activeLocalModelRuns: runningRuns.filter(run => localAgentIds.has(run.agentId)).length,
       startingLocalModelRuns: startingLocalModelRunIds.size
     },
-    activeRuns: activeRuns.map(run => serializeRunRuntimeState(run)),
-    pendingRuns: pendingRuns.map(run => serializeRunRuntimeState(run)),
-    runningRuns: runningRuns.map(run => serializeRunRuntimeState(run)),
-    expiredLeases: expiredLeases.map(run => serializeRunRuntimeState(run)),
+    activeRuns: activeRuns.map(serializeRunOnce),
+    pendingRuns: pendingRuns.map(serializeRunOnce),
+    runningRuns: runningRuns.map(serializeRunOnce),
+    expiredLeases: expiredLeases.map(serializeRunOnce),
     counts: {
       active: activeRuns.length,
       pending: pendingRuns.length,
@@ -5114,7 +5131,15 @@ function serializeTicketRuntimeState(ticketId) {
   const currentRun = ticketRuns.find(run => ['pending', 'running'].includes(run.status)) || null;
   const latestRun = ticketRuns[0] || null;
   const visibleRun = currentRun || latestRun;
-  const eventSummary = visibleRun ? recentEventSummary(visibleRun.id) : null;
+  // visibleRun, currentRun and latestRun frequently overlap, so memoize each
+  // run's event summary once and reuse it everywhere below to avoid re-scanning
+  // the event log for the same run.
+  const summaryByRunId = new Map();
+  const summaryFor = id => {
+    if (!summaryByRunId.has(id)) summaryByRunId.set(id, recentEventSummary(id));
+    return summaryByRunId.get(id);
+  };
+  const eventSummary = visibleRun ? summaryFor(visibleRun.id) : null;
   const outcome = latestRun ? classifyRunOperationalOutcome(latestRun) : null;
   const runStateInconsistency = visibleRun
     ? detectRunStateInconsistency(visibleRun, {
@@ -5125,9 +5150,9 @@ function serializeTicketRuntimeState(ticketId) {
 
   return {
     ticket,
-    currentRun: currentRun ? serializeRunRuntimeState(currentRun, logsByRunId) : null,
-    latestRun: latestRun ? serializeRunRuntimeState(latestRun, logsByRunId) : null,
-    currentMessage: visibleRun ? getRunCurrentMessage(visibleRun, logsByRunId) : null,
+    currentRun: currentRun ? serializeRunRuntimeState(currentRun, logsByRunId, { eventSummary: summaryFor(currentRun.id) }) : null,
+    latestRun: latestRun ? serializeRunRuntimeState(latestRun, logsByRunId, { eventSummary: summaryFor(latestRun.id) }) : null,
+    currentMessage: visibleRun ? getRunCurrentMessage(visibleRun, logsByRunId, eventSummary) : null,
     currentStep: eventSummary ? eventSummary.currentStep : null,
     leaseState: visibleRun ? serializeRunLease(visibleRun) : null,
     runStateInconsistency,
@@ -13446,7 +13471,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const displaySnapshot = createDisplaySnapshot(snapshot);
   const operationalOutcome = classifyRunOperationalOutcome(run);
   const runEvents = getRunEvents(runId);
-  const eventSummary = recentEventSummary(runId);
+  const eventSummary = recentEventSummary(runId, runEvents);
   const runStateInconsistency = detectRunStateInconsistency(run, {
     logs: readLogs().filter(log => log.runId === runId),
     events: runEvents,
@@ -13504,9 +13529,10 @@ fastify.get('/api/runs/:id/events', { preHandler: fastify.requireAuth }, async (
     return { error: 'Run not found' };
   }
 
+  const events = getRunEvents(runId);
   return {
-    events: getRunEvents(runId),
-    summary: recentEventSummary(runId)
+    events,
+    summary: recentEventSummary(runId, events)
   };
 });
 
