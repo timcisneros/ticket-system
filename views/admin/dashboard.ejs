@@ -142,9 +142,9 @@
       </div>
 
       <div class="form-group">
-        <label for="apiKey">OpenAI API Key <%= hasOpenAIApiKeyFallback ? '' : '*' %></label>
+        <label for="apiKey">Provider API Key <%= hasOpenAIApiKeyFallback ? '' : '*' %></label>
         <input type="password" id="apiKey" name="apiKey" placeholder="sk-...">
-        <p class="form-hint">Not used for Ollama.</p>
+        <p class="form-hint">Required for providers that need hosted API credentials. Leave blank for local providers such as Ollama unless your provider requires a key.</p>
       </div>
     </div>
 
