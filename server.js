@@ -5,6 +5,7 @@ const argon2 = require('argon2');
 const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
+const { readMatchingEvents } = require('./runtime/event-reader');
 require('dotenv').config()
 
 const PORT = process.env.PORT || 3099;
@@ -550,8 +551,7 @@ function advanceRunPhase(run, phase) {
 }
 
 function reconstructRunPhase(run) {
-  const allEvents = readEvents();
-  const runEvents = allEvents.filter(e => e.runId === run.id && !e._parseError).sort((a, b) => {
+  const runEvents = readRunScopedEvents(run.id).sort((a, b) => {
     const tsCmp = String(a.ts).localeCompare(String(b.ts));
     if (tsCmp !== 0) return tsCmp;
     if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq;
@@ -573,8 +573,7 @@ function reconstructRunPhase(run) {
 
 function reconstructResumableState(run) {
   // Read all events for this run
-  const allEvents = readEvents();
-  const runEvents = allEvents.filter(e => e.runId === run.id && !e._parseError).sort((a, b) => {
+  const runEvents = readRunScopedEvents(run.id).sort((a, b) => {
     const tsCmp = String(a.ts).localeCompare(String(b.ts));
     if (tsCmp !== 0) return tsCmp;
     if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq;
@@ -3659,14 +3658,44 @@ function readEvents() {
   return result;
 }
 
+// Merge persisted matches with not-yet-flushed buffered events under the same
+// predicate, preserving persisted-then-buffered order. This mirrors the old
+// readEvents() composition (persisted events followed by buffer entries not yet
+// on disk) that these bounded readers replaced.
+function readBufferedAndMatchingEvents({ needles, predicate }) {
+  const persisted = readMatchingEvents(EVENTS_FILE, { needles, predicate });
+  const persistedIds = new Set(persisted.map(event => event.id));
+  const buffered = pendingEventBuffer.filter(event => !persistedIds.has(event.id) && predicate(event));
+  return [...persisted, ...buffered];
+}
+
 function getRunEvents(runId) {
   const parsedRunId = parseInt(runId, 10);
   if (Number.isNaN(parsedRunId)) return [];
   const run = readRuns().find(item => item.id === parsedRunId) || null;
-  return readEvents().filter(event =>
-    event.runId === parsedRunId ||
-    (run && event.runId === null && event.ticketId === run.ticketId)
-  );
+  const ticketId = run ? run.ticketId : null;
+  // Raw-line prefilter: only run-id matches or (for the ticket-scoped branch)
+  // ticket-id matches can satisfy the predicate, so lines containing neither
+  // needle are skipped without parsing. The exact predicate runs after parse.
+  const needles = [`"runId":${parsedRunId}`];
+  if (Number.isInteger(ticketId)) needles.push(`"ticketId":${ticketId}`);
+  return readBufferedAndMatchingEvents({
+    needles,
+    predicate: event =>
+      event.runId === parsedRunId ||
+      (run && event.runId === null && event.ticketId === ticketId)
+  });
+}
+
+// Events for a single run scoped strictly by runId (excludes the ticket-scoped
+// null-runId events that getRunEvents also returns).
+function readRunScopedEvents(runId) {
+  const parsedRunId = parseInt(runId, 10);
+  if (Number.isNaN(parsedRunId)) return [];
+  return readBufferedAndMatchingEvents({
+    needles: [`"runId":${parsedRunId}`],
+    predicate: event => event.runId === parsedRunId
+  });
 }
 
 function recentEventSummary(runId) {
@@ -7870,7 +7899,7 @@ function interruptStaleRunsOnStartup() {
   });
 
   staleRuns.forEach(run => {
-    const runEvents = readEvents().filter(e => e.runId === run.id);
+    const runEvents = readRunScopedEvents(run.id);
     const resumeState = reconstructResumableState(run);
     if (resumeState && resumeState.safeToResumeExecution) {
       // Safe to resume: clear stale lease and return to pending
@@ -11415,7 +11444,6 @@ async function runAgentTicket(runId) {
     const mutationsByThisRun = [];
 
     // ── Resumable execution check ─────────────────────────────────
-    const beforeEvents = readEvents();
     const resumeState = reconstructResumableState(run);
     if (resumeState) {
       appendRunLog(run, 'run:resume_check', `Resumable state detected: ${resumeState.priorEvents} prior events, execution=${resumeState.safeToResumeExecution}, reconcile=${resumeState.safeToReconcileTerminalState}, unsafe=${resumeState.unsafeToContinue}, nextPhase=${resumeState.expectedNextPhase}`);
