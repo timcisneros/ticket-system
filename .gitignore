@@ -9,6 +9,7 @@ data-backup-*/
 data/replay-snapshots/
 data/benchmark-artifacts/
 data/events.jsonl
+data/event-archive/
 
 # Logs
 logs
