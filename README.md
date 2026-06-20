@@ -1,6 +1,6 @@
 # Ticket System
 
-## v0.1.0 Internal Demo Baseline
+## Internal Demo Baseline
 
 This is an internal/demo baseline for a local ticket-runner work substrate. It
 demonstrates ticket creation, assignment, agent execution, workspace mutations,
@@ -11,8 +11,12 @@ This baseline is not production security hardened, multi-user/hosted deployment
 ready, an arbitrary task correctness guarantee, final UX, an RL/training system,
 or a general verifier for all domains.
 
-Proposed tag: `v0.1.0-internal-demo`. Do not create the tag until these release
-docs are merged and a final checkpoint passes.
+Current released milestones:
+
+- `v0.1.0-internal-demo`
+- `v0.1.1-demo-hardening`
+- `v0.1.2-event-log-hardening`
+- `v0.1.3-dev-env-overrides`
 
 ## Local Setup
 
@@ -203,9 +207,15 @@ untracking transition — not an automatic reset, rotation, or compaction.
 ## First Demo Flow
 
 `npm run dev` starts with ignored local demo data (`.local-data` /
-`.local-workspace`). On a fresh `.local-data` directory, only the bootstrap admin
-account is created automatically — there are no seeded agents. Create/configure
-an agent before creating an agent-assigned ticket.
+`.local-workspace`). A fresh `.local-data` store is seeded from the tracked demo
+data, so seeded demo agents may already exist alongside the bootstrap admin
+account. Those seeded agents are configuration examples, not ready-to-run live
+credentials — they carry no provider keys. Configure provider/model/key through
+Admin (or set provider env) on an existing seeded agent, or create a new agent,
+before expecting successful agent execution.
+
+If a provider key is missing, the run should fail clearly with an "Agent API key
+is missing" message rather than pretending success.
 
 GUI demo steps:
 
