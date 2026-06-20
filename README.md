@@ -37,6 +37,11 @@ WORKSPACE_ROOT=.local-workspace
 PORT=3099
 ```
 
+`npm run dev` defaults to `.local-data` / `.local-workspace` but preserves
+caller-provided `DATA_DIR` and `WORKSPACE_ROOT`, so
+`DATA_DIR=/tmp/custom-data WORKSPACE_ROOT=/tmp/custom-workspace npm run dev`
+uses those paths instead.
+
 Open:
 
 ```txt
