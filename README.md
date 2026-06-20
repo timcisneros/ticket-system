@@ -176,6 +176,25 @@ operator-controlled maintenance.
   `--reset` requires `--archive`, so a log is never truncated without first
   preserving its evidence.
 
+### Pulling the untracking change
+
+`data/events.jsonl` used to be tracked. When a clone pulls (or fast-forwards to)
+the commit that stopped tracking it, Git may remove the working-tree copy because
+the file was tracked before that commit. This is **expected Git behavior** for the
+untracking transition — not an automatic reset, rotation, or compaction.
+
+- If you do not need the old local log, **no action is required**; the app
+  creates a fresh ignored log on future writes.
+- If you need the previous tracked contents, **restore it deliberately** from the
+  last commit that tracked it:
+
+  ```sh
+  git show aedd919c3efa2fd910bbb0b63439c0988d064510:data/events.jsonl > data/events.jsonl
+  ```
+
+  The restored file remains ignored/untracked. This is a one-time, operator-chosen
+  restore — nothing in the app rewrites or rotates the log for you.
+
 ## First Demo Flow
 
 `npm run dev` starts with ignored local demo data (`.local-data` /
