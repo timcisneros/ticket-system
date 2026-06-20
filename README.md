@@ -235,6 +235,26 @@ GUI demo steps:
 8. Use Admin debug reset only when intentionally clearing local demo/dev runtime
    state.
 
+### Demo model guidance
+
+The local seeded Ollama agents are useful for exercising the runtime and the
+failure-evidence path, but small local models may not reliably follow the agent
+protocol. For the most reliable green-path demo, configure a stronger
+provider/model through Admin before creating the ticket.
+
+Best observed local objective:
+
+```txt
+Create a folder named demo and stop.
+```
+
+With local Ollama/`gemma3`, this may complete or may fail honestly with a
+model/protocol/runtime explanation — that is expected for the local seed model
+and is not an app defect. A failed run is still useful: it lets you verify
+status, logs, Run Detail evidence, retry controls, and the recovery wording. A
+green local success is possible but not guaranteed; use a stronger configured
+provider/model when you need a dependable green run.
+
 For CLI-driven runs, prefer:
 
 ```sh
