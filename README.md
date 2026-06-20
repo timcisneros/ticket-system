@@ -258,10 +258,28 @@ provider/model when you need a dependable green run.
 For CLI-driven runs, prefer:
 
 ```sh
+node scripts/oquery.js agents                                  # discover agent id/name
 node scripts/oquery.js login --url http://127.0.0.1:3099
 node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent <agent-name-or-id> --wait --json "Create folder A B C and D"
 npm run codex:trace -- --run <runId>
 ```
+
+`oquery` is a headless equivalent of the UI. Beyond inspection (`tickets`,
+`runs`, `logs`, `mutations`, `replay`, `failures`, `search`, `stats`), it
+exposes the operator actions that mirror the UI controls:
+
+```sh
+node scripts/oquery.js agents              # list agents (id, name, provider/model)
+node scripts/oquery.js stop <runId>        # stop an active run (UI "Stop Run")
+node scripts/oquery.js retry <runId>       # retry a failed/interrupted run (UI "Retry")
+node scripts/oquery.js rerun <ticketId>    # rerun a ticket from the beginning (UI "Rerun")
+```
+
+The mutating actions (`stop`, `retry`, `rerun`) use the cached session from
+`login` and reflect the API response truthfully — they report clearly when an
+action is not applicable (e.g. stopping a run that is no longer active) rather
+than inventing success. Provider-key configuration and the destructive Admin
+debug reset remain UI-only by design.
 
 The CLI example requires an agent that exists in the selected `DATA_DIR`. The
 tracked seed may include example agents, but `npm run dev` uses `.local-data` by

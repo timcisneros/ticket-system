@@ -1385,6 +1385,117 @@ async function cmdStats(args) {
   console.log('');
 }
 
+// ── Operator action commands (headless equivalents of UI controls) ──
+
+// List agents from the local store so an operator can discover the id/name to
+// assign without reading raw agents.json. Never prints provider API keys.
+function cmdAgents(args) {
+  const agents = readJson('agents.json');
+  if (args.json) {
+    console.log(JSON.stringify(agents.map(a => ({
+      id: a.id, name: a.name || `Agent ${a.id}`, provider: a.provider || null, model: a.model || null
+    })), null, 2));
+    return;
+  }
+  if (!agents.length) {
+    console.log(dim('  No agents in the local store.'));
+    return;
+  }
+  console.log(`  ${bold('Agents')}`);
+  for (const a of agents) {
+    const name = a.name || `Agent ${a.id}`;
+    const pm = `${a.provider || '?'}/${a.model || '?'}`;
+    console.log(`    ${cyan('A' + a.id)}  ${bold(name)}  ${dim(pm)}`);
+  }
+  console.log(dim('\n  Assign with: oquery create-ticket --agent <id|name> "<objective>"'));
+}
+
+// Shared helper for authenticated mutating POSTs. Returns { status, data }.
+async function postOperatorAction(url, cookie, routePath, body) {
+  const headers = { 'Cookie': `sessionId=${cookie}` };
+  if (body !== undefined) headers['Content-Type'] = 'application/x-www-form-urlencoded';
+  const res = await httpReq('POST', `${url}${routePath}`, { headers, body });
+  let data = null;
+  try { data = res.body ? JSON.parse(res.body) : null; } catch (e) { data = null; }
+  return { status: res.status, data };
+}
+
+function requireSession(args) {
+  const cookie = readCookie();
+  if (!cookie) {
+    const message = 'Not logged in. Run oquery login first.';
+    if (args.json) console.log(JSON.stringify({ error: 'not_authenticated', message }, null, 2));
+    else console.log(red('  ✗ Not logged in. Run') + ` ${bold('oquery login')} ${red('first.')}`);
+    return null;
+  }
+  return cookie;
+}
+
+// Truthfully report a non-2xx operator-action response. Never invents success.
+function reportActionError(args, status, data) {
+  const message = (data && data.error) || `HTTP ${status}`;
+  if (status === 401 || status === 403) {
+    if (args.json) return console.log(JSON.stringify({ error: 'permission_denied', status, message }, null, 2));
+    return console.log(red('  ✗ ' + message + '. If your session expired, run') + ` ${bold('oquery login')} ${red('again.')}`);
+  }
+  if (args.json) return console.log(JSON.stringify({ error: 'action_rejected', status, message }, null, 2));
+  console.log(red(`  ✗ ${message}`));
+}
+
+// Stop an active run (UI "Stop Run"). POST /api/runs/:id/stop
+async function cmdStop(args) {
+  const runId = parseInt(args._[0] || args.id, 10);
+  if (Number.isNaN(runId)) return console.log(red('Usage: oquery stop <runId>'));
+  const cookie = requireSession(args); if (!cookie) return;
+  const url = args.url || opercUrl();
+  const { status, data } = await postOperatorAction(url, cookie, `/api/runs/${runId}/stop`);
+  if (status === 200 && data && data.run) {
+    if (args.json) return console.log(JSON.stringify({ runId, action: 'stop', status: data.run.status }, null, 2));
+    console.log(`  ${green('✓')} Stop requested for Run #${runId}.`);
+    console.log(`  Run is now ${statusTag(data.run.status)}.`);
+    console.log(dim(`  Next: oquery runs --id ${runId}`));
+    return;
+  }
+  reportActionError(args, status, data);
+}
+
+// Retry a failed/interrupted run (UI "Retry"). POST /api/runs/:id/retry
+async function cmdRetry(args) {
+  const runId = parseInt(args._[0] || args.id, 10);
+  if (Number.isNaN(runId)) return console.log(red('Usage: oquery retry <runId>'));
+  const cookie = requireSession(args); if (!cookie) return;
+  const url = args.url || opercUrl();
+  const { status, data } = await postOperatorAction(url, cookie, `/api/runs/${runId}/retry`);
+  if (status === 200 && data && data.ticket) {
+    const t = data.ticket;
+    if (args.json) return console.log(JSON.stringify({ runId, action: 'retry', ticketId: t.id, ticketStatus: t.status }, null, 2));
+    console.log(`  ${green('✓')} Retry requested for Run #${runId}.`);
+    console.log(`  Ticket #${t.id} reopened and a new run started (${statusTag(t.status)}).`);
+    console.log(dim(`  Next: oquery runs --ticket ${t.id}`));
+    return;
+  }
+  reportActionError(args, status, data);
+}
+
+// Rerun a ticket from the beginning (UI "Rerun"). POST /api/tickets/:id/rerun
+async function cmdRerun(args) {
+  const ticketId = parseInt(args._[0] || args.ticket, 10);
+  if (Number.isNaN(ticketId)) return console.log(red('Usage: oquery rerun <ticketId>'));
+  const cookie = requireSession(args); if (!cookie) return;
+  const url = args.url || opercUrl();
+  const mode = args.reassess ? 'reassess' : 'retry';
+  const { status, data } = await postOperatorAction(url, cookie, `/api/tickets/${ticketId}/rerun`, `mode=${mode}`);
+  if (status === 200 && data && data.ticket) {
+    const t = data.ticket;
+    if (args.json) return console.log(JSON.stringify({ ticketId: t.id, action: 'rerun', mode, ticketStatus: t.status }, null, 2));
+    console.log(`  ${green('✓')} Rerun requested for Ticket #${ticketId} (mode: ${mode}).`);
+    console.log(`  Ticket reopened and a new run started (${statusTag(t.status)}).`);
+    console.log(dim(`  Next: oquery runs --ticket ${t.id}`));
+    return;
+  }
+  reportActionError(args, status, data);
+}
+
 // ── Main ──
 
 function help() {
@@ -1452,10 +1563,26 @@ function help() {
     stats           Show operational statistics
       --api           Query remote server substrate
 
+    agents          List agents from the local store (id, name, provider/model)
+                      Use the id/name with create-ticket --agent
+      --json          Raw JSON output
+
   ${bold('Operator Actions:')}
     login           Authenticate and cache session
                       Env: OPERC_URL, OPERC_USERNAME, OPERC_PASSWORD
                       Prompts interactively if env vars not set
+
+    stop <runId>    Stop an active (pending/running) run
+                      Reflects the API response; reports clearly if not active
+      --json          Raw JSON output
+
+    retry <runId>   Retry a failed/interrupted run (reopens the ticket)
+      --json          Raw JSON output
+
+    rerun <ticketId>
+                    Rerun a ticket from the beginning
+      --reassess      Use reassess mode instead of retry
+      --json          Raw JSON output
 
     create-ticket <objective>
                     Create a new ticket via API
@@ -1481,6 +1608,10 @@ function help() {
     node scripts/oquery.js coverage 3
     node scripts/oquery.js coverage 5 --json
     node scripts/oquery.js stats
+    node scripts/oquery.js agents
+    node scripts/oquery.js stop 4
+    node scripts/oquery.js retry 3
+    node scripts/oquery.js rerun 1
 `);
 }
 
@@ -1488,7 +1619,7 @@ async function main() {
   const cmd = process.argv[2];
   if (!cmd || cmd === '--help' || cmd === '-h') return help();
 
-  const boolFlags = new Set(['api', 'json', 'help', 'h', 'wait']);
+  const boolFlags = new Set(['api', 'json', 'help', 'h', 'wait', 'reassess']);
   const args = { _: [] };
   for (let i = 3; i < process.argv.length; i++) {
     const a = process.argv[i];
@@ -1525,12 +1656,19 @@ async function main() {
     coverage: cmdCoverage,
     search: cmdSearch,
     stats: cmdStats,
+    agents: cmdAgents,
   };
 
   if (cmd === 'login') {
     await cmdLogin(args).catch(e => console.error(red('Error: ' + e.message)));
   } else if (cmd === 'create-ticket') {
     await cmdCreateTicket(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'stop') {
+    await cmdStop(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'retry') {
+    await cmdRetry(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'rerun') {
+    await cmdRerun(args).catch(e => console.error(red('Error: ' + e.message)));
   } else if (cmds[cmd]) {
     if (!args.json) {
       console.log(sourceLabelLine(args));
