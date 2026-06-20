@@ -1570,6 +1570,8 @@ function help() {
   ${bold('Operator Actions:')}
     login           Authenticate and cache session
                       Env: OPERC_URL, OPERC_USERNAME, OPERC_PASSWORD
+                      OPERC_COOKIE_PATH overrides the cached-session file
+                      (default: .opercookie) — set it to isolate sessions
                       Prompts interactively if env vars not set
 
     stop <runId>    Stop an active (pending/running) run

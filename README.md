@@ -281,6 +281,9 @@ action is not applicable (e.g. stopping a run that is no longer active) rather
 than inventing success. Provider-key configuration and the destructive Admin
 debug reset remain UI-only by design.
 
+`login` caches the session to `.opercookie` by default; set `OPERC_COOKIE_PATH`
+to store it elsewhere (for example to isolate sessions across stores).
+
 The CLI example requires an agent that exists in the selected `DATA_DIR`. The
 tracked seed may include example agents, but `npm run dev` uses `.local-data` by
 default, so create an agent first or replace `<agent-name-or-id>` with an agent
