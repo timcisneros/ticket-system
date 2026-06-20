@@ -26,7 +26,11 @@
   </div>
   <% if (operationHistory && operationHistory.length > 0) { %>
     <div class="partial-execution-recovery">
-      <span class="text-muted">Review Operation History below for recovery options.</span>
+      <% if (failureSummary && !failureSummary.recoveryAvailable) { %>
+        <span class="text-muted">This run has replay/evidence data, but no safe automatic recovery action is currently offered. Review Operation History before retrying or applying manual cleanup.</span>
+      <% } else { %>
+        <span class="text-muted">Review Operation History below for recovery options.</span>
+      <% } %>
     </div>
   <% } %>
 </section>
@@ -146,8 +150,8 @@
       <dd><%= failureSummary.outputSatisfaction.label %></dd>
     </div>
     <div>
-      <dt>Recovery Available</dt>
-      <dd><span class="badge badge--<%= failureSummary.recoveryAvailable ? 'recovery-recoverable' : 'outcome-noop' %>"><%= failureSummary.recoveryAvailable ? 'Yes' : 'No' %></span></dd>
+      <dt>Recovery Action</dt>
+      <dd><span class="badge badge--<%= failureSummary.recoveryAvailable ? 'recovery-recoverable' : 'outcome-noop' %>"><%= failureSummary.recoveryAvailable ? 'Available' : 'Not currently offered' %></span></dd>
     </div>
     <div>
       <dt>Debug Details</dt>
@@ -554,16 +558,16 @@
               <dd><span class="badge badge--<%= ac.controls.interruptible ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.interruptible ? 'Yes' : 'No' %></span></dd>
             </div>
             <div class="authority-row">
-              <dt>Recoverable</dt>
-              <dd><span class="badge badge--<%= ac.controls.recoverable ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.recoverable ? 'Yes' : 'No' %></span></dd>
+              <dt>Recovery Analysis</dt>
+              <dd><span class="badge badge--<%= ac.controls.recoverable ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.recoverable ? 'Possible' : 'Not available' %></span></dd>
             </div>
             <div class="authority-row">
-              <dt>Replay Available</dt>
-              <dd><span class="badge badge--<%= ac.controls.replayAvailable ? 'outcome-success' : 'outcome-error' %>"><%= ac.controls.replayAvailable ? 'Yes' : 'No' %></span></dd>
+              <dt>Replay Evidence</dt>
+              <dd><span class="badge badge--<%= ac.controls.replayAvailable ? 'outcome-success' : 'outcome-error' %>"><%= ac.controls.replayAvailable ? 'Available' : 'Not available' %></span></dd>
             </div>
             <div class="authority-row">
-              <dt>Recovery Available</dt>
-              <dd><% if (ac.controls.recoveryAvailable === true) { %><span class="badge badge--recovery-recoverable">Yes</span><% } else if (ac.controls.recoveryAvailable === false) { %><span class="badge badge--outcome-noop">No</span><% } else { %><span class="badge badge--outcome-noop">N/A</span><% } %></dd>
+              <dt>Recovery Action</dt>
+              <dd><% if (ac.controls.recoveryAvailable === true) { %><span class="badge badge--recovery-recoverable">Available</span><% } else if (ac.controls.recoveryAvailable === false) { %><span class="badge badge--outcome-noop">Not currently offered</span><% } else { %><span class="badge badge--outcome-noop">N/A</span><% } %></dd>
             </div>
           </dl>
         </div>

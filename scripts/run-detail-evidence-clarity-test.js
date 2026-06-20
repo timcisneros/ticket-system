@@ -118,6 +118,13 @@ const ok = (n, c) => c ? (pass++, console.log('  ✓ ' + n)) : (fail++, console.
     ok('3: cap note says truncated and run continued', p3.includes('truncated') && p3.includes('the run continued'));
     ok('3: cap note mentions deferred complete:true', p3.includes('complete:true was not honored for that response'));
 
+    // Recovery wording clarity: replay-evidence vs recovery-action are distinct
+    // labels, and the contradictory old wording is gone (no "Recoverable: Yes"
+    // alongside "Recovery Available: No" on the same page).
+    ok('recovery wording: "Replay Evidence" replaces "Replay Available"', p2.includes('Replay Evidence') && !p2.includes('Replay Available'));
+    ok('recovery wording: "Recovery Action" replaces "Recovery Available"', p2.includes('Recovery Action') && !p2.includes('Recovery Available'));
+    ok('recovery wording: "Recovery Analysis" replaces bare "Recoverable" label', p2.includes('Recovery Analysis') && !/<dt>Recoverable<\/dt>/.test(p2));
+
     console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}: run-detail evidence clarity (${pass} passed, ${fail} failed)`);
   } catch (e) { console.error('ERROR', e.stack || e.message); fail++; }
   finally { server.kill(); await sleep(200); fs.rmSync(DATA_DIR, { recursive: true, force: true }); fs.rmSync(WORKSPACE_ROOT, { recursive: true, force: true }); process.exit(fail ? 1 : 0); }
