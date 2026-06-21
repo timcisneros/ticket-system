@@ -252,7 +252,7 @@
     if (detailIsOpen && !detailHasAssignment) {
       openStateNote = 'Unassigned — not started.';
     } else if (detailIsOpen && detailHasAssignment && ticketRuns.length === 0) {
-      openStateNote = 'No run has been created yet. Execution target is not visible from the current ticket data.';
+      openStateNote = 'No run started yet for the assigned target. Check the agent or group configuration.';
     }
   %>
   <% if (openStateNote) { %>

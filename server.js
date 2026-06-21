@@ -2760,9 +2760,17 @@ function buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, g
   } else if (activeRun) {
     autoRun = { state: 'running', label: 'Running now (a run is active for this ticket).' };
   } else if (ticket.status === 'open' && ticketRuns.length === 0) {
-    autoRun = { state: 'no_target', label: 'No run has been created yet. Execution target is not visible from the current ticket data.' };
+    // Message-only: state stays 'no_target'. When the target is a group we can
+    // name the most common concrete cause (no agents in the group) accurately
+    // from memberCount; otherwise stay generic rather than speculate.
+    autoRun = {
+      state: 'no_target',
+      label: isGroup && memberCount === 0
+        ? 'No run started: this group has no agents. Add agents to the group to enable a run.'
+        : 'No run started yet for the assigned target. Check the agent or group configuration.'
+    };
   } else if (ticket.status === 'open') {
-    autoRun = { state: 'auto', label: 'Execution behavior: this open assigned ticket is expected to auto-run under the current runtime rules.' };
+    autoRun = { state: 'auto', label: 'Will start a run automatically (ticket is open and assigned).' };
   } else {
     autoRun = { state: 'manual', label: 'No — ticket is not open. Use Rerun to start a new run.' };
   }
@@ -2871,7 +2879,7 @@ function detectRunStateInconsistency(run, {
   if (uniqueReasons.length === 0) return null;
 
   return {
-    message: 'State inconsistency detected: this run may be reading stale historical event data. Inspect reset/run history before trusting this run.',
+    message: 'State inconsistency detected: this run’s evidence includes events from before this run (often left over from an earlier reset). Review reset/run history before relying on this run’s status.',
     reasons: uniqueReasons
   };
 }
@@ -2912,7 +2920,8 @@ function enrichTicketForDisplay(ticket, context) {
     : Boolean(target);
   let executionSummaryLabel = null;
   if (ticketBlocked) executionSummaryLabel = 'blocked';
-  else if (ticket.status === 'open' && hasRunnableTarget) executionSummaryLabel = 'eligible to auto-run under current rules';
+  else if (ticket.status === 'open' && hasRunnableTarget) executionSummaryLabel = 'will run automatically';
+  else if (ticket.status === 'open' && ticket.assignmentTargetType === 'group') executionSummaryLabel = 'open — group has no agents';
   else if (ticket.status === 'completed') executionSummaryLabel = 'completed — rerun available';
   else if (ticket.status === 'failed') executionSummaryLabel = 'failed — retry available';
 
@@ -8510,7 +8519,7 @@ function getAgentOpenAIConfig(agent) {
   const model = String(agent.model || process.env.OPENAI_MODEL || '').trim();
 
   if (!apiKey) {
-    throw new Error('Agent API key is missing');
+    throw new Error('Agent API key is missing — set the agent’s API key or the OPENAI_API_KEY environment variable.');
   }
 
   if (!model) {

@@ -10,7 +10,7 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'run-state-warning-data-'
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'run-state-warning-workspace-'));
 const PORT = String(5900 + Math.floor(Math.random() * 300));
 const BASE_URL = 'http://127.0.0.1:' + PORT;
-const WARNING_TEXT = 'State inconsistency detected: this run may be reading stale historical event data. Inspect reset/run history before trusting this run.';
+const WARNING_TEXT = 'State inconsistency detected: this run’s evidence includes events from before this run (often left over from an earlier reset). Review reset/run history before relying on this run’s status.';
 const STAMP = Date.now();
 
 let server = null;

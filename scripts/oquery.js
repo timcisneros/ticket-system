@@ -253,8 +253,8 @@ function ticketWithOperationalOutcome(ticket, data) {
 }
 
 function sourceLabel(args) {
-  if (args.api) return `[remote substrate: ${args.url || opercUrl()}]`;
-  return `[local substrate: ${DATA_DIR}]`;
+  if (args.api) return `[remote substrate — live server: ${args.url || opercUrl()}]`;
+  return `[local substrate — files on disk, not the running server: ${DATA_DIR}]`;
 }
 
 function sourceLabelLine(args) {
@@ -286,7 +286,7 @@ async function printDivergenceWarning(args) {
     any = true;
   }
   if (any) {
-    console.log(dim(`    Pass --api to query server substrate.`));
+    console.log(dim(`    These reads come from local files on disk, not the running server. Pass --api to query the server.`));
     console.log('');
   }
 }
