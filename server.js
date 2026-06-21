@@ -3339,14 +3339,14 @@ function buildRunCompletionSummary(run, snapshot, runEvents, operationHistory, f
     const postcondition = findSnap('run:postcondition_completed');
     if (postcondition) {
       source = 'postcondition';
-      label = 'Completed: required postconditions verified.' + (postcondition.message ? ' ' + postcondition.message : (postcondition.reason ? ' ' + postcondition.reason : ''));
+      label = 'Completed: required postconditions verified — declared postconditions only; not independently verified against the full ticket objective.' + (postcondition.message ? ' ' + postcondition.message : (postcondition.reason ? ' ' + postcondition.reason : ''));
       if (Array.isArray(postcondition.checkedPaths)) checkedPaths = postcondition.checkedPaths;
     } else if (findSnap('workspace.objective_satisfied')) {
       source = 'workspace_objective';
-      label = 'Completed: workspace objective satisfied by successful mutation evidence.';
+      label = 'Completed — agent workspace changes were applied (not independently verified against the full ticket objective).';
     } else if (findSnap('workflow.draft_objective_satisfied')) {
       source = 'workflow_draft';
-      label = 'Completed: workflow draft objective satisfied.';
+      label = 'Completed — workflow draft output was produced (not independently verified against the full ticket objective).';
     } else if (findSnap('run:completed_noop')) {
       source = 'completed_noop';
       label = 'Completed with no workspace changes (model reported complete with no actions).';
@@ -3469,9 +3469,9 @@ function displayOperationalOutcome(outcome, mutationCount = 0) {
   const labels = {
     'blocked/rejected': 'blocked',
     interrupted: 'stopped',
-    completed_with_verified_postcondition: 'completed: already satisfied',
-    completed_with_mutations: 'completed with changes',
-    completed_noop: 'completed: no changes needed',
+    completed_with_verified_postcondition: 'completed — postconditions checked',
+    completed_with_mutations: 'completed — changes applied',
+    completed_noop: 'completed — no workspace change needed',
     impossible_within_boundary: 'could not complete in workspace',
     failed_execution: mutationCount > 0 ? 'failed after partial work' : 'failed',
     running: 'running',
@@ -3490,7 +3490,7 @@ function displayLogType(type) {
     'run:completed': 'completed',
     'run:capability_started': 'workflow started',
     'run:capability_completed': 'workflow completed',
-    'run:postcondition_completed': 'already satisfied',
+    'run:postcondition_completed': 'postconditions checked',
     'model:request': 'waiting on model',
     'model:response': 'model response',
     'model:no_progress': 'no progress',

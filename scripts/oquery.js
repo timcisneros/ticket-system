@@ -72,14 +72,17 @@ function statusTag(s) {
   return yellow(s || 'unknown');
 }
 
+// Render the internal outcome code as a truthful operator-facing label. The
+// codes are kept internally for logic/comparison; only the display text here is
+// reworded so the CLI does not over-claim objective verification.
 function outcomeTag(s) {
-  if (s === 'completed_with_verified_postcondition') return green(s);
-  if (s === 'completed_with_mutations') return green(s);
-  if (s === 'completed_noop') return yellow(s);
-  if (s === 'impossible_within_boundary') return yellow(s);
-  if (s === 'blocked/rejected') return red(s);
-  if (s === 'failed_execution') return red(s);
-  if (s === 'interrupted') return yellow(s);
+  if (s === 'completed_with_verified_postcondition') return green('completed — postconditions checked');
+  if (s === 'completed_with_mutations') return green('completed — changes applied');
+  if (s === 'completed_noop') return yellow('completed — no workspace change needed');
+  if (s === 'impossible_within_boundary') return yellow('could not complete in workspace');
+  if (s === 'blocked/rejected') return red('blocked');
+  if (s === 'failed_execution') return red('failed');
+  if (s === 'interrupted') return yellow('stopped');
   return dim(s || 'unknown');
 }
 
