@@ -141,6 +141,21 @@
       work units: <%= executionState.group.workUnitsTotal %> generated, <%= executionState.group.workUnitsCompleted %> completed<%= executionState.group.workUnitsFailed > 0 ? ', ' + executionState.group.workUnitsFailed + ' failed' : '' %>.
       Completes when all work units complete; fails if any required work unit fails.</p>
   <% } %>
+  <% if (ticket.assignmentTargetType === 'group' && ticket.assignmentMode === 'dynamic') { %>
+    <%
+      const dynamicScopeMap = ticket.ownedOutputPaths && typeof ticket.ownedOutputPaths === 'object' && !Array.isArray(ticket.ownedOutputPaths)
+        ? ticket.ownedOutputPaths : null;
+    %>
+    <p class="text-muted">Automatic folder scopes: group agents are assigned to existing top-level workspace folders in deterministic order (folders by name, agents by id). The ticket runs only when there are at least as many usable folders as group agents.</p>
+    <% if (dynamicScopeMap && Object.keys(dynamicScopeMap).length > 0) { %>
+      <ul class="text-muted">
+        <% Object.keys(dynamicScopeMap).forEach(agentId => { %>
+          <% const scopedAgent = agents.find(a => String(a.id) === String(agentId)); %>
+          <li><%= scopedAgent ? scopedAgent.name : 'Agent #' + agentId %> → <code class="owned-path"><%= dynamicScopeMap[agentId] %></code></li>
+        <% }) %>
+      </ul>
+    <% } %>
+  <% } %>
 </section>
 <% } %>
 
@@ -251,6 +266,8 @@
     let openStateNote = null;
     if (detailIsOpen && !detailHasAssignment) {
       openStateNote = 'Unassigned — not started.';
+    } else if (detailIsOpen && detailHasAssignment && ticketRuns.length === 0 && ticket.assignmentTargetType === 'group' && ticket.assignmentMode === 'dynamic') {
+      openStateNote = 'No run started yet. Automatic folder scopes need at least one usable top-level workspace folder per group agent.';
     } else if (detailIsOpen && detailHasAssignment && ticketRuns.length === 0) {
       openStateNote = 'No run started yet for the assigned target. Check the agent or group configuration.';
     }

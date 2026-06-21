@@ -75,7 +75,8 @@
       <option value="dynamic">Automatic folder scopes</option>
     </select>
     <p class="form-hint">
-      Manual scopes use folders you choose for each agent. Automatic scopes assign agents to existing top-level workspace folders.
+      Manual scopes use folders you choose for each agent. Automatic scopes assign group agents to existing top-level workspace folders in deterministic order (folders by name, agents by id).
+      Automatic scopes can run only if there are at least as many usable top-level folders as the selected group has agents; otherwise the ticket is rejected at creation.
       Group tickets work best when each agent can produce an independent additive output inside its own scope.
     </p>
   </div>
