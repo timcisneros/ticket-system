@@ -58,7 +58,8 @@
     <select id="assignmentTargetId" name="assignmentTargetId" required disabled>
       <option value="">Select a target type first</option>
       <% agents.forEach(agent => { %>
-        <option value="<%= agent.id %>" data-target-type="agent"><%= agent.name %></option>
+        <% const agentSetupHint = agent.provider === 'ollama' ? 'needs local Ollama' : 'needs OPENAI_API_KEY'; %>
+        <option value="<%= agent.id %>" data-target-type="agent"><%= agent.name %> — <%= agent.provider %>/<%= agent.model %> (<%= agentSetupHint %>)</option>
       <% }); %>
       <% agentGroups.forEach(group => { %>
         <option value="<%= group.id %>" data-target-type="group"><%= group.name %></option>

@@ -73,7 +73,7 @@
   },
   {
     "id": "legal-intake",
-    "name": "Legal Intake",
+    "name": "Example: Legal Intake",
     "version": "1",
     "description": "Classifies fixture legal intake files with an attached workflow policy and writes register artifacts.",
     "enabled": true,
@@ -245,7 +245,7 @@
   },
   {
     "id": "customer-support-triage",
-    "name": "Customer Support Triage",
+    "name": "Example: Customer Support Triage",
     "version": "1",
     "description": "Classifies customer support tickets with attached workflow policy and writes triage artifacts.",
     "enabled": true,
@@ -418,7 +418,7 @@
   },
   {
     "id": "customer-support-triage-ticket-plan",
-    "name": "Customer Support Triage Ticket Plan",
+    "name": "Example: Customer Support Triage Ticket Plan",
     "version": "1",
     "description": "Creates bounded child support triage workflow tickets for a 50-ticket queue.",
     "enabled": true,
@@ -621,7 +621,7 @@
   },
   {
     "id": "customer-support-triage-chunk",
-    "name": "Customer Support Triage Chunk",
+    "name": "Example: Customer Support Triage Chunk",
     "version": "1",
     "description": "Classifies one bounded 10-ticket customer support chunk.",
     "enabled": true,
@@ -814,7 +814,7 @@
   },
   {
     "id": "customer-support-triage-aggregate",
-    "name": "Customer Support Triage Aggregate",
+    "name": "Example: Customer Support Triage Aggregate",
     "version": "1",
     "description": "Aggregates support triage chunk artifacts into final queue artifacts.",
     "enabled": true,
@@ -955,7 +955,7 @@
   },
   {
     "id": "vendor-compliance",
-    "name": "Vendor Compliance",
+    "name": "Example: Vendor Compliance",
     "version": "1",
     "description": "Classifies vendor compliance packets with attached workflow policy and writes audit artifacts.",
     "enabled": true,
@@ -1127,7 +1127,7 @@
   },
   {
     "id": "vendor-remediation-plan",
-    "name": "Vendor Remediation Plan",
+    "name": "Example: Vendor Remediation Plan",
     "version": "1",
     "description": "Consumes vendor compliance review outputs and writes remediation artifacts.",
     "enabled": true,
@@ -1231,7 +1231,7 @@
   },
   {
     "id": "vendor-remediation-failure-handoff",
-    "name": "Vendor Remediation Failure Handoff",
+    "name": "Example: Vendor Remediation Failure Handoff",
     "version": "1",
     "description": "Consumes Stage 1 failure evidence and writes deterministic remediation blockers.",
     "enabled": true,
@@ -1323,7 +1323,7 @@
   },
   {
     "id": "vendor-compliance-ticket-plan",
-    "name": "Vendor Compliance Ticket Plan",
+    "name": "Example: Vendor Compliance Ticket Plan",
     "version": "1",
     "description": "Creates bounded child vendor compliance chunk tickets for a multi-vendor queue.",
     "enabled": true,
@@ -1495,7 +1495,7 @@
   },
   {
     "id": "vendor-compliance-medium-chunk",
-    "name": "Vendor Compliance Medium Chunk",
+    "name": "Example: Vendor Compliance Medium Chunk",
     "version": "1",
     "description": "Classifies one bounded 10-vendor compliance chunk.",
     "enabled": true,
@@ -1694,7 +1694,7 @@
   },
   {
     "id": "vendor-compliance-medium-aggregate",
-    "name": "Vendor Compliance Medium Aggregate",
+    "name": "Example: Vendor Compliance Medium Aggregate",
     "version": "1",
     "description": "Aggregates vendor compliance chunk artifacts into final decision register and summary.",
     "enabled": true,
@@ -1820,7 +1820,7 @@
   },
   {
     "id": "shared-drive-cleanup",
-    "name": "Shared Drive Cleanup",
+    "name": "Example: Shared Drive Cleanup",
     "version": "1",
     "description": "Cleans a bounded shared-drive fixture using attached workflow policy and writes audit artifacts.",
     "enabled": true,
@@ -2072,7 +2072,7 @@
   },
   {
     "id": "failure-classification",
-    "name": "Failure Classification",
+    "name": "Example: Failure Classification",
     "version": "1",
     "description": "Classifies a failure dossier into S1-S5 using the frozen discriminator procedure.",
     "enabled": true,

@@ -1310,7 +1310,7 @@ const LEGAL_INTAKE_WORKFLOW_POLICY_TEXT = [
 function createLegalIntakeWorkflowDefinition(now = new Date().toISOString()) {
   return {
     id: 'legal-intake',
-    name: 'Legal Intake',
+    name: 'Example: Legal Intake',
     version: '1',
     description: 'Classifies fixture legal intake files with an attached workflow policy and writes register artifacts.',
     enabled: true,
@@ -1490,7 +1490,7 @@ const CUSTOMER_SUPPORT_TRIAGE_WORKFLOW_POLICY_TEXT = [
 function createCustomerSupportTriageWorkflowDefinition(now = new Date().toISOString()) {
   return {
     id: 'customer-support-triage',
-    name: 'Customer Support Triage',
+    name: 'Example: Customer Support Triage',
     version: '1',
     description: 'Classifies customer support tickets with attached workflow policy and writes triage artifacts.',
     enabled: true,
@@ -1625,7 +1625,7 @@ function buildSupportTicketPlanChunks() {
 function createCustomerSupportTicketPlanWorkflowDefinition(now = new Date().toISOString()) {
   return {
     id: 'customer-support-triage-ticket-plan',
-    name: 'Customer Support Triage Ticket Plan',
+    name: 'Example: Customer Support Triage Ticket Plan',
     version: '1',
     description: 'Creates bounded child support triage workflow tickets for a 50-ticket queue.',
     enabled: true,
@@ -1683,7 +1683,7 @@ function createCustomerSupportChunkWorkflowDefinition(now = new Date().toISOStri
   }
   return {
     id: 'customer-support-triage-chunk',
-    name: 'Customer Support Triage Chunk',
+    name: 'Example: Customer Support Triage Chunk',
     version: '1',
     description: 'Classifies one bounded 10-ticket customer support chunk.',
     enabled: true,
@@ -1779,7 +1779,7 @@ function createCustomerSupportChunkWorkflowDefinition(now = new Date().toISOStri
 function createCustomerSupportAggregateWorkflowDefinition(now = new Date().toISOString()) {
   return {
     id: 'customer-support-triage-aggregate',
-    name: 'Customer Support Triage Aggregate',
+    name: 'Example: Customer Support Triage Aggregate',
     version: '1',
     description: 'Aggregates support triage chunk artifacts into final queue artifacts.',
     enabled: true,
@@ -1899,7 +1899,7 @@ const VENDOR_COMPLIANCE_WORKFLOW_POLICY_TEXT = [
 function createVendorComplianceWorkflowDefinition(now = new Date().toISOString()) {
   return {
     id: 'vendor-compliance',
-    name: 'Vendor Compliance',
+    name: 'Example: Vendor Compliance',
     version: '1',
     description: 'Classifies vendor compliance packets with attached workflow policy and writes audit artifacts.',
     enabled: true,
@@ -2016,7 +2016,7 @@ const VENDOR_REMEDIATION_WORKFLOW_POLICY_TEXT = [
 function createVendorRemediationWorkflowDefinition(now = new Date().toISOString()) {
   return {
     id: 'vendor-remediation-plan',
-    name: 'Vendor Remediation Plan',
+    name: 'Example: Vendor Remediation Plan',
     version: '1',
     description: 'Consumes vendor compliance review outputs and writes remediation artifacts.',
     enabled: true,
@@ -2114,7 +2114,7 @@ const VENDOR_REMEDIATION_FAILURE_HANDOFF_POLICY_TEXT = [
 function createVendorRemediationFailureHandoffWorkflowDefinition(now = new Date().toISOString()) {
   return {
     id: 'vendor-remediation-failure-handoff',
-    name: 'Vendor Remediation Failure Handoff',
+    name: 'Example: Vendor Remediation Failure Handoff',
     version: '1',
     description: 'Consumes Stage 1 failure evidence and writes deterministic remediation blockers.',
     enabled: true,
@@ -2222,7 +2222,7 @@ const SHARED_DRIVE_CLEANUP_WORKFLOW_POLICY_TEXT = [
 function createSharedDriveCleanupWorkflowDefinition(now = new Date().toISOString()) {
   return {
     id: 'shared-drive-cleanup',
-    name: 'Shared Drive Cleanup',
+    name: 'Example: Shared Drive Cleanup',
     version: '1',
     description: 'Cleans a bounded shared-drive fixture using attached workflow policy and writes audit artifacts.',
     enabled: true,

@@ -10,5 +10,17 @@
     "principalType": "user",
     "principalId": 1,
     "groupId": 2
+  },
+  {
+    "id": 3,
+    "principalType": "agent",
+    "principalId": 3,
+    "groupId": 2
+  },
+  {
+    "id": 4,
+    "principalType": "agent",
+    "principalId": 4,
+    "groupId": 2
   }
 ]
