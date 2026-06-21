@@ -3020,7 +3020,7 @@ function classifyRunOperationalOutcome(run) {
   if (run.status === 'interrupted') return 'interrupted';
 
   if (run.status === 'completed') {
-    if (events.some(event => event && event.type === 'run:postcondition_completed')) return 'completed_with_verified_postcondition';
+    if (summary.hasPostconditionCompleted || events.some(event => event && event.type === 'run:postcondition_completed')) return 'completed_with_verified_postcondition';
     if (getRunMutationCount(run) > 0) return 'completed_with_mutations';
     if (workspaceOperations.some(item =>
       (item.result && item.result.status === 'not_found') ||

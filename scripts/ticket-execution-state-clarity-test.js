@@ -51,6 +51,7 @@ const C = {
   blocked: { tid: ++tid },
   group: { tid: ++tid, rid: ++rid },
   failed: { tid: ++tid, rid: ++rid },
+  postcond: { tid: ++tid, rid: ++rid },
   plan: 9001
 };
 
@@ -65,7 +66,10 @@ const newTickets = [
   // 3: group-assigned with allocation plan / work units
   { id: C.group.tid, objective: 'group case', assignmentTargetType: 'group', assignmentTargetId: group.id, assignmentMode: 'allocated', status: 'in_progress', createdBy: 'admin', createdAt: now, updatedAt: now },
   // failed agent ticket: the list card must surface the failure reason, not just "failed — retry available"
-  { id: C.failed.tid, objective: 'failed reason case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'failed', createdBy: 'admin', createdAt: now, updatedAt: now }
+  { id: C.failed.tid, objective: 'failed reason case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'failed', createdBy: 'admin', createdAt: now, updatedAt: now },
+  // hydration-independence: completed run with postcondition + mutations, rendered on the
+  // un-hydrated ticket-list path (replaySummary only, no replaySnapshot/snapshot file).
+  { id: C.postcond.tid, objective: 'postcondition hydration case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'completed', createdBy: 'admin', createdAt: now, updatedAt: now }
 ];
 writeJ('tickets.json', newTickets);
 
@@ -94,7 +98,17 @@ writeJ('runs.json', [
       mutationCount: 0,
       mutationOutcome: 'no_mutations'
     })
-  })
+  }),
+  // Un-hydrated completed run: replaySummary carries the postcondition flag and a
+  // mutation count, but there is no inlined replaySnapshot and no snapshot file on
+  // disk, so the ticket-list path must classify from replaySummary alone.
+  {
+    id: C.postcond.rid, ticketId: C.postcond.tid, agentId: agent.id, agentName: agent.name,
+    status: 'completed', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT,
+    executionWorkspaceType: 'main', createdAt: now, updatedAt: now, startedAt: now, completedAt: now,
+    mutationCount: 2,
+    replaySummary: { hasPostconditionCompleted: true, hasCompletedNoop: false, hasBlockedOrRejected: false, mutationCount: 2, mutationOutcome: 'all_intended', terminalStatus: 'completed' }
+  }
 ]);
 
 // Seed a run.failed event so recentEventSummary().latestError surfaces the
@@ -164,6 +178,14 @@ const ok = (n, c) => c ? (pass++, console.log('  ✓ ' + n)) : (fail++, console.
     const failedCard = failedIndex === -1 ? '' : list.slice(failedIndex, failedIndex + 1200);
     ok('list: failed ticket shows "failed — retry available"', failedCard.includes('Execution: failed — retry available'));
     ok('list: failed ticket surfaces the failure reason on the card', failedCard.includes('Agent API key is missing'));
+
+    // Hydration-independent outcome: an un-hydrated completed run with a postcondition
+    // event AND mutations must classify as postconditions checked (the completion
+    // criterion), not changes applied — same as the hydrated run-detail surface.
+    // Only this seeded run carries replaySummary.hasPostconditionCompleted, so the
+    // "postconditions checked" label can come from no other card. Without the
+    // hydration-independent fix the un-hydrated run would render "changes applied".
+    ok('list: un-hydrated postcondition run classifies as postconditions checked (hydration-independent)', list.includes('latest run: completed — postconditions checked'));
 
     console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}: ticket execution-state clarity (${pass} passed, ${fail} failed)`);
   } catch (e) { console.error('ERROR', e.stack || e.message); fail++; }
