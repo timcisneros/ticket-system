@@ -52,6 +52,7 @@ const C = {
   group: { tid: ++tid, rid: ++rid },
   failed: { tid: ++tid, rid: ++rid },
   postcond: { tid: ++tid, rid: ++rid },
+  review: { tid: ++tid, rid: ++rid },
   plan: 9001
 };
 
@@ -69,7 +70,11 @@ const newTickets = [
   { id: C.failed.tid, objective: 'failed reason case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'failed', createdBy: 'admin', createdAt: now, updatedAt: now },
   // hydration-independence: completed run with postcondition + mutations, rendered on the
   // un-hydrated ticket-list path (replaySummary only, no replaySnapshot/snapshot file).
-  { id: C.postcond.tid, objective: 'postcondition hydration case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'completed', createdBy: 'admin', createdAt: now, updatedAt: now }
+  { id: C.postcond.tid, objective: 'postcondition hydration case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'completed', createdBy: 'admin', createdAt: now, updatedAt: now },
+  // review-status: completed run with evidence warnings (objective coverage not scored,
+  // artifact accuracy < 100%, missing + unexpected artifacts) must show completed execution
+  // AND a separate "needs review" status.
+  { id: C.review.tid, objective: 'produce the review output', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'completed', createdBy: 'admin', createdAt: now, updatedAt: now }
 ];
 writeJ('tickets.json', newTickets);
 
@@ -108,7 +113,23 @@ writeJ('runs.json', [
     executionWorkspaceType: 'main', createdAt: now, updatedAt: now, startedAt: now, completedAt: now,
     mutationCount: 2,
     replaySummary: { hasPostconditionCompleted: true, hasCompletedNoop: false, hasBlockedOrRejected: false, mutationCount: 2, mutationOutcome: 'all_intended', terminalStatus: 'completed' }
-  }
+  },
+  // review-status run: predicts one artifact, but actual evidence (operation history)
+  // writes a different path → accuracy < 100%, missing + unexpected; objective has no
+  // path token → coverage not scored. Postcondition event present (completed).
+  mkRun(C.review.rid, C.review.tid, 'completed', {
+    replaySnapshot: snap(C.review.rid, C.review.tid, {
+      artifactPrediction: { artifacts: [{ type: 'file', artifact: 'review/expected.txt' }] },
+      events: [{ type: 'run:postcondition_completed', message: 'Requested workspace state is already satisfied' }]
+    })
+  })
+]);
+
+// Actual artifact evidence for the review-status run: a writeFile to a different
+// path than predicted, producing a missing + unexpected mismatch.
+writeJ('operation-history.json', [
+  ...readJ('operation-history.json'),
+  { id: 90001, runId: C.review.rid, ticketId: C.review.tid, agentId: agent.id, operation: 'writeFile', args: { path: 'review/other.txt' }, result: { path: 'review/other.txt', status: 'written' }, timestamp: now }
 ]);
 
 // Seed a run.failed event so recentEventSummary().latestError surfaces the
@@ -186,6 +207,14 @@ const ok = (n, c) => c ? (pass++, console.log('  ✓ ' + n)) : (fail++, console.
     // "postconditions checked" label can come from no other card. Without the
     // hydration-independent fix the un-hydrated run would render "changes applied".
     ok('list: un-hydrated postcondition run classifies as postconditions checked (hydration-independent)', list.includes('latest run: completed — postconditions checked'));
+
+    // Review status: a completed run with evidence warnings shows completed execution AND needs-review.
+    const dReview = (await req('GET', `/tickets/${C.review.tid}`, { cookie })).body;
+    ok('review: execution still shows completed (terminal/use rerun)', dReview.includes('Use Rerun to start a new run'));
+    ok('review: review status flags needs review', dReview.includes('Review status') && dReview.includes('Needs review'));
+    ok('review: lists objective-not-independently-verified reason', dReview.includes('The full ticket objective was not independently verified.'));
+    ok('review: lists objective path coverage not scored', dReview.includes('Objective path coverage was not scored.'));
+    ok('review: lists unexpected artifact warning', dReview.includes('Unexpected artifact'));
 
     console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'}: ticket execution-state clarity (${pass} passed, ${fail} failed)`);
   } catch (e) { console.error('ERROR', e.stack || e.message); fail++; }

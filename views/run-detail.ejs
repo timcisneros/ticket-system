@@ -84,6 +84,24 @@
 </section>
 <% } %>
 
+<% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable) { %>
+<section class="detail-section">
+  <h2>Review status</h2>
+  <% if (reviewStatus.needsReview) { %>
+    <p><strong>Needs review</strong> — execution completed, but the result should be checked.</p>
+    <p class="text-muted">The system verified declared postconditions / workspace evidence, not the full ticket objective.</p>
+    <ul class="text-muted">
+      <% reviewStatus.reasons.forEach(reason => { %>
+        <li><%= reason %></li>
+      <% }) %>
+    </ul>
+  <% } else { %>
+    <p><strong>No review flag</strong> — no evidence warnings were detected.</p>
+    <p class="text-muted">Completion reflects declared postconditions / workspace evidence, not independent verification of the full ticket objective.</p>
+  <% } %>
+</section>
+<% } %>
+
 <% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
 <section class="detail-section state-inconsistency-warning">
   <h2>State Warning</h2>

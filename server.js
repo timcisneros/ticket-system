@@ -5587,6 +5587,53 @@ function buildObjectivePathCoverage(ticket, snapshot) {
   };
 }
 
+// Display-only review-status derivation. Separates execution completion ("did the
+// run finish?") from evidence/objective review ("does the result need a look?").
+// It only reads already-computed evidence signals (objective path coverage,
+// artifact accuracy, artifact prediction comparison) — it does not change any
+// scoring, completion, or postcondition logic. Failed/interrupted runs already
+// explain the next action through their failure status, so they are not flagged.
+function buildRunReviewStatus(run, { objectivePathCoverage, artifactAccuracy, comparison } = {}) {
+  if (!run || run.status !== 'completed') {
+    return { applicable: false, needsReview: false, reasons: [] };
+  }
+
+  const coverage = objectivePathCoverage || {};
+  const accuracy = artifactAccuracy || {};
+  const cmp = comparison || {};
+  const missing = Array.isArray(cmp.missing) ? cmp.missing : [];
+  const unexpected = Array.isArray(cmp.unexpected) ? cmp.unexpected : [];
+  const artifactName = item => (item && item.artifact) || (item && item.key) || null;
+
+  const warnings = [];
+  if (coverage.scored === false) {
+    warnings.push('Objective path coverage was not scored.');
+  } else if (typeof coverage.percent === 'number' && coverage.percent < 100) {
+    warnings.push(`Objective path coverage is ${coverage.percent}% (${coverage.covered}/${coverage.total} planned).`);
+  }
+  if (accuracy.scored && typeof accuracy.percent === 'number' && accuracy.percent < 100) {
+    warnings.push(`Artifact accuracy is ${accuracy.percent}% (${accuracy.matched}/${accuracy.total} matched).`);
+  }
+  if (missing.length > 0) {
+    warnings.push(`Missing expected artifact${missing.length === 1 ? '' : 's'}: ${missing.map(artifactName).filter(Boolean).slice(0, 5).join(', ')}.`);
+  }
+  if (unexpected.length > 0) {
+    warnings.push(`Unexpected artifact${unexpected.length === 1 ? '' : 's'}: ${unexpected.map(artifactName).filter(Boolean).slice(0, 5).join(', ')}.`);
+  }
+
+  if (warnings.length === 0) {
+    return { applicable: true, needsReview: false, reasons: [] };
+  }
+
+  // The standing truthfulness caveat is listed first when review is flagged, then
+  // the concrete evidence warnings that actually triggered the flag.
+  return {
+    applicable: true,
+    needsReview: true,
+    reasons: ['The full ticket objective was not independently verified.', ...warnings]
+  };
+}
+
 function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns = []) {
   const runIds = new Set(ticketRuns.map(run => run.id));
   const artifacts = [];
@@ -12885,6 +12932,19 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
 
   const executionState = buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, readGroups());
 
+  // Review status for the latest terminal run — separates "did it finish" from
+  // "does the result need a look". Derived from existing evidence signals only.
+  let reviewStatus = { applicable: false, needsReview: false, reasons: [] };
+  if (latestRuntimeRun) {
+    const latestSnapshot = readRunReplaySnapshot(latestRuntimeRun) || latestRuntimeRun.replaySnapshot || null;
+    const latestComparison = buildArtifactPredictionComparison(latestRuntimeRun, latestSnapshot, history, readWorkflows());
+    reviewStatus = buildRunReviewStatus(latestRuntimeRun, {
+      objectivePathCoverage: buildObjectivePathCoverage(ticket, latestSnapshot),
+      artifactAccuracy: buildArtifactAccuracy(latestSnapshot, latestComparison),
+      comparison: latestComparison
+    });
+  }
+
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
     ticket,
@@ -12896,6 +12956,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     operationHistory: enrichOperationHistoryForDisplay(operationHistory),
     runStateInconsistency,
     executionState,
+    reviewStatus,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
 });
@@ -13477,6 +13538,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const artifactAccuracy = buildArtifactAccuracy(snapshot, artifactPredictionComparison);
   const objectiveSuccess = buildObjectiveSuccess(run);
   const objectivePathCoverage = buildObjectivePathCoverage(ticket, snapshot);
+  const reviewStatus = buildRunReviewStatus(run, { objectivePathCoverage, artifactAccuracy, comparison: artifactPredictionComparison });
   const displaySnapshot = createDisplaySnapshot(snapshot);
   const operationalOutcome = classifyRunOperationalOutcome(run);
   const runEvents = getRunEvents(runId);
@@ -13505,6 +13567,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     artifactAccuracy,
     objectiveSuccess,
     objectivePathCoverage,
+    reviewStatus,
     partialMutationCount: runPartialMutationCount,
     operationalOutcome,
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
