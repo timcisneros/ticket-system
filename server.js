@@ -13679,6 +13679,28 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     recentEventSummary: eventSummary
   });
   const completionSummary = buildRunCompletionSummary(run, snapshot, runEvents, enrichedHistory, failureSummary);
+  // Display-only: surface this run's permissioned cross-ticket delete audit events
+  // (recorded in v0.1.18). Strictly scoped to this run's id. Derived for the view;
+  // no runtime, permission, or event-writing behavior is affected.
+  const permissionedDeleteAuditEvents = (runEvents || [])
+    .filter(ev => ev && ev.type === 'workspace.cross_ticket_delete_authorized' && ev.runId === run.id && ev.payload && typeof ev.payload === 'object')
+    .map(ev => ({
+      type: ev.type,
+      ts: ev.ts || null,
+      operation: ev.payload.operation != null ? ev.payload.operation : null,
+      path: ev.payload.path != null ? ev.payload.path : null,
+      priorOwnerTicketId: ev.payload.priorOwnerTicketId != null ? ev.payload.priorOwnerTicketId : null,
+      priorOwnerRunId: ev.payload.priorOwnerRunId != null ? ev.payload.priorOwnerRunId : null,
+      priorOwnerHistoryId: ev.payload.priorOwnerHistoryId != null ? ev.payload.priorOwnerHistoryId : null,
+      priorOwnerPath: ev.payload.priorOwnerPath != null ? ev.payload.priorOwnerPath : null,
+      requestingTicketId: ev.payload.requestingTicketId != null ? ev.payload.requestingTicketId : null,
+      requestingRunId: ev.payload.requestingRunId != null ? ev.payload.requestingRunId : null,
+      actorUserId: ev.payload.actorUserId != null ? ev.payload.actorUserId : null,
+      actorUsername: ev.payload.actorUsername != null ? ev.payload.actorUsername : null,
+      delegatedPermissionSource: ev.payload.delegatedPermissionSource != null ? ev.payload.delegatedPermissionSource : null,
+      permissionUsed: ev.payload.permissionUsed != null ? ev.payload.permissionUsed : null,
+      source: ev.payload.source != null ? ev.payload.source : null
+    }));
 
   return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
@@ -13705,6 +13727,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     eventSummary,
     runStateInconsistency,
     completionSummary,
+    permissionedDeleteAuditEvents,
     formatDurationHuman,
     canUpdateRuns: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));

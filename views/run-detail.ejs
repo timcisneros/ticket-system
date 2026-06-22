@@ -718,6 +718,33 @@
     </details>
   </section>
 
+  <% if (typeof permissionedDeleteAuditEvents !== 'undefined' && permissionedDeleteAuditEvents && permissionedDeleteAuditEvents.length > 0) { %>
+  <% const dash = v => (v === null || v === undefined || v === '') ? '-' : v; %>
+  <section class="detail-section permissioned-delete-section" id="permissioned-cross-ticket-delete">
+    <h2>Permissioned Cross-Ticket Delete</h2>
+    <p class="text-muted">This run deleted an artifact produced by another ticket using delegated user authority.</p>
+    <% permissionedDeleteAuditEvents.forEach(entry => { %>
+      <div class="permissioned-delete-item">
+        <dl class="detail-grid">
+          <div><dt>Operation</dt><dd><code><%= dash(entry.operation) %></code></dd></div>
+          <div><dt>Path</dt><dd><code class="owned-path"><%= dash(entry.path) %></code></dd></div>
+          <div><dt>Prior owner ticket</dt><dd><%= entry.priorOwnerTicketId != null ? ('#' + entry.priorOwnerTicketId) : '-' %></dd></div>
+          <div><dt>Prior owner run</dt><dd><%= entry.priorOwnerRunId != null ? ('#' + entry.priorOwnerRunId) : '-' %></dd></div>
+          <div><dt>Prior owner history id</dt><dd><%= dash(entry.priorOwnerHistoryId) %></dd></div>
+          <div><dt>Prior owner path</dt><dd><code class="owned-path"><%= dash(entry.priorOwnerPath) %></code></dd></div>
+          <div><dt>Requesting ticket</dt><dd><%= entry.requestingTicketId != null ? ('#' + entry.requestingTicketId) : '-' %></dd></div>
+          <div><dt>Requesting run</dt><dd><%= entry.requestingRunId != null ? ('#' + entry.requestingRunId) : '-' %></dd></div>
+          <div><dt>Delegated actor</dt><dd><%= dash(entry.actorUsername) %><% if (entry.actorUserId != null) { %> (user #<%= entry.actorUserId %>)<% } %></dd></div>
+          <div><dt>Delegated permission source</dt><dd><%= dash(entry.delegatedPermissionSource) %></dd></div>
+          <div><dt>Permission used</dt><dd><code><%= dash(entry.permissionUsed) %></code></dd></div>
+          <div><dt>Audit event type</dt><dd><code><%= dash(entry.type) %></code></dd></div>
+          <div><dt>Timestamp</dt><dd><%= dash(entry.ts) %></dd></div>
+        </dl>
+      </div>
+    <% }) %>
+  </section>
+  <% } %>
+
   <section class="detail-section replay-section" id="replay-workspace-actions" data-replay-section="workspaceOperations">
     <h2>Workspace Actions</h2>
     <% if (!snapshot.workspaceOperations || snapshot.workspaceOperations.length === 0) { %>
