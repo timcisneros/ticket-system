@@ -14,5 +14,6 @@
   "permission:assign",
   "workspace:read",
   "workspace:write",
-  "workspace:reset"
+  "workspace:reset",
+  "workspace.delete.cross_ticket_artifact"
 ]

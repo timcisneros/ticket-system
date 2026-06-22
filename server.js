@@ -485,13 +485,14 @@ function findOverlappingSuccessfulArtifactOwner(operationHistory, run, candidate
   }) || null;
 }
 
-// Throw a WORKSPACE_WRITE_CONFLICT (same shape/mechanism as the writeFile prior-
-// owner guard) when a destructive operation's path overlaps another ticket's
-// produced artifact. Throws before any fs mutation or history persist, so no
-// destructive op is committed and no false success record is written.
-function assertNoCrossTicketOverlap(run, operation, args, candidatePath) {
-  const owner = findOverlappingSuccessfulArtifactOwner(readOperationHistory(), run, candidatePath);
-  if (!owner) return;
+// Permission that lets a human-delegated ticket authorize deleting an artifact
+// another ticket produced. Granted to the Administrators group (which receives the
+// full permission catalog in createDefaultData); other groups do not have it.
+const CROSS_TICKET_DELETE_PERMISSION = 'workspace.delete.cross_ticket_artifact';
+
+// Build the WORKSPACE_WRITE_CONFLICT error (same shape/mechanism as the writeFile
+// prior-owner guard) for a destructive op overlapping another ticket's artifact.
+function buildCrossTicketConflictError(operation, args, candidatePath, owner) {
   const ownerPath = getSuccessfulArtifactOwnershipPath(owner);
   const error = new Error(`Workspace ${operation === 'deletePath' ? 'delete' : 'rename'} conflict: path ${candidatePath} overlaps an artifact (${ownerPath}) previously produced by ticket ${owner.ticketId}, run ${owner.runId}`);
   error.code = 'WORKSPACE_WRITE_CONFLICT';
@@ -507,7 +508,66 @@ function assertNoCrossTicketOverlap(run, operation, args, candidatePath) {
     conflictingHistoryId: owner.id || null,
     conflictingPath: ownerPath
   };
-  throw error;
+  return error;
+}
+
+// Build the run-level delegated-authority descriptor from an authenticated
+// request. Captured at run-initiation time (creation/rerun/reopen) and stored on
+// the run, so cross-ticket permission is evaluated against the user who actually
+// initiated the run — never a later, unrelated ticket editor.
+function delegatedFromRequest(request, source) {
+  if (!request || !request.session || request.session.userId == null) return null;
+  return {
+    userId: request.session.userId,
+    username: request.user ? request.user.username : null,
+    source
+  };
+}
+
+// Record audit evidence for a permissioned cross-ticket artifact delete using the
+// existing event + run-log mechanisms (no event-log mechanics changed). The actor
+// is the run's delegated initiator, not whoever last edited the ticket.
+function recordPermissionedCrossTicketDelete(run, operation, args, candidatePath, owner) {
+  const audit = {
+    operation,
+    path: candidatePath,
+    priorOwnerTicketId: owner.ticketId,
+    priorOwnerRunId: owner.runId,
+    priorOwnerHistoryId: owner.id || null,
+    priorOwnerPath: getSuccessfulArtifactOwnershipPath(owner),
+    requestingTicketId: run.ticketId,
+    requestingRunId: run.id,
+    actorUserId: run.delegatedUserId != null ? run.delegatedUserId : null,
+    actorUsername: run.delegatedUsername || null,
+    delegatedPermissionSource: run.delegatedPermissionSource || null,
+    permissionUsed: CROSS_TICKET_DELETE_PERMISSION,
+    source: 'permissioned_cross_ticket_artifact_delete'
+  };
+  appendEvent({ type: 'workspace.cross_ticket_delete_authorized', ticketId: run.ticketId, runId: run.id, payload: audit });
+  appendRunLog(
+    run,
+    'workspace:cross_ticket_delete_authorized',
+    `Permissioned cross-ticket delete of ${candidatePath} authorized (prior owner ticket ${owner.ticketId}, run ${owner.runId}; permission ${CROSS_TICKET_DELETE_PERMISSION})`,
+    { operation, args, path: candidatePath, status: 'authorized_cross_ticket_delete' },
+    audit
+  );
+}
+
+// Guard a destructive op whose path overlaps another ticket's produced artifact.
+// renamePath is always blocked. deletePath is blocked too, UNLESS the user who
+// INITIATED this run (run.delegatedUserId) holds
+// workspace.delete.cross_ticket_artifact — in which case the delete is allowed and
+// recorded as a permissioned, audited action. Permission is evaluated live against
+// that fixed initiator identity. Throws before any fs mutation or history persist;
+// same-ticket never reaches here.
+function assertNoCrossTicketOverlap(run, operation, args, candidatePath) {
+  const owner = findOverlappingSuccessfulArtifactOwner(readOperationHistory(), run, candidatePath);
+  if (!owner) return;
+  if (operation === 'deletePath' && run && run.delegatedUserId != null && hasPermission(run.delegatedUserId, CROSS_TICKET_DELETE_PERMISSION)) {
+    recordPermissionedCrossTicketDelete(run, operation, args, candidatePath, owner);
+    return;
+  }
+  throw buildCrossTicketConflictError(operation, args, candidatePath, owner);
 }
 
 // ── Phase-aware execution helpers ─────────────────────────────────
@@ -7982,7 +8042,7 @@ function forceTicketOpenForRerun(ticketId, rerunMode = null) {
   return ticket;
 }
 
-function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retry') {
+function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retry', delegated = null) {
   const ticket = readTickets().find(item => item.id === ticketId);
 
   if (!ticket) return null;
@@ -8006,7 +8066,7 @@ function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retr
     mode,
     changedAt: new Date().toISOString()
   });
-  createRunsForTicket(reopenedTicket);
+  createRunsForTicket(reopenedTicket, delegated);
   return reopenedTicket;
 }
 
@@ -8195,7 +8255,7 @@ function completeAgentRun(run) {
   return completedRun;
 }
 
-function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null) {
+function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null) {
   const runs = readRuns();
   const activeRun = runs.find(run =>
     run.ticketId === ticket.id &&
@@ -8233,6 +8293,12 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     capabilityId: ticket.executionMode === 'workflow' ? ticket.workflowId : 'agent-selected-actions',
     capabilityInput: ticket.executionMode === 'workflow' ? (ticket.workflowInput || {}) : null,
     rerunMode: ticket.rerunMode || null,
+    // Delegated human authority for this run, captured at run-initiation time (not
+    // derived from ticket.changedBy later). Drives permissioned cross-ticket
+    // actions; null when no real user initiated the run (e.g. system/workflow).
+    delegatedUserId: delegated && delegated.userId != null ? delegated.userId : null,
+    delegatedUsername: delegated && delegated.username ? delegated.username : null,
+    delegatedPermissionSource: delegated && delegated.source ? delegated.source : null,
     currentPhase: 'planning',
     leaseOwner: null,
     leaseExpiresAt: null,
@@ -8271,12 +8337,12 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
   return run;
 }
 
-function createRunsForTicket(ticket) {
+function createRunsForTicket(ticket, delegated = null) {
   if (!ticket || ticket.status !== 'open') return [];
 
   if (ticket.assignmentTargetType === 'agent') {
     const agent = readAgents().find(item => item.id === ticket.assignmentTargetId);
-    return agent ? [createAgentRun(ticket, agent)].filter(Boolean) : [];
+    return agent ? [createAgentRun(ticket, agent, null, null, delegated)].filter(Boolean) : [];
   }
 
   if (usesOwnedScopeAllocation(ticket)) {
@@ -8307,7 +8373,8 @@ function createRunsForTicket(ticket) {
         ticket,
         agent,
         allocationPlan.items.find(item => item.assignedAgentId === agent.id),
-        allocationPlan.id
+        allocationPlan.id,
+        delegated
       ))
       .filter(Boolean);
   }
@@ -12921,7 +12988,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     }
   });
   broadcastTicketChange();
-  createRunsForTicket(newTicket);
+  createRunsForTicket(newTicket, delegatedFromRequest(request, 'created_from_ticket'));
 
   return reply.redirect('/tickets');
 });
@@ -13167,7 +13234,7 @@ fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }
     broadcastTicketChange();
   }
 
-  createRunsForTicket(ticket);
+  createRunsForTicket(ticket, delegatedFromRequest(request, 'assignment_change_auto_run'));
 
   if (assignmentAudit) {
     const updatedTickets = readTickets();
@@ -13267,7 +13334,7 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
 
   if (status === 'open') {
     try {
-      createRunsForTicket(ticket);
+      createRunsForTicket(ticket, delegatedFromRequest(request, 'reopen_auto_run'));
     } catch (error) {
       ticket.status = 'failed';
       ticket.updatedAt = changedAt;
@@ -13299,7 +13366,7 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
   let ticket = null;
 
   try {
-    ticket = rerunTicketFromBeginning(ticketId, changedBy, mode);
+    ticket = rerunTicketFromBeginning(ticketId, changedBy, mode, delegatedFromRequest(request, 'manual_rerun'));
   } catch (error) {
     appendSystemLog('allocation:setup_failed', error.message, null, {
       code: error.code || 'VALIDATION_ERROR',
@@ -13767,7 +13834,7 @@ fastify.post('/api/runs/:id/retry', { preHandler: fastify.requireAuth }, async (
     return { error: 'Only failed or interrupted runs can be retried' };
   }
 
-  return { ticket: rerunTicketFromBeginning(run.ticketId, request.user ? request.user.username : 'operator') };
+  return { ticket: rerunTicketFromBeginning(run.ticketId, request.user ? request.user.username : 'operator', 'retry', delegatedFromRequest(request, 'manual_rerun')) };
 });
 
 // ==================== AGENT METRICS ROUTES ====================

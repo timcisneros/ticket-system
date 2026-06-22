@@ -117,6 +117,25 @@ function seedData() {
     made.push(nextId);
   }
   writeJson('agents.json', agents);
+
+  // Seed a non-admin user WITHOUT workspace.delete.cross_ticket_artifact so the
+  // harness can exercise the blocked (unpermitted) cross-ticket delete path.
+  // (admin, via the Administrators group, receives the full permission catalog in
+  // createDefaultData and therefore holds the cross-ticket delete permission.)
+  const users = readJson('users.json');
+  const adminUser = users.find(u => u.username === 'admin') || users[0];
+  const restrictedUserId = users.reduce((m, u) => Math.max(m, u.id || 0), 0) + 1;
+  users.push({ id: restrictedUserId, username: 'restricted', passwordHash: adminUser.passwordHash, createdAt: new Date().toISOString(), type: 'user' });
+  writeJson('users.json', users);
+  const groups = readJson('groups.json');
+  const restrictedGroupId = groups.reduce((m, g) => Math.max(m, g.id || 0), 0) + 1;
+  groups.push({ id: restrictedGroupId, name: 'Restricted Operators', permissions: ['ticket:create', 'ticket:read', 'ticket:update'], canReceiveTickets: false });
+  writeJson('groups.json', groups);
+  const memberships = readJson('memberships.json');
+  const nextMembershipId = memberships.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1;
+  memberships.push({ id: nextMembershipId, principalType: 'user', principalId: restrictedUserId, groupId: restrictedGroupId });
+  writeJson('memberships.json', memberships);
+
   return made;
 }
 
@@ -164,13 +183,14 @@ async function stopServer() {
   server = null;
 }
 
-async function login() {
-  const res = await httpReq('POST', '/login', { form: { username: 'admin', password: 'admin123' } });
+async function loginAs(username, password) {
+  const res = await httpReq('POST', '/login', { form: { username, password } });
   const setCookie = Array.isArray(res.headers['set-cookie']) ? res.headers['set-cookie'][0] : res.headers['set-cookie'];
   const match = String(setCookie || '').match(/sessionId=([^;]+)/);
-  if (!match) throw new Error('login failed');
+  if (!match) throw new Error('login failed for ' + username);
   return 'sessionId=' + match[1];
 }
+async function login() { return loginAs('admin', 'admin123'); }
 
 // objective embeds the action directive so the run is deterministic.
 function objectiveWith(tag, plan) {
@@ -282,7 +302,7 @@ async function scenarioSameFolderCreate(cookie, agents) {
 // Discovery probe: does a second ticket's deletePath of a folder PRODUCED by a
 // first ticket get blocked (like cross-ticket writeFile is)? Sequenced for
 // determinism — proves guard existence, not race timing.
-async function probeDeleteParentCrossTicket(cookie, agents) {
+async function probeDeleteParentCrossTicket(cookie, restrictedCookie, agents) {
   const folder = 'del-probe-' + STAMP;
   const child = folder + '/child.txt';
   const oOwner = objectiveWith('delOwner', { actions: [
@@ -294,8 +314,10 @@ async function probeDeleteParentCrossTicket(cookie, agents) {
   const ownerFinal = owner && await waitForTerminalRun(owner.run.id);
   if (!ownerFinal || ownerFinal.status !== 'completed') { record('delete-parent/write-child', 'NOT_PROVEN', 'owner run did not complete'); return; }
 
+  // Deleter is the non-permitted user, so cross-ticket parent/child delete must
+  // still be blocked (permission-aware guard denies users lacking the permission).
   const oDeleter = objectiveWith('delAttacker', { actions: [{ operation: 'deletePath', args: { path: folder } }], complete: true });
-  await createTicket(cookie, agents[1], oDeleter);
+  await createTicket(restrictedCookie, agents[1], oDeleter);
   const del = await waitForTicketRun(oDeleter);
   const delFinal = del && await waitForTerminalRun(del.run.id);
   if (!delFinal) { record('delete-parent/write-child', 'NOT_PROVEN', 'deleter run did not reach terminal'); return; }
@@ -545,6 +567,88 @@ async function scenarioSameAgentFailureIsolation(cookie, agents) {
     "same agent: failed run keeps its failure/evidence to itself; the successful run stays clean (no cross-run contamination)");
 }
 
+function readEventsFile() {
+  try {
+    return fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8').split('\n').filter(Boolean)
+      .map(l => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+  } catch (_) { return []; }
+}
+
+// Permitted: admin holds workspace.delete.cross_ticket_artifact, so a cross-ticket
+// delete executes, removes the artifact, writes clean operation-history, and emits
+// an audit event recording the prior owner + permission used.
+async function scenarioPermittedCrossTicketDelete(cookie, agents) {
+  const cd = 'xdel-permitted/CD-' + STAMP + '.txt';
+  const oOwner = objectiveWith('permOwner', { actions: [{ operation: 'writeFile', args: { path: cd, content: 'CD' } }], complete: true });
+  await createTicket(cookie, agents[0], oOwner);
+  const owner = await waitForTicketRun(oOwner);
+  const ownerFinal = owner && await waitForTerminalRun(owner.run.id);
+  if (!ownerFinal || ownerFinal.status !== 'completed') { softAssert('permitted cross-ticket delete', false, 'owner run did not complete'); return; }
+  const oDel = objectiveWith('permDel', { actions: [{ operation: 'deletePath', args: { path: cd } }], complete: true });
+  await createTicket(cookie, agents[1], oDel);
+  const del = await waitForTicketRun(oDel);
+  const delFinal = del && await waitForTerminalRun(del.run.id);
+  const completed = delFinal && delFinal.status === 'completed';
+  const fileGone = !fs.existsSync(path.join(WORKSPACE_ROOT, cd));
+  const hist = jsonParsesOrNull('operation-history.json') || [];
+  const cleanDelete = del ? hist.some(h => h.runId === del.run.id && h.operation === 'deletePath' && !h.error && h.args && h.args.path === cd) : false;
+  const auditEvent = await waitFor(() => readEventsFile().find(e =>
+    e.type === 'workspace.cross_ticket_delete_authorized' && del && e.runId === del.run.id) || null, 10000, 100);
+  const auditOk = auditEvent && auditEvent.payload &&
+    auditEvent.payload.priorOwnerTicketId === owner.ticket.id &&
+    auditEvent.payload.priorOwnerRunId === owner.run.id &&
+    auditEvent.payload.requestingTicketId === del.ticket.id &&
+    auditEvent.payload.requestingRunId === del.run.id &&
+    auditEvent.payload.actorUsername === 'admin' &&
+    auditEvent.payload.permissionUsed === 'workspace.delete.cross_ticket_artifact';
+  softAssert('permitted cross-ticket delete', completed && fileGone && cleanDelete && !!auditOk,
+    `completed=${completed} fileGone=${fileGone} cleanDelete=${cleanDelete} auditOk=${!!auditOk}`,
+    "permissioned user deletes another ticket's artifact: executed, file removed, clean history, audit records prior owner + permission used");
+}
+
+// Non-permitted: a restricted user (no permission) attempting the same cross-ticket
+// delete stays blocked with the existing conflict; the artifact survives; no clean
+// delete history is written.
+async function scenarioNonPermittedCrossTicketDelete(cookie, restrictedCookie, agents) {
+  const cd = 'xdel-blocked/CD-' + STAMP + '.txt';
+  const oOwner = objectiveWith('blkOwner', { actions: [{ operation: 'writeFile', args: { path: cd, content: 'CD' } }], complete: true });
+  await createTicket(cookie, agents[0], oOwner);
+  const owner = await waitForTicketRun(oOwner);
+  const ownerFinal = owner && await waitForTerminalRun(owner.run.id);
+  if (!ownerFinal || ownerFinal.status !== 'completed') { softAssert('non-permitted cross-ticket delete blocked', false, 'owner run did not complete'); return; }
+  const oDel = objectiveWith('blkDel', { actions: [{ operation: 'deletePath', args: { path: cd } }], complete: true });
+  await createTicket(restrictedCookie, agents[1], oDel);
+  const del = await waitForTicketRun(oDel);
+  const delFinal = del && await waitForTerminalRun(del.run.id);
+  const blocked = delFinal && delFinal.status === 'failed' && /conflict|previously produced/i.test(String(delFinal.error || ''));
+  const fileExists = fs.existsSync(path.join(WORKSPACE_ROOT, cd));
+  const hist = jsonParsesOrNull('operation-history.json') || [];
+  const noCleanDelete = del ? !hist.some(h => h.runId === del.run.id && h.operation === 'deletePath' && !h.error) : false;
+  softAssert('non-permitted cross-ticket delete blocked', blocked && fileExists && noCleanDelete,
+    `blocked=${blocked} fileExists=${fileExists} noCleanDelete=${noCleanDelete}`,
+    'unpermitted user cross-ticket delete stays blocked with conflict; artifact survives; no clean delete history');
+}
+
+// Scope check: a delete of a path NOT owned by another ticket succeeds even for a
+// non-permitted user — the permission gate is scoped to cross-ticket artifacts and
+// does not affect own/unowned cleanup.
+async function scenarioNonCrossTicketDeleteAllowed(restrictedCookie, agents) {
+  const f = 'xdel-own/cleanup-' + STAMP + '.txt';
+  fs.mkdirSync(path.join(WORKSPACE_ROOT, path.dirname(f)), { recursive: true });
+  fs.writeFileSync(path.join(WORKSPACE_ROOT, f), 'PREEXISTING');
+  const o = objectiveWith('ownDel', { actions: [{ operation: 'deletePath', args: { path: f } }], complete: true });
+  await createTicket(restrictedCookie, agents[3], o);
+  const r = await waitForTicketRun(o);
+  const rf = r && await waitForTerminalRun(r.run.id);
+  const completed = rf && rf.status === 'completed';
+  const gone = !fs.existsSync(path.join(WORKSPACE_ROOT, f));
+  const hist = jsonParsesOrNull('operation-history.json') || [];
+  const cleanDelete = r ? hist.some(h => h.runId === r.run.id && h.operation === 'deletePath' && !h.error) : false;
+  softAssert('non-cross-ticket delete allowed without permission', completed && gone && cleanDelete,
+    `completed=${completed} gone=${gone} cleanDelete=${cleanDelete}`,
+    'deleting a path not owned by another ticket succeeds without the cross-ticket permission (gate is scoped to cross-ticket artifacts)');
+}
+
 async function main() {
   const agents = seedData();
   const preloadPath = createFetchStub();
@@ -553,11 +657,12 @@ async function main() {
   try {
     await startServer(preloadPath);
     const cookie = await login();
+    const restrictedCookie = await loginAs('restricted', 'admin123');
     await scenarioConcurrentTicketCreation(cookie, agents);
     await scenarioDifferentPathWrites(cookie, agents);
     await scenarioSameFileConflict(cookie, agents);
     await scenarioSameFolderCreate(cookie, agents);
-    await probeDeleteParentCrossTicket(cookie, agents);
+    await probeDeleteParentCrossTicket(cookie, restrictedCookie, agents);
     await probeRenameParentCrossTicket(cookie, agents);
     await scenarioDoubleRerun(cookie, agents);
     await scenarioStopVsRerun(cookie, agents);
@@ -566,6 +671,9 @@ async function main() {
     await scenarioSameAgentSameFile(cookie, agents);
     await scenarioSameAgentRerunIsolation(cookie, agents);
     await scenarioSameAgentFailureIsolation(cookie, agents);
+    await scenarioPermittedCrossTicketDelete(cookie, agents);
+    await scenarioNonPermittedCrossTicketDelete(cookie, restrictedCookie, agents);
+    await scenarioNonCrossTicketDeleteAllowed(restrictedCookie, agents);
 
     console.log('\nSummary');
     console.log('-'.repeat(60));
