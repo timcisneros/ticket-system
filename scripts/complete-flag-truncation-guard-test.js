@@ -271,22 +271,42 @@ async function main() {
     assert(capture.prompts.length >= 2, 'Expected at least two model calls');
     assert(capture.prompts[1].combined.includes('complete:true was not honored because 1 proposed action(s) were not applied'), 'Second prompt did not include deferred complete:true truncation warning');
 
-    const logs = readJson('logs.json').filter(log => log.runId === run.id);
-    const hasDeferredLog = logs.some(log => log.type === 'run:completion_deferred_truncation');
-    const snapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'replay-snapshots', 'run-' + run.id + '.json'), 'utf8'));
-    const hasDeferredReplayEvent = Array.isArray(snapshot.events) && snapshot.events.some(event => event.type === 'run:completion_deferred_truncation');
-    const events = readEvents();
-    const finalMutationIndex = events.findIndex(event =>
-      event.type === 'workspace.operation' &&
-      event.payload &&
-      event.payload.path === FOLDER_C
-    );
-    const terminalIndex = events.findIndex(event => event.type === 'run.terminalized');
-    assert(hasDeferredLog, 'Deferred completion log was not emitted');
-    assert(hasDeferredReplayEvent, 'Deferred completion replay event was not emitted');
-    assert(finalMutationIndex !== -1, 'Final dropped mutation event was not emitted');
-    assert(terminalIndex !== -1, 'Terminal event was not emitted');
-    assert(finalMutationIndex < terminalIndex, 'Run terminalized before the remaining dropped action was applied');
+    // Post-terminal evidence lands through several sinks. operation-history is
+    // persisted synchronously, but events.jsonl is appended asynchronously
+    // (eventAppendChain), and the replay snapshot is finalized around the same
+    // time. Under back-to-back load the run can read terminal in runs.json before
+    // the final workspace.operation / run.terminalized events have flushed, so
+    // poll until all the evidence is present rather than reading once. This is a
+    // test-timing fix only; it changes no runtime behavior and still fails if the
+    // evidence never appears (waitFor times out → evidence is null).
+    const evidence = await waitFor(() => {
+      const logs = readJson('logs.json').filter(log => log.runId === run.id);
+      const hasDeferredLog = logs.some(log => log.type === 'run:completion_deferred_truncation');
+      let snapshot;
+      try {
+        snapshot = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'replay-snapshots', 'run-' + run.id + '.json'), 'utf8'));
+      } catch (_) {
+        return null;
+      }
+      const hasDeferredReplayEvent = Array.isArray(snapshot.events) && snapshot.events.some(event => event.type === 'run:completion_deferred_truncation');
+      const events = readEvents();
+      const finalMutationIndex = events.findIndex(event =>
+        event.type === 'workspace.operation' &&
+        event.payload &&
+        event.payload.path === FOLDER_C
+      );
+      const terminalIndex = events.findIndex(event => event.type === 'run.terminalized');
+      if (hasDeferredLog && hasDeferredReplayEvent && finalMutationIndex !== -1 && terminalIndex !== -1) {
+        return { hasDeferredLog, hasDeferredReplayEvent, finalMutationIndex, terminalIndex };
+      }
+      return null;
+    });
+    assert(evidence, 'Deferred-completion evidence (logs/replay snapshot/events) did not become available before timeout');
+    assert(evidence.hasDeferredLog, 'Deferred completion log was not emitted');
+    assert(evidence.hasDeferredReplayEvent, 'Deferred completion replay event was not emitted');
+    assert(evidence.finalMutationIndex !== -1, 'Final dropped mutation event was not emitted');
+    assert(evidence.terminalIndex !== -1, 'Terminal event was not emitted');
+    assert(evidence.finalMutationIndex < evidence.terminalIndex, 'Run terminalized before the remaining dropped action was applied');
 
     console.log('PASS: complete:true is deferred after prefix truncation drops mutating actions');
   } catch (error) {
