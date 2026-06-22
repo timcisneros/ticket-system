@@ -99,6 +99,9 @@ function main() {
     'findCommittedMutation',
     'findConflictingMutation',
     'findPriorSuccessfulArtifactOwner',
+    'workspacePathsOverlap',
+    'findOverlappingSuccessfulArtifactOwner',
+    'assertNoCrossTicketOverlap',
     'executeWorkspaceOperation',
     'verifyBatchOperation'
   ];

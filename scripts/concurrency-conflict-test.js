@@ -35,7 +35,10 @@ const results = {};
 
 function record(name, verdict, detail) {
   results[name] = { verdict, detail: detail || null };
-  const isHard = verdict === 'FAIL';
+  // OBSERVED_UNSAFE is now a hard failure: cross-ticket parent/child delete/rename
+  // overlap is guarded (parent-child-conflict-guard), so re-exposing it is a
+  // regression. FAIL and OBSERVED_UNSAFE both fail the harness.
+  const isHard = verdict === 'FAIL' || verdict === 'OBSERVED_UNSAFE';
   if (isHard) hardFailures += 1;
   console.log(`  ${isHard ? '✗' : '·'} ${name}: ${verdict}${detail ? ' — ' + detail : ''}`);
 }

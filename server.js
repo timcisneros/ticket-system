@@ -458,6 +458,58 @@ function findPriorSuccessfulArtifactOwner(operationHistory, run, targetPath) {
   }) || null;
 }
 
+// True when normalized relative paths a and b are the same path or one contains
+// the other (ancestor/descendant). Used so a destructive deletePath/renamePath on
+// `parent/` is recognized as overlapping an artifact produced at `parent/` or
+// `parent/nested/file.txt`, and vice versa. `alpha/` and `beta/` do not overlap.
+function workspacePathsOverlap(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return a.startsWith(b + '/') || b.startsWith(a + '/');
+}
+
+// Like findPriorSuccessfulArtifactOwner, but matches when another ticket's
+// produced artifact overlaps (equals, contains, or is contained by) the candidate
+// path — the protection a destructive deletePath/renamePath needs so it cannot
+// remove or move a directory holding another ticket's output. Same-ticket records
+// are ignored (rerun/idempotency stay allowed).
+function findOverlappingSuccessfulArtifactOwner(operationHistory, run, candidatePath) {
+  if (!run) return null;
+  const normalizedCandidate = normalizeArtifactOwnershipPath(candidatePath);
+  if (!normalizedCandidate) return null;
+  return (operationHistory || []).find(record => {
+    if (!record || record.error) return false;
+    if (record.ticketId === run.ticketId) return false;
+    const produced = getSuccessfulArtifactOwnershipPath(record);
+    return produced && workspacePathsOverlap(normalizedCandidate, produced);
+  }) || null;
+}
+
+// Throw a WORKSPACE_WRITE_CONFLICT (same shape/mechanism as the writeFile prior-
+// owner guard) when a destructive operation's path overlaps another ticket's
+// produced artifact. Throws before any fs mutation or history persist, so no
+// destructive op is committed and no false success record is written.
+function assertNoCrossTicketOverlap(run, operation, args, candidatePath) {
+  const owner = findOverlappingSuccessfulArtifactOwner(readOperationHistory(), run, candidatePath);
+  if (!owner) return;
+  const ownerPath = getSuccessfulArtifactOwnershipPath(owner);
+  const error = new Error(`Workspace ${operation === 'deletePath' ? 'delete' : 'rename'} conflict: path ${candidatePath} overlaps an artifact (${ownerPath}) previously produced by ticket ${owner.ticketId}, run ${owner.runId}`);
+  error.code = 'WORKSPACE_WRITE_CONFLICT';
+  error.failureKind = 'invalid_action';
+  error.workspaceAction = {
+    operation,
+    args,
+    path: candidatePath,
+    blocked: true,
+    reason: 'overlapping_artifact_owner',
+    conflictingTicketId: owner.ticketId,
+    conflictingRunId: owner.runId,
+    conflictingHistoryId: owner.id || null,
+    conflictingPath: ownerPath
+  };
+  throw error;
+}
+
 // ── Phase-aware execution helpers ─────────────────────────────────
 
 function inferPhaseFromActions(actions) {
@@ -10173,6 +10225,12 @@ function executeWorkspaceOperation(run, action, step = 0) {
       throw error;
     }
 
+    // Reject if either the source (or anything below it) or the destination
+    // overlaps an artifact another ticket produced — a rename must not move away
+    // or clobber another ticket's output.
+    assertNoCrossTicketOverlap(run, operation, { path: pathValue, nextPath }, pathValue);
+    assertNoCrossTicketOverlap(run, operation, { path: pathValue, nextPath }, nextPath);
+
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
     try {
@@ -10220,6 +10278,10 @@ function executeWorkspaceOperation(run, action, step = 0) {
       error.code = 'MUTATION_CONFLICT';
       throw error;
     }
+
+    // Reject if the path (or anything below it) holds an artifact another ticket
+    // produced — a destructive delete must not remove another ticket's output.
+    assertNoCrossTicketOverlap(run, operation, { path: pathValue }, pathValue);
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
