@@ -423,6 +423,128 @@ async function scenarioNonOverlap(cookie, agents) {
     'both non-overlapping writes completed, no false conflict');
 }
 
+function readRunSnapshot(runId) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'replay-snapshots', 'run-' + runId + '.json'), 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+// Same agent, two tickets, different paths: both runs complete and their
+// operation-history + replay evidence stay isolated per runId (no cross-run
+// contamination), with no false conflict.
+async function scenarioSameAgentDifferentPaths(cookie, agents) {
+  const agent = agents[0];
+  const fA = 'sa-diff/a-' + STAMP + '.txt';
+  const fB = 'sa-diff/b-' + STAMP + '.txt';
+  const oA = objectiveWith('saDiffA', { actions: [{ operation: 'writeFile', args: { path: fA, content: 'SA_A' } }], complete: true });
+  const oB = objectiveWith('saDiffB', { actions: [{ operation: 'writeFile', args: { path: fB, content: 'SA_B' } }], complete: true });
+  await Promise.all([createTicket(cookie, agent, oA), createTicket(cookie, agent, oB)]);
+  const ra = await waitForTicketRun(oA); const rb = await waitForTicketRun(oB);
+  const fa = ra && await waitForTerminalRun(ra.run.id); const fb = rb && await waitForTerminalRun(rb.run.id);
+  const sameAgent = ra && rb && ra.run.agentId === agent && rb.run.agentId === agent && ra.run.id !== rb.run.id && ra.ticket.id !== rb.ticket.id;
+  const bothCompleted = fa && fb && fa.status === 'completed' && fb.status === 'completed';
+  const filesOk = fs.existsSync(path.join(WORKSPACE_ROOT, fA)) && fs.existsSync(path.join(WORKSPACE_ROOT, fB));
+  const hist = jsonParsesOrNull('operation-history.json') || [];
+  const aHist = ra ? hist.filter(h => h.runId === ra.run.id) : [];
+  const bHist = rb ? hist.filter(h => h.runId === rb.run.id) : [];
+  const histIsolated = aHist.length > 0 && bHist.length > 0 &&
+    aHist.every(h => h.args && h.args.path === fA) && bHist.every(h => h.args && h.args.path === fB) &&
+    !aHist.some(h => h.args && h.args.path === fB) && !bHist.some(h => h.args && h.args.path === fA);
+  const snapA = ra && readRunSnapshot(ra.run.id); const snapB = rb && readRunSnapshot(rb.run.id);
+  const snapIsolated = snapA && snapB &&
+    Array.isArray(snapA.modelResponses) && snapA.modelResponses.length > 0 &&
+    Array.isArray(snapB.modelResponses) && snapB.modelResponses.length > 0 &&
+    (snapA.runId === undefined || snapA.runId === ra.run.id) &&
+    (snapB.runId === undefined || snapB.runId === rb.run.id);
+  const noFalseConflict = !/conflict/i.test(String((fa && fa.error) || '')) && !/conflict/i.test(String((fb && fb.error) || ''));
+  softAssert('same-agent different-path runs isolated', sameAgent && bothCompleted && filesOk && histIsolated && snapIsolated && noFalseConflict,
+    `sameAgent=${sameAgent} bothCompleted=${bothCompleted} filesOk=${filesOk} histIsolated=${histIsolated} snapIsolated=${snapIsolated} noFalseConflict=${noFalseConflict}`,
+    'same agent, two tickets: both complete; operation-history and replay evidence isolated per run; no false conflict');
+}
+
+// Same agent, two tickets, same file: the cross-ticket conflict guard still
+// blocks one (no silent overwrite), attributed to the prior ticket/run.
+async function scenarioSameAgentSameFile(cookie, agents) {
+  const agent = agents[1];
+  const target = 'sa-same/conflict-' + STAMP + '.txt';
+  const oA = objectiveWith('saSameA', { actions: [{ operation: 'writeFile', args: { path: target, content: 'SA_ONE' } }], complete: true });
+  const oB = objectiveWith('saSameB', { actions: [{ operation: 'writeFile', args: { path: target, content: 'SA_TWO' } }], complete: true });
+  await Promise.all([createTicket(cookie, agent, oA), createTicket(cookie, agent, oB)]);
+  const ra = await waitForTicketRun(oA); const rb = await waitForTicketRun(oB);
+  const fa = ra && await waitForTerminalRun(ra.run.id); const fb = rb && await waitForTerminalRun(rb.run.id);
+  const statuses = [fa && fa.status, fb && fb.status].sort();
+  const oneEachWay = statuses.length === 2 && statuses[0] === 'completed' && statuses[1] === 'failed';
+  const failedRun = [fa, fb].find(r => r && r.status === 'failed');
+  const conflictAttributed = failedRun && /write conflict|previously produced|WORKSPACE_WRITE_CONFLICT/i.test(String(failedRun.error || ''));
+  const hist = jsonParsesOrNull('operation-history.json') || [];
+  const cleanWrites = hist.filter(h => h.args && h.args.path === target && h.operation === 'writeFile' && !h.error).length;
+  softAssert('same-agent same-file conflict blocked', oneEachWay && conflictAttributed && cleanWrites === 1,
+    `statuses=${JSON.stringify(statuses)} attributed=${!!conflictAttributed} cleanWrites=${cleanWrites}`,
+    'same agent, same file: one completes, one fails with attributed conflict, exactly one clean write (no last-writer-wins)');
+}
+
+// Rerunning one ticket must affect only that ticket's runs; the same agent's
+// other-ticket runs must be untouched.
+async function scenarioSameAgentRerunIsolation(cookie, agents) {
+  const agent = agents[2];
+  const oA = objectiveWith('saRerunA', { actions: [{ operation: 'writeFile', args: { path: 'sa-rerun/a-' + STAMP + '.txt', content: 'A' } }], complete: true });
+  const oB = objectiveWith('saRerunB', { actions: [{ operation: 'writeFile', args: { path: 'sa-rerun/b-' + STAMP + '.txt', content: 'B' } }], complete: true });
+  await Promise.all([createTicket(cookie, agent, oA), createTicket(cookie, agent, oB)]);
+  const ra = await waitForTicketRun(oA); const rb = await waitForTicketRun(oB);
+  const fa = ra && await waitForTerminalRun(ra.run.id); const fb = rb && await waitForTerminalRun(rb.run.id);
+  if (!fa || !fb) { softAssert('same-agent rerun isolation', false, 'base runs did not complete'); return; }
+  const bBefore = (jsonParsesOrNull('runs.json') || []).filter(r => r.ticketId === rb.ticket.id).map(r => r.id + ':' + r.status).sort();
+  const rer = await httpReq('POST', '/api/tickets/' + ra.ticket.id + '/rerun', { cookie, body: {} });
+  await sleep(300);
+  await waitFor(() => {
+    const aRuns = (jsonParsesOrNull('runs.json') || []).filter(r => r.ticketId === ra.ticket.id);
+    return aRuns.length >= 2 && aRuns.every(r => ['completed', 'failed', 'interrupted'].includes(r.status)) ? aRuns : null;
+  }, 45000, 100);
+  const bAfter = (jsonParsesOrNull('runs.json') || []).filter(r => r.ticketId === rb.ticket.id).map(r => r.id + ':' + r.status).sort();
+  const aAfter = (jsonParsesOrNull('runs.json') || []).filter(r => r.ticketId === ra.ticket.id);
+  const bUnaffected = JSON.stringify(bBefore) === JSON.stringify(bAfter);
+  const aGotNewRun = aAfter.length >= 2;
+  softAssert('same-agent rerun isolation', rer.status === 200 && bUnaffected && aGotNewRun,
+    `rerunStatus=${rer.status} bUnaffected=${bUnaffected} aRuns=${aAfter.length}`,
+    "rerunning one ticket adds a run only to that ticket; the same agent's other ticket runs are untouched");
+}
+
+// Same agent: one run fails (cross-ticket conflict against a prior owner), one
+// run succeeds. Failure stays on the failed run; the successful run stays clean.
+async function scenarioSameAgentFailureIsolation(cookie, agents) {
+  const owner = agents[3];
+  const worker = agents[0];
+  const ownedPath = 'sa-fail/owned-' + STAMP + '.txt';
+  const oS = objectiveWith('saFailOwner', { actions: [{ operation: 'writeFile', args: { path: ownedPath, content: 'OWNER' } }], complete: true });
+  await createTicket(cookie, owner, oS);
+  const rs = await waitForTicketRun(oS);
+  const sFinal = rs && await waitForTerminalRun(rs.run.id);
+  if (!sFinal || sFinal.status !== 'completed') { softAssert('same-agent failure isolation', false, 'owner setup run did not complete'); return; }
+
+  const okPath = 'sa-fail/ok-' + STAMP + '.txt';
+  const oOk = objectiveWith('saFailOk', { actions: [{ operation: 'writeFile', args: { path: okPath, content: 'OK' } }], complete: true });
+  const oBad = objectiveWith('saFailBad', { actions: [{ operation: 'writeFile', args: { path: ownedPath, content: 'BAD' } }], complete: true });
+  await Promise.all([createTicket(cookie, worker, oOk), createTicket(cookie, worker, oBad)]);
+  const rOk = await waitForTicketRun(oOk); const rBad = await waitForTicketRun(oBad);
+  const okF = rOk && await waitForTerminalRun(rOk.run.id); const badF = rBad && await waitForTerminalRun(rBad.run.id);
+  const okGood = okF && okF.status === 'completed' && !okF.error && fs.existsSync(path.join(WORKSPACE_ROOT, okPath));
+  const badFailed = badF && badF.status === 'failed' && /conflict|previously produced/i.test(String(badF.error || ''));
+  const hist = jsonParsesOrNull('operation-history.json') || [];
+  const okHist = rOk ? hist.filter(h => h.runId === rOk.run.id && !h.error) : [];
+  const badHist = rBad ? hist.filter(h => h.runId === rBad.run.id && !h.error) : [];
+  let okStateClean = false;
+  try {
+    const st = JSON.parse((await httpReq('GET', '/api/runs/' + rOk.run.id + '/state', { cookie })).body);
+    okStateClean = st && st.status === 'completed' && !st.error;
+  } catch (_) { okStateClean = false; }
+  const isolated = okGood && badFailed && okHist.length === 1 && badHist.length === 0 && okStateClean;
+  softAssert('same-agent failure isolation', isolated,
+    `okGood=${okGood} badFailed=${badFailed} okHist=${okHist.length} badHist=${badHist.length} okStateClean=${okStateClean}`,
+    "same agent: failed run keeps its failure/evidence to itself; the successful run stays clean (no cross-run contamination)");
+}
+
 async function main() {
   const agents = seedData();
   const preloadPath = createFetchStub();
@@ -440,6 +562,10 @@ async function main() {
     await scenarioDoubleRerun(cookie, agents);
     await scenarioStopVsRerun(cookie, agents);
     await scenarioNonOverlap(cookie, agents);
+    await scenarioSameAgentDifferentPaths(cookie, agents);
+    await scenarioSameAgentSameFile(cookie, agents);
+    await scenarioSameAgentRerunIsolation(cookie, agents);
+    await scenarioSameAgentFailureIsolation(cookie, agents);
 
     console.log('\nSummary');
     console.log('-'.repeat(60));
