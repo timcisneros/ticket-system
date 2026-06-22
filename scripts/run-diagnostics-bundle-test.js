@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Run Detail permissioned-delete audit display regression test (test-only).
+// Run Diagnostics copyable bundle regression test (test-only).
 //
 // Drives the real server over HTTP with a model-free fetch stub (same #ACTIONS=
-// directive pattern as the concurrency harness). Proves that the Run Detail page
-// surfaces the v0.1.18 permissioned cross-ticket delete audit evidence for a run
-// that performed a permissioned delete, and does NOT show it for a blocked
-// (unpermitted) delete run or a run that performed no cross-ticket delete.
+// directive pattern as the concurrency harness). Proves the Run Detail Diagnostics
+// section exists, the diagnostic bundle is generated server-side with the required
+// header/sections/fields for both a permissioned cross-ticket delete run and a
+// blocked cross-ticket delete run, and that secrets are redacted.
 //
 // Touches only temp DATA_DIR / WORKSPACE_ROOT under os.tmpdir(). Never reads or
 // writes the real data/ dir, .local-data, provider keys, or seed files in place.
@@ -18,10 +18,11 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const STAMP = Date.now();
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-system-pdaudit-'));
-const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-system-pdaudit-ws-'));
-const PORT = String(4360 + Math.floor(Math.random() * 200));
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-system-diag-'));
+const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-system-diag-ws-'));
+const PORT = String(4560 + Math.floor(Math.random() * 200));
 const BASE_URL = 'http://127.0.0.1:' + PORT;
+const FAKE_KEY = 'fake-key-diag-' + STAMP;
 
 let server = null;
 let failures = 0;
@@ -88,12 +89,13 @@ function seedData() {
   const made = [];
   for (let i = 0; i < 2; i += 1) {
     nextId += 1;
-    agents.push({ id: nextId, name: 'PDAudit Agent ' + i, provider: 'openai', model: 'fake-openai-' + i, apiKey: 'fake-key-' + i, createdAt: new Date().toISOString(), runtimeConfig: {} });
+    // A recognizable fake provider key so the redaction assertion is meaningful.
+    agents.push({ id: nextId, name: 'Diag Agent ' + i, provider: 'openai', model: 'fake-openai-' + i, apiKey: FAKE_KEY, createdAt: new Date().toISOString(), runtimeConfig: {} });
     made.push(nextId);
   }
   writeJson('agents.json', agents);
 
-  // Non-admin user WITHOUT workspace.delete.cross_ticket_artifact (for the blocked case).
+  // Non-admin user WITHOUT workspace.delete.cross_ticket_artifact (blocked case).
   const users = readJson('users.json');
   const adminUser = users.find(u => u.username === 'admin') || users[0];
   const restrictedUserId = users.reduce((m, u) => Math.max(m, u.id || 0), 0) + 1;
@@ -112,10 +114,10 @@ function seedData() {
 }
 
 function createFetchStub() {
-  const preloadPath = path.join(os.tmpdir(), 'pdaudit-stub-' + process.pid + '-' + STAMP + '.js');
+  const preloadPath = path.join(os.tmpdir(), 'diag-stub-' + process.pid + '-' + STAMP + '.js');
   const src = `
 function okResponse(plan) {
-  return { ok: true, status: 200, headers: new Map([['x-request-id', 'fake-pdaudit']]),
+  return { ok: true, status: 200, headers: new Map([['x-request-id', 'fake-diag']]),
     async text() { return JSON.stringify({ output_text: JSON.stringify(plan), usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }); } };
 }
 global.fetch = async function(_url, options = {}) {
@@ -162,7 +164,7 @@ async function loginAs(username, password) {
 }
 
 function objectiveWith(tag, plan) {
-  return `pdaudit ${tag} ${STAMP} #ACTIONS=${encodeActions(plan)}`;
+  return `diag ${tag} ${STAMP} #ACTIONS=${encodeActions(plan)}`;
 }
 
 async function createTicket(cookie, agentId, objective) {
@@ -192,15 +194,12 @@ async function waitForTerminalRun(runId) {
   }, 45000, 80);
 }
 
-// Owner ticket writes `target` and completes; deleter ticket (created with the
-// given cookie) deletes it. Returns { owner, deleter }.
 async function runDeleteFlow(adminCookie, deleterCookie, agents, target, tag) {
   const oOwner = objectiveWith(tag + 'Owner', { actions: [{ operation: 'writeFile', args: { path: target, content: 'CD' } }], complete: true });
   await createTicket(adminCookie, agents[0], oOwner);
   const owner = await waitForTicketRun(oOwner);
   const ownerFinal = owner && await waitForTerminalRun(owner.run.id);
   if (!ownerFinal || ownerFinal.status !== 'completed') throw new Error(tag + ' owner run did not complete');
-
   const oDel = objectiveWith(tag + 'Del', { actions: [{ operation: 'deletePath', args: { path: target } }], complete: true });
   await createTicket(deleterCookie, agents[1], oDel);
   const deleter = await waitForTicketRun(oDel);
@@ -217,48 +216,71 @@ async function getRunPage(cookie, runId, mustContain) {
   }, 10000, 100);
 }
 
+// Extract the diagnostic bundle text from the readonly textarea on the page.
+function extractBundle(pageBody) {
+  const m = pageBody.match(/<textarea id="run-diagnostics-bundle"[^>]*>([\s\S]*?)<\/textarea>/);
+  if (!m) return null;
+  return m[1]
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#34;/g, '"').replace(/&#39;/g, "'");
+}
+
 async function main() {
   const agents = seedData();
   const preloadPath = createFetchStub();
-  console.log('Run Detail permissioned-delete audit display test');
+  console.log('Run Diagnostics bundle test');
   console.log('='.repeat(60));
   try {
     await startServer(preloadPath);
     const adminCookie = await loginAs('admin', 'admin123');
     const restrictedCookie = await loginAs('restricted', 'admin123');
 
-    // 1. Permitted: admin deletes another ticket's artifact -> page shows the block.
-    const permitted = await runDeleteFlow(adminCookie, adminCookie, agents, 'pd-permit/CD-' + STAMP + '.txt', 'permit');
+    // --- Permissioned delete run ---
+    const permitted = await runDeleteFlow(adminCookie, adminCookie, agents, 'diag-permit/CD-' + STAMP + '.txt', 'permit');
     assert('permitted delete run completed', permitted.deleterFinal && permitted.deleterFinal.status === 'completed',
       `status=${permitted.deleterFinal && permitted.deleterFinal.status}`);
-    const permPage = await getRunPage(adminCookie, permitted.deleter.run.id, '<h2>Permissioned Cross-Ticket Delete</h2>');
-    const body = permPage ? permPage.body : '';
-    assert('permitted run page renders (200)', !!permPage, 'page did not render with the audit block');
-    assert('shows heading "Permissioned Cross-Ticket Delete"', body.includes('<h2>Permissioned Cross-Ticket Delete</h2>'));
-    assert('shows permission used', body.includes('workspace.delete.cross_ticket_artifact'));
-    assert('shows audit event type', body.includes('workspace.cross_ticket_delete_authorized'));
-    assert('shows prior owner ticket', body.includes('#' + permitted.owner.ticket.id));
-    assert('shows prior owner run', body.includes('#' + permitted.owner.run.id));
-    assert('shows requesting run', body.includes('#' + permitted.deleter.run.id));
-    assert('shows delegated actor (admin)', body.includes('admin'));
-    assert('shows delegated permission source', body.includes('created_from_ticket'));
-    assert('shows deleted path', body.includes('pd-permit/CD-' + STAMP + '.txt'));
+    const permPage = await getRunPage(adminCookie, permitted.deleter.run.id, 'id="run-diagnostics"');
+    const permBody = permPage ? permPage.body : '';
+    assert('1. Run Detail contains a Diagnostics section', permBody.includes('id="run-diagnostics"') && permBody.includes('<h2>Diagnostics</h2>'));
+    assert('2. page has a read-only diagnostics textarea', /<textarea id="run-diagnostics-bundle"[^>]*\breadonly\b/.test(permBody));
+    assert('3. page has a copy diagnostics button', permBody.includes('data-copy-diagnostics'));
 
-    // 2. The owner run (no cross-ticket delete) must NOT show the block.
-    const ownerPage = await httpReq('GET', '/runs/' + permitted.owner.run.id, { cookie: adminCookie });
-    assert('owner (non-delete) run page omits the block',
-      ownerPage.status === 200 && !ownerPage.body.includes('<h2>Permissioned Cross-Ticket Delete</h2>'),
-      'owner page unexpectedly shows the audit block');
+    const permBundle = extractBundle(permBody) || '';
+    assert('4. bundle starts with the required header', permBundle.trimStart().startsWith('# Ticket System Diagnostic Bundle'));
+    assert('5. bundle includes ticket id and run id',
+      permBundle.includes('Ticket: #' + permitted.deleter.ticket.id) && permBundle.includes('Run: #' + permitted.deleter.run.id));
+    assert('6. bundle includes delegated authority fields',
+      permBundle.includes('run.delegatedUserId:') && permBundle.includes('run.delegatedUsername:') && permBundle.includes('run.delegatedPermissionSource:'));
+    assert('7. bundle includes permission check result',
+      permBundle.includes('workspace.delete.cross_ticket_artifact') &&
+      /Delegated user has "workspace\.delete\.cross_ticket_artifact": yes/.test(permBundle));
+    assert('9. permissioned bundle includes audit section + fields',
+      permBundle.includes('## 10. Permissioned Cross-Ticket Delete Audit') &&
+      permBundle.includes('permissionUsed: workspace.delete.cross_ticket_artifact') &&
+      permBundle.includes('priorOwnerTicketId: ' + permitted.owner.ticket.id) &&
+      permBundle.includes('actorUsername: admin'));
+    assert('10. bundle includes the redaction notice',
+      permBundle.includes('Provider keys, session cookies, password hashes, auth tokens, and environment secrets are excluded from this diagnostic bundle.'));
+    assert('11. bundle does not include passwordHash', !permBundle.includes('passwordHash'));
+    assert('12. bundle does not include sessionId', !permBundle.includes('sessionId'));
+    assert('13. bundle does not include provider API key', !permBundle.includes(FAKE_KEY));
 
-    // 3. Blocked: restricted user delete stays blocked -> page must NOT show the block.
-    const blocked = await runDeleteFlow(adminCookie, restrictedCookie, agents, 'pd-block/CD-' + STAMP + '.txt', 'block');
+    // --- Blocked delete run ---
+    const blocked = await runDeleteFlow(adminCookie, restrictedCookie, agents, 'diag-block/CD-' + STAMP + '.txt', 'block');
     assert('blocked delete run failed with conflict',
       blocked.deleterFinal && blocked.deleterFinal.status === 'failed' && /conflict|previously produced/i.test(String(blocked.deleterFinal.error || '')),
-      `status=${blocked.deleterFinal && blocked.deleterFinal.status} error=${blocked.deleterFinal && blocked.deleterFinal.error}`);
-    const blockedPage = await httpReq('GET', '/runs/' + blocked.deleter.run.id, { cookie: adminCookie });
-    assert('blocked run page omits the block',
-      blockedPage.status === 200 && !blockedPage.body.includes('<h2>Permissioned Cross-Ticket Delete</h2>'),
-      'blocked page unexpectedly shows the audit block');
+      `status=${blocked.deleterFinal && blocked.deleterFinal.status}`);
+    const blockedPage = await getRunPage(adminCookie, blocked.deleter.run.id, 'id="run-diagnostics"');
+    const blockedBundle = extractBundle(blockedPage ? blockedPage.body : '') || '';
+    assert('8a. blocked bundle includes deletePath + path', blockedBundle.includes('deletePath') && blockedBundle.includes('diag-block/CD-' + STAMP + '.txt'));
+    assert('8b. blocked bundle includes conflicting owner ticket/run',
+      blockedBundle.includes('conflictingTicketId: ' + blocked.owner.ticket.id) && blockedBundle.includes('conflictingRunId: ' + blocked.owner.run.id));
+    assert('8c. blocked bundle includes attempted + committed counts',
+      /Workspace actions attempted before failure: \d+/.test(blockedBundle) && /Mutations committed before failure: 0/.test(blockedBundle));
+    assert('8d. blocked bundle states no mutation committed',
+      blockedBundle.includes('No operation-history mutation was committed for this run.') || blockedBundle.includes('mutation committed: no'));
+    assert('blocked bundle redaction intact (no key/hash/cookie)',
+      !blockedBundle.includes(FAKE_KEY) && !blockedBundle.includes('passwordHash') && !blockedBundle.includes('sessionId'));
 
     console.log('\n' + (failures === 0 ? 'PASS' : 'FAIL') + `: ${failures} failure(s)`);
   } finally {

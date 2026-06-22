@@ -957,6 +957,39 @@
 </section>
 <% } %>
 
+<% if (typeof runDiagnosticBundle !== 'undefined' && runDiagnosticBundle) { %>
+<section class="detail-section diagnostics-section" id="run-diagnostics">
+  <h2>Diagnostics</h2>
+  <p class="text-muted">One copyable bundle with this run's ticket, run, failure, authority, permission, workspace, replay, model, and artifact evidence — for sharing when diagnosing an issue. Provider keys, cookies, password hashes, and secrets are excluded.<% if (typeof diagnosticsGeneratedAt !== 'undefined' && diagnosticsGeneratedAt) { %> Generated at <%= diagnosticsGeneratedAt %>.<% } %></p>
+  <div class="diagnostics-actions">
+    <button type="button" class="btn-secondary" data-copy-diagnostics>Copy diagnostics</button>
+    <span class="diagnostics-copy-status" data-copy-diagnostics-status aria-live="polite"></span>
+  </div>
+  <textarea id="run-diagnostics-bundle" class="diagnostics-textarea" readonly rows="24" spellcheck="false" aria-label="Run diagnostic bundle"><%= runDiagnosticBundle %></textarea>
+</section>
+<script>
+(function() {
+  var copyBtn = document.querySelector('[data-copy-diagnostics]');
+  var textarea = document.getElementById('run-diagnostics-bundle');
+  var status = document.querySelector('[data-copy-diagnostics-status]');
+  if (!copyBtn || !textarea) return;
+  function note(msg) { if (status) { status.textContent = msg; setTimeout(function() { status.textContent = ''; }, 2500); } }
+  copyBtn.addEventListener('click', function() {
+    var text = textarea.value;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function() { note('Copied'); }).catch(function() {
+        textarea.select();
+        try { document.execCommand('copy'); note('Copied'); } catch (e) { note('Copy failed — select and copy manually'); }
+      });
+    } else {
+      textarea.select();
+      try { document.execCommand('copy'); note('Copied'); } catch (e) { note('Copy failed — select and copy manually'); }
+    }
+  });
+})();
+</script>
+<% } %>
+
 <script>
 (function() {
   var toggleAllBtn = document.querySelector('[data-replay-toggle-all]');

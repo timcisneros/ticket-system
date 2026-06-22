@@ -13607,6 +13607,351 @@ fastify.get('/api/logs/events', { preHandler: fastify.requireAuth }, async (requ
   setupSSEConnection(reply, request, logEventClients);
 });
 
+const DIAGNOSTIC_APP_VERSION = (() => {
+  try { return require('./package.json').version || 'unavailable'; } catch (_) { return 'unavailable'; }
+})();
+
+// Build a single copyable Markdown diagnostic bundle for a run. Display/debug only:
+// it reads already-computed run-detail data plus a few read-only lookups, writes
+// nothing, and changes no runtime behavior. It never includes provider API keys,
+// session cookies, password hashes, auth tokens, or environment secrets.
+function buildRunDiagnosticBundle(ctx) {
+  const {
+    run, ticket, agent, snapshot, authorityContext, failureSummary,
+    operationHistory, permissionedDeleteAuditEvents, completionSummary,
+    eventSummary, recentLogs, artifactPredictionComparison, artifactAccuracy,
+    objectiveSuccess, operationalOutcome, partialMutationCount,
+    generatedAt, route
+  } = ctx;
+
+  const lines = [];
+  const out = (s = '') => lines.push(s);
+  const dash = v => (v === null || v === undefined || v === '') ? 'unavailable' : v;
+  const j = v => { try { return JSON.stringify(v, null, 2); } catch (_) { return 'unavailable'; } };
+
+  const s = snapshot || {};
+  const fs2 = failureSummary || {};
+  const history = Array.isArray(operationHistory) ? operationHistory : [];
+  const workspaceOps = Array.isArray(s.workspaceOperations) ? s.workspaceOperations : [];
+  const committedCount = typeof partialMutationCount === 'number'
+    ? partialMutationCount
+    : history.filter(h => h && !h.error).length;
+  const attemptedCount = workspaceOps.length;
+  const opPath = op => (op && (op.path != null ? op.path : (op.args && op.args.path))) || null;
+
+  // Delegated authority + live permission resolution.
+  const delegatedUserId = run && run.delegatedUserId != null ? run.delegatedUserId : null;
+  const permissionCatalog = (typeof readPermissions === 'function') ? readPermissions() : [];
+  const permissionExists = permissionCatalog.includes(CROSS_TICKET_DELETE_PERMISSION);
+  let delegatedHasPermission = false;
+  let delegatedGroups = [];
+  if (delegatedUserId != null) {
+    try {
+      delegatedHasPermission = hasPermission(delegatedUserId, CROSS_TICKET_DELETE_PERMISSION);
+      const groups = readGroups();
+      delegatedGroups = getPrincipalGroupIds('user', delegatedUserId).map(id => {
+        const g = groups.find(item => item.id === id);
+        return g ? { id: g.id, name: g.name, permissions: Array.isArray(g.permissions) ? g.permissions : [] } : { id, name: 'unavailable', permissions: [] };
+      });
+    } catch (_) { /* read-only best effort */ }
+  }
+
+  // Cross-ticket conflict detection: prefer a recorded blocked workspace op; else
+  // parse the deterministic conflict message (buildCrossTicketConflictError) from
+  // the failure reason. Only treated as "blocked before mutation" when nothing was
+  // committed for this run.
+  let blockedConflict = workspaceOps.find(op => op && (op.blocked || op.reason) && op.reason === 'overlapping_artifact_owner') || null;
+  if (blockedConflict) {
+    blockedConflict = {
+      operation: blockedConflict.operation || 'deletePath',
+      path: opPath(blockedConflict),
+      reason: blockedConflict.reason || 'overlapping_artifact_owner',
+      conflictingTicketId: blockedConflict.conflictingTicketId != null ? blockedConflict.conflictingTicketId : null,
+      conflictingRunId: blockedConflict.conflictingRunId != null ? blockedConflict.conflictingRunId : null,
+      conflictingHistoryId: blockedConflict.conflictingHistoryId != null ? blockedConflict.conflictingHistoryId : null,
+      conflictingPath: blockedConflict.conflictingPath != null ? blockedConflict.conflictingPath : null
+    };
+  } else if (committedCount === 0) {
+    const errText = String((fs2.rootCause) || (run && run.error) || '');
+    const m = errText.match(/Workspace (delete|rename) conflict: path (\S+) overlaps an artifact \(([^)]*)\) previously produced by ticket (\d+), run (\d+)/);
+    if (m) {
+      blockedConflict = {
+        operation: m[1] === 'delete' ? 'deletePath' : 'renamePath',
+        path: m[2],
+        reason: 'overlapping_artifact_owner',
+        conflictingTicketId: parseInt(m[4], 10),
+        conflictingRunId: parseInt(m[5], 10),
+        conflictingHistoryId: null,
+        conflictingPath: m[3]
+      };
+    }
+  }
+  const blockedDelete = blockedConflict && blockedConflict.operation === 'deletePath' ? blockedConflict : null;
+  const permEvents = Array.isArray(permissionedDeleteAuditEvents) ? permissionedDeleteAuditEvents : [];
+
+  // ---- Header ----
+  out('# Ticket System Diagnostic Bundle');
+  out('');
+  out('Generated At: ' + dash(generatedAt));
+  out('App Version / Tag: ' + dash(DIAGNOSTIC_APP_VERSION));
+  out('Route: ' + dash(route));
+  out('Ticket: ' + (ticket ? '#' + ticket.id : 'unavailable'));
+  out('Run: ' + (run ? '#' + run.id : 'unavailable'));
+  out('Purpose: Single copyable bundle to diagnose this run/ticket.');
+  out('');
+
+  // 1. Summary
+  out('## 1. Summary');
+  if (blockedDelete && committedCount === 0) {
+    const p = dash(opPath(blockedDelete));
+    out(`This run was blocked before mutation. The model proposed deletePath ${p}, but ${p} overlaps an artifact produced by Ticket #${dash(blockedDelete.conflictingTicketId)} / Run #${dash(blockedDelete.conflictingRunId)}. No operation-history mutation was committed for this run.`);
+  }
+  if (permEvents.length > 0) {
+    out(`This run was allowed to delete a cross-ticket artifact because the run's delegated user had ${CROSS_TICKET_DELETE_PERMISSION}. The audit evidence records the prior owner, requesting run, delegated actor, delegated permission source, and permission used.`);
+  }
+  out('- Run status: ' + dash(run && run.status));
+  out('- Operational outcome: ' + dash(operationalOutcome));
+  out('- Workspace actions attempted before failure: ' + attemptedCount);
+  out('- Mutations committed before failure: ' + committedCount);
+  out('');
+
+  // 2. Ticket State
+  out('## 2. Ticket State');
+  if (ticket) {
+    out('- Ticket id: ' + dash(ticket.id));
+    out('- Objective/title: ' + dash(ticket.objective || ticket.title));
+    out('- Status: ' + dash(ticket.status));
+    out('- Assignment target type: ' + dash(ticket.assignmentTargetType));
+    out('- Assignment target id: ' + dash(ticket.assignmentTargetId));
+    out('- Assigned agent/group: ' + dash(agent ? agent.name : (authorityContext && authorityContext.authority && authorityContext.authority.assignment)));
+    out('- createdBy: ' + dash(ticket.createdBy));
+    out('- changedBy: ' + dash(ticket.changedBy));
+    out('- createdAt: ' + dash(ticket.createdAt));
+    out('- updatedAt: ' + dash(ticket.updatedAt));
+  } else {
+    out('Ticket: unavailable');
+  }
+  out('- Latest run id: ' + dash(run && run.id));
+  out('- Latest outcome: ' + dash(operationalOutcome));
+  out('- Current message: ' + dash(eventSummary && eventSummary.latestStatus && eventSummary.latestStatus.message));
+  out('');
+
+  // 3. Run State
+  out('## 3. Run State');
+  if (run) {
+    out('- Run id: ' + dash(run.id));
+    out('- Ticket id: ' + dash(run.ticketId));
+    out('- Agent id: ' + dash(run.agentId));
+    out('- Agent name: ' + dash(run.agentName || (agent && agent.name)));
+    out('- Status: ' + dash(run.status));
+    out('- Outcome: ' + dash(operationalOutcome));
+    out('- startedAt: ' + dash(run.startedAt));
+    out('- completedAt: ' + dash(run.completedAt));
+    out('- duration: ' + dash(typeof formatDurationHuman === 'function' && run.startedAt && run.completedAt ? formatDurationHuman(new Date(run.completedAt) - new Date(run.startedAt)) : null));
+    out('- Current phase: ' + dash(run.currentPhase));
+    out('- Current step: ' + dash(eventSummary && eventSummary.currentStep && eventSummary.currentStep.stepId));
+    out('- Current message: ' + dash(eventSummary && eventSummary.latestStatus && eventSummary.latestStatus.message));
+    out('- Error / root cause: ' + dash(fs2.rootCause || run.error));
+    out('- Final blocking reason: ' + dash(fs2.finalBlockingReason));
+    out('- Completion source: ' + dash(completionSummary && completionSummary.source));
+    out('- Mutations count: ' + committedCount);
+    out('- Latest workspace mutation: ' + dash(eventSummary && eventSummary.latestWorkspaceMutation ? (eventSummary.latestWorkspaceMutation.operation + ' ' + (eventSummary.latestWorkspaceMutation.path || '')) : null));
+    out('- Latest event error: ' + dash(eventSummary && eventSummary.latestError && eventSummary.latestError.message));
+  } else {
+    out('Run: unavailable');
+  }
+  out('');
+
+  // 4. Failure / Blocking Reason
+  out('## 4. Failure / Blocking Reason');
+  out('- Run ended as: ' + dash(fs2.statusLabel || (run && run.status)));
+  out('- Root cause: ' + dash(fs2.rootCause));
+  out('- Blocking error code: ' + dash(fs2.blockingErrorCode));
+  out('- Final blocking reason: ' + dash(fs2.finalBlockingReason));
+  out('');
+
+  // 5. Delegated Authority / Permissions
+  out('## 5. Delegated Authority / Permissions');
+  out('- run.delegatedUserId: ' + dash(delegatedUserId));
+  out('- run.delegatedUsername: ' + dash(run && run.delegatedUsername));
+  out('- run.delegatedPermissionSource: ' + dash(run && run.delegatedPermissionSource));
+  out('- "' + CROSS_TICKET_DELETE_PERMISSION + '" exists in permission catalog: ' + (permissionExists ? 'yes' : 'no'));
+  if (delegatedUserId == null) {
+    out('- Delegated user is null; the cross-ticket delete permission cannot be applied to this run.');
+  } else {
+    out('- Delegated user has "' + CROSS_TICKET_DELETE_PERMISSION + '": ' + (delegatedHasPermission ? 'yes' : 'no'));
+    out('- Delegated user groups: ' + (delegatedGroups.length > 0 ? delegatedGroups.map(g => g.name + ' (#' + g.id + ')').join(', ') : 'none'));
+    delegatedGroups.forEach(g => {
+      out('  - ' + g.name + ' permissions: ' + (g.permissions.length > 0 ? g.permissions.join(', ') : 'none'));
+    });
+  }
+  out('');
+
+  // 6. Assignment / Scope / Runtime Policy
+  out('## 6. Assignment / Scope / Runtime Policy');
+  const auth = (authorityContext && authorityContext.authority) || {};
+  out('- Assignment: ' + dash(auth.assignment));
+  out('- Scope: ' + dash(auth.scope));
+  out('- Runtime policy: ' + dash(auth.runtimePolicy));
+  out('- Execution mode: ' + dash(run && run.executionMode));
+  out('- Capability: ' + dash(run && run.capabilityType) + ' / ' + dash(run && run.capabilityId));
+  out('- Owned output paths: ' + ((run && Array.isArray(run.ownedOutputPaths) && run.ownedOutputPaths.length > 0) ? run.ownedOutputPaths.join(', ') : 'none'));
+  out('');
+
+  // 7. Proposed Actions
+  out('## 7. Proposed Actions');
+  out('- Last model message: ' + dash(fs2.lastModelMessage));
+  const proposed = Array.isArray(fs2.lastProposedActions) ? fs2.lastProposedActions : [];
+  if (proposed.length > 0) {
+    proposed.forEach(a => out('- ' + a));
+  } else {
+    out('- (no proposed actions captured)');
+  }
+  out('');
+
+  // 8. Workspace Actions
+  out('## 8. Workspace Actions');
+  out('- Workspace actions attempted before failure: ' + attemptedCount);
+  out('- Mutations committed before failure: ' + committedCount);
+  if (workspaceOps.length > 0) {
+    workspaceOps.forEach((op, i) => {
+      out(`- [${i}] ${dash(op.operation)} path=${dash(opPath(op))} status=${op.blocked ? 'blocked' : (op.error ? 'error' : 'ok')}${op.reason ? ' reason=' + op.reason : ''}${op.error ? ' error=' + op.error : ''}`);
+    });
+  } else {
+    out('- (no workspace operations captured)');
+  }
+  out('');
+
+  // 9. Operation History / Artifact Ownership
+  out('## 9. Operation History / Artifact Ownership');
+  if (history.length > 0) {
+    history.forEach(h => {
+      out(`- #${dash(h.id)} ${dash(h.operation)} path=${dash(opPath(h))} ${h.error ? 'ERROR=' + h.error : 'ok'}`);
+    });
+  } else {
+    out('- No operation-history records committed for this run.');
+  }
+  if (blockedConflict) {
+    out('- Conflicting owner (from blocked op): ticket #' + dash(blockedConflict.conflictingTicketId) + ', run #' + dash(blockedConflict.conflictingRunId) + ', history id ' + dash(blockedConflict.conflictingHistoryId) + ', path ' + dash(blockedConflict.conflictingPath));
+  }
+  out('');
+
+  // 10. Permissioned Cross-Ticket Delete Audit
+  out('## 10. Permissioned Cross-Ticket Delete Audit');
+  if (permEvents.length > 0) {
+    permEvents.forEach((e, i) => {
+      out(`- [${i}] event type: ${dash(e.type)}`);
+      out('  - timestamp: ' + dash(e.ts));
+      out('  - operation: ' + dash(e.operation));
+      out('  - path: ' + dash(e.path));
+      out('  - priorOwnerTicketId: ' + dash(e.priorOwnerTicketId));
+      out('  - priorOwnerRunId: ' + dash(e.priorOwnerRunId));
+      out('  - priorOwnerHistoryId: ' + dash(e.priorOwnerHistoryId));
+      out('  - priorOwnerPath: ' + dash(e.priorOwnerPath));
+      out('  - requestingTicketId: ' + dash(e.requestingTicketId));
+      out('  - requestingRunId: ' + dash(e.requestingRunId));
+      out('  - actorUserId: ' + dash(e.actorUserId));
+      out('  - actorUsername: ' + dash(e.actorUsername));
+      out('  - delegatedPermissionSource: ' + dash(e.delegatedPermissionSource));
+      out('  - permissionUsed: ' + dash(e.permissionUsed));
+      out('  - source: ' + dash(e.source));
+    });
+  } else if (blockedConflict) {
+    out('- No permissioned delete authorized. Blocked cross-ticket ' + (blockedConflict.operation === 'renamePath' ? 'rename' : 'delete') + ' diagnosis:');
+    out('  - operation: ' + dash(blockedConflict.operation));
+    out('  - path: ' + dash(blockedConflict.path));
+    out('  - reason: ' + dash(blockedConflict.reason));
+    out('  - conflictingTicketId: ' + dash(blockedConflict.conflictingTicketId));
+    out('  - conflictingRunId: ' + dash(blockedConflict.conflictingRunId));
+    out('  - conflictingHistoryId: ' + dash(blockedConflict.conflictingHistoryId));
+    out('  - conflictingPath: ' + dash(blockedConflict.conflictingPath));
+    out('  - mutation committed: no');
+  } else {
+    out('- No permissioned cross-ticket delete audit events for this run.');
+  }
+  out('');
+
+  // 11. Replay Events
+  const replayEvents = Array.isArray(s.replayEvents) ? s.replayEvents : [];
+  out('## 11. Replay Events');
+  out('- Replay event count: ' + replayEvents.length);
+  if (replayEvents.length > 0) {
+    replayEvents.forEach(ev => out('- ' + dash(ev && (ev.type || ev.kind)) + ': ' + dash(ev && (ev.message || ev.detail))));
+  }
+  out('');
+
+  // 12. Provider / Model Evidence
+  out('## 12. Provider / Model Evidence');
+  out('- Provider request count: ' + (Array.isArray(s.providerRequests) ? s.providerRequests.length : 0));
+  out('- Model response count: ' + (Array.isArray(s.modelResponses) ? s.modelResponses.length : 0));
+  out('- Last model message: ' + dash(fs2.lastModelMessage));
+  out('- Last proposed actions: ' + (proposed.length > 0 ? proposed.join(', ') : 'none'));
+  out('- Phase violations: ' + replayEvents.filter(ev => ev && String(ev.type || ev.kind || '').toLowerCase().includes('phase')).length);
+  out('- Model stalls: ' + replayEvents.filter(ev => ev && String(ev.type || ev.kind || '').toLowerCase().includes('stall')).length);
+  out('- Replay event count: ' + replayEvents.length);
+  out('');
+
+  // 13. Artifact Prediction / Output Analysis
+  out('## 13. Artifact Prediction / Output Analysis');
+  const cmp = artifactPredictionComparison || { matched: [], missing: [], unexpected: [] };
+  out('- Matched: ' + (Array.isArray(cmp.matched) ? cmp.matched.length : 0));
+  out('- Missing: ' + (Array.isArray(cmp.missing) ? cmp.missing.length : 0));
+  out('- Unexpected: ' + (Array.isArray(cmp.unexpected) ? cmp.unexpected.length : 0));
+  out('- Artifact accuracy: ' + dash(artifactAccuracy && artifactAccuracy.percent != null ? artifactAccuracy.percent + '%' : null));
+  out('- Objective success: ' + dash(objectiveSuccess && objectiveSuccess.status));
+  out('');
+
+  // 14. Recent Activity
+  out('## 14. Recent Activity');
+  const logs = Array.isArray(recentLogs) ? recentLogs : [];
+  if (logs.length > 0) {
+    logs.forEach(l => out('- ' + dash(l.displayType || l.type) + ': ' + dash(l.displayMessage || l.message)));
+  } else {
+    out('- No recent activity logs.');
+  }
+  out('');
+
+  // 15. Raw Debug JSON (secret-free projection)
+  out('## 15. Raw Debug JSON');
+  const safeAgent = agent ? { id: agent.id, name: agent.name, provider: agent.provider, model: agent.model } : null;
+  const rawDebug = {
+    route, generatedAt, appVersion: DIAGNOSTIC_APP_VERSION,
+    run: run || null,
+    ticket: ticket || null,
+    agent: safeAgent,
+    failureSummary: failureSummary || null,
+    operationHistory: history,
+    permissionedDeleteAuditEvents: permEvents,
+    eventSummary: eventSummary || null,
+    snapshotSummary: {
+      provider: s.provider || null,
+      model: s.model || null,
+      terminalStatus: s.terminalStatus || null,
+      failureReason: s.failureReason || null,
+      providerRequests: Array.isArray(s.providerRequests) ? s.providerRequests.length : 0,
+      modelResponses: Array.isArray(s.modelResponses) ? s.modelResponses.length : 0,
+      workspaceOperations: workspaceOps,
+      replayEvents
+    },
+    delegatedAuthority: {
+      delegatedUserId, delegatedUsername: run && run.delegatedUsername || null,
+      delegatedPermissionSource: run && run.delegatedPermissionSource || null,
+      permissionExists, delegatedHasPermission, delegatedGroups
+    }
+  };
+  out('```json');
+  out(j(rawDebug));
+  out('```');
+  out('');
+
+  // 16. Redaction Notice
+  out('## 16. Redaction Notice');
+  out('Provider keys, session cookies, password hashes, auth tokens, and environment secrets are excluded from this diagnostic bundle.');
+  out('');
+
+  return lines.join('\n');
+}
+
 fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
@@ -13702,6 +14047,15 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
       source: ev.payload.source != null ? ev.payload.source : null
     }));
 
+  const diagnosticsGeneratedAt = new Date().toISOString();
+  const runDiagnosticBundle = buildRunDiagnosticBundle({
+    run, ticket, agent, snapshot, authorityContext, failureSummary,
+    operationHistory: enrichedHistory, permissionedDeleteAuditEvents, completionSummary,
+    eventSummary, recentLogs: getRecentLogsForRun(runId), artifactPredictionComparison,
+    artifactAccuracy, objectiveSuccess, operationalOutcome, partialMutationCount: runPartialMutationCount,
+    generatedAt: diagnosticsGeneratedAt, route: '/runs/' + runId
+  });
+
   return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
     run,
@@ -13728,6 +14082,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     runStateInconsistency,
     completionSummary,
     permissionedDeleteAuditEvents,
+    runDiagnosticBundle,
+    diagnosticsGeneratedAt,
     formatDurationHuman,
     canUpdateRuns: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
