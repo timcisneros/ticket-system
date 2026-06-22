@@ -253,7 +253,8 @@ async function main() {
       permBundle.includes('run.delegatedUserId:') && permBundle.includes('run.delegatedUsername:') && permBundle.includes('run.delegatedPermissionSource:'));
     assert('7. bundle includes permission check result',
       permBundle.includes('workspace.delete.cross_ticket_artifact') &&
-      /Delegated user has "workspace\.delete\.cross_ticket_artifact": yes/.test(permBundle));
+      permBundle.includes('Permission present in live permissions data: yes') &&
+      /Delegated user has permission according to live data: yes/.test(permBundle));
     assert('9. permissioned bundle includes audit section + fields',
       permBundle.includes('## 10. Permissioned Cross-Ticket Delete Audit') &&
       permBundle.includes('permissionUsed: workspace.delete.cross_ticket_artifact') &&
@@ -275,12 +276,74 @@ async function main() {
     assert('8a. blocked bundle includes deletePath + path', blockedBundle.includes('deletePath') && blockedBundle.includes('diag-block/CD-' + STAMP + '.txt'));
     assert('8b. blocked bundle includes conflicting owner ticket/run',
       blockedBundle.includes('conflictingTicketId: ' + blocked.owner.ticket.id) && blockedBundle.includes('conflictingRunId: ' + blocked.owner.run.id));
-    assert('8c. blocked bundle includes attempted + committed counts',
-      /Workspace actions attempted before failure: \d+/.test(blockedBundle) && /Mutations committed before failure: 0/.test(blockedBundle));
+    assert('8c. blocked bundle includes runtime-accepted + committed counts',
+      /Runtime-accepted workspace operations before failure: \d+/.test(blockedBundle) && /Mutations committed before failure: 0/.test(blockedBundle));
     assert('8d. blocked bundle states no mutation committed',
       blockedBundle.includes('No operation-history mutation was committed for this run.') || blockedBundle.includes('mutation committed: no'));
     assert('blocked bundle redaction intact (no key/hash/cookie)',
       !blockedBundle.includes(FAKE_KEY) && !blockedBundle.includes('passwordHash') && !blockedBundle.includes('sessionId'));
+
+    // --- Run #12 phase/stall failure shape (seeded fixture) ---
+    // Failed run: model proposed deletePath CD + listDirectory during planning;
+    // runtime recorded phase violations + stalls + a step-limit; nothing accepted
+    // or committed. Seeded directly (inline replaySnapshot) to exercise bundle
+    // fidelity without orchestrating the live runtime into that exact shape.
+    const adminId = (jsonParsesOrNull('users.json') || []).find(u => u.username === 'admin').id;
+    const now = new Date().toISOString();
+    const fx = {
+      id: 9012, ticketId: 9012, agentId: agents[0], agentName: 'Diag Agent 0',
+      status: 'failed', error: 'Run hit the step limit (run:step_limit) after repeated complete:false responses with no workspace actions.',
+      delegatedUserId: adminId, delegatedUsername: 'admin', delegatedPermissionSource: 'created_from_ticket',
+      currentPhase: 'planning', executionMode: 'agent', capabilityType: 'directAction', capabilityId: 'agent-selected-actions',
+      ownedOutputPaths: [], workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
+      createdAt: now, updatedAt: now, startedAt: now, completedAt: now,
+      replaySnapshot: {
+        terminalStatus: 'failed',
+        failureReason: 'Run hit the step limit after repeated complete:false responses with no workspace actions.',
+        provider: 'openai', model: 'fake-openai-0',
+        providerRequests: [{}, {}, {}],
+        modelResponses: [{}, {}, {}],
+        workspaceOperations: [],
+        parsedModelPlans: [
+          { step: 0, message: 'planning', complete: false, actions: [{ operation: 'deletePath', args: { path: 'CD' } }, { operation: 'listDirectory', args: { path: '/' } }] },
+          { step: 2, message: 'planning', complete: false, actions: [{ operation: 'deletePath', args: { path: 'CD' } }, { operation: 'listDirectory', args: { path: '' } }] }
+        ],
+        events: [
+          { type: 'execution.phase_violation', message: 'mixed mutation and inspection actions' },
+          { type: 'execution.phase_violation', message: 'mixed mutation and inspection actions' },
+          { type: 'model:stalled', message: 'complete:false with no workspace actions' },
+          { type: 'model:stalled', message: 'complete:false with no workspace actions' },
+          { type: 'run:step_limit', message: 'step limit reached' }
+        ]
+      }
+    };
+    const tickets = jsonParsesOrNull('tickets.json') || [];
+    tickets.push({ id: 9012, objective: 'Delete CD', status: 'failed', assignmentTargetType: 'agent', assignmentTargetId: agents[0], assignmentMode: 'individual', createdBy: 'admin', changedBy: 'admin', createdAt: now, updatedAt: now });
+    writeJson('tickets.json', tickets);
+    const runs = jsonParsesOrNull('runs.json') || [];
+    runs.push(fx);
+    writeJson('runs.json', runs);
+
+    const fxPage = await getRunPage(adminCookie, 9012, 'id="run-diagnostics"');
+    const fxBundle = extractBundle(fxPage ? fxPage.body : '') || '';
+    assert('R12: model-proposed=4', fxBundle.includes('Model-proposed workspace actions before failure: 4'));
+    assert('R12: runtime-accepted=0', fxBundle.includes('Runtime-accepted workspace operations before failure: 0'));
+    assert('R12: committed=0', fxBundle.includes('Mutations committed before failure: 0'));
+    assert('R12: phase violations=2', fxBundle.includes('Phase violations: 2'));
+    assert('R12: model stalls=2', fxBundle.includes('Model stalls: 2'));
+    assert('R12: replay event count=5', fxBundle.includes('Replay event count: 5'));
+    assert('R12: surfaces run:step_limit', fxBundle.includes('run:step_limit'));
+    assert('R12: shows deletePath CD', fxBundle.includes('deletePath CD'));
+    assert('R12: shows proposed step list',
+      fxBundle.includes('step 0: deletePath CD') && fxBundle.includes('step 0: listDirectory /') &&
+      fxBundle.includes('step 2: deletePath CD') && fxBundle.includes('step 2: listDirectory ""'));
+    assert('R12: phase/stall failure summary',
+      fxBundle.includes('failed before workspace execution') &&
+      fxBundle.includes('No workspace operation was accepted') &&
+      fxBundle.includes('no mutation was committed'));
+    assert('R12: old false zeros absent',
+      !fxBundle.includes('Phase violations: 0') && !fxBundle.includes('Model stalls: 0') &&
+      !fxBundle.includes('Replay event count: 0') && !fxBundle.includes('Workspace actions attempted before failure: 0'));
 
     console.log('\n' + (failures === 0 ? 'PASS' : 'FAIL') + `: ${failures} failure(s)`);
   } finally {

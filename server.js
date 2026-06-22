@@ -13632,17 +13632,48 @@ function buildRunDiagnosticBundle(ctx) {
   const s = snapshot || {};
   const fs2 = failureSummary || {};
   const history = Array.isArray(operationHistory) ? operationHistory : [];
+  const opPath = op => (op && (op.path != null ? op.path : (op.args && op.args.path))) || null;
+
+  // Canonical replay event list: snapshot.events is what the runtime records;
+  // snapshot.replayEvents is a legacy/empty fallback. Reporting must agree with
+  // the raw snapshot, so prefer .events.
+  const replayEvents = Array.isArray(s.events)
+    ? s.events
+    : (Array.isArray(s.replayEvents) ? s.replayEvents : []);
+  const evType = e => String((e && (e.type || e.kind)) || '');
+  const phaseViolationCount = replayEvents.filter(e => evType(e) === 'execution.phase_violation').length;
+  const modelStallCount = replayEvents.filter(e => evType(e) === 'model:stalled').length;
+  const stepLimitCount = replayEvents.filter(e => evType(e) === 'run:step_limit').length;
+
+  // Model-proposed actions (what the model asked for) are distinct from
+  // runtime-accepted workspace operations (what the runtime actually executed) and
+  // from committed mutations (what changed the workspace).
+  const parsedModelPlans = Array.isArray(s.parsedModelPlans) ? s.parsedModelPlans : [];
+  const proposedActions = [];
+  parsedModelPlans.forEach(plan => {
+    (Array.isArray(plan && plan.actions) ? plan.actions : []).forEach(a => {
+      proposedActions.push({
+        step: plan && plan.step != null ? plan.step : null,
+        operation: a && a.operation ? a.operation : null,
+        path: a && a.args && a.args.path !== undefined ? a.args.path : null
+      });
+    });
+  });
+  const proposedCount = proposedActions.length;
+  const proposedMutatingCount = proposedActions.filter(a => a.operation && AGENT_MUTATING_OPERATIONS.includes(a.operation)).length;
+
   const workspaceOps = Array.isArray(s.workspaceOperations) ? s.workspaceOperations : [];
   const committedCount = typeof partialMutationCount === 'number'
     ? partialMutationCount
     : history.filter(h => h && !h.error).length;
-  const attemptedCount = workspaceOps.length;
-  const opPath = op => (op && (op.path != null ? op.path : (op.args && op.args.path))) || null;
+  const runtimeAcceptedCount = workspaceOps.length;
 
-  // Delegated authority + live permission resolution.
+  // Delegated authority + permission resolution. Distinguish the in-code constant
+  // from the live permissions data — these can legitimately differ when a live
+  // data dir is older than the app (do not claim the live file contains it if not).
   const delegatedUserId = run && run.delegatedUserId != null ? run.delegatedUserId : null;
   const permissionCatalog = (typeof readPermissions === 'function') ? readPermissions() : [];
-  const permissionExists = permissionCatalog.includes(CROSS_TICKET_DELETE_PERMISSION);
+  const permissionInLiveData = permissionCatalog.includes(CROSS_TICKET_DELETE_PERMISSION);
   let delegatedHasPermission = false;
   let delegatedGroups = [];
   if (delegatedUserId != null) {
@@ -13709,9 +13740,18 @@ function buildRunDiagnosticBundle(ctx) {
   if (permEvents.length > 0) {
     out(`This run was allowed to delete a cross-ticket artifact because the run's delegated user had ${CROSS_TICKET_DELETE_PERMISSION}. The audit evidence records the prior owner, requesting run, delegated actor, delegated permission source, and permission used.`);
   }
+  // Phase/stall failure: model proposed mutation(s) during planning but nothing was
+  // accepted or committed, with phase violations and stalls/step-limit.
+  const runFailed = run && run.status === 'failed';
+  if (runFailed && phaseViolationCount > 0 && proposedMutatingCount > 0 && runtimeAcceptedCount === 0 && committedCount === 0 && (modelStallCount > 0 || stepLimitCount > 0)) {
+    const firstMut = proposedActions.find(a => a.operation && AGENT_MUTATING_OPERATIONS.includes(a.operation));
+    const mutDesc = firstMut ? (firstMut.operation + (firstMut.path != null && firstMut.path !== '' ? ' ' + firstMut.path : '')) : 'a mutating action';
+    out(`This run failed before workspace execution. The model proposed ${mutDesc} during the planning phase, but the response mixed mutation and inspection actions, causing phase violations. No workspace operation was accepted and no mutation was committed. The run then failed after repeated complete:false responses with no workspace actions.`);
+  }
   out('- Run status: ' + dash(run && run.status));
   out('- Operational outcome: ' + dash(operationalOutcome));
-  out('- Workspace actions attempted before failure: ' + attemptedCount);
+  out('- Model-proposed workspace actions before failure: ' + proposedCount);
+  out('- Runtime-accepted workspace operations before failure: ' + runtimeAcceptedCount);
   out('- Mutations committed before failure: ' + committedCount);
   out('');
 
@@ -13775,11 +13815,15 @@ function buildRunDiagnosticBundle(ctx) {
   out('- run.delegatedUserId: ' + dash(delegatedUserId));
   out('- run.delegatedUsername: ' + dash(run && run.delegatedUsername));
   out('- run.delegatedPermissionSource: ' + dash(run && run.delegatedPermissionSource));
-  out('- "' + CROSS_TICKET_DELETE_PERMISSION + '" exists in permission catalog: ' + (permissionExists ? 'yes' : 'no'));
+  out('- Permission defined in app constant/catalog: yes (' + CROSS_TICKET_DELETE_PERMISSION + ')');
+  out('- Permission present in live permissions data: ' + (permissionInLiveData ? 'yes' : 'no'));
+  if (!permissionInLiveData) {
+    out('  - Note: this run\'s live permissions data does not contain the permission (the data dir may predate v0.1.18). No data was modified by this diagnostic.');
+  }
   if (delegatedUserId == null) {
     out('- Delegated user is null; the cross-ticket delete permission cannot be applied to this run.');
   } else {
-    out('- Delegated user has "' + CROSS_TICKET_DELETE_PERMISSION + '": ' + (delegatedHasPermission ? 'yes' : 'no'));
+    out('- Delegated user has permission according to live data: ' + (delegatedHasPermission ? 'yes' : 'no'));
     out('- Delegated user groups: ' + (delegatedGroups.length > 0 ? delegatedGroups.map(g => g.name + ' (#' + g.id + ')').join(', ') : 'none'));
     delegatedGroups.forEach(g => {
       out('  - ' + g.name + ' permissions: ' + (g.permissions.length > 0 ? g.permissions.join(', ') : 'none'));
@@ -13801,9 +13845,12 @@ function buildRunDiagnosticBundle(ctx) {
   // 7. Proposed Actions
   out('## 7. Proposed Actions');
   out('- Last model message: ' + dash(fs2.lastModelMessage));
-  const proposed = Array.isArray(fs2.lastProposedActions) ? fs2.lastProposedActions : [];
-  if (proposed.length > 0) {
-    proposed.forEach(a => out('- ' + a));
+  out('- Model-proposed workspace actions before failure: ' + proposedCount);
+  if (proposedActions.length > 0) {
+    proposedActions.forEach(a => {
+      const pathPart = a.path === null || a.path === undefined ? '' : (a.path === '' ? '""' : a.path);
+      out('- step ' + dash(a.step) + ': ' + dash(a.operation) + (pathPart ? ' ' + pathPart : ''));
+    });
   } else {
     out('- (no proposed actions captured)');
   }
@@ -13811,7 +13858,8 @@ function buildRunDiagnosticBundle(ctx) {
 
   // 8. Workspace Actions
   out('## 8. Workspace Actions');
-  out('- Workspace actions attempted before failure: ' + attemptedCount);
+  out('- Model-proposed workspace actions before failure: ' + proposedCount);
+  out('- Runtime-accepted workspace operations before failure: ' + runtimeAcceptedCount);
   out('- Mutations committed before failure: ' + committedCount);
   if (workspaceOps.length > 0) {
     workspaceOps.forEach((op, i) => {
@@ -13871,12 +13919,14 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 11. Replay Events
-  const replayEvents = Array.isArray(s.replayEvents) ? s.replayEvents : [];
+  // 11. Replay Events (canonical: snapshot.events)
   out('## 11. Replay Events');
   out('- Replay event count: ' + replayEvents.length);
+  out('- Phase violations (execution.phase_violation): ' + phaseViolationCount);
+  out('- Model stalls (model:stalled): ' + modelStallCount);
+  out('- Step limit (run:step_limit): ' + stepLimitCount);
   if (replayEvents.length > 0) {
-    replayEvents.forEach(ev => out('- ' + dash(ev && (ev.type || ev.kind)) + ': ' + dash(ev && (ev.message || ev.detail))));
+    replayEvents.forEach(ev => out('- ' + dash(evType(ev)) + ': ' + dash(ev && (ev.message || ev.detail || ev.reason))));
   }
   out('');
 
@@ -13885,9 +13935,10 @@ function buildRunDiagnosticBundle(ctx) {
   out('- Provider request count: ' + (Array.isArray(s.providerRequests) ? s.providerRequests.length : 0));
   out('- Model response count: ' + (Array.isArray(s.modelResponses) ? s.modelResponses.length : 0));
   out('- Last model message: ' + dash(fs2.lastModelMessage));
-  out('- Last proposed actions: ' + (proposed.length > 0 ? proposed.join(', ') : 'none'));
-  out('- Phase violations: ' + replayEvents.filter(ev => ev && String(ev.type || ev.kind || '').toLowerCase().includes('phase')).length);
-  out('- Model stalls: ' + replayEvents.filter(ev => ev && String(ev.type || ev.kind || '').toLowerCase().includes('stall')).length);
+  out('- Model-proposed workspace actions: ' + proposedCount);
+  out('- Phase violations: ' + phaseViolationCount);
+  out('- Model stalls: ' + modelStallCount);
+  out('- Step limit events (run:step_limit): ' + stepLimitCount);
   out('- Replay event count: ' + replayEvents.length);
   out('');
 
@@ -13936,7 +13987,7 @@ function buildRunDiagnosticBundle(ctx) {
     delegatedAuthority: {
       delegatedUserId, delegatedUsername: run && run.delegatedUsername || null,
       delegatedPermissionSource: run && run.delegatedPermissionSource || null,
-      permissionExists, delegatedHasPermission, delegatedGroups
+      permissionDefinedInConstant: true, permissionInLiveData, delegatedHasPermission, delegatedGroups
     }
   };
   out('```json');
