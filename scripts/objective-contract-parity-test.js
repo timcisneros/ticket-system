@@ -250,5 +250,28 @@ for (const base of [
     JSON.stringify(getReportRuntimeLimits(base)) === JSON.stringify(legacyGetReportRuntimeLimits(base)));
 }
 
+// ── Closure audit (v0.1.32): the initial v0.1.26 consolidation arc is complete ──
+// Source-level facts only (no new runtime behavior). All four objective-semantics
+// helper families now delegate to objective-contract.js; no mirrored-grammar drift
+// list remains; detectWorkloadProfile stays a separate, non-consolidated helper.
+assert('closure: delete extraction wrapper delegates to objective-contract.js',
+  /function extractSimpleDeleteTargets[\s\S]*?buildObjectiveContract\(objective\)[\s\S]*?\n}/.test(serverSrc));
+assert('closure: folder-list wrapper delegates to objective-contract.js',
+  /function parseSimpleFolderListObjective[\s\S]*?contractParseSimpleFolderListObjective\(text, command\)[\s\S]*?\n}/.test(serverSrc));
+assert('closure: single ensure-folder recognizer delegates to objective-contract.js',
+  /function buildObviousPostconditionChecks[\s\S]*?buildObjectiveContract\(text\)[\s\S]*?ensure_folder[\s\S]*?\n}/.test(serverSrc));
+assert('closure: report detection wrapper delegates to objective-contract.js',
+  /function isReportObjective[\s\S]*?contractIsReportObjective\(objective\)[\s\S]*?\n}/.test(serverSrc));
+assert('closure: report runtime-limit wrapper delegates to objective-contract.js',
+  /function getReportRuntimeLimits[\s\S]*?contractGetReportRuntimeLimits\(baseLimits\)[\s\S]*?\n}/.test(serverSrc));
+const parityTestSrc = fs.readFileSync(__filename, 'utf8');
+assert('closure: no "still mirrored objective-semantics" guard/list remains',
+  !/stillMirroredFragments\s*=/.test(parityTestSrc));
+// detectWorkloadProfile is intentionally separate: it still carries its own report
+// keyword copy in server.js and is NOT one of the consolidated wrappers.
+assert('closure: detectWorkloadProfile stays separate (own report-keyword copy, not consolidated)',
+  /function detectWorkloadProfile[\s\S]*?report\|summary\|synthesis/.test(serverSrc) &&
+  !/function detectWorkloadProfile[\s\S]*?buildObjectiveContract/.test(serverSrc));
+
 console.log('\n' + (failures === 0 ? 'PASS' : 'FAIL') + `: ${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);
