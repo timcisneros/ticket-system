@@ -265,6 +265,23 @@ async function main() {
     assert('11. bundle does not include passwordHash', !permBundle.includes('passwordHash'));
     assert('12. bundle does not include sessionId', !permBundle.includes('sessionId'));
     assert('13. bundle does not include provider API key', !permBundle.includes(FAKE_KEY));
+    // v0.1.24: completed run uses neutral count wording (no "before failure").
+    const permPath = 'diag-permit/CD-' + STAMP + '.txt';
+    assert('14. completed run uses neutral count wording',
+      permBundle.includes('Model-proposed workspace actions:') &&
+      permBundle.includes('Runtime-accepted workspace operations:') &&
+      permBundle.includes('Mutations committed:'));
+    assert('15. completed run omits "before failure" count wording',
+      !permBundle.includes('Model-proposed workspace actions before failure') &&
+      !permBundle.includes('Runtime-accepted workspace operations before failure') &&
+      !permBundle.includes('Mutations committed before failure'));
+    assert('16. completed run renders the workspace action clearly (op/path/status/historyId)',
+      /deletePath path=\S+ status=ok/.test(permBundle) &&
+      permBundle.includes('path=' + permPath) &&
+      /deletePath path=\S+ status=ok historyId=\d+/.test(permBundle),
+      permBundle.split('\n').filter(l => l.includes('deletePath') && l.includes('status=')).join(' | '));
+    assert('17. completed run avoids [object Object] / path=unavailable status=ok',
+      !permBundle.includes('[object Object]') && !permBundle.includes('path=unavailable status=ok'));
 
     // --- Blocked delete run ---
     const blocked = await runDeleteFlow(adminCookie, restrictedCookie, agents, 'diag-block/CD-' + STAMP + '.txt', 'block');

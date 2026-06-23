@@ -13724,6 +13724,34 @@ const DIAGNOSTIC_APP_VERSION = (() => {
   try { return require('./package.json').version || 'unavailable'; } catch (_) { return 'unavailable'; }
 })();
 
+// Render one workspace operation record into a single readable diagnostic line.
+// A record's `operation` field is the parseWorkspaceOperation object
+// ({ operation, args }) or the richer error.workspaceAction object — never a bare
+// string — so this reads the nested fields instead of stringifying the object
+// (which produced "[object Object]"). Uses only the actual record fields.
+function formatDiagnosticWorkspaceOperation(record, index) {
+  const opObj = record && record.operation;
+  const opName = opObj && typeof opObj === 'object'
+    ? (opObj.operation || 'unknown')
+    : (typeof opObj === 'string' && opObj ? opObj : 'unknown');
+  const args = opObj && typeof opObj === 'object' && opObj.args && typeof opObj.args === 'object' ? opObj.args : null;
+  let pathVal = null;
+  if (args && args.path !== undefined && args.path !== null) pathVal = args.path;
+  else if (opObj && typeof opObj === 'object' && opObj.path !== undefined && opObj.path !== null) pathVal = opObj.path;
+  else if (record && record.result && record.result.path !== undefined && record.result.path !== null) pathVal = record.result.path;
+  const pathDisplay = pathVal === null ? 'unavailable' : (pathVal === '' ? '""' : pathVal);
+  const status = record && record.error ? 'error' : (record && record.blocked ? 'blocked' : 'ok');
+  let line = `- [${index}] ${opName} path=${pathDisplay} status=${status}`;
+  if (record && record.blocked) line += ' blocked=true';
+  if (record && record.reason) line += ' reason=' + record.reason;
+  const nextPath = (args && args.nextPath !== undefined && args.nextPath !== null) ? args.nextPath
+    : (opObj && typeof opObj === 'object' && opObj.nextPath !== undefined && opObj.nextPath !== null ? opObj.nextPath : null);
+  if (nextPath !== null) line += ' nextPath=' + nextPath;
+  if (record && record.historyId !== undefined && record.historyId !== null) line += ' historyId=' + record.historyId;
+  if (record && record.error) line += ' error=' + record.error;
+  return line;
+}
+
 // Build a single copyable Markdown diagnostic bundle for a run. Display/debug only:
 // it reads already-computed run-detail data plus a few read-only lookups, writes
 // nothing, and changes no runtime behavior. It never includes provider API keys,
@@ -13856,6 +13884,9 @@ function buildRunDiagnosticBundle(ctx) {
   // Phase/stall failure: model proposed mutation(s) during planning but nothing was
   // accepted or committed, with phase violations and stalls/step-limit.
   const runFailed = run && run.status === 'failed';
+  // Status-aware count wording: "before failure" only for failed runs; completed
+  // (and interrupted) runs read neutrally.
+  const countSuffix = runFailed ? ' before failure' : '';
   if (runFailed && phaseViolationCount > 0 && proposedMutatingCount > 0 && runtimeAcceptedCount === 0 && committedCount === 0 && (modelStallCount > 0 || stepLimitCount > 0)) {
     const firstMut = proposedActions.find(a => a.operation && AGENT_MUTATING_OPERATIONS.includes(a.operation));
     const mutDesc = firstMut ? (firstMut.operation + (firstMut.path != null && firstMut.path !== '' ? ' ' + firstMut.path : '')) : 'a mutating action';
@@ -13863,9 +13894,9 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('- Run status: ' + dash(run && run.status));
   out('- Operational outcome: ' + dash(operationalOutcome));
-  out('- Model-proposed workspace actions before failure: ' + proposedCount);
-  out('- Runtime-accepted workspace operations before failure: ' + runtimeAcceptedCount);
-  out('- Mutations committed before failure: ' + committedCount);
+  out('- Model-proposed workspace actions' + countSuffix + ': ' + proposedCount);
+  out('- Runtime-accepted workspace operations' + countSuffix + ': ' + runtimeAcceptedCount);
+  out('- Mutations committed' + countSuffix + ': ' + committedCount);
   out('');
 
   // 2. Ticket State
@@ -13958,7 +13989,7 @@ function buildRunDiagnosticBundle(ctx) {
   // 7. Proposed Actions
   out('## 7. Proposed Actions');
   out('- Last model message: ' + dash(fs2.lastModelMessage));
-  out('- Model-proposed workspace actions before failure: ' + proposedCount);
+  out('- Model-proposed workspace actions' + countSuffix + ': ' + proposedCount);
   if (proposedActions.length > 0) {
     proposedActions.forEach(a => {
       const pathPart = a.path === null || a.path === undefined ? '' : (a.path === '' ? '""' : a.path);
@@ -13971,13 +14002,11 @@ function buildRunDiagnosticBundle(ctx) {
 
   // 8. Workspace Actions
   out('## 8. Workspace Actions');
-  out('- Model-proposed workspace actions before failure: ' + proposedCount);
-  out('- Runtime-accepted workspace operations before failure: ' + runtimeAcceptedCount);
-  out('- Mutations committed before failure: ' + committedCount);
+  out('- Model-proposed workspace actions' + countSuffix + ': ' + proposedCount);
+  out('- Runtime-accepted workspace operations' + countSuffix + ': ' + runtimeAcceptedCount);
+  out('- Mutations committed' + countSuffix + ': ' + committedCount);
   if (workspaceOps.length > 0) {
-    workspaceOps.forEach((op, i) => {
-      out(`- [${i}] ${dash(op.operation)} path=${dash(opPath(op))} status=${op.blocked ? 'blocked' : (op.error ? 'error' : 'ok')}${op.reason ? ' reason=' + op.reason : ''}${op.error ? ' error=' + op.error : ''}`);
-    });
+    workspaceOps.forEach((op, i) => out(formatDiagnosticWorkspaceOperation(op, i)));
   } else {
     out('- (no workspace operations captured)');
   }
