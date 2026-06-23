@@ -156,10 +156,39 @@ assert('folder wrapper: create folders a a (create) dedups -> ["a"]',
 assert('folder wrapper: unsupported/empty -> null (historical no-match shape)',
   folderParse('Refactor things', 'create') === null && folderParse('', 'ensure') === null);
 
-// Drift guard for the helpers NOT yet migrated (still mirrored in both files):
-// the single "ensure folder X exists" recognizer and report detection.
+// ── Migration guard (v0.1.30): single "ensure folder X exists" wired to contract ──
+const singleEnsureFragment = '\\bensure folder\\s+([A-Za-z0-9._/-]+)\\s+exists\\b';
+assert('migration: objective-contract.js is the single ensure-folder grammar source',
+  contractSrc.includes(singleEnsureFragment));
+assert('migration: server.js no longer duplicates the single ensure-folder regex',
+  !serverSrc.includes(singleEnsureFragment));
+assert('migration: buildObviousPostconditionChecks still exists',
+  /function buildObviousPostconditionChecks\s*\(/.test(serverSrc));
+assert('migration: buildObviousPostconditionChecks delegates the single ensure recognizer to buildObjectiveContract',
+  /function buildObviousPostconditionChecks[\s\S]*?buildObjectiveContract\(text\)[\s\S]*?ensure_folder[\s\S]*?\n}/.test(serverSrc));
+// Shape preservation: the single-ensure delegation must be scoped to the ensure_folder
+// intent, consume only folder_exists postconditions, and produce checks via the
+// unchanged addFolderPostconditionChecks helper (which yields { type:'folder', path, satisfied }).
+assert('shape: single-ensure delegation is scoped to ensure_folder + folder_exists and routes through addFolderPostconditionChecks',
+  /ensureContract\.intent === 'ensure_folder'[\s\S]*?pc\.type === 'folder_exists'[\s\S]*?addFolderPostconditionChecks\(checks, ensureFolderPaths\)/.test(serverSrc));
+assert('shape: addFolderPostconditionChecks still produces { type: "folder", path, satisfied }',
+  /function addFolderPostconditionChecks[\s\S]*?type:\s*'folder'[\s\S]*?path:\s*folderPath[\s\S]*?satisfied:\s*\(\)[\s\S]*?\n}/.test(serverSrc));
+// Contract recognizes the single ensure-folder forms with the historical paths.
+{
+  const a = buildObjectiveContract('ensure folder Reports exists');
+  assert('contract: ensure folder Reports exists -> ensure_folder, folder_exists Reports',
+    a.recognized === true && a.intent === 'ensure_folder' && a.targetPath === 'Reports' && hasPostcondition(a, 'folder_exists', 'Reports'));
+  const b = buildObjectiveContract('ensure folder report exists');
+  assert('contract: ensure folder report exists -> ensure_folder, folder_exists report (single regex, no blocklist)',
+    b.recognized === true && b.intent === 'ensure_folder' && hasPostcondition(b, 'folder_exists', 'report'));
+  const c = buildObjectiveContract('ensure folders Reports exists');
+  assert('contract: ensure folders Reports exists -> ensure_folder, folder_exists Reports (list form)',
+    c.recognized === true && c.intent === 'ensure_folder' && hasPostcondition(c, 'folder_exists', 'Reports'));
+}
+
+// Drift guard for the helper NOT yet migrated (still mirrored in both files):
+// report detection.
 const stillMirroredFragments = [
-  '\\bensure folder\\s+([A-Za-z0-9._/-]+)\\s+exists\\b',
   '\\b(report|summary|synthesis|overview|analysis|status|audit)\\b'
 ];
 for (const frag of stillMirroredFragments) {

@@ -6907,10 +6907,16 @@ function buildObviousPostconditionChecks(objective) {
     });
   }
 
-  match = text.match(/\bensure folder\s+([A-Za-z0-9._/-]+)\s+exists\b/i);
-  if (match) {
-    const folderPath = cleanObjectivePath(match[1]);
-    addFolderPostconditionChecks(checks, [folderPath]);
+  // Single "ensure folder X exists" recognizer: delegated to the objective contract
+  // (objective-contract.js is the grammar source). The list-form ensure/create
+  // handling below is unchanged; any overlap is removed by the dedup at the end, so
+  // the resulting folder checks are identical to the previous inline regex.
+  const ensureContract = buildObjectiveContract(text);
+  if (ensureContract.intent === 'ensure_folder') {
+    const ensureFolderPaths = ensureContract.postconditions
+      .filter(pc => pc && pc.type === 'folder_exists')
+      .map(pc => pc.path);
+    if (ensureFolderPaths.length > 0) addFolderPostconditionChecks(checks, ensureFolderPaths);
   }
 
   const ensuredFolderPaths = parseSimpleFolderListObjective(text, 'ensure');
