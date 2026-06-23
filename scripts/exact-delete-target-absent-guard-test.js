@@ -15,6 +15,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 
@@ -23,8 +24,10 @@ const STAMP = Date.now();
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-system-exactdel-'));
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-system-exactdel-ws-'));
 const PLAN_FILE = path.join(DATA_DIR, 'control-plans.json');
-const PORT = String(5160 + Math.floor(Math.random() * 200));
-const BASE_URL = 'http://127.0.0.1:' + PORT;
+// Assigned a fresh OS-allocated free port per server start (see startServer), so
+// repeated back-to-back checkpoint runs cannot collide on a fixed/predictable port.
+let PORT = null;
+let BASE_URL = null;
 
 let server = null;
 let failures = 0;
@@ -123,16 +126,41 @@ global.fetch = async function(_url, options = {}) {
   return preloadPath;
 }
 
-function startServer(preloadPath) {
-  const env = { ...process.env, NODE_ENV: 'test', PORT, DATA_DIR, WORKSPACE_ROOT, NODE_OPTIONS: '--require ' + preloadPath };
-  server = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  let output = '';
-  server.stdout.on('data', c => { output += String(c); });
-  server.stderr.on('data', c => { output += String(c); });
-  return waitFor(async () => {
-    if (server && server.exitCode !== null) throw new Error('server exited during startup: ' + output.slice(-800));
-    try { const res = await httpReq('GET', '/login'); return res.status === 200; } catch (_) { return false; }
-  }, 15000, 100);
+// Ask the OS for a currently-free port (bind to 0, read the assigned port, release
+// it). The OS will not hand out a port already in use, which removes the fixed-port
+// EADDRINUSE collisions seen under repeated back-to-back checkpoint runs.
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const assigned = probe.address().port;
+      probe.close(() => resolve(assigned));
+    });
+  });
+}
+
+// Start the server on a fresh free port, retrying on startup failure (e.g. a rare
+// free-port race) with a new port. Behavior/assertions are unchanged.
+async function startServer(preloadPath) {
+  let lastOutput = '';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    PORT = String(await getFreePort());
+    BASE_URL = 'http://127.0.0.1:' + PORT;
+    const env = { ...process.env, NODE_ENV: 'test', PORT, DATA_DIR, WORKSPACE_ROOT, NODE_OPTIONS: '--require ' + preloadPath };
+    server = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    server.stdout.on('data', c => { output += String(c); });
+    server.stderr.on('data', c => { output += String(c); });
+    const result = await waitFor(async () => {
+      if (server && server.exitCode !== null) return 'exited';
+      try { const res = await httpReq('GET', '/login'); return res.status === 200 ? 'ready' : false; } catch (_) { return false; }
+    }, 15000, 100);
+    if (result === 'ready') return;
+    lastOutput = output;
+    await stopServer();
+  }
+  throw new Error('server failed to start after retries: ' + lastOutput.slice(-800));
 }
 
 async function stopServer() {
