@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
-const { buildObjectiveContract } = require('./objective-contract');
+const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective } = require('./objective-contract');
 require('dotenv').config()
 
 const PORT = process.env.PORT || 3099;
@@ -6841,41 +6841,13 @@ function cleanObjectiveContent(value) {
     .trim();
 }
 
+// Compatibility wrapper (v0.1.29): the ensure/create simple-folder-list grammar now
+// lives in objective-contract.js. This delegates to that single source while
+// preserving the historical signature and return shape exactly — an array of folder
+// paths for a recognized "ensure|create folder(s) X [Y …]" objective, or null
+// otherwise (callers rely on the null/array truthiness).
 function parseSimpleFolderListObjective(text, command) {
-  const match = String(text || '').match(new RegExp(`^\\s*${command}\\s+folders?\\s+(.+?)\\s*[.!?]?\\s*$`, 'i'));
-  if (!match) return null;
-
-  let listText = match[1].trim();
-  if (!listText) return null;
-
-  if (command === 'ensure') {
-    listText = listText.replace(/\s+exists?\s*$/i, '').trim();
-  }
-
-  if (!listText) return null;
-
-  // Keep this shortcut intentionally narrow. Phrases with prose connectors or
-  // additional work should continue through the model instead of auto-completing.
-  if (/\b(?:for|named|called|with|inside|containing|write|file|note|summary|report|then|after|before|into|under)\b/i.test(listText)) {
-    return null;
-  }
-
-  const normalized = listText
-    .replace(/\s*,\s*/g, ' ')
-    .replace(/\s+and\s+/gi, ' ')
-    .trim();
-
-  if (!normalized || /[^A-Za-z0-9._/\-\s]/.test(normalized)) return null;
-
-  const paths = normalized
-    .split(/\s+/)
-    .map(cleanObjectivePath)
-    .filter(Boolean);
-
-  if (paths.length === 0) return null;
-  if (paths.some(folderPath => !/^[A-Za-z0-9._/-]+$/.test(folderPath))) return null;
-
-  return Array.from(new Set(paths));
+  return contractParseSimpleFolderListObjective(text, command);
 }
 
 function addFolderPostconditionChecks(checks, folderPaths) {

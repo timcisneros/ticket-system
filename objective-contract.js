@@ -51,7 +51,9 @@ function parseSimpleFolderListObjective(text, command) {
     .map(cleanObjectivePath)
     .filter(Boolean);
 
-  return paths.length > 0 ? paths : null;
+  if (paths.length === 0) return null;
+  if (paths.some(folderPath => !/^[A-Za-z0-9._/-]+$/.test(folderPath))) return null;
+  return Array.from(new Set(paths));
 }
 
 // Mirror of server.js extractSimpleDeleteTargets.
@@ -170,5 +172,6 @@ function buildObjectiveContract(objective) {
 }
 
 module.exports = {
-  buildObjectiveContract
+  buildObjectiveContract,
+  parseSimpleFolderListObjective
 };

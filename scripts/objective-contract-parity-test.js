@@ -130,7 +130,34 @@ assert('migration: extractSimpleDeleteTargets still exists as the compatibility 
 assert('migration: extractSimpleDeleteTargets calls buildObjectiveContract',
   /function extractSimpleDeleteTargets[\s\S]*?buildObjectiveContract\(objective\)[\s\S]*?\n}/.test(serverSrc));
 
-// Drift guard for the helpers NOT yet migrated (still mirrored in both files).
+// ── Migration guard (v0.1.29): ensure/create folder-list grammar wired to contract ──
+const folderBlocklistFragment = 'for|named|called|with|inside|containing|write|file|note|summary|report|then|after|before|into|under';
+assert('migration: objective-contract.js is the ensure/create folder-list grammar source',
+  contractSrc.includes(folderBlocklistFragment));
+assert('migration: server.js no longer duplicates the folder-list parser grammar',
+  !serverSrc.includes(folderBlocklistFragment));
+assert('migration: objective-contract.js exports parseSimpleFolderListObjective',
+  /module\.exports\s*=\s*\{[\s\S]*parseSimpleFolderListObjective[\s\S]*\}/.test(contractSrc));
+assert('migration: server.js imports the contract folder parser (aliased)',
+  /parseSimpleFolderListObjective:\s*contractParseSimpleFolderListObjective/.test(serverSrc));
+assert('migration: parseSimpleFolderListObjective still exists as the compatibility wrapper',
+  /function parseSimpleFolderListObjective\s*\(/.test(serverSrc));
+assert('migration: parseSimpleFolderListObjective delegates to the contract parser',
+  /function parseSimpleFolderListObjective[\s\S]*?contractParseSimpleFolderListObjective\(text, command\)[\s\S]*?\n}/.test(serverSrc));
+
+// Compatibility wrapper output shape (folder list parser): exact historical shape.
+const folderParse = require('../objective-contract.js').parseSimpleFolderListObjective;
+assert('folder wrapper: ensure folder Reports exists (ensure) -> ["Reports"]',
+  JSON.stringify(folderParse('ensure folder Reports exists', 'ensure')) === JSON.stringify(['Reports']));
+assert('folder wrapper: create folder Reports (create) -> ["Reports"]',
+  JSON.stringify(folderParse('create folder Reports', 'create')) === JSON.stringify(['Reports']));
+assert('folder wrapper: create folders a a (create) dedups -> ["a"]',
+  JSON.stringify(folderParse('create folders a a', 'create')) === JSON.stringify(['a']));
+assert('folder wrapper: unsupported/empty -> null (historical no-match shape)',
+  folderParse('Refactor things', 'create') === null && folderParse('', 'ensure') === null);
+
+// Drift guard for the helpers NOT yet migrated (still mirrored in both files):
+// the single "ensure folder X exists" recognizer and report detection.
 const stillMirroredFragments = [
   '\\bensure folder\\s+([A-Za-z0-9._/-]+)\\s+exists\\b',
   '\\b(report|summary|synthesis|overview|analysis|status|audit)\\b'
