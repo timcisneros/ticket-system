@@ -247,6 +247,30 @@ const ALLOWED_PHASE_TRANSITIONS = {
   terminalization: ['terminalization']
 };
 
+// Single source of truth for the operations the prompt may present as usable in a
+// given phase. Derived from the validator contract (PHASE_OPERATIONS + the
+// "one phase per response" rule enforced by checkPhaseCompliance): the validator
+// accepts any pure single-phase response and rejects only mixed-phase and
+// terminalization responses. Planning is an entry state whose immediate safe
+// operations are inspection reads; to mutate, the model emits a pure mutation
+// response (the prompt's transition guidance states this). This intentionally
+// never lists an operation the validator would reject for the current phase as a
+// pure response, and never advertises mutating operations under planning.
+function getAllowedOperationsForPhase(phase) {
+  switch (phase) {
+    case 'mutation':
+      return [...PHASE_OPERATIONS.mutation];
+    case 'inspection':
+    case 'verification':
+      return ['listDirectory', 'readFile'];
+    case 'terminalization':
+      return [];
+    case 'planning':
+    default:
+      return ['listDirectory', 'readFile'];
+  }
+}
+
 // ── Workload Profiles ─────────────────────────────────────────────
 // Explicit operational envelopes for common ticket classes.
 // Derived from observed workload behavior during validation.
@@ -11361,13 +11385,6 @@ function isHandoffPromptObjective(objective) {
     (/\bworkflow(s)?\b/.test(text) && /\b(handoff|hand off|delegate|delegation|executor|another agent)\b/.test(text));
 }
 
-function buildPhaseGatedCatalog(currentPhase, baseAllowedOps) {
-  const ops = PHASE_OPERATIONS[currentPhase] || baseAllowedOps;
-  // Always intersect with base allowed ops (which may exclude workflow/handoff ops)
-  const effectiveOps = ops.filter(op => baseAllowedOps.includes(op));
-  return effectiveOps.length > 0 ? effectiveOps : baseAllowedOps;
-}
-
 function compactRuntimeEnvelopeForPrompt(runtimeEnvelope) {
   const compact = { ...(runtimeEnvelope || {}) };
 
@@ -11433,8 +11450,11 @@ function captureRunWorkspaceRootSnapshot(run) {
 function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null, workspaceContext = null) {
   const baseAllowedOps = runtimeEnvelope.allowedOperations || AGENT_DIRECT_OPERATIONS;
   const currentPhase = runtimeEnvelope.currentPhase || 'planning';
-  const phaseGatedOps = buildPhaseGatedCatalog(currentPhase, baseAllowedOps);
-  const allowedOperationList = phaseGatedOps.join('|');
+  // Operation vocabulary (the full set of operation names available — used for the
+  // JSON schema enum) is distinct from the operations usable in the current phase.
+  const operationVocabulary = baseAllowedOps;
+  const allowedOperationList = operationVocabulary.join('|');
+  const currentPhaseAllowedOps = getAllowedOperationsForPhase(currentPhase).filter(op => baseAllowedOps.includes(op));
   const includeWorkflowDraftPromptGuidance = isWorkflowDraftPromptObjective(ticket.objective);
   const includeHandoffPromptGuidance = isHandoffPromptObjective(ticket.objective);
   const workflowDraftArgShape = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED && includeWorkflowDraftPromptGuidance
@@ -11504,8 +11524,9 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'If the target path is clear or can be overwritten or created safely, emit the create or write operation.',
         `Budgets: runtimeEnvelope.maxExecutionSteps steps total; every response consumes one step, including retries. Emit at most runtimeEnvelope.maxActionsPerResponse (${MAX_AGENT_ACTIONS_PER_RESPONSE}) actions per response.`,
         `Mutating limit: at most runtimeEnvelope.maxMutatingActionsPerResponse (${MAX_MUTATING_ACTIONS_PER_RESPONSE}) createFolder/writeFile/renamePath/deletePath actions per response. If more mutations remain, emit a bounded batch, set complete:false, and continue next response.`,
-        'Use only the operations appropriate to your current execution phase, as listed below.',
-        'Your current execution phase is runtimeEnvelope.currentPhase. In this phase, the allowed operations are: ' + phaseGatedOps.join(', ') + '.',
+        'Every response must belong to a single execution phase. Never mix inspection operations (listDirectory, readFile) and mutation operations (createFolder, writeFile, renamePath, deletePath) in the same response — a mixed response is rejected.',
+        'Your current execution phase is runtimeEnvelope.currentPhase. Operations you may use in this phase: ' + (currentPhaseAllowedOps.length > 0 ? currentPhaseAllowedOps.join(', ') : 'none') + '.',
+        'To perform mutations, respond with a single-phase mutation response containing only createFolder/writeFile/renamePath/deletePath actions (and no listDirectory/readFile); that moves you into the mutation phase.',
         'If you already performed inspection (listDirectory or readFile) and are now in the mutation phase, do not emit listDirectory or readFile again unless you are explicitly verifying results.',
         ...workflowDraftIntentGuidance,
         ...handoffGuidance,
@@ -11518,7 +11539,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'Required args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path "" only for the workspace root in listDirectory.',
         ...(workflowDraftIntentArgReminder ? [workflowDraftIntentArgReminder] : []),
         ...(handoffArgReminder ? [handoffArgReminder] : []),
-        'Respond only as JSON with this shape:',
+        'Respond only as JSON with this shape (the operation field lists the full operation vocabulary/schema, not the operations allowed in your current phase):',
         `{"message":"short summary","actions":[{"operation":"${allowedOperationList}","args":{"path":"relative/path","content":"for writeFile only","nextPath":"for renamePath only"${workflowDraftArgShape}${workflowDraftIntentResponseFields},"executor":"for createHandoffTask","operation":"writeFile for createHandoffTask","args":"nested args for createHandoffTask"}}],"complete":true|false}`
       ].join('\n')
     },

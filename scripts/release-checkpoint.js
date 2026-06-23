@@ -34,7 +34,8 @@ const checks = [
     'no-tracked-provider-keys-test.js',
     'concurrency-conflict-test.js',
     'run-detail-permissioned-delete-audit-test.js',
-    'run-diagnostics-bundle-test.js'
+    'run-diagnostics-bundle-test.js',
+    'phase-contract-alignment-test.js'
   ].map(name => ({ label: `NODE_PATH=./node_modules node scripts/${name}`, args: [path.join('scripts', name)] }))
 ];
 
