@@ -9120,6 +9120,59 @@ function requireStringArg(args, name, options = {}) {
   return args[name];
 }
 
+// Args that must be present and non-blank per operation. Mirrors the
+// requireStringArg({ nonEmpty: true }) calls in executeWorkspaceOperation:
+// listDirectory path may be "" (workspace root); every other op's path (and
+// renamePath nextPath) must be non-blank. writeFile content may be "".
+const WORKSPACE_PREFLIGHT_NONEMPTY_ARGS = {
+  listDirectory: [],
+  readFile: ['path'],
+  createFolder: ['path'],
+  writeFile: ['path'],
+  renamePath: ['path', 'nextPath'],
+  deletePath: ['path']
+};
+
+// Validate ONE standard workspace action's args without executing it, mirroring the
+// rules executeWorkspaceOperation enforces (missing / non-string / blank-when-required).
+// Returns an array of validation error strings (empty = valid). Non-standard
+// operations (workflow/handoff) are not gated here and return [].
+function validateWorkspaceActionForPreflight(action) {
+  if (!action || typeof action !== 'object' || Array.isArray(action)) return ['action must be an object'];
+  const operation = action.operation;
+  if (!AGENT_ALLOWED_OPERATIONS.includes(operation)) return [];
+  const requiredArgs = AGENT_OPERATION_ARGS[operation] || [];
+  const nonEmptyArgs = WORKSPACE_PREFLIGHT_NONEMPTY_ARGS[operation] || [];
+  const args = action.args && typeof action.args === 'object' && !Array.isArray(action.args) ? action.args : null;
+  if (!args) return ['args must be an object'];
+  const errors = [];
+  for (const name of requiredArgs) {
+    if (!Object.prototype.hasOwnProperty.call(args, name)) { errors.push('missing required arg: ' + name); continue; }
+    if (typeof args[name] !== 'string') { errors.push('arg must be a string: ' + name); continue; }
+    if (nonEmptyArgs.includes(name) && !args[name].trim()) errors.push('arg cannot be blank: ' + name);
+  }
+  return errors;
+}
+
+// Validate an entire model action batch before any execution. Returns the list of
+// invalid standard-workspace actions (with index/operation/args/errors); empty list
+// means the batch is safe to execute.
+function validateWorkspaceActionBatch(actions) {
+  const invalid = [];
+  (Array.isArray(actions) ? actions : []).forEach((action, index) => {
+    const errors = validateWorkspaceActionForPreflight(action);
+    if (errors.length > 0) {
+      invalid.push({
+        actionIndex: index,
+        operation: action && action.operation ? action.operation : null,
+        args: action && action.args ? action.args : null,
+        validationErrors: errors
+      });
+    }
+  });
+  return invalid;
+}
+
 function readProtectedWorkspacePaths() {
   try {
     const configuredPaths = JSON.parse(fs.readFileSync(PROTECTED_PATHS_FILE, 'utf8'));
@@ -12051,6 +12104,45 @@ async function runAgentTicket(runId) {
         actionResults = [{
           warning: 'model:stalled',
           message: `You returned complete:false with no workspace actions. You have ${remainingSteps} remaining execution step(s). Emit the next required workspace operation now or fail explicitly.`
+        }];
+        continue;
+      }
+
+      // ── Invalid-action-args preflight ─────────────────────────────
+      // Validate the entire batch before executing any action, so a later invalid
+      // action cannot fail the run after an earlier action already executed. If any
+      // standard workspace action has invalid args, execute none of them, record a
+      // structured event, warn the model, and retry (bounded by the step limit).
+      const invalidActions = validateWorkspaceActionBatch(actions);
+      if (invalidActions.length > 0) {
+        const first = invalidActions[0];
+        const detail = {
+          step,
+          operation: first.operation,
+          actionIndex: first.actionIndex,
+          args: first.args,
+          validationErrors: first.validationErrors,
+          invalidArgs: first.validationErrors,
+          invalidActions,
+          rejectedBatch: true,
+          executed: false,
+          capturedAt: new Date().toISOString()
+        };
+        recordRunEvent(run, 'workspace.invalid_action_args', `Action batch rejected before execution: ${first.operation} ${first.validationErrors.join('; ')}`, detail);
+        appendEvent({
+          type: 'workspace.invalid_action_args',
+          ticketId: run.ticketId,
+          runId: run.id,
+          stepId: String(step),
+          payload: detail
+        });
+        actionResults = [{
+          warning: 'workspace.invalid_action_args',
+          message: `The action batch was rejected before execution because action ${first.actionIndex} (${first.operation}) has invalid args: ${first.validationErrors.join('; ')}. listDirectory may use path "" for the workspace root, but readFile, createFolder, writeFile, renamePath, and deletePath may not. Emit a corrected single-phase action batch.`,
+          operation: first.operation,
+          actionIndex: first.actionIndex,
+          rejectedBatch: true,
+          executed: false
         }];
         continue;
       }
