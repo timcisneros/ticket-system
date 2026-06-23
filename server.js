@@ -6896,10 +6896,40 @@ function readWorkspaceFileIfExists(relativePath) {
   return workspaceProvider.readFile(relativePath);
 }
 
+// Extract the exact delete target(s) from a *simple* delete objective, or null if
+// the objective is not a recognized simple delete. Deliberately conservative: the
+// whole objective must be a single "delete|remove [the] [file|folder|directory|
+// path] <one-token-path>" form. Anything with extra words, multiple targets, or
+// connectors returns null (the guard then does nothing). Returns normalized
+// relative path strings.
+function extractSimpleDeleteTargets(objective) {
+  const text = String(objective || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  const match = text.match(/^(?:please\s+)?(?:delete|remove)\s+(?:the\s+)?(?:file|folder|directory|path)?\s*([A-Za-z0-9._/-]+)\s*\.?$/i);
+  if (!match) return null;
+  const target = cleanObjectivePath(match[1]);
+  return target ? [target] : null;
+}
+
 function buildObviousPostconditionChecks(objective) {
   const text = String(objective || '').replace(/\s+/g, ' ').trim();
   const checks = [];
   let match = null;
+
+  // Simple delete objective: the requested state is "exact target absent". If the
+  // exact path is already absent the run is idempotently satisfied (no model loop,
+  // no mutation). If it exists, this check is unsatisfied and the run proceeds
+  // normally so the existing deletePath path can run.
+  const deleteTargets = extractSimpleDeleteTargets(text);
+  if (deleteTargets) {
+    deleteTargets.forEach(targetPath => {
+      checks.push({
+        type: 'absent',
+        path: targetPath,
+        satisfied: () => !workspaceProvider.getPathInfo(targetPath).exists
+      });
+    });
+  }
 
   match = text.match(/\bensure folder\s+([A-Za-z0-9._/-]+)\s+exists\b/i);
   if (match) {
@@ -6954,8 +6984,13 @@ function checkObviousTicketPostcondition(ticket) {
   if (checks.length === 0) return null;
   if (!checks.every(check => check.satisfied())) return null;
 
+  const absentDelete = checks.every(check => check.type === 'absent');
+  const reason = absentDelete
+    ? `Delete target already absent: ${checks.map(check => check.path).join(', ')}`
+    : 'Requested workspace state is already satisfied';
   return {
-    reason: 'Requested workspace state is already satisfied',
+    reason,
+    absentDelete,
     checkedPaths: checks.map(check => ({
       type: check.type,
       path: check.path,
@@ -11781,6 +11816,14 @@ async function runAgentTicket(runId) {
       }
     }
 
+    // Exact delete-target identity: for a simple "delete <X>" objective, the only
+    // legitimate deletePath target is X. Used to reject near-miss deletes (e.g.
+    // deletePath C for "Delete CD") before execution. null for non-simple objectives.
+    const simpleDeleteTargets = extractSimpleDeleteTargets(ticket && ticket.objective);
+    const simpleDeleteTargetSet = simpleDeleteTargets
+      ? new Set(simpleDeleteTargets.map(t => normalizeArtifactOwnershipPath(t)).filter(Boolean))
+      : null;
+
     for (let step = 0; !completed; step += 1) {
       heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
       assertRunNotTimedOut(run, runStartedAtMs, limits);
@@ -11801,6 +11844,20 @@ async function runAgentTicket(runId) {
             checkedPaths: obviousPostcondition.checkedPaths,
             source: 'pre_model'
           });
+          if (obviousPostcondition.absentDelete) {
+            appendEvent({
+              type: 'workspace.delete_target_already_absent',
+              ticketId: run.ticketId,
+              runId: run.id,
+              stepId: String(step),
+              payload: {
+                paths: obviousPostcondition.checkedPaths.map(check => check.path),
+                reason: obviousPostcondition.reason,
+                executed: false,
+                mutationCommitted: false
+              }
+            });
+          }
           completed = true;
           break;
         }
@@ -12145,6 +12202,45 @@ async function runAgentTicket(runId) {
           executed: false
         }];
         continue;
+      }
+
+      // ── Exact delete-target guard ─────────────────────────────────
+      // For a simple "delete <X>" objective, reject any deletePath whose target is
+      // not the exact objective target (e.g. deletePath C for "Delete CD") before
+      // executing anything, so the model cannot mutate a near-miss path.
+      if (simpleDeleteTargetSet) {
+        const mismatched = actions
+          .filter(a => a && a.operation === 'deletePath' && a.args && typeof a.args.path === 'string')
+          .map(a => ({ proposed: a.args.path, norm: normalizeArtifactOwnershipPath(a.args.path) }))
+          .filter(x => !x.norm || !simpleDeleteTargetSet.has(x.norm));
+        if (mismatched.length > 0) {
+          const first = mismatched[0];
+          const targetList = Array.from(simpleDeleteTargetSet).join(', ');
+          const detail = {
+            step,
+            proposedPath: first.proposed,
+            objectiveTargets: Array.from(simpleDeleteTargetSet),
+            rejectedBatch: true,
+            executed: false,
+            capturedAt: new Date().toISOString()
+          };
+          recordRunEvent(run, 'workspace.delete_target_mismatch_rejected', `deletePath ${first.proposed} does not match the objective's exact delete target (${targetList})`, detail);
+          appendEvent({
+            type: 'workspace.delete_target_mismatch_rejected',
+            ticketId: run.ticketId,
+            runId: run.id,
+            stepId: String(step),
+            payload: detail
+          });
+          actionResults = [{
+            warning: 'workspace.delete_target_mismatch_rejected',
+            message: `The action batch was rejected before execution because deletePath ${first.proposed} does not match the objective's exact delete target (${targetList}). Delete only the exact target path; do not substitute a nearby path.`,
+            operation: 'deletePath',
+            rejectedBatch: true,
+            executed: false
+          }];
+          continue;
+        }
       }
 
       let hasMutatingAction = false;
