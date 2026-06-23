@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
+const { buildObjectiveContract } = require('./objective-contract');
 require('dotenv').config()
 
 const PORT = process.env.PORT || 3099;
@@ -6902,13 +6903,16 @@ function readWorkspaceFileIfExists(relativePath) {
 // path] <one-token-path>" form. Anything with extra words, multiple targets, or
 // connectors returns null (the guard then does nothing). Returns normalized
 // relative path strings.
+// Compatibility wrapper (v0.1.28): the simple-delete grammar now lives in
+// objective-contract.js. This delegates to buildObjectiveContract and preserves the
+// historical return shape exactly — an array of target paths for a recognized simple
+// delete, or null otherwise (callers rely on the null/array truthiness).
 function extractSimpleDeleteTargets(objective) {
-  const text = String(objective || '').replace(/\s+/g, ' ').trim();
-  if (!text) return null;
-  const match = text.match(/^(?:please\s+)?(?:delete|remove)\s+(?:the\s+)?(?:file|folder|directory|path)?\s*([A-Za-z0-9._/-]+)\s*\.?$/i);
-  if (!match) return null;
-  const target = cleanObjectivePath(match[1]);
-  return target ? [target] : null;
+  const contract = buildObjectiveContract(objective);
+  if (contract && contract.recognized && contract.intent === 'delete' && contract.targetPath) {
+    return [contract.targetPath];
+  }
+  return null;
 }
 
 function buildObviousPostconditionChecks(objective) {

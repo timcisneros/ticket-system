@@ -112,16 +112,31 @@ for (const obj of deleteForms) {
     c.source === 'objective-contract' && Array.isArray(c.notes));
 }
 
-// ── Drift guard: mirrored regexes must still match server.js literals ──
+// ── Migration guard (v0.1.28): delete grammar is wired to the contract ──
 const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const contractSrc = fs.readFileSync(path.join(__dirname, '..', 'objective-contract.js'), 'utf8');
-const mirroredFragments = [
-  '(?:please\\s+)?(?:delete|remove)\\s+(?:the\\s+)?(?:file|folder|directory|path)?\\s*([A-Za-z0-9._/-]+)\\s*\\.?$',
+
+const deleteFragment = '(?:please\\s+)?(?:delete|remove)\\s+(?:the\\s+)?(?:file|folder|directory|path)?\\s*([A-Za-z0-9._/-]+)\\s*\\.?$';
+// The delete grammar now lives ONLY in objective-contract.js; server.js no longer
+// carries the duplicated regex and instead delegates through the wrapper.
+assert('migration: objective-contract.js remains the delete grammar source',
+  contractSrc.includes(deleteFragment));
+assert('migration: server.js no longer duplicates the delete regex',
+  !serverSrc.includes(deleteFragment));
+assert('migration: server.js imports buildObjectiveContract',
+  /require\(['"]\.\/objective-contract['"]\)/.test(serverSrc) && /buildObjectiveContract/.test(serverSrc));
+assert('migration: extractSimpleDeleteTargets still exists as the compatibility wrapper',
+  /function extractSimpleDeleteTargets\s*\(/.test(serverSrc));
+assert('migration: extractSimpleDeleteTargets calls buildObjectiveContract',
+  /function extractSimpleDeleteTargets[\s\S]*?buildObjectiveContract\(objective\)[\s\S]*?\n}/.test(serverSrc));
+
+// Drift guard for the helpers NOT yet migrated (still mirrored in both files).
+const stillMirroredFragments = [
   '\\bensure folder\\s+([A-Za-z0-9._/-]+)\\s+exists\\b',
   '\\b(report|summary|synthesis|overview|analysis|status|audit)\\b'
 ];
-for (const frag of mirroredFragments) {
-  assert('drift guard: server.js + objective-contract.js share regex fragment ' + JSON.stringify(frag.slice(0, 28) + '…'),
+for (const frag of stillMirroredFragments) {
+  assert('drift guard (unmigrated): server.js + objective-contract.js share ' + JSON.stringify(frag.slice(0, 24) + '…'),
     serverSrc.includes(frag) && contractSrc.includes(frag),
     `server=${serverSrc.includes(frag)} contract=${contractSrc.includes(frag)}`);
 }
