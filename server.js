@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
-const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective } = require('./objective-contract');
+const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits } = require('./objective-contract');
 require('dotenv').config()
 
 const PORT = process.env.PORT || 3099;
@@ -10059,19 +10059,16 @@ function isDirectWorkspaceWriteObjective(objective) {
     (/\b(note|summary|report|file)\b/.test(text) || extractObjectivePathTokens(objective).length > 0);
 }
 
+// Compatibility wrappers (v0.1.31): report detection and report runtime-limit
+// shaping now live in objective-contract.js. These delegate to that single source
+// while preserving the historical signatures and return shapes exactly (boolean for
+// isReportObjective; merged limits object for getReportRuntimeLimits).
 function isReportObjective(objective) {
-  const text = String(objective || '').toLowerCase();
-  return /\b(report|summary|synthesis|overview|analysis|status|audit)\b/.test(text);
+  return contractIsReportObjective(objective);
 }
 
 function getReportRuntimeLimits(baseLimits) {
-  return {
-    ...baseLimits,
-    maxExecutionSteps: Math.min(baseLimits.maxExecutionSteps, 12),
-    maxModelRequestsPerRun: Math.min(baseLimits.maxModelRequestsPerRun, 8),
-    maxListDirectoryPerRun: 3,
-    maxReadFilePerRun: 8
-  };
+  return contractGetReportRuntimeLimits(baseLimits);
 }
 
 // ── Workload profile detection ────────────────────────────────────

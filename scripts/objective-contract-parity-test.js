@@ -13,7 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { buildObjectiveContract } = require('../objective-contract.js');
+const { buildObjectiveContract, isReportObjective, getReportRuntimeLimits } = require('../objective-contract.js');
 
 let failures = 0;
 function assert(name, condition, detail) {
@@ -186,15 +186,68 @@ assert('shape: addFolderPostconditionChecks still produces { type: "folder", pat
     c.recognized === true && c.intent === 'ensure_folder' && hasPostcondition(c, 'folder_exists', 'Reports'));
 }
 
-// Drift guard for the helper NOT yet migrated (still mirrored in both files):
-// report detection.
-const stillMirroredFragments = [
-  '\\b(report|summary|synthesis|overview|analysis|status|audit)\\b'
+// ── Migration guard (v0.1.31): report detection + report runtime limits wired ──
+const reportFragment = 'report|summary|synthesis|overview|analysis|status|audit';
+assert('migration: objective-contract.js is the report detection source',
+  contractSrc.includes(reportFragment));
+// isReportObjective is now a compatibility wrapper that delegates (its body no longer
+// carries the keyword regex).
+const isReportFnMatch = serverSrc.match(/function isReportObjective[\s\S]*?\n}/);
+assert('migration: server.js isReportObjective still exists as the compatibility wrapper',
+  !!isReportFnMatch);
+assert('migration: server.js isReportObjective no longer duplicates the report regex',
+  !!isReportFnMatch && !isReportFnMatch[0].includes(reportFragment));
+assert('migration: server.js isReportObjective delegates to the contract',
+  !!isReportFnMatch && /contractIsReportObjective\(objective\)/.test(isReportFnMatch[0]));
+// getReportRuntimeLimits is now a compatibility wrapper that delegates.
+const getLimitsFnMatch = serverSrc.match(/function getReportRuntimeLimits[\s\S]*?\n}/);
+assert('migration: server.js getReportRuntimeLimits still exists as the compatibility wrapper',
+  !!getLimitsFnMatch);
+assert('migration: server.js getReportRuntimeLimits delegates to the contract',
+  !!getLimitsFnMatch && /contractGetReportRuntimeLimits\(baseLimits\)/.test(getLimitsFnMatch[0]));
+assert('migration: objective-contract.js exports isReportObjective and getReportRuntimeLimits',
+  /isReportObjective/.test(contractSrc.slice(contractSrc.indexOf('module.exports'))) &&
+  /getReportRuntimeLimits/.test(contractSrc.slice(contractSrc.indexOf('module.exports'))));
+// The only remaining report-keyword copy in server.js is detectWorkloadProfile, a
+// separate workload-profile classifier intentionally NOT consolidated in this slice.
+const serverReportOccurrences = (serverSrc.match(/report\|summary\|synthesis\|overview\|analysis\|status\|audit/g) || []).length;
+assert('migration: only the intentionally non-consolidated detectWorkloadProfile copy remains in server.js',
+  serverReportOccurrences === 1 && /function detectWorkloadProfile[\s\S]*?report\|summary\|synthesis/.test(serverSrc));
+
+// Report detection behavior matches historical server.js (standalone keyword test,
+// case-insensitive, no intent precedence). Legacy reference reproduced inline.
+function legacyIsReportObjective(objective) {
+  const text = String(objective || '').toLowerCase();
+  return /\b(report|summary|synthesis|overview|analysis|status|audit)\b/.test(text);
+}
+const reportCases = [
+  'Write a weekly report', 'make a SUMMARY of X', 'synthesis of findings', 'project overview',
+  'do an analysis', 'status update', 'security audit', 'create folder audit-summary',
+  'Refactor the auth module', '', null, 'weekly  report'
 ];
-for (const frag of stillMirroredFragments) {
-  assert('drift guard (unmigrated): server.js + objective-contract.js share ' + JSON.stringify(frag.slice(0, 24) + '…'),
-    serverSrc.includes(frag) && contractSrc.includes(frag),
-    `server=${serverSrc.includes(frag)} contract=${contractSrc.includes(frag)}`);
+for (const obj of reportCases) {
+  assert(`report detection parity: ${JSON.stringify(obj)}`,
+    isReportObjective(obj) === legacyIsReportObjective(obj),
+    `contract=${isReportObjective(obj)} legacy=${legacyIsReportObjective(obj)}`);
+}
+
+// Report runtime limits match historical server.js exactly (caps via Math.min, fixed
+// list/read caps, base passthrough). Legacy reference reproduced inline.
+function legacyGetReportRuntimeLimits(baseLimits) {
+  return {
+    ...baseLimits,
+    maxExecutionSteps: Math.min(baseLimits.maxExecutionSteps, 12),
+    maxModelRequestsPerRun: Math.min(baseLimits.maxModelRequestsPerRun, 8),
+    maxListDirectoryPerRun: 3,
+    maxReadFilePerRun: 8
+  };
+}
+for (const base of [
+  { maxExecutionSteps: 99, maxModelRequestsPerRun: 99, maxListDirectoryPerRun: 99, maxReadFilePerRun: 99, extra: 7 },
+  { maxExecutionSteps: 5, maxModelRequestsPerRun: 4, maxListDirectoryPerRun: 1, maxReadFilePerRun: 2 }
+]) {
+  assert(`report runtime-limit parity: base maxExecutionSteps=${base.maxExecutionSteps}`,
+    JSON.stringify(getReportRuntimeLimits(base)) === JSON.stringify(legacyGetReportRuntimeLimits(base)));
 }
 
 console.log('\n' + (failures === 0 ? 'PASS' : 'FAIL') + `: ${failures} failure(s)`);

@@ -64,9 +64,23 @@ function extractDeleteTargets(text) {
   return target ? [target] : null;
 }
 
-// Mirror of server.js isReportObjective.
+// Mirror of server.js isReportObjective: standalone report-keyword detector (no
+// intent precedence). Case-insensitive keyword test, identical result to the
+// historical server.js helper for every input.
 function isReportObjective(text) {
   return /\b(report|summary|synthesis|overview|analysis|status|audit)\b/i.test(text);
+}
+
+// Mirror of server.js getReportRuntimeLimits: pure runtime-limit shaping for report
+// objectives. Verbatim from server.js to preserve exact behavior.
+function getReportRuntimeLimits(baseLimits) {
+  return {
+    ...baseLimits,
+    maxExecutionSteps: Math.min(baseLimits.maxExecutionSteps, 12),
+    maxModelRequestsPerRun: Math.min(baseLimits.maxModelRequestsPerRun, 8),
+    maxListDirectoryPerRun: 3,
+    maxReadFilePerRun: 8
+  };
 }
 
 function unsupportedContract(notes) {
@@ -173,5 +187,7 @@ function buildObjectiveContract(objective) {
 
 module.exports = {
   buildObjectiveContract,
-  parseSimpleFolderListObjective
+  parseSimpleFolderListObjective,
+  isReportObjective,
+  getReportRuntimeLimits
 };
