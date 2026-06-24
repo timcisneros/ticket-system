@@ -64,6 +64,21 @@ Set `ADMIN_BOOTSTRAP_PASSWORD` before first startup to use a different bootstrap
 password. Do not use the default bootstrap credential for anything beyond local
 demo/dev state.
 
+### Guided demo (no provider key)
+
+To see the current product loop — verified completion, triage, the `/triage`
+operator inbox, triage resolution, attempt/usage/budget visibility, and the audit
+log — without running a live model, seed the deterministic demo fixture and run
+against it:
+
+```sh
+npm run demo:seed   # writes .local-demo-data / .local-demo-workspace (git-ignored)
+npm run demo:dev    # serves the app against the demo data
+```
+
+Login with `admin` / `admin123`. See `docs/DEMO_WALKTHROUGH.md` for the exact click
+path and what each page demonstrates. Demo data only; no OpenAI/Ollama key required.
+
 ## Configuration
 
 The server reads `.env` through `dotenv`; `.env`, `.env.local`, and

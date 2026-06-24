@@ -3,6 +3,8 @@
 .env.test.local
 .local-data/
 .local-workspace/
+.local-demo-data/
+.local-demo-workspace/
 workspace-root/
 node_modules/
 data-backup-*/
