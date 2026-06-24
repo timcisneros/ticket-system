@@ -59,10 +59,20 @@ const NON_MAX_FIELDS = ['mode', 'requireVerification', 'maxRuntimeMs', 'maxModel
 
 function seed() {
   fs.mkdirSync(path.join(DATA_DIR, 'replay-snapshots'), { recursive: true });
-  writeJson('users.json', [{ id: 1, username: 'admin', passwordHash: ADMIN_HASH, createdAt: ISO, type: 'user' }]);
+  writeJson('users.json', [
+    { id: 1, username: 'admin', passwordHash: ADMIN_HASH, createdAt: ISO, type: 'user' },
+    // Read-only user (same hash → password 'admin123'); group lacks ticket:update.
+    { id: 2, username: 'viewer', passwordHash: ADMIN_HASH, createdAt: ISO, type: 'user' }
+  ]);
   writeJson('permissions.json', ['ticket:create', 'ticket:read', 'ticket:update']);
-  writeJson('groups.json', [{ id: 1, name: 'Admins', permissions: ['ticket:create', 'ticket:read', 'ticket:update'], canReceiveTickets: false }]);
-  writeJson('memberships.json', [{ id: 1, principalType: 'user', principalId: 1, groupId: 1 }]);
+  writeJson('groups.json', [
+    { id: 1, name: 'Admins', permissions: ['ticket:create', 'ticket:read', 'ticket:update'], canReceiveTickets: false },
+    { id: 2, name: 'Viewers', permissions: ['ticket:read'], canReceiveTickets: false }
+  ]);
+  writeJson('memberships.json', [
+    { id: 1, principalType: 'user', principalId: 1, groupId: 1 },
+    { id: 2, principalType: 'user', principalId: 2, groupId: 2 }
+  ]);
   writeJson('agents.json', [{ id: 1, name: 'MA Agent', type: 'agent', provider: 'openai', model: 'gpt-test', apiKey: 'k', createdAt: ISO, updatedAt: ISO }]);
   writeJson('workflows.json', []);
   writeJson('allocation-plans.json', []);
@@ -102,11 +112,12 @@ function waitForReady(timeoutMs = 12000) {
     setTimeout(poll, 400);
   });
 }
-async function login() {
-  const res = await request('POST', '/login', { form: { username: 'admin', password: 'admin123' } });
-  assert(res.statusCode === 302, 'login failed HTTP ' + res.statusCode);
+async function loginAs(username, password) {
+  const res = await request('POST', '/login', { form: { username, password } });
+  assert(res.statusCode === 302, `login ${username} failed HTTP ${res.statusCode}`);
   return cookieFrom(res);
 }
+function login() { return loginAs('admin', 'admin123'); }
 const setMax = (value, cookie) => request('POST', '/api/tickets/1/execution-policy/max-attempts', { cookie, json: { maxAttempts: value } });
 const rerun = cookie => request('POST', '/api/tickets/1/rerun', { cookie, json: { mode: 'retry' } });
 
@@ -130,7 +141,20 @@ async function main() {
     const runsBefore = runsForTicket(1).length;
     assert(policyBefore.maxAttempts === null, 'precondition: maxAttempts starts null');
 
-    // 1: set null → 2.
+    // Permission denial: a user without ticket:update cannot edit maxAttempts.
+    const statusBefore = readJsonData('tickets.json').find(t => t.id === 1).status;
+    const viewerCookie = await loginAs('viewer', 'admin123');
+    const denied = await setMax(5, viewerCookie);
+    assert(denied.statusCode === 403, `unauthorized maxAttempts edit must be 403, got HTTP ${denied.statusCode}: ${denied.body}`);
+    // Nothing changed: maxAttempts, other policy fields, runs, status, run snapshot.
+    const policyAfterDenied = ticketPolicy(1);
+    assert(policyAfterDenied.maxAttempts === null, 'denied edit must not change maxAttempts');
+    NON_MAX_FIELDS.forEach(f => assert(JSON.stringify(policyAfterDenied[f]) === JSON.stringify(policyBefore[f]), `denied edit must not change policy field ${f}`));
+    assert(runsForTicket(1).length === runsBefore, 'denied edit must not create runs');
+    assert(readJsonData('tickets.json').find(t => t.id === 1).status === statusBefore, 'denied edit must not change ticket status');
+    assert(JSON.stringify(readJsonData('runs.json').find(r => r.id === 10).executionPolicySnapshot) === snapshotBefore, 'denied edit must not change run executionPolicySnapshot');
+
+    // 1: set null → 2 (authorized path still works).
     const set2 = await setMax(2, cookie);
     assert(set2.statusCode === 200, `set maxAttempts 2 should succeed, got HTTP ${set2.statusCode}: ${set2.body}`);
     assert(ticketPolicy(1).maxAttempts === 2, 'maxAttempts should now be 2');
