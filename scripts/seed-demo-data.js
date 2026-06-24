@@ -21,6 +21,21 @@ const ROOT = path.resolve(__dirname, '..');
 const DEMO_DATA_DIR = path.resolve(process.env.DEMO_DATA_DIR || path.join(ROOT, '.local-demo-data'));
 const DEMO_WORKSPACE_ROOT = path.resolve(process.env.DEMO_WORKSPACE_ROOT || path.join(ROOT, '.local-demo-workspace'));
 
+// Safety: never let a mistyped DEMO_DATA_DIR wipe real or normal-local state.
+// Refuse to seed into the repo data dir, the normal .local-data dir, or the repo root.
+const PROTECTED_TARGETS = [
+  path.join(ROOT, 'data'),
+  path.join(ROOT, '.local-data'),
+  ROOT
+].map(p => path.resolve(p));
+function assertSafeTarget(dir) {
+  if (PROTECTED_TARGETS.includes(path.resolve(dir))) {
+    console.error(`Refusing to seed demo data into ${dir} — that is real/normal-local state.`);
+    console.error('Use an isolated demo directory such as .local-demo-data (the default), or set DEMO_DATA_DIR to a fresh path.');
+    process.exit(1);
+  }
+}
+
 // argon2id hash of password "admin123" (matches the local demo bootstrap credential).
 const ADMIN_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
 
@@ -86,6 +101,12 @@ const RUN_TRIAGE_RESOLVED = {
 };
 
 function seed() {
+  assertSafeTarget(DEMO_DATA_DIR);
+  // Deterministic + idempotent: replace the demo directory in full, with a clear
+  // message so re-seeding never silently surprises the user. The target is an
+  // isolated, git-ignored demo path (guarded above), so a deliberate replace is safe.
+  const existed = fs.existsSync(DEMO_DATA_DIR) && fs.readdirSync(DEMO_DATA_DIR).length > 0;
+  console.log(`${existed ? 'Replacing existing' : 'Creating'} demo data at ${DEMO_DATA_DIR}`);
   fs.rmSync(DEMO_DATA_DIR, { recursive: true, force: true });
   fs.rmSync(DEMO_WORKSPACE_ROOT, { recursive: true, force: true });
   fs.mkdirSync(path.join(DEMO_DATA_DIR, 'replay-snapshots'), { recursive: true });

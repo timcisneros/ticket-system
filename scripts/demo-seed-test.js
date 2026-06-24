@@ -68,6 +68,23 @@ async function main() {
   // No provider key anywhere in the fixture (no live provider required).
   assert(!/sk-[A-Za-z0-9]/.test(fs.readFileSync(path.join(DATA_DIR, 'agents.json'), 'utf8')), 'demo agent must not carry a provider key');
 
+  // Idempotent + deterministic: re-running over an existing demo dir succeeds and
+  // produces byte-identical fixture content.
+  const firstTickets = fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8');
+  execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'seed-demo-data.js')], {
+    env: { ...process.env, DEMO_DATA_DIR: DATA_DIR, DEMO_WORKSPACE_ROOT: WORKSPACE_ROOT }, stdio: 'ignore'
+  });
+  assert(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8') === firstTickets, 're-seed should be deterministic/idempotent');
+
+  // Safety guard: refuses to target the repo data/ or normal .local-data (would not wipe them).
+  let refused = false;
+  try {
+    execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'seed-demo-data.js')], {
+      env: { ...process.env, DEMO_DATA_DIR: path.join(ROOT, '.local-data') }, stdio: 'ignore'
+    });
+  } catch (_) { refused = true; }
+  assert(refused, 'seed must refuse to target .local-data');
+
   // 3: app boots against the demo DATA_DIR (no OPENAI key in env).
   const env = { ...process.env, NODE_ENV: 'development', PORT, DATA_DIR, WORKSPACE_ROOT, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' };
   delete env.OPENAI_API_KEY;

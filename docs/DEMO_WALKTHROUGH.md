@@ -19,7 +19,12 @@ npm run demo:seed
 
 This writes an isolated fixture to `.local-demo-data/` (workspace `.local-demo-workspace/`),
 both Git-ignored. It does not touch your normal `.local-data/`. Override the targets with
-`DEMO_DATA_DIR` / `DEMO_WORKSPACE_ROOT` if needed. Re-running overwrites the fixture.
+`DEMO_DATA_DIR` / `DEMO_WORKSPACE_ROOT` if needed.
+
+The script is deterministic and idempotent: re-running fully replaces the demo directory and
+prints whether it is **creating** or **replacing** it, so re-seeding never silently surprises
+you. As a safety guard it refuses to seed into the repo `data/`, your normal `.local-data/`,
+or the repo root.
 
 ## 2. Run the app against the demo data
 
