@@ -238,12 +238,14 @@ function createFakeOpenAIPreload() {
     "  }",
     "",
     "  if (combined.includes('postcondition-repeated-write')) {",
-    "    const count = nextCount('repeated-write');",
+    "    const timeoutAvoided = combined.includes('timeout-avoided');",
+    "    const targetPath = timeoutAvoided ? 'pc-timeout-file.txt' : 'pc-file.txt';",
+    "    const count = nextCount(timeoutAvoided ? 'repeated-write-timeout' : 'repeated-write');",
     "    if (count === 1) {",
     "      return okResponse({",
     "        message: 'Writing file.',",
     "        actions: [",
-    "          { operation: 'writeFile', args: { path: 'pc-file.txt', content: 'same-content' } }",
+    "          { operation: 'writeFile', args: { path: targetPath, content: 'same-content' } }",
     "        ],",
     "        complete: false",
     "      });",
@@ -251,7 +253,7 @@ function createFakeOpenAIPreload() {
     "    return okResponse({",
     "      message: 'Ensuring file exists.',",
     "      actions: [",
-    "        { operation: 'writeFile', args: { path: 'pc-file.txt', content: 'same-content' } }",
+    "        { operation: 'writeFile', args: { path: targetPath, content: 'same-content' } }",
     "      ],",
     "      complete: false",
     "    });",
@@ -576,7 +578,29 @@ async function waitForTerminalRun(ticketId, expectedStatus) {
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`Timed out waiting for terminal run for ticket ${ticketId}`);
+  const ticket = readJson('tickets.json').find(item => item.id === ticketId) || null;
+  const runs = readJson('runs.json').filter(run => run.ticketId === ticketId);
+  const run = runs[runs.length - 1] || null;
+  const events = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map(line => JSON.parse(line))
+    .filter(event => event.ticketId === ticketId || (run && event.runId === run.id));
+  const diagnostic = {
+    ticketId,
+    expectedStatus,
+    ticketStatus: ticket ? ticket.status : null,
+    runId: run ? run.id : null,
+    runStatus: run ? run.status : null,
+    runError: run ? run.error || null : null,
+    latestEvents: events.slice(-12),
+    replayTerminalStatus: run && run.replaySnapshot ? run.replaySnapshot.terminalStatus || null : null,
+    replayFailureReason: run && run.replaySnapshot ? run.replaySnapshot.failureReason || null : null,
+    verificationStatus: run && run.runEvaluation && run.runEvaluation.effectiveness
+      ? run.runEvaluation.effectiveness.status
+      : null
+  };
+  throw new Error(`Timed out waiting for terminal run:\n${JSON.stringify(diagnostic, null, 2)}`);
 }
 
 function assert(condition, message) {

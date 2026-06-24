@@ -375,7 +375,7 @@
   <% const matchedPredictionKeys = new Set((predictionComparison.matched || []).map(item => item.key)); %>
   <% const missingPredictionKeys = new Set((predictionComparison.missing || []).map(item => item.key)); %>
   <% function predictionKey(item) { const type = item && item.type === 'workflow draft' ? 'workflowDraft' : (item && item.type ? item.type : 'unknown'); const artifact = String(item && item.artifact ? item.artifact : '').trim().replace(/^\.\//, ''); return type + ':' + artifact; } %>
-  <p><strong>Run Completed:</strong> <% if (runObjectiveSuccess.scored) { %><%= runObjectiveSuccess.status === 'succeeded' ? 'Yes' : 'No · ' + runObjectiveSuccess.status %><% } else { %>Not scored<% } %></p>
+  <p><strong>Objective Success:</strong> <% if (runObjectiveSuccess.scored) { %><%= runObjectiveSuccess.status === 'succeeded' ? 'Yes' : 'No · ' + runObjectiveSuccess.status %><% } else { %><%= runObjectiveSuccess.status === 'unverified' ? 'Unverified' : 'Not scored' %><% } %></p>
   <p><strong>Objective Path Coverage:</strong> <% if (runObjectivePathCoverage.scored) { %><%= runObjectivePathCoverage.percent %>% · <%= runObjectivePathCoverage.covered %>/<%= runObjectivePathCoverage.total %> covered<% } else { %>Not scored<% } %></p>
   <p><strong>Artifact Accuracy:</strong> <% if (predictionAccuracy.scored) { %><%= predictionAccuracy.percent %>% · <%= predictionAccuracy.matched %>/<%= predictionAccuracy.total %> matched<% } else { %>Not scored<% } %></p>
   <% if (predictedArtifacts.length === 0) { %>

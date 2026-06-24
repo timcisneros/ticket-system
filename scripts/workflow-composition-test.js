@@ -294,6 +294,7 @@ async function main() {
 
     const run = await waitForCompletedRun(ticket.id);
     assert(run.status === 'completed', `workflow run should complete, got ${run.status}: ${run.error || ''}`);
+    assert(readJson('tickets.json').find(item => item.id === ticket.id).status === 'completed', 'ticket should complete after required workflow verification passes');
     assert(typeof run.leaseOwner === 'string' && run.leaseOwner.length > 0, 'workflow run should persist lease owner');
     assert(typeof run.leaseExpiresAt === 'string' && run.leaseExpiresAt.length > 0, 'workflow run should persist lease expiration');
     assert(typeof run.lastHeartbeatAt === 'string' && run.lastHeartbeatAt.length > 0, 'workflow run should persist heartbeat time');
@@ -342,6 +343,7 @@ async function main() {
     assert(eventTypes.includes('run.execution_completed'), 'events should include run.execution_completed');
     assert(eventTypes.includes('run.terminalized'), 'events should include run.terminalized');
     assert(eventTypes.includes('run.postconditions_checked'), 'events should include run.postconditions_checked');
+    assert(eventTypes.includes('run.verification_passed'), 'events should include run.verification_passed before completed terminalization');
     assert(eventTypes.includes('run.violations_checked'), 'events should include run.violations_checked');
     assert(eventTypes.includes('run.evaluation_completed'), 'events should include run.evaluation_completed');
     assert(eventTypes.includes('run.consequence_recorded'), 'events should include run.consequence_recorded');
@@ -387,6 +389,9 @@ async function main() {
     assert(runState.runConsequence.mutations.some(item => item.operation === 'writeFile' && item.path === workflowInput.path), 'run consequence should record writeFile mutation path');
     assert(runState.runConsequence.created.some(item => item.operation === 'writeFile' && item.path === workflowInput.path), 'run consequence should record created file path');
     assert(runState.runConsequence.updated.length === 0, 'new writeFile workflow should not record updated paths');
+    const verifiedRunPage = await request('GET', `/runs/${run.id}`, { cookie });
+    assert(verifiedRunPage.statusCode === 200, `verified run detail returned HTTP ${verifiedRunPage.statusCode}`);
+    assert(verifiedRunPage.body.includes('<strong>Objective Success:</strong> Yes'), 'passing required verification should report objective success');
 
     const storedRun = readJson('runs.json').find(item => item.id === run.id);
     assert(storedRun.runEvaluation.efficiency.workspaceOperations === 1, 'run evaluation should be persisted on run');
@@ -484,6 +489,9 @@ async function main() {
     assert(branchTrueRun.status === 'completed', 'branch true path should complete');
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/branch-a.txt'), 'utf8') === 'A', 'trueNext path should write branch A file');
     assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/branch-b.txt')), 'trueNext path should not write branch B file');
+    const unverifiedCompletedRunPage = await request('GET', `/runs/${branchTrueRun.id}`, { cookie });
+    assert(unverifiedCompletedRunPage.statusCode === 200, `unverified completed run detail returned HTTP ${unverifiedCompletedRunPage.statusCode}`);
+    assert(unverifiedCompletedRunPage.body.includes('<strong>Objective Success:</strong> Unverified'), 'completed status alone must not report 100% objective success');
 
     const branchFalseTicketResponse = await request('POST', '/tickets', {
       cookie,
@@ -1158,8 +1166,17 @@ async function main() {
     });
     assert(failingPostconditionTicketResponse.statusCode === 302, `failing postcondition ticket create returned HTTP ${failingPostconditionTicketResponse.statusCode}`);
     const failingPostconditionTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
-    const failingPostconditionRun = await waitForCompletedRun(failingPostconditionTicket.id);
-    assert(failingPostconditionRun.status === 'completed', 'failing postcondition workflow should still complete runtime execution');
+    const failingPostconditionRunId = Math.max(
+      0,
+      ...readJson('runs.json')
+        .filter(item => item.ticketId === failingPostconditionTicket.id)
+        .map(item => item.id || 0)
+    );
+    const failingPostconditionRun = await waitForRunStatus(failingPostconditionRunId, 'failed');
+    assert(failingPostconditionRun.status === 'failed', 'failing postcondition workflow must not be marked completed');
+    assert(failingPostconditionRun.error && failingPostconditionRun.error.includes('Verification failed'), 'failing postcondition run should persist a visible verification failure reason');
+    const failingPostconditionStoredTicket = readJson('tickets.json').find(item => item.id === failingPostconditionTicket.id);
+    assert(failingPostconditionStoredTicket.status === 'failed', 'ticket must not be marked completed when required verification fails');
     const failingPostconditionStateResponse = await request('GET', `/api/runs/${failingPostconditionRun.id}/state`, { cookie });
     assert(failingPostconditionStateResponse.statusCode === 200, `failing postcondition run state returned HTTP ${failingPostconditionStateResponse.statusCode}`);
     const failingPostconditionState = JSON.parse(failingPostconditionStateResponse.body);
@@ -1168,7 +1185,18 @@ async function main() {
     assert(failingPostconditionState.runEvaluation.effectiveness.postconditionsFailed === 1, 'failing postcondition should report one failed postcondition');
     const failingPostconditionEvents = await request('GET', `/api/runs/${failingPostconditionRun.id}/events`, { cookie });
     assert(failingPostconditionEvents.statusCode === 200, `failing postcondition events returned HTTP ${failingPostconditionEvents.statusCode}`);
-    assert(JSON.parse(failingPostconditionEvents.body).events.some(event => event.type === 'run.postcondition_failed'), 'failing postcondition should emit run.postcondition_failed');
+    const failingPostconditionEventItems = JSON.parse(failingPostconditionEvents.body).events;
+    assert(failingPostconditionEventItems.some(event => event.type === 'run.execution_completed'), 'failing postcondition should preserve execution-finished evidence');
+    assert(failingPostconditionEventItems.some(event => event.type === 'run.postcondition_failed'), 'failing postcondition should emit run.postcondition_failed');
+    assert(failingPostconditionEventItems.some(event => event.type === 'run.verification_failed'), 'failing postcondition should emit run.verification_failed');
+    assert(failingPostconditionEventItems.some(event => event.type === 'run.terminalized' && event.payload && event.payload.status === 'failed'), 'failing postcondition should terminalize as failed');
+    const failingPostconditionRunPage = await request('GET', `/runs/${failingPostconditionRun.id}`, { cookie });
+    assert(failingPostconditionRunPage.statusCode === 200, `failing postcondition run detail returned HTTP ${failingPostconditionRunPage.statusCode}`);
+    assert(failingPostconditionRunPage.body.includes('Verification failed'), 'run detail should show the verification failure reason');
+    assert(failingPostconditionRunPage.body.includes('<strong>Objective Success:</strong> No · failed'), 'objective success must not report success when verification failed');
+    const failingPostconditionTicketPage = await request('GET', `/tickets/${failingPostconditionTicket.id}`, { cookie });
+    assert(failingPostconditionTicketPage.statusCode === 200, `failing postcondition ticket detail returned HTTP ${failingPostconditionTicketPage.statusCode}`);
+    assert(failingPostconditionTicketPage.body.includes('Verification failed'), 'ticket detail should expose the verification failure reason from the latest run');
 
     const protectedWorkflowDefinition = {
       id: `workflow-protected-write-${Date.now()}`,

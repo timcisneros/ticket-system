@@ -4827,7 +4827,7 @@ function evaluateWorkflowPostcondition(run, workflow, postcondition, output) {
 
 function completeRunPostconditionCheck(runId) {
   const run = readRuns().find(item => item.id === runId);
-  if (!run || run.executionMode !== 'workflow' || !run.workflowId || run.status !== 'completed') return null;
+  if (!run || run.executionMode !== 'workflow' || !run.workflowId) return null;
 
   const existingEvents = getRunEvents(run.id);
   if (existingEvents.some(event => event.type === 'run.postconditions_checked')) {
@@ -4868,6 +4868,25 @@ function completeRunPostconditionCheck(runId) {
   });
 
   return failedResults;
+}
+
+function buildVerificationFailureReason(failedResults) {
+  const failures = Array.isArray(failedResults) ? failedResults : [];
+  const labels = failures
+    .map(result => result && (result.id || result.type))
+    .filter(Boolean);
+  const detail = labels.length > 0 ? `: ${labels.join(', ')}` : '';
+  return `Verification failed: ${failures.length} postcondition${failures.length === 1 ? '' : 's'} did not pass${detail}`;
+}
+
+function buildVerificationFailure(failedResults) {
+  return {
+    code: 'RUN_VERIFICATION_FAILED',
+    kind: 'verification_failed',
+    detail: {
+      failedPostconditions: sanitizeSnapshotValue(Array.isArray(failedResults) ? failedResults : [])
+    }
+  };
 }
 
 function persistRunEvaluation(runId) {
@@ -5607,13 +5626,32 @@ function buildArtifactAccuracy(snapshot, comparison = {}) {
   };
 }
 
+function isRunVerificationRequired(run) {
+  if (!run || run.executionMode !== 'workflow' || !run.workflowId) return false;
+  const workflow = getWorkflowById(run.workflowId);
+  return Boolean(workflow && Array.isArray(workflow.postconditions) && workflow.postconditions.length > 0);
+}
+
 function buildObjectiveSuccess(run) {
   if (!run || !run.status) {
     return { scored: false, status: 'unknown', score: null, percent: null, reason: 'No run status available' };
   }
 
   if (run.status === 'completed') {
-    return { scored: true, status: 'succeeded', score: 1, percent: 100, reason: 'Run completed' };
+    const evaluation = run.runEvaluation || buildRunEvaluation(run);
+    const verificationStatus = evaluation && evaluation.effectiveness
+      ? evaluation.effectiveness.status
+      : 'unknown';
+    if (verificationStatus === 'failed') {
+      return { scored: true, status: 'failed', score: 0, percent: 0, reason: 'Verification failed' };
+    }
+    const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+    const hasVerifiedDirectPostcondition = Array.isArray(snapshot.events) &&
+      snapshot.events.some(event => event && event.type === 'run:postcondition_completed');
+    if (verificationStatus === 'passed' || hasVerifiedDirectPostcondition) {
+      return { scored: true, status: 'succeeded', score: 1, percent: 100, reason: 'Verification passed' };
+    }
+    return { scored: false, status: 'unverified', score: null, percent: null, reason: 'Run completed without a passing verification verdict' };
   }
 
   if (run.status === 'failed') {
@@ -7892,11 +7930,13 @@ function reconcileTerminalRun(run) {
   const legacyTerminalEvent = events.find(e => ['run.completed', 'run.failed', 'run.interrupted'].includes(e.type));
   const isLegacy = !execCompletedEvent && !!legacyTerminalEvent;
 
-  const targetStatus = execCompletedEvent
+  let targetStatus = execCompletedEvent
     ? (execCompletedEvent.payload && execCompletedEvent.payload.status) || 'completed'
     : legacyTerminalEvent
       ? legacyTerminalEvent.type.replace('run.', '')
       : 'interrupted';
+  let verificationFailureReason = null;
+  let verificationFailure = null;
 
   const terminalPayload = (legacyTerminalEvent && legacyTerminalEvent.payload) ||
     (execCompletedEvent && execCompletedEvent.payload) || {};
@@ -7909,23 +7949,40 @@ function reconcileTerminalRun(run) {
     hasConsequence: existingTypes.has('run.consequence_recorded')
   });
 
-  // 1. Finalize replay snapshot if not already done
-  let didFinalize = false;
-  const snapshotDone = existingTypes.has('replay.snapshot.finalized') || existingTypes.has('run.snapshot_finalized');
-  if (!snapshotDone) {
-    maybeTestInterrupt(run, 'before_run.snapshot_finalized');
-    let failure = null;
-    if (targetStatus === 'failed' || targetStatus === 'interrupted') {
-      failure = buildFailureMetadata(null, targetStatus, run.error || 'Run reconciled to terminal state');
+  // 1. Required verification gates completion.
+  if (targetStatus === 'completed' && run.executionMode === 'workflow' && run.workflowId) {
+    const failedPostconditions = completeRunPostconditionCheck(runId);
+    if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
+      targetStatus = 'failed';
+      verificationFailureReason = buildVerificationFailureReason(failedPostconditions);
+      verificationFailure = buildVerificationFailure(failedPostconditions);
+      if (!existingTypes.has('run.verification_failed')) {
+        appendEvent({
+          type: 'run.verification_failed',
+          ticketId: run.ticketId,
+          runId: run.id,
+          payload: {
+            status: 'failed',
+            error: verificationFailureReason,
+            failure: verificationFailure
+          }
+        });
+      }
     }
-    finalizeRunReplaySnapshot(run, targetStatus, run.error || null, null, failure);
-    didFinalize = true;
-    maybeTestInterrupt(run, 'after_run.snapshot_finalized');
   }
 
-  // 2. Postcondition check for workflow runs that completed (idempotent internally)
-  if (targetStatus === 'completed' && run.executionMode === 'workflow' && run.workflowId) {
-    completeRunPostconditionCheck(runId);
+  // 2. Finalize replay snapshot if not already done
+  let didFinalize = false;
+  const snapshotDone = existingTypes.has('replay.snapshot.finalized') || existingTypes.has('run.snapshot_finalized');
+  if (!snapshotDone || verificationFailure) {
+    maybeTestInterrupt(run, 'before_run.snapshot_finalized');
+    let failure = verificationFailure;
+    if (!failure && (targetStatus === 'failed' || targetStatus === 'interrupted')) {
+      failure = buildFailureMetadata(null, targetStatus, run.error || 'Run reconciled to terminal state');
+    }
+    finalizeRunReplaySnapshot(run, targetStatus, verificationFailureReason || run.error || null, null, failure);
+    didFinalize = true;
+    maybeTestInterrupt(run, 'after_run.snapshot_finalized');
   }
 
   // 3. Violation check (idempotent internally)
@@ -7949,10 +8006,11 @@ function reconcileTerminalRun(run) {
   const runs = readRuns();
   const r = runs.find(item => item.id === runId);
   if (r) {
-    if (!['completed', 'failed', 'interrupted'].includes(r.status)) {
+    if (!['completed', 'failed', 'interrupted'].includes(r.status) || r.status !== targetStatus) {
       r.status = targetStatus;
       r.completedAt = r.completedAt || terminalPayload.completedAt || new Date().toISOString();
       r.updatedAt = new Date().toISOString();
+      if (verificationFailureReason) r.error = verificationFailureReason;
       writeRuns(runs);
     }
     // 7. Clean up stale lease
@@ -8265,24 +8323,67 @@ function failAgentRun(run, error, workspaceAction = null) {
 
 function completeAgentRun(run) {
   advanceRunPhase(run, 'terminalization');
-  const completedRun = updateRunStatus(run.id, 'completed');
-  if (completedRun.status === 'interrupted') return completedRun;
   appendEvent({
     type: 'run.execution_completed',
-    ticketId: completedRun.ticketId,
-    runId: completedRun.id,
+    ticketId: run.ticketId,
+    runId: run.id,
     payload: {
       status: 'completed',
-      mutationCount: countRunMutatingOperations(completedRun.id),
-      completedAt: completedRun.completedAt || completedRun.updatedAt
+      mutationCount: countRunMutatingOperations(run.id),
+      completedAt: new Date().toISOString()
     }
   });
+
+  const failedPostconditions = completeRunPostconditionCheck(run.id);
+  if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
+    const message = buildVerificationFailureReason(failedPostconditions);
+    const failure = buildVerificationFailure(failedPostconditions);
+    const failedRun = updateRunStatus(run.id, 'failed', message);
+    if (failedRun.status === 'interrupted') return failedRun;
+    appendEvent({
+      type: 'run.verification_failed',
+      ticketId: failedRun.ticketId,
+      runId: failedRun.id,
+      payload: {
+        status: 'failed',
+        error: message,
+        failure
+      }
+    });
+    finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
+    appendRunLog(failedRun, 'run:verification_failed', `${message}${allocationLogSuffix(failedRun)}`, null, {
+      allocationPlanId: failedRun.allocationPlanId || null,
+      allocationItemId: failedRun.allocationItemId || null,
+      failure
+    });
+    completeRunViolationCheck(failedRun.id);
+    persistRunEvaluation(failedRun.id);
+    persistRunConsequence(failedRun.id);
+    appendEvent({
+      type: 'run.terminalized',
+      ticketId: failedRun.ticketId,
+      runId: failedRun.id,
+      payload: { status: 'failed', error: message }
+    });
+    finalizeTicketForRun(failedRun, 'failed');
+    return failedRun;
+  }
+
+  const completedRun = updateRunStatus(run.id, 'completed');
+  if (completedRun.status === 'interrupted') return completedRun;
+  if (isRunVerificationRequired(completedRun)) {
+    appendEvent({
+      type: 'run.verification_passed',
+      ticketId: completedRun.ticketId,
+      runId: completedRun.id,
+      payload: { status: 'passed' }
+    });
+  }
   finalizeRunReplaySnapshot(completedRun, 'completed');
   appendRunLog(completedRun, 'run:completed', `Agent run completed${allocationLogSuffix(completedRun)}`, null, {
     allocationPlanId: completedRun.allocationPlanId || null,
     allocationItemId: completedRun.allocationItemId || null
   });
-  completeRunPostconditionCheck(completedRun.id);
   completeRunViolationCheck(completedRun.id);
   persistRunEvaluation(completedRun.id);
   persistRunConsequence(completedRun.id);
