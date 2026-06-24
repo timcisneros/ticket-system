@@ -460,6 +460,8 @@ async function updateTicketStatus(ticketId, status, select) {
     });
 
     if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      window.alert(payload && payload.error ? payload.error : 'Ticket status change was rejected.');
       await loadTickets();
       return;
     }

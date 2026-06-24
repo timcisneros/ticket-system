@@ -198,17 +198,18 @@
 <% if (ticket.executionPolicy) { %>
 <section class="detail-section">
   <h2>Execution Policy</h2>
+  <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
   <dl class="detail-grid">
-    <div><dt>Mode</dt><dd><code><%= ticket.executionPolicy.mode %></code></dd></div>
-    <div><dt>Verification</dt><dd><code><%= ticket.executionPolicy.requireVerification %></code></dd></div>
-    <div><dt>Workspace scope</dt><dd><code><%= ticket.executionPolicy.workspaceScope %></code></dd></div>
-    <div><dt>Workspace writes</dt><dd><%= ticket.executionPolicy.allowWorkspaceWrites ? 'Allowed' : 'Not allowed' %></dd></div>
-    <div><dt>Parallel runs</dt><dd><%= ticket.executionPolicy.allowParallelRuns ? 'Allowed' : 'Not allowed' %></dd></div>
-    <div><dt>Child tickets</dt><dd><%= ticket.executionPolicy.allowChildTickets ? 'Allowed' : 'Not allowed' %></dd></div>
-    <div><dt>Max attempts</dt><dd><%= ticket.executionPolicy.maxAttempts %></dd></div>
-    <div><dt>Max runtime</dt><dd><%= ticket.executionPolicy.maxRuntimeMs === null ? 'Runtime default' : ticket.executionPolicy.maxRuntimeMs + 'ms' %></dd></div>
-    <div><dt>Max model requests</dt><dd><%= ticket.executionPolicy.maxModelRequests === null ? 'Runtime default' : ticket.executionPolicy.maxModelRequests %></dd></div>
-    <div><dt>Max workspace operations</dt><dd><%= ticket.executionPolicy.maxWorkspaceOperations === null ? 'Runtime default' : ticket.executionPolicy.maxWorkspaceOperations %></dd></div>
+    <div><dt>Verification</dt><dd><code><%= ticket.executionPolicy.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
+    <div><dt>Workspace scope</dt><dd><code><%= ticket.executionPolicy.workspaceScope %></code> · enforced by the current workspace path</dd></div>
+    <div><dt>Mode</dt><dd><code><%= ticket.executionPolicy.mode %></code> · recorded intent, not enforced</dd></div>
+    <div><dt>Workspace writes</dt><dd><%= ticket.executionPolicy.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+    <div><dt>Parallel runs</dt><dd><%= ticket.executionPolicy.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+    <div><dt>Child tickets</dt><dd><%= ticket.executionPolicy.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+    <div><dt>Max attempts</dt><dd><%= ticket.executionPolicy.maxAttempts %> · recorded intent, not enforced</dd></div>
+    <div><dt>Max runtime</dt><dd><%= ticket.executionPolicy.maxRuntimeMs === null ? 'unspecified' : ticket.executionPolicy.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
+    <div><dt>Max model requests</dt><dd><%= ticket.executionPolicy.maxModelRequests === null ? 'unspecified' : ticket.executionPolicy.maxModelRequests %> · recorded intent, not enforced</dd></div>
+    <div><dt>Max workspace operations</dt><dd><%= ticket.executionPolicy.maxWorkspaceOperations === null ? 'unspecified' : ticket.executionPolicy.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
   </dl>
 </section>
 <% } %>

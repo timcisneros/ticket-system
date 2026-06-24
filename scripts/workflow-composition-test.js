@@ -361,6 +361,9 @@ async function main() {
     assert(run.currentStepId === 'done', 'workflow run should persist last completed workflow step id');
     assert(run.currentWorkflowAction === 'stop', 'workflow run should persist last completed workflow action');
     assert(JSON.stringify(run.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'run should copy the ticket execution policy at creation');
+    assert(run.verificationContractSnapshot && run.verificationContractSnapshot.workflowId === workflowDefinition.id, 'workflow run should snapshot its verification contract');
+    assert(JSON.stringify(run.verificationContractSnapshot.postconditions) === JSON.stringify(workflowDefinition.postconditions), 'verification contract snapshot should preserve declared postconditions');
+    assert(run.verificationContractSnapshot.verifierContract.id === workflowDefinition.verifierContract.id, 'verification contract snapshot should preserve verifier contract metadata');
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, workflowInput.path), 'utf8') === workflowInput.content, 'workflow writeFile should mutate workspace through runtime');
 
     const snapshotPath = path.join(DATA_DIR, run.replaySnapshotPath);
@@ -380,6 +383,7 @@ async function main() {
     assert(snapshot.authorityChecks.some(item => item.status === 'allowed' && item.operation === 'writeFile' && item.path === workflowInput.path), 'workflow run should record allowed authority evidence');
     assert(snapshot.workspaceOperations.some(item => item.workflowId === workflowDefinition.id && item.workflowStepId === 'write'), 'workflow workspace action should record workflow provenance');
     assert(JSON.stringify(snapshot.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'replay snapshot should preserve the run execution policy snapshot');
+    assert(JSON.stringify(snapshot.verificationContractSnapshot) === JSON.stringify(run.verificationContractSnapshot), 'replay snapshot should preserve the run verification contract snapshot');
     assert(snapshot.triage === null, 'successful replay snapshot should not require triage');
     assert(ticket.triage === null, 'successful runnable ticket should not require ticket-level triage');
     assert(snapshot.providerRequests.length === 0, 'no-model workflow should not create provider requests');
@@ -431,6 +435,7 @@ async function main() {
     assert(runState.status === 'completed', 'run state should include current status');
     assert(runState.triage === null, 'successful completion should not create required triage');
     assert(JSON.stringify(runState.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'run state API should expose the execution policy snapshot');
+    assert(JSON.stringify(runState.verificationContractSnapshot) === JSON.stringify(run.verificationContractSnapshot), 'run state API should expose the verification contract snapshot');
     assert(runState.lease && runState.lease.leaseOwner === run.leaseOwner, 'run state should include lease fields');
     assert(runState.currentStepId === 'done', 'run state should include current step id');
     assert(runState.currentWorkflowAction === 'stop', 'run state should include current workflow action');
@@ -460,6 +465,8 @@ async function main() {
     assert(verifiedRunPage.body.includes('<strong>Objective Success:</strong> Yes'), 'passing required verification should report objective success');
     assert(verifiedRunPage.body.includes('Execution Policy Snapshot'), 'run detail should show the execution policy snapshot');
     assert(verifiedRunPage.body.includes('<code>when_declared</code>'), 'run detail should show the snapshot verification mode');
+    assert(verifiedRunPage.body.includes('recorded intent, not enforced'), 'run detail should label unenforced policy fields as recorded intent');
+    assert(!verifiedRunPage.body.includes('<dt>Workspace writes</dt><dd>Allowed'), 'run detail must not present workspace-write intent as enforced permission');
 
     const ticketsAfterRun = readJson('tickets.json');
     const changedTicket = ticketsAfterRun.find(item => item.id === ticket.id);
@@ -473,7 +480,19 @@ async function main() {
     const changedTicketPage = await request('GET', `/tickets/${ticket.id}`, { cookie });
     assert(changedTicketPage.statusCode === 200, `changed ticket detail returned HTTP ${changedTicketPage.statusCode}`);
     assert(changedTicketPage.body.includes('Execution Policy'), 'ticket detail should show the current execution policy');
-    assert(changedTicketPage.body.includes('<dt>Max attempts</dt><dd>9</dd>'), 'ticket detail should show the changed current policy independently of the run snapshot');
+    assert(changedTicketPage.body.includes('recorded intent, not enforced'), 'ticket detail should label unenforced policy fields as recorded intent');
+    assert(!changedTicketPage.body.includes('<dt>Workspace writes</dt><dd>Allowed'), 'ticket detail must not present workspace-write intent as enforced permission');
+    const closeVerifiedTicketResponse = await request('PATCH', `/api/tickets/${ticket.id}/status`, {
+      cookie,
+      body: { status: 'closed' }
+    });
+    assert(closeVerifiedTicketResponse.statusCode === 200, `verified ticket close returned HTTP ${closeVerifiedTicketResponse.statusCode}`);
+    const completeVerifiedTicketResponse = await request('PATCH', `/api/tickets/${ticket.id}/status`, {
+      cookie,
+      body: { status: 'completed' }
+    });
+    assert(completeVerifiedTicketResponse.statusCode === 200, `verified ticket should allow manual completed transition, got HTTP ${completeVerifiedTicketResponse.statusCode}`);
+    assert(changedTicketPage.body.includes('<dt>Max attempts</dt><dd>9 · recorded intent, not enforced</dd>'), 'ticket detail should show the changed current policy independently of the run snapshot');
 
     const storedRun = readJson('runs.json').find(item => item.id === run.id);
     assert(storedRun.runEvaluation.efficiency.workspaceOperations === 1, 'run evaluation should be persisted on run');
@@ -582,6 +601,20 @@ async function main() {
     const unverifiedCompletedRunPage = await request('GET', `/runs/${branchTrueRun.id}`, { cookie });
     assert(unverifiedCompletedRunPage.statusCode === 200, `unverified completed run detail returned HTTP ${unverifiedCompletedRunPage.statusCode}`);
     assert(unverifiedCompletedRunPage.body.includes('<strong>Objective Success:</strong> Unverified'), 'completed status alone must not report 100% objective success');
+    const closeUnverifiedTicketResponse = await request('PATCH', `/api/tickets/${branchTrueTicket.id}/status`, {
+      cookie,
+      body: { status: 'closed' }
+    });
+    assert(closeUnverifiedTicketResponse.statusCode === 200, `unverified ticket close returned HTTP ${closeUnverifiedTicketResponse.statusCode}`);
+    const completeUnverifiedTicketResponse = await request('PATCH', `/api/tickets/${branchTrueTicket.id}/status`, {
+      cookie,
+      body: { status: 'completed' }
+    });
+    assert(completeUnverifiedTicketResponse.statusCode === 409, 'completed-but-unverified ticket must reject manual completed transition');
+    assert(JSON.parse(completeUnverifiedTicketResponse.body).error.includes('no verified objective-success evidence'), 'unverified completion rejection should explain missing verification evidence');
+    const ticketListAfterRejectedCompletion = await request('GET', '/tickets', { cookie });
+    assert(ticketListAfterRejectedCompletion.statusCode === 200, 'ticket list should remain available after rejected completion');
+    assert(ticketListAfterRejectedCompletion.body.includes('Ticket status change was rejected.'), 'ticket status UI should surface rejected status changes');
 
     const branchFalseTicketResponse = await request('POST', '/tickets', {
       cookie,
@@ -1209,6 +1242,12 @@ async function main() {
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-cap-a.txt'), 'utf8') === 'A', 'over mutation cap workflow should execute first write');
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-cap-b.txt'), 'utf8') === 'B', 'over mutation cap workflow should execute second write');
     assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-cap-c.txt')), 'over mutation cap workflow should block third write');
+    const completeRuntimeFailedTicketResponse = await request('PATCH', `/api/tickets/${overMutationCapTicket.id}/status`, {
+      cookie,
+      body: { status: 'completed' }
+    });
+    assert(completeRuntimeFailedTicketResponse.statusCode === 409, 'runtime-failed ticket must reject manual completed transition');
+    assert(JSON.parse(completeRuntimeFailedTicketResponse.body).error.includes('latest run is failed'), 'runtime failure completion rejection should expose the failed latest run');
 
     const failingPostconditionWorkflow = {
       id: `workflow-failing-postcondition-${Date.now()}`,
@@ -1300,6 +1339,12 @@ async function main() {
     assert(failingPostconditionTicketPage.body.includes('Verification failed'), 'ticket detail should expose the verification failure reason from the latest run');
     assert(failingPostconditionTicketPage.body.includes('Latest Run Triage') && failingPostconditionTicketPage.body.includes('<code>verification_failed</code>'), 'ticket detail should render latest-run triage');
     assert(!failingPostconditionTicketPage.body.includes('Ticket-Level Triage'), 'run-level triage must not be labeled as ticket-level triage');
+    const completeVerificationFailedTicketResponse = await request('PATCH', `/api/tickets/${failingPostconditionTicket.id}/status`, {
+      cookie,
+      body: { status: 'completed' }
+    });
+    assert(completeVerificationFailedTicketResponse.statusCode === 409, 'verification-failed ticket must reject manual completed transition');
+    assert(JSON.parse(completeVerificationFailedTicketResponse.body).error.includes('latest run is failed'), 'verification failure completion rejection should expose the failed latest run');
     await new Promise(resolve => setTimeout(resolve, 600));
     assert(readJson('runs.json').filter(item => item.ticketId === failingPostconditionTicket.id).length === 1, 'triage creation must not automatically retry or create another run');
 

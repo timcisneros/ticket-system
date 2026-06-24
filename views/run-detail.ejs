@@ -116,17 +116,18 @@
 <section class="detail-section">
   <h2>Execution Policy Snapshot</h2>
   <p class="text-muted">Policy copied from the ticket when this run was created.</p>
+  <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
   <dl class="detail-grid">
-    <div><dt>Mode</dt><dd><code><%= run.executionPolicySnapshot.mode %></code></dd></div>
-    <div><dt>Verification</dt><dd><code><%= run.executionPolicySnapshot.requireVerification %></code></dd></div>
-    <div><dt>Workspace scope</dt><dd><code><%= run.executionPolicySnapshot.workspaceScope %></code></dd></div>
-    <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'Allowed' : 'Not allowed' %></dd></div>
-    <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'Allowed' : 'Not allowed' %></dd></div>
-    <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'Allowed' : 'Not allowed' %></dd></div>
-    <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts %></dd></div>
-    <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'Runtime default' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %></dd></div>
-    <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'Runtime default' : run.executionPolicySnapshot.maxModelRequests %></dd></div>
-    <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'Runtime default' : run.executionPolicySnapshot.maxWorkspaceOperations %></dd></div>
+    <div><dt>Verification</dt><dd><code><%= run.executionPolicySnapshot.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
+    <div><dt>Workspace scope</dt><dd><code><%= run.executionPolicySnapshot.workspaceScope %></code> · enforced by this run's workspace path</dd></div>
+    <div><dt>Mode</dt><dd><code><%= run.executionPolicySnapshot.mode %></code> · recorded intent, not enforced</dd></div>
+    <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+    <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+    <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+    <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts %> · recorded intent, not enforced</dd></div>
+    <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'unspecified' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
+    <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'unspecified' : run.executionPolicySnapshot.maxModelRequests %> · recorded intent, not enforced</dd></div>
+    <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'unspecified' : run.executionPolicySnapshot.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
   </dl>
 </section>
 <% } %>

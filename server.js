@@ -2571,6 +2571,43 @@ function copyExecutionPolicy(policy, workspaceScope = 'shared') {
   return sanitizeSnapshotValue(normalizeExecutionPolicy(policy, workspaceScope));
 }
 
+function normalizeVerificationContractSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+  const workflowId = typeof snapshot.workflowId === 'string' && snapshot.workflowId.trim()
+    ? snapshot.workflowId.trim()
+    : null;
+  if (!workflowId) return null;
+
+  return {
+    workflowId,
+    workflowName: typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()
+      ? snapshot.workflowName.trim()
+      : workflowId,
+    workflowVersion: typeof snapshot.workflowVersion === 'string' && snapshot.workflowVersion.trim()
+      ? snapshot.workflowVersion.trim()
+      : null,
+    postconditions: Array.isArray(snapshot.postconditions)
+      ? sanitizeSnapshotValue(snapshot.postconditions.filter(item => item && typeof item === 'object' && !Array.isArray(item)))
+      : [],
+    verifierContract: normalizeWorkflowVerifierContract(snapshot.verifierContract),
+    capturedAt: typeof snapshot.capturedAt === 'string' && isValidIsoTimestamp(snapshot.capturedAt)
+      ? snapshot.capturedAt
+      : null
+  };
+}
+
+function buildVerificationContractSnapshot(workflow, capturedAt = new Date().toISOString()) {
+  if (!workflow || typeof workflow.id !== 'string') return null;
+  return normalizeVerificationContractSnapshot({
+    workflowId: workflow.id,
+    workflowName: workflow.name || workflow.id,
+    workflowVersion: workflow.version || null,
+    postconditions: Array.isArray(workflow.postconditions) ? workflow.postconditions : [],
+    verifierContract: workflow.verifierContract || null,
+    capturedAt
+  });
+}
+
 function normalizeTriage(triage) {
   if (!triage || typeof triage !== 'object' || Array.isArray(triage)) return null;
   const reasonCode = TRIAGE_REASON_CODES.includes(triage.reasonCode) ? triage.reasonCode : 'unknown';
@@ -4435,6 +4472,7 @@ function normalizeRuns(runs) {
     run.capabilityId = run.capabilityType === 'workflow' ? run.workflowId : 'agent-selected-actions';
     run.capabilityInput = run.capabilityType === 'workflow' ? run.workflowInput : null;
     run.executionPolicySnapshot = copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run));
+    run.verificationContractSnapshot = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
     run.leaseOwner = typeof run.leaseOwner === 'string' && run.leaseOwner.trim() ? run.leaseOwner : null;
     run.leaseExpiresAt = typeof run.leaseExpiresAt === 'string' && isValidIsoTimestamp(run.leaseExpiresAt) ? run.leaseExpiresAt : null;
     run.currentStepId = typeof run.currentStepId === 'string' && run.currentStepId.trim() ? run.currentStepId : null;
@@ -4917,7 +4955,18 @@ function completeRunPostconditionCheck(runId) {
     return existingEvents.filter(event => event.type === 'run.postcondition_failed').map(event => event.payload || {});
   }
 
-  const workflow = getWorkflowById(run.workflowId);
+  const capturedContract = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
+  const fallbackWorkflow = capturedContract ? null : getWorkflowById(run.workflowId);
+  const workflow = capturedContract
+    ? {
+        id: capturedContract.workflowId,
+        name: capturedContract.workflowName,
+        version: capturedContract.workflowVersion,
+        verifierContract: capturedContract.verifierContract,
+        postconditions: capturedContract.postconditions
+      }
+    : fallbackWorkflow;
+  const contractSource = capturedContract ? 'run_snapshot' : 'legacy_current_workflow';
   const postconditions = workflow && Array.isArray(workflow.postconditions) ? workflow.postconditions : [];
   if (postconditions.length === 0) return null;
 
@@ -4932,6 +4981,7 @@ function completeRunPostconditionCheck(runId) {
       runId: run.id,
       payload: sanitizeSnapshotValue({
         workflowId: workflow.id,
+        contractSource,
         postcondition: result
       })
     });
@@ -4942,6 +4992,7 @@ function completeRunPostconditionCheck(runId) {
     runId: run.id,
     payload: {
       workflowId: workflow.id,
+      contractSource,
       status: failedResults.length > 0 ? 'failed' : 'passed',
       passed: results.length - failedResults.length,
       failed: failedResults.length,
@@ -5291,6 +5342,7 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     capabilityId: run.capabilityId || null,
     workflowId: run.workflowId || null,
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
+    verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
     triage: normalizeTriage(run.triage),
     lease: serializeRunLease(run),
     leaseOwner: run.leaseOwner || null,
@@ -5718,6 +5770,8 @@ function isRunVerificationRequired(run) {
   );
   if (executionPolicy.requireVerification !== 'when_declared') return false;
   if (!run || run.executionMode !== 'workflow' || !run.workflowId) return false;
+  const capturedContract = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
+  if (capturedContract) return capturedContract.postconditions.length > 0;
   const workflow = getWorkflowById(run.workflowId);
   return Boolean(workflow && Array.isArray(workflow.postconditions) && workflow.postconditions.length > 0);
 }
@@ -6631,6 +6685,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     mainWorkspaceRoot: run.mainWorkspaceRoot || workspaceProvider.root,
     executionWorkspaceType: run.executionWorkspaceType || 'main',
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
+    verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
     triage: normalizeTriage(run.triage),
     allocationPlanId: run.allocationPlanId || null,
     allocationItemId: run.allocationItemId || null,
@@ -6669,6 +6724,7 @@ function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnve
     runtimeEnvelope,
     ticketObjectiveSnapshot: ticket.objective,
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
+    verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
     systemInstructionSnapshot,
     effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent)
   }));
@@ -8153,6 +8209,33 @@ function finalizeTicketForRun(run, terminalStatus) {
   return ticket;
 }
 
+function validateManualTicketCompletion(ticket) {
+  if (!ticket) return { allowed: false, reason: 'Ticket not found' };
+  if (ticket.triage && ticket.triage.required) {
+    return { allowed: false, reason: 'Ticket cannot be completed while ticket-level triage is required.' };
+  }
+
+  const latestRun = readRuns()
+    .filter(run => run.ticketId === ticket.id)
+    .sort(compareRunsNewestFirst)[0] || null;
+  if (!latestRun) {
+    return { allowed: false, reason: 'Ticket cannot be completed without supporting runtime evidence.' };
+  }
+  if (latestRun.status !== 'completed') {
+    return { allowed: false, reason: `Ticket cannot be completed because the latest run is ${latestRun.status}.` };
+  }
+  if (latestRun.triage && latestRun.triage.required) {
+    return { allowed: false, reason: 'Ticket cannot be completed while the latest run requires triage.' };
+  }
+
+  const objectiveSuccess = buildObjectiveSuccess(latestRun);
+  if (!objectiveSuccess.scored || objectiveSuccess.status !== 'succeeded') {
+    return { allowed: false, reason: 'Ticket cannot be completed because the latest run has no verified objective-success evidence.' };
+  }
+
+  return { allowed: true, latestRun, objectiveSuccess };
+}
+
 function reconcileTerminalRun(run) {
   // Idempotent reconciliation for runs that have run.execution_completed (or legacy
   // run.completed/failed/interrupted) but not yet run.terminalized.
@@ -8207,6 +8290,16 @@ function reconcileTerminalRun(run) {
           }
         });
       }
+    } else if (isRunVerificationRequired(run) && !existingTypes.has('run.verification_passed')) {
+      appendEvent({
+        type: 'run.verification_passed',
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: {
+          status: 'passed',
+          contractSource: run.verificationContractSnapshot ? 'run_snapshot' : 'legacy_current_workflow'
+        }
+      });
     }
   }
 
@@ -8595,6 +8688,7 @@ function completeAgentRun(run) {
       completedAt: new Date().toISOString()
     }
   });
+  maybeTestInterrupt(run, 'after_run.execution_completed');
 
   const failedPostconditions = completeRunPostconditionCheck(run.id);
   if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
@@ -8684,6 +8778,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
   const usesOwnedScope = usesOwnedScopeAllocation(ticket);
   const nextRunId = nextId(runs);
   const ownedOutputPaths = allocationItem ? allocationItem.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath) : [];
+  const workflow = ticket.executionMode === 'workflow' ? getWorkflowById(ticket.workflowId) : null;
   const run = {
     id: nextRunId,
     ticketId: ticket.id,
@@ -8696,6 +8791,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
       ticket.executionPolicy,
       usesOwnedScope ? 'owned_paths' : 'shared'
     ),
+    verificationContractSnapshot: buildVerificationContractSnapshot(workflow, now),
     allocationPlanId: allocationPlanId || null,
     allocationItemId: allocationItem ? allocationItem.allocationItemId : null,
     allocationSubtask: allocationItem ? allocationItem.allocationSubtask : null,
@@ -8740,6 +8836,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
       capabilityId: run.capabilityId,
       workflowId: run.workflowId,
       executionPolicySnapshot: run.executionPolicySnapshot,
+      verificationContractSnapshot: run.verificationContractSnapshot,
       createdAt: run.createdAt
     }
   });
@@ -13865,6 +13962,14 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
 
   const changedBy = request.user ? request.user.username : String(request.session.userId);
   const changedAt = new Date().toISOString();
+
+  if (status === 'completed') {
+    const completionCheck = validateManualTicketCompletion(ticket);
+    if (!completionCheck.allowed) {
+      reply.code(409);
+      return { error: completionCheck.reason };
+    }
+  }
 
   if (status === 'open' && usesOwnedScopeAllocation(ticket)) {
     try {

@@ -190,6 +190,12 @@ async function main() {
     assert(ticketPage.body.includes('<code>authority_blocked</code>'), 'Ticket detail should show the ticket triage reason');
     assert(ticketPage.body.includes('<code>change_scope</code>'), 'Ticket detail should show the required decision');
     assert(!ticketPage.body.includes('Latest Run Triage'), 'Pre-run ticket triage should not be rendered as latest-run triage');
+    const completeBlockedTicket = await request('PATCH', `/api/tickets/${ticket.id}/status`, {
+      cookie,
+      body: { status: 'completed' }
+    });
+    assert(completeBlockedTicket.statusCode === 409, 'Pre-run blocked ticket must reject manual completed transition');
+    assert(JSON.parse(completeBlockedTicket.body).error.includes('ticket-level triage'), 'Blocked ticket completion rejection should explain required ticket triage');
 
     console.log('PASS: ticket feasibility gate blocks missing Q3/Q4 grants before runs');
   } finally {
