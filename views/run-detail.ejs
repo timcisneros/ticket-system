@@ -129,6 +129,27 @@
 </section>
 <% } %>
 
+<% if (typeof budgetStatus !== 'undefined' && budgetStatus) { %>
+<%
+  function budgetCell(m, unit) {
+    unit = unit || '';
+    if (m.status === 'not_configured') return 'not configured';
+    if (m.status === 'unavailable') return 'unavailable';
+    var pair = m.usage + unit + ' / ' + m.threshold + unit;
+    return m.status === 'exceeded' ? (pair + ' · exceeded (advisory)') : (pair + ' · within limit');
+  }
+%>
+<section class="detail-section">
+  <h2>Budget (advisory)</h2>
+  <p class="text-muted">Advisory only — no execution is blocked. Recorded usage compared against this run's recorded thresholds; an exceeded threshold is a warning, not a limit.</p>
+  <dl class="detail-grid">
+    <div><dt>Runtime</dt><dd><%= budgetCell(budgetStatus.runtimeMs, 'ms') %></dd></div>
+    <div><dt>Model requests</dt><dd><%= budgetCell(budgetStatus.modelRequests, '') %></dd></div>
+    <div><dt>Workspace operations</dt><dd><%= budgetCell(budgetStatus.workspaceOperations, '') %></dd></div>
+  </dl>
+</section>
+<% } %>
+
 <% if (run.executionPolicySnapshot) { %>
 <section class="detail-section">
   <h2>Execution Policy Snapshot</h2>

@@ -4771,6 +4771,35 @@ function buildTicketAttemptSummary(ticketRuns) {
   };
 }
 
+// Advisory-only budget status: compares a run's recorded usage against the budget
+// threshold fields recorded in its execution policy snapshot. This NEVER blocks,
+// stops, fails, or reruns anything — it is purely a visibility signal derived from
+// existing usage metrics. Per-metric status:
+//   not_configured   threshold is null/unset → no warning
+//   unavailable      usage not observable yet → no warning, no fabricated number
+//   within_threshold usage <= threshold (equal is within)
+//   exceeded         usage > threshold (advisory warning only)
+function buildRunBudgetStatus(run, usage = null) {
+  if (!run) return null;
+  const policy = copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run));
+  const u = usage || buildRunAttemptUsage(run);
+
+  const metric = (threshold, used) => {
+    const t = Number.isInteger(threshold) && threshold > 0 ? threshold : null;
+    const usedValue = Number.isFinite(used) ? used : null;
+    if (t === null) return { threshold: null, usage: usedValue, status: 'not_configured' };
+    if (usedValue === null) return { threshold: t, usage: null, status: 'unavailable' };
+    return { threshold: t, usage: usedValue, status: usedValue > t ? 'exceeded' : 'within_threshold' };
+  };
+
+  return {
+    advisory: true,
+    runtimeMs: metric(policy.maxRuntimeMs, u ? u.durationMs : null),
+    modelRequests: metric(policy.maxModelRequests, u ? u.modelRequestCount : null),
+    workspaceOperations: metric(policy.maxWorkspaceOperations, u ? u.workspaceOperationCount : null)
+  };
+}
+
 function getWorkspaceOperationNameFromEvidence(evidence) {
   if (!evidence || typeof evidence !== 'object') return null;
   if (typeof evidence.operation === 'string') return evidence.operation;
@@ -5407,6 +5436,7 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
   const effectiveLogsByRunId = logsByRunId || groupBy(readLogs(), log => log.runId);
   const runLogs = effectiveLogsByRunId.get(run.id) || [];
   const replaySnapshot = readRunReplaySnapshot(run) || run.replaySnapshot || null;
+  const serializedAttemptUsage = buildRunAttemptUsage(run, options.ticketRuns || null);
 
   return {
     id: run.id,
@@ -5432,7 +5462,8 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     replaySummary,
     authorityEvidence: getRunAuthorityEvidence(run),
     runEvaluation: run.runEvaluation || buildRunEvaluation(run),
-    attemptUsage: buildRunAttemptUsage(run, options.ticketRuns || null),
+    attemptUsage: serializedAttemptUsage,
+    budgetStatus: buildRunBudgetStatus(run, serializedAttemptUsage),
     runConsequence: run.runConsequence || buildRunConsequence(run),
     currentMessage: getRunCurrentMessage(run, effectiveLogsByRunId, summary),
     stateInconsistency: detectRunStateInconsistency(run, {
@@ -15058,6 +15089,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     generatedAt: diagnosticsGeneratedAt, route: '/runs/' + runId
   });
 
+  const runDetailAttemptUsage = buildRunAttemptUsage(run, readRuns().filter(item => item.ticketId === run.ticketId));
+
   return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
     run,
@@ -15078,7 +15111,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     partialMutationCount: runPartialMutationCount,
     operationalOutcome,
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
-    attemptUsage: buildRunAttemptUsage(run, readRuns().filter(item => item.ticketId === run.ticketId)),
+    attemptUsage: runDetailAttemptUsage,
+    budgetStatus: buildRunBudgetStatus(run, runDetailAttemptUsage),
     runStatusLabel: displayRunStatus(run.status),
     runEvents,
     eventSummary,
