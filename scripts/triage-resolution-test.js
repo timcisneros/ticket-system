@@ -91,29 +91,48 @@ function seed() {
     { id: 2, principalType: 'user', principalId: 2, groupId: 2 }
   ]);
   writeJson('agents.json', [{ id: 1, name: 'Triage Agent', type: 'agent', provider: 'openai', model: 'gpt-test', apiKey: 'k', createdAt: T0, updatedAt: T0 }]);
-  writeJson('workflows.json', []);
+  writeJson('workflows.json', [{ id: 'wf-v', name: 'Verified workflow', version: '1', inputSchema: {}, actions: [{ id: 'done', action: 'stop', input: {} }], postconditions: [{ id: 'pc', type: 'fileExists', path: 'out.txt' }] }]);
   writeJson('allocation-plans.json', []);
   writeJson('operation-history.json', []);
   writeJson('logs.json', []);
   writeJson('tickets.json', [
     ticket(1, 'blocked', { ...TICKET_TRIAGE }),  // ticket-level triage to resolve
-    ticket(2, 'failed', null),                    // hosts run-level triage
-    ticket(4, 'open', null)                       // no triage → 409
+    ticket(2, 'failed', null),                    // hosts a FAILED run with run-level triage
+    ticket(4, 'open', null),                      // no triage → 409
+    // completed workflow run, verification REQUIRED but not passed, plus run triage:
+    ticket(5, 'in_progress', null)
   ]);
-  writeJson('runs.json', [{
-    id: 20, ticketId: 2, agentId: 1, agentName: 'Triage Agent',
-    workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
-    allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [],
-    executionMode: 'agent', workflowId: null, workflowInput: null,
-    capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
-    executionPolicySnapshot: { requireVerification: 'when_declared' },
-    currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null,
-    currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
-    status: 'failed', error: 'boom', triage: { ...RUN_TRIAGE },
-    createdAt: T0, updatedAt: T0, startedAt: T0, completedAt: T0,
-    replaySnapshotPath: 'replay-snapshots/run-20.json'
-  }]);
+  writeJson('runs.json', [
+    {
+      id: 20, ticketId: 2, agentId: 1, agentName: 'Triage Agent',
+      workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
+      allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [],
+      executionMode: 'agent', workflowId: null, workflowInput: null,
+      capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
+      executionPolicySnapshot: { requireVerification: 'when_declared' },
+      currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null,
+      currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
+      status: 'failed', error: 'boom', triage: { ...RUN_TRIAGE },
+      createdAt: T0, updatedAt: T0, startedAt: T0, completedAt: T0,
+      replaySnapshotPath: 'replay-snapshots/run-20.json'
+    },
+    {
+      id: 50, ticketId: 5, agentId: 1, agentName: 'Triage Agent',
+      workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
+      allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [],
+      executionMode: 'workflow', workflowId: 'wf-v', capabilityType: 'workflow', capabilityId: 'wf-v', workflowInput: {},
+      executionPolicySnapshot: { requireVerification: 'when_declared' },
+      verificationContractSnapshot: { workflowId: 'wf-v', workflowName: 'Verified workflow', workflowVersion: '1', postconditions: [{ id: 'pc', type: 'fileExists', path: 'out.txt' }], verifierContract: null, capturedAt: T0 },
+      runEvaluation: { effectiveness: { status: 'unknown' }, efficiency: { durationMs: 100, providerRequests: 1, modelResponses: 1, workspaceOperations: 1, mutationCount: 0, retryCount: 0 }, violations: { status: 'unknown', items: [] }, effectiveRuntimeConfig: null },
+      currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null,
+      currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
+      status: 'completed', triage: { ...RUN_TRIAGE },
+      createdAt: T0, updatedAt: T0, startedAt: T0, completedAt: T0,
+      replaySnapshotPath: 'replay-snapshots/run-50.json'
+    }
+  ]);
   fs.writeFileSync(path.join(DATA_DIR, 'replay-snapshots', 'run-20.json'), JSON.stringify({ runId: 20, providerRequests: [], modelResponses: [], workspaceOperations: [], events: [] }));
+  fs.writeFileSync(path.join(DATA_DIR, 'replay-snapshots', 'run-50.json'), JSON.stringify({ runId: 50, providerRequests: [], modelResponses: [], workspaceOperations: [], events: [] }));
   fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), '');
 }
 
@@ -135,6 +154,8 @@ async function loginAs(username) {
 }
 const resolveTicket = (id, resolution, cookie) => request('POST', `/api/tickets/${id}/triage/resolve`, { cookie, json: { resolution } });
 const resolveRun = (id, resolution, cookie) => request('POST', `/api/runs/${id}/triage/resolve`, { cookie, json: { resolution } });
+const completeTicket = (id, cookie) => request('PATCH', `/api/tickets/${id}/status`, { cookie, json: { status: 'completed' } });
+const errorOf = res => { try { return JSON.parse(res.body).error || ''; } catch (_) { return ''; } };
 const sameArr = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 async function main() {
@@ -207,6 +228,28 @@ async function main() {
 
     // 409: resolving an already-resolved run triage.
     assert((await resolveRun(20, 'again', cookie)).statusCode === 409, 'already-resolved run triage → 409');
+
+    // Completion-gate coverage: resolving run triage must NOT make a failed run
+    // completable — the status gate still rejects (not the now-resolved triage gate).
+    const complete2 = await completeTicket(2, cookie);
+    assert(complete2.statusCode === 409, `completing a failed-run ticket must be rejected, got HTTP ${complete2.statusCode}`);
+    assert(errorOf(complete2).includes('latest run is failed'), `rejection must be the status gate, got: ${errorOf(complete2)}`);
+    assert(!errorOf(complete2).includes('requires triage'), 'rejection must NOT cite the (now resolved) triage gate');
+    assert(ticketStatus(2) === 'failed', 'failed-run ticket must not become completed');
+    assert(readJsonData('runs.json').find(r => r.id === 20).status === 'failed', 'run 20 status must not change on completion attempt');
+    assert(runsForTicket(2).length === 1, 'completion attempt must create no run');
+
+    // And a verification-required-but-not-passed COMPLETED run: resolve its triage,
+    // then the verification gate must still block completion (not the triage gate).
+    assert((await resolveRun(50, 'Acknowledged; verification still pending.', cookie)).statusCode === 200, 'resolve run 50 triage should succeed');
+    assert(runTriage(50).required === false, 'run 50 triage should be resolved');
+    const complete5 = await completeTicket(5, cookie);
+    assert(complete5.statusCode === 409, `completing a verification-required-unverified ticket must be rejected, got HTTP ${complete5.statusCode}`);
+    assert(errorOf(complete5).includes('no verified objective-success evidence'), `rejection must be the verification gate, got: ${errorOf(complete5)}`);
+    assert(!errorOf(complete5).includes('requires triage'), 'rejection must NOT cite the (now resolved) triage gate');
+    assert(ticketStatus(5) !== 'completed', 'verification-required-unverified ticket must not become completed');
+    assert(readJsonData('runs.json').find(r => r.id === 50).status === 'completed', 'run 50 status must not change on completion attempt');
+    assert(runsForTicket(5).length === 1, 'completion attempt must create no run');
 
     console.log('PASS: human triage resolution annotates only — no rerun, completion, status change, or autonomy');
   } catch (error) {
