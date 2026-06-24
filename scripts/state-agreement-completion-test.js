@@ -238,13 +238,15 @@ async function runReconcilePhase() {
     // Ticket 11: completed+terminalized run, ticket stuck in_progress (crash window).
     // Ticket 12: failed+terminalized run, ticket stuck in_progress.
     // Ticket 13: legacy workflow run (no verificationContractSnapshot), needs reconcile.
+    // Ticket 14: interrupted+terminalized run, ticket stuck in_progress.
     writeJson(dataDir, 'tickets.json', [
       ticketBase(11, 'in_progress'),
       ticketBase(12, 'in_progress'),
       ticketBase(13, 'in_progress', {
         executionMode: 'workflow', workflowId: 'wf-legacy',
         capabilityType: 'workflow', capabilityId: 'wf-legacy', workflowInput: {}
-      })
+      }),
+      ticketBase(14, 'in_progress')
     ]);
 
     writeJson(dataDir, 'runs.json', [
@@ -255,10 +257,11 @@ async function runReconcilePhase() {
         capabilityType: 'workflow', capabilityId: 'wf-legacy', workflowInput: {},
         replaySnapshotPath: 'replay-snapshots/run-103.json'
         // intentionally NO verificationContractSnapshot → legacy fallback
-      })
+      }),
+      runBase(104, 14, 'interrupted', { error: 'process restarted', replaySnapshotPath: 'replay-snapshots/run-104.json' })
     ]);
 
-    [101, 102, 103].forEach(id => {
+    [101, 102, 103, 104].forEach(id => {
       fs.writeFileSync(path.join(dataDir, 'replay-snapshots', `run-${id}.json`), JSON.stringify({
         runId: id, providerRequests: [], modelResponses: [], workspaceOperations: [], events: []
       }));
@@ -277,7 +280,12 @@ async function runReconcilePhase() {
       { id: 'e102d', ts: ISO, type: 'run.terminalized', ticketId: 12, runId: 102, payload: { status: 'failed', error: 'boom' } },
       // Run 103: legacy — execution completed, not terminalized, no snapshot (needs reconcile).
       { id: 'e103a', ts: ISO, type: 'run.created', ticketId: 13, runId: 103, payload: { status: 'pending' } },
-      { id: 'e103b', ts: ISO, type: 'run.execution_completed', ticketId: 13, runId: 103, payload: { status: 'completed' } }
+      { id: 'e103b', ts: ISO, type: 'run.execution_completed', ticketId: 13, runId: 103, payload: { status: 'completed' } },
+      // Run 104: fully terminalized interrupted; ticket never finalized.
+      { id: 'e104a', ts: ISO, type: 'run.created', ticketId: 14, runId: 104, payload: { status: 'pending' } },
+      { id: 'e104b', ts: ISO, type: 'run.execution_completed', ticketId: 14, runId: 104, payload: { status: 'interrupted', error: 'process restarted' } },
+      { id: 'e104c', ts: ISO, type: 'run.snapshot_finalized', ticketId: 14, runId: 104, payload: { status: 'interrupted' } },
+      { id: 'e104d', ts: ISO, type: 'run.terminalized', ticketId: 14, runId: 104, payload: { status: 'interrupted', error: 'process restarted' } }
     ]);
 
     server = startServer(dataDir, workspaceRoot, port);
@@ -288,22 +296,29 @@ async function runReconcilePhase() {
     const runs = readJson(dataDir, 'runs.json');
     const events = readEvents(dataDir);
 
-    // Crash-window convergence
+    // Crash-window convergence — completed, failed, and interrupted terminal runs.
     const t11 = tickets.find(t => t.id === 11);
     const t12 = tickets.find(t => t.id === 12);
+    const t14 = tickets.find(t => t.id === 14);
     assert(t11.status === 'completed', `stuck completed-run ticket should converge to completed, got ${t11.status}`);
     assert(t12.status === 'failed', `stuck failed-run ticket must converge to failed (never completed), got ${t12.status}`);
+    // Interrupted runs revert the ticket to 'open' (existing interrupt lifecycle),
+    // never to completed/failed. Convergence itself starts no run.
+    assert(t14.status === 'open', `stuck interrupted-run ticket should converge to open, got ${t14.status}`);
 
     // No new runs / retries created
-    assert(runs.length === 3, `startup convergence must not create new runs, got ${runs.length}`);
+    assert(runs.length === 4, `startup convergence must not create new runs, got ${runs.length}`);
     assert(runs.find(r => r.id === 101).status === 'completed', 'run 101 should remain completed');
     assert(runs.find(r => r.id === 102).status === 'failed', 'run 102 should remain failed');
+    assert(runs.find(r => r.id === 104).status === 'interrupted', 'run 104 should remain interrupted');
 
     // No duplicate terminalized events
     const t101 = events.filter(e => e.runId === 101 && e.type === 'run.terminalized');
     const t102 = events.filter(e => e.runId === 102 && e.type === 'run.terminalized');
+    const t104 = events.filter(e => e.runId === 104 && e.type === 'run.terminalized');
     assert(t101.length === 1, `run 101 must have exactly one run.terminalized, got ${t101.length}`);
     assert(t102.length === 1, `run 102 must have exactly one run.terminalized, got ${t102.length}`);
+    assert(t104.length === 1, `run 104 must have exactly one run.terminalized, got ${t104.length}`);
 
     // Legacy fallback labeling
     const checked103 = events.find(e => e.runId === 103 && e.type === 'run.postconditions_checked');
@@ -314,7 +329,7 @@ async function runReconcilePhase() {
     assert(passed103 && passed103.payload.contractSource === 'legacy_current_workflow',
       'legacy run verification_passed should label legacy_current_workflow');
 
-    console.log('PASS: startup converges terminalized/unfinalized tickets and labels legacy contract source');
+    console.log('PASS: startup converges completed/failed/interrupted terminalized tickets and labels legacy contract source');
   } finally {
     await stopServer(server);
     fs.rmSync(dataDir, { recursive: true, force: true });
