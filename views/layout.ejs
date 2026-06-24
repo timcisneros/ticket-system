@@ -20,6 +20,7 @@
           <li><a href="/">New Ticket</a></li>
 	          <li><a href="/tickets">Tickets</a></li>
 	          <% if (userPermissions.includes('ticket:read')) { %>
+	            <li><a href="/triage">Triage</a></li>
 	            <li><a href="/agents">Agents</a></li>
 	            <li><a href="/logs">Logs</a></li>
 	          <% } %>

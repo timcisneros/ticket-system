@@ -14685,6 +14685,53 @@ fastify.get('/logs', { preHandler: fastify.requireAuth }, async (request, reply)
   }, request.session.userId));
 });
 
+// Read-only operator triage inbox. Lists unresolved ticket-level and run-level
+// triage so an operator can see what needs attention and navigate to the existing
+// ticket/run detail pages (where the existing resolve controls already live). This
+// page only reads JSON state — it never resolves, reruns, creates runs, or mutates
+// any ticket/run.
+fastify.get('/triage', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({
+      message: 'Access denied',
+      user: request.user
+    }, request.session.userId));
+  }
+
+  const tickets = readTickets();
+  const ticketById = new Map(tickets.map(ticket => [ticket.id, ticket]));
+
+  const ticketTriageItems = tickets
+    .filter(ticket => ticket.triage && ticket.triage.required === true)
+    .map(ticket => ({
+      ticketId: ticket.id,
+      objective: ticket.objective,
+      ticketStatus: ticket.status,
+      triage: ticket.triage
+    }));
+
+  const runTriageItems = readRuns()
+    .filter(run => run.triage && run.triage.required === true)
+    .map(run => {
+      const ticket = ticketById.get(run.ticketId) || null;
+      return {
+        runId: run.id,
+        runStatus: run.status,
+        ticketId: run.ticketId,
+        ticketObjective: ticket ? ticket.objective : null,
+        ticketStatus: ticket ? ticket.status : null,
+        triage: run.triage
+      };
+    });
+
+  return renderCachedView(request, reply, 'triage.ejs', viewData({
+    user: request.user,
+    ticketTriageItems,
+    runTriageItems
+  }, request.session.userId));
+});
+
 fastify.get('/api/logs', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
