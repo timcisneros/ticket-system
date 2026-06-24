@@ -143,6 +143,13 @@ async function login() {
   return cookieFrom(res);
 }
 
+// Run-state API: GET /api/runs/:id/state → serializeRunRuntimeState (incl. attemptUsage).
+async function getRunState(id, cookie) {
+  const res = await request('GET', `/api/runs/${id}/state`, { cookie });
+  assert(res.statusCode === 200, `/api/runs/${id}/state HTTP ${res.statusCode}`);
+  return JSON.parse(res.body);
+}
+
 async function main() {
   seed();
   server = spawn(process.execPath, ['server.js'], {
@@ -182,9 +189,33 @@ async function main() {
     assert(run120Page.body.includes('attempt 1 of 1'), 'interrupted run should be attempt 1 of 1');
     assert(run120Page.body.includes('<code>interrupted</code>'), 'interrupted run should show interrupted outcome');
 
-    // 5 + 7: viewing/measuring created no runs and changed no statuses.
+    // API coverage: /api/runs/:id/state exposes attemptUsage truthfully.
+    // Completed verified workflow run → attempt 1 of 1, observable counts, verified.
+    const state100 = await getRunState(100, cookie);
+    assert(state100.attemptUsage, 'run-state API should expose attemptUsage');
+    const u100 = state100.attemptUsage;
+    assert(u100.attemptNumber === 1, `API attemptNumber should be 1, got ${u100.attemptNumber}`);
+    assert(u100.attemptCount === 1, `API attemptCount should match ticket run count (1), got ${u100.attemptCount}`);
+    assert(u100.outcome === 'completed', `API outcome should be completed, got ${u100.outcome}`);
+    assert(u100.modelRequestCount === 2, `API modelRequestCount should be observable (2), got ${u100.modelRequestCount}`);
+    assert(u100.workspaceOperationCount === 3, `API workspaceOperationCount should be observable (3), got ${u100.workspaceOperationCount}`);
+    assert(u100.mutatingWorkspaceOperationCount === 1, `API mutatingWorkspaceOperationCount should be observable (1), got ${u100.mutatingWorkspaceOperationCount}`);
+    assert(u100.durationMs === 1234, `API durationMs should be observable (1234), got ${u100.durationMs}`);
+    assert(u100.verificationRequired === true, 'API run 100 verificationRequired should be true');
+    assert(u100.verificationOutcome === 'passed', `API run 100 verificationOutcome should be passed, got ${u100.verificationOutcome}`);
+
+    // Failed direct run → terminal observable counts, verification not_required (truthful).
+    const state110 = await getRunState(110, cookie);
+    const u110 = state110.attemptUsage;
+    assert(u110 && u110.attemptNumber === 1 && u110.attemptCount === 1, 'API failed run should be attempt 1 of 1');
+    assert(u110.outcome === 'failed', `API failed run outcome should be failed, got ${u110.outcome}`);
+    assert(u110.modelRequestCount === 2, 'API failed (terminal) run should report observable counts');
+    assert(u110.verificationRequired === false && u110.verificationOutcome === 'not_required',
+      `API direct run should report verification not_required, got required=${u110.verificationRequired} outcome=${u110.verificationOutcome}`);
+
+    // 5 + 7: viewing/measuring (pages AND API) created no runs and changed no statuses.
     const runsBefore = readJsonData('runs.json');
-    assert(runsBefore.length === 3, 'measurement views must not create runs, got ' + runsBefore.length);
+    assert(runsBefore.length === 3, 'measurement views/API must not create runs, got ' + runsBefore.length);
     assert(runsBefore.find(r => r.id === 100).status === 'completed', 'run 100 must remain completed (measurement does not alter semantics)');
 
     // 2: a manual rerun creates attempt 2 (one new run), not a retry policy cascade.
@@ -203,6 +234,17 @@ async function main() {
     assert(newRunPage.body.includes(`attempt 2 of 2`), 'new run should be attempt 2 of 2');
     assert(/Model requests<\/dt><dd>unavailable</.test(newRunPage.body), 'pending attempt should show model requests as unavailable');
     assert(/Duration<\/dt><dd>unavailable</.test(newRunPage.body), 'pending attempt should show duration as unavailable');
+
+    // API coverage: non-terminal (pending) run reports null usage counts, not fabricated.
+    const stateNew = await getRunState(newRun.id, cookie);
+    const uNew = stateNew.attemptUsage;
+    assert(uNew, 'API should expose attemptUsage for the pending rerun');
+    assert(uNew.attemptNumber === 2, `API pending run attemptNumber should be 2, got ${uNew.attemptNumber}`);
+    assert(uNew.attemptCount === 2, `API pending run attemptCount should be 2, got ${uNew.attemptCount}`);
+    assert(uNew.modelRequestCount === null, `API pending run modelRequestCount should be null, got ${uNew.modelRequestCount}`);
+    assert(uNew.workspaceOperationCount === null, `API pending run workspaceOperationCount should be null, got ${uNew.workspaceOperationCount}`);
+    assert(uNew.mutatingWorkspaceOperationCount === null, `API pending run mutatingWorkspaceOperationCount should be null, got ${uNew.mutatingWorkspaceOperationCount}`);
+    assert(uNew.durationMs === null, `API pending run durationMs should be null, got ${uNew.durationMs}`);
 
     // 7: no automatic rerun — count stays at 2 after a wait (scheduler is parked).
     await sleep(800);
