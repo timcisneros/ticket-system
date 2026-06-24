@@ -8229,8 +8229,18 @@ function validateManualTicketCompletion(ticket) {
   }
 
   const objectiveSuccess = buildObjectiveSuccess(latestRun);
-  if (!objectiveSuccess.scored || objectiveSuccess.status !== 'succeeded') {
-    return { allowed: false, reason: 'Ticket cannot be completed because the latest run has no verified objective-success evidence.' };
+  // Option A: completion means execution reached a valid terminal completion state.
+  // When declared verification applies to this run, completion still requires a
+  // passing verdict (verified). When no verification was required for the run
+  // (e.g. a postcondition-free direct or branch run), operational completion is a
+  // legitimate completed-but-unverified state and may be completed manually,
+  // unless the run's objective success is explicitly failed.
+  if (isRunVerificationRequired(latestRun)) {
+    if (!objectiveSuccess.scored || objectiveSuccess.status !== 'succeeded') {
+      return { allowed: false, reason: 'Ticket cannot be completed because the latest run has no verified objective-success evidence.' };
+    }
+  } else if (objectiveSuccess.status === 'failed') {
+    return { allowed: false, reason: 'Ticket cannot be completed because the latest run did not reach objective success.' };
   }
 
   return { allowed: true, latestRun, objectiveSuccess };
@@ -8613,6 +8623,54 @@ function interruptStaleRunsOnStartup() {
   }
   if (reconciledCount > 0) {
     console.log(`Reconciled ${reconciledCount} terminal agent run(s) on startup`);
+  }
+
+  reconcileUnfinalizedTicketsOnStartup();
+}
+
+// Heals the terminalized-run / unfinalized-ticket disagreement: a run can be
+// fully terminalized (run.terminalized emitted, verification already decided)
+// while a crash in the gap before finalizeTicketForRun left its ticket stuck in
+// a non-terminal status. Such a run is invisible to the stale-run and
+// incomplete-terminal-evidence reconcilers, so converge the ticket here. Runs
+// after those reconcilers so resumed/reconciled runs are settled first.
+function reconcileUnfinalizedTicketsOnStartup() {
+  const tickets = readTickets();
+  const runs = readRuns();
+  let finalizedCount = 0;
+
+  tickets.forEach(ticket => {
+    if (ticket.status !== 'in_progress') return;
+    const ticketRuns = runs.filter(run => run.ticketId === ticket.id);
+    if (ticketRuns.length === 0) return;
+    // Never finalize while execution could still be in flight.
+    if (ticketRuns.some(run => ['pending', 'running'].includes(run.status))) return;
+
+    const latestRun = ticketRuns.slice().sort(compareRunsNewestFirst)[0];
+    if (!latestRun) return;
+    // Only heal genuinely terminalized runs — run.terminalized is emitted after
+    // verification has already passed/failed, so latestRun.status is trustworthy.
+    const events = getRunEvents(latestRun.id);
+    if (!events.some(event => event.type === 'run.terminalized')) return;
+
+    let updated = null;
+    if (latestRun.status === 'completed' || latestRun.status === 'failed') {
+      updated = finalizeTicketForRun(latestRun, latestRun.status);
+    } else if (latestRun.status === 'interrupted') {
+      updated = updateTicketAfterRunInterrupted(latestRun);
+    } else {
+      return;
+    }
+
+    if (updated && updated.status !== 'in_progress') {
+      finalizedCount++;
+      appendRunLog(latestRun, 'run:ticket_finalized',
+        `Startup: finalized stuck ticket #${ticket.id} from 'in_progress' to '${updated.status}' from terminal run ${latestRun.id}`);
+    }
+  });
+
+  if (finalizedCount > 0) {
+    console.log(`Finalized ${finalizedCount} unfinalized ticket(s) on startup`);
   }
 }
 

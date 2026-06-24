@@ -610,11 +610,14 @@ async function main() {
       cookie,
       body: { status: 'completed' }
     });
-    assert(completeUnverifiedTicketResponse.statusCode === 409, 'completed-but-unverified ticket must reject manual completed transition');
-    assert(JSON.parse(completeUnverifiedTicketResponse.body).error.includes('no verified objective-success evidence'), 'unverified completion rejection should explain missing verification evidence');
-    const ticketListAfterRejectedCompletion = await request('GET', '/tickets', { cookie });
-    assert(ticketListAfterRejectedCompletion.statusCode === 200, 'ticket list should remain available after rejected completion');
-    assert(ticketListAfterRejectedCompletion.body.includes('Ticket status change was rejected.'), 'ticket status UI should surface rejected status changes');
+    // Option A: a postcondition-free run requires no verification, so operational
+    // completion is a legitimate completed-but-unverified state and may be
+    // completed manually. The run detail still reports objective success as
+    // Unverified (asserted above) — completed != verified.
+    assert(completeUnverifiedTicketResponse.statusCode === 200, `verification-free completed ticket should allow manual completed transition, got HTTP ${completeUnverifiedTicketResponse.statusCode}`);
+    const ticketListAfterUnverifiedCompletion = await request('GET', '/tickets', { cookie });
+    assert(ticketListAfterUnverifiedCompletion.statusCode === 200, 'ticket list should remain available after unverified completion');
+    assert(ticketListAfterUnverifiedCompletion.body.includes('Ticket status change was rejected.'), 'ticket status UI should still surface rejected status changes');
 
     const branchFalseTicketResponse = await request('POST', '/tickets', {
       cookie,
