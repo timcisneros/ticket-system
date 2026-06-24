@@ -444,6 +444,43 @@
 </section>
 <% } %>
 
+<% if (typeof attemptSummary !== 'undefined' && attemptSummary && attemptSummary.attemptCount > 0) { %>
+<section class="detail-section">
+  <h2>Execution Attempts (<%= attemptSummary.attemptCount %>)</h2>
+  <p class="text-muted">Each run on this ticket is one attempt. Measurement only — no retry is triggered and no limit is enforced. "unavailable" means a metric was not observable for that run.</p>
+  <table class="tickets-table">
+    <thead>
+      <tr>
+        <th>Attempt</th>
+        <th>Run #</th>
+        <th>Outcome</th>
+        <th>Duration</th>
+        <th>Model reqs</th>
+        <th>Workspace ops</th>
+        <th>Mutating ops</th>
+        <th>Verification</th>
+        <th>Triage</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% attemptSummary.attempts.forEach(a => { %>
+        <tr>
+          <td><%= a.attemptNumber === null ? '-' : a.attemptNumber %></td>
+          <td><a href="/runs/<%= a.runId %>">Run #<%= a.runId %></a></td>
+          <td><code><%= a.outcome || 'unavailable' %></code></td>
+          <td><%= a.durationMs === null ? 'unavailable' : a.durationMs + 'ms' %></td>
+          <td><%= a.modelRequestCount === null ? 'unavailable' : a.modelRequestCount %></td>
+          <td><%= a.workspaceOperationCount === null ? 'unavailable' : a.workspaceOperationCount %></td>
+          <td><%= a.mutatingWorkspaceOperationCount === null ? 'unavailable' : a.mutatingWorkspaceOperationCount %></td>
+          <td><%= a.verificationRequired ? 'required · ' + a.verificationOutcome : 'not required' %></td>
+          <td><%= a.triageRequired ? 'required' : 'none' %></td>
+        </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</section>
+<% } %>
+
 <section class="detail-section">
   <h2>Runs</h2>
   <% if (ticketRuns.length === 0) { %>

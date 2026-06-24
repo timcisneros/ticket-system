@@ -112,6 +112,23 @@
 </section>
 <% } %>
 
+<% if (typeof attemptUsage !== 'undefined' && attemptUsage) { %>
+<section class="detail-section">
+  <h2>Usage / Attempt</h2>
+  <p class="text-muted">Measured from this run's recorded evidence. Counts shown as "unavailable" were not observable for this run. Measurement only — no limits are enforced.</p>
+  <dl class="detail-grid">
+    <div><dt>Attempt</dt><dd><%= attemptUsage.attemptNumber === null ? 'unavailable' : 'attempt ' + attemptUsage.attemptNumber + ' of ' + attemptUsage.attemptCount %></dd></div>
+    <div><dt>Outcome</dt><dd><code><%= attemptUsage.outcome || 'unavailable' %></code></dd></div>
+    <div><dt>Duration</dt><dd><%= attemptUsage.durationMs === null ? 'unavailable' : (typeof formatDurationHuman === 'function' ? formatDurationHuman(attemptUsage.durationMs) : attemptUsage.durationMs + 'ms') %></dd></div>
+    <div><dt>Model requests</dt><dd><%= attemptUsage.modelRequestCount === null ? 'unavailable' : attemptUsage.modelRequestCount %></dd></div>
+    <div><dt>Workspace operations</dt><dd><%= attemptUsage.workspaceOperationCount === null ? 'unavailable' : attemptUsage.workspaceOperationCount %></dd></div>
+    <div><dt>Mutating workspace operations</dt><dd><%= attemptUsage.mutatingWorkspaceOperationCount === null ? 'unavailable' : attemptUsage.mutatingWorkspaceOperationCount %></dd></div>
+    <div><dt>Verification</dt><dd><%= attemptUsage.verificationRequired ? 'required · ' + attemptUsage.verificationOutcome : 'not required' %></dd></div>
+    <div><dt>Triage</dt><dd><%= attemptUsage.triageRequired ? 'required' : 'none' %></dd></div>
+  </dl>
+</section>
+<% } %>
+
 <% if (run.executionPolicySnapshot) { %>
 <section class="detail-section">
   <h2>Execution Policy Snapshot</h2>

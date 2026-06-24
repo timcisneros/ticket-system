@@ -4694,6 +4694,81 @@ function buildRunEvaluation(run) {
   };
 }
 
+// Measurement-only attempt/usage summary for a single run. Pure derivation from
+// existing runs/events/evaluation — no new persisted fields, no enforcement, no
+// limits. Unobservable metrics are reported as null (rendered as "unavailable")
+// rather than fabricated. This is evidence for future retry/budget work; it does
+// not change completion, verification, triage, or lifecycle semantics.
+function buildRunAttemptUsage(run, ticketRuns = null) {
+  if (!run) return null;
+
+  // Attempt ordering is creation order; run ids are globally monotonic via
+  // nextId(), so id-ascending within a ticket is a stable attempt sequence.
+  const siblings = (Array.isArray(ticketRuns)
+    ? ticketRuns
+    : readRuns().filter(item => item.ticketId === run.ticketId))
+    .slice()
+    .sort((a, b) => (a.id || 0) - (b.id || 0));
+  const attemptCount = siblings.length;
+  const index = siblings.findIndex(item => item.id === run.id);
+  const attemptNumber = index >= 0 ? index + 1 : null;
+
+  const isTerminal = ['completed', 'failed', 'interrupted'].includes(run.status);
+  // Only trust usage counts once there is terminal evidence (persisted evaluation
+  // or a terminal run). For pending/running runs without evaluation, counts are
+  // not yet observable → null.
+  const evaluation = run.runEvaluation || (isTerminal ? buildRunEvaluation(run) : null);
+  const efficiency = evaluation && evaluation.efficiency ? evaluation.efficiency : null;
+  const num = value => (Number.isFinite(value) ? value : null);
+
+  const startedAt = run.startedAt || null;
+  const completedAt = run.completedAt || null;
+  const durationMs = startedAt && completedAt
+    ? Math.max(0, Date.parse(completedAt) - Date.parse(startedAt))
+    : (efficiency && Number.isFinite(efficiency.durationMs) && efficiency.durationMs > 0 ? efficiency.durationMs : null);
+
+  const verificationRequired = isRunVerificationRequired(run);
+  let verificationOutcome;
+  if (!verificationRequired) {
+    verificationOutcome = 'not_required';
+  } else {
+    const events = getRunEvents(run.id);
+    if (events.some(event => event.type === 'run.verification_passed')) {
+      verificationOutcome = 'passed';
+    } else if (events.some(event => event.type === 'run.verification_failed' || event.type === 'run.postcondition_failed')) {
+      verificationOutcome = 'failed';
+    } else {
+      verificationOutcome = 'pending';
+    }
+  }
+
+  return {
+    attemptNumber,
+    attemptCount,
+    startedAt,
+    completedAt,
+    durationMs,
+    outcome: run.status || null,
+    modelRequestCount: efficiency ? num(efficiency.providerRequests) : null,
+    workspaceOperationCount: efficiency ? num(efficiency.workspaceOperations) : null,
+    mutatingWorkspaceOperationCount: efficiency ? num(efficiency.mutationCount) : null,
+    verificationRequired,
+    verificationOutcome,
+    triageRequired: Boolean(run.triage && run.triage.required)
+  };
+}
+
+// Per-ticket attempt roll-up for the ticket detail view. Derived only.
+function buildTicketAttemptSummary(ticketRuns) {
+  const runs = (Array.isArray(ticketRuns) ? ticketRuns : [])
+    .slice()
+    .sort((a, b) => (a.id || 0) - (b.id || 0));
+  return {
+    attemptCount: runs.length,
+    attempts: runs.map(run => ({ runId: run.id, ...buildRunAttemptUsage(run, runs) }))
+  };
+}
+
 function getWorkspaceOperationNameFromEvidence(evidence) {
   if (!evidence || typeof evidence !== 'object') return null;
   if (typeof evidence.operation === 'string') return evidence.operation;
@@ -5355,6 +5430,7 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     replaySummary,
     authorityEvidence: getRunAuthorityEvidence(run),
     runEvaluation: run.runEvaluation || buildRunEvaluation(run),
+    attemptUsage: buildRunAttemptUsage(run, options.ticketRuns || null),
     runConsequence: run.runConsequence || buildRunConsequence(run),
     currentMessage: getRunCurrentMessage(run, effectiveLogsByRunId, summary),
     stateInconsistency: detectRunStateInconsistency(run, {
@@ -13818,6 +13894,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     runStateInconsistency,
     executionState,
     reviewStatus,
+    attemptSummary: buildTicketAttemptSummary(ticketRuns),
     latestTriage: latestRuntimeRun ? normalizeTriage(latestRuntimeRun.triage) : null,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
@@ -14897,6 +14974,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     partialMutationCount: runPartialMutationCount,
     operationalOutcome,
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
+    attemptUsage: buildRunAttemptUsage(run, readRuns().filter(item => item.ticketId === run.ticketId)),
     runStatusLabel: displayRunStatus(run.status),
     runEvents,
     eventSummary,
