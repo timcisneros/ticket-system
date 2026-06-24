@@ -84,6 +84,34 @@
 </section>
 <% } %>
 
+<% if (run.triage && run.triage.required) { %>
+<section class="detail-section failure-summary">
+  <h2>Triage Required</h2>
+  <dl class="detail-grid">
+    <div><dt>Reason</dt><dd><code><%= run.triage.reasonCode %></code></dd></div>
+    <div><dt>Required decision</dt><dd><code><%= run.triage.requiredDecision %></code></dd></div>
+    <div><dt>Summary</dt><dd><%= run.triage.summary %></dd></div>
+    <div><dt>Created</dt><dd><%= run.triage.createdAt || '-' %></dd></div>
+  </dl>
+  <div class="allocation-item-row">
+    <span class="allocation-item-label">Allowed next actions</span>
+    <span class="allocation-item-value"><%= run.triage.allowedActions.length > 0 ? run.triage.allowedActions.join(', ') : 'none' %></span>
+  </div>
+  <div class="allocation-item-row">
+    <span class="allocation-item-label">Prohibited actions</span>
+    <span class="allocation-item-value"><%= run.triage.prohibitedActions.length > 0 ? run.triage.prohibitedActions.join(', ') : 'none' %></span>
+  </div>
+  <% if (run.triage.evidenceRefs.length > 0) { %>
+    <div class="allocation-item-row">
+      <span class="allocation-item-label">Evidence</span>
+      <span class="allocation-item-value">
+        <% run.triage.evidenceRefs.forEach(ref => { %><code class="owned-path"><%= ref %></code> <% }) %>
+      </span>
+    </div>
+  <% } %>
+</section>
+<% } %>
+
 <% if (run.executionPolicySnapshot) { %>
 <section class="detail-section">
   <h2>Execution Policy Snapshot</h2>

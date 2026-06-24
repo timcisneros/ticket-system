@@ -36,6 +36,8 @@ const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toSt
 const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed'];
+const TRIAGE_REASON_CODES = ['verification_failed', 'authority_blocked', 'runtime_failed', 'provider_failed', 'stopped', 'unknown'];
+const TRIAGE_REQUIRED_DECISIONS = ['review_failure', 'approve_retry', 'change_scope', 'fix_input', 'manual_recovery', 'none'];
 const DEFAULT_EXECUTION_POLICY = Object.freeze({
   mode: 'assisted',
   requireVerification: 'when_declared',
@@ -2569,6 +2571,33 @@ function copyExecutionPolicy(policy, workspaceScope = 'shared') {
   return sanitizeSnapshotValue(normalizeExecutionPolicy(policy, workspaceScope));
 }
 
+function normalizeTriage(triage) {
+  if (!triage || typeof triage !== 'object' || Array.isArray(triage)) return null;
+  const reasonCode = TRIAGE_REASON_CODES.includes(triage.reasonCode) ? triage.reasonCode : 'unknown';
+  const requiredDecision = TRIAGE_REQUIRED_DECISIONS.includes(triage.requiredDecision)
+    ? triage.requiredDecision
+    : 'review_failure';
+  return {
+    required: triage.required !== false,
+    reasonCode,
+    summary: String(triage.summary || '').trim() || 'Run stopped without a structured summary.',
+    requiredDecision,
+    evidenceRefs: Array.isArray(triage.evidenceRefs)
+      ? triage.evidenceRefs.map(item => String(item || '').trim()).filter(Boolean)
+      : [],
+    allowedActions: Array.isArray(triage.allowedActions)
+      ? triage.allowedActions.map(item => String(item || '').trim()).filter(Boolean)
+      : [],
+    prohibitedActions: Array.isArray(triage.prohibitedActions)
+      ? triage.prohibitedActions.map(item => String(item || '').trim()).filter(Boolean)
+      : [],
+    createdAt: typeof triage.createdAt === 'string' && isValidIsoTimestamp(triage.createdAt) ? triage.createdAt : null,
+    resolvedAt: typeof triage.resolvedAt === 'string' && isValidIsoTimestamp(triage.resolvedAt) ? triage.resolvedAt : null,
+    resolvedBy: typeof triage.resolvedBy === 'string' && triage.resolvedBy.trim() ? triage.resolvedBy.trim() : null,
+    resolution: typeof triage.resolution === 'string' && triage.resolution.trim() ? triage.resolution.trim() : null
+  };
+}
+
 function normalizeTickets(tickets) {
   const seenTicketIds = new Set();
 
@@ -4417,6 +4446,7 @@ function normalizeRuns(runs) {
     run.runConsequence = run.runConsequence && typeof run.runConsequence === 'object' && !Array.isArray(run.runConsequence)
       ? sanitizeSnapshotValue(run.runConsequence)
       : null;
+    run.triage = normalizeTriage(run.triage);
     if (run.replaySnapshot && typeof run.replaySnapshot === 'object') {
       const snapshot = sanitizeSnapshotValue(run.replaySnapshot);
       writeReplaySnapshotFile(run.id, snapshot);
@@ -5260,6 +5290,7 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     capabilityId: run.capabilityId || null,
     workflowId: run.workflowId || null,
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
+    triage: normalizeTriage(run.triage),
     lease: serializeRunLease(run),
     leaseOwner: run.leaseOwner || null,
     leaseExpiresAt: run.leaseExpiresAt || null,
@@ -6599,6 +6630,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     mainWorkspaceRoot: run.mainWorkspaceRoot || workspaceProvider.root,
     executionWorkspaceType: run.executionWorkspaceType || 'main',
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
+    triage: normalizeTriage(run.triage),
     allocationPlanId: run.allocationPlanId || null,
     allocationItemId: run.allocationItemId || null,
     allocationItem: getRunAllocationItem(run),
@@ -7139,6 +7171,109 @@ function buildFailureMetadata(error, status, failureReason = null, detail = {}) 
   return null;
 }
 
+function buildRunTriage(run, {
+  error = null,
+  failure = null,
+  status = null,
+  summary = null,
+  reasonCode = null
+} = {}) {
+  const effectiveStatus = status || (run && run.status) || 'failed';
+  const failureCode = (failure && failure.code) || (error && error.code) || null;
+  const failureKind = (failure && failure.kind) || (error && error.failureKind) || null;
+  const message = sanitizeLogMessage(summary || (error && error.message) || (run && run.error) || 'Run stopped without a structured failure reason.');
+  const authorityDenied = run ? getRunEvents(run.id).some(event => event.type === 'authority.denied') : false;
+  let mappedReason = reasonCode;
+
+  if (!mappedReason && effectiveStatus === 'interrupted') mappedReason = 'stopped';
+  if (!mappedReason && (
+    failureKind === 'protected_path' ||
+    ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION', 'WORKSPACE_SENSITIVE_PATH'].includes(failureCode) ||
+    authorityDenied
+  )) mappedReason = 'authority_blocked';
+  if (!mappedReason && (
+    failureKind === 'provider_error' ||
+    /Agent API key is missing|Agent model is missing|Ollama model is missing/i.test(message)
+  )) mappedReason = 'provider_failed';
+  if (!mappedReason && effectiveStatus === 'failed') mappedReason = 'runtime_failed';
+  if (!mappedReason) mappedReason = 'unknown';
+
+  const mutationCount = run ? countRunMutatingOperations(run.id) : 0;
+  const mapping = {
+    verification_failed: {
+      requiredDecision: 'review_failure',
+      evidenceRefs: ['event:run.postcondition_failed', 'event:run.postconditions_checked', 'event:run.verification_failed', 'replay:failure'],
+      allowedActions: ['review', 'rerun_from_start'],
+      prohibitedActions: ['mark_completed_without_verification']
+    },
+    authority_blocked: {
+      requiredDecision: 'change_scope',
+      evidenceRefs: ['event:authority.denied', 'event:run.violation_detected', 'replay:workspaceOperations', 'replay:failure'],
+      allowedActions: ['review', 'rerun_from_start'],
+      prohibitedActions: ['bypass_authority', 'repeat_same_action']
+    },
+    provider_failed: {
+      requiredDecision: 'fix_input',
+      evidenceRefs: ['replay:providerRequests', 'replay:modelResponses', 'event:run.execution_completed', 'replay:failure'],
+      allowedActions: ['review', 'rerun_from_start'],
+      prohibitedActions: ['automatic_retry']
+    },
+    stopped: {
+      requiredDecision: 'approve_retry',
+      evidenceRefs: ['event:run.execution_completed', 'event:run.terminalized', 'replay:failure'],
+      allowedActions: ['review', 'rerun_from_start'],
+      prohibitedActions: ['automatic_resume']
+    },
+    runtime_failed: {
+      requiredDecision: mutationCount > 0 ? 'manual_recovery' : 'review_failure',
+      evidenceRefs: ['event:run.execution_completed', 'event:run.terminalized', 'replay:failure'],
+      allowedActions: mutationCount > 0 ? ['review', 'manual_recovery', 'rerun_from_start'] : ['review', 'rerun_from_start'],
+      prohibitedActions: ['automatic_retry']
+    },
+    unknown: {
+      requiredDecision: 'review_failure',
+      evidenceRefs: ['event:run.execution_completed', 'replay:failure'],
+      allowedActions: ['review'],
+      prohibitedActions: ['automatic_retry']
+    }
+  };
+  const selected = mapping[mappedReason] || mapping.unknown;
+
+  return normalizeTriage({
+    required: true,
+    reasonCode: mappedReason,
+    summary: message,
+    requiredDecision: selected.requiredDecision,
+    evidenceRefs: selected.evidenceRefs,
+    allowedActions: selected.allowedActions,
+    prohibitedActions: selected.prohibitedActions,
+    createdAt: new Date().toISOString(),
+    resolvedAt: null,
+    resolvedBy: null,
+    resolution: null
+  });
+}
+
+function persistRunTriage(runId, triage) {
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+  if (!run) return null;
+  if (run.triage) return run.triage;
+
+  const normalized = normalizeTriage(triage);
+  if (!normalized) return null;
+  run.triage = normalized;
+  writeRuns(runs);
+  updateRunReplaySnapshot(runId, snapshot => snapshot ? { ...snapshot, triage: normalized } : snapshot);
+  appendEvent({
+    type: 'run.triage_created',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: { triage: normalized }
+  });
+  return normalized;
+}
+
 // mutationCount parameter is reserved but never passed by callers; count is always derived.
 function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
   maybeTestInterrupt(run, 'before_run.snapshot_finalized');
@@ -7206,6 +7341,26 @@ function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
   }));
 
   recordReplayEvent(run, 'run:interrupted', reason, phase ? { phase } : {});
+}
+
+function ensureFailedRunReplaySnapshot(run, reason) {
+  const ticket = readTickets().find(item => item.id === run.ticketId) || null;
+  const agent = readAgents().find(item => item.id === run.agentId) || null;
+
+  updateRunReplaySnapshot(run.id, snapshot => snapshot || createReplaySnapshotBase(run, {
+    agentNameSnapshot: run.agentName || (agent ? agent.name : 'Unknown agent'),
+    provider: agent ? (agent.provider || 'openai') : null,
+    model: agent ? (agent.model || null) : null,
+    runtimeEnvelope: null,
+    ticketObjectiveSnapshot: ticket ? ticket.objective : null,
+    systemInstructionSnapshot: null,
+    primitiveContract: {
+      allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
+      mutatingOperations: [...AGENT_MUTATING_OPERATIONS]
+    },
+    note: 'Run failed before execution snapshot capture completed'
+  }));
+  recordReplayEvent(run, 'run:failed', reason);
 }
 
 function runExecutionKey(run) {
@@ -8031,6 +8186,17 @@ function reconcileTerminalRun(run) {
     }
   }
 
+  if ((targetStatus === 'failed' || targetStatus === 'interrupted') && !run.triage) {
+    const triageSummary = verificationFailureReason || terminalPayload.error || run.error || `Run reconciled to ${targetStatus}`;
+    if (targetStatus === 'failed') ensureFailedRunReplaySnapshot(run, triageSummary);
+    run.triage = persistRunTriage(runId, buildRunTriage(run, {
+      failure: verificationFailure || terminalPayload.failure || null,
+      status: targetStatus,
+      summary: triageSummary,
+      reasonCode: verificationFailure ? 'verification_failed' : null
+    }));
+  }
+
   // 2. Finalize replay snapshot if not already done
   let didFinalize = false;
   const snapshotDone = existingTypes.has('replay.snapshot.finalized') || existingTypes.has('run.snapshot_finalized');
@@ -8152,6 +8318,11 @@ function interruptAgentRun(run, reason) {
       completedAt: interruptedRun.completedAt || interruptedRun.updatedAt
     }
   });
+  interruptedRun.triage = persistRunTriage(interruptedRun.id, buildRunTriage(interruptedRun, {
+    failure,
+    status: 'interrupted',
+    summary: reason
+  }));
   finalizeRunReplaySnapshot(interruptedRun, 'interrupted', reason, null, failure);
   completeRunViolationCheck(interruptedRun.id);
   persistRunEvaluation(interruptedRun.id);
@@ -8349,6 +8520,7 @@ function failAgentRun(run, error, workspaceAction = null) {
   };
 
   if (failedRun.status === 'interrupted') return failedRun;
+  ensureFailedRunReplaySnapshot(failedRun, message);
   appendEvent({
     type: 'run.execution_completed',
     ticketId: failedRun.ticketId,
@@ -8361,6 +8533,12 @@ function failAgentRun(run, error, workspaceAction = null) {
       completedAt: failedRun.completedAt || failedRun.updatedAt
     }
   });
+  failedRun.triage = persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
+    error,
+    failure,
+    status: 'failed',
+    summary: message
+  }));
   finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
   appendRunLog(failedRun, 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
     allocationPlanId: failedRun.allocationPlanId || null,
@@ -8410,6 +8588,12 @@ function completeAgentRun(run) {
         failure
       }
     });
+    failedRun.triage = persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
+      failure,
+      status: 'failed',
+      summary: message,
+      reasonCode: 'verification_failed'
+    }));
     finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
     appendRunLog(failedRun, 'run:verification_failed', `${message}${allocationLogSuffix(failedRun)}`, null, {
       allocationPlanId: failedRun.allocationPlanId || null,
@@ -13455,6 +13639,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     runStateInconsistency,
     executionState,
     reviewStatus,
+    latestTriage: latestRuntimeRun ? normalizeTriage(latestRuntimeRun.triage) : null,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
 });

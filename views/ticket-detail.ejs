@@ -159,6 +159,24 @@
 </section>
 <% } %>
 
+<% if (typeof latestTriage !== 'undefined' && latestTriage && latestTriage.required) { %>
+<section class="detail-section failure-summary">
+  <h2>Latest Run Triage</h2>
+  <dl class="detail-grid">
+    <div><dt>Reason</dt><dd><code><%= latestTriage.reasonCode %></code></dd></div>
+    <div><dt>Required decision</dt><dd><code><%= latestTriage.requiredDecision %></code></dd></div>
+    <div><dt>Summary</dt><dd><%= latestTriage.summary %></dd></div>
+    <div><dt>Allowed next actions</dt><dd><%= latestTriage.allowedActions.length > 0 ? latestTriage.allowedActions.join(', ') : 'none' %></dd></div>
+    <div><dt>Prohibited actions</dt><dd><%= latestTriage.prohibitedActions.length > 0 ? latestTriage.prohibitedActions.join(', ') : 'none' %></dd></div>
+  </dl>
+  <% if (latestTriage.evidenceRefs.length > 0) { %>
+    <p class="text-muted">Evidence:
+      <% latestTriage.evidenceRefs.forEach(ref => { %><code class="owned-path"><%= ref %></code> <% }) %>
+    </p>
+  <% } %>
+</section>
+<% } %>
+
 <% if (ticket.executionPolicy) { %>
 <section class="detail-section">
   <h2>Execution Policy</h2>

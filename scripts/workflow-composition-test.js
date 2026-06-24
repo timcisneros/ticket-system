@@ -150,6 +150,30 @@ async function waitForTicketStatus(ticketId, status) {
   throw new Error(`Timed out waiting for ticket #${ticketId} status ${status}`);
 }
 
+async function waitForRunTriage(runId, reasonCode) {
+  const started = Date.now();
+  let lastRun = null;
+
+  while (Date.now() - started < 5000) {
+    const run = readJson('runs.json').find(item => item.id === runId);
+    lastRun = run || lastRun;
+    const snapshotPath = run && run.replaySnapshotPath
+      ? path.join(DATA_DIR, run.replaySnapshotPath)
+      : null;
+    const replaySnapshot = snapshotPath && fs.existsSync(snapshotPath)
+      ? JSON.parse(fs.readFileSync(snapshotPath, 'utf8'))
+      : null;
+    if (run && run.triage && run.triage.reasonCode === reasonCode &&
+        replaySnapshot && replaySnapshot.triage &&
+        replaySnapshot.triage.reasonCode === reasonCode) {
+      return { ...run, replaySnapshot };
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  throw new Error(`Timed out waiting for run #${runId} triage ${reasonCode}: ${JSON.stringify(lastRun)}`);
+}
+
 function seedWorkflowAgent() {
   const agents = readJson('agents.json');
   const now = new Date().toISOString();
@@ -356,6 +380,7 @@ async function main() {
     assert(snapshot.authorityChecks.some(item => item.status === 'allowed' && item.operation === 'writeFile' && item.path === workflowInput.path), 'workflow run should record allowed authority evidence');
     assert(snapshot.workspaceOperations.some(item => item.workflowId === workflowDefinition.id && item.workflowStepId === 'write'), 'workflow workspace action should record workflow provenance');
     assert(JSON.stringify(snapshot.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'replay snapshot should preserve the run execution policy snapshot');
+    assert(snapshot.triage === null, 'successful replay snapshot should not require triage');
     assert(snapshot.providerRequests.length === 0, 'no-model workflow should not create provider requests');
     assert(snapshot.modelResponses.length === 0, 'no-model workflow should not create model responses');
 
@@ -403,6 +428,7 @@ async function main() {
     const runState = JSON.parse(runStateResponse.body);
     assert(runState.id === run.id, 'run state should include run id');
     assert(runState.status === 'completed', 'run state should include current status');
+    assert(runState.triage === null, 'successful completion should not create required triage');
     assert(JSON.stringify(runState.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'run state API should expose the execution policy snapshot');
     assert(runState.lease && runState.lease.leaseOwner === run.leaseOwner, 'run state should include lease fields');
     assert(runState.currentStepId === 'done', 'run state should include current step id');
@@ -1176,6 +1202,9 @@ async function main() {
       'failed'
     );
     assert(overMutationCapRun.error && overMutationCapRun.error.includes('Workflow exceeded mutation limit of 2'), 'third mutating workflow write should be blocked by mutation cap');
+    const overMutationCapTriagedRun = await waitForRunTriage(overMutationCapRun.id, 'runtime_failed');
+    assert(overMutationCapTriagedRun.triage.requiredDecision === 'manual_recovery', 'runtime failure after mutations should require manual recovery review');
+    assert(overMutationCapTriagedRun.replaySnapshot.triage.reasonCode === 'runtime_failed', 'runtime failure replay should include triage');
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-cap-a.txt'), 'utf8') === 'A', 'over mutation cap workflow should execute first write');
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-cap-b.txt'), 'utf8') === 'B', 'over mutation cap workflow should execute second write');
     assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'workflow-output/over-cap-c.txt')), 'over mutation cap workflow should block third write');
@@ -1236,13 +1265,18 @@ async function main() {
         .map(item => item.id || 0)
     );
     const failingPostconditionRun = await waitForRunStatus(failingPostconditionRunId, 'failed');
+    const failingPostconditionTriagedRun = await waitForRunTriage(failingPostconditionRun.id, 'verification_failed');
     assert(failingPostconditionRun.status === 'failed', 'failing postcondition workflow must not be marked completed');
     assert(failingPostconditionRun.error && failingPostconditionRun.error.includes('Verification failed'), 'failing postcondition run should persist a visible verification failure reason');
-    const failingPostconditionStoredTicket = readJson('tickets.json').find(item => item.id === failingPostconditionTicket.id);
+    assert(failingPostconditionTriagedRun.triage.requiredDecision === 'review_failure', 'verification failure should require failure review');
+    assert(failingPostconditionTriagedRun.triage.allowedActions.includes('rerun_from_start'), 'verification triage should list manual rerun from start');
+    assert(failingPostconditionTriagedRun.replaySnapshot.triage.reasonCode === 'verification_failed', 'verification failure replay should include triage');
+    const failingPostconditionStoredTicket = await waitForTicketStatus(failingPostconditionTicket.id, 'failed');
     assert(failingPostconditionStoredTicket.status === 'failed', 'ticket must not be marked completed when required verification fails');
     const failingPostconditionStateResponse = await request('GET', `/api/runs/${failingPostconditionRun.id}/state`, { cookie });
     assert(failingPostconditionStateResponse.statusCode === 200, `failing postcondition run state returned HTTP ${failingPostconditionStateResponse.statusCode}`);
     const failingPostconditionState = JSON.parse(failingPostconditionStateResponse.body);
+    assert(failingPostconditionState.triage && failingPostconditionState.triage.reasonCode === 'verification_failed', 'run state should expose verification triage');
     assert(failingPostconditionState.runEvaluation.effectiveness.status === 'failed', 'failing postcondition should report failed effectiveness');
     assert(failingPostconditionState.runEvaluation.effectiveness.postconditionsPassed === 0, 'failing postcondition should report zero passed postconditions');
     assert(failingPostconditionState.runEvaluation.effectiveness.postconditionsFailed === 1, 'failing postcondition should report one failed postcondition');
@@ -1252,14 +1286,19 @@ async function main() {
     assert(failingPostconditionEventItems.some(event => event.type === 'run.execution_completed'), 'failing postcondition should preserve execution-finished evidence');
     assert(failingPostconditionEventItems.some(event => event.type === 'run.postcondition_failed'), 'failing postcondition should emit run.postcondition_failed');
     assert(failingPostconditionEventItems.some(event => event.type === 'run.verification_failed'), 'failing postcondition should emit run.verification_failed');
+    assert(failingPostconditionEventItems.some(event => event.type === 'run.triage_created'), 'failing postcondition should emit run.triage_created');
     assert(failingPostconditionEventItems.some(event => event.type === 'run.terminalized' && event.payload && event.payload.status === 'failed'), 'failing postcondition should terminalize as failed');
     const failingPostconditionRunPage = await request('GET', `/runs/${failingPostconditionRun.id}`, { cookie });
     assert(failingPostconditionRunPage.statusCode === 200, `failing postcondition run detail returned HTTP ${failingPostconditionRunPage.statusCode}`);
     assert(failingPostconditionRunPage.body.includes('Verification failed'), 'run detail should show the verification failure reason');
     assert(failingPostconditionRunPage.body.includes('<strong>Objective Success:</strong> No · failed'), 'objective success must not report success when verification failed');
+    assert(failingPostconditionRunPage.body.includes('Triage Required') && failingPostconditionRunPage.body.includes('<code>verification_failed</code>'), 'run detail should render verification triage');
     const failingPostconditionTicketPage = await request('GET', `/tickets/${failingPostconditionTicket.id}`, { cookie });
     assert(failingPostconditionTicketPage.statusCode === 200, `failing postcondition ticket detail returned HTTP ${failingPostconditionTicketPage.statusCode}`);
     assert(failingPostconditionTicketPage.body.includes('Verification failed'), 'ticket detail should expose the verification failure reason from the latest run');
+    assert(failingPostconditionTicketPage.body.includes('Latest Run Triage') && failingPostconditionTicketPage.body.includes('<code>verification_failed</code>'), 'ticket detail should render latest-run triage');
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert(readJson('runs.json').filter(item => item.ticketId === failingPostconditionTicket.id).length === 1, 'triage creation must not automatically retry or create another run');
 
     const protectedWorkflowDefinition = {
       id: `workflow-protected-write-${Date.now()}`,
@@ -1302,9 +1341,13 @@ async function main() {
       Math.max(0, ...readJson('runs.json').filter(item => item.ticketId === protectedTicket.id).map(item => item.id || 0)),
       'failed'
     );
+    const protectedTriagedRun = await waitForRunTriage(protectedRun.id, 'authority_blocked');
     const protectedRunStateResponse = await request('GET', `/api/runs/${protectedRun.id}/state`, { cookie });
     assert(protectedRunStateResponse.statusCode === 200, `protected run state API returned HTTP ${protectedRunStateResponse.statusCode}`);
     const protectedRunState = JSON.parse(protectedRunStateResponse.body);
+    assert(protectedRunState.triage && protectedRunState.triage.reasonCode === 'authority_blocked', 'protected path failure should create authority_blocked triage');
+    assert(protectedRunState.triage.requiredDecision === 'change_scope', 'authority triage should require a scope decision');
+    assert(protectedRunState.triage.prohibitedActions.includes('bypass_authority'), 'authority triage should prohibit authority bypass');
     assert(protectedRunState.runEvaluation.violations.status === 'present', 'protected mutation should report present violation status');
     assert(protectedRunState.runEvaluation.violations.items.some(item => item.payload && item.payload.rule === 'protected_path'), 'protected mutation should report protected_path violation item');
     assert(protectedRunState.authorityEvidence.some(item => item.status === 'denied' && item.rule === 'protected_path' && item.operation === 'writeFile' && item.path === 'package.json'), 'protected mutation should expose denied authority evidence');
@@ -1315,6 +1358,7 @@ async function main() {
     const protectedEvents = JSON.parse(protectedEventsResponse.body).events;
     assert(protectedEvents.some(event => event.type === 'authority.denied'), 'protected mutation should emit authority.denied');
     assert(protectedEvents.some(event => event.type === 'run.violation_detected'), 'protected mutation should emit run.violation_detected');
+    assert(protectedTriagedRun.replaySnapshot.triage.reasonCode === 'authority_blocked', 'protected path replay should include authority triage');
 
     const staleRunId = Math.max(0, ...readJson('runs.json').map(item => item.id || 0)) + 1;
     const staleAt = new Date(Date.now() - 60000).toISOString();
