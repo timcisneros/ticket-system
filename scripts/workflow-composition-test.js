@@ -138,6 +138,18 @@ async function waitForRunStatus(runId, status) {
   throw new Error(`Timed out waiting for run #${runId} status ${status}`);
 }
 
+async function waitForTicketStatus(ticketId, status) {
+  const started = Date.now();
+
+  while (Date.now() - started < 5000) {
+    const ticket = readJson('tickets.json').find(item => item.id === ticketId);
+    if (ticket && ticket.status === status) return ticket;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  throw new Error(`Timed out waiting for ticket #${ticketId} status ${status}`);
+}
+
 function seedWorkflowAgent() {
   const agents = readJson('agents.json');
   const now = new Date().toISOString();
@@ -162,6 +174,8 @@ async function createWorkflow(cookie, definition) {
 }
 
 async function main() {
+  const legacyTicketId = (readJson('tickets.json').find(item => !item.executionPolicy && item.assignmentTargetType === 'agent') || {}).id;
+  assert(legacyTicketId, 'test fixture should include an old ticket without executionPolicy before startup normalization');
   const agent = seedWorkflowAgent();
   const child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
@@ -183,6 +197,14 @@ async function main() {
   try {
     await waitForReady();
     const cookie = await login();
+    const legacyTicketsResponse = await request('GET', '/api/tickets?limit=1000', { cookie });
+    assert(legacyTicketsResponse.statusCode === 200, `legacy ticket normalization API returned HTTP ${legacyTicketsResponse.statusCode}`);
+    const normalizedLegacyTicket = JSON.parse(legacyTicketsResponse.body).tickets.find(item => item.id === legacyTicketId);
+    assert(normalizedLegacyTicket && normalizedLegacyTicket.executionPolicy, 'old tickets should normalize with an execution policy');
+    assert(normalizedLegacyTicket.executionPolicy.mode === 'assisted', 'old ticket default policy should use assisted mode');
+    assert(normalizedLegacyTicket.executionPolicy.requireVerification === 'when_declared', 'old ticket default policy should verify when declared');
+    assert(normalizedLegacyTicket.executionPolicy.maxAttempts === 1, 'old ticket default policy should allow one attempt');
+    assert(normalizedLegacyTicket.executionPolicy.workspaceScope === 'shared', 'old individual ticket default policy should record shared workspace scope');
 
     const invalidUnknown = await createWorkflow(cookie, {
       id: 'invalid-unknown-action',
@@ -271,6 +293,18 @@ async function main() {
 
     fs.mkdirSync(path.join(WORKSPACE_ROOT, 'workflow-output'), { recursive: true });
     const workflowInput = { path: 'workflow-output/result.txt', content: 'workflow composition works\n' };
+    const suppliedExecutionPolicy = {
+      mode: 'assisted',
+      requireVerification: 'when_declared',
+      maxAttempts: 3,
+      maxRuntimeMs: 45000,
+      maxModelRequests: 5,
+      maxWorkspaceOperations: 8,
+      allowWorkspaceWrites: true,
+      allowParallelRuns: false,
+      allowChildTickets: false,
+      workspaceScope: 'shared'
+    };
     const ticketResponse = await request('POST', '/tickets', {
       cookie,
       form: {
@@ -280,7 +314,8 @@ async function main() {
         workflowInput: JSON.stringify(workflowInput),
         assignmentTargetType: 'agent',
         assignmentTargetId: String(agent.id),
-        assignmentMode: 'individual'
+        assignmentMode: 'individual',
+        executionPolicy: JSON.stringify(suppliedExecutionPolicy)
       }
     });
     assert(ticketResponse.statusCode === 302, `workflow ticket create returned HTTP ${ticketResponse.statusCode}`);
@@ -291,15 +326,17 @@ async function main() {
     assert(ticket.capabilityType === 'workflow', 'ticket should persist workflow capability type');
     assert(ticket.capabilityId === workflowDefinition.id, 'ticket should persist selected capability id');
     assert(ticket.workflowId === workflowDefinition.id, 'ticket should persist workflow id');
+    assert(JSON.stringify(ticket.executionPolicy) === JSON.stringify(suppliedExecutionPolicy), 'new ticket should persist the supplied normalized execution policy');
 
     const run = await waitForCompletedRun(ticket.id);
     assert(run.status === 'completed', `workflow run should complete, got ${run.status}: ${run.error || ''}`);
-    assert(readJson('tickets.json').find(item => item.id === ticket.id).status === 'completed', 'ticket should complete after required workflow verification passes');
+    assert((await waitForTicketStatus(ticket.id, 'completed')).status === 'completed', 'ticket should complete after required workflow verification passes');
     assert(typeof run.leaseOwner === 'string' && run.leaseOwner.length > 0, 'workflow run should persist lease owner');
     assert(typeof run.leaseExpiresAt === 'string' && run.leaseExpiresAt.length > 0, 'workflow run should persist lease expiration');
     assert(typeof run.lastHeartbeatAt === 'string' && run.lastHeartbeatAt.length > 0, 'workflow run should persist heartbeat time');
     assert(run.currentStepId === 'done', 'workflow run should persist last completed workflow step id');
     assert(run.currentWorkflowAction === 'stop', 'workflow run should persist last completed workflow action');
+    assert(JSON.stringify(run.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'run should copy the ticket execution policy at creation');
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, workflowInput.path), 'utf8') === workflowInput.content, 'workflow writeFile should mutate workspace through runtime');
 
     const snapshotPath = path.join(DATA_DIR, run.replaySnapshotPath);
@@ -318,6 +355,7 @@ async function main() {
     assert(snapshot.workflowActions.some(item => item.action === 'stop'), 'workflow run should record stop workflow action');
     assert(snapshot.authorityChecks.some(item => item.status === 'allowed' && item.operation === 'writeFile' && item.path === workflowInput.path), 'workflow run should record allowed authority evidence');
     assert(snapshot.workspaceOperations.some(item => item.workflowId === workflowDefinition.id && item.workflowStepId === 'write'), 'workflow workspace action should record workflow provenance');
+    assert(JSON.stringify(snapshot.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'replay snapshot should preserve the run execution policy snapshot');
     assert(snapshot.providerRequests.length === 0, 'no-model workflow should not create provider requests');
     assert(snapshot.modelResponses.length === 0, 'no-model workflow should not create model responses');
 
@@ -365,6 +403,7 @@ async function main() {
     const runState = JSON.parse(runStateResponse.body);
     assert(runState.id === run.id, 'run state should include run id');
     assert(runState.status === 'completed', 'run state should include current status');
+    assert(JSON.stringify(runState.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'run state API should expose the execution policy snapshot');
     assert(runState.lease && runState.lease.leaseOwner === run.leaseOwner, 'run state should include lease fields');
     assert(runState.currentStepId === 'done', 'run state should include current step id');
     assert(runState.currentWorkflowAction === 'stop', 'run state should include current workflow action');
@@ -392,6 +431,22 @@ async function main() {
     const verifiedRunPage = await request('GET', `/runs/${run.id}`, { cookie });
     assert(verifiedRunPage.statusCode === 200, `verified run detail returned HTTP ${verifiedRunPage.statusCode}`);
     assert(verifiedRunPage.body.includes('<strong>Objective Success:</strong> Yes'), 'passing required verification should report objective success');
+    assert(verifiedRunPage.body.includes('Execution Policy Snapshot'), 'run detail should show the execution policy snapshot');
+    assert(verifiedRunPage.body.includes('<code>when_declared</code>'), 'run detail should show the snapshot verification mode');
+
+    const ticketsAfterRun = readJson('tickets.json');
+    const changedTicket = ticketsAfterRun.find(item => item.id === ticket.id);
+    changedTicket.executionPolicy = { ...changedTicket.executionPolicy, maxAttempts: 9, maxRuntimeMs: 90000 };
+    writeJson('tickets.json', ticketsAfterRun);
+    const runAfterTicketPolicyChange = readJson('runs.json').find(item => item.id === run.id);
+    const replayAfterTicketPolicyChange = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+    assert(runAfterTicketPolicyChange.executionPolicySnapshot.maxAttempts === 3, 'changing ticket policy must not mutate the run policy snapshot');
+    assert(runAfterTicketPolicyChange.executionPolicySnapshot.maxRuntimeMs === 45000, 'run policy snapshot should retain its original runtime value');
+    assert(replayAfterTicketPolicyChange.executionPolicySnapshot.maxAttempts === 3, 'changing ticket policy must not mutate replay policy evidence');
+    const changedTicketPage = await request('GET', `/tickets/${ticket.id}`, { cookie });
+    assert(changedTicketPage.statusCode === 200, `changed ticket detail returned HTTP ${changedTicketPage.statusCode}`);
+    assert(changedTicketPage.body.includes('Execution Policy'), 'ticket detail should show the current execution policy');
+    assert(changedTicketPage.body.includes('<dt>Max attempts</dt><dd>9</dd>'), 'ticket detail should show the changed current policy independently of the run snapshot');
 
     const storedRun = readJson('runs.json').find(item => item.id === run.id);
     assert(storedRun.runEvaluation.efficiency.workspaceOperations === 1, 'run evaluation should be persisted on run');
@@ -485,6 +540,14 @@ async function main() {
     });
     assert(branchTrueTicketResponse.statusCode === 302, `branch true ticket create returned HTTP ${branchTrueTicketResponse.statusCode}`);
     const branchTrueTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
+    assert(branchTrueTicket.executionPolicy.mode === 'assisted', 'new ticket without supplied policy should persist assisted mode');
+    assert(branchTrueTicket.executionPolicy.requireVerification === 'when_declared', 'new ticket without supplied policy should persist when_declared verification');
+    assert(branchTrueTicket.executionPolicy.maxAttempts === 1, 'new ticket without supplied policy should persist one max attempt');
+    assert(branchTrueTicket.executionPolicy.maxRuntimeMs === null, 'new ticket without supplied policy should preserve runtime default');
+    assert(branchTrueTicket.executionPolicy.allowWorkspaceWrites === true, 'new ticket default policy should allow existing workspace writes');
+    assert(branchTrueTicket.executionPolicy.allowParallelRuns === false, 'new ticket default policy should disallow parallel runs');
+    assert(branchTrueTicket.executionPolicy.allowChildTickets === false, 'new ticket default policy should disallow child tickets');
+    assert(branchTrueTicket.executionPolicy.workspaceScope === 'shared', 'new individual ticket default policy should record shared workspace scope');
     const branchTrueRun = await waitForCompletedRun(branchTrueTicket.id);
     assert(branchTrueRun.status === 'completed', 'branch true path should complete');
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, 'workflow-output/branch-a.txt'), 'utf8') === 'A', 'trueNext path should write branch A file');

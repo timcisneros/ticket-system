@@ -84,6 +84,25 @@
 </section>
 <% } %>
 
+<% if (run.executionPolicySnapshot) { %>
+<section class="detail-section">
+  <h2>Execution Policy Snapshot</h2>
+  <p class="text-muted">Policy copied from the ticket when this run was created.</p>
+  <dl class="detail-grid">
+    <div><dt>Mode</dt><dd><code><%= run.executionPolicySnapshot.mode %></code></dd></div>
+    <div><dt>Verification</dt><dd><code><%= run.executionPolicySnapshot.requireVerification %></code></dd></div>
+    <div><dt>Workspace scope</dt><dd><code><%= run.executionPolicySnapshot.workspaceScope %></code></dd></div>
+    <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'Allowed' : 'Not allowed' %></dd></div>
+    <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'Allowed' : 'Not allowed' %></dd></div>
+    <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'Allowed' : 'Not allowed' %></dd></div>
+    <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts %></dd></div>
+    <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'Runtime default' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %></dd></div>
+    <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'Runtime default' : run.executionPolicySnapshot.maxModelRequests %></dd></div>
+    <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'Runtime default' : run.executionPolicySnapshot.maxWorkspaceOperations %></dd></div>
+  </dl>
+</section>
+<% } %>
+
 <% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable) { %>
 <section class="detail-section">
   <h2>Review status</h2>

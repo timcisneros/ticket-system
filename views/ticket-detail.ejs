@@ -159,6 +159,24 @@
 </section>
 <% } %>
 
+<% if (ticket.executionPolicy) { %>
+<section class="detail-section">
+  <h2>Execution Policy</h2>
+  <dl class="detail-grid">
+    <div><dt>Mode</dt><dd><code><%= ticket.executionPolicy.mode %></code></dd></div>
+    <div><dt>Verification</dt><dd><code><%= ticket.executionPolicy.requireVerification %></code></dd></div>
+    <div><dt>Workspace scope</dt><dd><code><%= ticket.executionPolicy.workspaceScope %></code></dd></div>
+    <div><dt>Workspace writes</dt><dd><%= ticket.executionPolicy.allowWorkspaceWrites ? 'Allowed' : 'Not allowed' %></dd></div>
+    <div><dt>Parallel runs</dt><dd><%= ticket.executionPolicy.allowParallelRuns ? 'Allowed' : 'Not allowed' %></dd></div>
+    <div><dt>Child tickets</dt><dd><%= ticket.executionPolicy.allowChildTickets ? 'Allowed' : 'Not allowed' %></dd></div>
+    <div><dt>Max attempts</dt><dd><%= ticket.executionPolicy.maxAttempts %></dd></div>
+    <div><dt>Max runtime</dt><dd><%= ticket.executionPolicy.maxRuntimeMs === null ? 'Runtime default' : ticket.executionPolicy.maxRuntimeMs + 'ms' %></dd></div>
+    <div><dt>Max model requests</dt><dd><%= ticket.executionPolicy.maxModelRequests === null ? 'Runtime default' : ticket.executionPolicy.maxModelRequests %></dd></div>
+    <div><dt>Max workspace operations</dt><dd><%= ticket.executionPolicy.maxWorkspaceOperations === null ? 'Runtime default' : ticket.executionPolicy.maxWorkspaceOperations %></dd></div>
+  </dl>
+</section>
+<% } %>
+
 <% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable) { %>
 <section class="detail-section">
   <h2>Review status</h2>

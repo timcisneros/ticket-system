@@ -36,6 +36,18 @@ const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toSt
 const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed'];
+const DEFAULT_EXECUTION_POLICY = Object.freeze({
+  mode: 'assisted',
+  requireVerification: 'when_declared',
+  maxAttempts: 1,
+  maxRuntimeMs: null,
+  maxModelRequests: null,
+  maxWorkspaceOperations: null,
+  allowWorkspaceWrites: true,
+  allowParallelRuns: false,
+  allowChildTickets: false,
+  workspaceScope: 'shared'
+});
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, 'workspace-root'));
 
 function isRepoDataDir() {
@@ -1357,7 +1369,7 @@ function readJsonArrayCached(filePath) {
 }
 
 function readTickets() {
-  return readJsonArrayCached(DATA_FILE);
+  return normalizeTickets(readJsonArrayCached(DATA_FILE));
 }
 
 function createDemoWorkflowDefinition(now = new Date().toISOString()) {
@@ -2519,6 +2531,44 @@ async function renderCachedView(request, reply, template, data) {
   return reply.send(html);
 }
 
+function normalizeOptionalPositiveInteger(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function ticketWorkspaceScope(ticket) {
+  return ticket && ticket.assignmentTargetType === 'group' && ['allocated', 'dynamic'].includes(ticket.assignmentMode)
+    ? 'owned_paths'
+    : 'shared';
+}
+
+function runWorkspaceScope(run) {
+  return run && run.executionWorkspaceType === 'main_owned_paths' ? 'owned_paths' : 'shared';
+}
+
+function normalizeExecutionPolicy(policy, workspaceScope = 'shared') {
+  const source = policy && typeof policy === 'object' && !Array.isArray(policy) ? policy : {};
+  return {
+    mode: source.mode === 'manual' ? 'manual' : 'assisted',
+    requireVerification: 'when_declared',
+    maxAttempts: normalizeOptionalPositiveInteger(source.maxAttempts) || DEFAULT_EXECUTION_POLICY.maxAttempts,
+    maxRuntimeMs: normalizeOptionalPositiveInteger(source.maxRuntimeMs),
+    maxModelRequests: normalizeOptionalPositiveInteger(source.maxModelRequests),
+    maxWorkspaceOperations: normalizeOptionalPositiveInteger(source.maxWorkspaceOperations),
+    allowWorkspaceWrites: source.allowWorkspaceWrites === undefined
+      ? DEFAULT_EXECUTION_POLICY.allowWorkspaceWrites
+      : source.allowWorkspaceWrites === true,
+    allowParallelRuns: source.allowParallelRuns === true,
+    allowChildTickets: source.allowChildTickets === true,
+    workspaceScope: workspaceScope === 'owned_paths' ? 'owned_paths' : 'shared'
+  };
+}
+
+function copyExecutionPolicy(policy, workspaceScope = 'shared') {
+  return sanitizeSnapshotValue(normalizeExecutionPolicy(policy, workspaceScope));
+}
+
 function normalizeTickets(tickets) {
   const seenTicketIds = new Set();
 
@@ -2554,6 +2604,7 @@ function normalizeTickets(tickets) {
     ticket.capabilityType = ticket.executionMode === 'workflow' ? 'workflow' : 'directAction';
     ticket.capabilityId = ticket.capabilityType === 'workflow' ? ticket.workflowId : 'agent-selected-actions';
     ticket.capabilityInput = ticket.capabilityType === 'workflow' ? ticket.workflowInput : null;
+    ticket.executionPolicy = normalizeExecutionPolicy(ticket.executionPolicy, ticketWorkspaceScope(ticket));
 
     return true;
   });
@@ -4353,6 +4404,7 @@ function normalizeRuns(runs) {
     run.capabilityType = run.executionMode === 'workflow' ? 'workflow' : 'directAction';
     run.capabilityId = run.capabilityType === 'workflow' ? run.workflowId : 'agent-selected-actions';
     run.capabilityInput = run.capabilityType === 'workflow' ? run.workflowInput : null;
+    run.executionPolicySnapshot = copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run));
     run.leaseOwner = typeof run.leaseOwner === 'string' && run.leaseOwner.trim() ? run.leaseOwner : null;
     run.leaseExpiresAt = typeof run.leaseExpiresAt === 'string' && isValidIsoTimestamp(run.leaseExpiresAt) ? run.leaseExpiresAt : null;
     run.currentStepId = typeof run.currentStepId === 'string' && run.currentStepId.trim() ? run.currentStepId : null;
@@ -5207,6 +5259,7 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     capabilityType: run.capabilityType || null,
     capabilityId: run.capabilityId || null,
     workflowId: run.workflowId || null,
+    executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
     lease: serializeRunLease(run),
     leaseOwner: run.leaseOwner || null,
     leaseExpiresAt: run.leaseExpiresAt || null,
@@ -5627,6 +5680,11 @@ function buildArtifactAccuracy(snapshot, comparison = {}) {
 }
 
 function isRunVerificationRequired(run) {
+  const executionPolicy = copyExecutionPolicy(
+    run && run.executionPolicySnapshot,
+    runWorkspaceScope(run)
+  );
+  if (executionPolicy.requireVerification !== 'when_declared') return false;
   if (!run || run.executionMode !== 'workflow' || !run.workflowId) return false;
   const workflow = getWorkflowById(run.workflowId);
   return Boolean(workflow && Array.isArray(workflow.postconditions) && workflow.postconditions.length > 0);
@@ -6540,6 +6598,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     workspaceRoot: run.workspaceRoot || workspaceProvider.root,
     mainWorkspaceRoot: run.mainWorkspaceRoot || workspaceProvider.root,
     executionWorkspaceType: run.executionWorkspaceType || 'main',
+    executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
     allocationPlanId: run.allocationPlanId || null,
     allocationItemId: run.allocationItemId || null,
     allocationItem: getRunAllocationItem(run),
@@ -6576,6 +6635,7 @@ function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnve
     model: providerConfig.model,
     runtimeEnvelope,
     ticketObjectiveSnapshot: ticket.objective,
+    executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
     systemInstructionSnapshot,
     effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent)
   }));
@@ -8424,6 +8484,10 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     workspaceRoot: workspaceProvider.root,
     mainWorkspaceRoot: workspaceProvider.root,
     executionWorkspaceType: usesOwnedScope ? 'main_owned_paths' : 'main',
+    executionPolicySnapshot: copyExecutionPolicy(
+      ticket.executionPolicy,
+      usesOwnedScope ? 'owned_paths' : 'shared'
+    ),
     allocationPlanId: allocationPlanId || null,
     allocationItemId: allocationItem ? allocationItem.allocationItemId : null,
     allocationSubtask: allocationItem ? allocationItem.allocationSubtask : null,
@@ -8467,6 +8531,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
       capabilityType: run.capabilityType,
       capabilityId: run.capabilityId,
       workflowId: run.workflowId,
+      executionPolicySnapshot: run.executionPolicySnapshot,
       createdAt: run.createdAt
     }
   });
@@ -11082,6 +11147,7 @@ function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket, spaw
     capabilityType: 'workflow',
     capabilityId: planTicket.workflowId,
     capabilityInput: planTicket.workflowInput,
+    executionPolicy: normalizeExecutionPolicy(null, 'shared'),
     parentTicketId: run.ticketId,
     parentRunId: run.id,
     parentWorkflowId: workflow.id,
@@ -13121,7 +13187,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return 'Permission denied';
   }
 
-  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput } = request.body;
+  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy } = request.body;
 
   function renderTicketForm(error) {
     reply.code(400);
@@ -13205,6 +13271,19 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
       return renderTicketForm('Owned output paths must be a mapping of agent ID to path');
     }
   }
+
+  let parsedExecutionPolicy = executionPolicy;
+  if (typeof executionPolicy === 'string' && executionPolicy.trim()) {
+    try {
+      parsedExecutionPolicy = JSON.parse(executionPolicy);
+    } catch (error) {
+      return renderTicketForm('Execution policy must be valid JSON');
+    }
+  }
+  if (parsedExecutionPolicy !== undefined && parsedExecutionPolicy !== null &&
+      (typeof parsedExecutionPolicy !== 'object' || Array.isArray(parsedExecutionPolicy))) {
+    return renderTicketForm('Execution policy must be a JSON object');
+  }
   
   const newTicket = {
     id: nextTicketId,
@@ -13219,6 +13298,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     capabilityType: resolvedCapabilityType,
     capabilityId: selectedWorkflow ? selectedWorkflow.id : 'agent-selected-actions',
     capabilityInput: selectedWorkflow ? parsedWorkflowInput : null,
+    executionPolicy: normalizeExecutionPolicy(parsedExecutionPolicy, resolvedAssignmentMode === 'individual' ? 'shared' : 'owned_paths'),
     status: 'open',
     createdBy: request.user ? request.user.username : String(request.session.userId),
     changedBy: request.user ? request.user.username : String(request.session.userId),
