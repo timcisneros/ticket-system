@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
@@ -9,8 +10,23 @@ const ROOT = path.resolve(__dirname, '..');
 const REAL_DATA_DIR = path.join(ROOT, 'data');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'postcondition-data-'));
 const WORKSPACE_ROOT = createTempWorkspaceRoot('postcondition');
-const PORT = process.env.PORT || '3441';
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+// Resolved to a free ephemeral port in main() (overridable via PORT env) so
+// repeated/concurrent local runs never collide on a fixed port. Assigned before
+// any server is started or request is made.
+let PORT = null;
+let BASE_URL = null;
+
+// Ask the OS for an unused port by binding to 0, then release it for the server.
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
 const STAMP = Date.now();
 const DATA_FILES = ['agents.json', 'allocation-plans.json', 'events.jsonl', 'groups.json', 'logs.json', 'memberships.json', 'operation-history.json', 'permissions.json', 'runs.json', 'tickets.json', 'users.json', 'workflows.json'];
 
@@ -135,10 +151,21 @@ async function waitForReady() {
   throw new Error('Timed out waiting for server ready');
 }
 
-async function waitForExit(child) {
+// Resolve only when the process has actually exited. `child.killed` only means a
+// signal was sent (not that the OS process is gone), so it must NOT short-circuit
+// the wait: doing so let teardown delete the temp data dir while the server still
+// held files open (ENOTEMPTY) and let the next server bind before the port was
+// released (ECONNRESET). Escalate to SIGKILL if graceful shutdown stalls.
+async function waitForExit(child, timeoutMs = 8000) {
   return new Promise(resolve => {
-    if (child.exitCode !== null || child.killed) return resolve();
-    child.once('exit', () => resolve());
+    if (child.exitCode !== null) return resolve();
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch (_) { /* already gone */ }
+    }, timeoutMs);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
   });
 }
 
@@ -651,6 +678,8 @@ async function runScenario(preloadPath, agent, objective, envOverrides, expectat
 }
 
 async function main() {
+  PORT = process.env.PORT || String(await getFreePort());
+  BASE_URL = `http://127.0.0.1:${PORT}`;
   const preloadPath = createFakeOpenAIPreload();
   const agent = seedAgent();
   const mike = seedMikeExecutor();
@@ -1148,9 +1177,27 @@ async function main() {
       invalidWorkflowDraftRejected: true
     }));
   } finally {
-    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    // Servers are killed and awaited per scenario, so nothing should hold these
+    // open here. Retry once anyway to stay idempotent on slow-FS / failure paths.
+    safeRmSync(DATA_DIR, { recursive: true, force: true });
     removeTempWorkspaceRoot(WORKSPACE_ROOT);
-    fs.rmSync(preloadPath, { force: true });
+    safeRmSync(preloadPath, { force: true });
+  }
+}
+
+function safeRmSync(target, options) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.rmSync(target, options);
+      return;
+    } catch (error) {
+      if (attempt === 1) {
+        process.stderr.write(`warning: cleanup of ${target} failed: ${error.message}\n`);
+        return;
+      }
+      const wait = Date.now() + 200;
+      while (Date.now() < wait) { /* brief backoff before retry */ }
+    }
   }
 }
 
