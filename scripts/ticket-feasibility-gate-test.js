@@ -176,9 +176,20 @@ async function main() {
     assert(JSON.stringify(ticket.feasibility.requiredWritableRoots) === JSON.stringify(['Q1/', 'Q2/', 'Q3/', 'Q4/']), 'Required roots were not captured');
     assert(JSON.stringify(ticket.feasibility.grantedWritableRoots) === JSON.stringify(['Q1/', 'Q2/']), 'Granted roots were not captured');
     assert(JSON.stringify(ticket.feasibility.missingAuthorityGrants) === JSON.stringify(['Q3/', 'Q4/']), 'Missing grants were not captured');
+    assert(ticket.triage && ticket.triage.required === true, 'Blocked ticket should persist required ticket-level triage');
+    assert(ticket.triage.reasonCode === 'authority_blocked', 'Missing authority grants should map to authority_blocked triage');
+    assert(ticket.triage.requiredDecision === 'change_scope', 'Missing authority grants should require a scope change');
+    assert(ticket.triage.allowedActions.includes('edit_ticket'), 'Ticket triage should allow editing the ticket');
+    assert(ticket.triage.prohibitedActions.includes('start_run_without_scope_change'), 'Ticket triage should prohibit starting without a scope change');
     assert(readJson('runs.json').filter(r => r.ticketId === ticket.id).length === 0, 'Blocked ticket created agent runs');
     assert(readJson('allocation-plans.json').filter(p => p.ticketId === ticket.id).length === 0, 'Blocked ticket created allocation plan');
     assert(!readJson('logs.json').some(log => log.ticketId === ticket.id && log.type === 'workspace:ownership_blocked'), 'Blocked ticket produced protected_path runtime failures');
+    const ticketPage = await request('GET', `/tickets/${ticket.id}`, { cookie });
+    assert(ticketPage.statusCode === 200, `Ticket detail failed with HTTP ${ticketPage.statusCode}`);
+    assert(ticketPage.body.includes('Ticket-Level Triage'), 'Ticket detail should identify pre-run ticket triage');
+    assert(ticketPage.body.includes('<code>authority_blocked</code>'), 'Ticket detail should show the ticket triage reason');
+    assert(ticketPage.body.includes('<code>change_scope</code>'), 'Ticket detail should show the required decision');
+    assert(!ticketPage.body.includes('Latest Run Triage'), 'Pre-run ticket triage should not be rendered as latest-run triage');
 
     console.log('PASS: ticket feasibility gate blocks missing Q3/Q4 grants before runs');
   } finally {

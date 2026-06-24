@@ -2634,6 +2634,7 @@ function normalizeTickets(tickets) {
     ticket.capabilityId = ticket.capabilityType === 'workflow' ? ticket.workflowId : 'agent-selected-actions';
     ticket.capabilityInput = ticket.capabilityType === 'workflow' ? ticket.workflowInput : null;
     ticket.executionPolicy = normalizeExecutionPolicy(ticket.executionPolicy, ticketWorkspaceScope(ticket));
+    ticket.triage = normalizeTriage(ticket.triage);
 
     return true;
   });
@@ -7814,6 +7815,27 @@ function assertTicketObjectiveWithinGrantedWritableRoots(ticket, agents) {
   return { requiredWritableRoots, grantedWritableRoots, missingAuthorityGrants: [] };
 }
 
+function buildTicketFeasibilityTriage(error, createdAt = new Date().toISOString()) {
+  const authorityBlocked = (
+    error.kind === 'impossible_authority_scope' ||
+    error.code === 'TICKET_FEASIBILITY_MISSING_GRANTS'
+  );
+
+  return normalizeTriage({
+    required: true,
+    reasonCode: authorityBlocked ? 'authority_blocked' : 'unknown',
+    summary: error.message,
+    requiredDecision: authorityBlocked ? 'change_scope' : 'review_failure',
+    evidenceRefs: ['event:ticket.blocked', 'ticket:feasibility', 'log:ticket:feasibility_blocked'],
+    allowedActions: ['review', 'edit_ticket'],
+    prohibitedActions: [authorityBlocked ? 'start_run_without_scope_change' : 'start_run_without_review'],
+    createdAt,
+    resolvedAt: null,
+    resolvedBy: null,
+    resolution: null
+  });
+}
+
 function blockTicketForFeasibility(ticket, error, context = {}) {
   const tickets = readTickets();
   const persistedTicket = tickets.find(item => item.id === ticket.id);
@@ -7831,6 +7853,7 @@ function blockTicketForFeasibility(ticket, error, context = {}) {
     grantedWritableRoots: error.grantedWritableRoots || [],
     missingAuthorityGrants: error.missingAuthorityGrants || []
   };
+  persistedTicket.triage = buildTicketFeasibilityTriage(error, now);
   persistedTicket.updatedAt = now;
   persistedTicket.changedAt = now;
   if (context.changedBy) persistedTicket.changedBy = context.changedBy;
@@ -7843,6 +7866,7 @@ function blockTicketForFeasibility(ticket, error, context = {}) {
       status: persistedTicket.status,
       reason: persistedTicket.blockedReason,
       feasibility: persistedTicket.feasibility,
+      triage: persistedTicket.triage,
       updatedAt: persistedTicket.updatedAt
     }
   });

@@ -381,6 +381,7 @@ async function main() {
     assert(snapshot.workspaceOperations.some(item => item.workflowId === workflowDefinition.id && item.workflowStepId === 'write'), 'workflow workspace action should record workflow provenance');
     assert(JSON.stringify(snapshot.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'replay snapshot should preserve the run execution policy snapshot');
     assert(snapshot.triage === null, 'successful replay snapshot should not require triage');
+    assert(ticket.triage === null, 'successful runnable ticket should not require ticket-level triage');
     assert(snapshot.providerRequests.length === 0, 'no-model workflow should not create provider requests');
     assert(snapshot.modelResponses.length === 0, 'no-model workflow should not create model responses');
 
@@ -1273,6 +1274,7 @@ async function main() {
     assert(failingPostconditionTriagedRun.replaySnapshot.triage.reasonCode === 'verification_failed', 'verification failure replay should include triage');
     const failingPostconditionStoredTicket = await waitForTicketStatus(failingPostconditionTicket.id, 'failed');
     assert(failingPostconditionStoredTicket.status === 'failed', 'ticket must not be marked completed when required verification fails');
+    assert(failingPostconditionStoredTicket.triage === null, 'run-level verification triage must not be duplicated into ticket-level triage');
     const failingPostconditionStateResponse = await request('GET', `/api/runs/${failingPostconditionRun.id}/state`, { cookie });
     assert(failingPostconditionStateResponse.statusCode === 200, `failing postcondition run state returned HTTP ${failingPostconditionStateResponse.statusCode}`);
     const failingPostconditionState = JSON.parse(failingPostconditionStateResponse.body);
@@ -1297,6 +1299,7 @@ async function main() {
     assert(failingPostconditionTicketPage.statusCode === 200, `failing postcondition ticket detail returned HTTP ${failingPostconditionTicketPage.statusCode}`);
     assert(failingPostconditionTicketPage.body.includes('Verification failed'), 'ticket detail should expose the verification failure reason from the latest run');
     assert(failingPostconditionTicketPage.body.includes('Latest Run Triage') && failingPostconditionTicketPage.body.includes('<code>verification_failed</code>'), 'ticket detail should render latest-run triage');
+    assert(!failingPostconditionTicketPage.body.includes('Ticket-Level Triage'), 'run-level triage must not be labeled as ticket-level triage');
     await new Promise(resolve => setTimeout(resolve, 600));
     assert(readJson('runs.json').filter(item => item.ticketId === failingPostconditionTicket.id).length === 1, 'triage creation must not automatically retry or create another run');
 
