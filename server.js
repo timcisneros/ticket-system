@@ -4800,6 +4800,52 @@ function buildRunBudgetStatus(run, usage = null) {
   };
 }
 
+// Advisory-only ticket-level budget rollup across a ticket's runs. Reuses each
+// run's own buildRunBudgetStatus (so every run is compared against its OWN
+// executionPolicySnapshot, never the current mutable ticket policy). Rolls up by
+// priority exceeded > unavailable > within_threshold > not_configured. Visibility
+// only — it never blocks, stops, fails, or reruns anything and is not read by any
+// control flow.
+const BUDGET_ROLLUP_PRIORITY = ['exceeded', 'unavailable', 'within_threshold', 'not_configured'];
+function rollupBudgetStatuses(statuses) {
+  return BUDGET_ROLLUP_PRIORITY.find(status => statuses.includes(status)) || 'not_configured';
+}
+function buildTicketBudgetSummary(ticketRuns) {
+  const runs = Array.isArray(ticketRuns) ? ticketRuns.filter(Boolean) : [];
+  const emptyCounts = { exceeded: 0, unavailable: 0, within_threshold: 0, not_configured: 0 };
+  if (runs.length === 0) {
+    return {
+      advisory: true,
+      runCount: 0,
+      overall: 'no_runs',
+      metrics: { runtimeMs: 'not_configured', modelRequests: 'not_configured', workspaceOperations: 'not_configured' },
+      counts: { ...emptyCounts }
+    };
+  }
+
+  const perRun = runs.map(run => buildRunBudgetStatus(run)).filter(Boolean);
+  const statusesFor = key => perRun.map(budget => budget[key].status);
+  const metrics = {
+    runtimeMs: rollupBudgetStatuses(statusesFor('runtimeMs')),
+    modelRequests: rollupBudgetStatuses(statusesFor('modelRequests')),
+    workspaceOperations: rollupBudgetStatuses(statusesFor('workspaceOperations'))
+  };
+
+  const counts = { ...emptyCounts };
+  perRun.forEach(budget => {
+    const runOverall = rollupBudgetStatuses([budget.runtimeMs.status, budget.modelRequests.status, budget.workspaceOperations.status]);
+    counts[runOverall] += 1;
+  });
+
+  return {
+    advisory: true,
+    runCount: runs.length,
+    overall: rollupBudgetStatuses([metrics.runtimeMs, metrics.modelRequests, metrics.workspaceOperations]),
+    metrics,
+    counts
+  };
+}
+
 function getWorkspaceOperationNameFromEvidence(evidence) {
   if (!evidence || typeof evidence !== 'object') return null;
   if (typeof evidence.operation === 'string') return evidence.operation;
@@ -13954,6 +14000,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     executionState,
     reviewStatus,
     attemptSummary: buildTicketAttemptSummary(ticketRuns),
+    budgetSummary: buildTicketBudgetSummary(ticketRuns),
     latestTriage: latestRuntimeRun ? normalizeTriage(latestRuntimeRun.triage) : null,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));

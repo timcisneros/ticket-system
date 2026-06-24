@@ -519,6 +519,28 @@
 </section>
 <% } %>
 
+<% if (typeof budgetSummary !== 'undefined' && budgetSummary && budgetSummary.runCount > 0) { %>
+<%
+  function budgetRollupLabel(status) {
+    if (status === 'exceeded') return 'exceeded (advisory)';
+    if (status === 'unavailable') return 'unavailable';
+    if (status === 'within_threshold') return 'within limit';
+    return 'not configured';
+  }
+%>
+<section class="detail-section">
+  <h2>Budget Advisory</h2>
+  <p class="text-muted">Advisory only — no execution is blocked. Summarized across this ticket's runs; each run is compared against its own recorded thresholds, not the current ticket policy.</p>
+  <dl class="detail-grid">
+    <div><dt>Overall</dt><dd><%= budgetRollupLabel(budgetSummary.overall) %></dd></div>
+    <div><dt>Runtime</dt><dd><%= budgetRollupLabel(budgetSummary.metrics.runtimeMs) %></dd></div>
+    <div><dt>Model requests</dt><dd><%= budgetRollupLabel(budgetSummary.metrics.modelRequests) %></dd></div>
+    <div><dt>Workspace operations</dt><dd><%= budgetRollupLabel(budgetSummary.metrics.workspaceOperations) %></dd></div>
+  </dl>
+  <p class="text-muted">Runs: <%= budgetSummary.counts.exceeded %> exceeded, <%= budgetSummary.counts.unavailable %> unavailable, <%= budgetSummary.counts.within_threshold %> within, <%= budgetSummary.counts.not_configured %> not configured.</p>
+</section>
+<% } %>
+
 <section class="detail-section">
   <h2>Runs</h2>
   <% if (ticketRuns.length === 0) { %>
