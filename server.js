@@ -14243,6 +14243,73 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
   return { ticket };
 });
 
+// Narrowly-scoped operator control to set/clear ONLY ticket.executionPolicy.maxAttempts
+// (the one field enforced for manual rerun-from-start). Every other policy field is
+// preserved. This edits no runs and creates no runs — it only updates the ticket's
+// recorded ceiling, which the manual rerun guard reads fresh on future rerun attempts.
+// No domain event is appended: executionPolicy is not part of the event-sourced ticket
+// projection (ticket.created payloads omit it and the rebuilder never reconstructs it),
+// so tickets.json is authoritative for policy. We persist + write a system-log audit
+// entry, consistent with how the ticket record already stores policy.
+fastify.post('/api/tickets/:id/execution-policy/max-attempts', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:update')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const ticketId = parseInt(request.params.id, 10);
+  if (Number.isNaN(ticketId)) {
+    reply.code(400);
+    return { error: 'Invalid ticket id' };
+  }
+
+  const raw = request.body ? request.body.maxAttempts : undefined;
+  let nextValue;
+  if (raw === null || raw === '' || (typeof raw === 'string' && raw.trim().toLowerCase() === 'clear')) {
+    nextValue = null; // clear → unlimited
+  } else if (typeof raw === 'number') {
+    if (!Number.isInteger(raw) || raw <= 0) {
+      reply.code(400);
+      return { error: 'maxAttempts must be a positive integer, or empty/clear for unlimited' };
+    }
+    nextValue = raw;
+  } else if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
+    const parsed = parseInt(raw.trim(), 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      reply.code(400);
+      return { error: 'maxAttempts must be a positive integer, or empty/clear for unlimited' };
+    }
+    nextValue = parsed;
+  } else {
+    reply.code(400);
+    return { error: 'maxAttempts must be a positive integer, or empty/clear for unlimited' };
+  }
+
+  const tickets = readTickets();
+  const ticket = tickets.find(item => item.id === ticketId);
+  if (!ticket) {
+    reply.code(404);
+    return { error: 'Ticket not found' };
+  }
+
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  const previousValue = ticket.executionPolicy ? ticket.executionPolicy.maxAttempts : null;
+  // Preserve every other executionPolicy field; change only maxAttempts.
+  ticket.executionPolicy = { ...ticket.executionPolicy, maxAttempts: nextValue };
+  ticket.updatedAt = new Date().toISOString();
+  writeTickets(tickets);
+  broadcastTicketChange();
+  appendSystemLog('ticket:max_attempts_change', `Ticket #${ticketId} maxAttempts changed from ${previousValue === null ? 'unlimited' : previousValue} to ${nextValue === null ? 'unlimited' : nextValue} by ${changedBy}`, null, {
+    ticketId,
+    changedBy,
+    changedAt: ticket.updatedAt,
+    fromMaxAttempts: previousValue,
+    toMaxAttempts: nextValue
+  });
+
+  return { ticket, maxAttempts: nextValue };
+});
+
 // ==================== RECOVERY ROUTES ====================
 
 fastify.get('/api/operations/:id/recovery-preview', { preHandler: fastify.requireAuth }, async (request, reply) => {

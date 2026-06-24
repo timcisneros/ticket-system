@@ -211,6 +211,44 @@
     <div><dt>Max model requests</dt><dd><%= ticket.executionPolicy.maxModelRequests === null ? 'unspecified' : ticket.executionPolicy.maxModelRequests %> · recorded intent, not enforced</dd></div>
     <div><dt>Max workspace operations</dt><dd><%= ticket.executionPolicy.maxWorkspaceOperations === null ? 'unspecified' : ticket.executionPolicy.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
   </dl>
+  <% if (typeof canUpdateTickets !== 'undefined' && canUpdateTickets) { %>
+  <div class="max-attempts-control" data-ticket-id="<%= ticket.id %>">
+    <p class="text-muted">Set the manual rerun-from-start ceiling. Leave blank to clear (unlimited). Measurement/limit applies only to manual reruns — no automatic retry.</p>
+    <input type="number" id="max-attempts-input" min="1" step="1" placeholder="unlimited" value="<%= ticket.executionPolicy.maxAttempts === null ? '' : ticket.executionPolicy.maxAttempts %>">
+    <button type="button" id="max-attempts-set">Set</button>
+    <button type="button" id="max-attempts-clear">Clear (unlimited)</button>
+    <span id="max-attempts-msg" class="text-muted"></span>
+  </div>
+  <script>
+    (function () {
+      var wrap = document.querySelector('.max-attempts-control');
+      if (!wrap) return;
+      var ticketId = wrap.getAttribute('data-ticket-id');
+      var input = document.getElementById('max-attempts-input');
+      var msg = document.getElementById('max-attempts-msg');
+      async function submit(value) {
+        msg.textContent = '';
+        try {
+          var res = await fetch('/api/tickets/' + ticketId + '/execution-policy/max-attempts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ maxAttempts: value })
+          });
+          var payload = await res.json().catch(function () { return null; });
+          if (!res.ok) {
+            msg.textContent = (payload && payload.error) ? payload.error : 'Update rejected.';
+            return;
+          }
+          window.location.reload();
+        } catch (e) {
+          msg.textContent = 'Update failed.';
+        }
+      }
+      document.getElementById('max-attempts-set').addEventListener('click', function () { submit(input.value.trim() === '' ? '' : input.value.trim()); });
+      document.getElementById('max-attempts-clear').addEventListener('click', function () { submit(''); });
+    })();
+  </script>
+  <% } %>
 </section>
 <% } %>
 
