@@ -50,14 +50,16 @@ function readTicketsData() { return JSON.parse(fs.readFileSync(path.join(DATA_DI
 function runsForTicket(id) { return readRunsData().filter(r => r.ticketId === id); }
 
 function ticket(id, status, maxAttempts) {
-  return {
+  const t = {
     id, objective: `Rerun ceiling ticket #${id}`,
     assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual',
     ownedOutputPaths: null, executionMode: 'agent', workflowId: null, workflowInput: null,
     capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
-    executionPolicy: { maxAttempts },
     status, createdBy: 'admin', changedBy: 'admin', changedAt: ISO, createdAt: ISO, updatedAt: ISO
   };
+  // maxAttempts undefined → no executionPolicy at all → normalizes to unlimited (null).
+  if (maxAttempts !== undefined) t.executionPolicy = { maxAttempts };
+  return t;
 }
 function run(id, ticketId, status) {
   return {
@@ -85,17 +87,25 @@ function seed() {
   writeJson('allocation-plans.json', []);
   writeJson('operation-history.json', []);
   writeJson('logs.json', []);
-  // T1: below ceiling (maxAttempts 2, 1 run) → allow.
+  // T1: explicit maxAttempts 2, 1 run → allow once, then block the next.
   // T2: at ceiling (maxAttempts 1, 1 run) → reject.
-  // T3: generous ceiling (maxAttempts 50, 1 run) → allow (non-constraining, behaves as today).
+  // T3: generous ceiling (maxAttempts 50, 1 run) → allow (non-constraining).
   // T4: at ceiling (maxAttempts 1) with a failed run → /retry route also rejects.
+  // T5: default/unset policy (no executionPolicy → null) → unlimited, rerun allowed.
+  // T6: explicit maxAttempts 2 with TWO runs from one cycle → documents that the
+  //     ceiling counts runs, not rerun cycles (rejected at 2 of 2).
   writeJson('tickets.json', [
     ticket(1, 'completed', 2),
     ticket(2, 'completed', 1),
     ticket(3, 'completed', 50),
-    ticket(4, 'failed', 1)
+    ticket(4, 'failed', 1),
+    ticket(5, 'completed'),
+    ticket(6, 'completed', 2)
   ]);
-  writeJson('runs.json', [run(10, 1, 'completed'), run(20, 2, 'completed'), run(30, 3, 'completed'), run(40, 4, 'failed')]);
+  writeJson('runs.json', [
+    run(10, 1, 'completed'), run(20, 2, 'completed'), run(30, 3, 'completed'), run(40, 4, 'failed'),
+    run(50, 5, 'completed'), run(60, 6, 'completed'), run(61, 6, 'completed')
+  ]);
   fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), '');
 }
 
@@ -133,11 +143,34 @@ async function main() {
     await waitForReady();
     const cookie = await login();
 
-    // 1: below ceiling → allowed, one new run created.
+    // 1 + 4 (allow side): below ceiling → allowed, one new run created.
     assert(runsForTicket(1).length === 1, 'precondition: ticket 1 has 1 run');
     const r1 = await rerun(1, cookie);
     assert(r1.statusCode === 200, `below-ceiling rerun should be allowed, got HTTP ${r1.statusCode}: ${reason(r1)}`);
     assert(runsForTicket(1).length === 2, `allowed rerun should create exactly one new run, got ${runsForTicket(1).length}`);
+
+    // 4 (block side): explicit maxAttempts 2 now at 2 runs → next rerun rejected.
+    const r1Again = await rerun(1, cookie);
+    assert(r1Again.statusCode === 409, `rerun at maxAttempts 2 with 2 runs must be rejected, got HTTP ${r1Again.statusCode}`);
+    assert(reason(r1Again).includes('2 of 2 allowed attempts'), `should report 2 of 2, got: ${reason(r1Again)}`);
+    assert(runsForTicket(1).length === 2, 'rejected second rerun must not create a new run');
+
+    // 1 + 2 + 5: default/unset policy (null) → unlimited → manual rerun allowed after first run.
+    assert(runsForTicket(5).length === 1, 'precondition: default-policy ticket has 1 run');
+    const r5 = await rerun(5, cookie);
+    assert(r5.statusCode === 200, `default/unset (unlimited) ticket should allow manual rerun, got HTTP ${r5.statusCode}: ${reason(r5)}`);
+    assert(runsForTicket(5).length === 2, 'default-policy rerun should create a new run');
+    const ticket5Page = await request('GET', '/tickets/5', { cookie });
+    assert(ticket5Page.body.includes('<dt>Max attempts</dt><dd>unlimited · enforced for manual rerun-from-start when set</dd>'),
+      'default/unset maxAttempts should render as unlimited');
+
+    // P1 coverage (owned-scope / multi-run counting): a ticket with 2 runs from one
+    // cycle is already at maxAttempts 2 → the ceiling counts RUNS, not rerun cycles.
+    // Documented as current behavior; counting model is unchanged in this tranche.
+    assert(runsForTicket(6).length === 2, 'precondition: multi-run ticket has 2 runs');
+    const r6 = await rerun(6, cookie);
+    assert(r6.statusCode === 409, `multi-run ticket at 2 runs / maxAttempts 2 must be rejected, got HTTP ${r6.statusCode}`);
+    assert(reason(r6).includes('2 of 2 allowed attempts'), `ceiling should count runs not cycles, got: ${reason(r6)}`);
 
     // 6 (practical): generous ceiling (well above attempt count) behaves as today → allowed.
     const r3 = await rerun(3, cookie);

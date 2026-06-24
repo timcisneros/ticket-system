@@ -41,7 +41,7 @@ const TRIAGE_REQUIRED_DECISIONS = ['review_failure', 'approve_retry', 'change_sc
 const DEFAULT_EXECUTION_POLICY = Object.freeze({
   mode: 'assisted',
   requireVerification: 'when_declared',
-  maxAttempts: 1,
+  maxAttempts: null,
   maxRuntimeMs: null,
   maxModelRequests: null,
   maxWorkspaceOperations: null,
@@ -2554,7 +2554,9 @@ function normalizeExecutionPolicy(policy, workspaceScope = 'shared') {
   return {
     mode: source.mode === 'manual' ? 'manual' : 'assisted',
     requireVerification: 'when_declared',
-    maxAttempts: normalizeOptionalPositiveInteger(source.maxAttempts) || DEFAULT_EXECUTION_POLICY.maxAttempts,
+    // Unset/invalid → null (unlimited). Only an explicit finite positive value is
+    // enforced (for manual rerun-from-start). Mirrors the other max* fields.
+    maxAttempts: normalizeOptionalPositiveInteger(source.maxAttempts),
     maxRuntimeMs: normalizeOptionalPositiveInteger(source.maxRuntimeMs),
     maxModelRequests: normalizeOptionalPositiveInteger(source.maxModelRequests),
     maxWorkspaceOperations: normalizeOptionalPositiveInteger(source.maxWorkspaceOperations),

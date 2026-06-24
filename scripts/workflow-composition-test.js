@@ -227,7 +227,7 @@ async function main() {
     assert(normalizedLegacyTicket && normalizedLegacyTicket.executionPolicy, 'old tickets should normalize with an execution policy');
     assert(normalizedLegacyTicket.executionPolicy.mode === 'assisted', 'old ticket default policy should use assisted mode');
     assert(normalizedLegacyTicket.executionPolicy.requireVerification === 'when_declared', 'old ticket default policy should verify when declared');
-    assert(normalizedLegacyTicket.executionPolicy.maxAttempts === 1, 'old ticket default policy should allow one attempt');
+    assert(normalizedLegacyTicket.executionPolicy.maxAttempts === null, 'old ticket default policy should normalize maxAttempts to unlimited (null)');
     assert(normalizedLegacyTicket.executionPolicy.workspaceScope === 'shared', 'old individual ticket default policy should record shared workspace scope');
 
     const invalidUnknown = await createWorkflow(cookie, {
@@ -588,7 +588,7 @@ async function main() {
     const branchTrueTicket = readJson('tickets.json')[readJson('tickets.json').length - 1];
     assert(branchTrueTicket.executionPolicy.mode === 'assisted', 'new ticket without supplied policy should persist assisted mode');
     assert(branchTrueTicket.executionPolicy.requireVerification === 'when_declared', 'new ticket without supplied policy should persist when_declared verification');
-    assert(branchTrueTicket.executionPolicy.maxAttempts === 1, 'new ticket without supplied policy should persist one max attempt');
+    assert(branchTrueTicket.executionPolicy.maxAttempts === null, 'new ticket without supplied policy should persist unlimited (null) max attempts');
     assert(branchTrueTicket.executionPolicy.maxRuntimeMs === null, 'new ticket without supplied policy should preserve runtime default');
     assert(branchTrueTicket.executionPolicy.allowWorkspaceWrites === true, 'new ticket default policy should allow existing workspace writes');
     assert(branchTrueTicket.executionPolicy.allowParallelRuns === false, 'new ticket default policy should disallow parallel runs');
