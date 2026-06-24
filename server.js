@@ -8575,6 +8575,32 @@ function forceTicketOpenForRerun(ticketId, rerunMode = null) {
   return ticket;
 }
 
+// Manual rerun-from-start safety gate. This is the ONLY place maxAttempts is
+// enforced: when an operator manually reruns a ticket and the ticket has already
+// used >= maxAttempts runs, the manual rerun is rejected. Attempt count is derived
+// from existing runs (no persisted counter, no fabricated attempts). maxAttempts
+// that is null/non-finite preserves today's behavior (allow). This is NOT automatic
+// retry — nothing here schedules, backs off, or retries on failure.
+function validateManualRerun(ticket) {
+  if (!ticket) return { allowed: false, reason: 'Ticket not found' };
+  const policy = ticket.executionPolicy;
+  const maxAttempts = policy && Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0
+    ? policy.maxAttempts
+    : null;
+  if (maxAttempts === null) return { allowed: true, attemptCount: null, maxAttempts: null };
+
+  const attemptCount = readRuns().filter(run => run.ticketId === ticket.id).length;
+  if (attemptCount >= maxAttempts) {
+    return {
+      allowed: false,
+      attemptCount,
+      maxAttempts,
+      reason: `Manual rerun rejected: this ticket has used ${attemptCount} of ${maxAttempts} allowed attempt${maxAttempts === 1 ? '' : 's'} (maxAttempts is enforced for manual rerun-from-start).`
+    };
+  }
+  return { allowed: true, attemptCount, maxAttempts };
+}
+
 function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retry', delegated = null) {
   const ticket = readTickets().find(item => item.id === ticketId);
 
@@ -14183,6 +14209,15 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
   const changedBy = request.user ? request.user.username : 'operator';
   let ticket = null;
 
+  const rerunGateTicket = readTickets().find(item => item.id === ticketId);
+  if (rerunGateTicket) {
+    const rerunCheck = validateManualRerun(rerunGateTicket);
+    if (!rerunCheck.allowed) {
+      reply.code(409);
+      return { error: rerunCheck.reason };
+    }
+  }
+
   try {
     ticket = rerunTicketFromBeginning(ticketId, changedBy, mode, delegatedFromRequest(request, 'manual_rerun'));
   } catch (error) {
@@ -15110,6 +15145,15 @@ fastify.post('/api/runs/:id/retry', { preHandler: fastify.requireAuth }, async (
   if (!['failed', 'interrupted'].includes(run.status)) {
     reply.code(400);
     return { error: 'Only failed or interrupted runs can be retried' };
+  }
+
+  const retryGateTicket = readTickets().find(item => item.id === run.ticketId);
+  if (retryGateTicket) {
+    const rerunCheck = validateManualRerun(retryGateTicket);
+    if (!rerunCheck.allowed) {
+      reply.code(409);
+      return { error: rerunCheck.reason };
+    }
   }
 
   return { ticket: rerunTicketFromBeginning(run.ticketId, request.user ? request.user.username : 'operator', 'retry', delegatedFromRequest(request, 'manual_rerun')) };

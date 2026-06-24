@@ -106,7 +106,9 @@ function seed() {
   // Ticket 10: completed verified workflow run (attempt 1, real metrics) — also reran below.
   // Ticket 11: failed run. Ticket 12: interrupted run.
   writeJson('tickets.json', [
-    ticket(10, 'completed', { executionMode: 'workflow', workflowId: 'wf-v', capabilityType: 'workflow', capabilityId: 'wf-v', workflowInput: {} }),
+    // maxAttempts 2 so the manual rerun below is permitted (1 run + 1 rerun);
+    // maxAttempts is now enforced for manual rerun-from-start.
+    ticket(10, 'completed', { executionMode: 'workflow', workflowId: 'wf-v', capabilityType: 'workflow', capabilityId: 'wf-v', workflowInput: {}, executionPolicy: { maxAttempts: 2 } }),
     ticket(11, 'failed'),
     ticket(12, 'in_progress')
   ]);

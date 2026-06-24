@@ -492,7 +492,7 @@ async function main() {
       body: { status: 'completed' }
     });
     assert(completeVerifiedTicketResponse.statusCode === 200, `verified ticket should allow manual completed transition, got HTTP ${completeVerifiedTicketResponse.statusCode}`);
-    assert(changedTicketPage.body.includes('<dt>Max attempts</dt><dd>9 · recorded intent, not enforced</dd>'), 'ticket detail should show the changed current policy independently of the run snapshot');
+    assert(changedTicketPage.body.includes('<dt>Max attempts</dt><dd>9 · enforced for manual rerun-from-start</dd>'), 'ticket detail should show the changed current policy independently of the run snapshot');
 
     const storedRun = readJson('runs.json').find(item => item.id === run.id);
     assert(storedRun.runEvaluation.efficiency.workspaceOperations === 1, 'run evaluation should be persisted on run');
@@ -992,7 +992,10 @@ async function main() {
         workflowInput: '{}',
         assignmentTargetType: 'agent',
         assignmentTargetId: String(agent.id),
-        assignmentMode: 'individual'
+        assignmentMode: 'individual',
+        // maxAttempts is now enforced for manual rerun-from-start; allow the
+        // parent rerun below (first run + one rerun = 2 attempts).
+        executionPolicy: JSON.stringify({ maxAttempts: 2 })
       }
     });
     assert(ticketPlanTicketResponse.statusCode === 302, `ticket plan ticket create returned HTTP ${ticketPlanTicketResponse.statusCode}`);
