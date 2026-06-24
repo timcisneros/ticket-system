@@ -174,6 +174,26 @@
       <% ticket.triage.evidenceRefs.forEach(ref => { %><code class="owned-path"><%= ref %></code> <% }) %>
     </p>
   <% } %>
+  <% if (typeof canUpdateTickets !== 'undefined' && canUpdateTickets) { %>
+  <form class="triage-resolve" data-resolve-url="/api/tickets/<%= ticket.id %>/triage/resolve">
+    <p class="text-muted">Resolving records an operator acknowledgement only — it does not rerun, complete, or change status.</p>
+    <input type="text" class="triage-resolution-input" placeholder="Resolution note (required)">
+    <button type="button" class="triage-resolve-btn">Resolve triage</button>
+    <span class="triage-resolve-msg text-muted"></span>
+  </form>
+  <% } %>
+</section>
+<% } else if (ticket.triage && ticket.triage.resolvedAt) { %>
+<section class="detail-section">
+  <h2>Ticket-Level Triage (resolved)</h2>
+  <dl class="detail-grid">
+    <div><dt>Reason</dt><dd><code><%= ticket.triage.reasonCode %></code></dd></div>
+    <div><dt>Required decision</dt><dd><code><%= ticket.triage.requiredDecision %></code></dd></div>
+    <div><dt>Summary</dt><dd><%= ticket.triage.summary %></dd></div>
+    <div><dt>Resolved by</dt><dd><%= ticket.triage.resolvedBy || '-' %></dd></div>
+    <div><dt>Resolved at</dt><dd><%= ticket.triage.resolvedAt || '-' %></dd></div>
+    <div><dt>Resolution</dt><dd><%= ticket.triage.resolution || '-' %></dd></div>
+  </dl>
 </section>
 <% } %>
 
@@ -192,8 +212,47 @@
       <% latestTriage.evidenceRefs.forEach(ref => { %><code class="owned-path"><%= ref %></code> <% }) %>
     </p>
   <% } %>
+  <% if (typeof canUpdateTickets !== 'undefined' && canUpdateTickets && typeof latestRuntimeRunId !== 'undefined' && latestRuntimeRunId) { %>
+  <form class="triage-resolve" data-resolve-url="/api/runs/<%= latestRuntimeRunId %>/triage/resolve">
+    <p class="text-muted">Resolving records an operator acknowledgement only — it does not rerun, complete, or change status.</p>
+    <input type="text" class="triage-resolution-input" placeholder="Resolution note (required)">
+    <button type="button" class="triage-resolve-btn">Resolve triage</button>
+    <span class="triage-resolve-msg text-muted"></span>
+  </form>
+  <% } %>
+</section>
+<% } else if (typeof latestTriage !== 'undefined' && latestTriage && latestTriage.resolvedAt) { %>
+<section class="detail-section">
+  <h2>Latest Run Triage (resolved)</h2>
+  <dl class="detail-grid">
+    <div><dt>Reason</dt><dd><code><%= latestTriage.reasonCode %></code></dd></div>
+    <div><dt>Required decision</dt><dd><code><%= latestTriage.requiredDecision %></code></dd></div>
+    <div><dt>Summary</dt><dd><%= latestTriage.summary %></dd></div>
+    <div><dt>Resolved by</dt><dd><%= latestTriage.resolvedBy || '-' %></dd></div>
+    <div><dt>Resolved at</dt><dd><%= latestTriage.resolvedAt || '-' %></dd></div>
+    <div><dt>Resolution</dt><dd><%= latestTriage.resolution || '-' %></dd></div>
+  </dl>
 </section>
 <% } %>
+
+<script>
+  document.querySelectorAll('.triage-resolve').forEach(function (form) {
+    var url = form.getAttribute('data-resolve-url');
+    var input = form.querySelector('.triage-resolution-input');
+    var msg = form.querySelector('.triage-resolve-msg');
+    form.querySelector('.triage-resolve-btn').addEventListener('click', async function () {
+      msg.textContent = '';
+      var value = input.value.trim();
+      if (!value) { msg.textContent = 'Resolution note is required.'; return; }
+      try {
+        var res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolution: value }) });
+        var payload = await res.json().catch(function () { return null; });
+        if (!res.ok) { msg.textContent = (payload && payload.error) ? payload.error : 'Resolve rejected.'; return; }
+        window.location.reload();
+      } catch (e) { msg.textContent = 'Resolve failed.'; }
+    });
+  });
+</script>
 
 <% if (ticket.executionPolicy) { %>
 <section class="detail-section">

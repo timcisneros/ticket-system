@@ -14002,6 +14002,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     attemptSummary: buildTicketAttemptSummary(ticketRuns),
     budgetSummary: buildTicketBudgetSummary(ticketRuns),
     latestTriage: latestRuntimeRun ? normalizeTriage(latestRuntimeRun.triage) : null,
+    latestRuntimeRunId: latestRuntimeRun ? latestRuntimeRun.id : null,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
 });
@@ -14386,6 +14387,120 @@ fastify.post('/api/tickets/:id/execution-policy/max-attempts', { preHandler: fas
   });
 
   return { ticket, maxAttempts: nextValue };
+});
+
+// Human triage resolution: an operator annotation that marks an existing REQUIRED
+// triage record as resolved/acknowledged. This NEVER reruns, completes, fails,
+// retries, or modifies workspace/run state — it only flips triage.required to false
+// and records who/when/why. Original reasonCode/summary/requiredDecision/
+// evidenceRefs/allowed/prohibited actions are preserved. No allowedAction is
+// performed. Replay/execution evidence is untouched (this is a triage annotation,
+// not a change to the run record's execution snapshot).
+function resolveTriageRecord(triage, resolvedBy, resolution) {
+  return {
+    ...triage,
+    required: false,
+    resolvedAt: new Date().toISOString(),
+    resolvedBy,
+    resolution
+  };
+}
+function readTriageResolutionInput(request) {
+  const raw = request.body ? request.body.resolution : undefined;
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return { error: 'A non-empty resolution note is required' };
+  }
+  return { resolution: raw.trim() };
+}
+
+fastify.post('/api/tickets/:id/triage/resolve', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:update')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const ticketId = parseInt(request.params.id, 10);
+  if (Number.isNaN(ticketId)) {
+    reply.code(400);
+    return { error: 'Invalid ticket id' };
+  }
+
+  const parsed = readTriageResolutionInput(request);
+  if (parsed.error) {
+    reply.code(400);
+    return { error: parsed.error };
+  }
+
+  const tickets = readTickets();
+  const ticket = tickets.find(item => item.id === ticketId);
+  if (!ticket) {
+    reply.code(404);
+    return { error: 'Ticket not found' };
+  }
+  if (!ticket.triage || ticket.triage.required !== true) {
+    reply.code(409);
+    return { error: 'No required ticket-level triage to resolve' };
+  }
+
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  ticket.triage = resolveTriageRecord(ticket.triage, changedBy, parsed.resolution);
+  ticket.updatedAt = new Date().toISOString();
+  writeTickets(tickets);
+  broadcastTicketChange();
+  appendSystemLog('ticket:triage_resolve', `Ticket #${ticketId} ticket-level triage resolved by ${changedBy}`, null, {
+    ticketId,
+    changedBy,
+    changedAt: ticket.updatedAt,
+    reasonCode: ticket.triage.reasonCode,
+    resolution: parsed.resolution
+  });
+
+  return { ticket, triage: ticket.triage };
+});
+
+fastify.post('/api/runs/:id/triage/resolve', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:update')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const runId = parseInt(request.params.id, 10);
+  if (Number.isNaN(runId)) {
+    reply.code(400);
+    return { error: 'Invalid run id' };
+  }
+
+  const parsed = readTriageResolutionInput(request);
+  if (parsed.error) {
+    reply.code(400);
+    return { error: parsed.error };
+  }
+
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+  if (!run) {
+    reply.code(404);
+    return { error: 'Run not found' };
+  }
+  if (!run.triage || run.triage.required !== true) {
+    reply.code(409);
+    return { error: 'No required run-level triage to resolve' };
+  }
+
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  run.triage = resolveTriageRecord(run.triage, changedBy, parsed.resolution);
+  run.updatedAt = new Date().toISOString();
+  writeRuns(runs);
+  appendSystemLog('run:triage_resolve', `Run #${runId} triage resolved by ${changedBy}`, null, {
+    runId,
+    ticketId: run.ticketId,
+    changedBy,
+    changedAt: run.updatedAt,
+    reasonCode: run.triage.reasonCode,
+    resolution: parsed.resolution
+  });
+
+  return { run: { id: run.id, ticketId: run.ticketId, status: run.status, triage: run.triage }, triage: run.triage };
 });
 
 // ==================== RECOVERY ROUTES ====================

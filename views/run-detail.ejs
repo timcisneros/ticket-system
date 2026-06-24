@@ -109,8 +109,47 @@
       </span>
     </div>
   <% } %>
+  <% if (typeof canUpdateRuns !== 'undefined' && canUpdateRuns) { %>
+  <form class="triage-resolve" data-resolve-url="/api/runs/<%= run.id %>/triage/resolve">
+    <p class="text-muted">Resolving records an operator acknowledgement only — it does not rerun, complete, or change status.</p>
+    <input type="text" class="triage-resolution-input" placeholder="Resolution note (required)">
+    <button type="button" class="triage-resolve-btn">Resolve triage</button>
+    <span class="triage-resolve-msg text-muted"></span>
+  </form>
+  <% } %>
+</section>
+<% } else if (run.triage && run.triage.resolvedAt) { %>
+<section class="detail-section">
+  <h2>Triage (resolved)</h2>
+  <dl class="detail-grid">
+    <div><dt>Reason</dt><dd><code><%= run.triage.reasonCode %></code></dd></div>
+    <div><dt>Required decision</dt><dd><code><%= run.triage.requiredDecision %></code></dd></div>
+    <div><dt>Summary</dt><dd><%= run.triage.summary %></dd></div>
+    <div><dt>Resolved by</dt><dd><%= run.triage.resolvedBy || '-' %></dd></div>
+    <div><dt>Resolved at</dt><dd><%= run.triage.resolvedAt || '-' %></dd></div>
+    <div><dt>Resolution</dt><dd><%= run.triage.resolution || '-' %></dd></div>
+  </dl>
 </section>
 <% } %>
+
+<script>
+  document.querySelectorAll('.triage-resolve').forEach(function (form) {
+    var url = form.getAttribute('data-resolve-url');
+    var input = form.querySelector('.triage-resolution-input');
+    var msg = form.querySelector('.triage-resolve-msg');
+    form.querySelector('.triage-resolve-btn').addEventListener('click', async function () {
+      msg.textContent = '';
+      var value = input.value.trim();
+      if (!value) { msg.textContent = 'Resolution note is required.'; return; }
+      try {
+        var res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolution: value }) });
+        var payload = await res.json().catch(function () { return null; });
+        if (!res.ok) { msg.textContent = (payload && payload.error) ? payload.error : 'Resolve rejected.'; return; }
+        window.location.reload();
+      } catch (e) { msg.textContent = 'Resolve failed.'; }
+    });
+  });
+</script>
 
 <% if (typeof attemptUsage !== 'undefined' && attemptUsage) { %>
 <section class="detail-section">
