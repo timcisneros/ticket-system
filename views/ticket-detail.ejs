@@ -9,12 +9,17 @@
   <div class="actions">
     <a class="btn-secondary" href="/tickets">Back to Tickets</a>
     <a class="btn-secondary" href="/logs?ticketId=<%= ticket.id %>">Ticket Logs</a>
-    <% if (canUpdateTickets && ticket.status !== 'open') { %>
+    <%
+      const hasUnresolvedTriage = ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt;
+    %>
+    <% if (canUpdateTickets && !hasUnresolvedTriage && ticket.status !== 'open') { %>
       <button type="button" class="btn-secondary" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %></button>
     <% } %>
   </div>
 </div>
-<% if (canUpdateTickets && ticket.status !== 'open') { %>
+<% if (canUpdateTickets && hasUnresolvedTriage) { %>
+  <p class="form-hint">Rerun disabled: unresolved ticket-level triage must be resolved or the ticket objective must be changed first.</p>
+<% } else if (canUpdateTickets && ticket.status !== 'open') { %>
   <%
     const isGroupTicket = typeof executionState !== 'undefined' && executionState && executionState.isGroup;
     const rerunWord = ticket.status === 'failed' ? 'Retry' : 'Rerun';

@@ -8673,11 +8673,19 @@ function interruptAgentRun(run, reason) {
   return interruptedRun;
 }
 
+function hasUnresolvedTicketTriage(ticket) {
+  return !!(ticket && ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt);
+}
+
 function forceTicketOpenForRerun(ticketId, rerunMode = null) {
   const tickets = readTickets();
   const ticket = tickets.find(item => item.id === ticketId);
 
   if (!ticket) return null;
+
+  if (hasUnresolvedTicketTriage(ticket)) {
+    throw Object.assign(new Error('Cannot rerun: unresolved ticket-level triage exists on this ticket. Resolve triage first.'), { statusCode: 409 });
+  }
 
   ticket.status = 'open';
   ticket.updatedAt = new Date().toISOString();
@@ -9135,6 +9143,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
 
 function createRunsForTicket(ticket, delegated = null) {
   if (!ticket || ticket.status !== 'open') return [];
+  if (hasUnresolvedTicketTriage(ticket)) return [];
 
   // Direct-action tickets: check objective clarity before creating any run.
   if (ticket.executionMode !== 'workflow') {
@@ -14346,6 +14355,10 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
 
   const rerunGateTicket = readTickets().find(item => item.id === ticketId);
   if (rerunGateTicket) {
+    if (hasUnresolvedTicketTriage(rerunGateTicket)) {
+      reply.code(409);
+      return { error: 'Cannot rerun: unresolved ticket-level triage exists on this ticket. Resolve triage first.' };
+    }
     const rerunCheck = validateManualRerun(rerunGateTicket);
     if (!rerunCheck.allowed) {
       reply.code(409);
@@ -14356,15 +14369,18 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
   try {
     ticket = rerunTicketFromBeginning(ticketId, changedBy, mode, delegatedFromRequest(request, 'manual_rerun'));
   } catch (error) {
-    appendSystemLog('allocation:setup_failed', error.message, null, {
-      code: error.code || 'VALIDATION_ERROR',
-      path: error.path || null,
-      assignedAgentId: error.assignedAgentId || null,
-      ticketId,
-      changedBy,
-      changedAt: new Date().toISOString()
-    });
-    reply.code(400);
+    const statusCode = error.statusCode || 400;
+    if (statusCode !== 409) {
+      appendSystemLog('allocation:setup_failed', error.message, null, {
+        code: error.code || 'VALIDATION_ERROR',
+        path: error.path || null,
+        assignedAgentId: error.assignedAgentId || null,
+        ticketId,
+        changedBy,
+        changedAt: new Date().toISOString()
+      });
+    }
+    reply.code(statusCode);
     return { error: error.message || 'Ticket rerun rejected' };
   }
 
@@ -15515,6 +15531,10 @@ fastify.post('/api/runs/:id/retry', { preHandler: fastify.requireAuth }, async (
 
   const retryGateTicket = readTickets().find(item => item.id === run.ticketId);
   if (retryGateTicket) {
+    if (hasUnresolvedTicketTriage(retryGateTicket)) {
+      reply.code(409);
+      return { error: 'Cannot retry: unresolved ticket-level triage exists on the parent ticket. Resolve triage first.' };
+    }
     const rerunCheck = validateManualRerun(retryGateTicket);
     if (!rerunCheck.allowed) {
       reply.code(409);
