@@ -5,6 +5,7 @@ const argon2 = require('argon2');
 const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
+const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
 const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 require('dotenv').config()
@@ -32,6 +33,9 @@ const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
 const WORKFLOWS_FILE = path.join(DATA_DIR, 'workflows.json');
 const PROCESS_TEMPLATES_FILE = path.join(DATA_DIR, 'process-templates.json');
 const PROCESS_TEMPLATE_TRIGGERS_FILE = path.join(DATA_DIR, 'process-template-triggers.json');
+// Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
+// separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
+const MIN_SCHEDULE_EVERY_SECONDS = 60;
 const REPLAY_SNAPSHOTS_DIR = path.join(DATA_DIR, 'replay-snapshots');
 const PROTECTED_PATHS_FILE = path.join(__dirname, 'config', 'protected-paths.json');
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
@@ -2734,6 +2738,162 @@ function findProcessTemplateTrigger(templateId, triggerToken) {
   if (!triggerToken) return null;
   return readProcessTemplateTriggers().find(entry =>
     entry && entry.templateId === templateId && entry.triggerToken === triggerToken) || null;
+}
+
+// Second idempotency source: an already-created ticket carrying this trigger token in
+// its provenance. Closes the crash window where the ticket was created but the
+// append-only trigger log write did not complete.
+function findTicketByProcessTemplateToken(triggerToken) {
+  if (!triggerToken) return null;
+  return readTickets().find(ticket =>
+    ticket && ticket.source && ticket.source.type === 'process_template' &&
+    ticket.source.triggerToken === triggerToken) || null;
+}
+
+// Pure forward interval arithmetic (UTC). Returns null for an invalid schedule.
+function computeNextRunAt(schedule, fromIso) {
+  const everySeconds = schedule && Number.isInteger(schedule.everySeconds) ? schedule.everySeconds : null;
+  if (!everySeconds || everySeconds <= 0) return null;
+  const fromMs = Date.parse(fromIso);
+  if (Number.isNaN(fromMs)) return null;
+  return new Date(fromMs + everySeconds * 1000).toISOString();
+}
+
+// Advance an interval schedule's cursor FORWARD FROM `fromIso` (never by replaying
+// missed slots). Used on a deduped scheduled re-entry so a stale nextRunAt (e.g. a
+// crash that lost the post-create cursor update) cannot re-process the same past slot
+// forever — the slot is already in the authoritative trigger log, so we just move on.
+function advanceScheduleCursorForward(templateId, fromIso) {
+  const templates = readProcessTemplates();
+  const t = templates.find(item => item.id === templateId);
+  if (!t || !t.schedule || t.schedule.kind !== 'interval' || t.schedule.enabled !== true) return;
+  t.schedule.nextRunAt = computeNextRunAt(t.schedule, fromIso);
+  t.updatedAt = fromIso;
+  writeProcessTemplates(templates);
+}
+
+// Shared process-template trigger used by BOTH the manual route and the scheduled
+// scanner. It enforces idempotency (append-only trigger log AND existing
+// ticket.source.triggerToken), creates the ticket ONLY through createTicketFromInput
+// (→ createRunsForTicket, inheriting every gate), appends the trigger log, writes a
+// compact system log, and advances the template cursor. It never creates runs,
+// calls createAgentRun, or mutates the workspace directly.
+//
+// triggerContext: { triggerType: 'manual'|'schedule', triggerToken, scheduledFor? }
+//   actor: { userId, username }  (a manual live user, or { userId: null, username: 'system' })
+function triggerProcessTemplate(template, actor, triggerContext) {
+  const triggerToken = triggerContext.triggerToken;
+  const triggerType = triggerContext.triggerType;
+  const isScheduled = triggerType === 'schedule';
+
+  // Idempotency: authoritative trigger log first, then existing tickets by source
+  // token (the crash-window backstop). A deduped scheduled re-entry still advances
+  // the cursor so the template moves past the already-handled slot.
+  const existingTrigger = findProcessTemplateTrigger(template.id, triggerToken);
+  const existingTicket = existingTrigger ? null : findTicketByProcessTemplateToken(triggerToken);
+  if (existingTrigger || existingTicket) {
+    if (isScheduled) advanceScheduleCursorForward(template.id, new Date().toISOString());
+    return {
+      ok: true,
+      deduped: true,
+      ticketId: existingTrigger ? existingTrigger.ticketId : existingTicket.id,
+      templateId: template.id,
+      triggerToken
+    };
+  }
+
+  const triggeredBy = isScheduled
+    ? 'system'
+    : (actor && actor.username ? actor.username : (actor && actor.userId != null ? String(actor.userId) : 'system'));
+  const now = new Date().toISOString();
+  const tt = template.ticketTemplate || {};
+  const source = {
+    type: 'process_template',
+    templateId: template.id,
+    templateName: template.name,
+    triggeredBy,
+    triggerType,
+    triggerRunId: null,
+    triggerToken,
+    createdAt: now
+  };
+  if (triggerContext.scheduledFor) source.scheduledFor = triggerContext.scheduledFor;
+
+  const result = createTicketFromInput({
+    objective: tt.objective,
+    assignmentTargetType: tt.assignmentTargetType,
+    assignmentTargetId: tt.assignmentTargetId,
+    assignmentMode: tt.assignmentMode,
+    capabilityType: tt.capabilityType,
+    executionMode: tt.capabilityType === 'workflow' ? 'workflow' : 'agent',
+    workflowId: tt.workflowId,
+    workflowInput: tt.workflowInput,
+    ownedOutputPaths: tt.ownedOutputPaths,
+    executionPolicy: tt.executionPolicy
+  }, { userId: actor ? actor.userId : null, username: triggeredBy }, {
+    source,
+    delegated: {
+      userId: actor ? actor.userId : null,
+      username: triggeredBy,
+      source: isScheduled ? 'process_template_schedule' : 'process_template_trigger'
+    }
+  });
+
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  const generatedTicket = result.ticket;
+
+  // Append-only trigger log: idempotency ledger + provenance snapshot.
+  const logEntry = {
+    triggerToken,
+    templateId: template.id,
+    templateName: template.name,
+    ticketId: generatedTicket.id,
+    triggeredBy,
+    triggerType,
+    createdAt: now,
+    ticketTemplateSnapshot: tt,
+    executionPolicyUsed: generatedTicket.executionPolicy
+  };
+  if (triggerContext.scheduledFor) logEntry.scheduledFor = triggerContext.scheduledFor;
+  if (template.createdBy) logEntry.templateCreatedBy = template.createdBy;
+  if (template.schedule && template.schedule.scheduledBy) logEntry.scheduledBy = template.schedule.scheduledBy;
+  appendProcessTemplateTrigger(logEntry);
+
+  // Advance the template cursor. Manual: lastTriggeredAt. Scheduled: also move
+  // nextRunAt FORWARD FROM NOW (no replay of missed slots) + record last trigger.
+  const templates = readProcessTemplates();
+  const persisted = templates.find(item => item.id === template.id);
+  if (persisted) {
+    persisted.lastTriggeredAt = now;
+    persisted.updatedAt = now;
+    if (isScheduled && persisted.schedule && persisted.schedule.kind === 'interval' && persisted.schedule.enabled === true) {
+      persisted.schedule.lastScheduledTriggerAt = now;
+      persisted.schedule.nextRunAt = computeNextRunAt(persisted.schedule, now);
+    }
+    writeProcessTemplates(templates);
+  }
+
+  appendSystemLog('process_template:triggered', `Process template "${template.name}" created ticket #${generatedTicket.id}`, null, {
+    contextTicketId: generatedTicket.id,
+    templateId: template.id,
+    templateName: template.name,
+    triggeredBy,
+    triggerType,
+    triggerToken
+  });
+
+  return {
+    ok: true,
+    deduped: false,
+    ticketId: generatedTicket.id,
+    ticket: generatedTicket,
+    templateId: template.id,
+    triggerToken,
+    source
+  };
 }
 
 function normalizeWorkflowPolicy(policy) {
@@ -14298,50 +14458,12 @@ fastify.post('/api/process-templates/:id/trigger', { preHandler: fastify.require
     ? body.triggerToken.trim()
     : crypto.randomUUID();
 
-  // Idempotency: a repeated token for this template returns the existing generated
-  // ticket instead of creating a duplicate. The handler runs synchronously from this
-  // check through the trigger-log append (no awaits), so sequential double-submits
-  // cannot interleave.
-  const existingTrigger = findProcessTemplateTrigger(template.id, triggerToken);
-  if (existingTrigger) {
-    return {
-      ok: true,
-      deduped: true,
-      ticketId: existingTrigger.ticketId,
-      templateId: template.id,
-      triggerToken
-    };
-  }
-
-  const actor = actorFromRequest(request);
-  const triggeredBy = actor.username || (actor.userId != null ? String(actor.userId) : 'system');
-  const now = new Date().toISOString();
-  const tt = template.ticketTemplate || {};
-  const source = {
-    type: 'process_template',
-    templateId: template.id,
-    templateName: template.name,
-    triggeredBy,
+  // Manual trigger delegates to the shared helper (same logic the scheduler uses).
+  // The helper runs synchronously through the trigger-log append (no awaits), so
+  // sequential double-submits cannot interleave; a repeated token dedupes.
+  const result = triggerProcessTemplate(template, actorFromRequest(request), {
     triggerType: 'manual',
-    triggerRunId: null,
-    triggerToken,
-    createdAt: now
-  };
-
-  const result = createTicketFromInput({
-    objective: tt.objective,
-    assignmentTargetType: tt.assignmentTargetType,
-    assignmentTargetId: tt.assignmentTargetId,
-    assignmentMode: tt.assignmentMode,
-    capabilityType: tt.capabilityType,
-    executionMode: tt.capabilityType === 'workflow' ? 'workflow' : 'agent',
-    workflowId: tt.workflowId,
-    workflowInput: tt.workflowInput,
-    ownedOutputPaths: tt.ownedOutputPaths,
-    executionPolicy: tt.executionPolicy
-  }, actor, {
-    source,
-    delegated: { userId: actor.userId, username: triggeredBy, source: 'process_template_trigger' }
+    triggerToken
   });
 
   if (!result.ok) {
@@ -14349,47 +14471,104 @@ fastify.post('/api/process-templates/:id/trigger', { preHandler: fastify.require
     return { error: result.error };
   }
 
-  const generatedTicket = result.ticket;
-
-  // Append-only trigger log: idempotency ledger + provenance snapshot.
-  appendProcessTemplateTrigger({
-    triggerToken,
-    templateId: template.id,
-    templateName: template.name,
-    ticketId: generatedTicket.id,
-    triggeredBy,
-    triggerType: 'manual',
-    createdAt: now,
-    ticketTemplateSnapshot: tt,
-    executionPolicyUsed: generatedTicket.executionPolicy
-  });
-
-  // Record lastTriggeredAt for audit convenience (NOT a scheduler cursor).
-  const templates = readProcessTemplates();
-  const persisted = templates.find(item => item.id === template.id);
-  if (persisted) {
-    persisted.lastTriggeredAt = now;
-    persisted.updatedAt = now;
-    writeProcessTemplates(templates);
-  }
-
-  appendSystemLog('process_template:triggered', `Process template "${template.name}" created ticket #${generatedTicket.id}`, null, {
-    contextTicketId: generatedTicket.id,
-    templateId: template.id,
-    templateName: template.name,
-    triggeredBy,
-    triggerType: 'manual',
-    triggerToken
-  });
-
   return {
     ok: true,
-    deduped: false,
-    ticketId: generatedTicket.id,
+    deduped: result.deduped,
+    ticketId: result.ticketId,
     templateId: template.id,
     triggerToken,
-    source
+    ...(result.source ? { source: result.source } : {})
   };
+});
+
+// Set or clear an interval schedule for a template (the only schedule mode in v1).
+// Management requires processTemplate:manage; ENABLING additionally requires
+// ticket:create (the schedule will create ordinary tickets as a system actor, so the
+// operator setting it must themselves be allowed to create tickets). No cron/RRULE/
+// natural-language/daily/timezone parsing — interval seconds in UTC only.
+fastify.post('/api/process-templates/:id/schedule', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const template = getProcessTemplateById(request.params.id);
+  if (!template) {
+    reply.code(404);
+    return { error: 'Process template not found' };
+  }
+
+  const body = request.body || {};
+  const now = new Date().toISOString();
+  const templates = readProcessTemplates();
+  const persisted = templates.find(item => item.id === template.id);
+  if (!persisted) {
+    reply.code(404);
+    return { error: 'Process template not found' };
+  }
+
+  const wantEnabled = !(body.enabled === false || body.enabled === 'false');
+
+  if (!wantEnabled) {
+    // Disable: stop future scheduled triggers, keep prior trigger history intact.
+    persisted.schedule = (persisted.schedule && persisted.schedule.kind === 'interval')
+      ? { ...persisted.schedule, enabled: false, nextRunAt: null }
+      : null;
+    persisted.updatedAt = now;
+    writeProcessTemplates(templates);
+    appendSystemLog('process_template:schedule_disabled', `Process template "${persisted.name}" schedule disabled`, null, {
+      templateId: persisted.id, templateName: persisted.name, changedBy: actorFromRequest(request).username || 'system'
+    });
+    return { ok: true, schedule: persisted.schedule };
+  }
+
+  // Enabling additionally requires ticket:create.
+  if (!hasPermission(request.session.userId, 'ticket:create')) {
+    reply.code(403);
+    return { error: 'Enabling a schedule requires ticket:create' };
+  }
+  const kind = body.kind || 'interval';
+  if (kind !== 'interval') {
+    reply.code(400);
+    return { error: 'Only interval schedules are supported' };
+  }
+  const everySeconds = parseInt(body.everySeconds, 10);
+  if (!Number.isInteger(everySeconds) || everySeconds < MIN_SCHEDULE_EVERY_SECONDS) {
+    reply.code(400);
+    return { error: `everySeconds must be an integer >= ${MIN_SCHEDULE_EVERY_SECONDS}` };
+  }
+
+  const scheduledBy = actorFromRequest(request).username || String(request.session.userId);
+  // Re-enabling recomputes nextRunAt FORWARD FROM NOW (anchor = now) so a stale old
+  // slot never fires immediately on enable.
+  persisted.schedule = {
+    enabled: true,
+    kind: 'interval',
+    everySeconds,
+    anchor: now,
+    nextRunAt: computeNextRunAt({ everySeconds }, now),
+    lastScheduledTriggerAt: null,
+    timezone: 'UTC',
+    scheduledBy
+  };
+  persisted.updatedAt = now;
+  writeProcessTemplates(templates);
+  appendSystemLog('process_template:schedule_set', `Process template "${persisted.name}" scheduled every ${everySeconds}s (UTC) by ${scheduledBy}`, null, {
+    templateId: persisted.id, templateName: persisted.name, everySeconds, scheduledBy
+  });
+  return { ok: true, schedule: persisted.schedule };
+});
+
+// Run one scheduled-template scan now. Same bounded due-scan the interval scheduler
+// runs (no catch-up, at most one trigger per due template). Gated by
+// processTemplate:manage; this is a "scan due schedules now" control, not a new
+// execution primitive — it only creates tickets through triggerProcessTemplate.
+fastify.post('/api/process-templates/scheduler/tick', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const results = runtimeTemplateScheduler ? runtimeTemplateScheduler.tick() : [];
+  return { ok: true, results };
 });
 
 fastify.get('/process-templates', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -17110,6 +17289,7 @@ fastify.get('/admin/actions', { preHandler: fastify.requireAuth }, async (reques
 // ==================== INITIALIZATION ====================
 
 let runtimeScheduler = null;
+let runtimeTemplateScheduler = null;
 
 function markRunStarting(run) {
   if (!run || !run.id) return;
@@ -17149,6 +17329,36 @@ function startRuntimeScheduler() {
   });
   runtimeScheduler.start();
   return runtimeScheduler;
+}
+
+// Host wrapper: build the deterministic per-slot token and route a due scheduled
+// template through the SAME shared helper the manual trigger uses. Never creates
+// runs or mutates the workspace — triggerProcessTemplate goes through
+// createTicketFromInput → createRunsForTicket only.
+function triggerDueScheduledTemplate(template, scheduledForIso) {
+  const triggerToken = `schedule:${template.id}:${scheduledForIso}`;
+  return triggerProcessTemplate(template, { userId: null, username: 'system' }, {
+    triggerType: 'schedule',
+    triggerToken,
+    scheduledFor: scheduledForIso
+  });
+}
+
+function startTemplateScheduler() {
+  if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) return runtimeTemplateScheduler;
+  runtimeTemplateScheduler = createTemplateScheduler({
+    intervalMs: getPositiveIntegerEnv('PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS', 60000),
+    readProcessTemplates,
+    triggerDueTemplate: triggerDueScheduledTemplate,
+    onError: (template, error) => {
+      // Invalid schedule data is skipped and surfaced; it never triggers.
+      appendSystemLog('process_template:schedule_skipped', `Process template schedule skipped: ${error && error.message ? error.message : 'invalid schedule'}`, null, {
+        templateId: template && template.id, templateName: template && template.name
+      });
+    }
+  });
+  runtimeTemplateScheduler.start();
+  return runtimeTemplateScheduler;
 }
 
 // Note: this does not validate integrity. It rewrites all data files through
@@ -17312,6 +17522,7 @@ async function start() {
     await createDefaultData();
     interruptStaleRunsOnStartup();
     startRuntimeScheduler();
+    startTemplateScheduler();
     serverReady = true;
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`Server running on http://localhost:${PORT}`);
@@ -17326,6 +17537,7 @@ async function start() {
 function shutdown(signal) {
   try {
     if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
+    if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
     releaseDataDirWriterLock();
   } finally {
     process.exit(signal === 'SIGINT' ? 130 : 143);

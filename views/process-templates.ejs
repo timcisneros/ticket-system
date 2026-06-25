@@ -1,8 +1,10 @@
 <h1>Process Templates</h1>
 <p class="text-muted">
-  A process template stores a reusable ticket and creates an ordinary ticket when you trigger it.
-  Triggering is manual only — it does not run anything in the background and does not schedule itself.
-  Generated tickets flow through the normal run, triage, verification, and policy controls.
+  A process template stores a reusable ticket. You can create a ticket from it on demand, or
+  <strong>schedule ticket creation</strong> at a fixed interval (UTC). A schedule only creates an
+  ordinary ticket each interval — it does not run anything in the background and does not execute
+  work on its own. Every generated ticket flows through the normal run, triage, verification, and
+  policy controls.
 </p>
 
 <%
@@ -11,6 +13,10 @@
   function describeAssignment(tt) {
     if (!tt) return '';
     return (tt.assignmentTargetType || '?') + ' #' + (tt.assignmentTargetId == null ? '?' : tt.assignmentTargetId);
+  }
+  function describeSchedule(s) {
+    if (!s || s.enabled !== true || s.kind !== 'interval') return 'Off';
+    return 'Creates a ticket every ' + s.everySeconds + ' seconds in UTC';
   }
 %>
 
@@ -24,25 +30,48 @@
         <th>Status</th>
         <th>Objective</th>
         <th>Assignment</th>
+        <th>Schedule</th>
+        <th>Next / last scheduled</th>
         <th>Last triggered</th>
         <th>Recent generated tickets</th>
         <th>Action</th>
       </tr>
     </thead>
     <tbody>
-      <% templateList.forEach(function (template) { var tt = template.ticketTemplate || {}; %>
+      <% templateList.forEach(function (template) { var tt = template.ticketTemplate || {}; var sch = template.schedule || null; %>
         <tr>
           <td><%= template.name %></td>
           <td><%= template.enabled ? 'Enabled' : 'Disabled' %></td>
           <td><%= tt.objective || '' %></td>
           <td><%= describeAssignment(tt) %></td>
+          <td>
+            <%= describeSchedule(sch) %>
+            <% if (allowTrigger) { %>
+              <form class="process-template-schedule" data-template-id="<%= template.id %>">
+                <input type="number" name="everySeconds" min="60" step="1"
+                  value="<%= sch && sch.everySeconds ? sch.everySeconds : '' %>" placeholder="seconds (UTC)">
+                <button type="submit" data-action="enable">Schedule ticket creation</button>
+                <% if (sch && sch.enabled) { %>
+                  <button type="button" data-action="disable">Disable schedule</button>
+                <% } %>
+              </form>
+            <% } %>
+          </td>
+          <td>
+            <% if (sch && sch.enabled) { %>
+              next: <%= sch.nextRunAt || '—' %><br>
+              last: <%= sch.lastScheduledTriggerAt || 'never' %>
+            <% } else { %>
+              <span class="text-muted">—</span>
+            <% } %>
+          </td>
           <td><%= template.lastTriggeredAt || 'never' %></td>
           <td>
             <% if (!template.recentTriggers || template.recentTriggers.length === 0) { %>
               <span class="text-muted">none</span>
             <% } else { %>
               <% template.recentTriggers.forEach(function (entry) { %>
-                <a href="/tickets/<%= entry.ticketId %>">#<%= entry.ticketId %></a>
+                <a href="/tickets/<%= entry.ticketId %>">#<%= entry.ticketId %></a><%= entry.triggerType === 'schedule' ? ' (scheduled)' : '' %>
               <% }); %>
             <% } %>
           </td>
@@ -64,8 +93,8 @@
 <% } %>
 
 <script>
-  // Progressive enhancement: post the trigger as JSON with a client-generated
-  // idempotency token, then open the generated ticket. No background execution.
+  // Progressive enhancement: manual trigger posts the trigger as JSON with a
+  // client-generated idempotency token, then opens the generated ticket.
   document.querySelectorAll('form.process-template-trigger').forEach(function (form) {
     form.addEventListener('submit', function (event) {
       event.preventDefault();
@@ -88,5 +117,35 @@
         alert('Trigger failed');
       });
     });
+  });
+
+  // Schedule control: enable an interval schedule (UTC) or disable it. Scheduling only
+  // creates ordinary tickets at the interval; it does not execute work on its own.
+  function postSchedule(id, payload) {
+    return fetch('/api/process-templates/' + id + '/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function (res) { return res.json(); });
+  }
+  document.querySelectorAll('form.process-template-schedule').forEach(function (form) {
+    var id = form.getAttribute('data-template-id');
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var everySeconds = parseInt(form.querySelector('input[name="everySeconds"]').value, 10);
+      postSchedule(id, { enabled: true, kind: 'interval', everySeconds: everySeconds }).then(function (data) {
+        if (data && data.ok) { window.location.reload(); }
+        else { alert((data && data.error) ? data.error : 'Schedule failed'); }
+      }).catch(function () { alert('Schedule failed'); });
+    });
+    var disableBtn = form.querySelector('button[data-action="disable"]');
+    if (disableBtn) {
+      disableBtn.addEventListener('click', function () {
+        postSchedule(id, { enabled: false }).then(function (data) {
+          if (data && data.ok) { window.location.reload(); }
+          else { alert((data && data.error) ? data.error : 'Disable failed'); }
+        }).catch(function () { alert('Disable failed'); });
+      });
+    }
   });
 </script>
