@@ -73,13 +73,15 @@ A template creates tickets two ways, and **both create ordinary tickets, not wor
   which then flows through the **same** run, triage, verification, and policy controls as any
   hand-entered ticket.
 
-The demo seeds three enabled templates:
+The demo seeds these templates:
 
 | Template | What it demonstrates |
 | -------- | -------------------- |
 | **Weekly status report** | Manual. Creates a clear, ordinary ticket; its detail shows **Created from template** provenance. Runs through the normal path like any other ticket. |
 | **Ad-hoc folder batch** | Manual, intentionally ambiguous — **blocked by the existing objective clarification gate** (`objective_ambiguous` triage, **no run**). A template cannot bypass a safety gate just because it is reusable. |
 | **Daily compliance digest** | **Scheduled** (`schedule.enabled: true`, `kind: "interval"`, UTC). When due, a scheduler scan creates one ordinary ticket whose detail shows scheduled provenance — `triggerType: "schedule"`, `triggeredBy: "system"`, a `schedule:<id>:<slot>` token, and `scheduledFor`. |
+| **Archived intake digest** | **Disabled template** (`template.enabled: false`). Shows the **Template disabled** state. **Disable template** stops *both* manual and scheduled future ticket creation — a manual trigger returns the existing 409 and a scan creates nothing — yet its earlier generated ticket and provenance stay visible. **Enable template** restores it. |
+| **Paused weekly export** | **Paused schedule** (`schedule.enabled: false`, `nextRunAt: null`, interval config retained). Shows the **Schedule paused** state. **Pause scheduled ticket creation** stops scheduled tickets only; **manual ticket creation is still available while only the schedule is paused.** **Resume scheduled ticket creation** recomputes `nextRunAt` forward from now. |
 
 Scheduling is bounded on purpose: **there is no catch-up.** If an interval was missed (for
 example the app was off), the next scan creates **one** ticket for the current slot — never a
@@ -87,8 +89,18 @@ storm of backfilled tickets. Repeating a scan does not duplicate a slot's ticket
 idempotent on its deterministic token). The **run scheduler is unchanged** — it still only drains
 pending runs **after** a ticket has been created the normal way.
 
+**Operator controls (r1.9).** On `/process-templates` each template row offers **Disable template /
+Enable template** and, for scheduled templates, **Pause scheduled ticket creation / Resume scheduled
+ticket creation**. These affect **future template-created tickets only** — existing generated
+tickets, runs, provenance, and `/logs` entries remain intact. **Paused schedules do not create
+tickets.** **Resume** does not catch up missed intervals and does **not** create an immediate ticket
+(the first ticket appears at the next due scan, one interval later); for an immediate ticket, use the
+manual **Create ticket from template** button.
+
 Every generated ticket records provenance, and each trigger (manual or scheduled) is written to
-an append-only trigger log plus a `process_template:triggered` audit entry on `/logs`.
+an append-only trigger log plus a `process_template:triggered` audit entry on `/logs`. Control
+actions (disable/enable/pause/resume) are recorded as their own audit-log entries and are **never**
+written to the trigger ledger, which is for created tickets only.
 
 ## What is intentionally NOT automated yet
 

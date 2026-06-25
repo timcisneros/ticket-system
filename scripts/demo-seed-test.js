@@ -296,6 +296,62 @@ async function main() {
     // No workspace mutation during the scheduled trigger itself.
     assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsBeforeScan, 'scheduled triggers must not mutate the workspace');
 
+    // 15: r1.9 template controls — a DISABLED template and a PAUSED scheduled template.
+    const schedFor = (id) => JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8')).filter(t => t.source && t.source.triggerType === 'schedule' && t.source.templateId === id).length;
+    const ctrlPage = await request('GET', '/process-templates', { cookie });
+    assert(ctrlPage.statusCode === 200, '/process-templates renders for controls');
+    assert(ctrlPage.body.includes('Archived intake digest') && ctrlPage.body.includes('Template disabled'), 'disabled template shows "Template disabled" state');
+    assert(ctrlPage.body.includes('Paused weekly export') && ctrlPage.body.includes('Schedule paused'), 'paused scheduled template shows "Schedule paused" state');
+    assert(/badge--health-paused/.test(ctrlPage.body), 'paused template shows the paused health badge');
+    assert(ctrlPage.body.includes('Disable template') && ctrlPage.body.includes('Enable template'), 'page shows Disable (enabled) and Enable (disabled) controls');
+    assert(ctrlPage.body.includes('Pause scheduled ticket creation') && ctrlPage.body.includes('Resume scheduled ticket creation'), 'page shows Pause (active) and Resume (paused) controls');
+    assert(ctrlPage.body.includes('Paused schedules do not create tickets.'), 'page shows paused explanatory copy');
+    assert(ctrlPage.body.includes('/tickets/8'), 'disabled template still lists its prior generated ticket (history/provenance intact)');
+
+    const wsCtrlBefore = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
+
+    // Disabled template (4): manual trigger blocked by the existing 409.
+    assert((await request('POST', '/api/process-templates/4/trigger', { cookie, json: { triggerToken: 'demo-dis-1' } })).statusCode === 409, 'disabled template manual trigger returns 409');
+
+    // Neither the disabled template (4, has a due schedule) nor the paused template (5)
+    // creates a scheduled ticket on a scan.
+    await request('POST', '/api/process-templates/scheduler/tick', { cookie, json: {} });
+    assert(schedFor(4) === 0, 'disabled template creates no scheduled ticket on a scan');
+    assert(schedFor(5) === 0, 'paused template creates no scheduled ticket on a scan');
+
+    // Paused template (5): manual trigger still works; interval config preserved.
+    const pausedManual = await request('POST', '/api/process-templates/5/trigger', { cookie, json: { triggerToken: 'demo-paused-manual-1' } });
+    assert(pausedManual.statusCode === 200 && JSON.parse(pausedManual.body).ok, 'paused template still allows manual trigger');
+    const t5 = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8')).find(t => t.id === 5);
+    assert(t5.schedule.enabled === false && t5.schedule.nextRunAt === null && t5.schedule.kind === 'interval' && t5.schedule.everySeconds === 86400 && t5.schedule.timezone === 'UTC', 'pause preserves the reusable interval config');
+
+    // Resume (5): recompute forward, no immediate ticket; a later due scan creates one.
+    const resume5 = await request('POST', '/api/process-templates/5/schedule/resume', { cookie, json: {} });
+    const resume5body = JSON.parse(resume5.body);
+    assert(resume5.statusCode === 200 && resume5body.schedule.enabled === true, 'resume returns ok');
+    assert(Date.parse(resume5body.schedule.nextRunAt) > Date.now(), 'resume recomputes nextRunAt forward from now');
+    const sched5Before = schedFor(5);
+    await request('POST', '/api/process-templates/scheduler/tick', { cookie, json: {} });
+    assert(schedFor(5) === sched5Before, 'immediate scan after resume creates no ticket (no catch-up)');
+    var s5store = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8'));
+    s5store.find(t => t.id === 5).schedule.nextRunAt = '2020-01-01T00:00:00.000Z'; // simulate the interval elapsing
+    fs.writeFileSync(path.join(DATA_DIR, 'process-templates.json'), JSON.stringify(s5store, null, 2));
+    await request('POST', '/api/process-templates/scheduler/tick', { cookie, json: {} });
+    assert(schedFor(5) === sched5Before + 1, 'a later due scan creates exactly one scheduled ticket (no storm)');
+
+    // Controls never write to the trigger ledger; the prior generated ticket survives.
+    assert(!JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-template-triggers.json'), 'utf8')).some(e => /pause|resume|disable|enable/.test(e.triggerType || '')), 'control ops do not pollute the trigger ledger');
+    const t8 = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8')).find(t => t.id === 8);
+    assert(t8 && t8.status === 'completed' && t8.source && t8.source.templateId === 4, 'pre-existing generated ticket + provenance intact after controls');
+
+    // GET /process-templates remains read-only.
+    const ctrlFiles = ['tickets.json', 'runs.json', 'process-templates.json', 'process-template-triggers.json', 'logs.json'];
+    const ctrlSnap = {}; ctrlFiles.forEach(f => { ctrlSnap[f] = fs.readFileSync(path.join(DATA_DIR, f), 'utf8'); });
+    const wsSnap = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
+    await request('GET', '/process-templates', { cookie });
+    ctrlFiles.forEach(f => assert(fs.readFileSync(path.join(DATA_DIR, f), 'utf8') === ctrlSnap[f], `${f} unchanged by GET /process-templates`));
+    assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsSnap && JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsCtrlBefore, 'no workspace mutation during the control demo checks');
+
     console.log('PASS: deterministic demo seed renders the full product loop with no provider key');
   } catch (error) {
     if (out) process.stderr.write(out);
