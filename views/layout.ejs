@@ -24,6 +24,9 @@
 	            <li><a href="/agents">Agents</a></li>
 	            <li><a href="/logs">Logs</a></li>
 	          <% } %>
+          <% if (userPermissions.includes('processTemplate:manage')) { %>
+            <li><a href="/process-templates">Templates</a></li>
+          <% } %>
           <% if (userPermissions.includes('workspace:read')) { %>
             <li><a href="/workspace">Workspace</a></li>
           <% } %>

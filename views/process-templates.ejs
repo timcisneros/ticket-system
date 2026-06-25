@@ -1,0 +1,92 @@
+<h1>Process Templates</h1>
+<p class="text-muted">
+  A process template stores a reusable ticket and creates an ordinary ticket when you trigger it.
+  Triggering is manual only — it does not run anything in the background and does not schedule itself.
+  Generated tickets flow through the normal run, triage, verification, and policy controls.
+</p>
+
+<%
+  var templateList = typeof templates === 'undefined' ? [] : templates;
+  var allowTrigger = typeof canTrigger !== 'undefined' && canTrigger;
+  function describeAssignment(tt) {
+    if (!tt) return '';
+    return (tt.assignmentTargetType || '?') + ' #' + (tt.assignmentTargetId == null ? '?' : tt.assignmentTargetId);
+  }
+%>
+
+<% if (templateList.length === 0) { %>
+  <p class="text-muted">No process templates yet.</p>
+<% } else { %>
+  <table class="tickets-table">
+    <thead>
+      <tr>
+        <th>Template</th>
+        <th>Status</th>
+        <th>Objective</th>
+        <th>Assignment</th>
+        <th>Last triggered</th>
+        <th>Recent generated tickets</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% templateList.forEach(function (template) { var tt = template.ticketTemplate || {}; %>
+        <tr>
+          <td><%= template.name %></td>
+          <td><%= template.enabled ? 'Enabled' : 'Disabled' %></td>
+          <td><%= tt.objective || '' %></td>
+          <td><%= describeAssignment(tt) %></td>
+          <td><%= template.lastTriggeredAt || 'never' %></td>
+          <td>
+            <% if (!template.recentTriggers || template.recentTriggers.length === 0) { %>
+              <span class="text-muted">none</span>
+            <% } else { %>
+              <% template.recentTriggers.forEach(function (entry) { %>
+                <a href="/tickets/<%= entry.ticketId %>">#<%= entry.ticketId %></a>
+              <% }); %>
+            <% } %>
+          </td>
+          <td>
+            <% if (allowTrigger && template.enabled) { %>
+              <form class="process-template-trigger" data-template-id="<%= template.id %>" method="post" action="/api/process-templates/<%= template.id %>/trigger">
+                <button type="submit">Create ticket from template</button>
+              </form>
+            <% } else if (!template.enabled) { %>
+              <span class="text-muted">disabled</span>
+            <% } else { %>
+              <span class="text-muted">requires ticket:create</span>
+            <% } %>
+          </td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>
+
+<script>
+  // Progressive enhancement: post the trigger as JSON with a client-generated
+  // idempotency token, then open the generated ticket. No background execution.
+  document.querySelectorAll('form.process-template-trigger').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var token = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + '-' + Math.random();
+      var button = form.querySelector('button');
+      if (button) button.disabled = true;
+      fetch(form.action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ triggerToken: token })
+      }).then(function (res) { return res.json(); }).then(function (data) {
+        if (data && data.ticketId) {
+          window.location.href = '/tickets/' + data.ticketId;
+        } else {
+          if (button) button.disabled = false;
+          alert((data && data.error) ? data.error : 'Trigger failed');
+        }
+      }).catch(function () {
+        if (button) button.disabled = false;
+        alert('Trigger failed');
+      });
+    });
+  });
+</script>

@@ -30,6 +30,8 @@ const DATA_DIR_WRITER_LOCK_FILE = path.join(DATA_DIR, 'writer-lock.json');
 const ALLOCATION_PLANS_FILE = path.join(DATA_DIR, 'allocation-plans.json');
 const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
 const WORKFLOWS_FILE = path.join(DATA_DIR, 'workflows.json');
+const PROCESS_TEMPLATES_FILE = path.join(DATA_DIR, 'process-templates.json');
+const PROCESS_TEMPLATE_TRIGGERS_FILE = path.join(DATA_DIR, 'process-template-triggers.json');
 const REPLAY_SNAPSHOTS_DIR = path.join(DATA_DIR, 'replay-snapshots');
 const PROTECTED_PATHS_FILE = path.join(__dirname, 'config', 'protected-paths.json');
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
@@ -561,6 +563,16 @@ function delegatedFromRequest(request, source) {
     userId: request.session.userId,
     username: request.user ? request.user.username : null,
     source
+  };
+}
+
+// Resolve the acting principal for shared ticket creation. Mirrors the historical
+// POST /tickets createdBy resolution (username when known, else the session user id).
+function actorFromRequest(request) {
+  if (!request || !request.session) return { userId: null, username: null };
+  return {
+    userId: request.session.userId != null ? request.session.userId : null,
+    username: request.user ? request.user.username : null
   };
 }
 
@@ -2685,6 +2697,43 @@ function normalizeTickets(tickets) {
 
 function writeTickets(tickets) {
   writeFileAtomic(DATA_FILE, JSON.stringify(normalizeTickets(tickets), null, 2));
+}
+
+// ==================== PROCESS TEMPLATES ====================
+// Durable, manual-trigger-only process templates. A template stores a reusable
+// ticket input and creates ordinary tickets through the same createTicketFromInput
+// path as the POST /tickets route. Templates never create runs directly and never
+// schedule themselves (schedule is inert in v1). The trigger log is append-only and
+// serves as both the idempotency ledger and the provenance record.
+function readProcessTemplates() {
+  return readJsonArrayCached(PROCESS_TEMPLATES_FILE);
+}
+
+function writeProcessTemplates(templates) {
+  writeFileAtomic(PROCESS_TEMPLATES_FILE, JSON.stringify(Array.isArray(templates) ? templates : [], null, 2));
+}
+
+function getProcessTemplateById(id) {
+  const numericId = parseInt(id, 10);
+  if (Number.isNaN(numericId)) return null;
+  return readProcessTemplates().find(template => template.id === numericId) || null;
+}
+
+function readProcessTemplateTriggers() {
+  return readJsonArrayCached(PROCESS_TEMPLATE_TRIGGERS_FILE);
+}
+
+function appendProcessTemplateTrigger(entry) {
+  const triggers = readProcessTemplateTriggers();
+  triggers.push(entry);
+  writeFileAtomic(PROCESS_TEMPLATE_TRIGGERS_FILE, JSON.stringify(triggers, null, 2));
+  return entry;
+}
+
+function findProcessTemplateTrigger(templateId, triggerToken) {
+  if (!triggerToken) return null;
+  return readProcessTemplateTriggers().find(entry =>
+    entry && entry.templateId === templateId && entry.triggerToken === triggerToken) || null;
 }
 
 function normalizeWorkflowPolicy(policy) {
@@ -13929,6 +13978,155 @@ fastify.get('/', { preHandler: fastify.requireAuth }, async (request, reply) => 
   }, request.session.userId));
 });
 
+// Shared ticket creation. Validates resolved inputs, builds the ticket with a
+// normalized execution policy, persists it, emits ticket.created, and routes run
+// creation through createRunsForTicket (which enforces the unresolved-triage block,
+// the objective clarification/ambiguity gate, and the feasibility gate). Both the
+// POST /tickets route and the process-template trigger use this; neither creates
+// runs directly. `input` carries already-parsed values (objects, not form strings);
+// transport-level JSON parsing stays in the HTTP layer. Returns { ok, ticket, runs }
+// or { ok: false, error } so each caller can shape its own response.
+function createTicketFromInput(input, actor, options = {}) {
+  const objective = typeof input.objective === 'string' ? input.objective.trim() : '';
+  const assignmentTargetType = input.assignmentTargetType;
+
+  if (!objective || !assignmentTargetType || input.assignmentTargetId == null || input.assignmentTargetId === '') {
+    return { ok: false, error: 'Objective, assignment target type, and assignment target are required' };
+  }
+
+  const parsedAssignmentTargetId = parseInt(input.assignmentTargetId, 10);
+  if (!['agent', 'group'].includes(assignmentTargetType) || Number.isNaN(parsedAssignmentTargetId)) {
+    return { ok: false, error: 'Invalid assignment target' };
+  }
+
+  const resolvedAssignmentMode = assignmentTargetType === 'agent' ? 'individual' : input.assignmentMode;
+  if (assignmentTargetType === 'group' && !['allocated', 'dynamic'].includes(resolvedAssignmentMode)) {
+    return { ok: false, error: 'Group assignments require allocated or dynamic mode' };
+  }
+  if (assignmentTargetType === 'agent' && !readAgents().some(agent => agent.id === parsedAssignmentTargetId)) {
+    return { ok: false, error: 'Selected agent does not exist' };
+  }
+  if (assignmentTargetType === 'group' && !getTicketAssignableGroups().some(group => group.id === parsedAssignmentTargetId)) {
+    return { ok: false, error: 'Selected ticket-capable group does not exist' };
+  }
+
+  const resolvedCapabilityType = input.capabilityType === 'workflow' || input.executionMode === 'workflow' ? 'workflow' : 'directAction';
+  const resolvedExecutionMode = resolvedCapabilityType === 'workflow' ? 'workflow' : 'agent';
+  let selectedWorkflow = null;
+  let parsedWorkflowInput = null;
+
+  if (resolvedCapabilityType === 'workflow') {
+    if (assignmentTargetType !== 'agent') {
+      return { ok: false, error: 'Workflow tickets must be assigned to one agent' };
+    }
+    selectedWorkflow = getWorkflowById(input.workflowId);
+    if (!selectedWorkflow || selectedWorkflow.enabled === false) {
+      return { ok: false, error: 'Selected workflow does not exist or is disabled' };
+    }
+    parsedWorkflowInput = input.workflowInput && typeof input.workflowInput === 'object' && !Array.isArray(input.workflowInput)
+      ? input.workflowInput
+      : {};
+    const inputErrors = validateSchemaValue(selectedWorkflow.inputSchema || {}, parsedWorkflowInput, 'workflow.input');
+    if (inputErrors.length > 0) {
+      return { ok: false, error: `Workflow input invalid: ${inputErrors.join('; ')}` };
+    }
+  }
+
+  let parsedOwnedPaths = input.ownedOutputPaths != null ? input.ownedOutputPaths : null;
+  if (parsedOwnedPaths != null && (typeof parsedOwnedPaths !== 'object' || Array.isArray(parsedOwnedPaths))) {
+    return { ok: false, error: 'Owned output paths must be a mapping of agent ID to path' };
+  }
+
+  const tickets = readTickets();
+  const now = new Date().toISOString();
+  const nextTicketId = nextId(tickets);
+  const actorName = actor && actor.username
+    ? actor.username
+    : (actor && actor.userId != null ? String(actor.userId) : 'system');
+
+  const newTicket = {
+    id: nextTicketId,
+    objective,
+    assignmentTargetType,
+    assignmentTargetId: parsedAssignmentTargetId,
+    assignmentMode: resolvedAssignmentMode,
+    ownedOutputPaths: parsedOwnedPaths,
+    executionMode: resolvedExecutionMode,
+    workflowId: selectedWorkflow ? selectedWorkflow.id : null,
+    workflowInput: selectedWorkflow ? parsedWorkflowInput : null,
+    capabilityType: resolvedCapabilityType,
+    capabilityId: selectedWorkflow ? selectedWorkflow.id : 'agent-selected-actions',
+    capabilityInput: selectedWorkflow ? parsedWorkflowInput : null,
+    executionPolicy: normalizeExecutionPolicy(input.executionPolicy, resolvedAssignmentMode === 'individual' ? 'shared' : 'owned_paths'),
+    status: 'open',
+    createdBy: actorName,
+    changedBy: actorName,
+    changedAt: now,
+    createdAt: now,
+    updatedAt: now
+  };
+  // Optional provenance (e.g. process-template origin). Durable on the ticket;
+  // normalizeTickets preserves unknown fields.
+  if (options.source && typeof options.source === 'object') {
+    newTicket.source = options.source;
+  }
+
+  if (newTicket.assignmentMode === 'dynamic') {
+    try {
+      const agents = getAgentsInGroup(newTicket.assignmentTargetId);
+      newTicket.ownedOutputPaths = deriveDynamicOwnedPaths(agents);
+    } catch (error) {
+      appendSystemLog('allocation:setup_failed', error.message, null, {
+        code: error.code || 'DYNAMIC_ALLOCATION_ERROR',
+        ticketId: newTicket.id,
+        assignmentTargetId: newTicket.assignmentTargetId,
+        createdBy: newTicket.createdBy
+      });
+      return { ok: false, error: error.message };
+    }
+  }
+
+  if (usesOwnedScopeAllocation(newTicket)) {
+    try {
+      assertAllocatedTicketCanStart(newTicket, getAgentsInGroup(newTicket.assignmentTargetId));
+    } catch (error) {
+      appendSystemLog('allocation:setup_failed', error.message, null, {
+        code: error.code || 'VALIDATION_ERROR',
+        path: error.path || null,
+        assignedAgentId: error.assignedAgentId || null,
+        ticketId: newTicket.id,
+        assignmentTargetId: newTicket.assignmentTargetId,
+        createdBy: newTicket.createdBy
+      });
+      return { ok: false, error: error.message };
+    }
+  }
+
+  tickets.push(newTicket);
+  writeTickets(tickets);
+  appendEvent({
+    type: 'ticket.created',
+    ticketId: newTicket.id,
+    payload: {
+      status: newTicket.status,
+      assignmentTargetType: newTicket.assignmentTargetType,
+      assignmentTargetId: newTicket.assignmentTargetId,
+      assignmentMode: newTicket.assignmentMode,
+      executionMode: newTicket.executionMode,
+      capabilityType: newTicket.capabilityType,
+      capabilityId: newTicket.capabilityId,
+      workflowId: newTicket.workflowId,
+      createdBy: newTicket.createdBy,
+      createdAt: newTicket.createdAt,
+      ...(newTicket.source ? { source: newTicket.source.type } : {})
+    }
+  });
+  broadcastTicketChange();
+  const runs = createRunsForTicket(newTicket, options.delegated || null);
+
+  return { ok: true, ticket: newTicket, runs };
+}
+
 fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) {
     reply.code(403);
@@ -13949,64 +14147,20 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     }, request.session.userId));
   }
 
-  if (!objective || !objective.trim() || !assignmentTargetType || !assignmentTargetId) {
-    return renderTicketForm('Objective, assignment target type, and assignment target are required');
-  }
-
-  const parsedAssignmentTargetId = parseInt(assignmentTargetId, 10);
-
-  if (!['agent', 'group'].includes(assignmentTargetType) || Number.isNaN(parsedAssignmentTargetId)) {
-    return renderTicketForm('Invalid assignment target');
-  }
-
-  const resolvedAssignmentMode = assignmentTargetType === 'agent' ? 'individual' : assignmentMode;
-
-  if (assignmentTargetType === 'group' && !['allocated', 'dynamic'].includes(resolvedAssignmentMode)) {
-    return renderTicketForm('Group assignments require allocated or dynamic mode');
-  }
-
-  if (assignmentTargetType === 'agent' && !readAgents().some(agent => agent.id === parsedAssignmentTargetId)) {
-    return renderTicketForm('Selected agent does not exist');
-  }
-
-  if (assignmentTargetType === 'group' && !getTicketAssignableGroups().some(group => group.id === parsedAssignmentTargetId)) {
-    return renderTicketForm('Selected ticket-capable group does not exist');
-  }
-
-  const resolvedCapabilityType = capabilityType === 'workflow' || executionMode === 'workflow' ? 'workflow' : 'directAction';
-  const resolvedExecutionMode = resolvedCapabilityType === 'workflow' ? 'workflow' : 'agent';
-  let selectedWorkflow = null;
+  // Transport-level JSON parsing (form fields arrive as strings). Semantic
+  // validation and ticket construction live in the shared createTicketFromInput.
+  const isWorkflowTicket = capabilityType === 'workflow' || executionMode === 'workflow';
   let parsedWorkflowInput = null;
-
-  if (resolvedCapabilityType === 'workflow') {
-    if (assignmentTargetType !== 'agent') {
-      return renderTicketForm('Workflow tickets must be assigned to one agent');
-    }
-
-    selectedWorkflow = getWorkflowById(workflowId);
-    if (!selectedWorkflow || selectedWorkflow.enabled === false) {
-      return renderTicketForm('Selected workflow does not exist or is disabled');
-    }
-
+  if (isWorkflowTicket) {
     try {
       parsedWorkflowInput = workflowInput && workflowInput.trim() ? JSON.parse(workflowInput) : {};
     } catch (error) {
       return renderTicketForm('Workflow input must be valid JSON');
     }
-
     if (!parsedWorkflowInput || typeof parsedWorkflowInput !== 'object' || Array.isArray(parsedWorkflowInput)) {
       return renderTicketForm('Workflow input must be a JSON object');
     }
-
-    const inputErrors = validateSchemaValue(selectedWorkflow.inputSchema || {}, parsedWorkflowInput, 'workflow.input');
-    if (inputErrors.length > 0) {
-      return renderTicketForm(`Workflow input invalid: ${inputErrors.join('; ')}`);
-    }
   }
-
-  const tickets = readTickets();
-  const now = new Date().toISOString();
-  const nextTicketId = nextId(tickets);
 
   let parsedOwnedPaths = null;
   if (request.body.ownedOutputPaths) {
@@ -14014,9 +14168,6 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
       parsedOwnedPaths = JSON.parse(request.body.ownedOutputPaths);
     } catch (e) {
       return renderTicketForm('Owned output paths must be valid JSON');
-    }
-    if (typeof parsedOwnedPaths !== 'object' || parsedOwnedPaths === null || Array.isArray(parsedOwnedPaths)) {
-      return renderTicketForm('Owned output paths must be a mapping of agent ID to path');
     }
   }
 
@@ -14032,82 +14183,242 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
       (typeof parsedExecutionPolicy !== 'object' || Array.isArray(parsedExecutionPolicy))) {
     return renderTicketForm('Execution policy must be a JSON object');
   }
-  
-  const newTicket = {
-    id: nextTicketId,
-    objective: objective.trim(),
+
+  const result = createTicketFromInput({
+    objective,
     assignmentTargetType,
-    assignmentTargetId: parsedAssignmentTargetId,
-    assignmentMode: resolvedAssignmentMode,
+    assignmentTargetId,
+    assignmentMode,
+    capabilityType,
+    executionMode,
+    workflowId,
+    workflowInput: parsedWorkflowInput,
     ownedOutputPaths: parsedOwnedPaths,
-    executionMode: resolvedExecutionMode,
-    workflowId: selectedWorkflow ? selectedWorkflow.id : null,
-    workflowInput: selectedWorkflow ? parsedWorkflowInput : null,
-    capabilityType: resolvedCapabilityType,
-    capabilityId: selectedWorkflow ? selectedWorkflow.id : 'agent-selected-actions',
-    capabilityInput: selectedWorkflow ? parsedWorkflowInput : null,
-    executionPolicy: normalizeExecutionPolicy(parsedExecutionPolicy, resolvedAssignmentMode === 'individual' ? 'shared' : 'owned_paths'),
-    status: 'open',
-    createdBy: request.user ? request.user.username : String(request.session.userId),
-    changedBy: request.user ? request.user.username : String(request.session.userId),
-    changedAt: now,
-    createdAt: now,
-    updatedAt: now
-  };
+    executionPolicy: parsedExecutionPolicy
+  }, actorFromRequest(request), { delegated: delegatedFromRequest(request, 'created_from_ticket') });
 
-  if (newTicket.assignmentMode === 'dynamic') {
-    try {
-      const agents = getAgentsInGroup(newTicket.assignmentTargetId);
-      newTicket.ownedOutputPaths = deriveDynamicOwnedPaths(agents);
-    } catch (error) {
-      appendSystemLog('allocation:setup_failed', error.message, null, {
-        code: error.code || 'DYNAMIC_ALLOCATION_ERROR',
-        ticketId: newTicket.id,
-        assignmentTargetId: newTicket.assignmentTargetId,
-        createdBy: newTicket.createdBy
-      });
-      return renderTicketForm(error.message);
-    }
+  if (!result.ok) {
+    return renderTicketForm(result.error);
   }
-
-  if (usesOwnedScopeAllocation(newTicket)) {
-    try {
-      assertAllocatedTicketCanStart(newTicket, getAgentsInGroup(newTicket.assignmentTargetId));
-    } catch (error) {
-      appendSystemLog('allocation:setup_failed', error.message, null, {
-        code: error.code || 'VALIDATION_ERROR',
-        path: error.path || null,
-        assignedAgentId: error.assignedAgentId || null,
-        ticketId: newTicket.id,
-        assignmentTargetId: newTicket.assignmentTargetId,
-        createdBy: newTicket.createdBy
-      });
-      return renderTicketForm(error.message);
-    }
-  }
-
-  tickets.push(newTicket);
-  writeTickets(tickets);
-  appendEvent({
-    type: 'ticket.created',
-    ticketId: newTicket.id,
-    payload: {
-      status: newTicket.status,
-      assignmentTargetType: newTicket.assignmentTargetType,
-      assignmentTargetId: newTicket.assignmentTargetId,
-      assignmentMode: newTicket.assignmentMode,
-      executionMode: newTicket.executionMode,
-      capabilityType: newTicket.capabilityType,
-      capabilityId: newTicket.capabilityId,
-      workflowId: newTicket.workflowId,
-      createdBy: newTicket.createdBy,
-      createdAt: newTicket.createdAt
-    }
-  });
-  broadcastTicketChange();
-  createRunsForTicket(newTicket, delegatedFromRequest(request, 'created_from_ticket'));
 
   return reply.redirect('/tickets');
+});
+
+// ==================== PROCESS TEMPLATE ROUTES ====================
+// Manual-trigger-only. Management is gated by processTemplate:manage; triggering is
+// gated by ticket:create (the trigger creates an ordinary ticket and must respect
+// ticket-creation authority). No scheduled execution, no cross-ticket spawning.
+function normalizeProcessTemplateInput(body) {
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const tt = body.ticketTemplate && typeof body.ticketTemplate === 'object' && !Array.isArray(body.ticketTemplate)
+    ? body.ticketTemplate
+    : null;
+  return { name, tt };
+}
+
+fastify.get('/api/process-templates', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  return { templates: readProcessTemplates() };
+});
+
+fastify.post('/api/process-templates', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const { name, tt } = normalizeProcessTemplateInput(request.body || {});
+  if (!name) {
+    reply.code(400);
+    return { error: 'Template name is required' };
+  }
+  if (!tt) {
+    reply.code(400);
+    return { error: 'ticketTemplate object is required' };
+  }
+
+  const templates = readProcessTemplates();
+  const now = new Date().toISOString();
+  const actor = actorFromRequest(request);
+  const createdBy = actor.username || (actor.userId != null ? String(actor.userId) : 'system');
+  const template = {
+    id: nextId(templates),
+    name,
+    enabled: request.body.enabled === false || request.body.enabled === 'false' ? false : true,
+    triggerType: 'manual',
+    schedule: null,
+    // ticketTemplate is RAW reusable ticket input. executionPolicy is stored as
+    // provided and is normalized ONLY at trigger time (createTicketFromInput).
+    ticketTemplate: {
+      objective: typeof tt.objective === 'string' ? tt.objective : '',
+      assignmentTargetType: tt.assignmentTargetType,
+      assignmentTargetId: tt.assignmentTargetId,
+      assignmentMode: tt.assignmentMode || null,
+      capabilityType: tt.capabilityType === 'workflow' ? 'workflow' : 'directAction',
+      capabilityId: tt.capabilityId || (tt.capabilityType === 'workflow' ? (tt.workflowId || null) : 'agent-selected-actions'),
+      workflowId: tt.workflowId || null,
+      workflowInput: tt.workflowInput && typeof tt.workflowInput === 'object' && !Array.isArray(tt.workflowInput) ? tt.workflowInput : null,
+      ownedOutputPaths: tt.ownedOutputPaths && typeof tt.ownedOutputPaths === 'object' && !Array.isArray(tt.ownedOutputPaths) ? tt.ownedOutputPaths : null,
+      executionPolicy: tt.executionPolicy && typeof tt.executionPolicy === 'object' && !Array.isArray(tt.executionPolicy) ? tt.executionPolicy : null
+    },
+    createdBy,
+    createdAt: now,
+    updatedAt: now,
+    lastTriggeredAt: null
+  };
+  templates.push(template);
+  writeProcessTemplates(templates);
+  appendSystemLog('process_template:created', `Process template "${name}" created`, null, {
+    templateId: template.id,
+    templateName: name,
+    createdBy
+  });
+  return { ok: true, template };
+});
+
+fastify.post('/api/process-templates/:id/trigger', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:create')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const template = getProcessTemplateById(request.params.id);
+  if (!template) {
+    reply.code(404);
+    return { error: 'Process template not found' };
+  }
+  if (template.enabled !== true) {
+    reply.code(409);
+    return { error: 'Process template is disabled' };
+  }
+
+  const body = request.body || {};
+  const triggerToken = (typeof body.triggerToken === 'string' && body.triggerToken.trim())
+    ? body.triggerToken.trim()
+    : crypto.randomUUID();
+
+  // Idempotency: a repeated token for this template returns the existing generated
+  // ticket instead of creating a duplicate. The handler runs synchronously from this
+  // check through the trigger-log append (no awaits), so sequential double-submits
+  // cannot interleave.
+  const existingTrigger = findProcessTemplateTrigger(template.id, triggerToken);
+  if (existingTrigger) {
+    return {
+      ok: true,
+      deduped: true,
+      ticketId: existingTrigger.ticketId,
+      templateId: template.id,
+      triggerToken
+    };
+  }
+
+  const actor = actorFromRequest(request);
+  const triggeredBy = actor.username || (actor.userId != null ? String(actor.userId) : 'system');
+  const now = new Date().toISOString();
+  const tt = template.ticketTemplate || {};
+  const source = {
+    type: 'process_template',
+    templateId: template.id,
+    templateName: template.name,
+    triggeredBy,
+    triggerType: 'manual',
+    triggerRunId: null,
+    triggerToken,
+    createdAt: now
+  };
+
+  const result = createTicketFromInput({
+    objective: tt.objective,
+    assignmentTargetType: tt.assignmentTargetType,
+    assignmentTargetId: tt.assignmentTargetId,
+    assignmentMode: tt.assignmentMode,
+    capabilityType: tt.capabilityType,
+    executionMode: tt.capabilityType === 'workflow' ? 'workflow' : 'agent',
+    workflowId: tt.workflowId,
+    workflowInput: tt.workflowInput,
+    ownedOutputPaths: tt.ownedOutputPaths,
+    executionPolicy: tt.executionPolicy
+  }, actor, {
+    source,
+    delegated: { userId: actor.userId, username: triggeredBy, source: 'process_template_trigger' }
+  });
+
+  if (!result.ok) {
+    reply.code(400);
+    return { error: result.error };
+  }
+
+  const generatedTicket = result.ticket;
+
+  // Append-only trigger log: idempotency ledger + provenance snapshot.
+  appendProcessTemplateTrigger({
+    triggerToken,
+    templateId: template.id,
+    templateName: template.name,
+    ticketId: generatedTicket.id,
+    triggeredBy,
+    triggerType: 'manual',
+    createdAt: now,
+    ticketTemplateSnapshot: tt,
+    executionPolicyUsed: generatedTicket.executionPolicy
+  });
+
+  // Record lastTriggeredAt for audit convenience (NOT a scheduler cursor).
+  const templates = readProcessTemplates();
+  const persisted = templates.find(item => item.id === template.id);
+  if (persisted) {
+    persisted.lastTriggeredAt = now;
+    persisted.updatedAt = now;
+    writeProcessTemplates(templates);
+  }
+
+  appendSystemLog('process_template:triggered', `Process template "${template.name}" created ticket #${generatedTicket.id}`, null, {
+    contextTicketId: generatedTicket.id,
+    templateId: template.id,
+    templateName: template.name,
+    triggeredBy,
+    triggerType: 'manual',
+    triggerToken
+  });
+
+  return {
+    ok: true,
+    deduped: false,
+    ticketId: generatedTicket.id,
+    templateId: template.id,
+    triggerToken,
+    source
+  };
+});
+
+fastify.get('/process-templates', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({
+      message: 'Access denied',
+      user: request.user
+    }, request.session.userId));
+  }
+
+  const templates = readProcessTemplates();
+  const triggers = readProcessTemplateTriggers();
+  const recentByTemplate = new Map();
+  triggers.forEach(entry => {
+    if (!entry) return;
+    const list = recentByTemplate.get(entry.templateId) || [];
+    list.push(entry);
+    recentByTemplate.set(entry.templateId, list);
+  });
+
+  return reply.view('process-templates.ejs', viewData({
+    user: request.user,
+    templates: templates.map(template => ({
+      ...template,
+      recentTriggers: (recentByTemplate.get(template.id) || []).slice(-5).reverse()
+    })),
+    canTrigger: hasPermission(request.session.userId, 'ticket:create')
+  }, request.session.userId));
 });
 
 fastify.get('/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {

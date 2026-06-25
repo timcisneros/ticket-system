@@ -109,6 +109,15 @@
       <dt>Assigned to</dt>
       <dd><%= executionState.assignmentTargetLabel %></dd>
     </div>
+    <% if (ticket.source && ticket.source.type === 'process_template') { %>
+      <div>
+        <dt>Created from template</dt>
+        <dd>
+          <a href="/process-templates"><%= ticket.source.templateName %></a>
+          (#<%= ticket.source.templateId %>, manual trigger by <%= ticket.source.triggeredBy %>)
+        </dd>
+      </div>
+    <% } %>
     <% if (executionState.isGroup && executionState.assignmentMode) { %>
       <div>
         <dt>Assignment mode</dt>
