@@ -1,10 +1,12 @@
 <h1>Process Templates</h1>
 <p class="text-muted">
   A process template stores a reusable ticket. You can create a ticket from it on demand, or
-  <strong>schedule ticket creation</strong> at a fixed interval (UTC). A schedule only creates an
-  ordinary ticket each interval — it does not run anything in the background and does not execute
-  work on its own. Every generated ticket flows through the normal run, triage, verification, and
-  policy controls.
+  schedule ticket creation at a fixed interval (UTC).
+  <strong>Schedules create tickets only.</strong>
+  A schedule creates one ordinary ticket each interval; it does not run anything in the background
+  and does not execute work on its own. Every generated ticket flows through the normal run,
+  triage, verification, and policy controls. This page is read-only — viewing it never creates a
+  ticket or triggers a schedule.
 </p>
 
 <%
@@ -18,6 +20,20 @@
     if (!s || s.enabled !== true || s.kind !== 'interval') return 'Off';
     return 'Creates a ticket every ' + s.everySeconds + ' seconds in UTC';
   }
+  function dueLabel(d) {
+    return ({
+      template_disabled: 'Template disabled', unscheduled: 'Not scheduled',
+      schedule_disabled: 'Schedule off', invalid_schedule: 'Invalid schedule',
+      not_due: 'Not due', due: 'Due for ticket creation'
+    })[d] || d || '';
+  }
+  function healthLabel(h) {
+    return ({
+      disabled: 'Disabled', invalid_schedule: 'Invalid schedule',
+      attention_needed: 'Needs operator attention', no_recent_triggers: 'No generated tickets yet',
+      ok: 'OK'
+    })[h] || h || '';
+  }
 %>
 
 <% if (templateList.length === 0) { %>
@@ -27,25 +43,41 @@
     <thead>
       <tr>
         <th>Template</th>
-        <th>Status</th>
+        <th>State</th>
         <th>Objective</th>
         <th>Assignment</th>
         <th>Schedule</th>
-        <th>Next / last scheduled</th>
-        <th>Last triggered</th>
+        <th>Generated tickets</th>
         <th>Recent generated tickets</th>
         <th>Action</th>
       </tr>
     </thead>
     <tbody>
-      <% templateList.forEach(function (template) { var tt = template.ticketTemplate || {}; var sch = template.schedule || null; %>
+      <% templateList.forEach(function (template) {
+           var tt = template.ticketTemplate || {};
+           var sch = template.schedule || null;
+           var counts = template.generatedTicketCounts || { total: 0, blocked: 0, triaged: 0, pending: 0, inProgress: 0, completed: 0, failed: 0 };
+           var recent = template.recentGeneratedTickets || [];
+      %>
         <tr>
           <td><%= template.name %></td>
-          <td><%= template.enabled ? 'Enabled' : 'Disabled' %></td>
+          <td>
+            <span class="badge"><%= template.enabled ? 'Enabled' : 'Disabled' %></span>
+            <span class="badge badge--due-<%= template.dueStatus %>"><%= dueLabel(template.dueStatus) %></span>
+            <span class="badge badge--health-<%= template.healthStatus %>"><%= healthLabel(template.healthStatus) %></span>
+            <% if (template.dueStatus === 'invalid_schedule') { %>
+              <div class="text-muted">⚠ Invalid schedule — this template will not create scheduled tickets until the schedule is fixed.</div>
+            <% } else if (template.dueStatus === 'due') { %>
+              <div class="text-muted">Due for ticket creation — the next scan creates one ticket; missed intervals are not backfilled.</div>
+            <% } %>
+          </td>
           <td><%= tt.objective || '' %></td>
           <td><%= describeAssignment(tt) %></td>
           <td>
             <%= describeSchedule(sch) %>
+            <% if (sch && sch.enabled) { %>
+              <div class="text-muted">next: <%= sch.nextRunAt || '—' %> · last: <%= sch.lastScheduledTriggerAt || 'never' %></div>
+            <% } %>
             <% if (allowTrigger) { %>
               <form class="process-template-schedule" data-template-id="<%= template.id %>">
                 <input type="number" name="everySeconds" min="60" step="1"
@@ -58,20 +90,26 @@
             <% } %>
           </td>
           <td>
-            <% if (sch && sch.enabled) { %>
-              next: <%= sch.nextRunAt || '—' %><br>
-              last: <%= sch.lastScheduledTriggerAt || 'never' %>
-            <% } else { %>
-              <span class="text-muted">—</span>
+            <%= counts.total %> total
+            <div class="text-muted">
+              <%= counts.pending %> pending · <%= counts.inProgress %> in progress · <%= counts.completed %> completed
+              · <%= counts.failed %> failed · <%= counts.blocked %> blocked · <%= counts.triaged %> triaged
+            </div>
+            <% if (template.lastGeneratedTicketId != null) { %>
+              <div>last: <a href="/tickets/<%= template.lastGeneratedTicketId %>">#<%= template.lastGeneratedTicketId %></a>
+                — <%= template.lastGeneratedTicketStatus %><%= template.lastGeneratedTicketTriageReason ? ' (' + template.lastGeneratedTicketTriageReason + ')' : '' %></div>
             <% } %>
           </td>
-          <td><%= template.lastTriggeredAt || 'never' %></td>
           <td>
-            <% if (!template.recentTriggers || template.recentTriggers.length === 0) { %>
+            <% if (recent.length === 0) { %>
               <span class="text-muted">none</span>
             <% } else { %>
-              <% template.recentTriggers.forEach(function (entry) { %>
-                <a href="/tickets/<%= entry.ticketId %>">#<%= entry.ticketId %></a><%= entry.triggerType === 'schedule' ? ' (scheduled)' : '' %>
+              <% recent.forEach(function (entry) { %>
+                <div>
+                  <a href="/tickets/<%= entry.ticketId %>">#<%= entry.ticketId %></a>
+                  <%= entry.triggerType === 'schedule' ? '(scheduled)' : '(manual)' %>
+                  — <%= entry.status %><%= entry.triageReason ? ' · ' + entry.triageReason : '' %><% if (entry.scheduledFor) { %> · for <%= entry.scheduledFor %><% } %>
+                </div>
               <% }); %>
             <% } %>
           </td>

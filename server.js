@@ -2896,6 +2896,111 @@ function triggerProcessTemplate(template, actor, triggerContext) {
   };
 }
 
+// Pure, read-only derivation of operator-facing process-template state. Joins the
+// existing stores (templates + tickets) in memory and returns one derived row per
+// template. It writes nothing, triggers nothing, and never calls the scheduler or any
+// trigger / run-creation path — rendering this state is a pure read. `now` is a
+// millisecond timestamp (injected for deterministic tests). The `triggers` ledger is
+// accepted for signature symmetry but counts are derived from tickets (authoritative
+// and dedupe-proof: deduped re-entries create no ticket, so they cannot double-count).
+function deriveProcessTemplateState(templates, triggers, tickets, now) {
+  const nowMs = typeof now === 'number' ? now : Date.now();
+
+  const ticketsByTemplate = new Map();
+  (tickets || []).forEach(ticket => {
+    const src = ticket && ticket.source;
+    if (!src || src.type !== 'process_template' || src.templateId == null) return;
+    const list = ticketsByTemplate.get(src.templateId) || [];
+    list.push(ticket);
+    ticketsByTemplate.set(src.templateId, list);
+  });
+
+  function ticketOrderKey(t) {
+    const createdMs = Date.parse((t.source && t.source.createdAt) || t.createdAt || '') || 0;
+    return createdMs * 1e7 + (Number(t.id) || 0);
+  }
+  function isTriaged(t) { return Boolean(t && t.triage && t.triage.required === true); }
+
+  function computeDueStatus(template) {
+    if (!template || template.enabled !== true) return 'template_disabled';
+    const s = template.schedule;
+    if (!s) return 'unscheduled';
+    if (s.enabled !== true) return 'schedule_disabled';
+    if (s.kind !== 'interval') return 'invalid_schedule';
+    if (!Number.isInteger(s.everySeconds) || s.everySeconds <= 0) return 'invalid_schedule';
+    const nextMs = typeof s.nextRunAt === 'string' ? Date.parse(s.nextRunAt) : NaN;
+    if (Number.isNaN(nextMs)) return 'invalid_schedule';
+    return nextMs <= nowMs ? 'due' : 'not_due';
+  }
+
+  return (templates || []).map(template => {
+    const generated = (ticketsByTemplate.get(template.id) || []).slice().sort((a, b) => ticketOrderKey(a) - ticketOrderKey(b));
+    const counts = { total: 0, blocked: 0, triaged: 0, pending: 0, inProgress: 0, completed: 0, failed: 0 };
+    generated.forEach(t => {
+      counts.total++;
+      if (t.status === 'blocked') counts.blocked++;
+      if (isTriaged(t)) counts.triaged++;
+      if (t.status === 'open') counts.pending++;
+      if (t.status === 'in_progress') counts.inProgress++;
+      if (t.status === 'completed') counts.completed++;
+      if (t.status === 'failed') counts.failed++;
+    });
+
+    const last = generated.length > 0 ? generated[generated.length - 1] : null;
+    const recentGeneratedTickets = generated.slice(-5).reverse().map(t => ({
+      ticketId: t.id,
+      triggerType: (t.source && t.source.triggerType) || 'manual',
+      status: t.status,
+      triageReason: isTriaged(t) ? (t.triage.reasonCode || null) : null,
+      scheduledFor: (t.source && t.source.scheduledFor) || null
+    }));
+
+    const dueStatus = computeDueStatus(template);
+
+    // Advisory health (derived; NOT a correctness guarantee; no remediation).
+    let healthStatus;
+    if (template.enabled !== true) {
+      healthStatus = 'disabled';
+    } else if (dueStatus === 'invalid_schedule') {
+      healthStatus = 'invalid_schedule';
+    } else if (last && (last.status === 'blocked' || isTriaged(last))) {
+      healthStatus = 'attention_needed';
+    } else if (recentGeneratedTickets.some(t => t.status === 'failed' || t.status === 'blocked')) {
+      healthStatus = 'attention_needed';
+    } else if (counts.total === 0) {
+      healthStatus = 'no_recent_triggers';
+    } else {
+      healthStatus = 'ok';
+    }
+
+    const schedule = template.schedule || null;
+    const tt = template.ticketTemplate || {};
+    return {
+      templateId: template.id,
+      name: template.name,
+      objective: tt.objective || '',
+      assignmentTargetType: tt.assignmentTargetType || null,
+      assignmentTargetId: tt.assignmentTargetId != null ? tt.assignmentTargetId : null,
+      enabled: template.enabled === true,
+      manualAvailable: template.enabled === true,
+      scheduleEnabled: Boolean(schedule && schedule.enabled === true),
+      scheduleKind: schedule ? (schedule.kind || null) : null,
+      scheduleEverySeconds: schedule && Number.isInteger(schedule.everySeconds) ? schedule.everySeconds : null,
+      nextRunAt: schedule ? (schedule.nextRunAt || null) : null,
+      lastScheduledTriggerAt: schedule ? (schedule.lastScheduledTriggerAt || null) : null,
+      lastTriggeredAt: template.lastTriggeredAt || null,
+      lastTriggerType: last ? ((last.source && last.source.triggerType) || null) : null,
+      lastGeneratedTicketId: last ? last.id : null,
+      lastGeneratedTicketStatus: last ? last.status : null,
+      lastGeneratedTicketTriageReason: last && isTriaged(last) ? (last.triage.reasonCode || null) : null,
+      generatedTicketCounts: counts,
+      recentGeneratedTickets,
+      dueStatus,
+      healthStatus
+    };
+  });
+}
+
 function normalizeWorkflowPolicy(policy) {
   if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return null;
   const id = typeof policy.id === 'string' ? policy.id.trim() : '';
@@ -14580,21 +14685,20 @@ fastify.get('/process-templates', { preHandler: fastify.requireAuth }, async (re
     }, request.session.userId));
   }
 
+  // Pure read: derive operator-facing state from existing stores. Nothing here
+  // triggers a schedule, creates a ticket/run, mutates the workspace, or writes logs.
   const templates = readProcessTemplates();
   const triggers = readProcessTemplateTriggers();
-  const recentByTemplate = new Map();
-  triggers.forEach(entry => {
-    if (!entry) return;
-    const list = recentByTemplate.get(entry.templateId) || [];
-    list.push(entry);
-    recentByTemplate.set(entry.templateId, list);
-  });
+  const tickets = readTickets();
+  const derivedById = new Map(
+    deriveProcessTemplateState(templates, triggers, tickets, Date.now()).map(row => [row.templateId, row])
+  );
 
   return reply.view('process-templates.ejs', viewData({
     user: request.user,
     templates: templates.map(template => ({
       ...template,
-      recentTriggers: (recentByTemplate.get(template.id) || []).slice(-5).reverse()
+      ...(derivedById.get(template.id) || {})
     })),
     canTrigger: hasPermission(request.session.userId, 'ticket:create')
   }, request.session.userId));
