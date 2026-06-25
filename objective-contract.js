@@ -219,7 +219,32 @@ function runObjectiveClarificationGate(objective, ticket) {
     };
   }
 
-  // 2. Narrow ambiguity: quantified folder creation with generative naming.
+  // 2. Narrow ambiguity: quantified category folder creation.
+  //    Catches "Create <N> <descriptor> folders" where the descriptor is a
+  //    category/source phrase (e.g. "Michael Jackson songs") rather than
+  //    explicit artifact names. Excludes descriptors containing list
+  //    separators (commas, quotes, semicolons) that would indicate explicit
+  //    enumeration. This pattern is intentionally narrow; it is better to
+  //    miss some ambiguous cases than block normal tickets.
+  const hasQuantifiedCategoryFolders = /^create\s+\d+\s+.+\s+(?:folders?|files?)\s*$/i.test(text);
+  const hasListSeparators = /["',;]/.test(text);
+
+  if (hasQuantifiedCategoryFolders && !hasListSeparators) {
+    return {
+      verdict: 'ambiguous',
+      reasonCode: 'objective_ambiguous',
+      requiredDecision: 'clarify_objective',
+      summary: 'The objective asks to create a specific number of folders based on a category but does not provide the exact folder names.',
+      ambiguityPatterns: ['quantified_category_folder_creation'],
+      expectedArtifacts: null,
+      canExecuteWithoutClarification: false,
+      evidenceRefs: ['objective-contract:gate', 'objective-contract:ambiguous'],
+      allowedActions: ['edit_objective', 'clarify_ticket'],
+      prohibitedActions: ['mutate_workspace_without_clarification', 'start_run_without_clarification']
+    };
+  }
+
+  // 3. Narrow ambiguity: quantified folder creation with generative naming.
   //    Check two independent patterns:
   //    a. quantified folder creation: "create <N> folders"
   //    b. generative naming signal: "each named", "each called", "named after"
@@ -243,7 +268,7 @@ function runObjectiveClarificationGate(objective, ticket) {
     };
   }
 
-  // 3. No ambiguity detected.
+  // 4. No ambiguity detected.
   return {
     verdict: 'clear',
     canExecuteWithoutClarification: true,

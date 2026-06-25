@@ -114,6 +114,44 @@ function phase1GateFunction() {
   const del = runObjectiveClarificationGate('delete folder someFolder');
   assert(del.verdict === 'clear', `expected clear for delete objective, got ${del.verdict}`);
 
+  // ── New quantified category folder blocking patterns ──
+
+  // 11. "Create 3 Michael Jackson songs folders" → ambiguous (false negative fix).
+  const mj = runObjectiveClarificationGate('Create 3 Michael Jackson songs folders');
+  assert(mj.verdict === 'ambiguous', `expected ambiguous for 'Create 3 Michael Jackson songs folders', got ${mj.verdict}`);
+  assert(mj.canExecuteWithoutClarification === false, 'Michael Jackson songs folders must not allow execution without clarification');
+  assert(mj.ambiguityPatterns.includes('quantified_category_folder_creation'),
+    `must include quantified_category_folder_creation pattern, got ${JSON.stringify(mj.ambiguityPatterns)}`);
+
+  // 12. "Create 3 Beatles albums folders" → ambiguous (same category).
+  const beatles = runObjectiveClarificationGate('Create 3 Beatles albums folders');
+  assert(beatles.verdict === 'ambiguous', `expected ambiguous for 'Create 3 Beatles albums folders', got ${beatles.verdict}`);
+  assert(beatles.canExecuteWithoutClarification === false, 'Beatles albums folders must not allow execution without clarification');
+  assert(beatles.ambiguityPatterns.includes('quantified_category_folder_creation'),
+    `must include quantified_category_folder_creation pattern, got ${JSON.stringify(beatles.ambiguityPatterns)}`);
+
+  // 13. "Create folder Michael Jackson songs" → still clear (singular, no count).
+  const singular2 = runObjectiveClarificationGate('Create folder Michael Jackson songs');
+  assert(singular2.verdict === 'clear', `expected clear for singular folder, got ${singular2.verdict}`);
+
+  // 14. "Create 3 Michael Jackson songs files" → ambiguous (files variant).
+  const files = runObjectiveClarificationGate('Create 3 Michael Jackson songs files');
+  assert(files.verdict === 'ambiguous', `expected ambiguous for files variant, got ${files.verdict}`);
+
+  // ── Existing cases still passing ──
+
+  // 15. Existing blocked examples still ambiguous.
+  const existingAmbiguous = runObjectiveClarificationGate('Create 3 folders each named Michael Jackson songs');
+  assert(existingAmbiguous.verdict === 'ambiguous', `existing blocked example must still be ambiguous, got ${existingAmbiguous.verdict}`);
+
+  // 16. Existing allowed examples still clear.
+  const existingExplicit = runObjectiveClarificationGate('Create folders Thriller BillieJean BeatIt');
+  assert(existingExplicit.verdict === 'clear', `existing allowed example must still be clear, got ${existingExplicit.verdict}`);
+  const existingQuoted = runObjectiveClarificationGate('Create folders "Thriller" "Billie Jean" "Beat It"');
+  assert(existingQuoted.verdict === 'clear', `existing quoted example must still be clear, got ${existingQuoted.verdict}`);
+  const existingWorkflow = runObjectiveClarificationGate('Create 3 folders each named Michael Jackson songs', { executionMode: 'workflow' });
+  assert(existingWorkflow.verdict === 'clear', `workflow mode must still be clear, got ${existingWorkflow.verdict}`);
+
   console.log('PASS: phase 1 — gate function pure tests');
 }
 
@@ -391,11 +429,89 @@ async function phase4ExistingTriageAndWorkflowUnchanged() {
   }
 }
 
+async function phase5QuantifiedCategoryAmbiguousBlocksBeforeRun() {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'objective-gate-cat-data-'));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'objective-gate-cat-ws-'));
+  const port = 3513;
+  const baseUrl = 'http://127.0.0.1:' + port;
+  let server = null;
+
+  try {
+    seedCommon(dataDir);
+    server = startServer(dataDir, workspaceRoot, port);
+    await waitForReady(baseUrl, server);
+
+    const cookie = await login(baseUrl);
+
+    const runsBefore = readJson(dataDir, 'runs.json');
+    const opsBefore = readJson(dataDir, 'operation-history.json');
+    const workspaceBefore = fs.existsSync(workspaceRoot) ? fs.readdirSync(workspaceRoot) : [];
+
+    // Create ticket with quantified category folder objective.
+    const response = await request(baseUrl, 'POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'Create 3 Michael Jackson songs folders',
+        assignmentTargetType: 'agent',
+        assignmentTargetId: '1'
+      }
+    });
+    assert(response.statusCode === 302, `Quantified category ticket create failed HTTP ${response.statusCode}`);
+
+    await sleep(300);
+
+    // 1. Ticket is blocked with triage.
+    const tickets = readJson(dataDir, 'tickets.json');
+    const blockedTicket = tickets.find(t => t.objective === 'Create 3 Michael Jackson songs folders');
+    assert(blockedTicket, 'Blocked ticket must be persisted');
+    assert(blockedTicket.status === 'blocked', `Ticket should be blocked, got ${blockedTicket.status}`);
+    assert(blockedTicket.triage && blockedTicket.triage.required === true,
+      'Blocked ticket must have required triage');
+    assert(blockedTicket.triage.reasonCode === 'objective_ambiguous',
+      `Triage reasonCode must be objective_ambiguous, got ${blockedTicket.triage.reasonCode}`);
+    assert(blockedTicket.triage.requiredDecision === 'clarify_objective',
+      `Triage requiredDecision must be clarify_objective, got ${blockedTicket.triage.requiredDecision}`);
+
+    // 2. No run was created.
+    const runs = readJson(dataDir, 'runs.json');
+    assert(runs.length === runsBefore.length,
+      `No runs should be created (before: ${runsBefore.length}, after: ${runs.length})`);
+
+    // 3. No operation-history entries.
+    const ops = readJson(dataDir, 'operation-history.json');
+    assert(ops.length === opsBefore.length,
+      `No operation-history entries should be added (before: ${opsBefore.length}, after: ${ops.length})`);
+
+    // 4. Workspace unchanged.
+    const workspaceAfter = fs.existsSync(workspaceRoot) ? fs.readdirSync(workspaceRoot) : [];
+    assert(workspaceAfter.length === workspaceBefore.length,
+      `Workspace should be unchanged (before: ${workspaceBefore.length} entries, after: ${workspaceAfter.length})`);
+
+    // 5. Ticket detail shows triage.
+    const ticketPage = await request(baseUrl, 'GET', `/tickets/${blockedTicket.id}`, { cookie });
+    assert(ticketPage.statusCode === 200, `Ticket detail failed HTTP ${ticketPage.statusCode}`);
+    assert(ticketPage.body.includes('Ticket-Level Triage'), 'Ticket detail must show triage section');
+
+    // 6. /triage shows the item.
+    const triagePage = await request(baseUrl, 'GET', '/triage', { cookie });
+    assert(triagePage.statusCode === 200, `Triage page failed HTTP ${triagePage.statusCode}`);
+    assert(triagePage.body.includes('objective_ambiguous'), 'Triage page must show objective_ambiguous');
+    assert(triagePage.body.includes(`/tickets/${blockedTicket.id}`), 'Triage page must link to the blocked ticket');
+
+    console.log('PASS: phase 5 — quantified category ambiguous blocks before run');
+  } finally {
+    await stop(server);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   phase1GateFunction();
   await phase2AmbiguousBlocksBeforeRun();
   await phase3ClearObjectivePassesThrough();
   await phase4ExistingTriageAndWorkflowUnchanged();
+  await phase5QuantifiedCategoryAmbiguousBlocksBeforeRun();
   console.log('PASS: objective clarification gate');
 }
 
