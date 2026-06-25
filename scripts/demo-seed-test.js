@@ -18,12 +18,15 @@ function assert(c, m) { if (!c) throw new Error(m); }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function request(method, urlPath, options = {}) {
-  const body = options.form ? new URLSearchParams(options.form).toString() : null;
+  const body = options.form ? new URLSearchParams(options.form).toString()
+    : options.json !== undefined ? JSON.stringify(options.json) : null;
   return new Promise((resolve, reject) => {
     const req = http.request(BASE_URL + urlPath, {
       method,
       headers: {
-        ...(options.form ? { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) } : {}),
+        ...(options.form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+        ...(options.json !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
         ...(options.cookie ? { Cookie: options.cookie } : {})
       }
     }, res => {
@@ -61,7 +64,7 @@ async function main() {
   });
 
   // 2: expected files were created and are coherent.
-  for (const f of ['users.json', 'tickets.json', 'runs.json', 'logs.json', 'events.jsonl', 'workflows.json']) {
+  for (const f of ['users.json', 'tickets.json', 'runs.json', 'logs.json', 'events.jsonl', 'workflows.json', 'process-templates.json', 'process-template-triggers.json']) {
     assert(fs.existsSync(path.join(DATA_DIR, f)), `seed should create ${f}`);
   }
   assert(fs.existsSync(path.join(DATA_DIR, 'replay-snapshots', 'run-101.json')), 'seed should create referenced replay snapshots');
@@ -161,6 +164,65 @@ async function main() {
     const logs = await request('GET', '/logs', { cookie });
     assert(logs.statusCode === 200, '/logs HTTP ' + logs.statusCode);
     assert(logs.body.includes('ticket:max_attempts_change') && logs.body.includes('run:triage_resolve'), '/logs should render demo audit entries');
+
+    // 13: process templates (r1.6) appear in the demo and the manual trigger story works.
+    const templatesStore = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8'));
+    assert(Array.isArray(templatesStore) && templatesStore.length >= 2, 'demo seed must include the process template store with templates');
+    assert(templatesStore.every(t => t.triggerType === 'manual'), 'all demo templates must be manual triggerType');
+    assert(templatesStore.every(t => t.schedule === null), 'all demo templates must have schedule null (no scheduled execution)');
+    assert(templatesStore.some(t => t.enabled === true), 'at least one demo template must be enabled');
+    const safeTemplate = templatesStore.find(t => t.name === 'Weekly status report');
+    const ambiguousTemplate = templatesStore.find(t => t.name === 'Ad-hoc folder batch');
+    assert(safeTemplate && ambiguousTemplate, 'demo must include the safe and ambiguous templates');
+
+    // Templates page renders the seeded templates with manual-only copy.
+    const templatesPage = await request('GET', '/process-templates', { cookie });
+    assert(templatesPage.statusCode === 200, '/process-templates HTTP ' + templatesPage.statusCode);
+    assert(templatesPage.body.includes('Weekly status report') && templatesPage.body.includes('Ad-hoc folder batch'), 'templates page should render the seeded templates');
+    assert(templatesPage.body.includes('Create ticket from template'), 'templates page must offer the manual trigger control');
+    assert(!/running loop/i.test(templatesPage.body), 'templates page must not imply a running loop');
+
+    const wsBeforeTriggers = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
+    const ticketCountBefore = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8')).length;
+
+    // Safe template → exactly one ordinary ticket with provenance + a normal pending run.
+    const safeTrigger = await request('POST', `/api/process-templates/${safeTemplate.id}/trigger`, { cookie, json: { triggerToken: 'demo-safe-1' } });
+    assert(safeTrigger.statusCode === 200, 'safe trigger HTTP ' + safeTrigger.statusCode + ': ' + safeTrigger.body);
+    const safeResult = JSON.parse(safeTrigger.body);
+    assert(safeResult.ok && safeResult.deduped === false && safeResult.ticketId, 'safe trigger should create a ticket');
+    const ticketsAfterSafe = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8'));
+    assert(ticketsAfterSafe.length === ticketCountBefore + 1, 'safe trigger must create exactly one ticket');
+    const safeTicket = ticketsAfterSafe.find(t => t.id === safeResult.ticketId);
+    assert(safeTicket && safeTicket.source && safeTicket.source.type === 'process_template', 'generated ticket must record process_template provenance');
+    ['templateId', 'templateName', 'triggeredBy', 'triggerType', 'triggerToken'].forEach(k =>
+      assert(safeTicket.source[k] !== undefined && safeTicket.source[k] !== null, `provenance must include ${k}`));
+    assert(safeTicket.source.triggerType === 'manual' && safeTicket.source.triggeredBy === 'admin', 'provenance must be manual + acting user');
+
+    const safeRuns = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'runs.json'), 'utf8')).filter(r => r.ticketId === safeTicket.id);
+    assert(safeRuns.length === 1 && safeRuns[0].status === 'pending', 'clear generated ticket should create exactly one pending run via the normal path');
+
+    // Trigger log + system log written.
+    const triggerLog = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-template-triggers.json'), 'utf8'));
+    assert(triggerLog.some(e => e.triggerToken === 'demo-safe-1' && e.ticketId === safeTicket.id && e.ticketTemplateSnapshot), 'trigger log must record the demo trigger with a snapshot');
+    const logsStore = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'logs.json'), 'utf8'));
+    assert(logsStore.some(l => l.type === 'process_template:triggered' && l.contextTicketId === safeTicket.id), 'process_template:triggered system log must be written');
+
+    // Provenance renders on generated ticket detail.
+    const safeTicketPage = await request('GET', '/tickets/' + safeTicket.id, { cookie });
+    assert(safeTicketPage.statusCode === 200 && safeTicketPage.body.includes('Created from template'), 'generated ticket detail should show provenance');
+
+    // Ambiguous template → blocked/triaged generated ticket through the existing gate, no run.
+    const ambTrigger = await request('POST', `/api/process-templates/${ambiguousTemplate.id}/trigger`, { cookie, json: { triggerToken: 'demo-amb-1' } });
+    assert(ambTrigger.statusCode === 200, 'ambiguous trigger HTTP ' + ambTrigger.statusCode + ': ' + ambTrigger.body);
+    const ambResult = JSON.parse(ambTrigger.body);
+    assert(ambResult.ok && ambResult.ticketId, 'ambiguous trigger should still create the ticket object');
+    const ambTicket = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8')).find(t => t.id === ambResult.ticketId);
+    assert(ambTicket.status === 'blocked', 'ambiguous generated ticket must be blocked through the existing gate');
+    assert(ambTicket.triage && ambTicket.triage.required === true && ambTicket.triage.reasonCode === 'objective_ambiguous', 'ambiguous generated ticket must carry objective_ambiguous triage');
+    assert(JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'runs.json'), 'utf8')).filter(r => r.ticketId === ambTicket.id).length === 0, 'ambiguous generated ticket must create no run');
+
+    // No workspace mutation occurred during either manual trigger.
+    assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsBeforeTriggers, 'template triggers must not mutate the workspace');
 
     console.log('PASS: deterministic demo seed renders the full product loop with no provider key');
   } catch (error) {

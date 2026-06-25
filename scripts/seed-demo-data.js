@@ -119,9 +119,9 @@ function seed() {
   fs.mkdirSync(DEMO_WORKSPACE_ROOT, { recursive: true });
 
   writeJson('users.json', [{ id: 1, username: 'admin', passwordHash: ADMIN_HASH, createdAt: T0, type: 'user' }]);
-  writeJson('permissions.json', ['ticket:create', 'ticket:read', 'ticket:update', 'user:read', 'user:update', 'user:delete', 'group:update', 'workspace:read', 'workspace:write', 'workspace:reset']);
+  writeJson('permissions.json', ['ticket:create', 'ticket:read', 'ticket:update', 'user:read', 'user:update', 'user:delete', 'group:update', 'workspace:read', 'workspace:write', 'workspace:reset', 'processTemplate:manage']);
   writeJson('groups.json', [
-    { id: 1, name: 'Administrators', permissions: ['ticket:create', 'ticket:read', 'ticket:update', 'user:read', 'user:update', 'user:delete', 'group:update', 'workspace:read', 'workspace:write', 'workspace:reset'], canReceiveTickets: false },
+    { id: 1, name: 'Administrators', permissions: ['ticket:create', 'ticket:read', 'ticket:update', 'user:read', 'user:update', 'user:delete', 'group:update', 'workspace:read', 'workspace:write', 'workspace:reset', 'processTemplate:manage'], canReceiveTickets: false },
     { id: 2, name: 'Demo Agents', permissions: ['ticket:read'], canReceiveTickets: true }
   ]);
   writeJson('memberships.json', [{ id: 1, principalType: 'user', principalId: 1, groupId: 1 }]);
@@ -130,6 +130,32 @@ function seed() {
   writeJson('allocation-plans.json', []);
   writeJson('operation-history.json', []);
   writeJson('protected-paths.json', []);
+
+  // Process templates (r1.6): reusable ticket starters. Manual trigger only —
+  // triggerType 'manual', schedule null (no scheduled/background execution). A
+  // trigger creates an ordinary ticket through the normal path, so both templates
+  // demonstrate the existing safety substrate:
+  //   - "Weekly status report" creates a clear, ordinary ticket with provenance.
+  //   - "Ad-hoc folder batch" is intentionally ambiguous, so a manual trigger is
+  //     blocked by the existing objective clarification gate (no run is created).
+  // executionPolicy is stored RAW here; it is normalized only when a trigger
+  // creates the generated ticket. The trigger log starts empty and is append-only.
+  const processTemplate = (id, name, objective) => ({
+    id, name, enabled: true, triggerType: 'manual', schedule: null,
+    ticketTemplate: {
+      objective,
+      assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: null,
+      capabilityType: 'directAction', capabilityId: 'agent-selected-actions',
+      workflowId: null, workflowInput: null, ownedOutputPaths: null,
+      executionPolicy: { maxAttempts: null }
+    },
+    createdBy: 'admin', createdAt: T0, updatedAt: T0, lastTriggeredAt: null
+  });
+  writeJson('process-templates.json', [
+    processTemplate(1, 'Weekly status report', 'Create folder reports'),
+    processTemplate(2, 'Ad-hoc folder batch', 'Create 3 folders each named Michael Jackson songs')
+  ]);
+  writeJson('process-template-triggers.json', []);
 
   // Tickets: one per demonstrated capability.
   writeJson('tickets.json', [
