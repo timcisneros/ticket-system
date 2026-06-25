@@ -89,7 +89,7 @@ async function main() {
   assert(refused, 'seed must refuse to target .local-data');
 
   // 3: app boots against the demo DATA_DIR (no OPENAI key in env).
-  const env = { ...process.env, NODE_ENV: 'development', PORT, DATA_DIR, WORKSPACE_ROOT, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' };
+  const env = { ...process.env, NODE_ENV: 'development', PORT, DATA_DIR, WORKSPACE_ROOT, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000', PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000' };
   delete env.OPENAI_API_KEY;
   server = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
@@ -168,11 +168,12 @@ async function main() {
     // 13: process templates (r1.6) appear in the demo and the manual trigger story works.
     const templatesStore = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8'));
     assert(Array.isArray(templatesStore) && templatesStore.length >= 2, 'demo seed must include the process template store with templates');
-    assert(templatesStore.every(t => t.triggerType === 'manual'), 'all demo templates must be manual triggerType');
-    assert(templatesStore.every(t => t.schedule === null), 'all demo templates must have schedule null (no scheduled execution)');
+    assert(templatesStore.every(t => t.triggerType === 'manual'), 'all demo templates keep triggerType manual (the schedule object governs scheduling)');
     assert(templatesStore.some(t => t.enabled === true), 'at least one demo template must be enabled');
     const safeTemplate = templatesStore.find(t => t.name === 'Weekly status report');
     const ambiguousTemplate = templatesStore.find(t => t.name === 'Ad-hoc folder batch');
+    // The two manual-story templates stay schedule-null; the scheduled story is template 3 (section 14).
+    assert(safeTemplate && safeTemplate.schedule === null && ambiguousTemplate && ambiguousTemplate.schedule === null, 'manual demo templates must remain schedule null');
     assert(safeTemplate && ambiguousTemplate, 'demo must include the safe and ambiguous templates');
 
     // Templates page renders the seeded templates with manual-only copy.
@@ -223,6 +224,77 @@ async function main() {
 
     // No workspace mutation occurred during either manual trigger.
     assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsBeforeTriggers, 'template triggers must not mutate the workspace');
+
+    // 14: scheduled process template (r1.7) — interval/UTC, due, fired by a scan tick.
+    const schedTemplate = templatesStore.find(t => t.name === 'Daily compliance digest');
+    assert(schedTemplate, 'demo must include a scheduled process template');
+    assert(schedTemplate.schedule && schedTemplate.schedule.enabled === true, 'demo scheduled template must have schedule.enabled true');
+    assert(schedTemplate.schedule.kind === 'interval', 'demo schedule must be kind interval');
+    assert(schedTemplate.schedule.timezone === 'UTC', 'demo schedule must be timezone UTC');
+    assert(Number.isInteger(schedTemplate.schedule.everySeconds) && schedTemplate.schedule.everySeconds >= 60, 'demo schedule everySeconds must be a valid integer >= minimum');
+
+    // Templates page renders schedule status with safe copy.
+    const schedPage = await request('GET', '/process-templates', { cookie });
+    assert(schedPage.body.includes('Daily compliance digest'), 'templates page should render the scheduled template');
+    assert(schedPage.body.includes('Schedule ticket creation'), 'templates page must say "Schedule ticket creation"');
+    assert(/Creates a ticket every/.test(schedPage.body), 'templates page must show interval schedule status');
+    assert(!/running loop/i.test(schedPage.body), 'templates page must not say "running loop"');
+
+    // Fixture for the ambiguous-scheduled case: give the existing ambiguous template a
+    // due interval schedule (kept out of the seed to avoid demo noise).
+    var ptStore = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8'));
+    var ambTmpl = ptStore.find(t => t.name === 'Ad-hoc folder batch');
+    ambTmpl.schedule = { enabled: true, kind: 'interval', everySeconds: 86400, anchor: schedTemplate.schedule.anchor, nextRunAt: schedTemplate.schedule.nextRunAt, lastScheduledTriggerAt: null, timezone: 'UTC', scheduledBy: 'admin' };
+    fs.writeFileSync(path.join(DATA_DIR, 'process-templates.json'), JSON.stringify(ptStore, null, 2));
+
+    const wsBeforeScan = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
+    const ticketCountBeforeScan = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8')).length;
+
+    // Run one scheduled scan: both due templates (3 safe, 2 ambiguous fixture) fire once.
+    const scan = await request('POST', '/api/process-templates/scheduler/tick', { cookie, json: {} });
+    assert(scan.statusCode === 200, 'scheduler tick HTTP ' + scan.statusCode + ': ' + scan.body);
+
+    const afterScan = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8'));
+    const schedTicket = afterScan.find(t => t.source && t.source.templateId === schedTemplate.id && t.source.triggerType === 'schedule');
+    assert(schedTicket, 'scheduled scan must create one ordinary ticket for the due scheduled template');
+    assert(afterScan.filter(t => t.source && t.source.templateId === schedTemplate.id && t.source.triggerType === 'schedule').length === 1, 'exactly one scheduled ticket for the safe template');
+
+    // Scheduled provenance.
+    const s = schedTicket.source;
+    assert(s.type === 'process_template', 'scheduled ticket source.type process_template');
+    assert(s.triggerType === 'schedule', 'scheduled ticket source.triggerType must be schedule');
+    assert(s.triggeredBy === 'system', 'scheduled ticket source.triggeredBy must be system');
+    assert(typeof s.scheduledFor === 'string' && s.scheduledFor, 'scheduled ticket source.scheduledFor present');
+    assert(typeof s.triggerToken === 'string' && s.triggerToken.indexOf('schedule:') === 0, 'scheduled ticket triggerToken begins with schedule:');
+
+    // One pending run via the normal path; no workspace mutation.
+    const schedRuns = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'runs.json'), 'utf8')).filter(r => r.ticketId === schedTicket.id);
+    assert(schedRuns.length === 1 && schedRuns[0].status === 'pending', 'scheduled clear ticket creates exactly one pending run via the normal path');
+
+    // Trigger log + system log for the scheduled trigger.
+    const schedLedger = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-template-triggers.json'), 'utf8'));
+    assert(schedLedger.some(e => e.ticketId === schedTicket.id && e.triggerType === 'schedule' && e.triggerToken === s.triggerToken), 'trigger log records the scheduled trigger');
+    assert(JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'logs.json'), 'utf8')).some(l => l.type === 'process_template:triggered' && l.contextTicketId === schedTicket.id && l.triggerType === 'schedule'), 'process_template:triggered system log for scheduled trigger');
+
+    // Provenance renders on the generated scheduled ticket detail.
+    const schedDetail = await request('GET', '/tickets/' + schedTicket.id, { cookie });
+    assert(schedDetail.statusCode === 200 && schedDetail.body.includes('Created from template'), 'scheduled ticket detail should show provenance');
+
+    // Ambiguous scheduled (fixture) → blocked with objective_ambiguous, no run.
+    const ambSchedTicket = afterScan.find(t => t.source && t.source.templateId === ambTmpl.id && t.source.triggerType === 'schedule');
+    assert(ambSchedTicket && ambSchedTicket.status === 'blocked', 'ambiguous scheduled ticket must be blocked');
+    assert(ambSchedTicket.triage && ambSchedTicket.triage.reasonCode === 'objective_ambiguous', 'ambiguous scheduled ticket must carry objective_ambiguous triage');
+    assert(JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'runs.json'), 'utf8')).filter(r => r.ticketId === ambSchedTicket.id).length === 0, 'ambiguous scheduled ticket must create no run');
+
+    // No historical storm: each due template produced exactly one ticket this scan.
+    assert(afterScan.length === ticketCountBeforeScan + 2, 'one scan created exactly one ticket per due template (no storm)');
+
+    // Repeated scan does not duplicate (cursor advanced forward; ledger/source dedupe).
+    await request('POST', '/api/process-templates/scheduler/tick', { cookie, json: {} });
+    assert(JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8')).length === afterScan.length, 'repeated scheduled scan must not duplicate tickets');
+
+    // No workspace mutation during the scheduled trigger itself.
+    assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsBeforeScan, 'scheduled triggers must not mutate the workspace');
 
     console.log('PASS: deterministic demo seed renders the full product loop with no provider key');
   } catch (error) {

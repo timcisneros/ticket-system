@@ -58,38 +58,49 @@ password: admin123
 | 9 | `/logs` | The durable audit trail, including `ticket:max_attempts_change` and `run:triage_resolve` operator-control entries. |
 | 10 | any ticket detail | **Budget Advisory** rollup across the ticket's runs (advisory only). |
 
-## 5. Process templates (manual)
+## 5. Process templates (manual + scheduled)
 
 Open **`/process-templates`** (the **Templates** nav link, gated by `processTemplate:manage`).
 A process template is a **reusable ticket starter** — it stores a ticket's objective,
-assignment, and policy so an operator can create that ticket again without retyping it.
+assignment, and policy so the same ticket can be created again without retyping it.
 
-Triggering is **manual only**. Pressing **"Create ticket from template"** creates one ordinary
-ticket and nothing else — there is no schedule, no background job, and no process that runs on
-its own. The generated ticket then flows through the **same** run, triage, verification, and
-policy controls as any hand-entered ticket.
+A template creates tickets two ways, and **both create ordinary tickets, not work**:
 
-The demo seeds two enabled templates (`triggerType: "manual"`, `schedule: null`):
+- **Manual** — pressing **"Create ticket from template"** creates one ordinary ticket now.
+- **Scheduled** — **"Schedule ticket creation from this template"** creates one ordinary ticket
+  each interval (r1.7 supports **interval seconds in UTC only** — no cron, no calendar, no
+  daily/timezone modes). A schedule does **not** run work on its own; it only creates a ticket,
+  which then flows through the **same** run, triage, verification, and policy controls as any
+  hand-entered ticket.
 
-| Template | What a manual trigger demonstrates |
-| -------- | ---------------------------------- |
-| **Weekly status report** | Creates a clear, ordinary ticket. Its detail shows **Created from template** provenance (template name, who triggered it, manual trigger). It then runs through the normal path like any other ticket. |
-| **Ad-hoc folder batch** | Has an intentionally ambiguous objective, so a manual trigger is **blocked by the existing objective clarification gate** — the generated ticket lands in triage (`objective_ambiguous`) and **no run is created**. A template cannot bypass a safety gate just because it is reusable. |
+The demo seeds three enabled templates:
 
-Every generated ticket records provenance, and each trigger is written to an append-only
-trigger log plus a `process_template:triggered` audit entry on `/logs`. Repeating the same
-trigger token returns the original ticket instead of creating a duplicate.
+| Template | What it demonstrates |
+| -------- | -------------------- |
+| **Weekly status report** | Manual. Creates a clear, ordinary ticket; its detail shows **Created from template** provenance. Runs through the normal path like any other ticket. |
+| **Ad-hoc folder batch** | Manual, intentionally ambiguous — **blocked by the existing objective clarification gate** (`objective_ambiguous` triage, **no run**). A template cannot bypass a safety gate just because it is reusable. |
+| **Daily compliance digest** | **Scheduled** (`schedule.enabled: true`, `kind: "interval"`, UTC). When due, a scheduler scan creates one ordinary ticket whose detail shows scheduled provenance — `triggerType: "schedule"`, `triggeredBy: "system"`, a `schedule:<id>:<slot>` token, and `scheduledFor`. |
+
+Scheduling is bounded on purpose: **there is no catch-up.** If an interval was missed (for
+example the app was off), the next scan creates **one** ticket for the current slot — never a
+storm of backfilled tickets. Repeating a scan does not duplicate a slot's ticket (the trigger is
+idempotent on its deterministic token). The **run scheduler is unchanged** — it still only drains
+pending runs **after** a ticket has been created the normal way.
+
+Every generated ticket records provenance, and each trigger (manual or scheduled) is written to
+an append-only trigger log plus a `process_template:triggered` audit entry on `/logs`.
 
 ## What is intentionally NOT automated yet
 
 This demo is a **visibility, navigation, and human-control** surface. It deliberately does
 **not** include: automatic retry, hard budget enforcement, run cancellation, remediation or
-approval workflows, child-ticket execution, or any rerun-from-triage. Process templates are
-**manual-trigger only** — there is no scheduler, no background loop, no template that wakes
-another template, and no autonomous ticket spawning. `maxAttempts` is the only enforced policy
-field, and only for **manual** rerun-from-start. Triage resolution is a human acknowledgement
-that never changes completion or verification outcomes. See
-`docs/AUTHORITY_AND_DURABILITY.md` for where this state lives.
+approval workflows, child-ticket execution, or any rerun-from-triage. Scheduled process templates
+**only create tickets** on a fixed UTC interval (no catch-up) — there is no background loop that
+executes work, no template that wakes another template, and no autonomous ticket spawning beyond
+that single bounded per-interval ticket. `maxAttempts` is the only enforced policy field, and only
+for **manual** rerun-from-start. Triage resolution is a human acknowledgement that never changes
+completion or verification outcomes. See `docs/AUTHORITY_AND_DURABILITY.md` for where this state
+lives.
 
 ## Resetting
 

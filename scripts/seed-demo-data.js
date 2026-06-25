@@ -131,17 +131,20 @@ function seed() {
   writeJson('operation-history.json', []);
   writeJson('protected-paths.json', []);
 
-  // Process templates (r1.6): reusable ticket starters. Manual trigger only —
-  // triggerType 'manual', schedule null (no scheduled/background execution). A
-  // trigger creates an ordinary ticket through the normal path, so both templates
-  // demonstrate the existing safety substrate:
-  //   - "Weekly status report" creates a clear, ordinary ticket with provenance.
-  //   - "Ad-hoc folder batch" is intentionally ambiguous, so a manual trigger is
-  //     blocked by the existing objective clarification gate (no run is created).
-  // executionPolicy is stored RAW here; it is normalized only when a trigger
-  // creates the generated ticket. The trigger log starts empty and is append-only.
-  const processTemplate = (id, name, objective) => ({
-    id, name, enabled: true, triggerType: 'manual', schedule: null,
+  // Process templates (r1.6/r1.7): reusable ticket starters. Each trigger creates an
+  // ordinary ticket through the normal path (createTicketFromInput → createRunsForTicket),
+  // so every template demonstrates the existing safety substrate:
+  //   - "Weekly status report" creates a clear, ordinary ticket with provenance (manual).
+  //   - "Ad-hoc folder batch" is intentionally ambiguous, so a trigger is blocked by the
+  //     existing objective clarification gate (no run is created).
+  //   - "Daily compliance digest" carries an r1.7 interval schedule (UTC) — it creates a
+  //     ticket each interval, it does not run work itself. The schedule is due (nextRunAt
+  //     in the past) so a scheduler scan creates one scheduled ticket; there is no
+  //     catch-up, so a long-missed interval produces a single ticket, never a storm.
+  // executionPolicy is stored RAW here; it is normalized only when a trigger creates the
+  // generated ticket. The trigger log starts empty and is append-only.
+  const processTemplate = (id, name, objective, schedule = null) => ({
+    id, name, enabled: true, triggerType: 'manual', schedule,
     ticketTemplate: {
       objective,
       assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: null,
@@ -151,9 +154,13 @@ function seed() {
     },
     createdBy: 'admin', createdAt: T0, updatedAt: T0, lastTriggeredAt: null
   });
+  // Interval-only, UTC-only schedule; everySeconds 86400 (1 day) is well above the
+  // safe minimum. nextRunAt is T0 (in the past) so the template is due for one scan.
+  const demoSchedule = { enabled: true, kind: 'interval', everySeconds: 86400, anchor: T0, nextRunAt: T0, lastScheduledTriggerAt: null, timezone: 'UTC', scheduledBy: 'admin' };
   writeJson('process-templates.json', [
     processTemplate(1, 'Weekly status report', 'Create folder reports'),
-    processTemplate(2, 'Ad-hoc folder batch', 'Create 3 folders each named Michael Jackson songs')
+    processTemplate(2, 'Ad-hoc folder batch', 'Create 3 folders each named Michael Jackson songs'),
+    processTemplate(3, 'Daily compliance digest', 'Create folder compliance', demoSchedule)
   ]);
   writeJson('process-template-triggers.json', []);
 
