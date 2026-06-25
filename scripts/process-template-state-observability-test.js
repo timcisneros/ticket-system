@@ -79,7 +79,7 @@ function seed() {
   writeJson('process-templates.json', [
     tmpl(1, 'Manual only', null),
     tmpl(2, 'Scheduled due', sched(PAST)),
-    tmpl(3, 'Scheduled disabled', sched(PAST, { enabled: false, nextRunAt: null })),
+    tmpl(3, 'Scheduled paused', sched(PAST, { enabled: false, nextRunAt: null })),
     tmpl(4, 'Invalid schedule', sched('not-a-date')),
     tmpl(5, 'Scheduled not due', sched(FUTURE)),
     tmpl(6, 'Attention blocked', null),
@@ -157,7 +157,7 @@ async function main() {
     // dueStatus surfacing.
     assert(b.includes('Due for ticket creation'), 'due scheduled template (2) shows due');
     assert(b.includes('Not due'), 'not-due scheduled template (5) shows not_due');
-    assert(b.includes('Schedule off'), 'scheduled-disabled template (3) shows schedule_disabled');
+    assert(b.includes('Schedule paused'), 'a disabled-but-reusable schedule (3) shows schedule_paused');
     assert(b.includes('Invalid schedule'), 'invalid schedule template (4) shows invalid_schedule');
     assert(b.includes('Not scheduled'), 'manual-only template (1) shows unscheduled');
     assert(bn.includes('this template will not create scheduled tickets'), 'invalid schedule shows inline warning');

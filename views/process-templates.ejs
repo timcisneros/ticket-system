@@ -23,16 +23,19 @@
   function dueLabel(d) {
     return ({
       template_disabled: 'Template disabled', unscheduled: 'Not scheduled',
-      schedule_disabled: 'Schedule off', invalid_schedule: 'Invalid schedule',
-      not_due: 'Not due', due: 'Due for ticket creation'
+      schedule_paused: 'Schedule paused', schedule_disabled: 'Schedule off',
+      invalid_schedule: 'Invalid schedule', not_due: 'Not due', due: 'Due for ticket creation'
     })[d] || d || '';
   }
   function healthLabel(h) {
     return ({
       disabled: 'Disabled', invalid_schedule: 'Invalid schedule',
-      attention_needed: 'Needs operator attention', no_recent_triggers: 'No generated tickets yet',
-      ok: 'OK'
+      attention_needed: 'Needs operator attention', paused: 'Paused',
+      no_recent_triggers: 'No generated tickets yet', ok: 'OK'
     })[h] || h || '';
+  }
+  function hasReusableInterval(s) {
+    return Boolean(s && s.kind === 'interval' && Number.isInteger(s.everySeconds) && s.everySeconds > 0);
   }
 %>
 
@@ -70,6 +73,15 @@
             <% } else if (template.dueStatus === 'due') { %>
               <div class="text-muted">Due for ticket creation — the next scan creates one ticket; missed intervals are not backfilled.</div>
             <% } %>
+            <div>
+              <% if (template.enabled) { %>
+                <button type="button" class="process-template-control" data-template-id="<%= template.id %>" data-control="disable">Disable template</button>
+              <% } else if (allowTrigger) { %>
+                <button type="button" class="process-template-control" data-template-id="<%= template.id %>" data-control="enable">Enable template</button>
+              <% } else { %>
+                <span class="text-muted">disabled — enabling requires ticket:create</span>
+              <% } %>
+            </div>
           </td>
           <td><%= tt.objective || '' %></td>
           <td><%= describeAssignment(tt) %></td>
@@ -77,6 +89,16 @@
             <%= describeSchedule(sch) %>
             <% if (sch && sch.enabled) { %>
               <div class="text-muted">next: <%= sch.nextRunAt || '—' %> · last: <%= sch.lastScheduledTriggerAt || 'never' %></div>
+            <% } %>
+            <% if (sch && sch.enabled) { %>
+              <div><button type="button" class="process-template-control" data-template-id="<%= template.id %>" data-control="schedule/pause">Pause scheduled ticket creation</button></div>
+            <% } else if (hasReusableInterval(sch)) { %>
+              <div class="text-muted">Paused schedules do not create tickets. Manual ticket creation is still available while only the schedule is paused.</div>
+              <% if (allowTrigger) { %>
+                <div><button type="button" class="process-template-control" data-template-id="<%= template.id %>" data-control="schedule/resume">Resume scheduled ticket creation</button></div>
+              <% } else { %>
+                <div class="text-muted">resuming requires ticket:create</div>
+              <% } %>
             <% } %>
             <% if (allowTrigger) { %>
               <form class="process-template-schedule" data-template-id="<%= template.id %>">
@@ -185,5 +207,22 @@
         }).catch(function () { alert('Disable failed'); });
       });
     }
+  });
+
+  // Template enable/disable and schedule pause/resume controls. Each posts to its
+  // dedicated endpoint and reloads. These stop/resume FUTURE template-created tickets
+  // only — they never touch existing tickets, runs, or history.
+  document.querySelectorAll('button.process-template-control').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var id = button.getAttribute('data-template-id');
+      var control = button.getAttribute('data-control'); // disable | enable | schedule/pause | schedule/resume
+      button.disabled = true;
+      fetch('/api/process-templates/' + id + '/' + control, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      }).then(function (res) { return res.json(); }).then(function (data) {
+        if (data && data.ok) { window.location.reload(); }
+        else { button.disabled = false; alert((data && data.error) ? data.error : 'Action failed'); }
+      }).catch(function () { button.disabled = false; alert('Action failed'); });
+    });
   });
 </script>

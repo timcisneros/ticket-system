@@ -2925,7 +2925,9 @@ function deriveProcessTemplateState(templates, triggers, tickets, now) {
     if (!template || template.enabled !== true) return 'template_disabled';
     const s = template.schedule;
     if (!s) return 'unscheduled';
-    if (s.enabled !== true) return 'schedule_disabled';
+    // A schedule turned off while retaining a reusable interval config is "paused"
+    // (one-click Resume restores it); without reusable config it is plainly disabled.
+    if (s.enabled !== true) return scheduleHasReusableInterval(s) ? 'schedule_paused' : 'schedule_disabled';
     if (s.kind !== 'interval') return 'invalid_schedule';
     if (!Number.isInteger(s.everySeconds) || s.everySeconds <= 0) return 'invalid_schedule';
     const nextMs = typeof s.nextRunAt === 'string' ? Date.parse(s.nextRunAt) : NaN;
@@ -2967,6 +2969,9 @@ function deriveProcessTemplateState(templates, triggers, tickets, now) {
       healthStatus = 'attention_needed';
     } else if (recentGeneratedTickets.some(t => t.status === 'failed' || t.status === 'blocked')) {
       healthStatus = 'attention_needed';
+    } else if (dueStatus === 'schedule_paused') {
+      // Paused is neutral — but a real blocked/failed issue above still wins.
+      healthStatus = 'paused';
     } else if (counts.total === 0) {
       healthStatus = 'no_recent_triggers';
     } else {
@@ -14659,6 +14664,140 @@ fastify.post('/api/process-templates/:id/schedule', { preHandler: fastify.requir
   writeProcessTemplates(templates);
   appendSystemLog('process_template:schedule_set', `Process template "${persisted.name}" scheduled every ${everySeconds}s (UTC) by ${scheduledBy}`, null, {
     templateId: persisted.id, templateName: persisted.name, everySeconds, scheduledBy
+  });
+  return { ok: true, schedule: persisted.schedule };
+});
+
+// Template disable/enable + schedule pause/resume (r1.9). These are thin operator
+// controls over the EXISTING enabled gates — they add no new durable state and change
+// no scheduler behavior. Disabling a template makes the manual route's existing 409
+// and the scheduler's existing `template.enabled` skip reachable; pausing a schedule
+// is `schedule.enabled = false` (already skipped by the due filter). None of these
+// touch tickets, runs, the trigger ledger, triage, verification, or provenance — they
+// only affect FUTURE template-created tickets.
+function scheduleHasReusableInterval(schedule) {
+  return Boolean(schedule && schedule.kind === 'interval' && Number.isInteger(schedule.everySeconds) && schedule.everySeconds > 0);
+}
+
+fastify.post('/api/process-templates/:id/disable', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const template = getProcessTemplateById(request.params.id);
+  if (!template) {
+    reply.code(404);
+    return { error: 'Process template not found' };
+  }
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const templates = readProcessTemplates();
+  const persisted = templates.find(item => item.id === template.id);
+  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
+  persisted.enabled = false; // idempotent if already false
+  persisted.updatedAt = now;
+  writeProcessTemplates(templates);
+  appendSystemLog('process_template:disabled', `Process template "${persisted.name}" disabled`, null, {
+    templateId: persisted.id, templateName: persisted.name, changedBy
+  });
+  return { ok: true, enabled: false };
+});
+
+fastify.post('/api/process-templates/:id/enable', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  // Enabling re-allows manual ticket creation, so it additionally requires ticket:create.
+  if (!hasPermission(request.session.userId, 'ticket:create')) {
+    reply.code(403);
+    return { error: 'Enabling a template requires ticket:create' };
+  }
+  const template = getProcessTemplateById(request.params.id);
+  if (!template) {
+    reply.code(404);
+    return { error: 'Process template not found' };
+  }
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const templates = readProcessTemplates();
+  const persisted = templates.find(item => item.id === template.id);
+  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
+  persisted.enabled = true; // idempotent if already true; does NOT create a ticket or change schedule
+  persisted.updatedAt = now;
+  writeProcessTemplates(templates);
+  appendSystemLog('process_template:enabled', `Process template "${persisted.name}" enabled`, null, {
+    templateId: persisted.id, templateName: persisted.name, changedBy
+  });
+  return { ok: true, enabled: true };
+});
+
+fastify.post('/api/process-templates/:id/schedule/pause', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const template = getProcessTemplateById(request.params.id);
+  if (!template) {
+    reply.code(404);
+    return { error: 'Process template not found' };
+  }
+  if (!scheduleHasReusableInterval(template.schedule)) {
+    reply.code(400);
+    return { error: 'No reusable interval schedule to pause' };
+  }
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const templates = readProcessTemplates();
+  const persisted = templates.find(item => item.id === template.id);
+  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
+  // Pause = schedule.enabled false, nextRunAt null. Interval config is preserved so
+  // Resume can restore it without re-entering everySeconds. Idempotent if already paused.
+  persisted.schedule = { ...persisted.schedule, enabled: false, nextRunAt: null };
+  persisted.updatedAt = now;
+  writeProcessTemplates(templates);
+  appendSystemLog('process_template:schedule_paused', `Process template "${persisted.name}" schedule paused`, null, {
+    templateId: persisted.id, templateName: persisted.name, changedBy
+  });
+  return { ok: true, schedule: persisted.schedule };
+});
+
+fastify.post('/api/process-templates/:id/schedule/resume', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  // Resuming re-enables future scheduled ticket creation, so it additionally requires ticket:create.
+  if (!hasPermission(request.session.userId, 'ticket:create')) {
+    reply.code(403);
+    return { error: 'Resuming a schedule requires ticket:create' };
+  }
+  const template = getProcessTemplateById(request.params.id);
+  if (!template) {
+    reply.code(404);
+    return { error: 'Process template not found' };
+  }
+  if (!scheduleHasReusableInterval(template.schedule)) {
+    reply.code(400);
+    return { error: 'No reusable interval schedule to resume' };
+  }
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const templates = readProcessTemplates();
+  const persisted = templates.find(item => item.id === template.id);
+  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
+  // Resume = enable + recompute nextRunAt FORWARD FROM NOW (no catch-up, no stale slot,
+  // no immediate ticket — the next scan one interval later creates the first ticket).
+  // Reuses stored kind/everySeconds/timezone/scheduledBy/lastScheduledTriggerAt.
+  persisted.schedule = {
+    ...persisted.schedule,
+    enabled: true,
+    nextRunAt: computeNextRunAt(persisted.schedule, now)
+  };
+  persisted.updatedAt = now;
+  writeProcessTemplates(templates);
+  appendSystemLog('process_template:schedule_resumed', `Process template "${persisted.name}" schedule resumed`, null, {
+    templateId: persisted.id, templateName: persisted.name, changedBy
   });
   return { ok: true, schedule: persisted.schedule };
 });
