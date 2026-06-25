@@ -320,6 +320,7 @@ async function main() {
     const suppliedExecutionPolicy = {
       mode: 'assisted',
       requireVerification: 'when_declared',
+      autoRetry: false,
       maxAttempts: 3,
       maxRuntimeMs: 45000,
       maxModelRequests: 5,

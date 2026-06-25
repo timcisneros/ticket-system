@@ -41,6 +41,7 @@ const TRIAGE_REQUIRED_DECISIONS = ['review_failure', 'approve_retry', 'change_sc
 const DEFAULT_EXECUTION_POLICY = Object.freeze({
   mode: 'assisted',
   requireVerification: 'when_declared',
+  autoRetry: false,
   maxAttempts: null,
   maxRuntimeMs: null,
   maxModelRequests: null,
@@ -2554,6 +2555,9 @@ function normalizeExecutionPolicy(policy, workspaceScope = 'shared') {
   return {
     mode: source.mode === 'manual' ? 'manual' : 'assisted',
     requireVerification: 'when_declared',
+    // Strict boolean opt-in. Default-off; has effect only when maxAttempts is a
+    // finite positive integer (enforced by the auto-retry gate, not here).
+    autoRetry: source.autoRetry === true,
     // Unset/invalid → null (unlimited). Only an explicit finite positive value is
     // enforced (for manual rerun-from-start). Mirrors the other max* fields.
     maxAttempts: normalizeOptionalPositiveInteger(source.maxAttempts),
@@ -8733,6 +8737,86 @@ function validateManualRerun(ticket) {
   return { allowed: true, attemptCount, maxAttempts };
 }
 
+// v1 auto-retry allowlist (allowlist semantics, not denylist). The ONLY retryable
+// class is a generic, unclassified runtime failure with no workspace mutations. A
+// generic runtime error makes buildFailureMetadata return null, which buildRunTriage
+// classifies as reasonCode 'runtime_failed'. Any structured failure kind
+// (protected_path, provider_error, timeout, budget_exhausted, authority denial, …),
+// verification_failed, interrupted, unknown, or any run that mutated the workspace is
+// excluded. The caller re-derives the prospective triage reasonCode via buildRunTriage
+// so this stays consistent with the real classifier (incl. authority.denied events).
+function isAutoRetryableReason(prospectiveReasonCode, mutationCount) {
+  if (mutationCount !== 0) return false;
+  return prospectiveReasonCode === 'runtime_failed';
+}
+
+// Bounded automatic retry (v1). Called ONLY from failAgentRun, before run triage is
+// persisted. Creates at most one new pending run when the ticket policy explicitly
+// opts in AND a finite maxAttempts ceiling has room AND the failure is in the runtime
+// allowlist with no mutations AND no triage is required. It never resolves triage,
+// changes verification, mutates the workspace, or finalizes completion. On exhaustion
+// or any non-retryable failure it returns { retried: false } so the caller falls
+// through to today's triage behavior.
+function maybeAutoRetryAfterFailure(failedRun, failure, mutationCount) {
+  if (!failedRun) return { retried: false, reason: 'no_run' };
+  const ticket = readTickets().find(item => item.id === failedRun.ticketId);
+  if (!ticket) return { retried: false, reason: 'ticket_missing' };
+
+  const policy = ticket.executionPolicy || {};
+  if (policy.autoRetry !== true) return { retried: false, reason: 'auto_retry_disabled' };
+  const maxAttempts = Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0 ? policy.maxAttempts : null;
+  if (maxAttempts === null) return { retried: false, reason: 'no_finite_max_attempts' };
+  if (ticket.triage && ticket.triage.required === true) return { retried: false, reason: 'ticket_triage_required' };
+  // v1 supports only single-run individual-agent tickets (one new pending run).
+  if (usesOwnedScopeAllocation(ticket) || ticket.assignmentTargetType !== 'agent') {
+    return { retried: false, reason: 'unsupported_ticket_shape' };
+  }
+
+  // Classify exactly as triage would; only runtime_failed (no mutations) is retryable.
+  const prospectiveTriage = buildRunTriage(failedRun, { failure, status: 'failed', summary: failedRun.error || 'Run failed' });
+  const prospectiveReasonCode = prospectiveTriage ? prospectiveTriage.reasonCode : 'unknown';
+  if (!isAutoRetryableReason(prospectiveReasonCode, mutationCount)) {
+    return { retried: false, reason: `non_retryable:${prospectiveReasonCode}` };
+  }
+
+  // The just-failed run is already counted; require room under the ceiling.
+  const attemptCount = readRuns().filter(run => run.ticketId === ticket.id).length;
+  if (attemptCount >= maxAttempts) return { retried: false, reason: 'max_attempts_exhausted' };
+
+  let newRun = null;
+  try {
+    // The just-failed run still holds its in-memory execution lock (cleared by the
+    // runAgentTicket finally only after failAgentRun returns). Release it now so the
+    // new pending run can be created; the finally's deletes are idempotent.
+    runningRunKeys.delete(runExecutionKey(failedRun));
+    startingRunIds.delete(failedRun.id);
+    startingLocalModelRunIds.delete(failedRun.id);
+
+    const reopened = forceTicketOpenForRerun(ticket.id, 'auto_retry');
+    if (!reopened) return { retried: false, reason: 'reopen_failed' };
+    const created = createRunsForTicket(reopened, { userId: null, username: 'system', source: 'auto_retry' });
+    newRun = (Array.isArray(created) && created[0]) || null;
+  } catch (error) {
+    return { retried: false, reason: 'retry_creation_failed' };
+  }
+  if (!newRun) return { retried: false, reason: 'no_run_created' };
+
+  appendSystemLog('ticket:auto_retry',
+    `Ticket #${ticket.id} automatically retried after run #${failedRun.id} failed (attempt ${attemptCount} of ${maxAttempts})`,
+    null, {
+      contextTicketId: ticket.id,
+      contextRunId: newRun.id,
+      fromRunId: failedRun.id,
+      toRunId: newRun.id,
+      attemptCount,
+      maxAttempts,
+      reasonCode: prospectiveReasonCode,
+      source: 'auto_retry'
+    });
+
+  return { retried: true, newRun, attemptCount, maxAttempts, reasonCode: prospectiveReasonCode };
+}
+
 function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retry', delegated = null) {
   const ticket = readTickets().find(item => item.id === ticketId);
 
@@ -8942,17 +9026,24 @@ function failAgentRun(run, error, workspaceAction = null) {
       completedAt: failedRun.completedAt || failedRun.updatedAt
     }
   });
-  failedRun.triage = persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
-    error,
-    failure,
-    status: 'failed',
-    summary: message
-  }));
+  // Bounded automatic retry (v1): decide BEFORE persisting run triage. The failed run
+  // keeps all of its evidence below; only triage-creation and ticket-failure
+  // finalization are skipped when an eligible immediate retry is created.
+  const autoRetry = maybeAutoRetryAfterFailure(failedRun, failure, countRunMutatingOperations(failedRun.id));
+  failedRun.triage = autoRetry.retried
+    ? null
+    : persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
+        error,
+        failure,
+        status: 'failed',
+        summary: message
+      }));
   finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
-  appendRunLog(failedRun, 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
+  appendRunLog(failedRun, autoRetry.retried ? 'run:failed_auto_retried' : 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
     allocationPlanId: failedRun.allocationPlanId || null,
     allocationItemId: failedRun.allocationItemId || null,
-    failure
+    failure,
+    ...(autoRetry.retried ? { autoRetryRunId: autoRetry.newRun.id } : {})
   });
   completeRunPostconditionCheck(failedRun.id);
   completeRunViolationCheck(failedRun.id);
@@ -8964,7 +9055,11 @@ function failAgentRun(run, error, workspaceAction = null) {
     runId: failedRun.id,
     payload: { status: 'failed', error: message }
   });
-  finalizeTicketForRun(failedRun, 'failed');
+  // When auto-retry created a new pending run it already reopened the ticket; do not
+  // finalize the ticket as failed in that case.
+  if (!autoRetry.retried) {
+    finalizeTicketForRun(failedRun, 'failed');
+  }
   return failedRun;
 }
 

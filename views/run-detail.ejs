@@ -3,6 +3,9 @@
   <div>
     <h1>Run #<%= run.id %></h1>
     <p class="text-muted">Ticket <a href="/tickets/<%= run.ticketId %>">#<%= run.ticketId %></a> · <%= run.agentName %></p>
+    <% if (run.delegatedPermissionSource === 'auto_retry') { %>
+      <p class="text-muted">Created by: automatic retry</p>
+    <% } %>
   </div>
   <div class="actions">
     <% if (canUpdateRuns && ['pending', 'running'].includes(run.status)) { %>

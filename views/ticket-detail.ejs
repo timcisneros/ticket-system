@@ -279,6 +279,7 @@
     <div><dt>Parallel runs</dt><dd><%= ticket.executionPolicy.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
     <div><dt>Child tickets</dt><dd><%= ticket.executionPolicy.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
     <div><dt>Max attempts</dt><dd><%= ticket.executionPolicy.maxAttempts === null ? 'unlimited · enforced for manual rerun-from-start when set' : ticket.executionPolicy.maxAttempts + ' · enforced for manual rerun-from-start' %></dd></div>
+    <div><dt>Automatic retry</dt><dd><%= !ticket.executionPolicy.autoRetry ? 'disabled' : (ticket.executionPolicy.maxAttempts === null ? 'enabled but inactive — set maxAttempts to bound automatic retry' : 'enabled · bounded by maxAttempts ' + ticket.executionPolicy.maxAttempts) %></dd></div>
     <div><dt>Max runtime</dt><dd><%= ticket.executionPolicy.maxRuntimeMs === null ? 'unspecified' : ticket.executionPolicy.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
     <div><dt>Max model requests</dt><dd><%= ticket.executionPolicy.maxModelRequests === null ? 'unspecified' : ticket.executionPolicy.maxModelRequests %> · recorded intent, not enforced</dd></div>
     <div><dt>Max workspace operations</dt><dd><%= ticket.executionPolicy.maxWorkspaceOperations === null ? 'unspecified' : ticket.executionPolicy.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
