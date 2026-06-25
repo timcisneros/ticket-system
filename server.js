@@ -9315,6 +9315,52 @@ function buildRuntimeEnvelope(run, step = 0, objective = null) {
   };
 }
 
+function buildSimulationRuntimeEnvelope(ticket, agent) {
+  const timezone = getRuntimeTimezone();
+  const workspaceRoot = workspaceProvider.root;
+  const limits = getAgentRuntimeLimits(ticket.objective);
+
+  const disabledConfigToOps = {
+    allowHandoffTask: 'createHandoffTask',
+    allowWorkflowDraftIntent: 'createWorkflowDraftIntent',
+    allowCanonicalWorkflowDraft: 'createWorkflowDraft'
+  };
+
+  const effectiveConfig = agent ? getAgentEffectiveRuntimeConfig(agent) : {};
+  const filteredOps = AGENT_DIRECT_OPERATIONS.filter(op => {
+    for (const [configKey, operationName] of Object.entries(disabledConfigToOps)) {
+      if (op === operationName && effectiveConfig[configKey] === false) return false;
+    }
+    return true;
+  });
+
+  const profile = detectWorkloadProfile(ticket.objective);
+
+  return {
+    runId: null,
+    ticketId: ticket.id,
+    assignedAgentId: agent ? agent.id : null,
+    currentDateTime: formatDateTimeForTimezone(new Date(), timezone),
+    timezone,
+    workspaceRoot,
+    mainWorkspaceRoot: workspaceProvider.root,
+    executionWorkspaceType: 'main',
+    allocationPlanId: null,
+    allocationItemId: null,
+    allocationItem: null,
+    allocationSubtask: null,
+    ownedOutputPaths: [],
+    allowedOperations: filteredOps,
+    maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+    maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+    currentStep: 0,
+    maxExecutionSteps: limits.maxExecutionSteps,
+    workloadProfile: profile || null,
+    currentPhase: 'planning',
+    simulationMode: true
+  };
+}
+
 function countMutatingActions(actions) {
   return (actions || []).filter(action =>
     action && typeof action === 'object' && AGENT_MUTATING_OPERATIONS.includes(action.operation)
@@ -14390,6 +14436,105 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
   }
 
   return { ticket };
+});
+
+// Agent behavior simulation — dry-run the model plan without mutating state or
+// creating runs. Gate-only mode (includeModelPlan=false) requires ticket:read and
+// returns just the clarification gate verdict. Model-plan mode
+// (includeModelPlan=true) requires ticket:update and calls the model for a
+// simulated action proposal without executing anything.
+fastify.post('/api/tickets/:id/simulate-plan', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  const includeModelPlan = request.body && request.body.includeModelPlan === true;
+  const requiredPermission = includeModelPlan ? 'ticket:update' : 'ticket:read';
+  if (!hasPermission(request.session.userId, requiredPermission)) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const ticketId = parseInt(request.params.id, 10);
+  if (Number.isNaN(ticketId)) {
+    reply.code(400);
+    return { error: 'Invalid ticket id' };
+  }
+
+  const tickets = readTickets();
+  const ticket = tickets.find(item => item.id === ticketId);
+  if (!ticket) {
+    reply.code(404);
+    return { error: 'Ticket not found' };
+  }
+
+  const gateResult = runObjectiveClarificationGate(ticket.objective, ticket);
+
+  const result = {
+    ticketId: ticket.id,
+    objective: ticket.objective,
+    gateVerdict: gateResult.verdict,
+    reasonCode: gateResult.reasonCode || null,
+    requiredDecision: gateResult.requiredDecision || null,
+    gateSummary: gateResult.summary || null,
+    ambiguityPatterns: gateResult.ambiguityPatterns || null,
+    modelCalled: false,
+    productionRunCreated: false,
+    workspaceMutated: false,
+    actionsExecuted: 0,
+    actionsProposed: [],
+    validationFindings: []
+  };
+
+  if (includeModelPlan && ticket.assignmentTargetType === 'agent') {
+    const agent = readAgents().find(a => a.id === ticket.assignmentTargetId);
+    if (agent && agent.provider) {
+      const runtimeEnvelope = buildSimulationRuntimeEnvelope(ticket, agent);
+      const input = buildAgentPrompt(ticket, runtimeEnvelope, [], null, null);
+
+      let modelResponse;
+      try {
+        modelResponse = await callModelProvider(agent, input, { simulation: true, timeout: 30000 });
+      } catch (modelError) {
+        result.modelCalled = true;
+        result.modelError = modelError.message || 'Model call failed';
+        appendSystemLog('ticket:simulation_plan', `Ticket #${ticket.id} simulation model call failed: ${result.modelError}`, null, {
+          contextTicketId: ticket.id,
+          gateVerdict: gateResult.verdict,
+          modelCalled: true,
+          productionRunCreated: false,
+          workspaceMutated: false,
+          actionsExecuted: 0,
+          actionsProposed: 0,
+          validationFindings: 0
+        });
+        return result;
+      }
+
+      const rawText = modelResponse.text || '';
+      result.modelCalled = true;
+      result.rawModelResponse = rawText;
+
+      const parsed = parseModelActions(rawText);
+      if (parsed.parseError) {
+        result.parseError = parsed.parseError;
+      } else {
+        result.actionsProposed = parsed.actions || [];
+        result.modelMessage = parsed.message || '';
+        result.modelComplete = parsed.complete;
+        result.validationFindings = validateWorkspaceActionBatch(parsed.actions);
+      }
+    }
+  }
+
+  appendSystemLog('ticket:simulation_plan', `Ticket #${ticket.id} simulation plan${includeModelPlan ? ' with model call' : ' (gate only)'}`, null, {
+    contextTicketId: ticket.id,
+    gateVerdict: gateResult.verdict,
+    modelCalled: result.modelCalled,
+    productionRunCreated: false,
+    workspaceMutated: false,
+    actionsExecuted: 0,
+    actionsProposed: Array.isArray(result.actionsProposed) ? result.actionsProposed.length : 0,
+    validationFindings: Array.isArray(result.validationFindings) ? result.validationFindings.length : 0
+  });
+
+  return result;
 });
 
 // Narrowly-scoped operator control to set/clear ONLY ticket.executionPolicy.maxAttempts

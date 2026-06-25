@@ -15,6 +15,10 @@
     <% if (canUpdateTickets && !hasUnresolvedTriage && ticket.status !== 'open') { %>
       <button type="button" class="btn-secondary" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %></button>
     <% } %>
+    <% if (canUpdateTickets) { %>
+      <button type="button" class="btn-secondary" data-simulate-plan-id="<%= ticket.id %>" data-simulate-mode="gate">Test gate</button>
+      <button type="button" class="btn-secondary" data-simulate-plan-id="<%= ticket.id %>" data-simulate-mode="model">Test agent plan (simulation)</button>
+    <% } %>
   </div>
 </div>
 <% if (canUpdateTickets && hasUnresolvedTriage) { %>
@@ -25,6 +29,10 @@
     const rerunWord = ticket.status === 'failed' ? 'Retry' : 'Rerun';
   %>
   <p class="form-hint"><%= rerunWord %> interrupts any active run, reopens this ticket, and starts a new run from the current objective and assignment.<%= isGroupTicket ? ' For this group ticket it regenerates the work-unit allocation across group members.' : '' %></p>
+<% } %>
+<% if (canUpdateTickets) { %>
+<p class="form-hint">Simulation tests the agent plan without creating a run or mutating the workspace. "Test agent plan" calls the model; "Test gate" returns the objective clarification verdict only.</p>
+<div id="simulation-result" style="display:none;margin-top:8px;padding:8px;border:1px solid #ccc;border-radius:4px;"></div>
 <% } %>
 
 <%
@@ -960,7 +968,44 @@
 
 <% if (canUpdateTickets) { %>
 <script>
-document.addEventListener('click', event => {
+document.addEventListener('click', async event => {
+  const simulateButton = event.target.closest('[data-simulate-plan-id]');
+  if (simulateButton) {
+    simulateButton.disabled = true;
+    const ticketId = simulateButton.dataset.simulatePlanId;
+    const mode = simulateButton.dataset.simulateMode;
+    const resultDiv = document.getElementById('simulation-result');
+    if (resultDiv) resultDiv.style.display = 'block';
+    try {
+      const res = await fetch('/api/tickets/' + encodeURIComponent(ticketId) + '/simulate-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ includeModelPlan: mode === 'model' })
+      });
+      const data = await res.json();
+      const parts = [];
+      parts.push('<strong>Gate verdict:</strong> ' + escapeHtml(data.gateVerdict));
+      if (data.reasonCode) parts.push('<strong>Reason:</strong> ' + escapeHtml(data.reasonCode));
+      if (data.gateSummary) parts.push('<strong>Summary:</strong> ' + escapeHtml(data.gateSummary));
+      if (data.modelError) parts.push('<strong>Model error:</strong> ' + escapeHtml(data.modelError));
+      if (data.parseError) parts.push('<strong>Parse error:</strong> ' + escapeHtml(data.parseError));
+      if (Array.isArray(data.actionsProposed) && data.actionsProposed.length > 0) {
+        parts.push('<strong>Proposed actions:</strong> ' + data.actionsProposed.length);
+        parts.push('<pre class="code-block">' + escapeHtml(JSON.stringify(data.actionsProposed, null, 2)) + '</pre>');
+      }
+      if (Array.isArray(data.validationFindings) && data.validationFindings.length > 0) {
+        parts.push('<strong>Validation findings:</strong> ' + data.validationFindings.length);
+        parts.push('<pre class="code-block">' + escapeHtml(JSON.stringify(data.validationFindings, null, 2)) + '</pre>');
+      }
+      if (data.modelMessage) parts.push('<strong>Model message:</strong> ' + escapeHtml(data.modelMessage));
+      if (resultDiv) resultDiv.innerHTML = parts.join('<br>');
+    } catch (e) {
+      if (resultDiv) resultDiv.innerHTML = '<strong>Simulation failed:</strong> ' + escapeHtml(e.message);
+    }
+    simulateButton.disabled = false;
+    return;
+  }
+
   const rerunButton = event.target.closest('[data-rerun-ticket-id]');
   if (rerunButton) {
     rerunButton.disabled = true;
