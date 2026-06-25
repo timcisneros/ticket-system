@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
-const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits } = require('./objective-contract');
+const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 require('dotenv').config()
 
 const PORT = process.env.PORT || 3099;
@@ -36,8 +36,8 @@ const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toSt
 const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed'];
-const TRIAGE_REASON_CODES = ['verification_failed', 'authority_blocked', 'runtime_failed', 'provider_failed', 'stopped', 'unknown'];
-const TRIAGE_REQUIRED_DECISIONS = ['review_failure', 'approve_retry', 'change_scope', 'fix_input', 'manual_recovery', 'none'];
+const TRIAGE_REASON_CODES = ['verification_failed', 'authority_blocked', 'runtime_failed', 'provider_failed', 'stopped', 'objective_ambiguous', 'unknown'];
+const TRIAGE_REQUIRED_DECISIONS = ['review_failure', 'approve_retry', 'change_scope', 'fix_input', 'manual_recovery', 'clarify_objective', 'none'];
 const DEFAULT_EXECUTION_POLICY = Object.freeze({
   mode: 'assisted',
   requireVerification: 'when_declared',
@@ -8094,6 +8094,51 @@ function blockTicketForFeasibility(ticket, error, context = {}) {
   return persistedTicket;
 }
 
+function blockTicketForObjectiveAmbiguity(ticket, gateResult, context = {}) {
+  const tickets = readTickets();
+  const persistedTicket = tickets.find(item => item.id === ticket.id);
+  if (!persistedTicket) return null;
+
+  const now = new Date().toISOString();
+  persistedTicket.status = 'blocked';
+  persistedTicket.blockedReason = gateResult.summary;
+  persistedTicket.triage = normalizeTriage({
+    required: true,
+    reasonCode: 'objective_ambiguous',
+    summary: gateResult.summary,
+    requiredDecision: 'clarify_objective',
+    evidenceRefs: gateResult.evidenceRefs || ['objective-contract:gate'],
+    allowedActions: gateResult.allowedActions || ['edit_objective', 'clarify_ticket'],
+    prohibitedActions: gateResult.prohibitedActions || ['mutate_workspace_without_clarification', 'start_run_without_clarification'],
+    createdAt: now,
+    resolvedAt: null,
+    resolvedBy: null,
+    resolution: null
+  });
+  persistedTicket.updatedAt = now;
+  persistedTicket.changedAt = now;
+  if (context.changedBy) persistedTicket.changedBy = context.changedBy;
+  writeTickets(tickets);
+
+  appendEvent({
+    type: 'ticket.blocked',
+    ticketId: persistedTicket.id,
+    payload: {
+      status: persistedTicket.status,
+      reason: persistedTicket.blockedReason,
+      reasonCode: 'objective_ambiguous',
+      triage: persistedTicket.triage
+    }
+  });
+  appendSystemLog('ticket:objective_ambiguous', gateResult.summary, null, {
+    ticketId: persistedTicket.id,
+    ambiguityPatterns: gateResult.ambiguityPatterns || [],
+    changedBy: context.changedBy || null
+  });
+  broadcastTicketChange();
+  return persistedTicket;
+}
+
 function assertAllocatedObjectiveSupported(objective) {
   const normalizedObjective = String(objective || '').toLowerCase();
   const destructivePattern = /\b(delete|remove|rename|move|refactor|fix|modify|overwrite|update existing|edit|cleanup|clean up|restructure|reorganize|replace)\b/;
@@ -9090,6 +9135,15 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
 
 function createRunsForTicket(ticket, delegated = null) {
   if (!ticket || ticket.status !== 'open') return [];
+
+  // Direct-action tickets: check objective clarity before creating any run.
+  if (ticket.executionMode !== 'workflow') {
+    const gateResult = runObjectiveClarificationGate(ticket.objective, ticket);
+    if (gateResult.verdict === 'ambiguous') {
+      blockTicketForObjectiveAmbiguity(ticket, gateResult);
+      return [];
+    }
+  }
 
   if (ticket.assignmentTargetType === 'agent') {
     const agent = readAgents().find(item => item.id === ticket.assignmentTargetId);
