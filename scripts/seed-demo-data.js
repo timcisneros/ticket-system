@@ -99,6 +99,12 @@ const RUN_TRIAGE_RESOLVED = {
   allowedActions: ['review', 'rerun_from_start'], prohibitedActions: ['automatic_retry'],
   createdAt: T0, resolvedAt: T1, resolvedBy: 'admin', resolution: 'Acknowledged — known flaky external dependency; no rerun needed.'
 };
+const OBJECTIVE_AMBIGUOUS_TRIAGE = {
+  required: true, reasonCode: 'objective_ambiguous', summary: 'The objective asks to create a specific number of folders with generated names but does not provide the exact folder names.',
+  requiredDecision: 'clarify_objective', evidenceRefs: ['objective-contract:gate', 'objective-contract:ambiguous'],
+  allowedActions: ['edit_objective', 'clarify_ticket'], prohibitedActions: ['mutate_workspace_without_clarification', 'start_run_without_clarification'],
+  createdAt: T0, resolvedAt: null, resolvedBy: null, resolution: null
+};
 
 function seed() {
   assertSafeTarget(DEMO_DATA_DIR);
@@ -132,7 +138,8 @@ function seed() {
     ticket(3, 'blocked', 'Reorganize protected legal archive (blocked: ticket-level triage)', { triage: { ...TICKET_TRIAGE }, blockedReason: TICKET_TRIAGE.summary, feasibility: { status: 'blocked', reason: TICKET_TRIAGE.summary, code: 'TICKET_FEASIBILITY_MISSING_GRANTS', kind: 'impossible_authority_scope', requiredWritableRoots: [], grantedWritableRoots: [] } }),
     ticket(4, 'completed', 'Bulk-process intake backlog (budget advisory)'),
     ticket(5, 'completed', 'Reconcile billing exports (manual rerun ceiling: maxAttempts 2)', { executionPolicy: { maxAttempts: 2 } }),
-    ticket(6, 'failed', 'Migrate shared drive folders (run triage resolved)')
+    ticket(6, 'failed', 'Migrate shared drive folders (run triage resolved)'),
+    ticket(7, 'blocked', 'Create 3 folders each named Michael Jackson songs (blocked: objective clarification)', { triage: { ...OBJECTIVE_AMBIGUOUS_TRIAGE }, blockedReason: OBJECTIVE_AMBIGUOUS_TRIAGE.summary })
   ]);
 
   writeJson('runs.json', [

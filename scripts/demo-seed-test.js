@@ -109,31 +109,55 @@ async function main() {
     // 6: /triage contains unresolved ticket-level AND run-level triage, excludes resolved.
     const triage = await request('GET', '/triage', { cookie });
     assert(triage.statusCode === 200, '/triage HTTP ' + triage.statusCode);
-    assert(triage.body.includes('authority_blocked') && triage.body.includes('href="/tickets/3"'), '/triage should list ticket-level triage (ticket 3)');
+    assert(triage.body.includes('authority_blocked') && triage.body.includes('href="/tickets/3"'), '/triage should list authority_blocked triage (ticket 3)');
+    assert(triage.body.includes('objective_ambiguous') && triage.body.includes('href="/tickets/7"'), '/triage should list objective_ambiguous triage (ticket 7)');
     assert(triage.body.includes('verification_failed') && triage.body.includes('href="/runs/102"'), '/triage should list run-level triage (run 102)');
     assert(!triage.body.includes('No unresolved triage.'), '/triage should not be empty');
     // resolved run-106 triage excluded:
     assert(!triage.body.includes('href="/runs/106"'), '/triage must exclude resolved run triage (run 106)');
 
-    // 7: completed verified case renders verified objective success.
+    // 7: objective_ambiguous ticket 7 has no run, no operation-history, and no workspace artifacts.
+    const ticketsJson = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8'));
+    const ambiguousTicket = ticketsJson.find(t => t.id === 7);
+    assert(ambiguousTicket, 'ticket 7 must exist in seeded data');
+    assert(ambiguousTicket.status === 'blocked', 'ticket 7 must be blocked');
+    assert(ambiguousTicket.triage && ambiguousTicket.triage.required === true, 'ticket 7 must have required triage');
+    assert(ambiguousTicket.triage.reasonCode === 'objective_ambiguous', 'ticket 7 triage reasonCode must be objective_ambiguous');
+    assert(ambiguousTicket.triage.requiredDecision === 'clarify_objective', 'ticket 7 requiredDecision must be clarify_objective');
+
+    const runsJson = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'runs.json'), 'utf8'));
+    assert(runsJson.filter(r => r.ticketId === 7).length === 0, 'no run must exist for ambiguous ticket 7');
+
+    const opsJson = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'operation-history.json'), 'utf8'));
+    assert(opsJson.filter(e => e.ticketId === 7).length === 0, 'no operation-history entries for ambiguous ticket 7');
+
+    const wsEntries = fs.readdirSync(WORKSPACE_ROOT);
+    assert(!wsEntries.some(e => /michael/i.test(e)), 'workspace must not contain Michael Jackson songs folders');
+
+    const ticketPage7 = await request('GET', '/tickets/7', { cookie });
+    assert(ticketPage7.statusCode === 200, '/tickets/7 HTTP ' + ticketPage7.statusCode);
+    assert(ticketPage7.body.includes('Ticket-Level Triage'), 'ticket 7 must show ticket-level triage');
+    assert(ticketPage7.body.includes('objective_ambiguous'), 'ticket 7 must show objective_ambiguous');
+
+    // 8: completed verified case renders verified objective success.
     const run101 = await request('GET', '/runs/101', { cookie });
     assert(run101.body.includes('<strong>Objective Success:</strong> Yes'), '/runs/101 should show verified objective success');
 
-    // 8: budget advisory case renders exceeded advisory.
+    // 9: budget advisory case renders exceeded advisory.
     const run104 = await request('GET', '/runs/104', { cookie });
     assert(run104.body.includes('Budget (advisory)') && run104.body.includes('exceeded (advisory)'), '/runs/104 should show budget advisory exceeded');
     const ticket4 = await request('GET', '/tickets/4', { cookie });
     assert(ticket4.body.includes('Budget Advisory') && ticket4.body.includes('exceeded (advisory)'), 'ticket 4 detail should show budget rollup exceeded');
 
-    // 9: maxAttempts example renders the explicit ceiling.
+    // 10: maxAttempts example renders the explicit ceiling.
     const ticket5 = await request('GET', '/tickets/5', { cookie });
     assert(ticket5.body.includes('2 · enforced for manual rerun-from-start'), 'ticket 5 should show explicit maxAttempts ceiling');
 
-    // 10: resolved triage renders resolved on run detail (and is excluded from /triage, asserted above).
+    // 11: resolved triage renders resolved on run detail (and is excluded from /triage, asserted above).
     const run106 = await request('GET', '/runs/106', { cookie });
     assert(run106.body.includes('Triage (resolved)') && run106.body.includes('Acknowledged'), '/runs/106 should show resolved triage with resolution note');
 
-    // 11: logs/audit page renders the demo operator-control audit entries.
+    // 12: logs/audit page renders the demo operator-control audit entries.
     const logs = await request('GET', '/logs', { cookie });
     assert(logs.statusCode === 200, '/logs HTTP ' + logs.statusCode);
     assert(logs.body.includes('ticket:max_attempts_change') && logs.body.includes('run:triage_resolve'), '/logs should render demo audit entries');

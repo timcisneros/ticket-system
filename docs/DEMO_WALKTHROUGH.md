@@ -50,7 +50,7 @@ password: admin123
 | 1 | `/tickets` | The seeded demo tickets, each labeled with the capability it shows. |
 | 2 | open **"…(completed + verified)"** → its run | Verified completion: run detail shows **Objective Success: Yes**, the verification contract snapshot, and Usage/Attempt. |
 | 3 | open **"…(verification failed → run triage)"** → its run | A failed run with **Triage Required** (reason `verification_failed`, required decision, summary, allowed/prohibited actions). |
-| 4 | `/triage` | The operator triage inbox: unresolved **ticket-level** triage (the blocked "…protected legal archive" ticket) and **run-level** triage (the failed verification run), each linking to detail. Resolved triage is **not** listed. |
+| 4 | `/triage` | The operator triage inbox: unresolved **ticket-level** triage (the blocked "…protected legal archive" ticket and the `objective_ambiguous` "…Michael Jackson songs" ticket) and **run-level** triage (the failed verification run), each linking to detail. Resolved triage is **not** listed. |
 | 5 | run detail (from `/triage`) | Why the item needs attention; the existing **Resolve triage** control (gated by `ticket:update`). Resolving records who/when/why — it does **not** rerun, complete, or change status. |
 | 6 | `/runs/<id>` for the budget ticket | **Budget (advisory)**: recorded usage vs the run's recorded thresholds, showing `exceeded (advisory)`. Advisory only — nothing is blocked. |
 | 7 | open **"…(manual rerun ceiling: maxAttempts 2)"** ticket | Execution Policy shows **Max attempts: 2 · enforced for manual rerun-from-start**; other fields are recorded intent. The operator control to set/clear the ceiling lives here. |
