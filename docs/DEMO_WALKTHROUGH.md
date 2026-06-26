@@ -114,6 +114,41 @@ UI/API and no version store; a future append-only edit/version model is explicit
 Older tickets created before this groundwork have no version and render safely without a version
 suffix (e.g. the seeded "Archived intake digest" ticket).
 
+**Append-only template versions: drafts & activation (r1.12).** Editing a template never happens
+in place. `data/process-template-versions.json` stores **immutable** version records: a draft is a
+*new* version record, and activation **supersedes** the prior active version and re-points the
+template's active content — old records are never rewritten or deleted. The demo seeds this story on
+**"Weekly status report"**: its active definition is materialized as **v1** and a pending **v2 draft**
+sits beside it in the store, while the template still shows **v1** (the root stays on v1 until you
+activate).
+
+- **Drafts are harmless until activated.** Creating a draft writes only an immutable version record:
+  it creates **no ticket, no run, and no workspace change**, and does not alter the active version. The
+  seeded v2 draft is visible in the store while ticket #9 is still a v1 generated ticket and no v2
+  ticket exists.
+- **Activation changes future generated tickets only.** Activating the draft supersedes v1, marks v2
+  active, and re-points the template's active content. It still creates **no ticket, no run, and no
+  workspace change** by itself — it only changes what the *next* trigger produces.
+- **Old tickets keep the version that created them.** Activation never rewrites past tickets, past
+  runs, or past trigger-ledger entries. The seeded **v1 ticket #9 stays v1** (its detail still reads
+  "Created from template `Weekly status report` v1"); a new ticket created *after* activation shows
+  **v2**.
+- **Pause scheduled ticket creation before activation.** When a template's schedule is enabled,
+  activation is **blocked (409, "pause the schedule before activating a new version")** so a live
+  schedule's future output is never silently changed. Pause the schedule, activate, then resume.
+  Activation never touches the schedule cursor (`nextRunAt` / `lastScheduledTriggerAt`), so there is
+  **no catch-up** and no backfilled storm.
+- **Scheduled tokens do not include the version.** The scheduled idempotency token stays
+  `schedule:<templateId>:<scheduledForIso>` regardless of which version is active — **version belongs
+  in provenance, not in idempotency**. The trigger ledger records the producing `templateVersion`
+  alongside the immutable `ticketTemplateSnapshot` and `executionPolicyUsed` it already kept.
+
+Versioning still adds **no editing surface**: there is **no rich edit UI, no workflow builder, and no
+old-version replay** — you cannot re-run or manually trigger a superseded version, and there is at most
+one draft per template at a time. (A known durability note for a future hardening pass: activation
+writes the version store and the root pointer in two sequential atomic writes, so a crash *between*
+them could leave a brief root/store mismatch; reconciliation is out of scope here.)
+
 ## What is intentionally NOT automated yet
 
 This demo is a **visibility, navigation, and human-control** surface. It deliberately does

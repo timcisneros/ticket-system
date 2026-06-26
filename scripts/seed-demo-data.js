@@ -168,12 +168,37 @@ function seed() {
   //    its reusable interval config preserved so Resume can restore it. A paused
   //    schedule creates no ticket on a scan, but manual ticket creation still works.
   const pausedSchedule = { enabled: false, kind: 'interval', everySeconds: 86400, anchor: T0, nextRunAt: null, lastScheduledTriggerAt: T1, timezone: 'UTC', scheduledBy: 'admin' };
-  writeJson('process-templates.json', [
+  const templates = [
     processTemplate(1, 'Weekly status report', 'Create folder reports'),
     processTemplate(2, 'Ad-hoc folder batch', 'Create 3 folders each named Michael Jackson songs'),
     processTemplate(3, 'Daily compliance digest', 'Create folder compliance', demoSchedule),
     processTemplate(4, 'Archived intake digest', 'Create folder archive', { ...demoSchedule }, false),
     processTemplate(5, 'Paused weekly export', 'Create folder export', pausedSchedule)
+  ];
+  // r1.12 append-only version store. "Weekly status report" (template 1) is the lifecycle
+  // demo: its current active definition is materialized as v1, and a pending v2 DRAFT sits
+  // beside it in the store. The root stays on v1 (currentVersion 1) — a draft is harmless
+  // until activated, so the page still shows "Weekly status report v1", ticket #9 is still a
+  // v1 generated ticket, and NO v2 ticket exists yet. Records are immutable history: editing
+  // never happens in place, it appends a new version record. (The demo-seed test then drives
+  // the live activation lifecycle from this seeded starting point.)
+  const weekly = templates.find(t => t.id === 1);
+  weekly.currentVersion = 1;
+  weekly.currentVersionId = 'ptv_1_1';
+  const weeklyV1Content = JSON.parse(JSON.stringify(weekly.ticketTemplate));
+  writeJson('process-templates.json', templates);
+  // Version records mirror the shapes the server writes (lazy-materialized active + draft).
+  // Append-only: v1 is `active`, v2 is `draft`; neither is ever rewritten in place, and no
+  // record is deleted. v2's content overlays only the edited objective over v1's content.
+  writeJson('process-template-versions.json', [
+    { id: 'ptv_1_1', templateId: 1, version: 1, status: 'active', name: 'Weekly status report',
+      ticketTemplate: weeklyV1Content, executionPolicy: weeklyV1Content.executionPolicy,
+      createdBy: 'admin', createdAt: T0, activatedBy: 'admin', activatedAt: T0, supersedesVersionId: null, changeSummary: null },
+    { id: 'ptv_1_2', templateId: 1, version: 2, status: 'draft', name: 'Weekly status report',
+      ticketTemplate: { ...weeklyV1Content, objective: 'Create folder reports (v2 draft: add an executive summary)' },
+      executionPolicy: weeklyV1Content.executionPolicy,
+      createdBy: 'admin', createdAt: T0, activatedBy: null, activatedAt: null, supersedesVersionId: null,
+      changeSummary: 'Draft v2: add an executive summary section to the weekly report' }
   ]);
   // Trigger ledger (append-only). Two prior generated tickets:
   //  - #8: a LEGACY entry (pre-r1.10, no templateVersion) — still renders safely.

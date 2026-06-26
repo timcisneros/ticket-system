@@ -384,8 +384,9 @@ async function main() {
     assert(liveSched && liveSched.source.templateVersion === 1, 'scheduled trigger stamps templateVersion: 1');
     assert(liveSched.source.triggerToken === 'schedule:3:2020-01-01T00:00:00.000Z', 'scheduled token is schedule:<id>:<iso> — version-free');
 
-    // No edit capability / no versions store exists.
-    assert(!fs.existsSync(path.join(DATA_DIR, 'process-template-versions.json')), 'no process-template-versions.json is created');
+    // r1.12: the append-only version store now exists (seeded with a v1/v2 story, exercised
+    // in section 17). The templates page still exposes no in-place edit / replay-old-version UI.
+    assert(fs.existsSync(path.join(DATA_DIR, 'process-template-versions.json')), 'append-only version store exists (r1.12)');
     assert(!/edit template|version history editor|replay old version/i.test(verPage.body), 'templates page implies no editing');
 
     // GET /process-templates remains read-only across these checks.
@@ -395,6 +396,134 @@ async function main() {
     await request('GET', '/process-templates', { cookie });
     vFiles.forEach(f => assert(fs.readFileSync(path.join(DATA_DIR, f), 'utf8') === vSnap[f], `${f} unchanged by GET /process-templates`));
     assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === vWs, 'no workspace mutation during version-provenance demo checks');
+
+    // 17: r1.12.1 — append-only template version draft/activation lifecycle (demo readiness).
+    // The seed ships template 1 ("Weekly status report") with a v1 active record AND a pending
+    // v2 draft. A draft is harmless until activated: the root is still v1, ticket #9 is still a
+    // v1 generated ticket, and no v2 ticket exists yet. This section drives the live lifecycle
+    // from that seeded starting point and proves activation changes FUTURE tickets only.
+    const ticketsPath = path.join(DATA_DIR, 'tickets.json');
+    const runsPath = path.join(DATA_DIR, 'runs.json');
+    const versionsPath = path.join(DATA_DIR, 'process-template-versions.json');
+    const ledgerPath = path.join(DATA_DIR, 'process-template-triggers.json');
+
+    // Seeded store: v1 active + v2 draft for template 1; append-only and coherent.
+    const verStore = JSON.parse(fs.readFileSync(versionsPath, 'utf8'));
+    const seededV1 = verStore.find(v => v.id === 'ptv_1_1');
+    const seededV2 = verStore.find(v => v.id === 'ptv_1_2');
+    assert(seededV1 && seededV1.templateId === 1 && seededV1.version === 1 && seededV1.status === 'active', 'seeded v1 is the active version of template 1');
+    assert(seededV2 && seededV2.templateId === 1 && seededV2.version === 2 && seededV2.status === 'draft', 'seeded v2 is a draft of template 1');
+    assert(verStore.filter(v => v.templateId === 1 && v.status === 'active').length === 1, 'exactly one active version for template 1');
+    assert(verStore.filter(v => v.templateId === 1 && v.status === 'draft').length === 1, 'exactly one draft for template 1 (one-draft rule)');
+    assert(!verStore.some(v => v.templateId === 1 && v.status === 'superseded'), 'seeded store has no superseded record yet (no activation seeded)');
+    assert(JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8')).find(t => t.id === 1).currentVersion === 1, 'root template stays on v1 while a draft exists (a draft is harmless until activated)');
+
+    // Old v1 generated ticket #9 (seeded): provenance + ledger retained.
+    const t9seed = JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).find(t => t.id === 9);
+    assert(t9seed.source.templateVersion === 1, 'seeded generated ticket #9 carries source.templateVersion 1');
+    const seedLedger9 = JSON.parse(fs.readFileSync(ledgerPath, 'utf8')).find(e => e.ticketId === 9);
+    assert(seedLedger9 && seedLedger9.templateVersion === 1 && seedLedger9.ticketTemplateSnapshot && seedLedger9.executionPolicyUsed, 'v1 ledger entry keeps templateVersion + ticketTemplateSnapshot + executionPolicyUsed');
+
+    // ---- Live activation of the seeded draft (template 1 is enabled + unscheduled → safe). ----
+    const wsBeforeVer = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
+    const ticketsBeforeAct = JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).length;
+    const runsBeforeAct = fs.readFileSync(runsPath, 'utf8');
+
+    // One-draft-per-template: a second draft is rejected while a draft exists.
+    assert((await request('POST', '/api/process-templates/1/versions/draft', { cookie, json: {} })).statusCode === 409, 'second draft rejected while a draft exists');
+
+    const act1 = await request('POST', '/api/process-templates/1/versions/ptv_1_2/activate', { cookie, json: {} });
+    assert(act1.statusCode === 200 && JSON.parse(act1.body).activeVersion === 2, 'seeded draft activates to v2: ' + act1.body);
+    // Activation by itself creates no ticket, no run, and mutates no workspace files.
+    assert(JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).length === ticketsBeforeAct, 'activation alone creates no ticket');
+    assert(fs.readFileSync(runsPath, 'utf8') === runsBeforeAct, 'activation alone creates no run');
+    assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsBeforeVer, 'activation alone mutates no workspace files');
+    // Append-only store transition: v1 superseded, v2 active with supersedes + activatedAt.
+    const afterStore = JSON.parse(fs.readFileSync(versionsPath, 'utf8'));
+    assert(afterStore.find(v => v.id === 'ptv_1_1').status === 'superseded', 'prior active v1 marked superseded (old record kept, not deleted)');
+    const v2after = afterStore.find(v => v.id === 'ptv_1_2');
+    assert(v2after.status === 'active' && v2after.supersedesVersionId === 'ptv_1_1' && v2after.activatedAt, 'v2 active, supersedes v1, activatedAt stamped');
+    // Root re-points to v2; page renders the active version.
+    const t1after = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8')).find(t => t.id === 1);
+    assert(t1after.currentVersion === 2 && t1after.version === 2, 'root template re-points to active v2');
+    const verPageV2 = await request('GET', '/process-templates', { cookie });
+    assert(/Weekly status report\s*<span class="text-muted">v2<\/span>/.test(verPageV2.body), '/process-templates shows the active version (v2) after activation');
+
+    // Old generated ticket #9 stays v1 — activation never rewrites past tickets/ledger.
+    const t9after = JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).find(t => t.id === 9);
+    assert(t9after.source.templateVersion === 1, 'old generated ticket #9 remains v1 after activation');
+    const t9detail = await request('GET', '/tickets/9', { cookie });
+    assert(t9detail.statusCode === 200 && /Weekly status report<\/a> v1/.test(t9detail.body), 'old ticket detail still renders v1 after activation');
+
+    // New manual trigger after activation → a v2 generated ticket (future tickets only).
+    const postTrig = await request('POST', '/api/process-templates/1/trigger', { cookie, json: { triggerToken: 'demo-weekly-v2' } });
+    assert(postTrig.statusCode === 200, 'post-activation manual trigger ok: ' + postTrig.body);
+    const postId = JSON.parse(postTrig.body).ticketId;
+    const postTicket = JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).find(t => t.id === postId);
+    assert(postTicket.source.templateVersion === 2, 'new generated ticket after activation is v2');
+    assert(postTicket.objective === 'Create folder reports (v2 draft: add an executive summary)', 'new generated ticket uses v2 content');
+    const postDetail = await request('GET', '/tickets/' + postId, { cookie });
+    assert(postDetail.statusCode === 200 && /Weekly status report<\/a> v2/.test(postDetail.body), 'new ticket detail renders v2');
+    const ledgerAfter = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+    const v2Ledger = ledgerAfter.find(e => e.ticketId === postId);
+    assert(v2Ledger && v2Ledger.templateVersion === 2 && v2Ledger.ticketTemplateSnapshot && v2Ledger.executionPolicyUsed, 'v2 ledger entry records templateVersion 2 + ticketTemplateSnapshot + executionPolicyUsed');
+    // The seeded v1 ledger entry is left byte-intact (append-only history).
+    assert(JSON.parse(fs.readFileSync(ledgerPath, 'utf8')).find(e => e.ticketId === 9).templateVersion === 1, 'old v1 ledger entry unchanged after activation');
+
+    // ---- Scheduled template (3): draft is harmless; activation requires PAUSE first; token stays version-free. ----
+    const wsBeforeSched = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
+    const ticketsBeforeSchedDraft = JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).length;
+    const runsBeforeSchedDraft = fs.readFileSync(runsPath, 'utf8');
+    const d3 = await request('POST', '/api/process-templates/3/versions/draft', { cookie, json: { ticketTemplate: { objective: 'Create folder compliance (v2)' }, changeSummary: 'Draft v2' } });
+    assert(d3.statusCode === 200 && JSON.parse(d3.body).ok, 'draft for scheduled template ok: ' + d3.body);
+    // Draft alone creates no ticket, no run, and mutates no workspace files.
+    assert(JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).length === ticketsBeforeSchedDraft, 'draft alone creates no ticket');
+    assert(fs.readFileSync(runsPath, 'utf8') === runsBeforeSchedDraft, 'draft alone creates no run');
+    assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsBeforeSched, 'draft alone mutates no workspace files');
+
+    // Activation blocked while schedule.enabled === true — pause the schedule first.
+    const blocked = await request('POST', '/api/process-templates/3/versions/ptv_3_2/activate', { cookie, json: {} });
+    assert(blocked.statusCode === 409 && /pause the schedule/i.test(blocked.body), 'activation blocked while schedule enabled (pause first)');
+    assert(JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'logs.json'), 'utf8')).some(l => l.type === 'process_template:version_activation_blocked' && l.templateId === 3), 'activation_blocked audit log written');
+
+    // Pause, then activate.
+    assert((await request('POST', '/api/process-templates/3/schedule/pause', { cookie, json: {} })).statusCode === 200, 'pause schedule ok');
+    const sched3Before = JSON.stringify(JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8')).find(t => t.id === 3).schedule);
+    const wsBeforeSchedAct = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
+    const ticketsBeforeSchedAct = JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).length;
+    const act3 = await request('POST', '/api/process-templates/3/versions/ptv_3_2/activate', { cookie, json: {} });
+    assert(act3.statusCode === 200 && JSON.parse(act3.body).activeVersion === 2, 'activation succeeds after pause: ' + act3.body);
+    // Activation does not touch the schedule cursor and creates no ticket/workspace mutation.
+    assert(JSON.stringify(JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8')).find(t => t.id === 3).schedule) === sched3Before, 'activation does not change the schedule cursor');
+    assert(JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).length === ticketsBeforeSchedAct, 'scheduled-template activation alone creates no ticket');
+    assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsBeforeSchedAct, 'scheduled-template activation alone mutates no workspace files');
+
+    // A scheduled trigger after activation stamps v2 AND keeps a version-free token.
+    const SLOT = '2020-06-01T00:00:00.000Z';
+    var schedStore = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8'));
+    var t3 = schedStore.find(t => t.id === 3);
+    t3.schedule.enabled = true; t3.schedule.nextRunAt = SLOT; // resume + make due (direct, deterministic)
+    fs.writeFileSync(path.join(DATA_DIR, 'process-templates.json'), JSON.stringify(schedStore, null, 2));
+    const sched3CountBefore = JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).filter(t => t.source && t.source.triggerType === 'schedule' && t.source.templateId === 3).length;
+    await request('POST', '/api/process-templates/scheduler/tick', { cookie, json: {} });
+    const sched3Tickets = JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).filter(t => t.source && t.source.triggerType === 'schedule' && t.source.templateId === 3);
+    assert(sched3Tickets.length === sched3CountBefore + 1, 'scheduled scan after activation creates exactly one ticket');
+    const newSched = sched3Tickets.sort((a, b) => b.id - a.id)[0];
+    assert(newSched.source.templateVersion === 2, 'scheduled ticket after activation stamps templateVersion 2');
+    assert(newSched.source.triggerToken === 'schedule:3:' + SLOT, 'scheduled token is schedule:<templateId>:<scheduledForIso> — version-free');
+    assert(!/version|versionId|ptv_/i.test(newSched.source.triggerToken), 'scheduled token includes no version/versionId');
+
+    // No old-version replay / rich-edit / workflow-builder UI or copy is exposed.
+    const verUiPage = await request('GET', '/process-templates', { cookie });
+    assert(!/replay old version|old-version replay|version history editor|workflow builder/i.test(verUiPage.body), 'templates page exposes no old-version replay / rich-edit / workflow-builder copy');
+
+    // GET /process-templates remains read-only across the r1.12.1 checks.
+    const verFiles = ['tickets.json', 'runs.json', 'process-templates.json', 'process-template-triggers.json', 'process-template-versions.json', 'logs.json'];
+    const verSnap = {}; verFiles.forEach(f => { verSnap[f] = fs.readFileSync(path.join(DATA_DIR, f), 'utf8'); });
+    const verWs = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
+    await request('GET', '/process-templates', { cookie });
+    verFiles.forEach(f => assert(fs.readFileSync(path.join(DATA_DIR, f), 'utf8') === verSnap[f], `${f} unchanged by GET /process-templates`));
+    assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === verWs, 'no workspace mutation during r1.12.1 demo checks');
 
     console.log('PASS: deterministic demo seed renders the full product loop with no provider key');
   } catch (error) {
