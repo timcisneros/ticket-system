@@ -17,6 +17,7 @@ const childEnv = { ...process.env, NODE_PATH: process.env.NODE_PATH || path.join
 const checks = [
   { label: 'node --check server.js', args: ['--check', 'server.js'] },
   ...[
+    'workspace-fixture-catalog-test.js',
     'target-provider-contract-test.js',
     'catalog-consistency-test.js',
     'page-render-regression-test.js',
