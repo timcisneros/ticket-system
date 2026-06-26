@@ -2777,6 +2777,97 @@ function activeVersionNumber(template) {
   return 1;
 }
 
+// ---- Startup reconciliation: template version store ↔ root pointer (r1.12.2) ----
+// Activation (and lazy v1 materialization) writes the append-only version store FIRST,
+// then re-points the root process-template record in a SEPARATE atomic write. A crash in
+// that gap can leave the durable version store ahead of the root pointer. This reconciler
+// converges the root to the store's single active version — the store is the source of
+// truth: it is written first and its records are immutable history.
+//
+// It is deliberately conservative and deterministic:
+//   - It only ever rewrites ROOT pointer/content fields. It never touches a version record,
+//     a ticket/run, the trigger ledger, a ticket.source, the schedule cursor / enabled flag,
+//     trigger tokens, or the workspace. It creates nothing and runs no work.
+//   - It repairs ONLY when the direction is explained by the activation write order — i.e.
+//     the store's single active version is the SAME as, or NEWER than, the root pointer.
+//   - If the root points AHEAD of the store's active version, or the store has zero or more
+//     than one active record for a template, the state is ambiguous (it cannot be produced
+//     by the forward write order). It logs an unresolved consistency issue and changes
+//     nothing — it never demotes a root, never activates a draft, never picks among actives.
+//   - It is idempotent at the data level: once the root matches the active record, a re-run
+//     makes no change.
+function processTemplateRootMatchesActive(root, active) {
+  return root.currentVersionId === active.id
+    && root.currentVersion === active.version
+    && root.version === active.version
+    && root.name === active.name
+    && JSON.stringify(root.ticketTemplate || null) === JSON.stringify(active.ticketTemplate || null);
+}
+
+function reconcileProcessTemplateVersionConsistencyOnStartup() {
+  const templates = readProcessTemplates();
+  const versions = readProcessTemplateVersions();
+  if (!Array.isArray(templates) || templates.length === 0) return;
+  let repairedCount = 0;
+  let unresolvedCount = 0;
+  let changed = false;
+
+  templates.forEach(root => {
+    if (!root || typeof root.id !== 'number') return;
+    const records = versions.filter(v => v && v.templateId === root.id);
+    if (records.length === 0) return; // un-versioned (legacy) template — nothing to reconcile.
+    const activeRecords = records.filter(v => v.status === 'active');
+
+    // Must be exactly one active record. Zero (draft-only / all-superseded) or many
+    // (split-brain) is never produced by the forward write order — refuse + log.
+    if (activeRecords.length !== 1) {
+      unresolvedCount++;
+      appendSystemLog('process_template:version_consistency_unresolved',
+        `Process template "${root.name}" version store has ${activeRecords.length} active records; root pointer left unchanged for manual review`, null,
+        { templateId: root.id, templateName: root.name, reason: activeRecords.length === 0 ? 'no_active_version' : 'multiple_active_versions',
+          activeCount: activeRecords.length, rootVersion: root.version || null, rootCurrentVersion: root.currentVersion || null, rootCurrentVersionId: root.currentVersionId || null });
+      return;
+    }
+
+    const active = activeRecords[0];
+    if (processTemplateRootMatchesActive(root, active)) return; // already consistent.
+
+    // Root AHEAD of the store's active version cannot result from the activation write order
+    // (the root is written last). Treat as ambiguous corruption: never demote the root and
+    // never activate a draft — log and leave for manual review.
+    const rootActiveVersion = activeVersionNumber(root);
+    if (active.version < rootActiveVersion) {
+      unresolvedCount++;
+      appendSystemLog('process_template:version_consistency_unresolved',
+        `Process template "${root.name}" root points to v${rootActiveVersion} but the store's active version is v${active.version}; root pointer left unchanged for manual review`, null,
+        { templateId: root.id, templateName: root.name, reason: 'root_ahead_of_store', activeVersion: active.version, activeVersionId: active.id,
+          rootVersion: root.version || null, rootCurrentVersion: root.currentVersion || null, rootCurrentVersionId: root.currentVersionId || null });
+      return;
+    }
+
+    // Deterministic repair: finish the interrupted activation by converging the root to the
+    // single active version record. Content + version pointers only; the schedule cursor,
+    // enabled flag, and trigger behavior are deliberately untouched.
+    const fromVersion = root.currentVersion || root.version || null;
+    root.name = active.name;
+    root.ticketTemplate = JSON.parse(JSON.stringify(active.ticketTemplate));
+    root.currentVersion = active.version;
+    root.currentVersionId = active.id;
+    root.version = active.version;
+    root.updatedBy = 'system';
+    root.updatedAt = new Date().toISOString();
+    changed = true;
+    repairedCount++;
+    appendSystemLog('process_template:version_consistency_repaired',
+      `Process template "${root.name}" root pointer reconciled to active v${active.version} after interrupted activation`, null,
+      { templateId: root.id, templateName: root.name, fromVersion, toVersion: active.version, activeVersionId: active.id, changedBy: 'system' });
+  });
+
+  if (changed) writeProcessTemplates(templates);
+  if (repairedCount > 0) console.log(`Reconciled ${repairedCount} process-template version pointer(s) on startup`);
+  if (unresolvedCount > 0) console.log(`Left ${unresolvedCount} process-template version consistency issue(s) unresolved for manual review`);
+}
+
 // Second idempotency source: an already-created ticket carrying this trigger token in
 // its provenance. Closes the crash window where the ticket was created but the
 // append-only trigger log write did not complete.
@@ -19099,6 +19190,9 @@ async function start() {
 
     await createDefaultData();
     interruptStaleRunsOnStartup();
+    // Converge any root/version-store mismatch left by an activation that crashed between
+    // its two atomic writes — before the template scheduler can trigger against a stale root.
+    reconcileProcessTemplateVersionConsistencyOnStartup();
     startRuntimeScheduler();
     startTemplateScheduler();
     serverReady = true;
