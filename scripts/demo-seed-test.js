@@ -352,6 +352,50 @@ async function main() {
     ctrlFiles.forEach(f => assert(fs.readFileSync(path.join(DATA_DIR, f), 'utf8') === ctrlSnap[f], `${f} unchanged by GET /process-templates`));
     assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsSnap && JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === wsCtrlBefore, 'no workspace mutation during the control demo checks');
 
+    // 16: r1.10 template version provenance — demo readiness.
+    const verTemplates = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8'));
+    assert(verTemplates.some(t => t.version === 1), 'demo includes at least one template with version 1');
+    const verPage = await request('GET', '/process-templates', { cookie });
+    assert(/Weekly status report\s*<span class="text-muted">v1<\/span>/.test(verPage.body), '/process-templates renders the active version (v1)');
+
+    // Versioned generated ticket (#9) shows "Created from template <name> v1".
+    const verTicketDetail = await request('GET', '/tickets/9', { cookie });
+    assert(verTicketDetail.statusCode === 200, 'versioned generated ticket detail renders');
+    assert(/Weekly status report<\/a> v1/.test(verTicketDetail.body), 'versioned ticket detail shows "Created from template … v1"');
+    // Legacy generated ticket (#8, no templateVersion) still renders safely — unlabeled.
+    const legacyTicketDetail = await request('GET', '/tickets/8', { cookie });
+    assert(legacyTicketDetail.statusCode === 200 && legacyTicketDetail.body.includes('Created from template'), 'legacy (no-version) generated ticket still renders');
+    assert(!/Archived intake digest<\/a> v/.test(legacyTicketDetail.body), 'legacy ticket shows no version suffix');
+
+    // Ledger: r1.10 entry (#9) records templateVersion AND keeps the immutable snapshot+policy.
+    const verLedger = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-template-triggers.json'), 'utf8'));
+    const v9 = verLedger.find(e => e.ticketId === 9);
+    assert(v9 && v9.templateVersion === 1, 'ledger entry records templateVersion');
+    assert(v9.ticketTemplateSnapshot && v9.executionPolicyUsed, 'ledger entry still includes ticketTemplateSnapshot + executionPolicyUsed');
+
+    // A LIVE scheduled trigger stamps templateVersion and keeps a version-free token.
+    var vstore = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8'));
+    vstore.find(t => t.id === 3).schedule.nextRunAt = '2020-01-01T00:00:00.000Z'; // make template 3 due
+    fs.writeFileSync(path.join(DATA_DIR, 'process-templates.json'), JSON.stringify(vstore, null, 2));
+    await request('POST', '/api/process-templates/scheduler/tick', { cookie, json: {} });
+    const liveSched = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8'))
+      .filter(t => t.source && t.source.templateId === 3 && t.source.triggerType === 'schedule')
+      .sort((a, b) => b.id - a.id)[0];
+    assert(liveSched && liveSched.source.templateVersion === 1, 'scheduled trigger stamps templateVersion: 1');
+    assert(liveSched.source.triggerToken === 'schedule:3:2020-01-01T00:00:00.000Z', 'scheduled token is schedule:<id>:<iso> — version-free');
+
+    // No edit capability / no versions store exists.
+    assert(!fs.existsSync(path.join(DATA_DIR, 'process-template-versions.json')), 'no process-template-versions.json is created');
+    assert(!/edit template|version history editor|replay old version/i.test(verPage.body), 'templates page implies no editing');
+
+    // GET /process-templates remains read-only across these checks.
+    const vFiles = ['runs.json'];
+    const vSnap = {}; vFiles.forEach(f => { vSnap[f] = fs.readFileSync(path.join(DATA_DIR, f), 'utf8'); });
+    const vWs = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
+    await request('GET', '/process-templates', { cookie });
+    vFiles.forEach(f => assert(fs.readFileSync(path.join(DATA_DIR, f), 'utf8') === vSnap[f], `${f} unchanged by GET /process-templates`));
+    assert(JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()) === vWs, 'no workspace mutation during version-provenance demo checks');
+
     console.log('PASS: deterministic demo seed renders the full product loop with no provider key');
   } catch (error) {
     if (out) process.stderr.write(out);

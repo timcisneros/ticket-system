@@ -102,6 +102,18 @@ an append-only trigger log plus a `process_template:triggered` audit entry on `/
 actions (disable/enable/pause/resume) are recorded as their own audit-log entries and are **never**
 written to the trigger ledger, which is for created tickets only.
 
+**Template version provenance (r1.10).** Each template carries a version (currently `v1` — shown
+beside its name on `/process-templates`). A generated ticket now records **which template version
+produced it**: open a templated ticket and its detail reads **"Created from template `<name>` v1"**.
+The trigger ledger records the same `templateVersion` alongside the immutable `ticketTemplateSnapshot`
+and `executionPolicyUsed` it already kept. **Template version is provenance** — it labels the producing
+definition and is shown for audit. **Scheduled trigger tokens do not include the version**
+(`schedule:<templateId>:<scheduledForIso>`), so scheduled idempotency stays per template + scheduled
+slot regardless of version. **Versioning does not add editing** — there is still no template edit
+UI/API and no version store; a future append-only edit/version model is explicitly out of scope here.
+Older tickets created before this groundwork have no version and render safely without a version
+suffix (e.g. the seeded "Archived intake digest" ticket).
+
 ## What is intentionally NOT automated yet
 
 This demo is a **visibility, navigation, and human-control** surface. It deliberately does
