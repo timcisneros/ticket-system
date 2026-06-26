@@ -12,14 +12,13 @@
 <% } else { %>
   <table class="data-table">
     <thead>
-      <tr><th>#</th><th>Name</th><th>Purpose</th><th>Status</th><th>Allowed capabilities</th><th>Filtered views</th></tr>
+      <tr><th>#</th><th>Name</th><th>Status</th><th>Tickets</th><th>Open</th><th>Blocked</th><th>Triage</th><th>Templates</th><th>Views</th></tr>
     </thead>
     <tbody>
-      <% workContexts.forEach(function (ctx) { %>
+      <% workContexts.forEach(function (ctx) { var c = ctx.counts || {}; %>
         <tr>
           <td><%= ctx.id %></td>
-          <td><%= ctx.name %></td>
-          <td class="text-muted"><%= ctx.purpose || '—' %></td>
+          <td><a href="/work-contexts/<%= ctx.id %>"><%= ctx.name %></a></td>
           <td>
             <% if (ctx.status === 'archived') { %>
               <span class="text-muted">archived</span>
@@ -27,10 +26,13 @@
               active
             <% } %>
           </td>
-          <td class="text-muted">
-            <%= (ctx.allowedCapabilities && ctx.allowedCapabilities.length) ? ctx.allowedCapabilities.join(', ') : 'any' %>
-          </td>
+          <td><%= c.ticketCount || 0 %></td>
+          <td><%= c.openTicketCount || 0 %></td>
+          <td><%= c.blockedTicketCount || 0 %></td>
+          <td><%= c.unresolvedTriageCount || 0 %></td>
+          <td><%= c.processTemplateCount || 0 %></td>
           <td>
+            <a href="/work-contexts/<%= ctx.id %>">Detail</a> ·
             <a href="/tickets?workContextId=<%= ctx.id %>">Tickets</a> ·
             <a href="/triage?workContextId=<%= ctx.id %>">Triage</a> ·
             <a href="/process-templates?workContextId=<%= ctx.id %>">Templates</a>

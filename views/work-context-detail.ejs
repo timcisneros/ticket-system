@@ -1,0 +1,101 @@
+<% var ctx = summary.workContext; var c = summary.counts; %>
+<p><a href="/work-contexts">← Work Contexts</a></p>
+
+<h1><%= ctx.name %>
+  <% if (ctx.status === 'archived') { %><span class="text-muted">(archived)</span><% } %>
+</h1>
+<p class="text-muted"><%= ctx.purpose || 'No purpose set.' %></p>
+<p class="text-muted">
+  This is a <strong>product-layer grouping</strong> only. This page is <strong>read-only</strong>:
+  it shows related tickets, triage, templates, and recent runs derived live from the existing
+  stores. It creates no ticket, run, schedule, or workspace change, and is not a watcher, memory
+  system, connector, chat, or automation surface. All work still runs through the normal
+  Ticket → Run → Authority → Target → Evidence path.
+</p>
+
+<h2>Summary</h2>
+<table class="data-table">
+  <tbody>
+    <tr><th>Tickets</th><td><%= c.ticketCount %></td></tr>
+    <tr><th>Open</th><td><%= c.openTicketCount %></td></tr>
+    <tr><th>Blocked</th><td><%= c.blockedTicketCount %></td></tr>
+    <tr><th>Unresolved triage</th><td><%= c.unresolvedTriageCount %></td></tr>
+    <tr><th>Process templates</th><td><%= c.processTemplateCount %></td></tr>
+    <tr><th>Scheduled templates</th><td><%= c.scheduledTemplateCount %></td></tr>
+    <tr><th>Recent runs</th><td><%= c.recentRunCount %></td></tr>
+  </tbody>
+</table>
+<p>
+  <a href="/tickets?workContextId=<%= ctx.id %>">All tickets</a> ·
+  <a href="/triage?workContextId=<%= ctx.id %>">All triage</a> ·
+  <a href="/process-templates?workContextId=<%= ctx.id %>">All templates</a>
+</p>
+
+<h2>Tickets</h2>
+<% if (summary.tickets.length === 0) { %>
+  <p class="text-muted">No tickets in this Work Context.</p>
+<% } else { %>
+  <table class="data-table">
+    <thead><tr><th>#</th><th>Objective</th><th>Status</th></tr></thead>
+    <tbody>
+      <% summary.tickets.forEach(function (t) { %>
+        <tr>
+          <td><a href="/tickets/<%= t.id %>"><%= t.id %></a></td>
+          <td><%= t.objective %></td>
+          <td><%= t.status %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>
+
+<h2>Unresolved triage</h2>
+<% if (summary.triage.tickets.length === 0 && summary.triage.runs.length === 0) { %>
+  <p class="text-muted">No unresolved triage in this Work Context.</p>
+<% } else { %>
+  <ul>
+    <% summary.triage.tickets.forEach(function (t) { %>
+      <li>Ticket <a href="/tickets/<%= t.ticketId %>">#<%= t.ticketId %></a> — <%= t.reasonCode || 'triage' %><% if (t.requiredDecision) { %> (<%= t.requiredDecision %>)<% } %></li>
+    <% }); %>
+    <% summary.triage.runs.forEach(function (r) { %>
+      <li>Run <a href="/runs/<%= r.runId %>">#<%= r.runId %></a> (ticket <a href="/tickets/<%= r.ticketId %>">#<%= r.ticketId %></a>) — <%= r.reasonCode || 'triage' %></li>
+    <% }); %>
+  </ul>
+<% } %>
+
+<h2>Process templates</h2>
+<% if (summary.processTemplates.length === 0) { %>
+  <p class="text-muted">No process templates in this Work Context.</p>
+<% } else { %>
+  <table class="data-table">
+    <thead><tr><th>#</th><th>Name</th><th>Version</th><th>Schedule</th></tr></thead>
+    <tbody>
+      <% summary.processTemplates.forEach(function (t) { %>
+        <tr>
+          <td><%= t.id %></td>
+          <td><a href="/process-templates?workContextId=<%= ctx.id %>"><%= t.name %></a><% if (!t.enabled) { %> <span class="text-muted">(disabled)</span><% } %></td>
+          <td>v<%= t.version %></td>
+          <td class="text-muted"><%= t.scheduled ? (t.dueStatus || 'scheduled') : 'manual' %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>
+
+<h2>Recent runs</h2>
+<% if (summary.recentRuns.length === 0) { %>
+  <p class="text-muted">No recent runs for this Work Context.</p>
+<% } else { %>
+  <table class="data-table">
+    <thead><tr><th>Run</th><th>Ticket</th><th>Status</th></tr></thead>
+    <tbody>
+      <% summary.recentRuns.forEach(function (r) { %>
+        <tr>
+          <td><a href="/runs/<%= r.id %>">#<%= r.id %></a></td>
+          <td><a href="/tickets/<%= r.ticketId %>">#<%= r.ticketId %></a> <span class="text-muted">(timeline)</span></td>
+          <td><%= r.status %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>

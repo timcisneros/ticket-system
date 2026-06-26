@@ -2982,6 +2982,58 @@ function validateWorkContextAssignment(workContextId, { capabilityId, templateId
   return { ok: true, context: ctx, snapshot: buildWorkContextSnapshot(ctx) };
 }
 
+// ---- Work Context visibility summary (r1.21) ----
+// A READ-ONLY, bounded, deterministic projection over existing tickets/runs/templates/triage for
+// one Work Context. It writes nothing (no ticket/run/log/event/summary file) and creates no new
+// source of truth — every field is derived live from the existing stores.
+const WORK_CONTEXT_SUMMARY_LIMIT = 10;
+
+function buildWorkContextSummary(ctx, options = {}) {
+  const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : WORK_CONTEXT_SUMMARY_LIMIT;
+  const allTickets = readTickets();
+  const ctxTickets = allTickets.filter(t => t && t.workContextId === ctx.id);
+  const ctxTicketIds = new Set(ctxTickets.map(t => t.id));
+  const ctxRuns = readRuns().filter(r => r && ctxTicketIds.has(r.ticketId));
+  const ctxTemplates = readProcessTemplates().filter(t => t && t.workContextId === ctx.id);
+  const derivedById = new Map(
+    deriveProcessTemplateState(ctxTemplates, readProcessTemplateTriggers(), allTickets, Date.now()).map(row => [row.templateId, row])
+  );
+
+  // Deterministic ordering (id desc for recency-stable lists; id asc for templates).
+  const byIdDesc = (a, b) => b.id - a.id;
+  const ticketsSorted = ctxTickets.slice().sort(byIdDesc);
+  const runsSorted = ctxRuns.slice().sort(byIdDesc);
+  const templatesSorted = ctxTemplates.slice().sort((a, b) => a.id - b.id);
+
+  const ticketTriage = ticketsSorted
+    .filter(t => t.triage && t.triage.required === true)
+    .map(t => ({ ticketId: t.id, objective: t.objective, reasonCode: t.triage.reasonCode || null, requiredDecision: t.triage.requiredDecision || null }));
+  const runTriage = runsSorted
+    .filter(r => r.triage && r.triage.required === true)
+    .map(r => ({ runId: r.id, ticketId: r.ticketId, reasonCode: r.triage.reasonCode || null }));
+
+  return {
+    workContext: ctx,
+    counts: {
+      ticketCount: ctxTickets.length,
+      openTicketCount: ctxTickets.filter(t => t.status === 'open' || t.status === 'in_progress').length,
+      blockedTicketCount: ctxTickets.filter(t => t.status === 'blocked').length,
+      unresolvedTriageCount: ticketTriage.length + runTriage.length,
+      processTemplateCount: ctxTemplates.length,
+      scheduledTemplateCount: ctxTemplates.filter(t => t.schedule && t.schedule.enabled === true).length,
+      recentRunCount: ctxRuns.length
+    },
+    tickets: ticketsSorted.slice(0, limit).map(t => ({ id: t.id, objective: t.objective, status: t.status, updatedAt: t.updatedAt || null })),
+    triage: { tickets: ticketTriage.slice(0, limit), runs: runTriage.slice(0, limit) },
+    processTemplates: templatesSorted.slice(0, limit).map(t => {
+      const d = derivedById.get(t.id) || {};
+      return { id: t.id, name: t.name, enabled: t.enabled !== false, version: t.currentVersion || t.version || 1,
+        scheduled: Boolean(t.schedule && t.schedule.enabled === true), dueStatus: d.dueStatus || null };
+    }),
+    recentRuns: runsSorted.slice(0, limit).map(r => ({ id: r.id, ticketId: r.ticketId, status: r.status, createdAt: r.createdAt || null }))
+  };
+}
+
 // Second idempotency source: an already-created ticket carrying this trigger token in
 // its provenance. Closes the crash window where the ticket was created but the
 // append-only trigger log write did not complete.
@@ -15870,15 +15922,58 @@ fastify.post('/api/work-contexts/:id', { preHandler: fastify.requireAuth }, asyn
   return { ok: true, workContext: existing };
 });
 
+// Read-only visibility summary (r1.21) for one Work Context: bounded, deterministic, derived
+// live from existing stores. It writes nothing and creates no new source of truth.
+fastify.get('/api/work-contexts/:id/summary', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!workContextManageGuard(request, reply)) return { error: 'Permission denied' };
+  const ctx = getWorkContextById(request.params.id);
+  if (!ctx) { reply.code(404); return { error: 'Work Context not found' }; }
+  return { ok: true, ...buildWorkContextSummary(ctx) };
+});
+
 fastify.get('/work-contexts', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'workContext:manage')) {
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
+  // Cheap per-context counts for the list (single read of tickets/templates).
+  const allTickets = readTickets();
+  const allTemplates = readProcessTemplates();
+  const workContexts = readWorkContexts().map(ctx => {
+    const t = allTickets.filter(tk => tk && tk.workContextId === ctx.id);
+    return {
+      ...ctx,
+      counts: {
+        ticketCount: t.length,
+        openTicketCount: t.filter(tk => tk.status === 'open' || tk.status === 'in_progress').length,
+        blockedTicketCount: t.filter(tk => tk.status === 'blocked').length,
+        unresolvedTriageCount: t.filter(tk => tk.triage && tk.triage.required === true).length,
+        processTemplateCount: allTemplates.filter(tp => tp && tp.workContextId === ctx.id).length
+      }
+    };
+  });
   return reply.view('work-contexts.ejs', viewData({
     user: request.user,
-    workContexts: readWorkContexts(),
+    workContexts,
     canManage: true
+  }, request.session.userId));
+});
+
+// Read-only Work Context detail/visibility page (r1.21). Product-layer grouping only — viewing
+// it creates no ticket/run/workspace mutation and writes no log/event/summary.
+fastify.get('/work-contexts/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'workContext:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const ctx = getWorkContextById(request.params.id);
+  if (!ctx) {
+    reply.code(404);
+    return reply.view('error.ejs', viewData({ message: 'Work Context not found', user: request.user }, request.session.userId));
+  }
+  return reply.view('work-context-detail.ejs', viewData({
+    user: request.user,
+    summary: buildWorkContextSummary(ctx)
   }, request.session.userId));
 });
 
