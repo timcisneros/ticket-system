@@ -62,6 +62,8 @@ const DEFAULT_EXECUTION_POLICY = Object.freeze({
   workspaceScope: 'shared'
 });
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, 'workspace-root'));
+const LOCAL_WORKSPACE_TARGET_ID = 'local-workspace';
+const LOCAL_WORKSPACE_TARGET_KIND = 'localWorkspace';
 
 function isRepoDataDir() {
   return path.resolve(DATA_DIR) === path.resolve(REPO_DATA_DIR);
@@ -7195,6 +7197,8 @@ function updateRunReplaySnapshot(runId, updater) {
 }
 
 function createReplaySnapshotBase(run, overrides = {}) {
+  const targetProvider = getRunWorkspaceProvider(run);
+  const target = getTargetProviderDescriptor(targetProvider);
   return {
     version: 1,
     runId: run.id,
@@ -7208,6 +7212,10 @@ function createReplaySnapshotBase(run, overrides = {}) {
     },
     workspaceRoot: run.workspaceRoot || workspaceProvider.root,
     mainWorkspaceRoot: run.mainWorkspaceRoot || workspaceProvider.root,
+    targetId: target.id,
+    targetKind: target.kind,
+    targetScope: target.scope,
+    targetProvider: target,
     executionWorkspaceType: run.executionWorkspaceType || 'main',
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
     verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
@@ -7234,6 +7242,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     workflowActionPlans: [],
     workflowTicketPlans: [],
     workspaceOperations: [],
+    targetSnapshots: [],
     events: [],
     terminalStatus: null,
     failureReason: null,
@@ -8042,6 +8051,150 @@ function getRunWorkspaceProvider(run) {
   return workspaceProvider;
 }
 
+function getTargetProviderDescriptor(provider) {
+  return {
+    id: provider.id,
+    kind: provider.kind,
+    scope: provider.scope,
+    capabilities: sanitizeSnapshotValue(provider.capabilities)
+  };
+}
+
+function buildTargetEvidenceMetadata(run, operation, args = {}) {
+  const provider = getRunWorkspaceProvider(run);
+  const targetPath = typeof args.path === 'string' ? args.path : null;
+
+  return {
+    targetId: provider.id,
+    targetKind: provider.kind,
+    targetScope: provider.scope,
+    targetPath,
+    targetResourceId: targetPath
+  };
+}
+
+function buildTargetActorContext(run) {
+  return {
+    actorType: 'agent',
+    actorId: run.agentId || null,
+    runId: run.id,
+    ticketId: run.ticketId
+  };
+}
+
+function buildTargetReadReceipt(run, operation, args, result) {
+  const provider = getRunWorkspaceProvider(run);
+  const target = buildTargetEvidenceMetadata(run, operation, args);
+  const receipt = {
+    ...target,
+    operation,
+    timestamp: createLogTimestamp(),
+    metadata: {},
+    partial: false,
+    truncated: false,
+    ...buildTargetActorContext(run)
+  };
+
+  if (operation === 'listDirectory') {
+    const entries = result && Array.isArray(result.entries) ? result.entries : [];
+    receipt.metadata = {
+      status: result && result.status ? result.status : 'ok',
+      entryCount: entries.length
+    };
+  } else if (operation === 'readFile') {
+    const content = result && typeof result.content === 'string' ? result.content : '';
+    receipt.metadata = {
+      size: Buffer.byteLength(content, 'utf8'),
+      contentHash: hashContent(content)
+    };
+  }
+
+  return receipt;
+}
+
+function buildMutationResourceChanges(operation, args, preState, postState) {
+  if (operation === 'createFolder') {
+    const created = preState && preState.existed === false && postState && postState.existed;
+    return {
+      changedResources: created ? [args.path] : [],
+      createdResources: created ? [args.path] : [],
+      deletedResources: []
+    };
+  }
+  if (operation === 'writeFile') {
+    const changed = postState && postState.existed && (
+      !preState ||
+      preState.existed === false ||
+      preState.contentHash !== postState.contentHash
+    );
+    return {
+      changedResources: changed ? [args.path] : [],
+      createdResources: preState && preState.existed === false && postState && postState.existed ? [args.path] : [],
+      deletedResources: []
+    };
+  }
+  if (operation === 'renamePath') {
+    const sourceDeleted = preState && preState.source && preState.source.existed &&
+      postState && postState.source && postState.source.existed === false;
+    const destinationCreated = preState && preState.destination && preState.destination.existed === false &&
+      postState && postState.destination && postState.destination.existed;
+    return {
+      changedResources: sourceDeleted || destinationCreated ? [args.path, args.nextPath] : [],
+      createdResources: destinationCreated ? [args.nextPath] : [],
+      deletedResources: sourceDeleted ? [args.path] : []
+    };
+  }
+  if (operation === 'deletePath') {
+    return {
+      changedResources: preState && preState.existed ? [args.path] : [],
+      createdResources: [],
+      deletedResources: preState && preState.existed && postState && postState.existed === false ? [args.path] : []
+    };
+  }
+  return { changedResources: [], createdResources: [], deletedResources: [] };
+}
+
+function buildTargetMutationReceipt(run, operationId, operation, args, preState, postState, result, error, authorityDecision) {
+  return {
+    operationId,
+    ...buildTargetEvidenceMetadata(run, operation, args),
+    operation,
+    timestamp: createLogTimestamp(),
+    before: sanitizeSnapshotValue(preState),
+    after: sanitizeSnapshotValue(postState),
+    ...buildMutationResourceChanges(operation, args, preState, postState),
+    providerResponse: error ? null : sanitizeSnapshotValue(result),
+    authorityDecision: authorityDecision ? sanitizeSnapshotValue(authorityDecision) : null,
+    error: error ? {
+      message: error.message || String(error),
+      code: error.code || null,
+      failureKind: error.failureKind || null
+    } : null,
+    ...buildTargetActorContext(run)
+  };
+}
+
+function buildWorkspaceOperationTargetEvidence(run, operation, args, result = null, error = null) {
+  const evidence = buildTargetEvidenceMetadata(run, operation, args);
+
+  if (operation === 'listDirectory' || operation === 'readFile') {
+    if (!error && result) evidence.readReceipt = buildTargetReadReceipt(run, operation, args, result);
+    return evidence;
+  }
+
+  const historyId = result && result.historyId ? result.historyId : error && error.historyId ? error.historyId : null;
+  const historyRecord = historyId
+    ? readOperationHistory().find(record => record.id === historyId)
+    : null;
+
+  evidence.mutationReceipt = historyRecord && historyRecord.mutationReceipt
+    ? historyRecord.mutationReceipt
+    : error
+      ? buildTargetMutationReceipt(run, null, operation, args, null, null, null, error, null)
+      : null;
+  return evidence;
+}
+
 function normalizeWorkspaceOwnershipPath(relativePath) {
   const normalized = path.posix.normalize(String(relativePath || '').replace(/\\/g, '/').trim());
   const cleanPath = normalized === '.' ? '' : normalized.replace(/^\/+/, '');
@@ -8093,6 +8246,9 @@ function blockWorkspaceOwnershipViolation(run, operation, args, relativePath, ru
 function buildWorkspaceActionMetadata(run, runWorkspaceProvider, extra = {}) {
   return {
     ...extra,
+    targetId: runWorkspaceProvider ? runWorkspaceProvider.id : null,
+    targetKind: runWorkspaceProvider ? runWorkspaceProvider.kind : null,
+    targetScope: runWorkspaceProvider ? runWorkspaceProvider.scope : null,
     workspaceRoot: runWorkspaceProvider ? runWorkspaceProvider.root : null,
     executionWorkspaceType: run.executionWorkspaceType || 'main',
     allocationPlanId: run.allocationPlanId || null,
@@ -10599,9 +10755,21 @@ function captureWorkspacePostState(runWorkspaceProvider, operation, args) {
   return null;
 }
 
-function persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, error) {
+function persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, error, authorityDecision = null) {
   const histories = readOperationHistory();
   const newId = nextId(histories);
+  const target = buildTargetEvidenceMetadata(run, operation, args);
+  const mutationReceipt = buildTargetMutationReceipt(
+    run,
+    newId,
+    operation,
+    args,
+    preState,
+    postState,
+    result,
+    error,
+    authorityDecision
+  );
   const record = {
     id: newId,
     timestamp: createLogTimestamp(),
@@ -10615,7 +10783,12 @@ function persistWorkspaceOperationHistory(run, step, operation, args, preState, 
     preState,
     postState,
     result: error ? null : sanitizeSnapshotValue(result),
-    error: error ? (error.message || String(error)) : null
+    error: error ? (error.message || String(error)) : null,
+    errorCode: error ? error.code || null : null,
+    failureKind: error ? error.failureKind || null : null,
+    ...target,
+    authorityDecision: authorityDecision ? sanitizeSnapshotValue(authorityDecision) : null,
+    mutationReceipt
   };
   histories.push(record);
   writeOperationHistory(histories);
@@ -11512,7 +11685,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   if (operation === 'createFolder') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.createFolder, 'createFolder args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
-    checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
+    const authorityDecision = checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
 
@@ -11542,10 +11715,10 @@ function executeWorkspaceOperation(run, action, step = 0) {
     try {
       result = runWorkspaceProvider.createFolder(pathValue);
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null);
+      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null, authorityDecision);
     } catch (error) {
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error);
+      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error, authorityDecision);
       if (historyRecord) error.historyId = historyRecord.id;
       throw error;
     }
@@ -11566,7 +11739,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.writeFile, 'writeFile args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const content = requireStringArg(args, 'content');
-    checkWorkspaceMutationAuthority(run, operation, { path: pathValue, content });
+    const authorityDecision = checkWorkspaceMutationAuthority(run, operation, { path: pathValue, content });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     if (runWorkspaceProvider.exists(pathValue, { allowHidden: true })) {
       blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
@@ -11616,10 +11789,10 @@ function executeWorkspaceOperation(run, action, step = 0) {
     try {
       result = runWorkspaceProvider.writeFile(pathValue, content);
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null);
+      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null, authorityDecision);
     } catch (error) {
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error);
+      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error, authorityDecision);
       if (historyRecord) error.historyId = historyRecord.id;
       throw error;
     }
@@ -11635,7 +11808,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.renamePath, 'renamePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const nextPath = requireStringArg(args, 'nextPath', { nonEmpty: true });
-    checkWorkspaceMutationAuthority(run, operation, { path: pathValue, nextPath });
+    const authorityDecision = checkWorkspaceMutationAuthority(run, operation, { path: pathValue, nextPath });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue, nextPath }, pathValue, runWorkspaceProvider);
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue, nextPath }, nextPath, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue, nextPath }, pathValue, runWorkspaceProvider);
@@ -11674,10 +11847,10 @@ function executeWorkspaceOperation(run, action, step = 0) {
     try {
       result = { ...runWorkspaceProvider.rename(pathValue, nextPath), status: 'renamed' };
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null);
+      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null, authorityDecision);
     } catch (error) {
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error);
+      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error, authorityDecision);
       if (historyRecord) error.historyId = historyRecord.id;
       throw error;
     }
@@ -11692,7 +11865,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   if (operation === 'deletePath') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.deletePath, 'deletePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
-    checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
+    const authorityDecision = checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
@@ -11726,10 +11899,10 @@ function executeWorkspaceOperation(run, action, step = 0) {
     try {
       result = runWorkspaceProvider.delete(pathValue);
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null);
+      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null, authorityDecision);
     } catch (error) {
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error);
+      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error, authorityDecision);
       if (historyRecord) error.historyId = historyRecord.id;
       throw error;
     }
@@ -12054,6 +12227,7 @@ function validateActionPlanInput(input, limits, counters) {
 }
 
 function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, startedAt, counters) {
+  const targetEvidence = buildWorkspaceOperationTargetEvidence(run, action.operation, action.args, result);
   appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
     operation: { operation: action.operation, args: action.args, reason: action.reason || null },
     result,
@@ -12067,7 +12241,8 @@ function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result
     ownedOutputPaths: getRunOwnedOutputPaths(run),
     workflowId: workflow.id,
     workflowStepId: step.id,
-    actionPlanIndex: action.index
+    actionPlanIndex: action.index,
+    ...targetEvidence
   });
   appendEvent({
     type: 'workspace.operation',
@@ -12082,7 +12257,8 @@ function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result
       input: sanitizeSnapshotValue(action.args),
       result: sanitizeSnapshotValue(result),
       actionPlanIndex: action.index,
-      reason: action.reason || null
+      reason: action.reason || null,
+      ...targetEvidence
     }
   });
   counters.workspaceOperations += 1;
@@ -12393,6 +12569,7 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
       result = executeWorkspaceOperation(run, { operation: step.action, args: input }, counters.transitions);
       counters.workspaceOperations += 1;
       if (contract.mutating) counters.mutations += 1;
+      const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, result);
       appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
         operation: { operation: step.action, args: input },
         result,
@@ -12405,7 +12582,8 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
         allocationItemId: run.allocationItemId || null,
         ownedOutputPaths: getRunOwnedOutputPaths(run),
         workflowId: workflow.id,
-        workflowStepId: step.id
+        workflowStepId: step.id,
+        ...targetEvidence
       });
       appendEvent({
         type: 'workspace.operation',
@@ -12418,7 +12596,8 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
           path: input.path || null,
           mutating: contract.mutating === true,
           input: sanitizeSnapshotValue(input),
-          result: sanitizeSnapshotValue(result)
+          result: sanitizeSnapshotValue(result),
+          ...targetEvidence
         }
       });
     } else if (step.action === 'executeActionPlan') {
@@ -12472,6 +12651,7 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
     return result;
   } catch (error) {
     if (contract && contract.type === 'workspaceAction') {
+      const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, null, error);
       appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
         operation: error.workspaceAction || { operation: step.action, args: input },
         error: error.message,
@@ -12485,7 +12665,8 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
         allocationPlanId: run.allocationPlanId || null,
         allocationItemId: run.allocationItemId || null,
         workflowId: workflow.id,
-        workflowStepId: step.id
+        workflowStepId: step.id,
+        ...targetEvidence
       });
   appendEvent({
     type: 'workspace.operation',
@@ -12500,7 +12681,8 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
       input: sanitizeSnapshotValue(input),
       blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
       reason: error.reason || null,
-      error: error.message
+      error: error.message,
+      ...targetEvidence
     }
   });
     }
@@ -12782,16 +12964,41 @@ const RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES = 200;
 // model an initial (run-start) and current snapshot without spending a
 // listDirectory action. Captures only the root level to stay small.
 function captureRunWorkspaceRootSnapshot(run) {
+  const provider = getRunWorkspaceProvider(run);
+  const capturedAt = new Date().toISOString();
   try {
-    const listing = getRunWorkspaceProvider(run).list('');
+    const listing = provider.list('');
     const allEntries = Array.isArray(listing.entries) ? listing.entries : [];
     return {
+      targetId: provider.id,
+      targetKind: provider.kind,
+      targetScope: provider.scope,
       path: '',
       entries: allEntries.slice(0, RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES).map(entry => ({ name: entry.name, type: entry.type })),
+      capturedAt,
+      full: false,
+      partial: true,
+      bounded: true,
+      entryCount: allEntries.length,
+      entryLimit: RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES,
       truncated: allEntries.length > RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES
     };
   } catch (error) {
-    return { path: '', entries: [], error: error.code || 'list_failed' };
+    return {
+      targetId: provider.id,
+      targetKind: provider.kind,
+      targetScope: provider.scope,
+      path: '',
+      entries: [],
+      capturedAt,
+      full: false,
+      partial: true,
+      bounded: true,
+      entryCount: 0,
+      entryLimit: RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES,
+      truncated: false,
+      error: error.code || 'list_failed'
+    };
   }
 }
 
@@ -13028,6 +13235,10 @@ async function runAgentTicket(runId) {
     // Captured once at run start and never updated, so it does not absorb
     // folders/files this run creates. Anchors relative objectives.
     const initialWorkspaceSnapshot = captureRunWorkspaceRootSnapshot(run);
+    appendRunReplaySnapshotItem(run.id, 'targetSnapshots', {
+      phase: 'run_start',
+      snapshot: initialWorkspaceSnapshot
+    });
     const mutationsByThisRun = [];
 
     // ── Resumable execution check ─────────────────────────────────
@@ -13581,6 +13792,12 @@ async function runAgentTicket(runId) {
           // item.operation.operation and item.result — any shape change
           // here must be mirrored in the error entry and all consumers.
           if (!isResumeSkipped && AGENT_ALLOWED_OPERATIONS.includes(operation.operation)) {
+            const targetEvidence = buildWorkspaceOperationTargetEvidence(
+              run,
+              operation.operation,
+              operation.args || {},
+              result
+            );
             appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
               operation,
               result,
@@ -13591,7 +13808,8 @@ async function runAgentTicket(runId) {
               executionWorkspaceType: run.executionWorkspaceType || 'main',
               allocationPlanId: run.allocationPlanId || null,
               allocationItemId: run.allocationItemId || null,
-              ownedOutputPaths: getRunOwnedOutputPaths(run)
+              ownedOutputPaths: getRunOwnedOutputPaths(run),
+              ...targetEvidence
             });
             appendEvent({
               type: 'workspace.operation',
@@ -13604,7 +13822,8 @@ async function runAgentTicket(runId) {
                 nextPath: operation.args ? operation.args.nextPath || null : null,
                 mutating: AGENT_MUTATING_OPERATIONS.includes(operation.operation),
                 input: sanitizeSnapshotValue(operation.args || {}),
-                result: sanitizeSnapshotValue(result)
+                result: sanitizeSnapshotValue(result),
+                ...targetEvidence
               }
             });
             maybeTestInterrupt(run, 'after_first_workspace.operation');
@@ -13615,6 +13834,12 @@ async function runAgentTicket(runId) {
               operation: result.operation,
               args: result.args
             };
+            const targetEvidence = buildWorkspaceOperationTargetEvidence(
+              run,
+              result.operation,
+              result.args || {},
+              result.result
+            );
             appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
               operation: executedOperation,
               result: result.result,
@@ -13631,7 +13856,8 @@ async function runAgentTicket(runId) {
               executionWorkspaceType: run.executionWorkspaceType || 'main',
               allocationPlanId: run.allocationPlanId || null,
               allocationItemId: run.allocationItemId || null,
-              ownedOutputPaths: getRunOwnedOutputPaths(run)
+              ownedOutputPaths: getRunOwnedOutputPaths(run),
+              ...targetEvidence
             });
             appendEvent({
               type: 'workspace.operation',
@@ -13650,7 +13876,8 @@ async function runAgentTicket(runId) {
                   plannerAgentName: run.agentName || null,
                   executorAgentId: result.executorAgentId,
                   executorAgentName: result.executorAgentName
-                }
+                },
+                ...targetEvidence
               }
             });
           }
@@ -13680,6 +13907,15 @@ async function runAgentTicket(runId) {
             // reason, etc.). Downstream consumers access item.operation and
             // item.error — any shape change here must be mirrored in the
             // success entry and all consumers.
+            const eventOperation = error.workspaceAction || operation;
+            const eventArgs = eventOperation && eventOperation.args ? eventOperation.args : {};
+            const targetEvidence = buildWorkspaceOperationTargetEvidence(
+              run,
+              eventOperation ? eventOperation.operation : null,
+              eventArgs,
+              null,
+              error
+            );
             appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
               operation: error.workspaceAction || operation,
               error: error.message,
@@ -13691,9 +13927,9 @@ async function runAgentTicket(runId) {
               workspaceRoot: getRunWorkspaceProvider(run).root,
               executionWorkspaceType: run.executionWorkspaceType || 'main',
               allocationPlanId: run.allocationPlanId || null,
-              allocationItemId: run.allocationItemId || null
+              allocationItemId: run.allocationItemId || null,
+              ...targetEvidence
             });
-            const eventOperation = error.workspaceAction || operation;
             appendEvent({
               type: 'workspace.operation',
               ticketId: run.ticketId,
@@ -13707,7 +13943,8 @@ async function runAgentTicket(runId) {
               input: sanitizeSnapshotValue(eventOperation && eventOperation.args ? eventOperation.args : {}),
               blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
               reason: error.reason || null,
-              error: error.message
+              error: error.message,
+              ...targetEvidence
             }
           });
           }
@@ -13920,7 +14157,26 @@ function createLocalWorkspaceProvider(root) {
   }
 
   return {
+    id: LOCAL_WORKSPACE_TARGET_ID,
+    kind: LOCAL_WORKSPACE_TARGET_KIND,
     root: workspaceRoot,
+    scope: {
+      type: 'filesystemRoot',
+      root: workspaceRoot
+    },
+    capabilities: {
+      listDirectory: true,
+      readFile: true,
+      createFile: true,
+      createFolder: true,
+      writeFile: true,
+      renamePath: true,
+      deletePath: true,
+      snapshots: true,
+      readReceipts: true,
+      mutationReceipts: true,
+      dryRun: false
+    },
 
     exists(relativePath = '', options = {}) {
       const resolved = resolveInside(relativePath, options);
@@ -16805,7 +17061,10 @@ function operatorWorkspaceMutationApi(request, reply, operationName, args, affec
     const postState = captureOperatorWorkspaceState(affectedPaths);
     appendSystemLog('workspace:operator_mutation', `Operator workspace ${operationName} by ${requestedBy}`, {
       operation: operationName,
-      args: sanitizeSnapshotValue(args)
+      args: sanitizeSnapshotValue(args),
+      targetId: workspaceProvider.id,
+      targetKind: workspaceProvider.kind,
+      targetScope: workspaceProvider.scope
     }, {
       source: 'operator_workspace_api',
       requestedBy,

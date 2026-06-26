@@ -102,6 +102,10 @@ function main() {
     'workspacePathsOverlap',
     'findOverlappingSuccessfulArtifactOwner',
     'assertNoCrossTicketOverlap',
+    'buildTargetEvidenceMetadata',
+    'buildTargetActorContext',
+    'buildMutationResourceChanges',
+    'buildTargetMutationReceipt',
     'executeWorkspaceOperation',
     'verifyBatchOperation'
   ];
@@ -154,6 +158,9 @@ function main() {
 
     getRunWorkspaceProvider(run) {
       return {
+        id: 'local-workspace',
+        kind: 'localWorkspace',
+        scope: { type: 'filesystemRoot', root: workspaceDir },
         root: workspaceDir,
         getPathInfo(p) {
           const fullPath = path.join(workspaceDir, p);
