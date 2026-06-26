@@ -33,6 +33,10 @@ const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
 const WORKFLOWS_FILE = path.join(DATA_DIR, 'workflows.json');
 const PROCESS_TEMPLATES_FILE = path.join(DATA_DIR, 'process-templates.json');
 const PROCESS_TEMPLATE_TRIGGERS_FILE = path.join(DATA_DIR, 'process-template-triggers.json');
+// Append-only template version records (r1.12). Edits create draft versions; activation
+// supersedes the prior active version. Records are never deleted; the trigger ledger
+// remains the provenance authority for created tickets.
+const PROCESS_TEMPLATE_VERSIONS_FILE = path.join(DATA_DIR, 'process-template-versions.json');
 // Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
 // separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
@@ -2740,6 +2744,37 @@ function findProcessTemplateTrigger(templateId, triggerToken) {
     entry && entry.templateId === templateId && entry.triggerToken === triggerToken) || null;
 }
 
+// ---- Append-only process-template version store (r1.12) ----
+// Version records are immutable history: a record's content (name/ticketTemplate) is
+// never rewritten once written; only its `status` transitions (draft → active →
+// superseded, or draft → discarded). Records are never deleted. Generated tickets and
+// the trigger ledger are NOT rewritten when versions change — they keep the materialized
+// content/provenance they captured at trigger time.
+function readProcessTemplateVersions() {
+  return readJsonArrayCached(PROCESS_TEMPLATE_VERSIONS_FILE);
+}
+
+function writeProcessTemplateVersions(versions) {
+  writeFileAtomic(PROCESS_TEMPLATE_VERSIONS_FILE, JSON.stringify(Array.isArray(versions) ? versions : [], null, 2));
+}
+
+function processTemplateVersionId(templateId, version) {
+  return `ptv_${templateId}_${version}`;
+}
+
+function versionsForTemplate(templateId) {
+  return readProcessTemplateVersions().filter(v => v && v.templateId === templateId);
+}
+
+// Active version number for a template: prefer the explicit currentVersion pointer,
+// fall back to the r1.10 root `version`, default 1 (lazy backward-compat — legacy
+// templates are never rewritten just to gain a version).
+function activeVersionNumber(template) {
+  if (template && Number.isInteger(template.currentVersion) && template.currentVersion > 0) return template.currentVersion;
+  if (template && Number.isInteger(template.version) && template.version > 0) return template.version;
+  return 1;
+}
+
 // Second idempotency source: an already-created ticket carrying this trigger token in
 // its provenance. Closes the crash window where the ticket was created but the
 // append-only trigger log write did not complete.
@@ -2993,7 +3028,8 @@ function deriveProcessTemplateState(templates, triggers, tickets, now) {
       templateId: template.id,
       name: template.name,
       // Active template version (absent → 1 for legacy templates; never rewritten).
-      version: Number.isInteger(template.version) && template.version > 0 ? template.version : 1,
+      version: activeVersionNumber(template),
+      currentVersionId: template.currentVersionId || null,
       objective: tt.objective || '',
       assignmentTargetType: tt.assignmentTargetType || null,
       assignmentTargetId: tt.assignmentTargetId != null ? tt.assignmentTargetId : null,
@@ -14528,6 +14564,7 @@ fastify.post('/api/process-templates', { preHandler: fastify.requireAuth }, asyn
     id: nextId(templates),
     name,
     version: 1,
+    currentVersion: 1,
     enabled: request.body.enabled === false || request.body.enabled === 'false' ? false : true,
     triggerType: 'manual',
     schedule: null,
@@ -14812,6 +14849,188 @@ fastify.post('/api/process-templates/:id/schedule/resume', { preHandler: fastify
     templateId: persisted.id, templateName: persisted.name, changedBy
   });
   return { ok: true, schedule: persisted.schedule };
+});
+
+// Append-only template versioning (r1.12): draft creation + activation. Editing never
+// happens in place — a draft is a new immutable version record; activation supersedes
+// the prior active version and re-points the root's active content. Activation changes
+// FUTURE generated tickets only: it never creates a ticket/run, never mutates the
+// workspace, never touches the schedule cursor, and never triggers the scheduler.
+
+// Capture the template's current active ticket-generating content as an immutable
+// version record (deep-cloned via JSON round-trip so later root edits can't mutate it).
+function buildProcessTemplateVersionContent(template) {
+  const tt = template.ticketTemplate || {};
+  return {
+    name: template.name,
+    ticketTemplate: JSON.parse(JSON.stringify(tt)),
+    executionPolicy: JSON.parse(JSON.stringify(tt.executionPolicy || null))
+  };
+}
+
+// Lazily materialize the current root definition as an immutable active version record
+// the first time a template is versioned. Never rewrites old tickets/ledger; only
+// records "what the active definition is" so a later draft has a parent to supersede.
+function ensureMaterializedActiveVersion(persisted, versions, now) {
+  const existing = versions.filter(v => v && v.templateId === persisted.id);
+  if (existing.length > 0) return existing.find(v => v.status === 'active') || existing[existing.length - 1];
+  const activeNum = activeVersionNumber(persisted);
+  const content = buildProcessTemplateVersionContent(persisted);
+  const record = {
+    id: processTemplateVersionId(persisted.id, activeNum),
+    templateId: persisted.id,
+    version: activeNum,
+    status: 'active',
+    name: content.name,
+    ticketTemplate: content.ticketTemplate,
+    executionPolicy: content.executionPolicy,
+    createdBy: persisted.createdBy || 'system',
+    createdAt: persisted.createdAt || now,
+    activatedBy: persisted.createdBy || 'system',
+    activatedAt: persisted.createdAt || now,
+    supersedesVersionId: null,
+    changeSummary: null
+  };
+  versions.push(record);
+  // Record the active pointer on the root (operator-initiated action on this template).
+  persisted.currentVersion = activeNum;
+  persisted.currentVersionId = record.id;
+  if (!Number.isInteger(persisted.version) || persisted.version <= 0) persisted.version = activeNum;
+  return record;
+}
+
+fastify.post('/api/process-templates/:id/versions/draft', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const template = getProcessTemplateById(request.params.id);
+  if (!template) {
+    reply.code(404);
+    return { error: 'Process template not found' };
+  }
+  const versions = readProcessTemplateVersions();
+  if (versions.some(v => v && v.templateId === template.id && v.status === 'draft')) {
+    reply.code(409);
+    return { error: 'A draft version already exists for this template' };
+  }
+
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const templates = readProcessTemplates();
+  const persisted = templates.find(item => item.id === template.id);
+  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
+
+  // Lazily preserve the current active definition before drafting a successor.
+  const active = ensureMaterializedActiveVersion(persisted, versions, now);
+  const draftNum = active.version + 1;
+
+  // The draft is a COMPLETE definition: start from the active content and overlay only
+  // the provided versioned fields. It never activates and never affects future tickets.
+  const body = request.body || {};
+  const baseTt = active.ticketTemplate || {};
+  const overlayTt = body.ticketTemplate && typeof body.ticketTemplate === 'object' && !Array.isArray(body.ticketTemplate) ? body.ticketTemplate : {};
+  const draftTicketTemplate = { ...baseTt, ...overlayTt };
+  const draft = {
+    id: processTemplateVersionId(persisted.id, draftNum),
+    templateId: persisted.id,
+    version: draftNum,
+    status: 'draft',
+    name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : active.name,
+    ticketTemplate: draftTicketTemplate,
+    executionPolicy: draftTicketTemplate.executionPolicy || null,
+    createdBy: changedBy,
+    createdAt: now,
+    activatedBy: null,
+    activatedAt: null,
+    supersedesVersionId: null,
+    changeSummary: typeof body.changeSummary === 'string' ? body.changeSummary : null
+  };
+  versions.push(draft);
+  writeProcessTemplateVersions(versions);
+  // Persist the (possibly newly materialized) active pointer on the root. No content,
+  // schedule cursor, enabled, or trigger behavior changes here.
+  persisted.updatedBy = changedBy;
+  persisted.updatedAt = now;
+  writeProcessTemplates(templates);
+
+  appendSystemLog('process_template:version_draft_created', `Process template "${persisted.name}" draft v${draftNum} created`, null, {
+    templateId: persisted.id, templateName: persisted.name, fromVersion: active.version, toVersion: draftNum, draftVersionId: draft.id, changedBy
+  });
+  return { ok: true, draft, activeVersion: active.version };
+});
+
+fastify.post('/api/process-templates/:id/versions/:versionId/activate', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const template = getProcessTemplateById(request.params.id);
+  if (!template) {
+    reply.code(404);
+    return { error: 'Process template not found' };
+  }
+  const versions = readProcessTemplateVersions();
+  const draft = versions.find(v => v && v.templateId === template.id && v.id === request.params.versionId);
+  if (!draft) {
+    reply.code(404);
+    return { error: 'Version not found' };
+  }
+  if (draft.status !== 'draft') {
+    reply.code(409);
+    return { error: 'Only a draft version can be activated' };
+  }
+  // Activation changes future ticket creation, so it requires ticket:create when the
+  // template can generate tickets (enabled, or scheduled).
+  const scheduleEnabled = Boolean(template.schedule && template.schedule.enabled === true);
+  if ((template.enabled === true || scheduleEnabled) && !hasPermission(request.session.userId, 'ticket:create')) {
+    reply.code(403);
+    return { error: 'Activating a version that can generate tickets requires ticket:create' };
+  }
+  // High-risk guard: never silently change a live schedule's future output. Pause first.
+  if (scheduleEnabled) {
+    appendSystemLog('process_template:version_activation_blocked', `Process template "${template.name}" version activation blocked: schedule is enabled`, null, {
+      templateId: template.id, templateName: template.name, draftVersionId: draft.id, reason: 'schedule_enabled',
+      changedBy: actorFromRequest(request).username || String(request.session.userId)
+    });
+    reply.code(409);
+    return { error: 'Pause the schedule before activating a new version' };
+  }
+
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const templates = readProcessTemplates();
+  const persisted = templates.find(item => item.id === template.id);
+  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
+
+  // Supersede the prior active version(s); activate the draft.
+  const priorActive = versions.find(v => v && v.templateId === persisted.id && v.status === 'active') || null;
+  versions.forEach(v => { if (v && v.templateId === persisted.id && v.status === 'active') v.status = 'superseded'; });
+  const draftRecord = versions.find(v => v && v.id === draft.id);
+  draftRecord.status = 'active';
+  draftRecord.activatedBy = changedBy;
+  draftRecord.activatedAt = now;
+  draftRecord.supersedesVersionId = priorActive ? priorActive.id : null;
+  writeProcessTemplateVersions(versions);
+
+  // Re-point the root's ACTIVE content + version. The schedule cursor (nextRunAt /
+  // lastScheduledTriggerAt) and enabled flag are deliberately untouched — activation
+  // creates no ticket, no run, no scheduler tick, and no catch-up.
+  persisted.name = draftRecord.name;
+  persisted.ticketTemplate = JSON.parse(JSON.stringify(draftRecord.ticketTemplate));
+  persisted.currentVersion = draftRecord.version;
+  persisted.currentVersionId = draftRecord.id;
+  persisted.version = draftRecord.version; // keep r1.10 root `version` in sync for stamping
+  persisted.updatedBy = changedBy;
+  persisted.updatedAt = now;
+  writeProcessTemplates(templates);
+
+  appendSystemLog('process_template:version_activated', `Process template "${persisted.name}" activated v${draftRecord.version}`, null, {
+    templateId: persisted.id, templateName: persisted.name,
+    fromVersion: priorActive ? priorActive.version : null, toVersion: draftRecord.version,
+    activatedVersionId: draftRecord.id, supersedesVersionId: draftRecord.supersedesVersionId, changedBy
+  });
+  return { ok: true, activeVersion: draftRecord.version, activeVersionId: draftRecord.id };
 });
 
 // Run one scheduled-template scan now. Same bounded due-scan the interval scheduler

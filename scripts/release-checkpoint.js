@@ -43,7 +43,8 @@ const checks = [
     'scheduled-process-template-trigger-test.js',
     'process-template-state-observability-test.js',
     'process-template-disable-pause-controls-test.js',
-    'process-template-version-provenance-test.js'
+    'process-template-version-provenance-test.js',
+    'process-template-append-only-version-store-test.js'
   ].map(name => ({ label: `NODE_PATH=./node_modules node scripts/${name}`, args: [path.join('scripts', name)] }))
 ];
 
