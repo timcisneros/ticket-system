@@ -2807,10 +2807,16 @@ function triggerProcessTemplate(template, actor, triggerContext) {
     : (actor && actor.username ? actor.username : (actor && actor.userId != null ? String(actor.userId) : 'system'));
   const now = new Date().toISOString();
   const tt = template.ticketTemplate || {};
+  // Active template version used for this trigger. Absent version is treated as 1
+  // (lazy backward-compat — old templates are never rewritten). This labels which
+  // template definition produced the ticket; it is NOT part of the scheduled token,
+  // so per-slot idempotency stays version-independent.
+  const templateVersion = Number.isInteger(template.version) && template.version > 0 ? template.version : 1;
   const source = {
     type: 'process_template',
     templateId: template.id,
     templateName: template.name,
+    templateVersion,
     triggeredBy,
     triggerType,
     triggerRunId: null,
@@ -2850,6 +2856,7 @@ function triggerProcessTemplate(template, actor, triggerContext) {
     triggerToken,
     templateId: template.id,
     templateName: template.name,
+    templateVersion,
     ticketId: generatedTicket.id,
     triggeredBy,
     triggerType,
@@ -2954,7 +2961,9 @@ function deriveProcessTemplateState(templates, triggers, tickets, now) {
       triggerType: (t.source && t.source.triggerType) || 'manual',
       status: t.status,
       triageReason: isTriaged(t) ? (t.triage.reasonCode || null) : null,
-      scheduledFor: (t.source && t.source.scheduledFor) || null
+      scheduledFor: (t.source && t.source.scheduledFor) || null,
+      // Legacy tickets created before r1.10 have no templateVersion → null (unlabeled).
+      templateVersion: (t.source && t.source.templateVersion) || null
     }));
 
     const dueStatus = computeDueStatus(template);
@@ -2983,6 +2992,8 @@ function deriveProcessTemplateState(templates, triggers, tickets, now) {
     return {
       templateId: template.id,
       name: template.name,
+      // Active template version (absent → 1 for legacy templates; never rewritten).
+      version: Number.isInteger(template.version) && template.version > 0 ? template.version : 1,
       objective: tt.objective || '',
       assignmentTargetType: tt.assignmentTargetType || null,
       assignmentTargetId: tt.assignmentTargetId != null ? tt.assignmentTargetId : null,
@@ -14516,6 +14527,7 @@ fastify.post('/api/process-templates', { preHandler: fastify.requireAuth }, asyn
   const template = {
     id: nextId(templates),
     name,
+    version: 1,
     enabled: request.body.enabled === false || request.body.enabled === 'false' ? false : true,
     triggerType: 'manual',
     schedule: null,

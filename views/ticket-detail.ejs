@@ -113,8 +113,8 @@
       <div>
         <dt>Created from template</dt>
         <dd>
-          <a href="/process-templates"><%= ticket.source.templateName %></a>
-          (#<%= ticket.source.templateId %>, manual trigger by <%= ticket.source.triggeredBy %>)
+          <a href="/process-templates"><%= ticket.source.templateName %></a><% if (ticket.source.templateVersion) { %> v<%= ticket.source.templateVersion %><% } %>
+          (#<%= ticket.source.templateId %>, <%= ticket.source.triggerType === 'schedule' ? 'scheduled' : 'manual' %> trigger by <%= ticket.source.triggeredBy %>)
         </dd>
       </div>
     <% } %>

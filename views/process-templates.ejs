@@ -63,7 +63,7 @@
            var recent = template.recentGeneratedTickets || [];
       %>
         <tr>
-          <td><%= template.name %></td>
+          <td><%= template.name %> <span class="text-muted">v<%= template.version || 1 %></span></td>
           <td>
             <span class="badge"><%= template.enabled ? 'Enabled' : 'Disabled' %></span>
             <span class="badge badge--due-<%= template.dueStatus %>"><%= dueLabel(template.dueStatus) %></span>
@@ -129,7 +129,7 @@
               <% recent.forEach(function (entry) { %>
                 <div>
                   <a href="/tickets/<%= entry.ticketId %>">#<%= entry.ticketId %></a>
-                  <%= entry.triggerType === 'schedule' ? '(scheduled)' : '(manual)' %>
+                  <%= entry.triggerType === 'schedule' ? '(scheduled)' : '(manual)' %><% if (entry.templateVersion) { %> v<%= entry.templateVersion %><% } %>
                   — <%= entry.status %><%= entry.triageReason ? ' · ' + entry.triageReason : '' %><% if (entry.scheduledFor) { %> · for <%= entry.scheduledFor %><% } %>
                 </div>
               <% }); %>
