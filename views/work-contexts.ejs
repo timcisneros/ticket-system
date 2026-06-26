@@ -1,0 +1,51 @@
+<h1>Work Contexts</h1>
+<p class="text-muted">
+  A Work Context is a <strong>product-layer grouping</strong> for related tickets and templates.
+  It supplies creation-time defaults and scopes listings — it is <strong>not</strong> an execution
+  path. Creating or archiving a context never creates a ticket, run, schedule, or workspace change.
+  Every piece of work still runs through the normal Ticket → Run → Authority → Target → Evidence
+  path. This page is read-only except for the create/update controls below.
+</p>
+
+<% if (!workContexts || workContexts.length === 0) { %>
+  <p class="text-muted">No Work Contexts yet.</p>
+<% } else { %>
+  <table class="data-table">
+    <thead>
+      <tr><th>#</th><th>Name</th><th>Purpose</th><th>Status</th><th>Allowed capabilities</th><th>Filtered views</th></tr>
+    </thead>
+    <tbody>
+      <% workContexts.forEach(function (ctx) { %>
+        <tr>
+          <td><%= ctx.id %></td>
+          <td><%= ctx.name %></td>
+          <td class="text-muted"><%= ctx.purpose || '—' %></td>
+          <td>
+            <% if (ctx.status === 'archived') { %>
+              <span class="text-muted">archived</span>
+            <% } else { %>
+              active
+            <% } %>
+          </td>
+          <td class="text-muted">
+            <%= (ctx.allowedCapabilities && ctx.allowedCapabilities.length) ? ctx.allowedCapabilities.join(', ') : 'any' %>
+          </td>
+          <td>
+            <a href="/tickets?workContextId=<%= ctx.id %>">Tickets</a> ·
+            <a href="/triage?workContextId=<%= ctx.id %>">Triage</a> ·
+            <a href="/process-templates?workContextId=<%= ctx.id %>">Templates</a>
+          </td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>
+
+<% if (canManage) { %>
+  <p class="text-muted">
+    Management is gated by <code>workContext:manage</code>. Create, update, and archive are served by
+    the JSON API (<code>POST /api/work-contexts</code>, <code>POST /api/work-contexts/:id</code>);
+    <code>GET /api/work-contexts</code> lists them. Defaults and allow-lists apply only at creation
+    time and never widen authority — the runtime never reads a Work Context.
+  </p>
+<% } %>

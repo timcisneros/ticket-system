@@ -118,6 +118,15 @@
         </dd>
       </div>
     <% } %>
+    <% if (ticket.workContextId && ticket.workContextSnapshot) { %>
+      <div>
+        <dt>Work Context</dt>
+        <dd>
+          <a href="/tickets?workContextId=<%= ticket.workContextId %>"><%= ticket.workContextSnapshot.name %></a>
+          (#<%= ticket.workContextId %><% if (ticket.workContextSnapshot.status && ticket.workContextSnapshot.status !== 'active') { %>, <%= ticket.workContextSnapshot.status %><% } %>)
+        </dd>
+      </div>
+    <% } %>
     <% if (executionState.isGroup && executionState.assignmentMode) { %>
       <div>
         <dt>Assignment mode</dt>

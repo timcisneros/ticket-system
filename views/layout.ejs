@@ -27,6 +27,9 @@
           <% if (userPermissions.includes('processTemplate:manage')) { %>
             <li><a href="/process-templates">Templates</a></li>
           <% } %>
+          <% if (userPermissions.includes('workContext:manage')) { %>
+            <li><a href="/work-contexts">Work Contexts</a></li>
+          <% } %>
           <% if (userPermissions.includes('workspace:read')) { %>
             <li><a href="/workspace">Workspace</a></li>
           <% } %>

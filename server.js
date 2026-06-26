@@ -37,6 +37,10 @@ const PROCESS_TEMPLATE_TRIGGERS_FILE = path.join(DATA_DIR, 'process-template-tri
 // supersedes the prior active version. Records are never deleted; the trigger ledger
 // remains the provenance authority for created tickets.
 const PROCESS_TEMPLATE_VERSIONS_FILE = path.join(DATA_DIR, 'process-template-versions.json');
+// Work Context (r1.20): a product-layer grouping ABOVE the runtime. It groups related
+// tickets/templates and supplies creation-time defaults + listing filters only. The runtime
+// never dereferences workContextId during execution — see docs/WORK_CONTEXT_PRIMITIVE.md.
+const WORK_CONTEXTS_FILE = path.join(DATA_DIR, 'work-contexts.json');
 // Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
 // separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
@@ -111,7 +115,8 @@ function seedOperationalDataDir() {
     'runs.json',
     'logs.json',
     'operation-history.json',
-    'allocation-plans.json'
+    'allocation-plans.json',
+    'work-contexts.json'
   ].forEach(fileName => writeMissingFile(fileName, '[]'));
 
   writeMissingFile('events.jsonl', '');
@@ -2868,6 +2873,115 @@ function reconcileProcessTemplateVersionConsistencyOnStartup() {
   if (unresolvedCount > 0) console.log(`Left ${unresolvedCount} process-template version consistency issue(s) unresolved for manual review`);
 }
 
+// ---- Work Context store (r1.20) ----
+// A Work Context is a PRODUCT-LAYER grouping above the runtime: it groups related tickets and
+// templates, supplies creation-time defaults, and scopes listing — nothing more. It owns no
+// execution state and the runtime never dereferences it. See docs/WORK_CONTEXT_PRIMITIVE.md.
+const WORK_CONTEXT_STATUSES = ['active', 'archived'];
+
+function readWorkContexts() {
+  return readJsonArrayCached(WORK_CONTEXTS_FILE);
+}
+function writeWorkContexts(contexts) {
+  writeFileAtomic(WORK_CONTEXTS_FILE, JSON.stringify(Array.isArray(contexts) ? contexts : [], null, 2));
+}
+function getWorkContextById(id) {
+  const numericId = parseInt(id, 10);
+  if (Number.isNaN(numericId)) return null;
+  return readWorkContexts().find(ctx => ctx && ctx.id === numericId) || null;
+}
+
+// A compact, immutable label captured ONTO a ticket/template at creation/assignment time.
+// The runtime reads this snapshot, never the live Work Context record — so changing a context
+// later never reinterprets old tickets/runs.
+function buildWorkContextSnapshot(ctx) {
+  return { id: ctx.id, name: ctx.name, purpose: ctx.purpose || null, status: ctx.status };
+}
+
+function normalizeIdArray(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    const n = typeof item === 'number' ? item : parseInt(item, 10);
+    if (Number.isInteger(n) && !out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+// Validate a Work Context create/update payload into a clean record body. Pure validation —
+// it creates nothing. Defaults are conservative (no execution, no authority widening).
+function validateWorkContextInput(body, existing = null) {
+  const b = body && typeof body === 'object' ? body : {};
+  const name = typeof b.name === 'string' ? b.name.trim() : (existing ? existing.name : '');
+  if (!name) return { ok: false, error: 'Work Context name is required' };
+  const status = b.status !== undefined ? b.status : (existing ? existing.status : 'active');
+  if (!WORK_CONTEXT_STATUSES.includes(status)) return { ok: false, error: `status must be one of ${WORK_CONTEXT_STATUSES.join(', ')}` };
+
+  const allowedTargetIds = b.allowedTargetIds !== undefined ? normalizeIdArray(b.allowedTargetIds) : (existing ? existing.allowedTargetIds || [] : []);
+  const allowedProcessTemplateIds = b.allowedProcessTemplateIds !== undefined ? normalizeIdArray(b.allowedProcessTemplateIds) : (existing ? existing.allowedProcessTemplateIds || [] : []);
+  const allowedCapabilities = b.allowedCapabilities !== undefined
+    ? (Array.isArray(b.allowedCapabilities) ? b.allowedCapabilities.filter(c => typeof c === 'string' && c.trim()).map(c => c.trim()) : null)
+    : (existing ? existing.allowedCapabilities || [] : []);
+  if (allowedCapabilities === null) return { ok: false, error: 'allowedCapabilities must be an array of capability ids' };
+
+  let defaultTargetId = b.defaultTargetId !== undefined ? b.defaultTargetId : (existing ? existing.defaultTargetId : null);
+  if (defaultTargetId !== null && defaultTargetId !== undefined) {
+    const n = typeof defaultTargetId === 'number' ? defaultTargetId : parseInt(defaultTargetId, 10);
+    if (!Number.isInteger(n)) return { ok: false, error: 'defaultTargetId must be an integer or null' };
+    defaultTargetId = n;
+    // Self-consistency: a default target must be within a non-empty allow-list.
+    if (allowedTargetIds.length > 0 && !allowedTargetIds.includes(defaultTargetId)) {
+      return { ok: false, error: 'defaultTargetId must be one of allowedTargetIds' };
+    }
+  } else {
+    defaultTargetId = null;
+  }
+
+  const value = {
+    name,
+    purpose: typeof b.purpose === 'string' ? b.purpose.trim() : (existing ? existing.purpose || '' : ''),
+    status,
+    defaultTargetId,
+    defaultAuthorityProfileId: b.defaultAuthorityProfileId !== undefined ? (b.defaultAuthorityProfileId || null) : (existing ? existing.defaultAuthorityProfileId || null : null),
+    allowedTargetIds,
+    allowedCapabilities,
+    allowedProcessTemplateIds,
+    defaultVerificationProfile: b.defaultVerificationProfile !== undefined ? (b.defaultVerificationProfile || null) : (existing ? existing.defaultVerificationProfile || null : null),
+    memoryPolicy: b.memoryPolicy && typeof b.memoryPolicy === 'object' ? b.memoryPolicy : (existing ? existing.memoryPolicy || { mode: 'none' } : { mode: 'none' }),
+    visibilityPolicy: b.visibilityPolicy && typeof b.visibilityPolicy === 'object' ? b.visibilityPolicy : (existing ? existing.visibilityPolicy || { mode: 'participants' } : { mode: 'participants' }),
+    participants: Array.isArray(b.participants) ? b.participants : (existing ? existing.participants || [] : []),
+    ticketQueueFilter: b.ticketQueueFilter && typeof b.ticketQueueFilter === 'object' ? b.ticketQueueFilter : (existing ? existing.ticketQueueFilter || {} : {}),
+    triageQueueFilter: b.triageQueueFilter && typeof b.triageQueueFilter === 'object' ? b.triageQueueFilter : (existing ? existing.triageQueueFilter || {} : {}),
+    scheduleFilter: b.scheduleFilter && typeof b.scheduleFilter === 'object' ? b.scheduleFilter : (existing ? existing.scheduleFilter || {} : {})
+  };
+  return { ok: true, value };
+}
+
+// Validate that a record (ticket/template) may be ASSIGNED to a Work Context. Enforces that the
+// assignment never EXCEEDS the context's non-empty allow-lists — context can only narrow, never
+// widen, authority. Returns the context + a snapshot on success.
+function validateWorkContextAssignment(workContextId, { capabilityId, templateId, targetId } = {}) {
+  if (workContextId === undefined || workContextId === null || workContextId === '') {
+    return { ok: true, context: null, snapshot: null }; // contextless is always valid.
+  }
+  const ctx = getWorkContextById(workContextId);
+  if (!ctx) return { ok: false, code: 404, error: 'Work Context not found' };
+  if (ctx.status !== 'active') return { ok: false, code: 409, error: 'Work Context is archived and cannot be assigned to new records' };
+  const allowedCapabilities = Array.isArray(ctx.allowedCapabilities) ? ctx.allowedCapabilities : [];
+  const allowedTargetIds = Array.isArray(ctx.allowedTargetIds) ? ctx.allowedTargetIds : [];
+  const allowedProcessTemplateIds = Array.isArray(ctx.allowedProcessTemplateIds) ? ctx.allowedProcessTemplateIds : [];
+  if (allowedCapabilities.length > 0 && capabilityId != null && !allowedCapabilities.includes(capabilityId)) {
+    return { ok: false, code: 403, error: `Capability "${capabilityId}" is not allowed by Work Context "${ctx.name}"` };
+  }
+  if (allowedTargetIds.length > 0 && targetId != null && !allowedTargetIds.includes(parseInt(targetId, 10))) {
+    return { ok: false, code: 403, error: `Target ${targetId} is not allowed by Work Context "${ctx.name}"` };
+  }
+  if (allowedProcessTemplateIds.length > 0 && templateId != null && !allowedProcessTemplateIds.includes(parseInt(templateId, 10))) {
+    return { ok: false, code: 403, error: `Process template ${templateId} is not allowed by Work Context "${ctx.name}"` };
+  }
+  return { ok: true, context: ctx, snapshot: buildWorkContextSnapshot(ctx) };
+}
+
 // Second idempotency source: an already-created ticket carrying this trigger token in
 // its provenance. Closes the crash window where the ticket was created but the
 // append-only trigger log write did not complete.
@@ -3680,8 +3794,11 @@ function ticketsPageHref(page, limit) {
 
 function getPaginatedTickets(query = {}) {
   const { page, limit } = getPagination(query, 25);
+  // Optional Work Context filter (r1.20) — a read-only projection over existing tickets.
+  const workContextFilter = query.workContextId !== undefined && query.workContextId !== '' ? parseInt(query.workContextId, 10) : null;
   const allTickets = readTickets()
     .slice()
+    .filter(ticket => workContextFilter === null || (ticket && ticket.workContextId === workContextFilter))
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
   const agents = readAgents();
   const agentGroups = getTicketAssignableGroups();
@@ -15523,6 +15640,13 @@ function createTicketFromInput(input, actor, options = {}) {
     return { ok: false, error: 'Owned output paths must be a mapping of agent ID to path' };
   }
 
+  // Work Context (r1.20) is OPTIONAL grouping. Validate the assignment up front (existence,
+  // active status, allow-lists). This narrows — never widens — authority, and only labels the
+  // ticket; the runtime never reads it. A null/absent context is always valid.
+  const resolvedCapabilityIdForContext = selectedWorkflow ? selectedWorkflow.id : 'agent-selected-actions';
+  const contextCheck = validateWorkContextAssignment(input.workContextId, { capabilityId: resolvedCapabilityIdForContext, targetId: input.workContextTargetId });
+  if (!contextCheck.ok) return { ok: false, error: contextCheck.error };
+
   const tickets = readTickets();
   const now = new Date().toISOString();
   const nextTicketId = nextId(tickets);
@@ -15555,6 +15679,12 @@ function createTicketFromInput(input, actor, options = {}) {
   // normalizeTickets preserves unknown fields.
   if (options.source && typeof options.source === 'object') {
     newTicket.source = options.source;
+  }
+  // Optional Work Context grouping label + immutable snapshot (r1.20). Grouping/visibility
+  // only — never read by the runtime. Contextless tickets simply omit these.
+  if (contextCheck.context) {
+    newTicket.workContextId = contextCheck.context.id;
+    newTicket.workContextSnapshot = contextCheck.snapshot;
   }
 
   if (newTicket.assignmentMode === 'dynamic') {
@@ -15680,7 +15810,9 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     workflowId,
     workflowInput: parsedWorkflowInput,
     ownedOutputPaths: parsedOwnedPaths,
-    executionPolicy: parsedExecutionPolicy
+    executionPolicy: parsedExecutionPolicy,
+    workContextId: request.body.workContextId !== undefined && request.body.workContextId !== '' ? request.body.workContextId : null,
+    workContextTargetId: request.body.workContextTargetId !== undefined && request.body.workContextTargetId !== '' ? request.body.workContextTargetId : null
   }, actorFromRequest(request), { delegated: delegatedFromRequest(request, 'created_from_ticket') });
 
   if (!result.ok) {
@@ -15688,6 +15820,66 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
   }
 
   return reply.redirect('/tickets');
+});
+
+// ==================== WORK CONTEXT ROUTES ====================
+// Product-layer grouping ONLY (r1.20). Management is gated by workContext:manage. Creating,
+// updating, or archiving a Work Context creates NO ticket/run/schedule/target-op/workspace
+// mutation and emits no execution event — it only writes the grouping store + an audit log.
+function workContextManageGuard(request, reply) {
+  if (!hasPermission(request.session.userId, 'workContext:manage')) {
+    reply.code(403);
+    return false;
+  }
+  return true;
+}
+
+fastify.get('/api/work-contexts', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!workContextManageGuard(request, reply)) return { error: 'Permission denied' };
+  return { ok: true, workContexts: readWorkContexts() };
+});
+
+fastify.post('/api/work-contexts', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!workContextManageGuard(request, reply)) return { error: 'Permission denied' };
+  const parsed = validateWorkContextInput(request.body || {}, null);
+  if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
+  const contexts = readWorkContexts();
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const record = { id: nextId(contexts), ...parsed.value, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now };
+  contexts.push(record);
+  writeWorkContexts(contexts);
+  appendSystemLog('work_context:created', `Work Context "${record.name}" created`, null, { workContextId: record.id, name: record.name, status: record.status, changedBy });
+  return { ok: true, workContext: record };
+});
+
+fastify.post('/api/work-contexts/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!workContextManageGuard(request, reply)) return { error: 'Permission denied' };
+  const contexts = readWorkContexts();
+  const existing = contexts.find(ctx => ctx && ctx.id === parseInt(request.params.id, 10));
+  if (!existing) { reply.code(404); return { error: 'Work Context not found' }; }
+  const parsed = validateWorkContextInput(request.body || {}, existing);
+  if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const prevStatus = existing.status;
+  Object.assign(existing, parsed.value, { updatedBy: changedBy, updatedAt: now });
+  writeWorkContexts(contexts);
+  const type = prevStatus !== existing.status && existing.status === 'archived' ? 'work_context:archived' : 'work_context:updated';
+  appendSystemLog(type, `Work Context "${existing.name}" ${type === 'work_context:archived' ? 'archived' : 'updated'}`, null, { workContextId: existing.id, name: existing.name, status: existing.status, changedBy });
+  return { ok: true, workContext: existing };
+});
+
+fastify.get('/work-contexts', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'workContext:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  return reply.view('work-contexts.ejs', viewData({
+    user: request.user,
+    workContexts: readWorkContexts(),
+    canManage: true
+  }, request.session.userId));
 });
 
 // ==================== PROCESS TEMPLATE ROUTES ====================
@@ -16226,12 +16418,15 @@ fastify.get('/process-templates', { preHandler: fastify.requireAuth }, async (re
 
   // Pure read: derive operator-facing state from existing stores. Nothing here
   // triggers a schedule, creates a ticket/run, mutates the workspace, or writes logs.
-  const templates = readProcessTemplates();
+  const allTemplates = readProcessTemplates();
   const triggers = readProcessTemplateTriggers();
   const tickets = readTickets();
   const derivedById = new Map(
-    deriveProcessTemplateState(templates, triggers, tickets, Date.now()).map(row => [row.templateId, row])
+    deriveProcessTemplateState(allTemplates, triggers, tickets, Date.now()).map(row => [row.templateId, row])
   );
+  // Optional Work Context filter (r1.20) — read-only projection over existing templates.
+  const wcFilter = request.query && request.query.workContextId !== undefined && request.query.workContextId !== '' ? parseInt(request.query.workContextId, 10) : null;
+  const templates = wcFilter === null ? allTemplates : allTemplates.filter(t => t && t.workContextId === wcFilter);
 
   return reply.view('process-templates.ejs', viewData({
     user: request.user,
@@ -16241,6 +16436,33 @@ fastify.get('/process-templates', { preHandler: fastify.requireAuth }, async (re
     })),
     canTrigger: hasPermission(request.session.userId, 'ticket:create')
   }, request.session.userId));
+});
+
+// Tag a process template with a Work Context (or clear it). Grouping/filtering only — it does
+// not change trigger/schedule/version behavior and creates no ticket/run. Gated by
+// processTemplate:manage; a non-null context must be active and allow this template.
+fastify.post('/api/process-templates/:id/work-context', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) { reply.code(403); return { error: 'Permission denied' }; }
+  const templates = readProcessTemplates();
+  const template = templates.find(t => t && t.id === parseInt(request.params.id, 10));
+  if (!template) { reply.code(404); return { error: 'Process template not found' }; }
+  const raw = request.body && request.body.workContextId !== undefined ? request.body.workContextId : null;
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  if (raw === null || raw === '') {
+    delete template.workContextId;
+    delete template.workContextSnapshot;
+  } else {
+    const check = validateWorkContextAssignment(raw, { templateId: template.id });
+    if (!check.ok) { reply.code(check.code || 400); return { error: check.error }; }
+    template.workContextId = check.context.id;
+    template.workContextSnapshot = check.snapshot;
+  }
+  template.updatedBy = changedBy;
+  template.updatedAt = new Date().toISOString();
+  writeProcessTemplates(templates);
+  appendSystemLog('work_context:template_assigned', `Process template "${template.name}" work context ${template.workContextId ? 'set to ' + template.workContextId : 'cleared'}`, null,
+    { templateId: template.id, workContextId: template.workContextId || null, changedBy });
+  return { ok: true, templateId: template.id, workContextId: template.workContextId || null };
 });
 
 fastify.get('/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -17168,8 +17390,13 @@ fastify.get('/triage', { preHandler: fastify.requireAuth }, async (request, repl
   const tickets = readTickets();
   const ticketById = new Map(tickets.map(ticket => [ticket.id, ticket]));
 
+  // Optional Work Context filter (r1.20). It is OFF by default — uncontexted/critical triage is
+  // never hidden unless the operator explicitly filters by a context.
+  const wcFilter = request.query && request.query.workContextId !== undefined && request.query.workContextId !== '' ? parseInt(request.query.workContextId, 10) : null;
+  const inContext = ticket => wcFilter === null || (ticket && ticket.workContextId === wcFilter);
+
   const ticketTriageItems = tickets
-    .filter(ticket => ticket.triage && ticket.triage.required === true)
+    .filter(ticket => ticket.triage && ticket.triage.required === true && inContext(ticket))
     .map(ticket => ({
       ticketId: ticket.id,
       objective: ticket.objective,
@@ -17187,9 +17414,12 @@ fastify.get('/triage', { preHandler: fastify.requireAuth }, async (request, repl
         ticketId: run.ticketId,
         ticketObjective: ticket ? ticket.objective : null,
         ticketStatus: ticket ? ticket.status : null,
-        triage: run.triage
+        triage: run.triage,
+        _ticket: ticket
       };
-    });
+    })
+    .filter(item => inContext(item._ticket))
+    .map(({ _ticket, ...item }) => item);
 
   return renderCachedView(request, reply, 'triage.ejs', viewData({
     user: request.user,
