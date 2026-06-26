@@ -6122,6 +6122,828 @@ function getOperationHistoryForTicket(ticketId, history = readOperationHistory()
   return history.filter(record => record.ticketId === ticketId);
 }
 
+const TICKET_TIMELINE_SOURCE_PRIORITY = {
+  operation_history: 60,
+  live_state: 50,
+  provenance: 45,
+  append_only_event: 40,
+  embedded_receipt: 35,
+  replay_snapshot: 20,
+  diagnostic_log: 10
+};
+
+function timelineText(value, maxLength = 240) {
+  const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function timelineTimestamp(...values) {
+  return values.find(value => typeof value === 'string' && isValidIsoTimestamp(value)) || null;
+}
+
+function summarizeTimelineState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
+  const summary = {};
+  for (const key of ['existed', 'type', 'contentHash']) {
+    if (state[key] !== undefined) summary[key] = state[key];
+  }
+  for (const key of ['source', 'destination']) {
+    const nested = summarizeTimelineState(state[key]);
+    if (nested) summary[key] = nested;
+  }
+  return Object.keys(summary).length > 0 ? summary : null;
+}
+
+function summarizeTimelineEvaluation(evaluation) {
+  if (!evaluation || typeof evaluation !== 'object') return null;
+  const efficiency = evaluation.efficiency || {};
+  const violations = evaluation.violations || {};
+  return {
+    effectivenessStatus: evaluation.effectiveness ? evaluation.effectiveness.status || null : null,
+    violationsStatus: violations.status || null,
+    violationCount: Array.isArray(violations.items) ? violations.items.length : null,
+    durationMs: Number.isFinite(efficiency.durationMs) ? efficiency.durationMs : null,
+    providerRequests: Number.isFinite(efficiency.providerRequests) ? efficiency.providerRequests : null,
+    workspaceOperations: Number.isFinite(efficiency.workspaceOperations) ? efficiency.workspaceOperations : null,
+    mutationCount: Number.isFinite(efficiency.mutationCount) ? efficiency.mutationCount : null
+  };
+}
+
+function summarizeTimelineConsequence(consequence) {
+  if (!consequence || typeof consequence !== 'object') return null;
+  const count = key => Array.isArray(consequence[key]) ? consequence[key].length : 0;
+  return {
+    mutations: count('mutations'),
+    created: count('created'),
+    updated: count('updated'),
+    deleted: count('deleted'),
+    renamed: count('renamed'),
+    notifications: count('notifications'),
+    externalEffects: count('externalEffects'),
+    verification: consequence.verification ? sanitizeSnapshotValue(consequence.verification) : null
+  };
+}
+
+function timelineWorkspaceOperation(item) {
+  if (!item || typeof item !== 'object') return { operation: null, args: {}, path: null, nextPath: null };
+  const operationObject = item.operation && typeof item.operation === 'object' ? item.operation : null;
+  const operation = typeof item.operation === 'string'
+    ? item.operation
+    : operationObject && typeof operationObject.operation === 'string'
+      ? operationObject.operation
+      : null;
+  const args = operationObject && operationObject.args && typeof operationObject.args === 'object'
+    ? operationObject.args
+    : item.args && typeof item.args === 'object'
+      ? item.args
+      : item.input && typeof item.input === 'object'
+        ? item.input
+        : {};
+  return {
+    operation,
+    args,
+    path: item.path || item.targetPath || args.path || null,
+    nextPath: item.nextPath || args.nextPath || null
+  };
+}
+
+function timelineReceiptDetails(receipt) {
+  if (!receipt || typeof receipt !== 'object') return null;
+  return {
+    operationId: receipt.operationId == null ? null : receipt.operationId,
+    targetId: receipt.targetId || null,
+    targetKind: receipt.targetKind || null,
+    targetScope: receipt.targetScope ? sanitizeSnapshotValue(receipt.targetScope) : null,
+    targetPath: receipt.targetPath || receipt.targetResourceId || null,
+    timestamp: receipt.timestamp || null,
+    metadata: receipt.metadata ? sanitizeSnapshotValue(receipt.metadata) : null,
+    partial: receipt.partial === true,
+    truncated: receipt.truncated === true,
+    changedResources: Array.isArray(receipt.changedResources) ? receipt.changedResources : [],
+    createdResources: Array.isArray(receipt.createdResources) ? receipt.createdResources : [],
+    deletedResources: Array.isArray(receipt.deletedResources) ? receipt.deletedResources : [],
+    providerStatus: receipt.providerResponse && receipt.providerResponse.status ? receipt.providerResponse.status : null,
+    error: receipt.error ? {
+      code: receipt.error.code || null,
+      failureKind: receipt.error.failureKind || null,
+      message: timelineText(receipt.error.message)
+    } : null
+  };
+}
+
+function timelineEntrySort(a, b) {
+  const aTime = a.timestamp ? Date.parse(a.timestamp) : 0;
+  const bTime = b.timestamp ? Date.parse(b.timestamp) : 0;
+  if (aTime !== bTime) return aTime - bTime;
+  const aPriority = TICKET_TIMELINE_SOURCE_PRIORITY[a.sourceRole] || 0;
+  const bPriority = TICKET_TIMELINE_SOURCE_PRIORITY[b.sourceRole] || 0;
+  if (aPriority !== bPriority) return bPriority - aPriority;
+  if ((a.runId || 0) !== (b.runId || 0)) return (a.runId || 0) - (b.runId || 0);
+  return String(a.id).localeCompare(String(b.id));
+}
+
+function buildTicketTimeline(ticketId) {
+  const parsedTicketId = parseInt(ticketId, 10);
+  if (Number.isNaN(parsedTicketId)) return null;
+  const ticket = readTickets().find(item => item.id === parsedTicketId);
+  if (!ticket) return null;
+
+  const runs = readRuns()
+    .filter(run => run.ticketId === parsedTicketId)
+    .sort((a, b) => (a.id || 0) - (b.id || 0));
+  const runIds = new Set(runs.map(run => run.id));
+  const eventNeedles = [`"ticketId":${parsedTicketId}`, ...runs.map(run => `"runId":${run.id}`)];
+  const events = readBufferedAndMatchingEvents({
+    needles: eventNeedles,
+    predicate: event => event.ticketId === parsedTicketId || runIds.has(event.runId)
+  })
+    .slice()
+    .sort((a, b) => {
+      const time = String(a.ts || '').localeCompare(String(b.ts || ''));
+      if (time !== 0) return time;
+      if ((a.runId || 0) !== (b.runId || 0)) return (a.runId || 0) - (b.runId || 0);
+      if ((a.seq ?? -1) !== (b.seq ?? -1)) return (a.seq ?? -1) - (b.seq ?? -1);
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+  const history = getOperationHistoryForTicket(parsedTicketId);
+  const historyIds = new Set(history.map(record => record.id));
+  const logs = readLogs().filter(log =>
+    log.ticketId === parsedTicketId ||
+    log.contextTicketId === parsedTicketId ||
+    runIds.has(log.runId) ||
+    runIds.has(log.contextRunId)
+  );
+  const snapshots = new Map(runs.map(run => [run.id, readRunReplaySnapshot(run)]).filter(([, snapshot]) => snapshot));
+  const trigger = ticket.source && ticket.source.type === 'process_template'
+    ? readProcessTemplateTriggers().find(item =>
+      item && (
+        item.ticketId === parsedTicketId ||
+        (ticket.source.triggerToken && item.triggerToken === ticket.source.triggerToken)
+      )) || null
+    : null;
+
+  const entriesByDedupeKey = new Map();
+  const supportingRefs = new Map();
+  function addEntry(entry) {
+    const normalized = {
+      id: entry.id,
+      timestamp: entry.timestamp || null,
+      type: entry.type,
+      title: entry.title,
+      summary: timelineText(entry.summary),
+      sourceType: entry.sourceType,
+      sourceRef: entry.sourceRef,
+      sourceRole: entry.sourceRole,
+      runId: entry.runId || null,
+      ticketId: parsedTicketId,
+      status: entry.status || null,
+      severity: entry.severity || null,
+      dedupeKey: entry.dedupeKey || entry.id,
+      details: sanitizeSnapshotValue(entry.details || {})
+    };
+    const key = normalized.dedupeKey;
+    const existing = entriesByDedupeKey.get(key);
+    if (!existing) {
+      entriesByDedupeKey.set(key, normalized);
+      supportingRefs.set(key, new Set([normalized.sourceRef].filter(Boolean)));
+      return;
+    }
+    const refs = supportingRefs.get(key) || new Set();
+    if (normalized.sourceRef) refs.add(normalized.sourceRef);
+    supportingRefs.set(key, refs);
+    const existingPriority = TICKET_TIMELINE_SOURCE_PRIORITY[existing.sourceRole] || 0;
+    const incomingPriority = TICKET_TIMELINE_SOURCE_PRIORITY[normalized.sourceRole] || 0;
+    const winner = incomingPriority > existingPriority ? normalized : existing;
+    const loser = winner === normalized ? existing : normalized;
+    winner.details = {
+      ...loser.details,
+      ...winner.details
+    };
+    entriesByDedupeKey.set(key, winner);
+  }
+
+  const ticketCreatedEvent = events.find(event => event.type === 'ticket.created');
+  if (!ticketCreatedEvent) {
+    addEntry({
+      id: `ticket:${parsedTicketId}:created`,
+      timestamp: ticket.createdAt || null,
+      type: 'ticket.created',
+      title: 'Ticket created',
+      summary: timelineText(ticket.objective),
+      sourceType: 'ticket',
+      sourceRef: `tickets.json:${parsedTicketId}`,
+      sourceRole: 'live_state',
+      status: ticket.status,
+      details: {
+        assignmentTargetType: ticket.assignmentTargetType || null,
+        assignmentTargetId: ticket.assignmentTargetId || null,
+        assignmentMode: ticket.assignmentMode || null
+      }
+    });
+  }
+
+  addEntry({
+    id: `ticket:${parsedTicketId}:state`,
+    timestamp: timelineTimestamp(ticket.updatedAt, ticket.changedAt, ticket.createdAt),
+    type: 'ticket.state',
+    title: 'Current ticket state',
+    summary: `Status ${ticket.status || 'unknown'}; assigned to ${ticket.assignmentTargetType || 'target'} ${ticket.assignmentTargetId || 'unassigned'}`,
+    sourceType: 'ticket',
+    sourceRef: `tickets.json:${parsedTicketId}`,
+    sourceRole: 'live_state',
+    status: ticket.status,
+    details: {
+      objective: timelineText(ticket.objective),
+      assignmentTargetType: ticket.assignmentTargetType || null,
+      assignmentTargetId: ticket.assignmentTargetId || null,
+      assignmentMode: ticket.assignmentMode || null,
+      changedBy: ticket.changedBy || null
+    }
+  });
+
+  if (ticket.source && ticket.source.type === 'process_template') {
+    const versionLabel = ticket.source.templateVersion ? `v${ticket.source.templateVersion}` : 'legacy unversioned';
+    addEntry({
+      id: `ticket:${parsedTicketId}:provenance`,
+      timestamp: timelineTimestamp(trigger && (trigger.triggeredAt || trigger.createdAt), ticket.createdAt),
+      type: 'ticket.provenance',
+      title: 'Created from process template',
+      summary: `${ticket.source.templateName || `Template #${ticket.source.templateId}`} ${versionLabel} via ${ticket.source.triggerType || 'unknown'} trigger`,
+      sourceType: 'process_template',
+      sourceRef: trigger && trigger.id != null
+        ? `process-template-triggers.json:${trigger.id}`
+        : `tickets.json:${parsedTicketId}.source`,
+      sourceRole: 'provenance',
+      status: ticket.source.triggerType || null,
+      details: {
+        templateId: ticket.source.templateId || null,
+        templateName: ticket.source.templateName || null,
+        templateVersion: ticket.source.templateVersion || null,
+        legacyUnversioned: !ticket.source.templateVersion,
+        triggerType: ticket.source.triggerType || null,
+        triggerToken: ticket.source.triggerToken || null,
+        triggeredBy: ticket.source.triggeredBy || null,
+        scheduledFor: ticket.source.scheduledFor || (trigger && trigger.scheduledFor) || null
+      }
+    });
+  }
+
+  const runAttemptById = new Map(runs.map((run, index) => [run.id, index + 1]));
+  for (const run of runs) {
+    const runEvents = events.filter(event => event.runId === run.id);
+    if (!runEvents.some(event => event.type === 'run.created')) {
+      addEntry({
+        id: `run:${run.id}:created`,
+        timestamp: run.createdAt || null,
+        type: 'run.created',
+        title: `Run #${run.id} created`,
+        summary: `Attempt ${runAttemptById.get(run.id)} created for ${run.agentName || `agent #${run.agentId}`}`,
+        sourceType: 'run',
+        sourceRef: `runs.json:${run.id}`,
+        sourceRole: 'live_state',
+        runId: run.id,
+        status: 'pending',
+        details: { attemptNumber: runAttemptById.get(run.id), rerunMode: run.rerunMode || null }
+      });
+    }
+    const snapshot = snapshots.get(run.id) || {};
+    addEntry({
+      id: `run:${run.id}:state`,
+      timestamp: timelineTimestamp(run.updatedAt, run.completedAt, run.startedAt, run.createdAt),
+      type: 'run.state',
+      title: `Run #${run.id} current state`,
+      summary: run.error ? `${run.status}: ${timelineText(run.error)}` : `Status ${run.status || 'unknown'}`,
+      sourceType: 'run',
+      sourceRef: `runs.json:${run.id}`,
+      sourceRole: 'live_state',
+      runId: run.id,
+      status: run.status,
+      severity: run.status === 'failed' ? 'error' : null,
+      details: {
+        attemptNumber: runAttemptById.get(run.id),
+        rerunMode: run.rerunMode || null,
+        error: timelineText(run.error),
+        replaySnapshotPath: run.replaySnapshotPath || null,
+        targetId: snapshot.targetId || null,
+        targetKind: snapshot.targetKind || null,
+        targetScope: snapshot.targetScope ? sanitizeSnapshotValue(snapshot.targetScope) : null
+      }
+    });
+    addEntry({
+      id: `run:${run.id}:verification-requirement`,
+      timestamp: run.createdAt || null,
+      type: 'verification.requirement',
+      title: isRunVerificationRequired(run) ? 'Verification required' : 'Verification not required',
+      summary: run.verificationContractSnapshot
+        ? `Verification contract captured for run #${run.id}`
+        : `No declared verification contract for run #${run.id}`,
+      sourceType: 'run',
+      sourceRef: `runs.json:${run.id}.verificationContractSnapshot`,
+      sourceRole: 'live_state',
+      runId: run.id,
+      status: isRunVerificationRequired(run) ? 'required' : 'not_required',
+      details: {
+        required: isRunVerificationRequired(run),
+        workflowId: run.verificationContractSnapshot ? run.verificationContractSnapshot.workflowId || null : null,
+        capturedAt: run.verificationContractSnapshot ? run.verificationContractSnapshot.capturedAt || null : null
+      }
+    });
+  }
+
+  const lifecycleTitles = {
+    'ticket.created': 'Ticket created',
+    'ticket.updated': 'Ticket updated',
+    'ticket.blocked': 'Ticket blocked',
+    'run.created': 'Run created',
+    'run.lease_acquired': 'Run lease acquired',
+    'run.started': 'Run started',
+    'run.execution_completed': 'Run execution completed',
+    'run.snapshot_finalized': 'Replay snapshot finalized',
+    'run.terminalized': 'Run terminalized'
+  };
+  const verificationTypes = new Set([
+    'batch.verification_failed',
+    'run.postcondition_failed',
+    'run.postconditions_checked',
+    'run.verification_passed',
+    'run.verification_failed',
+    'run.violations_checked',
+    'run.evaluation_completed',
+    'run.consequence_recorded'
+  ]);
+  const workspaceEventKeys = new Set();
+  const foldedWorkspaceEventIds = new Set();
+  const foldedWorkspaceAttemptByAuthorityId = new Map();
+
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    if (event.type !== 'authority.denied') continue;
+    const payload = event.payload || {};
+    for (let nextIndex = index + 1; nextIndex < events.length; nextIndex += 1) {
+      const candidate = events[nextIndex];
+      if (candidate.runId !== event.runId) continue;
+      if (candidate.type === 'authority.denied') break;
+      if (candidate.type !== 'workspace.operation') continue;
+      const candidatePayload = candidate.payload || {};
+      if (candidatePayload.operation === payload.operation && (candidatePayload.path || null) === (payload.path || null) && (candidatePayload.error || candidatePayload.blocked)) {
+        const candidateReceipt = candidatePayload.readReceipt || candidatePayload.mutationReceipt || null;
+        workspaceEventKeys.add(`${candidate.runId}:${candidatePayload.operation}:${candidatePayload.path || null}:${candidateReceipt && candidateReceipt.timestamp ? candidateReceipt.timestamp : candidate.id}`);
+        foldedWorkspaceEventIds.add(candidate.id);
+        foldedWorkspaceAttemptByAuthorityId.set(event.id, {
+          error: timelineText(candidatePayload.error),
+          blocked: candidatePayload.blocked === true,
+          targetId: candidatePayload.targetId || null,
+          targetKind: candidatePayload.targetKind || null,
+          targetScope: candidatePayload.targetScope ? sanitizeSnapshotValue(candidatePayload.targetScope) : null,
+          mutationReceipt: timelineReceiptDetails(candidatePayload.mutationReceipt),
+          supportingSourceRefs: [`events.jsonl:${candidate.id}`]
+        });
+        break;
+      }
+    }
+  }
+
+  for (const event of events) {
+    const payload = event.payload || {};
+    const sourceRef = `events.jsonl:${event.id || `${event.runId || 'ticket'}:${event.seq ?? event.ts}`}`;
+    if (lifecycleTitles[event.type]) {
+      addEntry({
+        id: `event:${event.id || `${event.type}:${event.ts}`}`,
+        timestamp: event.ts || null,
+        type: event.type,
+        title: lifecycleTitles[event.type],
+        summary: payload.message || payload.error || (payload.status ? `Status ${payload.status}` : event.type),
+        sourceType: 'event',
+        sourceRef,
+        sourceRole: 'append_only_event',
+        runId: event.runId,
+        status: payload.status || (event.type === 'ticket.blocked' ? 'blocked' : null),
+        severity: event.type === 'ticket.blocked' ? 'warning' : null,
+        dedupeKey: event.type === 'ticket.created' ? `ticket:${parsedTicketId}:created` : `event:${event.id || `${event.type}:${event.ts}`}`,
+        details: {
+          eventId: event.id || null,
+          sequence: event.seq ?? null,
+          previousHash: event.prevHash || null,
+          attemptNumber: event.runId ? runAttemptById.get(event.runId) || null : null,
+          replaySnapshotPath: payload.replaySnapshotPath || null
+        }
+      });
+      continue;
+    }
+
+    if (event.type === 'authority.allowed' || event.type === 'authority.denied') {
+      const denied = event.type === 'authority.denied';
+      addEntry({
+        id: `event:${event.id || `${event.type}:${event.ts}`}`,
+        timestamp: event.ts || null,
+        type: event.type,
+        title: denied ? 'Authority denied workspace mutation' : 'Authority allowed workspace mutation',
+        summary: `${payload.operation || 'operation'} ${payload.path || ''}: ${payload.reason || (denied ? 'denied' : 'allowed')}`,
+        sourceType: 'event',
+        sourceRef,
+        sourceRole: 'append_only_event',
+        runId: event.runId,
+        status: denied ? 'denied' : 'allowed',
+        severity: denied ? 'warning' : null,
+        details: {
+          eventId: event.id || null,
+          rule: payload.rule || null,
+          operation: payload.operation || null,
+          path: payload.path || null,
+          actor: payload.actor || null,
+          reason: timelineText(payload.reason),
+          ownedOutputPaths: Array.isArray(payload.ownedOutputPaths) ? payload.ownedOutputPaths : [],
+          workspaceAttempt: foldedWorkspaceAttemptByAuthorityId.get(event.id) || null
+        }
+      });
+      continue;
+    }
+
+    if (event.type === 'workspace.cross_ticket_delete_authorized') {
+      addEntry({
+        id: `event:${event.id || `${event.type}:${event.ts}`}`,
+        timestamp: event.ts || null,
+        type: event.type,
+        title: 'Permissioned cross-ticket delete authorized',
+        summary: `${payload.path || 'Artifact'} authorized for deletion with delegated permission`,
+        sourceType: 'event',
+        sourceRef,
+        sourceRole: 'append_only_event',
+        runId: event.runId,
+        status: 'authorized',
+        details: {
+          path: payload.path || null,
+          priorOwnerTicketId: payload.priorOwnerTicketId || null,
+          priorOwnerRunId: payload.priorOwnerRunId || null,
+          priorOwnerHistoryId: payload.priorOwnerHistoryId || null,
+          permission: payload.permission || payload.permissionUsed || null,
+          requestedBy: payload.requestedBy || null
+        }
+      });
+      continue;
+    }
+
+    if (verificationTypes.has(event.type)) {
+      let title = event.type.replace(/[._]/g, ' ');
+      let summary = payload.error || payload.message || null;
+      let details = { eventId: event.id || null };
+      if (event.type === 'run.postconditions_checked') {
+        title = 'Postconditions checked';
+        summary = `${payload.status || 'unknown'}: ${payload.passed || 0} passed, ${payload.failed || 0} failed`;
+        details = { ...details, status: payload.status || null, passed: payload.passed || 0, failed: payload.failed || 0, total: payload.total || 0, contractSource: payload.contractSource || null };
+      } else if (event.type === 'run.postcondition_failed') {
+        title = 'Postcondition failed';
+        const result = payload.postcondition || {};
+        summary = result.message || result.id || result.type || 'A declared postcondition failed';
+        details = { ...details, postconditionId: result.id || null, postconditionType: result.type || null, path: result.path || null };
+      } else if (event.type === 'run.verification_passed') {
+        title = 'Verification passed';
+        summary = 'Declared verification completed successfully';
+      } else if (event.type === 'run.verification_failed') {
+        title = 'Verification failed';
+        summary = payload.error || 'Declared verification failed';
+      } else if (event.type === 'run.violations_checked') {
+        title = 'Violations checked';
+        const items = Array.isArray(payload.violations) ? payload.violations : Array.isArray(payload.items) ? payload.items : [];
+        summary = `${payload.status || (items.length ? 'failed' : 'passed')}; ${items.length} violation${items.length === 1 ? '' : 's'}`;
+        details = { ...details, status: payload.status || null, violationCount: items.length };
+      } else if (event.type === 'run.evaluation_completed') {
+        title = 'Run evaluation recorded';
+        details = { ...details, evaluation: summarizeTimelineEvaluation(payload.evaluation) };
+        summary = details.evaluation && details.evaluation.effectivenessStatus ? `Effectiveness ${details.evaluation.effectivenessStatus}` : 'Run evaluation persisted';
+      } else if (event.type === 'run.consequence_recorded') {
+        title = 'Run consequence recorded';
+        details = { ...details, consequence: summarizeTimelineConsequence(payload.consequence) };
+        summary = details.consequence ? `${details.consequence.mutations} mutation consequence${details.consequence.mutations === 1 ? '' : 's'}` : 'Run consequence persisted';
+      }
+      addEntry({
+        id: `event:${event.id || `${event.type}:${event.ts}`}`,
+        timestamp: event.ts || null,
+        type: event.type,
+        title,
+        summary,
+        sourceType: 'event',
+        sourceRef,
+        sourceRole: 'append_only_event',
+        runId: event.runId,
+        status: payload.status || (event.type.endsWith('_passed') ? 'passed' : event.type.endsWith('_failed') ? 'failed' : null),
+        severity: event.type.endsWith('_failed') ? 'error' : null,
+        details
+      });
+      continue;
+    }
+
+    if (event.type === 'run.triage_created') {
+      const triage = payload.triage || {};
+      addEntry({
+        id: `event:${event.id || `${event.type}:${event.ts}`}`,
+        timestamp: event.ts || null,
+        type: event.type,
+        title: 'Run triage required',
+        summary: triage.summary || 'Run requires operator triage',
+        sourceType: 'event',
+        sourceRef,
+        sourceRole: 'append_only_event',
+        runId: event.runId,
+        status: 'required',
+        severity: 'warning',
+        details: { reasonCode: triage.reasonCode || null, requiredDecision: triage.requiredDecision || null }
+      });
+      continue;
+    }
+
+    if (event.type !== 'workspace.operation' || foldedWorkspaceEventIds.has(event.id)) continue;
+    const operationInfo = timelineWorkspaceOperation(payload);
+    const receipt = payload.readReceipt || payload.mutationReceipt || null;
+    const historyId = payload.historyId || (payload.result && payload.result.historyId) || (payload.mutationReceipt && payload.mutationReceipt.operationId) || null;
+    if (historyId && historyIds.has(historyId)) continue;
+    const evidenceKey = `${event.runId}:${operationInfo.operation}:${operationInfo.path}:${receipt && receipt.timestamp ? receipt.timestamp : event.id}`;
+    workspaceEventKeys.add(evidenceKey);
+    if (operationInfo.operation === 'listDirectory' || operationInfo.operation === 'readFile') {
+      addEntry({
+        id: `event:${event.id || `${event.type}:${event.ts}`}`,
+        timestamp: (receipt && receipt.timestamp) || event.ts || null,
+        type: 'target.read',
+        title: operationInfo.operation === 'readFile' ? 'Target file read' : 'Target directory listed',
+        summary: `${operationInfo.operation} ${operationInfo.path || '.'}`,
+        sourceType: 'event_read_receipt',
+        sourceRef,
+        sourceRole: receipt ? 'embedded_receipt' : 'append_only_event',
+        runId: event.runId,
+        status: payload.error ? 'failed' : 'observed',
+        severity: payload.error ? 'error' : null,
+        dedupeKey: `target-read:${evidenceKey}`,
+        details: {
+          operation: operationInfo.operation,
+          path: operationInfo.path,
+          targetId: payload.targetId || (receipt && receipt.targetId) || null,
+          targetKind: payload.targetKind || (receipt && receipt.targetKind) || null,
+          receipt: timelineReceiptDetails(receipt),
+          error: timelineText(payload.error)
+        }
+      });
+    } else if (AGENT_MUTATING_OPERATIONS.includes(operationInfo.operation) && (payload.error || payload.blocked)) {
+      addEntry({
+        id: `event:${event.id || `${event.type}:${event.ts}`}`,
+        timestamp: event.ts || null,
+        type: 'target.mutation_attempted',
+        title: 'Target mutation attempted but not committed',
+        summary: `${operationInfo.operation} ${operationInfo.path || ''}: ${timelineText(payload.error || payload.reason || 'blocked')}`,
+        sourceType: 'workspace_operation_event',
+        sourceRef,
+        sourceRole: 'append_only_event',
+        runId: event.runId,
+        status: payload.blocked ? 'denied' : 'failed',
+        severity: 'warning',
+        dedupeKey: `target-attempt:${evidenceKey}`,
+        details: {
+          committed: false,
+          operation: operationInfo.operation,
+          path: operationInfo.path,
+          nextPath: operationInfo.nextPath,
+          targetId: payload.targetId || null,
+          targetKind: payload.targetKind || null,
+          receipt: timelineReceiptDetails(receipt),
+          conflictingTicketId: payload.conflictingTicketId || null,
+          conflictingRunId: payload.conflictingRunId || null,
+          conflictingHistoryId: payload.conflictingHistoryId || null,
+          error: timelineText(payload.error)
+        }
+      });
+    }
+  }
+
+  for (const record of history) {
+    const receipt = record.mutationReceipt || null;
+    const committed = !record.error;
+    const duplicateSourceRefs = [];
+    events.forEach(event => {
+      if (event.type !== 'workspace.operation') return;
+      const payload = event.payload || {};
+      const eventHistoryId = payload.historyId || (payload.result && payload.result.historyId) || (payload.mutationReceipt && payload.mutationReceipt.operationId) || null;
+      if (eventHistoryId === record.id) duplicateSourceRefs.push(`events.jsonl:${event.id}`);
+    });
+    for (const [snapshotRunId, snapshot] of snapshots.entries()) {
+      (Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : []).forEach((item, index) => {
+        const replayHistoryId = item.historyId || (item.result && item.result.historyId) || (item.mutationReceipt && item.mutationReceipt.operationId) || null;
+        if (replayHistoryId === record.id) {
+          const replayRun = runs.find(run => run.id === snapshotRunId);
+          duplicateSourceRefs.push(`${replayRun && replayRun.replaySnapshotPath ? replayRun.replaySnapshotPath : `replay-snapshots/run-${snapshotRunId}.json`}:workspaceOperations[${index}]`);
+        }
+      });
+    }
+    addEntry({
+      id: `operation-history:${record.id}`,
+      timestamp: record.timestamp || null,
+      type: committed ? 'target.mutation_committed' : 'target.mutation_failed',
+      title: committed ? 'Target mutation committed' : 'Target mutation failed',
+      summary: `${record.operation} ${(record.args && record.args.path) || record.targetPath || ''}${record.args && record.args.nextPath ? ` -> ${record.args.nextPath}` : ''}`,
+      sourceType: 'operation_history',
+      sourceRef: `operation-history.json:${record.id}`,
+      sourceRole: 'operation_history',
+      runId: record.runId,
+      status: committed ? (record.result && record.result.status) || 'committed' : 'failed',
+      severity: committed ? null : 'error',
+      dedupeKey: `mutation:${record.id}`,
+      details: {
+        committed,
+        historyId: record.id,
+        operation: record.operation,
+        path: record.args && record.args.path ? record.args.path : record.targetPath || null,
+        nextPath: record.args && record.args.nextPath ? record.args.nextPath : null,
+        targetId: record.targetId || (receipt && receipt.targetId) || null,
+        targetKind: record.targetKind || (receipt && receipt.targetKind) || null,
+        targetScope: record.targetScope ? sanitizeSnapshotValue(record.targetScope) : null,
+        before: summarizeTimelineState(record.preState),
+        after: summarizeTimelineState(record.postState),
+        receipt: timelineReceiptDetails(receipt),
+        authorityRule: record.authorityDecision ? record.authorityDecision.rule || null : null,
+        errorCode: record.errorCode || null,
+        failureKind: record.failureKind || null,
+        error: timelineText(record.error),
+        supportingSourceRefs: [...new Set(duplicateSourceRefs)].sort()
+      }
+    });
+  }
+
+  for (const run of runs) {
+    const snapshot = snapshots.get(run.id);
+    if (!snapshot || !Array.isArray(snapshot.workspaceOperations)) continue;
+    for (let index = 0; index < snapshot.workspaceOperations.length; index += 1) {
+      const item = snapshot.workspaceOperations[index];
+      const operationInfo = timelineWorkspaceOperation(item);
+      const receipt = item.readReceipt || item.mutationReceipt || null;
+      const historyId = item.historyId || (item.result && item.result.historyId) || (item.mutationReceipt && item.mutationReceipt.operationId) || null;
+      if (historyId && historyIds.has(historyId)) continue;
+      const evidenceKey = `${run.id}:${operationInfo.operation}:${operationInfo.path}:${receipt && receipt.timestamp ? receipt.timestamp : item.startedAt || index}`;
+      if (workspaceEventKeys.has(evidenceKey)) continue;
+      if (operationInfo.operation === 'listDirectory' || operationInfo.operation === 'readFile') {
+        addEntry({
+          id: `replay:${run.id}:workspace:${index}`,
+          timestamp: (receipt && receipt.timestamp) || item.startedAt || snapshot.capturedAt || run.createdAt || null,
+          type: 'target.read',
+          title: operationInfo.operation === 'readFile' ? 'Target file read' : 'Target directory listed',
+          summary: `${operationInfo.operation} ${operationInfo.path || '.'}`,
+          sourceType: 'replay_read_receipt',
+          sourceRef: `${run.replaySnapshotPath || `replay-snapshots/run-${run.id}.json`}:workspaceOperations[${index}]`,
+          sourceRole: receipt ? 'embedded_receipt' : 'replay_snapshot',
+          runId: run.id,
+          status: item.error ? 'failed' : 'observed',
+          severity: item.error ? 'error' : null,
+          dedupeKey: `target-read:${evidenceKey}`,
+          details: {
+            operation: operationInfo.operation,
+            path: operationInfo.path,
+            targetId: item.targetId || (receipt && receipt.targetId) || snapshot.targetId || null,
+            targetKind: item.targetKind || (receipt && receipt.targetKind) || snapshot.targetKind || null,
+            receipt: timelineReceiptDetails(receipt),
+            error: timelineText(item.error)
+          }
+        });
+      } else if (AGENT_MUTATING_OPERATIONS.includes(operationInfo.operation) && (item.error || item.blocked || (item.operation && item.operation.blocked))) {
+        addEntry({
+          id: `replay:${run.id}:workspace:${index}`,
+          timestamp: item.startedAt || (receipt && receipt.timestamp) || snapshot.capturedAt || run.createdAt || null,
+          type: 'target.mutation_attempted',
+          title: 'Target mutation attempted but not committed',
+          summary: `${operationInfo.operation} ${operationInfo.path || ''}: ${timelineText(item.error || item.reason || 'blocked')}`,
+          sourceType: 'replay_workspace_operation',
+          sourceRef: `${run.replaySnapshotPath || `replay-snapshots/run-${run.id}.json`}:workspaceOperations[${index}]`,
+          sourceRole: 'replay_snapshot',
+          runId: run.id,
+          status: item.blocked ? 'denied' : 'failed',
+          severity: 'warning',
+          dedupeKey: `target-attempt:${evidenceKey}`,
+          details: {
+            committed: false,
+            operation: operationInfo.operation,
+            path: operationInfo.path,
+            nextPath: operationInfo.nextPath,
+            targetId: item.targetId || snapshot.targetId || null,
+            targetKind: item.targetKind || snapshot.targetKind || null,
+            receipt: timelineReceiptDetails(receipt),
+            error: timelineText(item.error)
+          }
+        });
+      }
+    }
+  }
+
+  function addTriageEntry(ownerType, ownerId, triage, runId = null) {
+    if (!triage) return;
+    const resolved = Boolean(triage.resolvedAt);
+    addEntry({
+      id: `${ownerType}:${ownerId}:triage:${resolved ? 'resolved' : 'current'}`,
+      timestamp: timelineTimestamp(triage.resolvedAt, triage.createdAt, ownerType === 'ticket' ? ticket.updatedAt : null),
+      type: resolved ? 'triage.resolved' : 'triage.required',
+      title: `${ownerType === 'ticket' ? 'Ticket' : 'Run'} triage ${resolved ? 'resolved' : 'required'}`,
+      summary: triage.summary || (resolved ? 'Operator acknowledged triage' : 'Operator action required'),
+      sourceType: ownerType,
+      sourceRef: `${ownerType === 'ticket' ? 'tickets' : 'runs'}.json:${ownerId}.triage`,
+      sourceRole: 'live_state',
+      runId,
+      status: resolved ? 'resolved' : 'required',
+      severity: resolved ? null : 'warning',
+      details: {
+        reasonCode: triage.reasonCode || null,
+        requiredDecision: triage.requiredDecision || null,
+        evidenceRefs: Array.isArray(triage.evidenceRefs) ? triage.evidenceRefs : [],
+        resolvedAt: triage.resolvedAt || null,
+        resolvedBy: triage.resolvedBy || null,
+        resolution: timelineText(triage.resolution),
+        statusUnchangedByResolution: resolved
+      }
+    });
+  }
+  addTriageEntry('ticket', parsedTicketId, normalizeTriage(ticket.triage));
+  runs.forEach(run => addTriageEntry('run', run.id, normalizeTriage(run.triage), run.id));
+
+  for (const run of runs) {
+    const runEvents = events.filter(event => event.runId === run.id);
+    if (run.runEvaluation && !runEvents.some(event => event.type === 'run.evaluation_completed')) {
+      addEntry({
+        id: `run:${run.id}:evaluation`,
+        timestamp: timelineTimestamp(run.completedAt, run.updatedAt),
+        type: 'run.evaluation_completed',
+        title: 'Run evaluation recorded',
+        summary: `Effectiveness ${(run.runEvaluation.effectiveness && run.runEvaluation.effectiveness.status) || 'unknown'}`,
+        sourceType: 'run',
+        sourceRef: `runs.json:${run.id}.runEvaluation`,
+        sourceRole: 'live_state',
+        runId: run.id,
+        details: { evaluation: summarizeTimelineEvaluation(run.runEvaluation) }
+      });
+    }
+    if (run.runConsequence && !runEvents.some(event => event.type === 'run.consequence_recorded')) {
+      const consequence = summarizeTimelineConsequence(run.runConsequence);
+      addEntry({
+        id: `run:${run.id}:consequence`,
+        timestamp: timelineTimestamp(run.completedAt, run.updatedAt),
+        type: 'run.consequence_recorded',
+        title: 'Run consequence recorded',
+        summary: consequence ? `${consequence.mutations} mutation consequence${consequence.mutations === 1 ? '' : 's'}` : 'Run consequence persisted',
+        sourceType: 'run',
+        sourceRef: `runs.json:${run.id}.runConsequence`,
+        sourceRole: 'live_state',
+        runId: run.id,
+        details: { consequence }
+      });
+    }
+  }
+
+  const selectedLogTypes = new Set(['ticket:triage_resolve', 'run:triage_resolve']);
+  for (const log of logs.filter(item => selectedLogTypes.has(item.type))) {
+    addEntry({
+      id: `log:${log.id}`,
+      timestamp: log.timestamp || log.changedAt || null,
+      type: log.type,
+      title: log.type === 'ticket:triage_resolve' ? 'Ticket triage resolution recorded' : 'Run triage resolution recorded',
+      summary: log.message,
+      sourceType: 'log',
+      sourceRef: `logs.json:${log.id}`,
+      sourceRole: 'diagnostic_log',
+      runId: log.runId || log.contextRunId || null,
+      status: 'diagnostic',
+      details: {
+        changedBy: log.changedBy || null,
+        changedAt: log.changedAt || null,
+        reasonCode: log.reasonCode || null,
+        resolution: timelineText(log.resolution),
+        authoritativeStateSource: log.type === 'ticket:triage_resolve'
+          ? `tickets.json:${parsedTicketId}.triage`
+          : `runs.json:${log.contextRunId || log.runId}.triage`
+      }
+    });
+  }
+
+  const entries = [...entriesByDedupeKey.entries()].map(([key, entry]) => {
+    const refs = [...(supportingRefs.get(key) || [])].filter(ref => ref && ref !== entry.sourceRef).sort();
+    const existingRefs = Array.isArray(entry.details.supportingSourceRefs) ? entry.details.supportingSourceRefs : [];
+    const combinedRefs = [...new Set([...existingRefs, ...refs])].filter(ref => ref && ref !== entry.sourceRef).sort();
+    if (combinedRefs.length > 0) entry.details.supportingSourceRefs = combinedRefs;
+    return entry;
+  }).sort(timelineEntrySort);
+
+  const roleCounts = {};
+  entries.forEach(entry => { roleCounts[entry.sourceRole] = (roleCounts[entry.sourceRole] || 0) + 1; });
+  return {
+    ticketId: parsedTicketId,
+    generatedAt: new Date().toISOString(),
+    sourceSummary: {
+      ticketRecords: 1,
+      runRecords: runs.length,
+      appendOnlyEvents: events.length,
+      operationHistoryRecords: history.length,
+      replaySnapshots: snapshots.size,
+      selectedDiagnosticLogs: logs.filter(item => selectedLogTypes.has(item.type)).length,
+      provenanceTriggerRecords: trigger ? 1 : 0,
+      timelineEntriesBySourceRole: roleCounts
+    },
+    entries
+  };
+}
+
 function buildWriteFileArtifactStatus(record, operationHistory = [], runIds = new Set()) {
   if (record && record.preState && record.preState.existed === false) return 'created';
   const args = record && record.args ? record.args : {};
@@ -15397,6 +16219,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     : null;
 
   const executionState = buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, readGroups());
+  const timeline = buildTicketTimeline(ticketId);
 
   // Review status for the latest terminal run — separates "did it finish" from
   // "does the result need a look". Derived from existing evidence signals only.
@@ -15425,6 +16248,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     reviewStatus,
     attemptSummary: buildTicketAttemptSummary(ticketRuns),
     budgetSummary: buildTicketBudgetSummary(ticketRuns),
+    timeline,
     latestTriage: latestRuntimeRun ? normalizeTriage(latestRuntimeRun.triage) : null,
     latestRuntimeRunId: latestRuntimeRun ? latestRuntimeRun.id : null,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update')
@@ -15479,6 +16303,27 @@ fastify.get('/api/tickets/:id/runtime', { preHandler: fastify.requireAuth }, asy
   }
 
   return runtimeState;
+});
+
+fastify.get('/api/tickets/:id/timeline', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const ticketId = parseInt(request.params.id, 10);
+  if (Number.isNaN(ticketId)) {
+    reply.code(400);
+    return { error: 'Invalid ticket id' };
+  }
+
+  const timeline = buildTicketTimeline(ticketId);
+  if (!timeline) {
+    reply.code(404);
+    return { error: 'Ticket not found' };
+  }
+
+  return timeline;
 });
 
 fastify.post('/api/tickets/shape-objective', { preHandler: fastify.requireAuth }, async (request, reply) => {

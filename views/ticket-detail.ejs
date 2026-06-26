@@ -711,6 +711,50 @@
   <% } %>
 </section>
 
+<% const ticketTimeline = typeof timeline === 'undefined' || !timeline ? { entries: [] } : timeline; %>
+<section class="detail-section">
+  <h2>Timeline</h2>
+  <p class="text-muted">Read-only projection from ticket/run state, structured events, target receipts, replay evidence, and selected diagnostic logs.</p>
+  <% if (ticketTimeline.entries.length === 0) { %>
+    <p class="text-muted">No timeline evidence available.</p>
+  <% } else { %>
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Entry</th>
+          <th>Source</th>
+          <th>Run</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% ticketTimeline.entries.forEach(entry => { %>
+          <tr>
+            <td><%= entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '-' %></td>
+            <td>
+              <strong><%= entry.title %></strong>
+              <% if (entry.status) { %><span class="status-badge status-<%= entry.status %>"><%= entry.status %></span><% } %>
+              <% if (entry.summary) { %><div class="text-muted"><%= entry.summary %></div><% } %>
+              <% if (entry.details && (entry.details.operation || entry.details.path)) { %>
+                <div class="text-muted">
+                  <% if (entry.details.operation) { %><code><%= entry.details.operation %></code><% } %>
+                  <% if (entry.details.path) { %><code class="owned-path"><%= entry.details.path %></code><% } %>
+                  <% if (entry.details.nextPath) { %> to <code class="owned-path"><%= entry.details.nextPath %></code><% } %>
+                </div>
+              <% } %>
+            </td>
+            <td>
+              <code><%= entry.sourceRole %></code>
+              <div class="text-muted"><%= entry.sourceRef %></div>
+            </td>
+            <td><% if (entry.runId) { %><a href="/runs/<%= entry.runId %>">Run #<%= entry.runId %></a><% } else { %>-<% } %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  <% } %>
+</section>
+
 <% const ticketRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
 <% if (ticketRecentLogs.length > 0) { %>
 <section class="detail-section">
