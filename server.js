@@ -741,6 +741,24 @@ function checkPhaseCompliance(run, actions) {
   return { compliant: true, currentPhase, inferredPhase };
 }
 
+function buildPhaseViolationFeedback(phaseCheck, actions) {
+  const proposedActions = Array.isArray(actions) ? actions : [];
+  const inspectionOperations = proposedActions
+    .map(action => action && action.operation)
+    .filter(operation => operation === 'listDirectory' || operation === 'readFile');
+  const mutationOperations = proposedActions
+    .map(action => action && action.operation)
+    .filter(operation => PHASE_OPERATIONS.mutation.includes(operation));
+
+  if (phaseCheck && phaseCheck.violationType === 'mixed_phase' && inspectionOperations.length > 0 && mutationOperations.length > 0) {
+    const mutations = [...new Set(mutationOperations)].join(', ');
+    const inspections = [...new Set(inspectionOperations)].join(', ');
+    return `${phaseCheck.reason}. No proposed action was executed. On the next response, emit a mutation-only response containing only ${mutations}; re-emit the same mutation args if they are still correct. Do not emit ${inspections} again. Prefer the information already present in initialWorkspaceSnapshot, currentWorkspaceSnapshot, or previousActionResults; inspect in a separate response only when that provided evidence is insufficient.`;
+  }
+
+  return `${phaseCheck.reason}. No proposed action was executed. On the next response, emit actions from exactly one execution phase.`;
+}
+
 function advanceRunPhase(run, phase) {
   if (!run || !phase) return run;
   if (run.currentPhase === phase) return run;
@@ -14803,8 +14821,9 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'You are an agent working inside a contained workspace.',
         'You may only request workspace CRUD actions. Do not request shell commands, terminal access, admin data, auth data, or files outside the workspace root.',
         'Use runtimeEnvelope.currentDateTime and runtimeEnvelope.timezone for any current date or time facts. Do not invent timestamps.',
-        'The ticket context may include initialWorkspaceSnapshot (the root workspace at the start of this run), currentWorkspaceSnapshot (the live root workspace now), and mutationsByThisRun (the changes you have already made). You may still request list or read actions for deeper or nested details. No prior logs or run history are included.',
+        'The ticket context may include initialWorkspaceSnapshot (the root workspace at the start of this run), currentWorkspaceSnapshot (the live root workspace now), and mutationsByThisRun (the changes you have already made). If either workspace snapshot already contains the information needed for the objective, use it directly and do not request listDirectory for that same path. Request list or read actions only for missing deeper or nested details. No prior logs or run history are included.',
         'When a user objective refers to the current or existing workspace, interpret that relative to the workspace state at the start of the run (initialWorkspaceSnapshot). Do not treat files or folders created by this run (mutationsByThisRun) as pre-existing inputs for reinterpreting the same objective, unless the user explicitly asks you to continue from your own newly-created outputs.',
+        'Honor destination phrases in the objective. For example, "in Q1 put/create/write a txt/file" requires a path inside Q1 such as "Q1/name.txt", never a workspace-root path such as "name.txt".',
         'When the requested target state is achieved, return complete: true. Do not continue creating additional files or folders merely because the live workspace has changed from your own actions.',
         'If the ticket requires creating or changing files, request the necessary workspace actions.',
         'Do not say you will do work later. Do not describe future work instead of performing it.',
@@ -14816,8 +14835,8 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         `Budgets: runtimeEnvelope.maxExecutionSteps steps total; every response consumes one step, including retries. Emit at most runtimeEnvelope.maxActionsPerResponse (${MAX_AGENT_ACTIONS_PER_RESPONSE}) actions per response.`,
         `Mutating limit: at most runtimeEnvelope.maxMutatingActionsPerResponse (${MAX_MUTATING_ACTIONS_PER_RESPONSE}) createFolder/writeFile/renamePath/deletePath actions per response. If more mutations remain, emit a bounded batch, set complete:false, and continue next response.`,
         'Every response must belong to a single execution phase. Never mix inspection operations (listDirectory, readFile) and mutation operations (createFolder, writeFile, renamePath, deletePath) in the same response — a mixed response is rejected.',
-        'Your current execution phase is runtimeEnvelope.currentPhase. Operations you may use in this phase: ' + (currentPhaseAllowedOps.length > 0 ? currentPhaseAllowedOps.join(', ') : 'none') + '.',
-        'To perform mutations, respond with a single-phase mutation response containing only createFolder/writeFile/renamePath/deletePath actions (and no listDirectory/readFile); that moves you into the mutation phase.',
+        'Your current execution phase is runtimeEnvelope.currentPhase. Operations available without transitioning from this phase: ' + (currentPhaseAllowedOps.length > 0 ? currentPhaseAllowedOps.join(', ') : 'none') + '.',
+        'A mutation-only response is permitted when runtimeEnvelope.currentPhase is planning: respond with only createFolder/writeFile/renamePath/deletePath actions (and no listDirectory/readFile), and the response transitions the run into mutation. Do this immediately when the snapshots already provide the required facts.',
         'If you already performed inspection (listDirectory or readFile) and are now in the mutation phase, do not emit listDirectory or readFile again unless you are explicitly verifying results.',
         ...workflowDraftIntentGuidance,
         ...handoffGuidance,
@@ -15322,7 +15341,7 @@ async function runAgentTicket(runId) {
         });
         actionResults = [{
           warning: 'execution.phase_violation',
-          message: `${phaseCheck.reason}. Current phase is ${phaseCheck.currentPhase}. Actions in this response must all belong to the same allowed phase.`
+          message: buildPhaseViolationFeedback(phaseCheck, actions)
         }];
         continue;
       }

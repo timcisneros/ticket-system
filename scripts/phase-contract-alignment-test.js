@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Phase contract alignment regression test (test-only).
 //
-// Verifies the prompt/runtime envelope is truthful about phase-allowed operations:
-// the planning-phase prompt must not present mutating operations as current-phase
-// allowed, the mutation-phase prompt must present them, and the validator must
-// still reject a mixed inspection+mutation response in planning. Provider-free:
+// Verifies the direct-action prompt and retry contract around planning -> mutation:
+// snapshots can satisfy root inspection, destination folders are preserved, a pure
+// mutation may transition directly from planning, and a rejected mixed response
+// receives deterministic mutation-only correction. Provider-free:
 // a fake fetch stub captures each provider request body and returns a per-step
 // plan sequence decoded from the ticket objective (#SEQ=<base64url>).
 //
@@ -24,6 +24,8 @@ const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-system-phas
 const CAPTURE_FILE = path.join(DATA_DIR, 'captured-requests.log');
 const PORT = String(4760 + Math.floor(Math.random() * 200));
 const BASE_URL = 'http://127.0.0.1:' + PORT;
+const SNAPSHOT_OBJECTIVE = 'in Q1 put a txt with all the top-level folder names.';
+const TOP_LEVEL_FOLDERS = ['A', 'B', 'E', 'F', 'Michael Jackson songs 1', 'Michael Jackson songs 2', 'Michael Jackson songs 3', 'Q1', 'Q2'];
 
 let server = null;
 let failures = 0;
@@ -107,9 +109,20 @@ function okResponse(plan) {
 }
 global.fetch = async function(_url, options = {}) {
   let combined = '';
+  let ticketContext = null;
   try { const body = JSON.parse(options.body || '{}'); const input = Array.isArray(body.input) ? body.input : [];
-    combined = input.map(i => i && i.content ? String(i.content) : '').join('\\n'); } catch (_) {}
+    combined = input.map(i => i && i.content ? String(i.content) : '').join('\\n');
+    for (const item of input) { try { const parsed = JSON.parse(item.content); if (parsed && parsed.ticketObjective) ticketContext = parsed; } catch (_) {} }
+  } catch (_) {}
   try { fs.appendFileSync(CAPTURE_FILE, JSON.stringify({ text: combined }) + '\\n'); } catch (_) {}
+  if (ticketContext && ticketContext.ticketObjective === ${JSON.stringify(SNAPSHOT_OBJECTIVE)}) {
+    const names = (ticketContext.initialWorkspaceSnapshot.entries || []).map(entry => entry.name);
+    return okResponse({
+      message: 'Created Q1/top_folders.txt from the initial workspace snapshot.',
+      actions: [{ operation: 'writeFile', args: { path: 'Q1/top_folders.txt', content: names.join('\\n') + '\\n' } }],
+      complete: true
+    });
+  }
   const sm = combined.match(/#SEQ=([A-Za-z0-9_-]+=*)/);
   if (!sm) return okResponse({ message: 'noop', actions: [], complete: true });
   let seq;
@@ -185,9 +198,9 @@ function readCaptured() {
 }
 
 // From a captured prompt, extract the embedded runtimeEnvelope currentPhase and
-// the "Operations you may use in this phase:" line.
+// the non-transition operations line.
 function phaseOf(text) { const m = text.match(/"currentPhase":\s*"(\w+)"/); return m ? m[1] : null; }
-function currentPhaseLine(text) { const m = text.match(/Operations you may use in this phase: ([^\n]*)/); return m ? m[1] : null; }
+function currentPhaseLine(text) { const m = text.match(/Operations available without transitioning from this phase: ([^\n]*)/); return m ? m[1] : null; }
 
 function readRunEventsFile() {
   try {
@@ -197,6 +210,7 @@ function readRunEventsFile() {
 }
 
 async function main() {
+  for (const folder of TOP_LEVEL_FOLDERS) fs.mkdirSync(path.join(WORKSPACE_ROOT, folder), { recursive: true });
   const agents = seedData();
   const preloadPath = createFetchStub();
   console.log('Phase contract alignment test');
@@ -204,6 +218,25 @@ async function main() {
   try {
     await startServer(preloadPath);
     const cookie = await login();
+
+    // Run #49 regression: the root snapshot is sufficient, so the model can
+    // transition directly from planning with one correctly nested writeFile.
+    await createTicket(cookie, agents[0], SNAPSHOT_OBJECTIVE);
+    const snapshotCase = await waitForTicketRun(SNAPSHOT_OBJECTIVE);
+    const snapshotFinal = snapshotCase && await waitForTerminalRun(snapshotCase.run.id);
+    assert('snapshot-sufficient run completed', snapshotFinal && snapshotFinal.status === 'completed', `status=${snapshotFinal && snapshotFinal.status}`);
+    const snapshotHistory = (jsonParsesOrNull('operation-history.json') || []).filter(item => snapshotCase && item.runId === snapshotCase.run.id && !item.error);
+    assert('snapshot run accepted exactly one workspace operation', snapshotHistory.length === 1, `operations=${snapshotHistory.length}`);
+    assert('accepted operation is writeFile', snapshotHistory[0] && snapshotHistory[0].operation === 'writeFile');
+    assert('write path is inside Q1', snapshotHistory[0] && String(snapshotHistory[0].args.path).startsWith('Q1/'), `path=${snapshotHistory[0] && snapshotHistory[0].args.path}`);
+    assert('snapshot run required no listDirectory', !snapshotHistory.some(item => item.operation === 'listDirectory'));
+    const writtenPath = path.join(WORKSPACE_ROOT, 'Q1', 'top_folders.txt');
+    const writtenContent = fs.existsSync(writtenPath) ? fs.readFileSync(writtenPath, 'utf8') : '';
+    assert('written file contains every initial top-level folder', TOP_LEVEL_FOLDERS.every(folder => writtenContent.split('\n').includes(folder)), writtenContent);
+    const snapshotEvents = readRunEventsFile().filter(event => snapshotCase && event.runId === snapshotCase.run.id);
+    assert('snapshot run has no phase violation', !snapshotEvents.some(event => event.type === 'execution.phase_violation'));
+    assert('snapshot run has no model stall', !snapshotEvents.some(event => event.type === 'model:stalled'));
+    assert('snapshot run has no run-limit failure', !snapshotEvents.some(event => event.type === 'run:failed' && /RUN_LIMIT_EXCEEDED/.test(JSON.stringify(event))));
 
     // Run that goes planning -> (pure mutation) -> mutation phase, so we capture
     // both a planning-phase prompt and a mutation-phase prompt.
@@ -225,8 +258,9 @@ async function main() {
     const planLine = planningPrompt ? currentPhaseLine(planningPrompt) : '';
     const mutLine = mutationPrompt ? currentPhaseLine(mutationPrompt) : '';
 
-    // 1. Planning current-phase list excludes mutating operations.
-    assert('1. planning current-phase excludes mutating ops',
+    // 1. Planning's non-transition list excludes mutations, while explicit
+    // guidance permits mutation-only responses as a forward transition.
+    assert('1. planning non-transition list excludes mutating ops',
       !!planLine && !/createFolder|writeFile|renamePath|deletePath/.test(planLine), 'line=' + planLine);
     // 2. Planning current-phase includes planning-safe read ops.
     assert('2. planning current-phase includes listDirectory + readFile',
@@ -240,11 +274,17 @@ async function main() {
     // One-phase rule is present.
     assert('one-phase rule present in planning prompt',
       !!planningPrompt && /single execution phase/.test(planningPrompt) && /Never mix inspection operations .* and mutation operations/.test(planningPrompt));
+    assert('planning prompt explicitly permits a mutation-only transition',
+      !!planningPrompt && /mutation-only response is permitted when runtimeEnvelope.currentPhase is planning/.test(planningPrompt));
+    assert('prompt forbids redundant root listing when snapshot is sufficient',
+      !!planningPrompt && /snapshot already contains the information needed.*do not request listDirectory/.test(planningPrompt));
+    assert('prompt preserves objective destination folder',
+      !!planningPrompt && /requires a path inside Q1/.test(planningPrompt));
 
-    // 4. Mixed deletePath + listDirectory in planning is still rejected.
+    // 4. Mixed writeFile + listDirectory in planning is rejected, then corrected.
     const oMixed = objectiveWithSeq('mixed', [
-      { actions: [{ operation: 'deletePath', args: { path: 'CD' } }, { operation: 'listDirectory', args: { path: '' } }], complete: false },
-      { actions: [], complete: true }
+      { actions: [{ operation: 'listDirectory', args: { path: '' } }, { operation: 'writeFile', args: { path: 'Q1/retry-top-folders.txt', content: 'A\\nB\\n' } }], complete: false },
+      { actions: [{ operation: 'writeFile', args: { path: 'Q1/retry-top-folders.txt', content: 'A\\nB\\n' } }], complete: true }
     ]);
     await createTicket(cookie, agents[1], oMixed);
     const rm = await waitForTicketRun(oMixed);
@@ -254,8 +294,18 @@ async function main() {
       const evs = readRunEventsFile().filter(e => rm && e.runId === rm.run.id && e.type === 'execution.phase_violation');
       return evs.length > 0 ? evs : null;
     }, 10000, 100);
-    assert('4. mixed deletePath+listDirectory in planning is rejected (phase violation recorded)', !!violation,
+    assert('4. mixed listDirectory+writeFile in planning is rejected (phase violation recorded)', !!violation,
       'no execution.phase_violation event for the mixed run');
+    const mixedCaptures = readCaptured().filter(text => text.includes(oMixed));
+    assert('mixed response caused a second model request', mixedCaptures.length >= 2, `requests=${mixedCaptures.length}`);
+    const retryPrompt = mixedCaptures[1] || '';
+    assert('retry includes deterministic mutation-only writeFile correction',
+      /On the next response, emit a mutation-only response containing only writeFile/.test(retryPrompt));
+    assert('retry explicitly says not to emit listDirectory again', /Do not emit listDirectory again/.test(retryPrompt));
+    const mixedHistory = (jsonParsesOrNull('operation-history.json') || []).filter(item => rm && item.runId === rm.run.id && !item.error);
+    assert('retry accepted exactly one writeFile and no listDirectory',
+      mixedHistory.length === 1 && mixedHistory[0].operation === 'writeFile' && !mixedHistory.some(item => item.operation === 'listDirectory'),
+      JSON.stringify(mixedHistory));
 
     console.log('\n' + (failures === 0 ? 'PASS' : 'FAIL') + `: ${failures} failure(s)`);
   } finally {
