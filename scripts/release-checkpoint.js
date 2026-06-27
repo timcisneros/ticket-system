@@ -33,6 +33,7 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'run-state-inconsistency-warning-test.js',
   'run-detail-evidence-clarity-test.js',
   'run-timeout-attribution-clarity-test.js',
+  'runtime-limits-ui-test.js',
   'ticket-execution-state-clarity-test.js',
   'oquery-cli-parity-test.js',
   'health-live-paths-test.js',

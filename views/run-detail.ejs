@@ -171,6 +171,32 @@
 </section>
 <% } %>
 
+<% if (typeof runtimeLimitsDisplay !== 'undefined' && runtimeLimitsDisplay) { %>
+<%
+  function runtimeLimitPair(used, limit, duration) {
+    var usedText = used === null || used === undefined
+      ? 'unavailable'
+      : (duration && typeof formatDurationHuman === 'function' ? formatDurationHuman(used) : used);
+    var limitText = duration && typeof formatDurationHuman === 'function' ? formatDurationHuman(limit) : limit;
+    return usedText + ' / ' + limitText;
+  }
+%>
+<section class="detail-section">
+  <h2>Runtime limits and usage</h2>
+  <p class="text-muted"><%= runtimeLimitsDisplay.sourceLabel %>.</p>
+  <dl class="detail-grid">
+    <div><dt>Execution turns</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.executionTurns, runtimeLimitsDisplay.limits.maxExecutionSteps, false) %></dd></div>
+    <div><dt>Runtime</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.runtimeMs, runtimeLimitsDisplay.limits.maxRuntimeDurationMs, true) %></dd></div>
+    <div><dt>Model requests</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.modelRequests, runtimeLimitsDisplay.limits.maxModelRequestsPerRun, false) %></dd></div>
+    <div><dt>Workspace operations</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.workspaceOperations, runtimeLimitsDisplay.limits.maxWorkspaceOperationsPerRun, false) %></dd></div>
+    <div><dt>Limit outcome</dt><dd><code><%= runtimeLimitsDisplay.limitOutcome %></code></dd></div>
+    <% if (runtimeLimitsDisplay.providerSymptom) { %>
+      <div><dt>Provider symptom</dt><dd><%= runtimeLimitsDisplay.providerSymptom %></dd></div>
+    <% } %>
+  </dl>
+</section>
+<% } %>
+
 <% if (typeof budgetStatus !== 'undefined' && budgetStatus) { %>
 <%
   function budgetCell(m, unit) {

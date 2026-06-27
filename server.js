@@ -5600,6 +5600,52 @@ function buildRunAttemptUsage(run, ticketRuns = null) {
   };
 }
 
+function buildRunRuntimeLimitsDisplay(run, snapshot, attemptUsage, objective = null) {
+  const persisted = normalizeRuntimeLimitsSnapshot(run && run.runtimeLimitsSnapshot) ||
+    normalizeRuntimeLimitsSnapshot(snapshot && snapshot.runtimeLimitsSnapshot);
+  const historical = Boolean(persisted);
+  const limits = historical
+    ? persisted
+    : resolveAgentRuntimeLimits(objective).snapshot;
+  const parsedPlans = snapshot && Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
+  const providerRequests = snapshot && Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests.length : null;
+  const modelResponses = snapshot && Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses.length : null;
+  const workspaceOperations = snapshot && Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations.length : null;
+  const failure = snapshot && snapshot.failure && typeof snapshot.failure === 'object' ? snapshot.failure : null;
+  const limitType = failure && failure.code === 'RUN_LIMIT_EXCEEDED' && failure.detail
+    ? failure.detail.limitType
+    : null;
+  const outcomeByType = {
+    timeout: 'timeout',
+    step: 'steps',
+    model_request: 'requests',
+    operation: 'operations',
+    mutating_action: 'operations'
+  };
+  const timeoutFromRun = run && /runtime duration limit/i.test(run.error || '');
+  return {
+    historical,
+    sourceLabel: historical
+      ? 'Applied run-start limits'
+      : 'Historical applied limits unavailable; showing current fallback defaults',
+    limits: pickRuntimeLimitValues(limits),
+    usage: {
+      executionTurns: snapshot ? parsedPlans.length : null,
+      runtimeMs: attemptUsage && attemptUsage.durationMs !== null ? attemptUsage.durationMs : null,
+      modelRequests: attemptUsage && attemptUsage.modelRequestCount !== null
+        ? attemptUsage.modelRequestCount
+        : providerRequests,
+      workspaceOperations: attemptUsage && attemptUsage.workspaceOperationCount !== null
+        ? attemptUsage.workspaceOperationCount
+        : workspaceOperations
+    },
+    limitOutcome: outcomeByType[limitType] || (timeoutFromRun ? 'timeout' : 'none'),
+    providerSymptom: providerRequests !== null && modelResponses !== null && providerRequests > modelResponses
+      ? 'request recorded without matching response'
+      : null
+  };
+}
+
 // Per-ticket attempt roll-up for the ticket detail view. Derived only.
 function buildTicketAttemptSummary(ticketRuns) {
   const runs = (Array.isArray(ticketRuns) ? ticketRuns : [])
@@ -9002,6 +9048,63 @@ function writeRuntimeLimitsConfig(config, actor) {
   };
   writeFileAtomic(RUNTIME_LIMITS_FILE, JSON.stringify(value, null, 2));
   return value;
+}
+
+function persistRuntimeLimitsUpdate(parsedValue, request) {
+  const previous = readRuntimeLimitsConfig();
+  const actor = request.user ? request.user.username : String(request.session.userId);
+  const next = writeRuntimeLimitsConfig(parsedValue, actor);
+  const timestamp = next.updatedAt;
+  const auditPayload = {
+    actor,
+    timestamp,
+    oldValues: pickRuntimeLimitValues(previous),
+    newValues: pickRuntimeLimitValues(next)
+  };
+  appendEvent({ type: 'runtime_limits.updated', payload: auditPayload });
+  appendSystemLog('runtime_limits.updated', `Runtime limits updated by ${actor}`, null, auditPayload);
+  return next;
+}
+
+const RUNTIME_LIMIT_DISPLAY = Object.freeze({
+  maxExecutionSteps: { label: 'Max execution steps / model turns', help: 'Maximum model turns for one direct-action run.' },
+  maxModelRequestsPerRun: { label: 'Max model requests per run', help: 'Maximum provider requests made by one run.' },
+  maxWorkspaceOperationsPerRun: { label: 'Max workspace operations per run', help: 'Maximum accepted workspace operations in one run.' },
+  maxRuntimeDurationMs: { label: 'Max runtime duration (ms)', help: 'Wall-clock timeout for one run. Minimum 5000 ms.' }
+});
+
+function buildRuntimeLimitsAdminState(formValues = null) {
+  const config = readRuntimeLimitsConfig();
+  const resolved = resolveAgentRuntimeLimits(null, { config });
+  return {
+    config,
+    deploymentCaps: resolved.deployment,
+    effectiveLimits: pickRuntimeLimitValues(resolved.limits),
+    rows: RUNTIME_LIMIT_CONFIG_KEYS.map(key => ({
+      key,
+      label: RUNTIME_LIMIT_DISPLAY[key].label,
+      help: RUNTIME_LIMIT_DISPLAY[key].help,
+      minimum: RUNTIME_LIMIT_MINIMUMS[key],
+      deploymentCap: resolved.deployment[key],
+      configuredValue: config[key],
+      effectiveValue: resolved.limits[key],
+      inputValue: formValues && Object.prototype.hasOwnProperty.call(formValues, key)
+        ? formValues[key]
+        : config[key]
+    }))
+  };
+}
+
+function parseRuntimeLimitsForm(body = {}) {
+  const parsed = {};
+  for (const key of RUNTIME_LIMIT_CONFIG_KEYS) {
+    const raw = body[key];
+    const text = raw === undefined || raw === null ? '' : String(raw).trim();
+    if (!text) parsed[key] = null;
+    else if (/^\d+$/.test(text)) parsed[key] = Number(text);
+    else parsed[key] = text;
+  }
+  return parsed;
 }
 
 function createRunLimitError(run, type, message, details) {
@@ -18015,30 +18118,43 @@ fastify.post('/api/runtime-limits', { preHandler: fastify.requireAuth }, async (
     reply.code(400);
     return { error: parsed.error };
   }
-  const actor = request.user ? request.user.username : String(request.session.userId);
-  const next = writeRuntimeLimitsConfig(parsed.value, actor);
-  const timestamp = next.updatedAt;
-  appendEvent({
-    type: 'runtime_limits.updated',
-    payload: {
-      actor,
-      timestamp,
-      oldValues: pickRuntimeLimitValues(previous),
-      newValues: pickRuntimeLimitValues(next)
-    }
-  });
-  appendSystemLog('runtime_limits.updated', `Runtime limits updated by ${actor}`, null, {
-    actor,
-    timestamp,
-    oldValues: pickRuntimeLimitValues(previous),
-    newValues: pickRuntimeLimitValues(next)
-  });
+  const next = persistRuntimeLimitsUpdate(parsed.value, request);
   const effective = resolveAgentRuntimeLimits(null, { config: next });
   return {
     config: next,
     deploymentCaps: effective.deployment,
     effectiveLimits: pickRuntimeLimitValues(effective.limits)
   };
+});
+
+function renderRuntimeLimitsAdminPage(request, reply, options = {}) {
+  return reply.view('admin/runtime-limits.ejs', viewData({
+    user: request.user,
+    runtimeLimitsState: buildRuntimeLimitsAdminState(options.formValues || null),
+    error: options.error || null,
+    saved: options.saved === true
+  }, request.session.userId));
+}
+
+fastify.get('/admin/runtime-limits', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!runtimeLimitsManageGuard(request, reply)) {
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  return renderRuntimeLimitsAdminPage(request, reply, { saved: request.query && request.query.saved === '1' });
+});
+
+fastify.post('/admin/runtime-limits', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!runtimeLimitsManageGuard(request, reply)) {
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const formValues = parseRuntimeLimitsForm(request.body || {});
+  const parsed = validateRuntimeLimitsConfigInput(formValues, readRuntimeLimitsConfig());
+  if (!parsed.ok) {
+    reply.code(400);
+    return renderRuntimeLimitsAdminPage(request, reply, { error: parsed.error, formValues });
+  }
+  persistRuntimeLimitsUpdate(parsed.value, request);
+  return reply.redirect('/admin/runtime-limits?saved=1');
 });
 
 fastify.get('/api/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -19046,7 +19162,7 @@ function buildRunDiagnosticBundle(ctx) {
     run, ticket, agent, snapshot, authorityContext, failureSummary,
     operationHistory, permissionedDeleteAuditEvents, completionSummary,
     eventSummary, recentLogs, artifactPredictionComparison, artifactAccuracy,
-    objectiveSuccess, operationalOutcome, partialMutationCount,
+    objectiveSuccess, operationalOutcome, partialMutationCount, runtimeLimitsDisplay,
     generatedAt, route
   } = ctx;
 
@@ -19228,6 +19344,19 @@ function buildRunDiagnosticBundle(ctx) {
     out('- Latest event error: ' + dash(eventSummary && eventSummary.latestError && eventSummary.latestError.message));
   } else {
     out('Run: unavailable');
+  }
+  out('');
+
+  const runtimePolicy = runtimeLimitsDisplay || null;
+  out('### Runtime limits and usage');
+  out('- Limit source: ' + dash(runtimePolicy && runtimePolicy.sourceLabel));
+  if (runtimePolicy) {
+    out('- Execution turns: ' + dash(runtimePolicy.usage.executionTurns) + ' / ' + dash(runtimePolicy.limits.maxExecutionSteps));
+    out('- Runtime: ' + dash(runtimePolicy.usage.runtimeMs) + 'ms / ' + dash(runtimePolicy.limits.maxRuntimeDurationMs) + 'ms');
+    out('- Model requests: ' + dash(runtimePolicy.usage.modelRequests) + ' / ' + dash(runtimePolicy.limits.maxModelRequestsPerRun));
+    out('- Workspace operations: ' + dash(runtimePolicy.usage.workspaceOperations) + ' / ' + dash(runtimePolicy.limits.maxWorkspaceOperationsPerRun));
+    out('- Limit outcome: ' + dash(runtimePolicy.limitOutcome));
+    out('- Provider symptom: ' + dash(runtimePolicy.providerSymptom));
   }
   out('');
 
@@ -19526,15 +19655,16 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }));
 
   const diagnosticsGeneratedAt = new Date().toISOString();
+  const runDetailAttemptUsage = buildRunAttemptUsage(run, readRuns().filter(item => item.ticketId === run.ticketId));
+  const runtimeLimitsDisplay = buildRunRuntimeLimitsDisplay(run, snapshot, runDetailAttemptUsage, ticket && ticket.objective);
   const runDiagnosticBundle = buildRunDiagnosticBundle({
     run, ticket, agent, snapshot, authorityContext, failureSummary,
     operationHistory: enrichedHistory, permissionedDeleteAuditEvents, completionSummary,
     eventSummary, recentLogs: getRecentLogsForRun(runId), artifactPredictionComparison,
     artifactAccuracy, objectiveSuccess, operationalOutcome, partialMutationCount: runPartialMutationCount,
+    runtimeLimitsDisplay,
     generatedAt: diagnosticsGeneratedAt, route: '/runs/' + runId
   });
-
-  const runDetailAttemptUsage = buildRunAttemptUsage(run, readRuns().filter(item => item.ticketId === run.ticketId));
 
   return renderCachedView(request, reply, 'run-detail.ejs', viewData({
     user: request.user,
@@ -19557,6 +19687,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     operationalOutcome,
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
     attemptUsage: runDetailAttemptUsage,
+    runtimeLimitsDisplay,
     budgetStatus: buildRunBudgetStatus(run, runDetailAttemptUsage),
     runStatusLabel: displayRunStatus(run.status),
     runEvents,

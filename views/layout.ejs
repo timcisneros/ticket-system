@@ -50,6 +50,9 @@
             <li><a href="/admin/workflows">Workflows</a></li>
             <li><a href="/admin/actions">Actions</a></li>
           <% } %>
+          <% if (userPermissions.includes('runtimeLimits:manage')) { %>
+            <li><a href="/admin/runtime-limits">Runtime Limits</a></li>
+          <% } %>
           <li><a href="/logout">Logout</a></li>
           <% if (userPermissions.includes('ticket:read')) { %>
             <li><span id="scheduler-indicator" class="scheduler-indicator" hidden></span></li>
