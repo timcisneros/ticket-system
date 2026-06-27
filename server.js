@@ -595,6 +595,26 @@ function buildCrossTicketConflictError(operation, args, candidatePath, owner) {
   return error;
 }
 
+function buildPriorArtifactOwnerConflictError(operation, args, candidatePath, owner) {
+  const conflictKind = operation === 'createFolder' ? 'create' : 'write';
+  const error = new Error(`Workspace ${conflictKind} conflict: path ${candidatePath} was previously produced by ticket ${owner.ticketId}, run ${owner.runId}`);
+  error.code = 'WORKSPACE_WRITE_CONFLICT';
+  error.failureKind = 'invalid_action';
+  error.reason = 'prior_artifact_owner';
+  error.workspaceAction = {
+    operation,
+    args,
+    path: candidatePath,
+    blocked: true,
+    reason: 'prior_artifact_owner',
+    conflictingTicketId: owner.ticketId,
+    conflictingRunId: owner.runId,
+    conflictingHistoryId: owner.id || null,
+    conflictingPath: candidatePath
+  };
+  return error;
+}
+
 // Build the run-level delegated-authority descriptor from an authenticated
 // request. Captured at run-initiation time (creation/rerun/reopen) and stored on
 // the run, so cross-ticket permission is evaluated against the user who actually
@@ -13256,6 +13276,51 @@ function extractObjectivePathTokens(objective) {
   return Array.from(tokens);
 }
 
+function objectiveRequiresExactArtifactPath(objective) {
+  return extractObjectivePathTokens(objective).length > 0;
+}
+
+function extractRequestedDestinationFolder(objective, candidatePath) {
+  const text = String(objective || '');
+  const match = text.match(/\b(?:in|inside|under)\s+(?:the\s+)?(?:folder\s+|directory\s+)?["'`]?([A-Za-z0-9._/-]+)["'`]?/i);
+  const explicitFolder = match ? normalizeObjectivePathToken(match[1]) : null;
+  if (explicitFolder && !['a', 'an', 'the'].includes(explicitFolder.toLowerCase())) {
+    return explicitFolder.replace(/\/$/, '');
+  }
+  const normalizedCandidate = normalizeObjectivePathToken(candidatePath);
+  if (!normalizedCandidate) return '';
+  const destination = path.posix.dirname(normalizedCandidate);
+  return destination === '.' ? '' : destination;
+}
+
+function isRecoverablePriorArtifactOwnerConflict(error, ticket, modelRequestCount, step, limits) {
+  if (!error || error.code !== 'WORKSPACE_WRITE_CONFLICT') return false;
+  if (!error.workspaceAction || error.workspaceAction.reason !== 'prior_artifact_owner') return false;
+  if (!['writeFile', 'createFolder'].includes(error.workspaceAction.operation)) return false;
+  if (objectiveRequiresExactArtifactPath(ticket && ticket.objective)) return false;
+  return modelRequestCount < limits.maxModelRequestsPerRun && step + 1 < limits.maxExecutionSteps;
+}
+
+function buildPriorArtifactOwnerRetryResult(error, ticket) {
+  const action = error.workspaceAction;
+  const destination = extractRequestedDestinationFolder(ticket && ticket.objective, action.path);
+  const destinationText = destination ? `${destination}/` : 'the requested destination folder';
+  const replacementKind = action.operation === 'createFolder' ? 'name' : 'filename';
+  const attemptedOutcome = action.operation === 'createFolder' ? 'created' : 'written';
+  const existingArtifact = action.operation === 'createFolder' ? 'artifact' : 'file';
+  return {
+    warning: 'workspace.prior_artifact_owner',
+    error: error.message,
+    blocked: true,
+    reason: 'prior_artifact_owner',
+    conflictingTicketId: action.conflictingTicketId,
+    conflictingRunId: action.conflictingRunId,
+    conflictingPath: action.path,
+    requestedDestination: destination,
+    message: `The requested path ${action.path} is owned by ticket ${action.conflictingTicketId}/run ${action.conflictingRunId} and was not ${attemptedOutcome}. Choose a new non-conflicting ${replacementKind} under ${destinationText}. Do not overwrite or delete the existing ${existingArtifact}. Emit only the corrected mutation action next.`
+  };
+}
+
 function isDirectWorkspaceWriteObjective(objective) {
   const text = String(objective || '').toLowerCase();
   if (!text.trim()) return false;
@@ -13464,6 +13529,11 @@ function executeWorkspaceOperation(run, action, step = 0) {
       throw error;
     }
 
+    const priorOwner = findPriorSuccessfulArtifactOwner(readOperationHistory(), run, pathValue);
+    if (priorOwner) {
+      throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue }, pathValue, priorOwner);
+    }
+
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
     try {
@@ -13522,20 +13592,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
 
     const priorOwner = findPriorSuccessfulArtifactOwner(readOperationHistory(), run, pathValue);
     if (priorOwner) {
-      const error = new Error(`Workspace write conflict: path was previously produced by ticket ${priorOwner.ticketId}, run ${priorOwner.runId}`);
-      error.code = 'WORKSPACE_WRITE_CONFLICT';
-      error.failureKind = 'invalid_action';
-      error.workspaceAction = {
-        operation,
-        args: { path: pathValue, content },
-        path: pathValue,
-        blocked: true,
-        reason: 'prior_artifact_owner',
-        conflictingTicketId: priorOwner.ticketId,
-        conflictingRunId: priorOwner.runId,
-        conflictingHistoryId: priorOwner.id || null
-      };
-      throw error;
+      throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue, content }, pathValue, priorOwner);
     }
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
@@ -15470,6 +15527,7 @@ async function runAgentTicket(runId) {
       }
 
       let hasMutatingAction = false;
+      let recoverableOwnershipConflict = false;
       const repeatedListPaths = [];
       const listPathsThisStep = new Set();
 
@@ -15652,7 +15710,16 @@ async function runAgentTicket(runId) {
           }
         } catch (error) {
           const opDurationMs = Date.now() - actionStartedAt;
-          actionResults.push({ action, error: error.message });
+          const canRetryPriorOwnerConflict = isRecoverablePriorArtifactOwnerConflict(
+            error,
+            ticket,
+            modelRequestCount,
+            step,
+            limits
+          );
+          actionResults.push(canRetryPriorOwnerConflict
+            ? { action, ...buildPriorArtifactOwnerRetryResult(error, ticket) }
+            : { action, error: error.message });
           if (error.workspaceAction || (operation && AGENT_ALLOWED_OPERATIONS.includes(operation.operation))) {
             // INVARIANT: Error replay entry shape must remain structurally
             // compatible with the success replay entry above (line ~2717).
@@ -15671,11 +15738,22 @@ async function runAgentTicket(runId) {
               null,
               error
             );
+            const blocked = Boolean(error.workspaceAction && error.workspaceAction.blocked) ||
+              error.failureKind === 'protected_path' ||
+              ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code);
+            const blockedReason = error.reason || (error.workspaceAction && error.workspaceAction.reason) || null;
+            const conflictEvidence = error.workspaceAction ? {
+              ...(error.workspaceAction.conflictingTicketId != null ? { conflictingTicketId: error.workspaceAction.conflictingTicketId } : {}),
+              ...(error.workspaceAction.conflictingRunId != null ? { conflictingRunId: error.workspaceAction.conflictingRunId } : {}),
+              ...(error.workspaceAction.conflictingHistoryId != null ? { conflictingHistoryId: error.workspaceAction.conflictingHistoryId } : {}),
+              ...(error.workspaceAction.conflictingPath != null ? { conflictingPath: error.workspaceAction.conflictingPath } : {})
+            } : {};
             appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
               operation: error.workspaceAction || operation,
               error: error.message,
-              blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
-              reason: error.reason || null,
+              blocked,
+              reason: blockedReason,
+              ...conflictEvidence,
               durationMs: opDurationMs,
               historyId: error.historyId || null,
               ownedOutputPaths: error.ownedOutputPaths || getRunOwnedOutputPaths(run),
@@ -15696,18 +15774,27 @@ async function runAgentTicket(runId) {
               nextPath: eventOperation && eventOperation.args ? eventOperation.args.nextPath || null : null,
               mutating: eventOperation ? AGENT_MUTATING_OPERATIONS.includes(eventOperation.operation) : false,
               input: sanitizeSnapshotValue(eventOperation && eventOperation.args ? eventOperation.args : {}),
-              blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
-              reason: error.reason || null,
+              blocked,
+              reason: blockedReason,
               error: error.message,
+              ...conflictEvidence,
               ...targetEvidence
             }
           });
           }
           error.workspaceAction = error.workspaceAction || action;
+          if (canRetryPriorOwnerConflict) {
+            recoverableOwnershipConflict = true;
+            break;
+          }
           if (error.failureKind !== 'workspace_error') {
             throw error;
           }
         }
+      }
+
+      if (recoverableOwnershipConflict) {
+        continue;
       }
 
       if (hasMutatingAction) {
