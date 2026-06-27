@@ -5168,6 +5168,9 @@ function acquireRunLease(runId) {
 
   Object.assign(run, buildRunLease());
   writeRuns(runs);
+  // The lease acquisition IS the claim. Record a normalized Claim Receipt on this existing event
+  // (additive evidence only — no execution/scheduler behavior change, no target/workspace write).
+  const claimTicket = readTickets().find(item => item && item.id === run.ticketId) || null;
   appendEvent({
     type: 'run.lease_acquired',
     ticketId: run.ticketId,
@@ -5175,7 +5178,8 @@ function acquireRunLease(runId) {
     payload: {
       leaseOwner: run.leaseOwner,
       leaseExpiresAt: run.leaseExpiresAt,
-      lastHeartbeatAt: run.lastHeartbeatAt
+      lastHeartbeatAt: run.lastHeartbeatAt,
+      claimReceipt: buildClaimReceipt(run, claimTicket)
     }
   });
   return run;
@@ -6503,6 +6507,87 @@ function timelineEntrySort(a, b) {
   return String(a.id).localeCompare(String(b.id));
 }
 
+// ---- Agent handoff/queue protocol receipts (r1.23) ----
+// These are READ-ONLY derivations over existing evidence (runs, lease events, operation-history,
+// replay summary, verification, triage). They create no new persisted ledger and never include
+// full file contents or provider response bodies — only counts, ids, paths, and refs.
+
+// A Claim Receipt formalizes the existing run lease acquisition (run.lease_acquired event):
+// who claimed which ticket/run, when, the lease window, and the Work Context if present.
+function buildClaimReceipt(run, ticket) {
+  if (!run) return null;
+  const t = ticket || readTickets().find(item => item && item.id === run.ticketId) || null;
+  return {
+    receiptKind: 'claim_receipt',
+    ticketId: run.ticketId,
+    runId: run.id,
+    actorAgentId: run.agentId != null ? run.agentId : null,
+    actorAgentName: run.agentName || null,
+    assignee: t ? { type: t.assignmentTargetType || null, id: t.assignmentTargetId != null ? t.assignmentTargetId : null } : null,
+    owner: t ? (t.createdBy || null) : null,
+    claimedAt: run.startedAt || run.updatedAt || run.createdAt || null,
+    leaseOwner: run.leaseOwner || null,
+    leaseExpiresAt: run.leaseExpiresAt || null,
+    workContextId: t && t.workContextId != null ? t.workContextId : null,
+    claimSource: 'run_lease'
+  };
+}
+
+// A Work Receipt summarizes what a run did, derived entirely from existing evidence. It carries
+// refs/counts/paths — never file contents or provider bodies.
+function buildWorkReceipt(run, ticket) {
+  if (!run) return null;
+  const t = ticket || readTickets().find(item => item && item.id === run.ticketId) || null;
+  const snapshot = readRunReplaySnapshot(run) || {};
+  const summary = run.replaySummary || extractReplaySummary(snapshot) || {};
+  const evaluation = run.runEvaluation || null;
+  const effectiveness = evaluation && evaluation.effectiveness ? evaluation.effectiveness : null;
+  const history = readOperationHistory().filter(record => record && record.runId === run.id);
+  const events = getRunEvents(run.id);
+  const authorityAllowed = events.filter(e => e && e.type === 'authority.allowed').length;
+  const authorityDenied = events.filter(e => e && e.type === 'authority.denied').length;
+  const verificationRequired = isRunVerificationRequired(run);
+  const verificationResult = effectiveness && effectiveness.status ? effectiveness.status : (verificationRequired ? 'unknown' : 'not_required');
+  const blocked = Boolean(run.triage && run.triage.required === true);
+  const targetOps = history.map(record => ({ historyId: record.id, operation: record.operation || null, path: record.path || record.targetPath || null })).slice(0, 25);
+  const artifactPaths = [...new Set(targetOps.map(op => op.path).filter(Boolean))].slice(0, 25);
+  return {
+    receiptKind: 'work_receipt',
+    runId: run.id,
+    ticketId: run.ticketId,
+    actorAgentId: run.agentId != null ? run.agentId : null,
+    actorAgentName: run.agentName || null,
+    workContextId: t && t.workContextId != null ? t.workContextId : null,
+    startedAt: run.startedAt || null,
+    completedAt: run.completedAt || null,
+    status: run.status,
+    stoppedAt: ['completed', 'failed', 'interrupted'].includes(run.status) ? run.status : 'in_progress',
+    sourceRefsRead: [t ? `tickets.json:${t.id}` : null, `runs.json:${run.id}`, run.replaySnapshotPath || null].filter(Boolean),
+    targetOperationsPerformed: targetOps,
+    artifactsProduced: artifactPaths,
+    authorityDecisions: { allowed: authorityAllowed, denied: authorityDenied },
+    verification: { required: verificationRequired, result: verificationResult },
+    triage: blocked ? { required: true, reasonCode: run.triage.reasonCode || null } : { required: false },
+    whatWasDone: effectiveness ? `postconditions passed ${effectiveness.postconditionsPassed || 0}, failed ${effectiveness.postconditionsFailed || 0}` : null,
+    whatWasNotDone: blocked ? `stopped for triage: ${run.triage.reasonCode || 'review'}` : (run.status === 'failed' ? timelineText(run.error) : null),
+    whereWorkStopped: blocked ? 'triage_required' : (run.status || 'unknown'),
+    nextRecommendedAction: blocked ? 'resolve triage' : (run.status === 'failed' ? 'review failure' : (run.status === 'completed' ? 'none' : 'await completion'))
+  };
+}
+
+// A Needs-Input projection surfaces the exact blocking question from EXISTING triage evidence on a
+// ticket/run. It reads triage; it does not add a parallel needs-input system or change triage.
+function deriveNeedsInput(triage) {
+  if (!triage || triage.required !== true) return null;
+  return {
+    reasonCode: triage.reasonCode || null,
+    question: triage.summary || null,
+    requiredDecision: triage.requiredDecision || null,
+    allowedActions: Array.isArray(triage.allowedActions) ? triage.allowedActions : [],
+    resolved: Boolean(triage.resolvedAt)
+  };
+}
+
 function buildTicketTimeline(ticketId) {
   const parsedTicketId = parseInt(ticketId, 10);
   if (Number.isNaN(parsedTicketId)) return null;
@@ -6649,6 +6734,36 @@ function buildTicketTimeline(ticketId) {
     });
   }
 
+  // Handoff provenance (r1.23): this ticket was created by an agent/human handoff. The Handoff
+  // Receipt lives on ticket.source; the ticket itself was created through the normal path.
+  if (ticket.source && ticket.source.type === 'handoff') {
+    const h = ticket.source;
+    addEntry({
+      id: `ticket:${parsedTicketId}:handoff`,
+      timestamp: timelineTimestamp(h.createdAt, ticket.createdAt),
+      type: 'ticket.handoff',
+      title: 'Created from handoff',
+      summary: `Handoff from ticket #${h.fromTicketId || '?'}${h.fromRunId ? ` run #${h.fromRunId}` : ''} by ${h.createdBy || h.fromActor || 'unknown'}`,
+      sourceType: 'handoff',
+      sourceRef: `tickets.json:${parsedTicketId}.source`,
+      sourceRole: 'provenance',
+      status: h.status || 'created',
+      details: {
+        fromTicketId: h.fromTicketId || null,
+        fromRunId: h.fromRunId || null,
+        fromActor: h.fromActor || null,
+        toAssignee: h.toAssignee || null,
+        workContextId: h.workContextId != null ? h.workContextId : null,
+        sourceRefs: Array.isArray(h.sourceRefs) ? h.sourceRefs : [],
+        evidenceRefs: Array.isArray(h.evidenceRefs) ? h.evidenceRefs : [],
+        constraints: h.constraints || null,
+        authorityLimits: h.authorityLimits || null,
+        stopCondition: h.stopCondition || null,
+        receiptExpectation: h.receiptExpectation || null
+      }
+    });
+  }
+
   const runAttemptById = new Map(runs.map((run, index) => [run.id, index + 1]));
   for (const run of runs) {
     const runEvents = events.filter(event => event.runId === run.id);
@@ -6690,6 +6805,24 @@ function buildTicketTimeline(ticketId) {
         targetScope: snapshot.targetScope ? sanitizeSnapshotValue(snapshot.targetScope) : null
       }
     });
+    // Work Receipt summary (r1.23) for a terminal run — derived live from existing evidence;
+    // refs/counts only, no file contents or provider bodies.
+    if (['completed', 'failed', 'interrupted'].includes(run.status)) {
+      const workReceipt = buildWorkReceipt(run, ticket);
+      addEntry({
+        id: `run:${run.id}:work-receipt`,
+        timestamp: timelineTimestamp(run.completedAt, run.updatedAt, run.startedAt, run.createdAt),
+        type: 'run.work_receipt',
+        title: `Run #${run.id} work receipt`,
+        summary: `${workReceipt.status}: ${workReceipt.targetOperationsPerformed.length} target op(s), verification ${workReceipt.verification.result}, next: ${workReceipt.nextRecommendedAction}`,
+        sourceType: 'run',
+        sourceRef: `runs.json:${run.id}`,
+        sourceRole: 'live_state',
+        runId: run.id,
+        status: run.status,
+        details: workReceipt
+      });
+    }
     addEntry({
       id: `run:${run.id}:verification-requirement`,
       timestamp: run.createdAt || null,
@@ -16732,6 +16865,86 @@ fastify.get('/api/tickets/:id/timeline', { preHandler: fastify.requireAuth }, as
   }
 
   return timeline;
+});
+
+// ---- Agent handoff/queue protocol endpoints (r1.23) ----
+// Read-only Claim Receipt derived from a run's existing lease evidence.
+fastify.get('/api/runs/:id/claim-receipt', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) { reply.code(403); return { error: 'Permission denied' }; }
+  const run = readRuns().find(item => item && item.id === parseInt(request.params.id, 10));
+  if (!run) { reply.code(404); return { error: 'Run not found' }; }
+  return { ok: true, claimReceipt: buildClaimReceipt(run) };
+});
+
+// Read-only Work Receipt derived from a run's existing evidence (refs/counts only).
+fastify.get('/api/runs/:id/work-receipt', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) { reply.code(403); return { error: 'Permission denied' }; }
+  const run = readRuns().find(item => item && item.id === parseInt(request.params.id, 10));
+  if (!run) { reply.code(404); return { error: 'Run not found' }; }
+  return { ok: true, workReceipt: buildWorkReceipt(run) };
+});
+
+// Agent/human handoff: propose a handoff that creates an ORDINARY ticket through the normal,
+// authorized ticket-creation path. A proposal is not execution; the created ticket flows through
+// the same run/triage/verification path as any ticket, and the recipient claims it normally. The
+// handoff never bypasses ticket permissions, Work Context scope, or Authority (all enforced by
+// createTicketFromInput), and never opens a private agent-to-agent channel.
+fastify.post('/api/tickets/:id/handoff', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:create')) { reply.code(403); return { error: 'Permission denied' }; }
+  const fromTicket = readTickets().find(item => item && item.id === parseInt(request.params.id, 10));
+  if (!fromTicket) { reply.code(404); return { error: 'Source ticket not found' }; }
+  const body = request.body || {};
+  const objective = typeof body.objective === 'string' ? body.objective.trim() : '';
+  if (!objective) { reply.code(400); return { error: 'Handoff objective is required' }; }
+
+  const toType = body.toAssignmentTargetType || fromTicket.assignmentTargetType;
+  const toId = body.toAssignmentTargetId != null ? body.toAssignmentTargetId : fromTicket.assignmentTargetId;
+  const workContextId = body.workContextId !== undefined ? body.workContextId : (fromTicket.workContextId != null ? fromTicket.workContextId : null);
+  const fromRun = readRuns().filter(r => r && r.ticketId === fromTicket.id).sort((a, b) => b.id - a.id)[0] || null;
+  const actor = actorFromRequest(request);
+  const actorName = actor.username || String(request.session.userId);
+  const now = new Date().toISOString();
+
+  const handoffReceipt = {
+    type: 'handoff',
+    fromTicketId: fromTicket.id,
+    fromRunId: fromRun ? fromRun.id : null,
+    fromActor: actorName,
+    toAssignee: { type: toType || null, id: toId != null ? parseInt(toId, 10) : null },
+    workContextId: workContextId != null ? parseInt(workContextId, 10) : null,
+    objective,
+    sourceRefs: Array.isArray(body.sourceRefs) && body.sourceRefs.length
+      ? body.sourceRefs
+      : (fromRun ? [`tickets.json:${fromTicket.id}`, `runs.json:${fromRun.id}`] : [`tickets.json:${fromTicket.id}`]),
+    evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : [],
+    constraints: body.constraints != null ? body.constraints : null,
+    authorityLimits: body.authorityLimits != null ? body.authorityLimits : null,
+    stopCondition: body.stopCondition != null ? body.stopCondition : null,
+    receiptExpectation: body.receiptExpectation != null ? body.receiptExpectation : 'work_receipt',
+    createdAt: now,
+    createdBy: actorName,
+    status: 'created'
+  };
+
+  // Normal authorized ticket creation — enforces Authority and Work Context scope; never widens.
+  const result = createTicketFromInput({
+    objective,
+    assignmentTargetType: toType,
+    assignmentTargetId: toId,
+    assignmentMode: toType === 'group' ? (body.assignmentMode || 'dynamic') : undefined,
+    workContextId
+  }, actor, { source: handoffReceipt, delegated: delegatedFromRequest(request, 'created_from_handoff') });
+  if (!result.ok) { reply.code(400); return { error: result.error }; }
+
+  appendEvent({
+    type: 'handoff.ticket_created',
+    ticketId: result.ticket.id,
+    payload: { fromTicketId: fromTicket.id, fromRunId: handoffReceipt.fromRunId, createdTicketId: result.ticket.id, createdBy: actorName, status: 'created' }
+  });
+  appendSystemLog('handoff:ticket_created', `Handoff from ticket #${fromTicket.id} created ticket #${result.ticket.id}`, null,
+    { fromTicketId: fromTicket.id, createdTicketId: result.ticket.id, changedBy: actorName });
+
+  return { ok: true, createdTicketId: result.ticket.id, handoffReceipt: { ...handoffReceipt, createdTicketId: result.ticket.id } };
 });
 
 fastify.post('/api/tickets/shape-objective', { preHandler: fastify.requireAuth }, async (request, reply) => {

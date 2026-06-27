@@ -51,7 +51,8 @@ const checks = [
     'process-template-append-only-version-store-test.js',
     'process-template-activation-durability-test.js',
     'work-context-primitive-test.js',
-    'work-context-visibility-surface-test.js'
+    'work-context-visibility-surface-test.js',
+    'agent-handoff-queue-protocol-test.js'
   ].map(name => ({ label: `NODE_PATH=./node_modules node scripts/${name}`, args: [path.join('scripts', name)] }))
 ];
 
