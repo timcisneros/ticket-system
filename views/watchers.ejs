@@ -1,0 +1,30 @@
+<h1>Watchers</h1>
+<p class="text-muted">
+  A watcher is a <strong>scoped observer/proposer</strong> over a Work Context. It is
+  <strong>manual</strong>: it only observes when you press <em>Observe now</em>, it reads one
+  bounded source, and it records a receipt. It <strong>never</strong> mutates targets, runs
+  templates, wakes agents, or creates hidden work. A watcher may draft a ticket <em>proposal</em>;
+  a proposal is not a ticket and not execution — an explicit approval (<code>ticket:create</code>)
+  creates a normal ticket through the usual path. No background daemon, no connectors, no
+  notifications.
+</p>
+
+<% if (!watchers || watchers.length === 0) { %>
+  <p class="text-muted">No watchers yet. Manage via the JSON API (<code>POST /api/watchers</code>).</p>
+<% } else { %>
+  <table class="data-table">
+    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Work Context</th><th>Source</th><th>Last observed</th></tr></thead>
+    <tbody>
+      <% watchers.forEach(function (w) { %>
+        <tr>
+          <td><%= w.id %></td>
+          <td><a href="/watchers/<%= w.id %>"><%= w.name %></a></td>
+          <td><% if (w.status !== 'active') { %><span class="text-muted"><%= w.status %></span><% } else { %>active<% } %></td>
+          <td><a href="/work-contexts/<%= w.workContextId %>">#<%= w.workContextId %></a></td>
+          <td class="text-muted"><%= w.sourceKind %></td>
+          <td class="text-muted"><%= w.lastObservedAt || 'never' %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>

@@ -17,5 +17,6 @@
   "workspace:reset",
   "workspace.delete.cross_ticket_artifact",
   "processTemplate:manage",
-  "workContext:manage"
+  "workContext:manage",
+  "watcher:manage"
 ]

@@ -30,6 +30,9 @@
           <% if (userPermissions.includes('workContext:manage')) { %>
             <li><a href="/work-contexts">Work Contexts</a></li>
           <% } %>
+          <% if (userPermissions.includes('watcher:manage')) { %>
+            <li><a href="/watchers">Watchers</a></li>
+          <% } %>
           <% if (userPermissions.includes('workspace:read')) { %>
             <li><a href="/workspace">Workspace</a></li>
           <% } %>

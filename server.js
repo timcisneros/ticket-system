@@ -41,6 +41,13 @@ const PROCESS_TEMPLATE_VERSIONS_FILE = path.join(DATA_DIR, 'process-template-ver
 // tickets/templates and supplies creation-time defaults + listing filters only. The runtime
 // never dereferences workContextId during execution — see docs/WORK_CONTEXT_PRIMITIVE.md.
 const WORK_CONTEXTS_FILE = path.join(DATA_DIR, 'work-contexts.json');
+// Bounded watcher (r1.26): a scoped, MANUAL observer/proposer over a Work Context. It observes a
+// narrow bounded source (workspace_file), writes observation receipts, and may draft ticket
+// proposals — it never mutates targets, runs templates, wakes agents, or creates hidden work.
+// See docs/BOUNDED_WATCHER.md. There is no background daemon and no automatic polling loop.
+const WATCHERS_FILE = path.join(DATA_DIR, 'watchers.json');
+const WATCHER_OBSERVATIONS_FILE = path.join(DATA_DIR, 'watcher-observations.json');
+const WATCHER_TICKET_PROPOSALS_FILE = path.join(DATA_DIR, 'watcher-ticket-proposals.json');
 // Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
 // separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
@@ -116,7 +123,10 @@ function seedOperationalDataDir() {
     'logs.json',
     'operation-history.json',
     'allocation-plans.json',
-    'work-contexts.json'
+    'work-contexts.json',
+    'watchers.json',
+    'watcher-observations.json',
+    'watcher-ticket-proposals.json'
   ].forEach(fileName => writeMissingFile(fileName, '[]'));
 
   writeMissingFile('events.jsonl', '');
@@ -3033,6 +3043,123 @@ function buildWorkContextSummary(ctx, options = {}) {
     recentRuns: runsSorted.slice(0, limit).map(r => ({ id: r.id, ticketId: r.ticketId, status: r.status, createdAt: r.createdAt || null }))
   };
 }
+
+// ---- Bounded watcher store + manual observe (r1.26) ----
+// A watcher is a scoped, MANUAL observer/proposer. It never executes: observe reads only its
+// bounded source and writes a receipt; proposals are drafts; only an explicit authorized approval
+// creates a normal ticket through createTicketFromInput.
+const WATCHER_STATUSES = ['active', 'paused', 'archived'];
+const WATCHER_SOURCE_KINDS = ['workspace_file'];
+const WATCHER_ALLOWED_ACTIONS = ['summarize', 'raise_triage', 'propose_ticket', 'notify'];
+const WATCHER_OBSERVATION_LIMIT = 20;
+
+function readWatchers() { return readJsonArrayCached(WATCHERS_FILE); }
+function writeWatchers(list) { writeFileAtomic(WATCHERS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
+function getWatcherById(id) { const n = parseInt(id, 10); return Number.isNaN(n) ? null : readWatchers().find(w => w && w.id === n) || null; }
+function readWatcherObservations() { return readJsonArrayCached(WATCHER_OBSERVATIONS_FILE); }
+function writeWatcherObservations(list) { writeFileAtomic(WATCHER_OBSERVATIONS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
+function readWatcherProposals() { return readJsonArrayCached(WATCHER_TICKET_PROPOSALS_FILE); }
+function writeWatcherProposals(list) { writeFileAtomic(WATCHER_TICKET_PROPOSALS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
+function getWatcherProposalById(id) { const n = parseInt(id, 10); return Number.isNaN(n) ? null : readWatcherProposals().find(p => p && p.id === n) || null; }
+
+// Validate a watcher create/update payload. A new ACTIVE watcher requires an ACTIVE Work Context;
+// the action policy can never include execution verbs. Pure validation — creates nothing.
+function validateWatcherInput(body, existing = null) {
+  const b = body && typeof body === 'object' ? body : {};
+  const name = typeof b.name === 'string' ? b.name.trim() : (existing ? existing.name : '');
+  if (!name) return { ok: false, error: 'Watcher name is required' };
+  const status = b.status !== undefined ? b.status : (existing ? existing.status : 'active');
+  if (!WATCHER_STATUSES.includes(status)) return { ok: false, error: `status must be one of ${WATCHER_STATUSES.join(', ')}` };
+
+  const workContextId = b.workContextId !== undefined ? b.workContextId : (existing ? existing.workContextId : null);
+  const wcId = workContextId != null ? parseInt(workContextId, 10) : null;
+  if (!Number.isInteger(wcId)) return { ok: false, error: 'workContextId is required' };
+  const ctx = getWorkContextById(wcId);
+  if (!ctx) return { ok: false, error: 'Work Context not found' };
+  // A watcher must belong to an active Work Context; an active watcher cannot live in an archived one.
+  if (status === 'active' && ctx.status !== 'active') return { ok: false, error: 'An active watcher requires an active Work Context' };
+
+  const sourceKind = b.sourceKind !== undefined ? b.sourceKind : (existing ? existing.sourceKind : 'workspace_file');
+  if (!WATCHER_SOURCE_KINDS.includes(sourceKind)) return { ok: false, error: `sourceKind must be one of ${WATCHER_SOURCE_KINDS.join(', ')}` };
+  const rawRefs = b.sourceRefs !== undefined ? b.sourceRefs : (existing ? existing.sourceRefs : []);
+  if (!Array.isArray(rawRefs) || rawRefs.length === 0) return { ok: false, error: 'sourceRefs must list at least one bounded source' };
+  const sourceRefs = [];
+  for (const ref of rawRefs) {
+    const p = ref && typeof ref === 'object' ? ref.path : ref;
+    if (typeof p !== 'string' || !p.trim()) return { ok: false, error: 'each sourceRef needs a workspace-relative path' };
+    sourceRefs.push({ path: p.trim() });
+  }
+
+  const actionPolicy = b.actionPolicy && typeof b.actionPolicy === 'object' ? b.actionPolicy : (existing ? existing.actionPolicy : { allowedActions: ['summarize'] });
+  const allowedActions = Array.isArray(actionPolicy.allowedActions) ? actionPolicy.allowedActions : ['summarize'];
+  for (const a of allowedActions) {
+    if (!WATCHER_ALLOWED_ACTIONS.includes(a)) return { ok: false, error: `action "${a}" is not allowed (observer/proposer only)` };
+  }
+
+  return {
+    ok: true,
+    value: {
+      name, status, workContextId: wcId, sourceKind, sourceRefs,
+      cadence: b.cadence && typeof b.cadence === 'object' ? { mode: b.cadence.mode === 'manual' ? 'manual' : 'manual' } : (existing ? existing.cadence : { mode: 'manual' }),
+      triggerPolicy: { mode: 'manual' },
+      deltaPolicy: b.deltaPolicy && typeof b.deltaPolicy === 'object' ? { mode: b.deltaPolicy.mode || 'hash' } : (existing ? existing.deltaPolicy : { mode: 'hash' }),
+      actionPolicy: { allowedActions: [...new Set(allowedActions)] },
+      triagePolicy: b.triagePolicy && typeof b.triagePolicy === 'object' ? b.triagePolicy : (existing ? existing.triagePolicy : { mode: 'manual' }),
+      ticketProposalPolicy: b.ticketProposalPolicy && typeof b.ticketProposalPolicy === 'object' ? b.ticketProposalPolicy : (existing ? existing.ticketProposalPolicy : { enabled: false }),
+      notificationPolicy: b.notificationPolicy && typeof b.notificationPolicy === 'object' ? b.notificationPolicy : (existing ? existing.notificationPolicy : { mode: 'none' })
+    }
+  };
+}
+
+// Perform ONE manual observation of a watcher's single bounded source. Reads only that source via
+// the workspace provider boundary, records a receipt (hash + metadata, never file contents), and
+// updates the watcher cursor. It creates no ticket/run, mutates no target or workspace, wakes no
+// agent, and runs no template.
+function performWatcherObservation(watcher, changedBy) {
+  const now = new Date().toISOString();
+  const ctx = getWorkContextById(watcher.workContextId);
+  const observations = readWatcherObservations();
+  const nextId = nextId_(observations);
+  const ref = (watcher.sourceRefs && watcher.sourceRefs[0]) || null;
+  const base = { id: nextId, watcherId: watcher.id, workContextId: watcher.workContextId, observedAt: now, sourceKind: watcher.sourceKind, sourceRefs: watcher.sourceRefs || [], previousHash: watcher.lastObservationHash || null, currentHash: null, summary: null, actionTaken: null, ticketProposalId: null, error: null };
+
+  // Refusals (archived watcher / archived context / no source / paused) record evidence; no guess.
+  if (watcher.status === 'archived') return finalizeObservation(observations, { ...base, status: 'refused', error: 'watcher is archived' });
+  if (watcher.status === 'paused') return finalizeObservation(observations, { ...base, status: 'refused', error: 'watcher is paused' });
+  if (!ctx || ctx.status !== 'active') return finalizeObservation(observations, { ...base, status: 'refused', error: 'Work Context is not active' });
+  if (!ref || typeof ref.path !== 'string') return finalizeObservation(observations, { ...base, status: 'refused', error: 'no bounded source configured' });
+
+  let content;
+  try {
+    content = workspaceProvider.readFile(ref.path);
+  } catch (error) {
+    const rec = finalizeObservation(observations, { ...base, status: 'failed', error: (error && error.message) ? String(error.message).slice(0, 200) : 'source unavailable' });
+    updateWatcherCursor(watcher.id, now, watcher.lastObservationHash || null, changedBy);
+    return rec;
+  }
+  const currentHash = crypto.createHash('sha256').update(content).digest('hex');
+  const changed = watcher.lastObservationHash !== currentHash;
+  const summary = { bytes: Buffer.byteLength(content, 'utf8'), lineCount: content === '' ? 0 : content.split('\n').length };
+  const rec = finalizeObservation(observations, { ...base, status: changed ? 'changed' : 'unchanged', currentHash, summary, actionTaken: 'summarized' });
+  updateWatcherCursor(watcher.id, now, currentHash, changedBy);
+  return rec;
+}
+function finalizeObservation(observations, record) {
+  observations.push(record);
+  writeWatcherObservations(observations);
+  return record;
+}
+function updateWatcherCursor(watcherId, observedAt, hash, changedBy) {
+  const list = readWatchers();
+  const w = list.find(item => item && item.id === watcherId);
+  if (!w) return;
+  w.lastObservedAt = observedAt;
+  w.lastObservationHash = hash;
+  w.updatedBy = changedBy;
+  w.updatedAt = observedAt;
+  writeWatchers(list);
+}
+function nextId_(list) { return (Array.isArray(list) ? list : []).reduce((m, x) => Math.max(m, (x && x.id) || 0), 0) + 1; }
 
 // Second idempotency source: an already-created ticket carrying this trigger token in
 // its provenance. Closes the crash window where the ticket was created but the
@@ -6760,6 +6887,35 @@ function buildTicketTimeline(ticketId) {
         authorityLimits: h.authorityLimits || null,
         stopCondition: h.stopCondition || null,
         receiptExpectation: h.receiptExpectation || null
+      }
+    });
+  }
+
+  // Watcher-proposal provenance (r1.26): this ticket was created by approving a watcher proposal
+  // through the normal authorized path. Projection-only; no watcher timeline ledger.
+  if (ticket.source && ticket.source.type === 'watcher_proposal') {
+    const w = ticket.source;
+    addEntry({
+      id: `ticket:${parsedTicketId}:watcher-proposal`,
+      timestamp: timelineTimestamp(w.createdAt, ticket.createdAt),
+      type: 'ticket.watcher_proposal',
+      title: 'Created from watcher proposal',
+      summary: `Approved watcher #${w.watcherId || '?'} proposal #${w.proposalId || '?'} by ${w.createdBy || w.fromActor || 'unknown'}`,
+      sourceType: 'watcher_proposal',
+      sourceRef: `tickets.json:${parsedTicketId}.source`,
+      sourceRole: 'provenance',
+      status: w.status || 'created',
+      details: {
+        watcherId: w.watcherId || null,
+        proposalId: w.proposalId || null,
+        observationId: w.observationId != null ? w.observationId : null,
+        workContextId: w.workContextId != null ? w.workContextId : null,
+        sourceRefs: Array.isArray(w.sourceRefs) ? w.sourceRefs : [],
+        evidenceRefs: Array.isArray(w.evidenceRefs) ? w.evidenceRefs : [],
+        constraints: w.constraints || null,
+        authorityLimits: w.authorityLimits || null,
+        stopCondition: w.stopCondition || null,
+        receiptExpectation: w.receiptExpectation || null
       }
     });
   }
@@ -16108,6 +16264,173 @@ fastify.get('/work-contexts/:id', { preHandler: fastify.requireAuth }, async (re
     user: request.user,
     summary: buildWorkContextSummary(ctx)
   }, request.session.userId));
+});
+
+// ==================== BOUNDED WATCHER ROUTES (r1.26) ====================
+// Manual observer/proposer ONLY. Management gated by watcher:manage. Observe reads only the
+// bounded source and writes a receipt — no ticket/run/workspace mutation, no agent wake-up, no
+// template run. A proposal is a draft; only an explicit approval (ticket:create) creates a normal
+// ticket through createTicketFromInput. There is no background daemon and no automatic polling.
+function watcherManageGuard(request, reply) {
+  if (!hasPermission(request.session.userId, 'watcher:manage')) { reply.code(403); return false; }
+  return true;
+}
+
+fastify.get('/api/watchers', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
+  return { ok: true, watchers: readWatchers() };
+});
+
+fastify.post('/api/watchers', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
+  const parsed = validateWatcherInput(request.body || {}, null);
+  if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
+  const list = readWatchers();
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const record = { id: nextId_(list), ...parsed.value, lastObservedAt: null, lastObservationHash: null, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now };
+  list.push(record);
+  writeWatchers(list);
+  appendSystemLog('watcher:created', `Watcher "${record.name}" created`, null, { watcherId: record.id, workContextId: record.workContextId, changedBy });
+  return { ok: true, watcher: record };
+});
+
+fastify.post('/api/watchers/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
+  const list = readWatchers();
+  const existing = list.find(w => w && w.id === parseInt(request.params.id, 10));
+  if (!existing) { reply.code(404); return { error: 'Watcher not found' }; }
+  const parsed = validateWatcherInput(request.body || {}, existing);
+  if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  Object.assign(existing, parsed.value, { updatedBy: changedBy, updatedAt: now });
+  writeWatchers(list);
+  appendSystemLog('watcher:updated', `Watcher "${existing.name}" updated`, null, { watcherId: existing.id, status: existing.status, changedBy });
+  return { ok: true, watcher: existing };
+});
+
+fastify.get('/api/watchers/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
+  const watcher = getWatcherById(request.params.id);
+  if (!watcher) { reply.code(404); return { error: 'Watcher not found' }; }
+  const observations = readWatcherObservations().filter(o => o && o.watcherId === watcher.id).sort((a, b) => b.id - a.id).slice(0, WATCHER_OBSERVATION_LIMIT);
+  const proposals = readWatcherProposals().filter(p => p && p.watcherId === watcher.id).sort((a, b) => b.id - a.id);
+  return { ok: true, watcher, observations, proposals };
+});
+
+// Manual observe — the only way a watcher ever "runs". Reads the bounded source, writes a receipt.
+fastify.post('/api/watchers/:id/observe', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
+  const watcher = getWatcherById(request.params.id);
+  if (!watcher) { reply.code(404); return { error: 'Watcher not found' }; }
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const observation = performWatcherObservation(watcher, changedBy);
+  appendSystemLog('watcher:observed', `Watcher "${watcher.name}" observation ${observation.status}`, null, { watcherId: watcher.id, observationId: observation.id, status: observation.status, changedBy });
+  return { ok: true, observation };
+});
+
+// Draft a ticket proposal (NOT a ticket, NOT execution).
+fastify.post('/api/watchers/:id/proposals', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
+  const watcher = getWatcherById(request.params.id);
+  if (!watcher) { reply.code(404); return { error: 'Watcher not found' }; }
+  const ctx = getWorkContextById(watcher.workContextId);
+  if (!ctx || ctx.status !== 'active') { reply.code(409); return { error: 'Work Context is not active; proposals are blocked' }; }
+  const body = request.body || {};
+  const objective = typeof body.objective === 'string' ? body.objective.trim() : '';
+  if (!objective) { reply.code(400); return { error: 'Proposal objective is required' }; }
+  const list = readWatcherProposals();
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const record = {
+    id: nextId_(list), watcherId: watcher.id, workContextId: watcher.workContextId,
+    observationId: body.observationId != null ? parseInt(body.observationId, 10) : null,
+    status: 'proposed', objective,
+    sourceRefs: Array.isArray(body.sourceRefs) ? body.sourceRefs : (watcher.sourceRefs || []),
+    evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : [],
+    constraints: body.constraints != null ? body.constraints : null,
+    authorityLimits: body.authorityLimits != null ? body.authorityLimits : null,
+    stopCondition: body.stopCondition != null ? body.stopCondition : null,
+    receiptExpectation: body.receiptExpectation != null ? body.receiptExpectation : 'work_receipt',
+    createdTicketId: null, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now
+  };
+  list.push(record);
+  writeWatcherProposals(list);
+  appendSystemLog('watcher:proposal_created', `Watcher "${watcher.name}" drafted ticket proposal #${record.id}`, null, { watcherId: watcher.id, proposalId: record.id, changedBy });
+  return { ok: true, proposal: record };
+});
+
+// Approve a proposal → create a NORMAL ticket through the authorized path (ticket:create).
+fastify.post('/api/watcher-proposals/:id/approve', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:create')) { reply.code(403); return { error: 'Approving a proposal into a ticket requires ticket:create' }; }
+  const list = readWatcherProposals();
+  const proposal = list.find(p => p && p.id === parseInt(request.params.id, 10));
+  if (!proposal) { reply.code(404); return { error: 'Proposal not found' }; }
+  if (proposal.status !== 'proposed') { reply.code(409); return { error: 'Only a proposed proposal can be approved' }; }
+  const body = request.body || {};
+  const toType = body.assignmentTargetType || 'agent';
+  const toId = body.assignmentTargetId;
+  if (toId == null) { reply.code(400); return { error: 'assignmentTargetId is required to create the ticket' }; }
+  const actor = actorFromRequest(request);
+  const actorName = actor.username || String(request.session.userId);
+  const now = new Date().toISOString();
+  const source = {
+    type: 'watcher_proposal', watcherId: proposal.watcherId, workContextId: proposal.workContextId,
+    observationId: proposal.observationId, proposalId: proposal.id, fromActor: actorName,
+    sourceRefs: proposal.sourceRefs, evidenceRefs: proposal.evidenceRefs, constraints: proposal.constraints,
+    authorityLimits: proposal.authorityLimits, stopCondition: proposal.stopCondition, receiptExpectation: proposal.receiptExpectation,
+    createdAt: now, createdBy: actorName, status: 'created'
+  };
+  const result = createTicketFromInput({
+    objective: proposal.objective, assignmentTargetType: toType, assignmentTargetId: toId,
+    assignmentMode: toType === 'group' ? (body.assignmentMode || 'dynamic') : undefined,
+    workContextId: proposal.workContextId
+  }, actor, { source, delegated: delegatedFromRequest(request, 'created_from_watcher_proposal') });
+  if (!result.ok) { reply.code(400); return { error: result.error }; }
+  proposal.status = 'approved';
+  proposal.createdTicketId = result.ticket.id;
+  proposal.updatedBy = actorName;
+  proposal.updatedAt = now;
+  writeWatcherProposals(list);
+  appendEvent({ type: 'watcher.proposal_approved', ticketId: result.ticket.id, payload: { watcherId: proposal.watcherId, proposalId: proposal.id, createdTicketId: result.ticket.id, createdBy: actorName } });
+  appendSystemLog('watcher:proposal_approved', `Watcher proposal #${proposal.id} approved → ticket #${result.ticket.id}`, null, { proposalId: proposal.id, createdTicketId: result.ticket.id, changedBy: actorName });
+  return { ok: true, createdTicketId: result.ticket.id, proposal };
+});
+
+fastify.post('/api/watcher-proposals/:id/reject', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
+  const list = readWatcherProposals();
+  const proposal = list.find(p => p && p.id === parseInt(request.params.id, 10));
+  if (!proposal) { reply.code(404); return { error: 'Proposal not found' }; }
+  if (proposal.status !== 'proposed') { reply.code(409); return { error: 'Only a proposed proposal can be rejected' }; }
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  proposal.status = 'rejected';
+  proposal.updatedBy = changedBy;
+  proposal.updatedAt = new Date().toISOString();
+  writeWatcherProposals(list);
+  appendSystemLog('watcher:proposal_rejected', `Watcher proposal #${proposal.id} rejected`, null, { proposalId: proposal.id, changedBy });
+  return { ok: true, proposal };
+});
+
+fastify.get('/watchers', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'watcher:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  return reply.view('watchers.ejs', viewData({ user: request.user, watchers: readWatchers() }, request.session.userId));
+});
+
+fastify.get('/watchers/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'watcher:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const watcher = getWatcherById(request.params.id);
+  if (!watcher) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Watcher not found', user: request.user }, request.session.userId)); }
+  const observations = readWatcherObservations().filter(o => o && o.watcherId === watcher.id).sort((a, b) => b.id - a.id).slice(0, WATCHER_OBSERVATION_LIMIT);
+  const proposals = readWatcherProposals().filter(p => p && p.watcherId === watcher.id).sort((a, b) => b.id - a.id);
+  return reply.view('watcher-detail.ejs', viewData({ user: request.user, watcher, observations, proposals }, request.session.userId));
 });
 
 // ==================== PROCESS TEMPLATE ROUTES ====================

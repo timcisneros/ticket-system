@@ -1,0 +1,61 @@
+<p><a href="/watchers">← Watchers</a></p>
+<h1><%= watcher.name %> <% if (watcher.status !== 'active') { %><span class="text-muted">(<%= watcher.status %>)</span><% } %></h1>
+<p class="text-muted">
+  Scoped observer/proposer only. This page is read-only except for manual observe/propose actions
+  served by the JSON API. The watcher creates no ticket/run/workspace mutation, wakes no agent, and
+  runs no template. A proposal is not execution — approval creates a normal ticket through
+  <code>ticket:create</code>.
+</p>
+
+<h2>Configuration</h2>
+<table class="data-table">
+  <tbody>
+    <tr><th>Status</th><td><%= watcher.status %></td></tr>
+    <tr><th>Work Context</th><td><a href="/work-contexts/<%= watcher.workContextId %>">#<%= watcher.workContextId %></a></td></tr>
+    <tr><th>Source kind</th><td><%= watcher.sourceKind %></td></tr>
+    <tr><th>Sources</th><td class="text-muted"><%= (watcher.sourceRefs || []).map(function (r) { return r.path; }).join(', ') %></td></tr>
+    <tr><th>Cadence</th><td class="text-muted"><%= watcher.cadence && watcher.cadence.mode %> (manual only in r1.26)</td></tr>
+    <tr><th>Allowed actions</th><td class="text-muted"><%= (watcher.actionPolicy && watcher.actionPolicy.allowedActions || []).join(', ') %></td></tr>
+    <tr><th>Last observed</th><td class="text-muted"><%= watcher.lastObservedAt || 'never' %></td></tr>
+    <tr><th>Last observation hash</th><td class="text-muted"><%= watcher.lastObservationHash || '—' %></td></tr>
+  </tbody>
+</table>
+
+<h2>Recent observations</h2>
+<% if (!observations || observations.length === 0) { %>
+  <p class="text-muted">No observations yet. Trigger one with <code>POST /api/watchers/<%= watcher.id %>/observe</code>.</p>
+<% } else { %>
+  <table class="data-table">
+    <thead><tr><th>#</th><th>Observed at</th><th>Status</th><th>Hash</th><th>Summary</th></tr></thead>
+    <tbody>
+      <% observations.forEach(function (o) { %>
+        <tr>
+          <td><%= o.id %></td>
+          <td class="text-muted"><%= o.observedAt %></td>
+          <td><%= o.status %></td>
+          <td class="text-muted"><%= o.currentHash ? o.currentHash.slice(0, 12) : '—' %></td>
+          <td class="text-muted"><%= o.summary ? (o.summary.bytes + ' bytes, ' + o.summary.lineCount + ' lines') : (o.error || '—') %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>
+
+<h2>Ticket proposals</h2>
+<% if (!proposals || proposals.length === 0) { %>
+  <p class="text-muted">No proposals. A proposal is a draft — not a ticket and not execution.</p>
+<% } else { %>
+  <table class="data-table">
+    <thead><tr><th>#</th><th>Status</th><th>Objective</th><th>Created ticket</th></tr></thead>
+    <tbody>
+      <% proposals.forEach(function (p) { %>
+        <tr>
+          <td><%= p.id %></td>
+          <td><%= p.status %></td>
+          <td><%= p.objective %></td>
+          <td><% if (p.createdTicketId) { %><a href="/tickets/<%= p.createdTicketId %>">#<%= p.createdTicketId %></a><% } else { %><span class="text-muted">—</span><% } %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>
