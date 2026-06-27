@@ -27,6 +27,7 @@ const MEMBERSHIPS_FILE = path.join(DATA_DIR, 'memberships.json');
 const RUNS_FILE = path.join(DATA_DIR, 'runs.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
+const RUNTIME_LIMITS_FILE = path.join(DATA_DIR, 'runtime-limits.json');
 const DATA_DIR_WRITER_LOCK_FILE = path.join(DATA_DIR, 'writer-lock.json');
 const ALLOCATION_PLANS_FILE = path.join(DATA_DIR, 'allocation-plans.json');
 const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
@@ -147,6 +148,14 @@ function seedOperationalDataDir() {
   ].forEach(fileName => writeMissingFile(fileName, '[]'));
 
   writeMissingFile('events.jsonl', '');
+  writeMissingFile('runtime-limits.json', JSON.stringify({
+    maxExecutionSteps: null,
+    maxModelRequestsPerRun: null,
+    maxWorkspaceOperationsPerRun: null,
+    maxRuntimeDurationMs: null,
+    updatedBy: null,
+    updatedAt: null
+  }, null, 2));
 }
 function readDataDirWriterLock() {
   try {
@@ -277,6 +286,18 @@ const DEFAULT_AGENT_RUNTIME_LIMITS = {
   maxModelRequestsPerRun: 4,
   maxRuntimeDurationMs: 120000
 };
+const RUNTIME_LIMIT_CONFIG_KEYS = Object.freeze([
+  'maxExecutionSteps',
+  'maxModelRequestsPerRun',
+  'maxWorkspaceOperationsPerRun',
+  'maxRuntimeDurationMs'
+]);
+const RUNTIME_LIMIT_MINIMUMS = Object.freeze({
+  maxExecutionSteps: 1,
+  maxModelRequestsPerRun: 1,
+  maxWorkspaceOperationsPerRun: 1,
+  maxRuntimeDurationMs: 5000
+});
 const DEFAULT_LOCAL_MODEL_CONCURRENCY = 1;
 const DEFAULT_PROTECTED_WORKSPACE_PATHS = ['.git', '.env', '.env.*', 'node_modules', 'package.json', 'pnpm-lock.yaml'];
 const WORKSPACE_FIXTURES = [
@@ -3654,7 +3675,7 @@ function getDisplayMessageFromRunLog(log) {
 
 function getRunDisplayState(run, logsByRunId) {
   if (!run) return null;
-  const limits = getAgentRuntimeLimits();
+  const limits = getRunRuntimeLimitsSnapshot(run);
 
   if (run.status === 'pending') {
     return {
@@ -4439,7 +4460,7 @@ function buildRunAuthorityContext(run, ticket, agent, snapshot) {
   const allocationPlanId = run.allocationPlanId || s.allocationPlanId || null;
   const allocationItemId = run.allocationItemId || s.allocationItemId || null;
   const ownedOutputPaths = getRunOwnedOutputPaths(run);
-  const limits = getAgentRuntimeLimits();
+  const limits = getRunRuntimeLimitsSnapshot(run, ticket && ticket.objective);
   const groups = readGroups();
   const agentGroupNames = agent
     ? getPrincipalGroupIds('agent', agent.id).map(groupId => (groups.find(group => group.id === groupId) || {}).name).filter(Boolean)
@@ -5288,6 +5309,7 @@ function normalizeRuns(runs) {
     run.capabilityId = run.capabilityType === 'workflow' ? run.workflowId : 'agent-selected-actions';
     run.capabilityInput = run.capabilityType === 'workflow' ? run.workflowInput : null;
     run.executionPolicySnapshot = copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run));
+    run.runtimeLimitsSnapshot = normalizeRuntimeLimitsSnapshot(run.runtimeLimitsSnapshot);
     run.verificationContractSnapshot = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
     run.leaseOwner = typeof run.leaseOwner === 'string' && run.leaseOwner.trim() ? run.leaseOwner : null;
     run.leaseExpiresAt = typeof run.leaseExpiresAt === 'string' && isValidIsoTimestamp(run.leaseExpiresAt) ? run.leaseExpiresAt : null;
@@ -8677,7 +8699,8 @@ function createReplaySnapshotBase(run, overrides = {}) {
     allocationSubtask: run.allocationSubtask || null,
     ownedOutputPaths: getRunOwnedOutputPaths(run),
     ticketOpenedAt: run.ticketOpenedAt || null,
-    runtimeLimits: getAgentRuntimeLimits(),
+    runtimeLimits: pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run)),
+    runtimeLimitsSnapshot: getRunRuntimeLimitsSnapshot(run),
     providerRequests: [],
     modelResponses: [],
     parsedModelPlans: [],
@@ -8709,9 +8732,11 @@ function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnve
     runtimeEnvelope,
     ticketObjectiveSnapshot: ticket.objective,
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
+    runtimeLimits: pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run)),
+    runtimeLimitsSnapshot: getRunRuntimeLimitsSnapshot(run),
     verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
     systemInstructionSnapshot,
-    effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent)
+    effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent, getRunRuntimeLimitsSnapshot(run))
   }));
 }
 
@@ -8823,22 +8848,160 @@ function getPositiveIntegerEnv(name, fallback) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-function getAgentRuntimeLimits(objective = null) {
-  const base = {
+function emptyRuntimeLimitsConfig() {
+  return {
+    maxExecutionSteps: null,
+    maxModelRequestsPerRun: null,
+    maxWorkspaceOperationsPerRun: null,
+    maxRuntimeDurationMs: null,
+    updatedBy: null,
+    updatedAt: null
+  };
+}
+
+function readRuntimeLimitsConfig() {
+  if (!fs.existsSync(RUNTIME_LIMITS_FILE)) return emptyRuntimeLimitsConfig();
+  try {
+    const value = JSON.parse(fs.readFileSync(RUNTIME_LIMITS_FILE, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyRuntimeLimitsConfig();
+    return {
+      ...emptyRuntimeLimitsConfig(),
+      ...Object.fromEntries(RUNTIME_LIMIT_CONFIG_KEYS.map(key => [key, value[key] ?? null])),
+      updatedBy: typeof value.updatedBy === 'string' && value.updatedBy.trim() ? value.updatedBy : null,
+      updatedAt: typeof value.updatedAt === 'string' && isValidIsoTimestamp(value.updatedAt) ? value.updatedAt : null
+    };
+  } catch (_) {
+    return emptyRuntimeLimitsConfig();
+  }
+}
+
+function getDeploymentRuntimeLimits() {
+  return {
     maxExecutionSteps: getPositiveIntegerEnv('AGENT_MAX_EXECUTION_STEPS', DEFAULT_AGENT_RUNTIME_LIMITS.maxExecutionSteps),
     maxWorkspaceOperationsPerRun: getPositiveIntegerEnv('AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxWorkspaceOperationsPerRun),
     maxModelRequestsPerRun: getPositiveIntegerEnv('AGENT_MAX_MODEL_REQUESTS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxModelRequestsPerRun),
     maxRuntimeDurationMs: getPositiveIntegerEnv('AGENT_MAX_RUNTIME_DURATION_MS', DEFAULT_AGENT_RUNTIME_LIMITS.maxRuntimeDurationMs)
   };
+}
+
+function pickRuntimeLimitValues(source) {
+  return Object.fromEntries(RUNTIME_LIMIT_CONFIG_KEYS.map(key => [key, source[key]]));
+}
+
+function runtimeLimitsForExecution(source) {
+  const limits = pickRuntimeLimitValues(source);
+  for (const key of ['maxListDirectoryPerRun', 'maxReadFilePerRun']) {
+    if (Number.isInteger(source && source[key]) && source[key] > 0) limits[key] = source[key];
+  }
+  return limits;
+}
+
+function getWorkflowSpecificLimits() {
+  return {
+    maxTransitions: getPositiveIntegerEnv('WORKFLOW_MAX_TRANSITIONS', 16),
+    maxLoopIterations: getPositiveIntegerEnv('WORKFLOW_MAX_LOOP_ITERATIONS', 3),
+    maxMutations: getPositiveIntegerEnv('WORKFLOW_MAX_MUTATIONS', MAX_MUTATING_ACTIONS_PER_RESPONSE)
+  };
+}
+
+function resolveAgentRuntimeLimits(objective = null, options = {}) {
+  const deployment = getDeploymentRuntimeLimits();
+  const config = options.config || readRuntimeLimitsConfig();
+  const uiConfiguredKeys = [];
+  const base = {};
+  for (const key of RUNTIME_LIMIT_CONFIG_KEYS) {
+    const configured = config[key];
+    if (Number.isInteger(configured) && configured >= RUNTIME_LIMIT_MINIMUMS[key]) {
+      uiConfiguredKeys.push(key);
+      base[key] = Math.min(configured, deployment[key]);
+    } else {
+      base[key] = deployment[key];
+    }
+  }
   const profile = detectWorkloadProfile(objective);
+  let limits = base;
   if (profile) {
-    return getProfileRuntimeLimits(base, profile);
+    limits = getProfileRuntimeLimits(base, profile);
+  } else if (isReportObjective(objective)) {
+    limits = getReportRuntimeLimits(base);
   }
-  // Fallback to legacy report detection for backward compatibility
-  if (isReportObjective(objective)) {
-    return getReportRuntimeLimits(base);
+  return {
+    limits,
+    snapshot: {
+      ...runtimeLimitsForExecution(limits),
+      source: {
+        uiConfigured: uiConfiguredKeys.length > 0,
+        uiConfiguredKeys,
+        deploymentCapped: true,
+        workloadProfile: profile || null,
+        workflowLimits: options.workflow ? getWorkflowSpecificLimits() : null
+      }
+    },
+    deployment,
+    config
+  };
+}
+
+function normalizeRuntimeLimitsSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+  for (const key of RUNTIME_LIMIT_CONFIG_KEYS) {
+    if (!Number.isInteger(snapshot[key]) || snapshot[key] <= 0) return null;
   }
-  return base;
+  return {
+    ...runtimeLimitsForExecution(snapshot),
+    source: snapshot.source && typeof snapshot.source === 'object' && !Array.isArray(snapshot.source)
+      ? sanitizeSnapshotValue(snapshot.source)
+      : null
+  };
+}
+
+function getAgentRuntimeLimits(objective = null) {
+  return resolveAgentRuntimeLimits(objective).limits;
+}
+
+function getRunRuntimeLimitsSnapshot(run, objective = null, options = {}) {
+  const persisted = normalizeRuntimeLimitsSnapshot(run && run.runtimeLimitsSnapshot);
+  return persisted || resolveAgentRuntimeLimits(objective, options).snapshot;
+}
+
+function validateRuntimeLimitsConfigInput(input, existing = readRuntimeLimitsConfig()) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { ok: false, error: 'Runtime limits payload must be an object' };
+  }
+  const deployment = getDeploymentRuntimeLimits();
+  const value = { ...existing };
+  for (const key of Object.keys(input)) {
+    if (!RUNTIME_LIMIT_CONFIG_KEYS.includes(key)) return { ok: false, error: `Unknown runtime limit: ${key}` };
+  }
+  for (const key of RUNTIME_LIMIT_CONFIG_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
+    const candidate = input[key];
+    if (candidate === null) {
+      value[key] = null;
+      continue;
+    }
+    if (!Number.isInteger(candidate)) return { ok: false, error: `${key} must be a positive integer or null` };
+    if (candidate < RUNTIME_LIMIT_MINIMUMS[key]) {
+      return { ok: false, error: `${key} must be at least ${RUNTIME_LIMIT_MINIMUMS[key]}` };
+    }
+    if (candidate > deployment[key]) {
+      return { ok: false, error: `${key} cannot exceed the deployment cap of ${deployment[key]}` };
+    }
+    value[key] = candidate;
+  }
+  return { ok: true, value: { ...emptyRuntimeLimitsConfig(), ...pickRuntimeLimitValues(value) }, deployment };
+}
+
+function writeRuntimeLimitsConfig(config, actor) {
+  const now = new Date().toISOString();
+  const value = {
+    ...emptyRuntimeLimitsConfig(),
+    ...pickRuntimeLimitValues(config),
+    updatedBy: actor,
+    updatedAt: now
+  };
+  writeFileAtomic(RUNTIME_LIMITS_FILE, JSON.stringify(value, null, 2));
+  return value;
 }
 
 function createRunLimitError(run, type, message, details) {
@@ -9847,9 +10010,11 @@ function getAgentEffectiveRuntimeConfig(agent) {
   return normalizeAgentRuntimeConfig(agent);
 }
 
-function buildEffectiveRuntimeConfigSnapshot(agent) {
+function buildEffectiveRuntimeConfigSnapshot(agent, runtimeLimitsSnapshot = null) {
   const effectiveConfig = getAgentEffectiveRuntimeConfig(agent);
-  const runtimeLimits = getAgentRuntimeLimits();
+  const runtimeLimits = runtimeLimitsSnapshot
+    ? pickRuntimeLimitValues(runtimeLimitsSnapshot)
+    : getAgentRuntimeLimits();
   const KEYS = ['allowHandoffTask', 'allowWorkflowDraftIntent', 'allowCanonicalWorkflowDraft'];
 
   const configSources = {};
@@ -11450,6 +11615,10 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
   const nextRunId = nextId(runs);
   const ownedOutputPaths = allocationItem ? allocationItem.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath) : [];
   const workflow = ticket.executionMode === 'workflow' ? getWorkflowById(ticket.workflowId) : null;
+  const runtimeLimitsSnapshot = resolveAgentRuntimeLimits(
+    ticket.executionMode === 'workflow' ? null : ticket.objective,
+    { workflow: Boolean(workflow) }
+  ).snapshot;
   // Routing decision (r1.28): dispatch-policy + immutable snapshot. With no applicable policy this
   // is a no-op recording the agent's own provider/model (execution behavior unchanged). If a policy
   // permits no provider, refuse via triage rather than guessing — no run is created.
@@ -11472,6 +11641,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
       ticket.executionPolicy,
       usesOwnedScope ? 'owned_paths' : 'shared'
     ),
+    runtimeLimitsSnapshot,
     verificationContractSnapshot: buildVerificationContractSnapshot(workflow, now),
     // Immutable routing snapshot (r1.28): supporting metadata only, never rewritten.
     routingSnapshot: routeDecision.routingSnapshot,
@@ -11519,6 +11689,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
       capabilityId: run.capabilityId,
       workflowId: run.workflowId,
       executionPolicySnapshot: run.executionPolicySnapshot,
+      runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
       verificationContractSnapshot: run.verificationContractSnapshot,
       createdAt: run.createdAt
     }
@@ -11660,10 +11831,10 @@ function formatDateTimeForTimezone(date, timeZone) {
   return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}${offsetSign}${offsetHours}:${offsetRemainder}`;
 }
 
-function buildRuntimeEnvelope(run, step = 0, objective = null) {
+function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLimits = null) {
   const timezone = getRuntimeTimezone();
   const workspaceRoot = run.workspaceRoot || workspaceProvider.root;
-  const limits = getAgentRuntimeLimits(objective);
+  const limits = resolvedLimits || getRunRuntimeLimitsSnapshot(run, objective);
 
   const disabledConfigToOps = {
     allowHandoffTask: 'createHandoffTask',
@@ -14544,10 +14715,11 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
   }
 
   const limits = {
-    ...getAgentRuntimeLimits(),
-    maxTransitions: options.maxTransitions || getPositiveIntegerEnv('WORKFLOW_MAX_TRANSITIONS', 16),
-    maxLoopIterations: options.maxLoopIterations || getPositiveIntegerEnv('WORKFLOW_MAX_LOOP_ITERATIONS', 3),
-    maxMutations: options.maxMutations || getPositiveIntegerEnv('WORKFLOW_MAX_MUTATIONS', MAX_MUTATING_ACTIONS_PER_RESPONSE)
+    ...(options.runtimeLimits || pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run))),
+    ...(options.workflowLimits || getWorkflowSpecificLimits()),
+    ...(options.maxTransitions ? { maxTransitions: options.maxTransitions } : {}),
+    ...(options.maxLoopIterations ? { maxLoopIterations: options.maxLoopIterations } : {}),
+    ...(options.maxMutations ? { maxMutations: options.maxMutations } : {})
   };
   const counters = { transitions: 0, workspaceOperations: 0, modelRequests: 0, mutations: 0 };
   const context = {
@@ -14982,7 +15154,13 @@ async function runAgentTicket(runId) {
     if (!ticket) throw new Error('Ticket not found');
     if (!agent) throw new Error('Agent not found');
     providerConfig = getAgentProviderConfig(agent);
-    const runtimeEnvelope = buildRuntimeEnvelope(run, 0, ticket.objective);
+    const runtimeLimitsSnapshot = getRunRuntimeLimitsSnapshot(
+      run,
+      run.executionMode === 'workflow' ? null : ticket.objective,
+      { workflow: run.executionMode === 'workflow' }
+    );
+    const limits = runtimeLimitsForExecution(runtimeLimitsSnapshot);
+    const runtimeEnvelope = buildRuntimeEnvelope(run, 0, ticket.objective, limits);
     const initialInput = buildAgentPrompt(ticket, runtimeEnvelope, [], run.rerunMode);
     createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
     appendRunLog(run, 'run:runtime', JSON.stringify(runtimeEnvelope));
@@ -15014,7 +15192,12 @@ async function runAgentTicket(runId) {
         capabilityType: capability.type,
         capabilityId: capability.id
       });
-      const workflowResult = await executeWorkflowDefinition(run, workflow, workflowInput, agent);
+      const workflowResult = await executeWorkflowDefinition(run, workflow, workflowInput, agent, {
+        runtimeLimits: limits,
+        workflowLimits: runtimeLimitsSnapshot.source && runtimeLimitsSnapshot.source.workflowLimits
+          ? runtimeLimitsSnapshot.source.workflowLimits
+          : getWorkflowSpecificLimits()
+      });
       appendRunReplaySnapshotItem(run.id, 'capabilityOutputs', {
         capabilityType: capability.type,
         capabilityId: capability.id,
@@ -15042,7 +15225,6 @@ async function runAgentTicket(runId) {
     const listedDirectoryPaths = new Set();
     let completed = false;
     let resumedFromPersistedState = false;
-    const limits = getAgentRuntimeLimits(ticket.objective);
     const runStartedAtMs = Date.now();
     // Captured once at run start and never updated, so it does not absorb
     // folders/files this run creates. Anchors relative objectives.
@@ -15146,7 +15328,7 @@ async function runAgentTicket(runId) {
         }
       }
 
-      const currentEnvelope = buildRuntimeEnvelope(run, step, ticket.objective);
+      const currentEnvelope = buildRuntimeEnvelope(run, step, ticket.objective, limits);
       const workspaceContext = {
         initialWorkspaceSnapshot,
         currentWorkspaceSnapshot: captureRunWorkspaceRootSnapshot(run),
@@ -17805,6 +17987,58 @@ fastify.get('/api/runtime/status', { preHandler: fastify.requireAuth }, async (r
   }
 
   return getRuntimeStatusSnapshot();
+});
+
+function runtimeLimitsManageGuard(request, reply) {
+  if (!hasPermission(request.session.userId, 'runtimeLimits:manage')) {
+    reply.code(403);
+    return false;
+  }
+  return true;
+}
+
+fastify.get('/api/runtime-limits', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!runtimeLimitsManageGuard(request, reply)) return { error: 'Permission denied' };
+  const resolved = resolveAgentRuntimeLimits();
+  return {
+    config: resolved.config,
+    deploymentCaps: resolved.deployment,
+    effectiveLimits: pickRuntimeLimitValues(resolved.limits)
+  };
+});
+
+fastify.post('/api/runtime-limits', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!runtimeLimitsManageGuard(request, reply)) return { error: 'Permission denied' };
+  const previous = readRuntimeLimitsConfig();
+  const parsed = validateRuntimeLimitsConfigInput(request.body || {}, previous);
+  if (!parsed.ok) {
+    reply.code(400);
+    return { error: parsed.error };
+  }
+  const actor = request.user ? request.user.username : String(request.session.userId);
+  const next = writeRuntimeLimitsConfig(parsed.value, actor);
+  const timestamp = next.updatedAt;
+  appendEvent({
+    type: 'runtime_limits.updated',
+    payload: {
+      actor,
+      timestamp,
+      oldValues: pickRuntimeLimitValues(previous),
+      newValues: pickRuntimeLimitValues(next)
+    }
+  });
+  appendSystemLog('runtime_limits.updated', `Runtime limits updated by ${actor}`, null, {
+    actor,
+    timestamp,
+    oldValues: pickRuntimeLimitValues(previous),
+    newValues: pickRuntimeLimitValues(next)
+  });
+  const effective = resolveAgentRuntimeLimits(null, { config: next });
+  return {
+    config: next,
+    deploymentCaps: effective.deployment,
+    effectiveLimits: pickRuntimeLimitValues(effective.limits)
+  };
 });
 
 fastify.get('/api/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {

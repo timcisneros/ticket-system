@@ -23,5 +23,6 @@
   "connector:manage",
   "connector:read",
   "connector:write",
-  "ops:read"
+  "ops:read",
+  "runtimeLimits:manage"
 ]
