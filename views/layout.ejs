@@ -36,6 +36,9 @@
           <% if (userPermissions.includes('modelRouting:manage')) { %>
             <li><a href="/model-routing-policies">Routing</a></li>
           <% } %>
+          <% if (userPermissions.includes('connector:manage')) { %>
+            <li><a href="/connectors">Connectors</a></li>
+          <% } %>
           <% if (userPermissions.includes('workspace:read')) { %>
             <li><a href="/workspace">Workspace</a></li>
           <% } %>

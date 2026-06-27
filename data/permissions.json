@@ -19,5 +19,8 @@
   "processTemplate:manage",
   "workContext:manage",
   "watcher:manage",
-  "modelRouting:manage"
+  "modelRouting:manage",
+  "connector:manage",
+  "connector:read",
+  "connector:write"
 ]

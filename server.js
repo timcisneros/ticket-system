@@ -53,6 +53,14 @@ const WATCHER_TICKET_PROPOSALS_FILE = path.join(DATA_DIR, 'watcher-ticket-propos
 // (the agent's own provider/model remains the backend), never grants authority, and never bypasses
 // verification/triage. See docs/MODEL_PROVIDER_ROUTING.md.
 const MODEL_ROUTING_POLICIES_FILE = path.join(DATA_DIR, 'model-routing-policies.json');
+// Local/mock connector contract (r1.30): a bounded source/target ADAPTER scoped to a Work Context.
+// It is a local mock only — NO external system, OAuth, API key, or background sync. Reads return
+// bounded content + a receipt; writes are refused in r1.30 (connector availability is not write
+// authority). The local object store is a test/demo fixture, not product data. See
+// docs/LOCAL_CONNECTOR_CONTRACT.md.
+const CONNECTORS_FILE = path.join(DATA_DIR, 'connectors.json');
+const CONNECTOR_RECEIPTS_FILE = path.join(DATA_DIR, 'connector-receipts.json');
+const LOCAL_CONNECTOR_OBJECTS_FILE = path.join(DATA_DIR, 'local-connector-objects.json');
 // Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
 // separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
@@ -132,7 +140,10 @@ function seedOperationalDataDir() {
     'watchers.json',
     'watcher-observations.json',
     'watcher-ticket-proposals.json',
-    'model-routing-policies.json'
+    'model-routing-policies.json',
+    'connectors.json',
+    'connector-receipts.json',
+    'local-connector-objects.json'
   ].forEach(fileName => writeMissingFile(fileName, '[]'));
 
   writeMissingFile('events.jsonl', '');
@@ -11186,6 +11197,89 @@ function blockTicketForNoModelRoute(ticket, decision) {
   return persisted;
 }
 
+// ---- Local/mock connector contract (r1.30) ----
+// A connector is a bounded source/target adapter scoped to one Work Context. r1.30 ships ONLY a
+// local_mock kind that reads from a local fixture object store and refuses writes. It never calls
+// an external system, holds no plaintext secret (credentialRef only), creates no ticket/run, and
+// mutates no workspace. Every read/write produces a receipt carrying metadata/hash — never full
+// sensitive content.
+const CONNECTOR_STATUSES = ['active', 'paused', 'archived'];
+const CONNECTOR_KINDS = ['local_mock'];
+const CONNECTOR_SCOPES = ['read', 'write'];
+const CONNECTOR_RECEIPT_LIMIT = 25;
+
+function readConnectors() { return readJsonArrayCached(CONNECTORS_FILE); }
+function writeConnectors(list) { writeFileAtomic(CONNECTORS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
+function getConnectorById(id) { const n = parseInt(id, 10); return Number.isNaN(n) ? null : readConnectors().find(c => c && c.id === n) || null; }
+function readConnectorReceipts() { return readJsonArrayCached(CONNECTOR_RECEIPTS_FILE); }
+function writeConnectorReceipts(list) { writeFileAtomic(CONNECTOR_RECEIPTS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
+function readLocalConnectorObjects() { return readJsonArrayCached(LOCAL_CONNECTOR_OBJECTS_FILE); }
+
+// Validate a connector create/update payload. A new ACTIVE connector requires an ACTIVE Work
+// Context. r1.30 enforces kind=local_mock and never accepts a plaintext secret field.
+function validateConnectorInput(body, existing = null) {
+  const b = body && typeof body === 'object' ? body : {};
+  // Hard refusal: a plaintext secret must never enter the connector record.
+  for (const k of ['credential', 'secret', 'apiKey', 'token', 'password']) {
+    if (b[k] !== undefined) return { ok: false, error: `plaintext secret field "${k}" is not allowed; use credentialRef` };
+  }
+  const name = typeof b.name === 'string' ? b.name.trim() : (existing ? existing.name : '');
+  if (!name) return { ok: false, error: 'Connector name is required' };
+  const status = b.status !== undefined ? b.status : (existing ? existing.status : 'active');
+  if (!CONNECTOR_STATUSES.includes(status)) return { ok: false, error: `status must be one of ${CONNECTOR_STATUSES.join(', ')}` };
+  const kind = b.kind !== undefined ? b.kind : (existing ? existing.kind : 'local_mock');
+  if (!CONNECTOR_KINDS.includes(kind)) return { ok: false, error: `kind must be one of ${CONNECTOR_KINDS.join(', ')} (r1.30 is local-only)` };
+
+  const wcRaw = b.workContextId !== undefined ? b.workContextId : (existing ? existing.workContextId : null);
+  const wcId = wcRaw != null ? parseInt(wcRaw, 10) : null;
+  if (!Number.isInteger(wcId)) return { ok: false, error: 'workContextId is required' };
+  const ctx = getWorkContextById(wcId);
+  if (!ctx) return { ok: false, error: 'Work Context not found' };
+  if (status === 'active' && ctx.status !== 'active') return { ok: false, error: 'An active connector requires an active Work Context' };
+
+  const strArr = (value, fallback) => value !== undefined ? (Array.isArray(value) ? value.filter(s => typeof s === 'string' && s.trim()).map(s => s.trim()) : null) : (existing ? existing[fallback] || [] : []);
+  const allowedScopes = value_or(strArr(b.allowedScopes, 'allowedScopes'), []);
+  if (allowedScopes === null || allowedScopes.some(s => !CONNECTOR_SCOPES.includes(s))) return { ok: false, error: `allowedScopes must be a subset of ${CONNECTOR_SCOPES.join(', ')}` };
+  const sourceRoots = strArr(b.sourceRoots, 'sourceRoots');
+  const targetRoots = strArr(b.targetRoots, 'targetRoots');
+  if (sourceRoots === null || targetRoots === null) return { ok: false, error: 'sourceRoots/targetRoots must be arrays of strings' };
+
+  return {
+    ok: true,
+    value: {
+      name, status, kind, workContextId: wcId,
+      credentialRef: b.credentialRef !== undefined ? (b.credentialRef || null) : (existing ? existing.credentialRef || null : null),
+      allowedScopes, sourceRoots, targetRoots,
+      readPolicy: b.readPolicy && typeof b.readPolicy === 'object' ? b.readPolicy : (existing ? existing.readPolicy : { mode: 'bounded' }),
+      writePolicy: b.writePolicy && typeof b.writePolicy === 'object' ? b.writePolicy : (existing ? existing.writePolicy : { mode: 'disabled' }),
+      receiptPolicy: b.receiptPolicy && typeof b.receiptPolicy === 'object' ? b.receiptPolicy : (existing ? existing.receiptPolicy : { mode: 'required' }),
+      syncPolicy: { mode: 'manual' }
+    }
+  };
+}
+function value_or(v, fallback) { return v === undefined ? fallback : v; }
+
+// A source object path must be under one of the connector's sourceRoots (bounded), with no
+// traversal. Returns the normalized id or null.
+function connectorObjectUnderRoots(objectId, roots) {
+  if (typeof objectId !== 'string' || !objectId.trim()) return null;
+  const norm = objectId.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+  if (!norm || norm.includes('..')) return null;
+  const ok = (Array.isArray(roots) ? roots : []).some(root => {
+    const r = String(root || '').replace(/^\/+|\/+$/g, '');
+    return r && (norm === r || norm.startsWith(r + '/'));
+  });
+  return ok ? norm : null;
+}
+
+function appendConnectorReceipt(record) {
+  const list = readConnectorReceipts();
+  const rec = { id: nextId_(list), ...record };
+  list.push(rec);
+  writeConnectorReceipts(list);
+  return rec;
+}
+
 function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null) {
   const runs = readRuns();
   const activeRun = runs.find(run =>
@@ -16658,6 +16752,126 @@ fastify.get('/model-routing-policies/:id', { preHandler: fastify.requireAuth }, 
   const policy = getModelRoutingPolicyById(request.params.id);
   if (!policy) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Routing policy not found', user: request.user }, request.session.userId)); }
   return reply.view('model-routing-policy-detail.ejs', viewData({ user: request.user, policy }, request.session.userId));
+});
+
+// ==================== LOCAL CONNECTOR ROUTES (r1.30) ====================
+// Local/mock connector contract ONLY. CRUD gated by connector:manage; read by connector:read;
+// write by connector:write (but writes are refused in r1.30). No external system, no OAuth, no
+// secret storage, no ticket/run creation, no workspace mutation, no background sync.
+function connectorManageGuard(request, reply) {
+  if (!hasPermission(request.session.userId, 'connector:manage')) { reply.code(403); return false; }
+  return true;
+}
+
+fastify.get('/api/connectors', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!connectorManageGuard(request, reply)) return { error: 'Permission denied' };
+  return { ok: true, connectors: readConnectors() };
+});
+
+fastify.post('/api/connectors', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!connectorManageGuard(request, reply)) return { error: 'Permission denied' };
+  const parsed = validateConnectorInput(request.body || {}, null);
+  if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
+  const list = readConnectors();
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const record = { id: nextId_(list), ...parsed.value, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now };
+  list.push(record);
+  writeConnectors(list);
+  appendSystemLog('connector:created', `Connector "${record.name}" created`, null, { connectorId: record.id, workContextId: record.workContextId, changedBy });
+  return { ok: true, connector: record };
+});
+
+fastify.post('/api/connectors/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!connectorManageGuard(request, reply)) return { error: 'Permission denied' };
+  const list = readConnectors();
+  const existing = list.find(c => c && c.id === parseInt(request.params.id, 10));
+  if (!existing) { reply.code(404); return { error: 'Connector not found' }; }
+  const parsed = validateConnectorInput(request.body || {}, existing);
+  if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  Object.assign(existing, parsed.value, { updatedBy: changedBy, updatedAt: now });
+  writeConnectors(list);
+  appendSystemLog('connector:updated', `Connector "${existing.name}" updated`, null, { connectorId: existing.id, status: existing.status, changedBy });
+  return { ok: true, connector: existing };
+});
+
+fastify.get('/api/connectors/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!connectorManageGuard(request, reply)) return { error: 'Permission denied' };
+  const connector = getConnectorById(request.params.id);
+  if (!connector) { reply.code(404); return { error: 'Connector not found' }; }
+  const receipts = readConnectorReceipts().filter(r => r && r.connectorId === connector.id).sort((a, b) => b.id - a.id).slice(0, CONNECTOR_RECEIPT_LIMIT);
+  return { ok: true, connector, receipts };
+});
+
+// Read a bounded object through the local connector. Returns bounded content in the API response;
+// the persisted receipt stores only metadata + hash (never full content).
+fastify.post('/api/connectors/:id/read', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'connector:read')) { reply.code(403); return { error: 'connector:read required' }; }
+  const connector = getConnectorById(request.params.id);
+  if (!connector) { reply.code(404); return { error: 'Connector not found' }; }
+  const actor = actorFromRequest(request).username || String(request.session.userId);
+  const ctx = getWorkContextById(connector.workContextId);
+  const objectId = request.body && typeof request.body.objectId === 'string' ? request.body.objectId : '';
+  const receiptBase = { connectorId: connector.id, workContextId: connector.workContextId, operation: 'read', sourceRef: objectId || null, targetRef: null, externalObjectId: objectId || null, ticketId: null, runId: null, actor, timestamp: new Date().toISOString(), request: { bounded: true } };
+  const refuse = (reason, code) => { const receipt = appendConnectorReceipt({ ...receiptBase, operation: 'read_refused', result: { status: 'refused', reason }, error: reason }); reply.code(code || 409); return { error: reason, receipt }; };
+
+  if (connector.status !== 'active') return refuse('connector is not active', 409);
+  if (!ctx || ctx.status !== 'active') return refuse('Work Context is not active', 409);
+  if (connector.kind !== 'local_mock') return refuse('only local_mock connectors are supported in r1.30', 409);
+  if (!Array.isArray(connector.allowedScopes) || !connector.allowedScopes.includes('read')) return refuse('connector does not allow read scope', 403);
+  const bounded = connectorObjectUnderRoots(objectId, connector.sourceRoots);
+  if (!bounded) return refuse('object is not within the connector sourceRoots', 403);
+
+  // The object must belong to the SAME Work Context — no cross-context read.
+  const obj = readLocalConnectorObjects().find(o => o && o.id === bounded);
+  if (!obj) { const receipt = appendConnectorReceipt({ ...receiptBase, operation: 'read', result: { status: 'failed', reason: 'object not found' }, error: 'object not found' }); reply.code(404); return { error: 'object not found', receipt }; }
+  if (obj.workContextId !== connector.workContextId) return refuse('object belongs to a different Work Context', 403);
+
+  const content = typeof obj.content === 'string' ? obj.content : '';
+  const hash = crypto.createHash('sha256').update(content).digest('hex');
+  const receipt = appendConnectorReceipt({ ...receiptBase, externalObjectId: bounded, sourceRef: bounded, result: { status: 'ok', bytes: Buffer.byteLength(content, 'utf8'), hash }, error: null });
+  appendSystemLog('connector:read', `Connector "${connector.name}" read ${bounded}`, null, { connectorId: connector.id, objectId: bounded, receiptId: receipt.id, changedBy: actor });
+  // Bounded content returned in the response only; not persisted in the receipt.
+  return { ok: true, content, metadata: { bytes: receipt.result.bytes, hash }, receipt };
+});
+
+// Write is REFUSED in r1.30 — connector availability is not write authority.
+fastify.post('/api/connectors/:id/write', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'connector:write')) { reply.code(403); return { error: 'connector:write required' }; }
+  const connector = getConnectorById(request.params.id);
+  if (!connector) { reply.code(404); return { error: 'Connector not found' }; }
+  const actor = actorFromRequest(request).username || String(request.session.userId);
+  const targetRef = request.body && typeof request.body.objectId === 'string' ? request.body.objectId : null;
+  const reason = 'write_disabled_in_r1.30';
+  const receipt = appendConnectorReceipt({
+    connectorId: connector.id, workContextId: connector.workContextId, operation: 'write_refused',
+    sourceRef: null, targetRef, externalObjectId: targetRef, ticketId: null, runId: null, actor,
+    timestamp: new Date().toISOString(), request: { bounded: true }, result: { status: 'refused', reason }, error: reason
+  });
+  appendSystemLog('connector:write_refused', `Connector "${connector.name}" write refused (${reason})`, null, { connectorId: connector.id, receiptId: receipt.id, changedBy: actor });
+  reply.code(409);
+  return { error: 'Connector writes are refused in r1.30 (availability is not write authority)', reason, receipt };
+});
+
+fastify.get('/connectors', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'connector:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  return reply.view('connectors.ejs', viewData({ user: request.user, connectors: readConnectors() }, request.session.userId));
+});
+
+fastify.get('/connectors/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'connector:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const connector = getConnectorById(request.params.id);
+  if (!connector) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Connector not found', user: request.user }, request.session.userId)); }
+  const receipts = readConnectorReceipts().filter(r => r && r.connectorId === connector.id).sort((a, b) => b.id - a.id).slice(0, CONNECTOR_RECEIPT_LIMIT);
+  return reply.view('connector-detail.ejs', viewData({ user: request.user, connector, receipts }, request.session.userId));
 });
 
 // ==================== PROCESS TEMPLATE ROUTES ====================

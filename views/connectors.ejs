@@ -1,0 +1,30 @@
+<h1>Connectors</h1>
+<p class="text-muted">
+  A connector is a <strong>bounded source/target adapter</strong> scoped to a Work Context. r1.30
+  ships a <strong>local/mock connector only</strong> — there is <strong>no</strong> external system,
+  OAuth, API key, or background sync. Connectors hold a <code>credentialRef</code> (never a secret
+  value), produce a <strong>receipt</strong> for every read, and <strong>refuse writes</strong> in
+  r1.30 (connector availability is not write authority). They create no ticket/run and mutate no
+  workspace. Fixtures here are test/demo only — businesses connect their own data later.
+</p>
+
+<% if (!connectors || connectors.length === 0) { %>
+  <p class="text-muted">No connectors. Manage via <code>POST /api/connectors</code>.</p>
+<% } else { %>
+  <table class="data-table">
+    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Kind</th><th>Work Context</th><th>Scopes</th><th>Credential</th></tr></thead>
+    <tbody>
+      <% connectors.forEach(function (c) { %>
+        <tr>
+          <td><%= c.id %></td>
+          <td><a href="/connectors/<%= c.id %>"><%= c.name %></a></td>
+          <td><% if (c.status !== 'active') { %><span class="text-muted"><%= c.status %></span><% } else { %>active<% } %></td>
+          <td class="text-muted"><%= c.kind %></td>
+          <td><a href="/work-contexts/<%= c.workContextId %>">#<%= c.workContextId %></a></td>
+          <td class="text-muted"><%= (c.allowedScopes || []).join(', ') || 'none' %></td>
+          <td class="text-muted"><%= c.credentialRef ? 'set (ref)' : 'none' %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>
