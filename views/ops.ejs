@@ -1,0 +1,60 @@
+<h1>Operational Transparency</h1>
+<p class="text-muted">
+  A <strong>read-only</strong> snapshot of what exists, what is active, what is blocked, and what is
+  unresolved across the substrate. It is derived live from existing stores — it creates no new
+  source of truth, writes nothing, and offers no remediation/rerun/mutation controls. Generated
+  <%= summary.generatedAt %>.
+</p>
+
+<% var w = summary.warnings; var anyWarn = Object.keys(w).some(function (k) { return w[k]; }); %>
+<h2>Warnings</h2>
+<% if (!anyWarn) { %>
+  <p class="text-muted">No warning flags.</p>
+<% } else { %>
+  <ul>
+    <% if (w.unresolvedTriageExists) { %><li>Unresolved triage exists — <a href="/triage">/triage</a></li><% } %>
+    <% if (w.blockedTicketsExist) { %><li>Blocked tickets exist — <a href="/tickets">/tickets</a></li><% } %>
+    <% if (w.failedRunsExist) { %><li>Failed runs exist</li><% } %>
+    <% if (w.connectorReadRefusalsExist) { %><li>Connector read refusals recorded — <a href="/connectors">/connectors</a></li><% } %>
+    <% if (w.watcherFailedOrRefusedExist) { %><li>Watcher failed/refused observations recorded — <a href="/watchers">/watchers</a></li><% } %>
+    <% if (w.noActiveWorkContexts) { %><li>No active Work Contexts — <a href="/work-contexts">/work-contexts</a></li><% } %>
+    <% if (w.noRoutingPolicies) { %><li>No model routing policies — <a href="/model-routing-policies">/model-routing-policies</a></li><% } %>
+    <% if (w.noConnectors) { %><li>No connectors configured</li><% } %>
+    <% if (w.versionConsistencyUnresolved) { %><li>Process-template version consistency unresolved — see <a href="/logs">/logs</a></li><% } %>
+  </ul>
+<% } %>
+
+<h2>Summary</h2>
+<table class="data-table">
+  <tbody>
+    <tr><th>Tickets</th><td>total <%= summary.tickets.total %> · open <%= summary.tickets.open %> · blocked <%= summary.tickets.blocked %> · completed <%= summary.tickets.completed %> · failed <%= summary.tickets.failed %></td></tr>
+    <tr><th>Runs</th><td>total <%= summary.runs.total %> · running/pending <%= summary.runs.running %> · completed <%= summary.runs.completed %> · failed <%= summary.runs.failed %> · interrupted <%= summary.runs.interrupted %></td></tr>
+    <tr><th>Unresolved triage</th><td>tickets <%= summary.triage.unresolvedTicketCount %> · runs <%= summary.triage.unresolvedRunCount %> — <a href="/triage">/triage</a></td></tr>
+    <tr><th>Work Contexts</th><td>active <%= summary.workContexts.active %> · archived <%= summary.workContexts.archived %> — <a href="/work-contexts">/work-contexts</a></td></tr>
+    <tr><th>Watchers</th><td>active <%= summary.watchers.active %> · paused <%= summary.watchers.paused %> · archived <%= summary.watchers.archived %> — <a href="/watchers">/watchers</a></td></tr>
+    <tr><th>Connectors</th><td>active <%= summary.connectors.active %> · paused <%= summary.connectors.paused %> · archived <%= summary.connectors.archived %> — <a href="/connectors">/connectors</a></td></tr>
+    <tr><th>Model routing policies</th><td>active <%= summary.modelRoutingPolicies.active %> · archived <%= summary.modelRoutingPolicies.archived %> — <a href="/model-routing-policies">/model-routing-policies</a></td></tr>
+    <tr><th>Process templates</th><td>total <%= summary.processTemplates.total %> · enabled <%= summary.processTemplates.enabled %> · disabled <%= summary.processTemplates.disabled %> · scheduled <%= summary.processTemplates.scheduled %> · paused <%= summary.processTemplates.pausedSchedule %> — <a href="/process-templates">/process-templates</a></td></tr>
+    <tr><th>Schedules</th><td>enabled <%= summary.schedules.enabled %> · disabled <%= summary.schedules.disabled %></td></tr>
+  </tbody>
+</table>
+
+<h2>Recent failed runs</h2>
+<% if (summary.recentFailedRuns.length === 0) { %><p class="text-muted">None.</p><% } else { %>
+  <ul><% summary.recentFailedRuns.forEach(function (r) { %><li>Run <a href="/runs/<%= r.runId %>">#<%= r.runId %></a> (ticket <a href="/tickets/<%= r.ticketId %>">#<%= r.ticketId %></a>)</li><% }); %></ul>
+<% } %>
+
+<h2>Recent connector refusals</h2>
+<% if (summary.connectors.recentRefusals.length === 0) { %><p class="text-muted">None.</p><% } else { %>
+  <ul><% summary.connectors.recentRefusals.forEach(function (r) { %><li>Connector #<%= r.connectorId %> — <%= r.operation %><% if (r.reason) { %> (<%= r.reason %>)<% } %></li><% }); %></ul>
+<% } %>
+
+<h2>Recent watcher failures</h2>
+<% if (summary.watchers.recentFailures.length === 0) { %><p class="text-muted">None.</p><% } else { %>
+  <ul><% summary.watchers.recentFailures.forEach(function (o) { %><li>Watcher #<%= o.watcherId %> — <%= o.status %><% if (o.error) { %> (<%= o.error %>)<% } %></li><% }); %></ul>
+<% } %>
+
+<h2>Recent authority/refusal signals</h2>
+<% if (summary.recentAuthorityDenials.length === 0) { %><p class="text-muted">None.</p><% } else { %>
+  <ul><% summary.recentAuthorityDenials.forEach(function (d) { %><li><%= d.type %>: <%= d.message %></li><% }); %></ul>
+<% } %>

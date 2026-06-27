@@ -11280,6 +11280,118 @@ function appendConnectorReceipt(record) {
   return rec;
 }
 
+// ---- Operational transparency summary (r1.31) ----
+// A READ-ONLY, bounded, deterministic projection over every existing store. It writes nothing
+// (no ticket/run/log/event/receipt/summary file) and creates no new source of truth — every field
+// is derived live. See docs/OPERATIONAL_TRANSPARENCY.md.
+const OPS_SUMMARY_LIMIT = 10;
+
+function buildOperationalSummary(options = {}) {
+  const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : OPS_SUMMARY_LIMIT;
+  const tickets = readTickets();
+  const runs = readRuns();
+  const workContexts = readWorkContexts();
+  const watchers = readWatchers();
+  const observations = readWatcherObservations();
+  const connectors = readConnectors();
+  const receipts = readConnectorReceipts();
+  const policies = readModelRoutingPolicies();
+  const templates = readProcessTemplates();
+  const logs = readLogs();
+
+  const countBy = (list, pred) => list.filter(pred).length;
+  const byIdDesc = (a, b) => (b.id || 0) - (a.id || 0);
+
+  const ticketCounts = {
+    total: tickets.length,
+    open: countBy(tickets, t => t.status === 'open' || t.status === 'in_progress'),
+    blocked: countBy(tickets, t => t.status === 'blocked'),
+    completed: countBy(tickets, t => t.status === 'completed'),
+    failed: countBy(tickets, t => t.status === 'failed')
+  };
+  const runCounts = {
+    total: runs.length,
+    running: countBy(runs, r => r.status === 'running' || r.status === 'pending'),
+    completed: countBy(runs, r => r.status === 'completed'),
+    failed: countBy(runs, r => r.status === 'failed'),
+    interrupted: countBy(runs, r => r.status === 'interrupted')
+  };
+  const ticketTriage = tickets.filter(t => t.triage && t.triage.required === true);
+  const runTriage = runs.filter(r => r.triage && r.triage.required === true);
+
+  const watcherCounts = {
+    active: countBy(watchers, w => w.status === 'active'),
+    paused: countBy(watchers, w => w.status === 'paused'),
+    archived: countBy(watchers, w => w.status === 'archived')
+  };
+  const watcherFailures = observations.filter(o => o && (o.status === 'failed' || o.status === 'refused'));
+
+  const connectorCounts = {
+    active: countBy(connectors, c => c.status === 'active'),
+    paused: countBy(connectors, c => c.status === 'paused'),
+    archived: countBy(connectors, c => c.status === 'archived')
+  };
+  const connectorRefusals = receipts.filter(r => r && (r.operation === 'read_refused' || r.operation === 'write_refused' || (r.result && r.result.status === 'failed')));
+
+  const routingCounts = {
+    active: countBy(policies, p => p.status === 'active'),
+    archived: countBy(policies, p => p.status === 'archived')
+  };
+
+  const enabledTemplates = countBy(templates, t => t.enabled !== false);
+  const templateCounts = {
+    total: templates.length,
+    enabled: enabledTemplates,
+    disabled: templates.length - enabledTemplates,
+    scheduled: countBy(templates, t => t.schedule && t.schedule.enabled === true),
+    pausedSchedule: countBy(templates, t => t.schedule && t.schedule.enabled === false)
+  };
+  const scheduleCounts = {
+    enabled: countBy(templates, t => t.schedule && t.schedule.enabled === true),
+    disabled: countBy(templates, t => t.schedule && t.schedule.enabled !== true)
+  };
+
+  const versionConsistencyUnresolved = logs.some(l => l && l.type === 'process_template:version_consistency_unresolved');
+  const denialLogTypes = new Set(['ticket:no_model_route', 'connector:write_refused', 'process_template:version_consistency_unresolved']);
+  const recentAuthorityDenials = logs.filter(l => l && denialLogTypes.has(l.type)).slice().sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, limit)
+    .map(l => ({ id: l.id || null, type: l.type, message: l.message || null, timestamp: l.timestamp || null }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    tickets: ticketCounts,
+    runs: runCounts,
+    triage: {
+      unresolvedTicketCount: ticketTriage.length,
+      unresolvedRunCount: runTriage.length,
+      recent: ticketTriage.slice().sort(byIdDesc).slice(0, limit).map(t => ({ ticketId: t.id, reasonCode: t.triage.reasonCode || null }))
+    },
+    workContexts: {
+      active: countBy(workContexts, c => c.status === 'active'),
+      archived: countBy(workContexts, c => c.status === 'archived'),
+      total: workContexts.length
+    },
+    watchers: { ...watcherCounts, recentFailures: watcherFailures.slice().sort(byIdDesc).slice(0, limit).map(o => ({ id: o.id, watcherId: o.watcherId, status: o.status, error: o.error || null })) },
+    connectors: { ...connectorCounts, total: connectors.length, recentRefusals: connectorRefusals.slice().sort(byIdDesc).slice(0, limit).map(r => ({ id: r.id, connectorId: r.connectorId, operation: r.operation, reason: (r.result && r.result.reason) || r.error || null })) },
+    modelRoutingPolicies: { ...routingCounts, total: policies.length },
+    processTemplates: templateCounts,
+    schedules: scheduleCounts,
+    recentFailedRuns: runs.filter(r => r.status === 'failed').slice().sort(byIdDesc).slice(0, limit).map(r => ({ runId: r.id, ticketId: r.ticketId })),
+    recentConnectorReceipts: receipts.slice().sort(byIdDesc).slice(0, limit).map(r => ({ id: r.id, connectorId: r.connectorId, operation: r.operation, status: r.result ? r.result.status : null })),
+    recentAuthorityDenials,
+    warnings: {
+      unresolvedTriageExists: ticketTriage.length + runTriage.length > 0,
+      blockedTicketsExist: ticketCounts.blocked > 0,
+      failedRunsExist: runCounts.failed > 0,
+      connectorReadRefusalsExist: receipts.some(r => r && r.operation === 'read_refused'),
+      watcherFailedOrRefusedExist: watcherFailures.length > 0,
+      noActiveWorkContexts: countBy(workContexts, c => c.status === 'active') === 0,
+      noRoutingPolicies: policies.length === 0,
+      noConnectors: connectors.length === 0,
+      versionConsistencyUnresolved
+    }
+  };
+}
+
 function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null) {
   const runs = readRuns();
   const activeRun = runs.find(run =>
@@ -16872,6 +16984,22 @@ fastify.get('/connectors/:id', { preHandler: fastify.requireAuth }, async (reque
   if (!connector) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Connector not found', user: request.user }, request.session.userId)); }
   const receipts = readConnectorReceipts().filter(r => r && r.connectorId === connector.id).sort((a, b) => b.id - a.id).slice(0, CONNECTOR_RECEIPT_LIMIT);
   return reply.view('connector-detail.ejs', viewData({ user: request.user, connector, receipts }, request.session.userId));
+});
+
+// ==================== OPERATIONAL TRANSPARENCY (r1.31) ====================
+// Read-only operational summary derived live from existing stores. Gated by ops:read. It writes
+// nothing and creates no new source of truth.
+fastify.get('/api/ops/summary', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ops:read')) { reply.code(403); return { error: 'Permission denied' }; }
+  return { ok: true, summary: buildOperationalSummary() };
+});
+
+fastify.get('/ops', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ops:read')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  return reply.view('ops.ejs', viewData({ user: request.user, summary: buildOperationalSummary() }, request.session.userId));
 });
 
 // ==================== PROCESS TEMPLATE ROUTES ====================

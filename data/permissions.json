@@ -22,5 +22,6 @@
   "modelRouting:manage",
   "connector:manage",
   "connector:read",
-  "connector:write"
+  "connector:write",
+  "ops:read"
 ]
