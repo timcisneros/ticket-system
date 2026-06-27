@@ -1,399 +1,132 @@
 # Ticket System
 
-## Internal Demo Baseline
+## 1. Project summary
 
-This is an internal/demo baseline for a local ticket-runner work substrate. It
-demonstrates ticket creation, assignment, agent execution, workspace mutations,
-evidence capture, replay/run detail visibility, and clarity around
-blocked/stopped/timeout runs.
+A **bounded ticket/run substrate**. You create a **ticket** (a durable work object), it runs as
+a **run** under explicit **authority**, all external effects flow through a **target provider**, and
+everything produces **evidence/receipts**. On top of that substrate sit grouping, visibility,
+handoff, observation, and routing layers — all bounded and read-only or proposal-only.
 
-This baseline is not production security hardened, multi-user/hosted deployment
-ready, an arbitrary task correctness guarantee, final UX, an RL/training system,
-or a general verifier for all domains.
+This is a **release candidate** (see `docs/RELEASE_CANDIDATE_AUDIT.md`), not a final `v1.0` tag and
+not production-hardened. It runs as a single-process Fastify server backed by JSON files.
 
-Current released milestones:
+## 2. What this system is
 
-- `v0.1.0-internal-demo`
-- `v0.1.1-demo-hardening`
-- `v0.1.2-event-log-hardening`
-- `v0.1.3-dev-env-overrides`
+- A **ticket → run → authority → target provider → evidence** execution model.
+- A **human-control surface**: tickets, runs, verification, triage, timeline, and an operational
+  summary make work inspectable.
+- A set of **bounded primitives** layered above the runtime: process templates & schedules, Work
+  Contexts, a handoff queue protocol, a bounded watcher, model/provider routing, a local/mock
+  connector contract, and operational transparency.
 
-## Local Setup
+## 3. What this system is not
 
-Install dependencies:
+- **Not a fully autonomous agent platform.** Every unit of work is a visible ticket; nothing
+  executes off-ledger.
+- **Not** production-security-hardened, multi-tenant/hosted, or a correctness guarantee for arbitrary
+  tasks.
+- **No** real external connectors, OAuth/API-key integrations, Slack/Discord/Gmail/Google Drive, no
+  background watcher daemon, no automatic polling, no private agent-to-agent channel, no workflow
+  builder, no rich UI.
+
+## 4. Core primitives
+
+Ticket · Run · Authority · Target Provider · Evidence/Receipt · Verification · Triage · Timeline ·
+Process Template · Schedule · Work Context · Handoff · Watcher · Model Routing · Connector ·
+Operational Summary. See **`docs/PRIMITIVE_GLOSSARY.md`** for precise definitions and commonly
+confused terms.
+
+## 5. Current release-candidate scope
+
+Ticket creation/assignment; runs with lease/claim, attempts, evaluation; workspace/target operations
+through the bounded target-provider contract; authority & permissions; append-only evidence &
+receipts; verification & triage; per-ticket timeline projection; process templates & schedules;
+process-template activation durability reconciliation; Work Context grouping & visibility; the
+handoff queue protocol (claim/work/handoff receipts) with a deterministic smoke loop; a bounded
+manual watcher (observer/proposer); model/provider routing (dispatch policy + immutable per-run
+snapshot); a local/mock connector contract (bounded read with receipt, write refused); a read-only
+operational transparency surface; and a hardened release checkpoint. Verdict: **ready for release
+docs, no P0/P1 blockers** (`docs/RELEASE_CANDIDATE_AUDIT.md`).
+
+## 6. Quick start
 
 ```sh
 npm install
+npm run dev        # serves on http://localhost:3099 against ignored .local-data / .local-workspace
 ```
 
-Start a local demo server with ignored local data/workspace directories:
+Login with the bootstrap admin (created only when missing): `admin` / `admin123` (override with
+`ADMIN_BOOTSTRAP_PASSWORD` before first start; never reuse it beyond local demo/dev).
+
+Guided, **no-provider-key** demo of the full loop:
 
 ```sh
-npm run dev
+npm run demo:seed   # writes git-ignored .local-demo-data / .local-demo-workspace
+npm run demo:dev    # serves the app against the demo fixture
 ```
 
-The app prints the selected `DATA_DIR`, `WORKSPACE_ROOT`, and URL at startup.
-By default, `npm run dev` uses:
+See **`docs/SETUP_AND_FIRST_RUN.md`** for a full first-run walkthrough and `docs/DEMO_WALKTHROUGH.md`
+for the click path. Configuration variables are documented under **Configuration** below.
 
-```txt
-DATA_DIR=.local-data
-WORKSPACE_ROOT=.local-workspace
-PORT=3099
-```
+## 7. Run the release checkpoint
 
-`npm run dev` defaults to `.local-data` / `.local-workspace` but preserves
-caller-provided `DATA_DIR` and `WORKSPACE_ROOT`, so
-`DATA_DIR=/tmp/custom-data WORKSPACE_ROOT=/tmp/custom-workspace npm run dev`
-uses those paths instead.
-
-Open:
-
-```txt
-http://localhost:3099
-```
-
-The default local admin bootstrap account is created only when an admin user is
-missing:
-
-```txt
-username: admin
-password: admin123
-```
-
-Set `ADMIN_BOOTSTRAP_PASSWORD` before first startup to use a different bootstrap
-password. Do not use the default bootstrap credential for anything beyond local
-demo/dev state.
-
-### Guided demo (no provider key)
-
-To see the current product loop — verified completion, triage, the `/triage`
-operator inbox, triage resolution, attempt/usage/budget visibility, and the audit
-log — without running a live model, seed the deterministic demo fixture and run
-against it:
+The release checkpoint is the **release gate** — provider-free, network-free, deterministic, and
+temp-`DATA_DIR`/`WORKSPACE_ROOT` safe:
 
 ```sh
-npm run demo:seed   # writes .local-demo-data / .local-demo-workspace (git-ignored)
-npm run demo:dev    # serves the app against the demo data
+npm run checkpoint:release
 ```
 
-Login with `admin` / `admin123`. See `docs/DEMO_WALKTHROUGH.md` for the exact click
-path and what each page demonstrates. Demo data only; no OpenAI/Ollama key required.
-
-## Configuration
-
-The server reads `.env` through `dotenv`; `.env`, `.env.local`, and
-`.env.test.local` are ignored by Git. Keep provider keys and local secrets in
-ignored env files or the shell environment.
-
-Core variables:
-
-- `PORT` - HTTP port. Defaults to `3099`.
-- `NODE_ENV` - runtime mode. `npm run dev` sets `development`; `npm start` sets
-  `production`. The admin debug reset route is disabled in `production`.
-- `DATA_DIR` - JSON persistence directory. Defaults to tracked `data/`; local
-  demo/dev should normally use ignored `.local-data`.
-- `WORKSPACE_ROOT` - workspace mutation target. Defaults to `workspace-root`;
-  local demo/dev should normally use ignored `.local-workspace`.
-- `SESSION_SECRET` - Fastify session secret. If omitted, a random in-process
-  secret is generated at startup.
-- `ADMIN_BOOTSTRAP_PASSWORD` - password used if the default `admin` user must be
-  bootstrapped.
-
-Provider variables:
-
-- `OPENAI_API_KEY` - fallback OpenAI API key for OpenAI-backed agents.
-- `OPENAI_MODEL` - fallback OpenAI model name.
-- `OLLAMA_MODEL` - fallback Ollama model name. If `OLLAMA_MODEL` is set and
-  `OPENAI_MODEL` is not set, new agent forms default toward Ollama.
-- `OLLAMA_BASE_URL` - Ollama base URL. Defaults to `http://127.0.0.1:11434`.
-
-Tracked seed agents do not contain provider API keys. Configure provider keys
-through ignored env files, the shell environment, or the local Admin UI. If a
-real provider key was ever committed in historical data, revoke it at the
-provider; this repository does not rewrite release history.
-
-Runtime/test knobs used by current diagnostics:
-
-- `RUN_LEASE_DURATION_MS` - override run lease duration.
-- `AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE` - mutating action cap per model
-  response. Defaults to `2`.
-- `ENABLE_PREFIX_TRUNCATION` - set to `true` to enable prefix truncation instead
-  of suppressing an over-cap mutating response.
-- `AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT` - set to `1` to expose the canonical
-  workflow draft capability to agents.
-- `TEST_INTERRUPTION_POINT` - test-only interruption hook used by recovery
-  regressions.
-
-Local Ollama models can be slow. A timeout while waiting for a local model
-response is not by itself evidence of a bad workspace mutation or false
-completion.
-
-## Data and Workspace Model
-
-The app is a single-process Fastify server backed by JSON files.
-
-- `data/*.json` - tracked baseline/demo seed data.
-- `data/events.jsonl` - append-only operational history. It is an evidence
-  artifact, not editable source, and is intentionally **untracked** (ignored by
-  Git). A local file may exist and grow during runs; the server recreates an
-  empty one when missing. To shrink a large local log deliberately, archive it
-  with `node scripts/archive-local-events.js` (see Event Log Lifecycle below)
-  rather than hand-editing it.
-- `data/replay-snapshots/` - replay artifacts generated by runs; ignored by Git.
-- `.local-data/` - ignored local runtime data for demo/dev runs.
-- `workspace-root/` - default workspace target; ignored by Git.
-- `.local-workspace/` - ignored local workspace target used by `npm run dev`.
-
-Evidence artifacts include tickets, runs, logs, events, operation history, replay
-snapshots, run evaluation, and run consequence data. Preserve those artifacts
-when diagnosing runtime behavior.
-
-## Debug Reset and Rollback
-
-The Admin debug reset is a destructive local demo/dev tool. It is disabled when
-`NODE_ENV=production`.
-
-Use it to clear local ticket/run execution state when a demo needs a clean
-runtime. It clears local debug data that can attach to future ticket/run IDs,
-including tickets, runs, logs, allocation plans, operation history, append-only
-events, replay snapshots, writer-lock/event buffering state, and the existing
-workspace reset surface.
-
-It does not claim production recovery semantics. It is not a substitute for
-backups, migrations, hosted rollback, or multi-user recovery. It preserves
-auth/config/product state such as users, groups, permissions, agents, workflows,
-provider configuration, `.env` files, and user secrets.
-
-Recent reset hardening prevents a new local `Ticket #1` / `Run #1` from
-attaching stale event/replay state after a destructive debug reset.
-
-## Event Log Lifecycle
-
-Event logs are **append-only local evidence artifacts**, not normal editable
-source files. Treat them like a ledger: do not hand-edit, truncate, or reformat
-them. Active/local event logs are ignored by Git, and archive/reset is explicit,
-operator-controlled maintenance.
-
-- Active demo/dev runs write to the ignored `.local-data/` store
-  (`npm run dev` sets `DATA_DIR=.local-data`). Both `.local-data/` and
-  `data/events.jsonl` are Git-ignored, so live runtime events never accumulate
-  into tracked source.
-- The file can grow large over many runs. To reduce a large local log,
-  **archive it deliberately** instead of editing it:
-
-  ```sh
-  # Inspect only — report size + line count, change nothing:
-  node scripts/archive-local-events.js
-  DATA_DIR=.local-data node scripts/archive-local-events.js   # active dev store
-  node scripts/archive-local-events.js --file path/to/events.jsonl
-
-  # Write a timestamped archive copy (non-destructive):
-  node scripts/archive-local-events.js --archive
-
-  # Archive, then start a fresh empty log (explicit, operator-controlled):
-  node scripts/archive-local-events.js --archive --reset
-  ```
-
-  The default invocation only inspects. Archives are written under
-  `<store>/event-archive/` (ignored by Git). The script only ever touches the
-  target event log — never provider keys, other data files, or release tags.
-  `--reset` requires `--archive`, so a log is never truncated without first
-  preserving its evidence.
-
-### Pulling the untracking change
-
-`data/events.jsonl` used to be tracked. When a clone pulls (or fast-forwards to)
-the commit that stopped tracking it, Git may remove the working-tree copy because
-the file was tracked before that commit. This is **expected Git behavior** for the
-untracking transition — not an automatic reset, rotation, or compaction.
-
-- If you do not need the old local log, **no action is required**; the app
-  creates a fresh ignored log on future writes.
-- If you need the previous tracked contents, **restore it deliberately** from the
-  last commit that tracked it:
-
-  ```sh
-  git show aedd919c3efa2fd910bbb0b63439c0988d064510:data/events.jsonl > data/events.jsonl
-  ```
-
-  The restored file remains ignored/untracked. This is a one-time, operator-chosen
-  restore — nothing in the app rewrites or rotates the log for you.
-
-## First Demo Flow
-
-`npm run dev` starts with ignored local demo data (`.local-data` /
-`.local-workspace`). A fresh `.local-data` store is seeded from the tracked demo
-data, so seeded demo agents may already exist alongside the bootstrap admin
-account. Those seeded agents are configuration examples, not ready-to-run live
-credentials — they carry no provider keys. Configure provider/model/key through
-Admin (or set provider env) on an existing seeded agent, or create a new agent,
-before expecting successful agent execution.
-
-If a provider key is missing, the run should fail clearly with an "Agent API key
-is missing" message rather than pretending success.
-
-GUI demo steps:
-
-1. Set provider config through ignored env files / the shell environment, or use
-   a local Ollama model. Tracked seed agents do not include provider API keys;
-   use ignored env files, the shell environment, or the local Admin UI.
-2. Run `npm run dev`.
-3. Log in as the bootstrap admin user (default `admin` / `admin123`).
-4. Create/configure an agent on the Admin page (Create Account → Agent), choosing
-   a provider and model.
-5. Create a ticket assigned to that agent, for example: `Create folder A B C and D`.
-6. Open Ticket Detail to inspect assignment, auto-run eligibility, blocked state,
-   latest/current run state, and current message source; open Run Detail to
-   inspect why the run stopped, provider/model counts, workspace actions, replay
-   events, logs, and operation history.
-7. Inspect the workspace directory and the Logs page to confirm actual mutations.
-8. Use Admin debug reset only when intentionally clearing local demo/dev runtime
-   state.
-
-### Demo model guidance
-
-The local seeded Ollama agents are useful for exercising the runtime and the
-failure-evidence path, but small local models may not reliably follow the agent
-protocol. For the most reliable green-path demo, configure a stronger
-provider/model through Admin before creating the ticket.
-
-Best observed local objective:
-
-```txt
-Create a folder named demo and stop.
-```
-
-With local Ollama/`gemma3`, this may complete or may fail honestly with a
-model/protocol/runtime explanation — that is expected for the local seed model
-and is not an app defect. A failed run is still useful: it lets you verify
-status, logs, Run Detail evidence, retry controls, and the recovery wording. A
-green local success is possible but not guaranteed; use a stronger configured
-provider/model when you need a dependable green run.
-
-For CLI-driven runs, prefer:
-
-```sh
-node scripts/oquery.js agents                                  # discover agent id/name
-node scripts/oquery.js login --url http://127.0.0.1:3099
-node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent <agent-name-or-id> --wait --json "Create folder A B C and D"
-npm run codex:trace -- --run <runId>
-```
-
-`oquery` is a headless equivalent of the UI. Beyond inspection (`tickets`,
-`runs`, `logs`, `mutations`, `replay`, `failures`, `search`, `stats`), it
-exposes the operator actions that mirror the UI controls:
-
-```sh
-node scripts/oquery.js agents              # list agents (id, name, provider/model)
-node scripts/oquery.js stop <runId>        # stop an active run (UI "Stop Run")
-node scripts/oquery.js retry <runId>       # retry a failed/interrupted run (UI "Retry")
-node scripts/oquery.js rerun <ticketId>    # rerun a ticket from the beginning (UI "Rerun")
-```
-
-The mutating actions (`stop`, `retry`, `rerun`) use the cached session from
-`login` and reflect the API response truthfully — they report clearly when an
-action is not applicable (e.g. stopping a run that is no longer active) rather
-than inventing success. Provider-key configuration and the destructive Admin
-debug reset remain UI-only by design.
-
-`login` caches the session to `.opercookie` by default; set `OPERC_COOKIE_PATH`
-to store it elsewhere (for example to isolate sessions across stores).
-
-The CLI example requires an agent that exists in the selected `DATA_DIR`. The
-tracked seed may include example agents, but `npm run dev` uses `.local-data` by
-default, so create an agent first or replace `<agent-name-or-id>` with an agent
-name/id that exists in your local data.
-
-## Release Checkpoint
-
-Run the whole checkpoint with the single runner (stops on the first failure):
-
-```sh
-NODE_PATH=./node_modules node scripts/release-checkpoint.js
-```
-
-The runner executes the following checks in order. Server-backed tests may need
-normal localhost binding permission in sandboxed environments.
-
-```sh
-node --check server.js
-
-NODE_PATH=./node_modules node scripts/catalog-consistency-test.js
-NODE_PATH=./node_modules node scripts/page-render-regression-test.js
-NODE_PATH=./node_modules node scripts/artifact-prediction-capture-test.js
-NODE_PATH=./node_modules node scripts/ticket-feasibility-gate-test.js
-NODE_PATH=./node_modules node scripts/moving-goalpost-regression-test.js
-NODE_PATH=./node_modules node scripts/complete-flag-truncation-guard-test.js
-NODE_PATH=./node_modules node scripts/direct-folder-postcondition-completeness-test.js
-NODE_PATH=./node_modules node scripts/debug-reset-contamination-test.js
-NODE_PATH=./node_modules node scripts/run-state-inconsistency-warning-test.js
-NODE_PATH=./node_modules node scripts/run-detail-evidence-clarity-test.js
-NODE_PATH=./node_modules node scripts/run-timeout-attribution-clarity-test.js
-NODE_PATH=./node_modules node scripts/ticket-execution-state-clarity-test.js
-NODE_PATH=./node_modules node scripts/health-live-paths-test.js
-NODE_PATH=./node_modules node scripts/no-tracked-provider-keys-test.js
-```
-
-## Documentation Map
-
-**Canonical docs** (live, describe the current system — left in place):
-
-- `AGENTS.md` — operational guide: commands, verification workflow, evidence locations, boundaries
-- Root operations canon: `OPERATIONS.md`, `OPERATOR_CONTRACT.md`, `OPERATIONAL_PRESSURES.md`, `DIRECTION.md`, `STRATEGY.md`, `STATE_SURFACES.md`
-- `docs/` — system semantics and contracts, e.g. `ARCHITECTURE_INVARIANTS.md`, `EXECUTION_MODEL.md`, `EXECUTION_PHASES.md`, `EXECUTION_SEMANTICS.md`, `BOUNDED_OPERATION_BATCHES.md`, `LIFECYCLE_EVENTS.md`, `WORKLOAD_PROFILES.md`, `OPERATIONAL_TELEMETRY.md`, `FAILURE_TAXONOMY.md`, `FAILURE_CLASSIFICATION_WORKFLOW.md`, `DECISION_LOG.md`, `KNOWN_LIMITATIONS.md`, `BUSINESS_FIXTURE_SPEC.md`, `PRODUCT_SYNTHESIS.md`
-- Root evidence corpus (active research, 2026-06): `evidence-ledger.md`, `evidence-consolidation.md`, `failure-cluster-report.md`, `anchored-summary.md`, `evidence-memo.md`, `evidence-reconciliation-validation.md`
-
-**Archived docs**: closed investigations, superseded plans, generated validation
-reports, and early exploratory documents live in `docs/archive/` (see its README
-for the index). Frozen investigation evidence bundles (data + harnesses) live in
-`ARCHIVE/` (see its README).
-
-**Scripts inventory**: `scripts/README.md` categorizes all scripts (operator CLI,
-maintenance utilities, verification, benchmarks, experiments, investigation
-harnesses) and lists the shared modules other scripts depend on.
-
-## Workflow Benchmarks
-
-Mocked mode is the default and is suitable for CI:
-
-```sh
-npm run benchmark:workflow-drafts
-npm run benchmark:workflow-repair
-```
-
-Real-model mode disables mocked provider responses and uses a configured agent/provider normally. By default it tries agent `Mike`, or set `BENCHMARK_AGENT_NAME`:
-
-```sh
-REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-drafts
-REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-repair
-REAL_MODEL_BENCHMARK=1 npm run benchmark:ambiguous-operational
-BENCHMARK_AGENT_NAME=Mike REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-drafts
-```
-
-Real-mode benchmark records are appended as JSONL to:
-
-```txt
-data/benchmark-results.jsonl
-```
-
-Real-mode failures are recorded with `passed:false` and `failureReason`; mocked mode still fails the process on regressions.
-
-Slow local real-model benchmarks require configurable timeout budgets. Short benchmark defaults are suitable for fast CI, but they are not evidence of model or runtime failure when evaluating slow local models. Use explicit timeout overrides such as `BENCHMARK_AGENT_RUNTIME_MS` and `BENCHMARK_RUN_WAIT_TIMEOUT_MS` when running observational real-model benchmarks.
-
-Harvest real failed workflow runs into future repair benchmark fixtures:
-
-```sh
-npm run harvest:benchmark-cases
-```
-
-Harvested cases are written to:
-
-```txt
-data/benchmark-cases.jsonl
-```
-
-The repair benchmark keeps synthetic fixtures by default. To include harvested cases as an evolving corpus:
-
-```sh
-INCLUDE_HARVESTED_BENCHMARK_CASES=1 npm run benchmark:workflow-repair
-```
+It runs `node --check server.js` plus the ordered `CHECKPOINT_TEST_SCRIPTS`, fails loudly if any
+referenced script is missing, and ends with `RELEASE CHECKPOINT PASSED: N/N checks`. The current
+count is **43/43**. See **`docs/RELEASE_CHECKPOINT.md`** for what a pass does and does not mean and
+the full release-hygiene flow.
+
+## 8. Demo fixtures note
+
+All seed/demo fixtures (`scripts/seed-demo-data.js`, the local/mock connector objects, tracked
+example agents) are **test/demo only — not final product seed data**. Real businesses will connect
+their **own** drives/data later. The current **local/mock connector is a contract fixture, not a real
+external connector**, and it refuses writes. Tracked seed agents carry **no provider API keys**.
+
+## 9. Current limitations
+
+- No real external connector yet (only the `local_mock` contract).
+- Legacy records may lack newer fields by design (e.g. pre-r1.10 tickets without `templateVersion`,
+  runs without `routingSnapshot`) — nullable, no backfill; they render safely.
+- Activation writes the version store then the root in two atomic writes; a crash between them is
+  reconciled at startup (`docs/PROCESS_TEMPLATE_ACTIVATION_DURABILITY.md`) but is not fully
+  transactional.
+- No production deployment guide yet. Not security-hardened for hosted/multi-tenant use.
+- Naming care: *Model Provider* (who reasons) ≠ *Target Provider* (where mutations happen); see the
+  glossary.
+
+## 10. Documentation map
+
+**Start here:** this README → `docs/SETUP_AND_FIRST_RUN.md` → `docs/OPERATOR_GUIDE.md` →
+`docs/PRIMITIVE_GLOSSARY.md`.
+
+- **Release / safety:** `docs/RELEASE_CANDIDATE_AUDIT.md`, `docs/RELEASE_CHECKPOINT.md`,
+  `docs/SAFETY_AND_NON_GOALS.md`, `docs/RELEASE_NOTES_r1.33.md`, `docs/INDEX.md`.
+- **Primitive docs:** `docs/TARGET_PROVIDER_CONTRACT.md`,
+  `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH_AUDIT.md`,
+  `docs/TICKET_TIMELINE_AND_AUTHORITY_VISIBILITY.md`,
+  `docs/PROCESS_TEMPLATE_ACTIVATION_DURABILITY.md`, `docs/WORK_CONTEXT_PRIMITIVE.md`,
+  `docs/WORK_CONTEXT_VISIBILITY_SURFACE.md`, `docs/AGENT_HANDOFF_QUEUE_PROTOCOL.md`,
+  `docs/HANDOFF_SMOKE_TESTS_AND_DEMO_SCENARIOS.md`, `docs/BOUNDED_WATCHER.md`,
+  `docs/MODEL_PROVIDER_ROUTING.md`, `docs/LOCAL_CONNECTOR_CONTRACT.md`,
+  `docs/OPERATIONAL_TRANSPARENCY.md`.
+- **Design audits:** `docs/CONNECTOR_BOUNDARY_DESIGN_AUDIT.md`,
+  `docs/MODEL_PROVIDER_ROUTING_DESIGN_AUDIT.md`, `docs/BOUNDED_WATCHER_DESIGN_AUDIT.md`,
+  `docs/WORK_CONTEXT_PRIMITIVE_DESIGN_AUDIT.md`.
+- **Configuration / data model / CLI detail:** `docs/SETUP_AND_FIRST_RUN.md` (env vars, ports,
+  first run) and `docs/OPERATOR_GUIDE.md` (data/evidence model, headless `oquery` CLI). The deeper
+  semantics & operations canon live in `AGENTS.md`, `OPERATIONS.md`, the rest of `docs/`
+  (`ARCHITECTURE_INVARIANTS.md`, `EXECUTION_MODEL.md`, `LIFECYCLE_EVENTS.md`, `FAILURE_TAXONOMY.md`,
+  `KNOWN_LIMITATIONS.md`, …), and `scripts/README.md`.
+
+> **Backup branches.** A prior reconciliation preserved three branches holding foreign concurrent
+> work and the original bad-stack commit: `backup/local-master-with-foreign-and-r1.28`,
+> `backup/foreign-stack-before-r1.28`, `backup/r1.28-commit-caec9a6`. They are **intentionally
+> preserved and excluded from the release flow — do not merge, push, delete, or move them without an
+> explicit owner decision** (see `docs/RELEASE_CHECKPOINT.md`).
