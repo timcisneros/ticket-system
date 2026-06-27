@@ -1,0 +1,20 @@
+<p><a href="/model-routing-policies">← Model Routing Policies</a></p>
+<h1><%= policy.name %> <% if (policy.status !== 'active') { %><span class="text-muted">(<%= policy.status %>)</span><% } %></h1>
+<p class="text-muted">
+  Dispatch policy only. It decides the recorded provider/model for new runs; it never changes
+  actual execution, never widens authority, and never bypasses the target provider. An archived
+  policy is never selected for new runs.
+</p>
+<table class="data-table">
+  <tbody>
+    <tr><th>Status</th><td><%= policy.status %></td></tr>
+    <tr><th>Work Context</th><td class="text-muted"><%= policy.workContextId != null ? ('#' + policy.workContextId) : 'any' %></td></tr>
+    <tr><th>Capability</th><td class="text-muted"><%= policy.capabilityId || 'any' %></td></tr>
+    <tr><th>Allowed providers</th><td class="text-muted"><%= (policy.allowedProviders || []).join(', ') || 'any (unrestricted)' %></td></tr>
+    <tr><th>Preferred provider / model</th><td class="text-muted"><%= policy.preferredProvider || '—' %> / <%= policy.preferredModel || '—' %></td></tr>
+    <tr><th>Fallback providers</th><td class="text-muted"><%= (policy.fallbackProviders || []).join(', ') || 'none' %></td></tr>
+    <tr><th>Risk class</th><td class="text-muted"><%= policy.riskClass || 'standard' %></td></tr>
+    <tr><th>Max cost / latency</th><td class="text-muted"><%= policy.maxCost == null ? '—' : policy.maxCost %> / <%= policy.maxLatency == null ? '—' : policy.maxLatency %></td></tr>
+    <tr><th>Triage on no route</th><td class="text-muted"><%= policy.triageOnNoRoute !== false ? 'yes' : 'no' %></td></tr>
+  </tbody>
+</table>

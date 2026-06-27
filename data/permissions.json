@@ -18,5 +18,6 @@
   "workspace.delete.cross_ticket_artifact",
   "processTemplate:manage",
   "workContext:manage",
-  "watcher:manage"
+  "watcher:manage",
+  "modelRouting:manage"
 ]

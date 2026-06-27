@@ -33,6 +33,9 @@
           <% if (userPermissions.includes('watcher:manage')) { %>
             <li><a href="/watchers">Watchers</a></li>
           <% } %>
+          <% if (userPermissions.includes('modelRouting:manage')) { %>
+            <li><a href="/model-routing-policies">Routing</a></li>
+          <% } %>
           <% if (userPermissions.includes('workspace:read')) { %>
             <li><a href="/workspace">Workspace</a></li>
           <% } %>

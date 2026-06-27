@@ -54,7 +54,8 @@ const checks = [
     'work-context-visibility-surface-test.js',
     'agent-handoff-queue-protocol-test.js',
     'handoff-smoke-test.js',
-    'bounded-watcher-test.js'
+    'bounded-watcher-test.js',
+    'model-provider-routing-test.js'
   ].map(name => ({ label: `NODE_PATH=./node_modules node scripts/${name}`, args: [path.join('scripts', name)] }))
 ];
 

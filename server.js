@@ -48,6 +48,11 @@ const WORK_CONTEXTS_FILE = path.join(DATA_DIR, 'work-contexts.json');
 const WATCHERS_FILE = path.join(DATA_DIR, 'watchers.json');
 const WATCHER_OBSERVATIONS_FILE = path.join(DATA_DIR, 'watcher-observations.json');
 const WATCHER_TICKET_PROPOSALS_FILE = path.join(DATA_DIR, 'watcher-ticket-proposals.json');
+// Model/provider routing (r1.28): dispatch policy + an immutable per-run routingSnapshot. Routing
+// records WHICH provider/model a run was dispatched to; it never changes actual provider execution
+// (the agent's own provider/model remains the backend), never grants authority, and never bypasses
+// verification/triage. See docs/MODEL_PROVIDER_ROUTING.md.
+const MODEL_ROUTING_POLICIES_FILE = path.join(DATA_DIR, 'model-routing-policies.json');
 // Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
 // separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
@@ -126,7 +131,8 @@ function seedOperationalDataDir() {
     'work-contexts.json',
     'watchers.json',
     'watcher-observations.json',
-    'watcher-ticket-proposals.json'
+    'watcher-ticket-proposals.json',
+    'model-routing-policies.json'
   ].forEach(fileName => writeMissingFile(fileName, '[]'));
 
   writeMissingFile('events.jsonl', '');
@@ -6979,6 +6985,31 @@ function buildTicketTimeline(ticketId) {
         details: workReceipt
       });
     }
+    // Routing decision (r1.28) — projection-only; only for runs that carry a routingSnapshot.
+    if (run.routingSnapshot) {
+      const rs = run.routingSnapshot;
+      addEntry({
+        id: `run:${run.id}:routing`,
+        timestamp: rs.decidedAt || run.createdAt || null,
+        type: 'run.routing',
+        title: `Run #${run.id} routing decision`,
+        summary: `${rs.selectedProvider || 'agent default'}${rs.selectedModel ? ' / ' + rs.selectedModel : ''} (${rs.reason}${rs.fallbackUsed ? ', fallback' : ''})`,
+        sourceType: 'run',
+        sourceRef: `runs.json:${run.id}.routingSnapshot`,
+        sourceRole: 'live_state',
+        runId: run.id,
+        status: rs.reason || null,
+        details: {
+          policyId: rs.policyId != null ? rs.policyId : null,
+          selectedProvider: rs.selectedProvider || null,
+          selectedModel: rs.selectedModel || null,
+          reason: rs.reason || null,
+          fallbackUsed: Boolean(rs.fallbackUsed),
+          rejectedProviders: Array.isArray(rs.rejectedProviders) ? rs.rejectedProviders : [],
+          workContextId: rs.workContextId != null ? rs.workContextId : null
+        }
+      });
+    }
     addEntry({
       id: `run:${run.id}:verification-requirement`,
       timestamp: run.createdAt || null,
@@ -11039,6 +11070,122 @@ function completeAgentRun(run) {
   return completedRun;
 }
 
+// ---- Model/provider routing: policy store + dispatch decision (r1.28) ----
+const MODEL_ROUTING_STATUSES = ['active', 'archived'];
+
+function readModelRoutingPolicies() { return readJsonArrayCached(MODEL_ROUTING_POLICIES_FILE); }
+function writeModelRoutingPolicies(list) { writeFileAtomic(MODEL_ROUTING_POLICIES_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
+function getModelRoutingPolicyById(id) { const n = parseInt(id, 10); return Number.isNaN(n) ? null : readModelRoutingPolicies().find(p => p && p.id === n) || null; }
+
+function validateModelRoutingPolicyInput(body, existing = null) {
+  const b = body && typeof body === 'object' ? body : {};
+  const name = typeof b.name === 'string' ? b.name.trim() : (existing ? existing.name : '');
+  if (!name) return { ok: false, error: 'Routing policy name is required' };
+  const status = b.status !== undefined ? b.status : (existing ? existing.status : 'active');
+  if (!MODEL_ROUTING_STATUSES.includes(status)) return { ok: false, error: `status must be one of ${MODEL_ROUTING_STATUSES.join(', ')}` };
+  const arr = (value, fallback) => value !== undefined ? (Array.isArray(value) ? value : null) : (existing ? existing[fallback] || [] : []);
+  const allowedProviders = arr(b.allowedProviders, 'allowedProviders');
+  const fallbackProviders = arr(b.fallbackProviders, 'fallbackProviders');
+  const toolRequirements = arr(b.toolRequirements, 'toolRequirements');
+  const targetRequirements = arr(b.targetRequirements, 'targetRequirements');
+  if (allowedProviders === null || fallbackProviders === null || toolRequirements === null || targetRequirements === null) {
+    return { ok: false, error: 'allowedProviders/fallbackProviders/toolRequirements/targetRequirements must be arrays' };
+  }
+  let workContextId = b.workContextId !== undefined ? b.workContextId : (existing ? existing.workContextId : null);
+  if (workContextId != null && workContextId !== '') {
+    const n = parseInt(workContextId, 10);
+    if (!Number.isInteger(n) || !getWorkContextById(n)) return { ok: false, error: 'workContextId must reference an existing Work Context or be null' };
+    workContextId = n;
+  } else workContextId = null;
+  return {
+    ok: true,
+    value: {
+      name, status, workContextId,
+      capabilityId: b.capabilityId !== undefined ? (b.capabilityId || null) : (existing ? existing.capabilityId || null : null),
+      allowedProviders, preferredProvider: b.preferredProvider !== undefined ? (b.preferredProvider || null) : (existing ? existing.preferredProvider || null : null),
+      preferredModel: b.preferredModel !== undefined ? (b.preferredModel || null) : (existing ? existing.preferredModel || null : null),
+      fallbackProviders,
+      maxCost: b.maxCost !== undefined ? (b.maxCost ?? null) : (existing ? existing.maxCost ?? null : null),
+      maxLatency: b.maxLatency !== undefined ? (b.maxLatency ?? null) : (existing ? existing.maxLatency ?? null : null),
+      riskClass: b.riskClass !== undefined ? (b.riskClass || 'standard') : (existing ? existing.riskClass || 'standard' : 'standard'),
+      toolRequirements, targetRequirements,
+      verificationRequirement: b.verificationRequirement !== undefined ? (b.verificationRequirement ?? null) : (existing ? existing.verificationRequirement ?? null : null),
+      triageOnNoRoute: b.triageOnNoRoute !== undefined ? Boolean(b.triageOnNoRoute) : (existing ? existing.triageOnNoRoute !== false : true)
+    }
+  };
+}
+
+// Deterministically choose the routing policy for a run and validate the agent's provider against
+// it. This NEVER changes which provider executes (the agent's own provider/model stays the
+// backend); it records the decision. Returns { ok, routingSnapshot } or { ok:false, reason }.
+function resolveModelRouteForRun({ ticket, agent, capabilityId, workContextId, explicitPolicyId }) {
+  const now = new Date().toISOString();
+  const agentProvider = agent && agent.provider ? agent.provider : null;
+  const agentModel = agent && agent.model ? agent.model : null;
+  const base = { policyId: null, selectedProvider: agentProvider, selectedModel: agentModel, reason: 'no_policy', capabilityId: capabilityId || null, workContextId: workContextId != null ? workContextId : null, fallbackUsed: false, rejectedProviders: [], constraints: {}, decidedAt: now };
+
+  const active = readModelRoutingPolicies().filter(p => p && p.status === 'active');
+  // Deterministic selection order; ties broken by lowest id.
+  const byId = (a, b) => a.id - b.id;
+  let policy = null;
+  let reason = 'no_policy';
+  if (explicitPolicyId != null) {
+    const explicit = active.find(p => p.id === parseInt(explicitPolicyId, 10));
+    if (explicit) { policy = explicit; reason = 'explicit_override'; }
+  }
+  if (!policy) {
+    const tiers = [
+      active.filter(p => p.workContextId === workContextId && p.capabilityId === capabilityId && p.workContextId != null && p.capabilityId != null),
+      active.filter(p => p.workContextId === workContextId && p.workContextId != null && (p.capabilityId == null)),
+      active.filter(p => p.workContextId == null && p.capabilityId === capabilityId && p.capabilityId != null),
+      active.filter(p => p.workContextId == null && p.capabilityId == null)
+    ];
+    for (const tier of tiers) { if (tier.length) { policy = tier.slice().sort(byId)[0]; reason = 'policy_preferred'; break; } }
+  }
+
+  if (!policy) return { ok: true, routingSnapshot: base };
+
+  const allowed = Array.isArray(policy.allowedProviders) ? policy.allowedProviders : [];
+  const fallback = Array.isArray(policy.fallbackProviders) ? policy.fallbackProviders : [];
+  const constraints = { allowedProviders: allowed, preferredProvider: policy.preferredProvider || null, preferredModel: policy.preferredModel || null, riskClass: policy.riskClass || 'standard' };
+  // Unrestricted policy, or the agent provider is explicitly allowed.
+  if (allowed.length === 0 || (agentProvider && allowed.includes(agentProvider))) {
+    return { ok: true, routingSnapshot: { ...base, policyId: policy.id, reason: reason === 'explicit_override' ? 'explicit_override' : 'policy_preferred', constraints } };
+  }
+  // Disallowed, but the agent provider is an explicitly-permitted fallback.
+  if (agentProvider && fallback.includes(agentProvider)) {
+    return { ok: true, routingSnapshot: { ...base, policyId: policy.id, reason: 'fallback_allowed', fallbackUsed: true, constraints } };
+  }
+  // No permitted provider — refuse (triage), never guess or silently switch.
+  return { ok: false, policyId: policy.id, reason: 'no_eligible_provider', rejectedProviders: agentProvider ? [agentProvider] : [], constraints, triageOnNoRoute: policy.triageOnNoRoute !== false };
+}
+
+// Block a ticket when routing finds no permitted provider — reuses the existing triage mechanism.
+function blockTicketForNoModelRoute(ticket, decision) {
+  const tickets = readTickets();
+  const persisted = tickets.find(item => item.id === ticket.id);
+  if (!persisted) return null;
+  const now = new Date().toISOString();
+  const summary = `No permitted model provider for this run (rejected: ${(decision.rejectedProviders || []).join(', ') || 'none'}). Edit the routing policy or reassign the ticket.`;
+  persisted.status = 'blocked';
+  persisted.blockedReason = summary;
+  // Reuse the existing triage vocabulary (authority_blocked / change_scope) — routing introduces no
+  // new triage semantics. The routing-specific signal lives in the summary, evidenceRefs, the
+  // ticket.blocked event (reasonCode no_model_route), and the system log.
+  persisted.triage = normalizeTriage({
+    required: true, reasonCode: 'authority_blocked', summary, requiredDecision: 'change_scope',
+    evidenceRefs: ['model-routing:policy:' + (decision.policyId != null ? decision.policyId : 'none'), 'model-routing:no_route'],
+    allowedActions: ['edit_routing_policy', 'change_assignment'], prohibitedActions: ['start_run_without_permitted_provider'],
+    createdAt: now, resolvedAt: null, resolvedBy: null, resolution: null
+  });
+  persisted.updatedAt = now; persisted.changedAt = now;
+  writeTickets(tickets);
+  appendEvent({ type: 'ticket.blocked', ticketId: persisted.id, payload: { status: 'blocked', reason: summary, reasonCode: 'no_model_route', triage: persisted.triage } });
+  appendSystemLog('ticket:no_model_route', summary, null, { ticketId: persisted.id, policyId: decision.policyId || null, rejectedProviders: decision.rejectedProviders || [] });
+  broadcastTicketChange();
+  return persisted;
+}
+
 function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null) {
   const runs = readRuns();
   const activeRun = runs.find(run =>
@@ -11059,6 +11206,16 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
   const nextRunId = nextId(runs);
   const ownedOutputPaths = allocationItem ? allocationItem.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath) : [];
   const workflow = ticket.executionMode === 'workflow' ? getWorkflowById(ticket.workflowId) : null;
+  // Routing decision (r1.28): dispatch-policy + immutable snapshot. With no applicable policy this
+  // is a no-op recording the agent's own provider/model (execution behavior unchanged). If a policy
+  // permits no provider, refuse via triage rather than guessing — no run is created.
+  const routeCapabilityId = ticket.executionMode === 'workflow' ? ticket.workflowId : 'agent-selected-actions';
+  const routeDecision = resolveModelRouteForRun({
+    ticket, agent, capabilityId: routeCapabilityId,
+    workContextId: ticket.workContextId != null ? ticket.workContextId : null,
+    explicitPolicyId: ticket.routingPolicyId != null ? ticket.routingPolicyId : null
+  });
+  if (!routeDecision.ok) { blockTicketForNoModelRoute(ticket, routeDecision); return null; }
   const run = {
     id: nextRunId,
     ticketId: ticket.id,
@@ -11072,6 +11229,8 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
       usesOwnedScope ? 'owned_paths' : 'shared'
     ),
     verificationContractSnapshot: buildVerificationContractSnapshot(workflow, now),
+    // Immutable routing snapshot (r1.28): supporting metadata only, never rewritten.
+    routingSnapshot: routeDecision.routingSnapshot,
     allocationPlanId: allocationPlanId || null,
     allocationItemId: allocationItem ? allocationItem.allocationItemId : null,
     allocationSubtask: allocationItem ? allocationItem.allocationSubtask : null,
@@ -16431,6 +16590,74 @@ fastify.get('/watchers/:id', { preHandler: fastify.requireAuth }, async (request
   const observations = readWatcherObservations().filter(o => o && o.watcherId === watcher.id).sort((a, b) => b.id - a.id).slice(0, WATCHER_OBSERVATION_LIMIT);
   const proposals = readWatcherProposals().filter(p => p && p.watcherId === watcher.id).sort((a, b) => b.id - a.id);
   return reply.view('watcher-detail.ejs', viewData({ user: request.user, watcher, observations, proposals }, request.session.userId));
+});
+
+// ==================== MODEL ROUTING ROUTES (r1.28) ====================
+// Routing POLICY management only (gated by modelRouting:manage). Policy CRUD creates no
+// ticket/run/workspace mutation. The actual route decision happens at run dispatch in
+// createAgentRun and is recorded as an immutable run.routingSnapshot.
+function modelRoutingManageGuard(request, reply) {
+  if (!hasPermission(request.session.userId, 'modelRouting:manage')) { reply.code(403); return false; }
+  return true;
+}
+
+fastify.get('/api/model-routing-policies', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!modelRoutingManageGuard(request, reply)) return { error: 'Permission denied' };
+  return { ok: true, policies: readModelRoutingPolicies() };
+});
+
+fastify.post('/api/model-routing-policies', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!modelRoutingManageGuard(request, reply)) return { error: 'Permission denied' };
+  const parsed = validateModelRoutingPolicyInput(request.body || {}, null);
+  if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
+  const list = readModelRoutingPolicies();
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  const record = { id: nextId_(list), ...parsed.value, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now };
+  list.push(record);
+  writeModelRoutingPolicies(list);
+  appendSystemLog('model_routing:policy_created', `Routing policy "${record.name}" created`, null, { policyId: record.id, changedBy });
+  return { ok: true, policy: record };
+});
+
+fastify.post('/api/model-routing-policies/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!modelRoutingManageGuard(request, reply)) return { error: 'Permission denied' };
+  const list = readModelRoutingPolicies();
+  const existing = list.find(p => p && p.id === parseInt(request.params.id, 10));
+  if (!existing) { reply.code(404); return { error: 'Routing policy not found' }; }
+  const parsed = validateModelRoutingPolicyInput(request.body || {}, existing);
+  if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
+  const now = new Date().toISOString();
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  Object.assign(existing, parsed.value, { updatedBy: changedBy, updatedAt: now });
+  writeModelRoutingPolicies(list);
+  appendSystemLog('model_routing:policy_updated', `Routing policy "${existing.name}" updated`, null, { policyId: existing.id, status: existing.status, changedBy });
+  return { ok: true, policy: existing };
+});
+
+fastify.get('/api/model-routing-policies/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!modelRoutingManageGuard(request, reply)) return { error: 'Permission denied' };
+  const policy = getModelRoutingPolicyById(request.params.id);
+  if (!policy) { reply.code(404); return { error: 'Routing policy not found' }; }
+  return { ok: true, policy };
+});
+
+fastify.get('/model-routing-policies', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'modelRouting:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  return reply.view('model-routing-policies.ejs', viewData({ user: request.user, policies: readModelRoutingPolicies() }, request.session.userId));
+});
+
+fastify.get('/model-routing-policies/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'modelRouting:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const policy = getModelRoutingPolicyById(request.params.id);
+  if (!policy) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Routing policy not found', user: request.user }, request.session.userId)); }
+  return reply.view('model-routing-policy-detail.ejs', viewData({ user: request.user, policy }, request.session.userId));
 });
 
 // ==================== PROCESS TEMPLATE ROUTES ====================

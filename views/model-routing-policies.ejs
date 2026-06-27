@@ -1,0 +1,30 @@
+<h1>Model Routing Policies</h1>
+<p class="text-muted">
+  A routing policy is a <strong>dispatch-time decision rule</strong>: when a run is created, the
+  most specific active policy decides which provider/model the run is recorded as using. Routing
+  <strong>never changes which provider actually executes</strong> (the agent's own provider/model
+  remains the backend), never grants authority, and never bypasses verification or triage. If a
+  policy permits no provider for a run, the ticket is <strong>refused into triage</strong> rather
+  than guessing. The decision is recorded as an immutable <code>routingSnapshot</code> on the run.
+</p>
+
+<% if (!policies || policies.length === 0) { %>
+  <p class="text-muted">No routing policies. With none, runs use the agent's own provider/model
+    (<code>no_policy</code>). Manage via <code>POST /api/model-routing-policies</code>.</p>
+<% } else { %>
+  <table class="data-table">
+    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Work Context</th><th>Capability</th><th>Allowed providers</th></tr></thead>
+    <tbody>
+      <% policies.forEach(function (p) { %>
+        <tr>
+          <td><%= p.id %></td>
+          <td><a href="/model-routing-policies/<%= p.id %>"><%= p.name %></a></td>
+          <td><% if (p.status !== 'active') { %><span class="text-muted"><%= p.status %></span><% } else { %>active<% } %></td>
+          <td class="text-muted"><%= p.workContextId != null ? ('#' + p.workContextId) : 'any' %></td>
+          <td class="text-muted"><%= p.capabilityId || 'any' %></td>
+          <td class="text-muted"><%= (p.allowedProviders && p.allowedProviders.length) ? p.allowedProviders.join(', ') : 'any' %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+<% } %>
