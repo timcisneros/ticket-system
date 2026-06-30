@@ -67,21 +67,26 @@
 </div>
 
 <% if (canResetWorkspaceFixtures) { %>
-  <div class="admin-section">
+  <section class="admin-block">
     <h2>Workspace Fixtures</h2>
-    <form id="workspace-fixture-form" class="workspace-inline-form">
-      <select id="workspace-fixture" name="fixtureId" required>
-        <option value="">Choose fixture</option>
-        <% workspaceFixtures.forEach(fixture => { %>
-          <option value="<%= fixture.id %>"><%= fixture.name %></option>
-        <% }) %>
-      </select>
-      <button type="submit" class="btn-small btn-danger">Reset Workspace</button>
+    <form id="workspace-fixture-form">
+      <div class="form-group">
+        <label for="workspace-fixture">Fixture</label>
+        <select id="workspace-fixture" name="fixtureId" required>
+          <option value="">Choose fixture</option>
+          <% workspaceFixtures.forEach(fixture => { %>
+            <option value="<%= fixture.id %>"><%= fixture.name %></option>
+          <% }) %>
+        </select>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn-submit btn-danger">Reset Workspace</button>
+      </div>
     </form>
-  </div>
+  </section>
 <% } %>
 
-<div class="admin-section" id="file-editor" hidden>
+<section class="admin-block" id="file-editor" hidden>
   <h2>Edit File</h2>
   <p class="text-muted">File: <code id="editor-path"></code></p>
   <form id="editor-form" class="ticket-form">
@@ -94,7 +99,7 @@
       <button type="button" class="btn-secondary" id="editor-cancel">Cancel</button>
     </div>
   </form>
-</div>
+</section>
 
 <script>
 let currentPath = '';

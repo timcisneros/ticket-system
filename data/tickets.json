@@ -17,7 +17,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 2,
@@ -37,7 +51,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 3,
@@ -57,7 +85,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 4,
@@ -77,7 +119,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 5,
@@ -97,7 +153,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 6,
@@ -117,7 +187,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 7,
@@ -137,7 +221,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 8,
@@ -157,7 +255,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 9,
@@ -181,7 +293,21 @@
     "capabilityId": "legal-intake-summary",
     "capabilityInput": {
       "intakeText": "Client Jane Doe called about wrongful termination. Needs legal advice urgently."
-    }
+    },
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 10,
@@ -201,7 +327,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 11,
@@ -227,7 +367,21 @@
     "capabilityInput": {
       "path": "validation-output.txt",
       "content": "workflow test output"
-    }
+    },
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 12,
@@ -247,7 +401,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 13,
@@ -267,7 +435,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 14,
@@ -293,7 +475,21 @@
     "capabilityInput": {
       "instruction": "Return JSON with shouldWrite true and content exactly: hello validation",
       "path": "greeting.txt"
-    }
+    },
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 15,
@@ -313,7 +509,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 16,
@@ -333,7 +543,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 17,
@@ -353,7 +577,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 18,
@@ -373,7 +611,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 19,
@@ -393,7 +645,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 20,
@@ -413,7 +679,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 21,
@@ -433,7 +713,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 22,
@@ -453,7 +747,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 23,
@@ -473,7 +781,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 24,
@@ -493,7 +815,21 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   },
   {
     "id": 25,
@@ -513,6 +849,20 @@
     "workflowInput": null,
     "capabilityType": "directAction",
     "capabilityId": "agent-selected-actions",
-    "capabilityInput": null
+    "capabilityInput": null,
+    "executionPolicy": {
+      "mode": "assisted",
+      "requireVerification": "when_declared",
+      "autoRetry": false,
+      "maxAttempts": null,
+      "maxRuntimeMs": null,
+      "maxModelRequests": null,
+      "maxWorkspaceOperations": null,
+      "allowWorkspaceWrites": true,
+      "allowParallelRuns": false,
+      "allowChildTickets": false,
+      "workspaceScope": "shared"
+    },
+    "triage": null
   }
 ]

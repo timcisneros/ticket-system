@@ -84,6 +84,7 @@ function main() {
     'hashContent',
     'normalizeObjectivePathToken',
     'nextId',
+    'sanitizeOperationArgs',
     'assertOnlyKeys',
     'computeMutationFingerprint',
     'computePathFingerprint',

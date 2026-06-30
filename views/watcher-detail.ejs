@@ -1,8 +1,7 @@
 <p><a href="/watchers">← Watchers</a></p>
 <h1><%= watcher.name %> <% if (watcher.status !== 'active') { %><span class="text-muted">(<%= watcher.status %>)</span><% } %></h1>
 <p class="text-muted">
-  Scoped observer/proposer only. This page is read-only except for manual observe/propose actions
-  served by the JSON API. The watcher creates no ticket/run/workspace mutation, wakes no agent, and
+  Scoped observer/proposer only. The watcher creates no ticket/run/workspace mutation, wakes no agent, and
   runs no template. A proposal is not execution — approval creates a normal ticket through
   <code>ticket:create</code>.
 </p>
@@ -20,6 +19,63 @@
     <tr><th>Last observation hash</th><td class="text-muted"><%= watcher.lastObservationHash || '—' %></td></tr>
   </tbody>
 </table>
+
+<% if (userPermissions.includes('watcher:manage')) { %>
+<section class="admin-block">
+  <h2>Edit Watcher</h2>
+  <form id="edit-watcher-form" class="ticket-form">
+    <div class="form-group">
+      <label for="w-name">Name *</label>
+      <input type="text" id="w-name" name="name" required value="<%= watcher.name %>">
+    </div>
+    <div class="form-group">
+      <label for="w-edit-wctx">Work Context *</label>
+      <select id="w-edit-wctx" name="workContextId" required>
+        <option value="">Select work context</option>
+        <% (workContexts || []).forEach(function(wc) { %>
+          <option value="<%= wc.id %>" <%= watcher.workContextId === wc.id ? 'selected' : '' %>><%= wc.name %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="w-path">Source paths (one per line)</label>
+      <textarea id="w-path" name="sourceRefs" rows="2"><%= (watcher.sourceRefs || []).map(function(r) { return r.path; }).join('\n') %></textarea>
+    </div>
+    <button type="submit" class="btn-submit">Save Changes</button>
+    <span id="w-edit-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
+<script>
+(function() {
+  var form = document.getElementById('edit-watcher-form');
+  if (!form) return;
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var msg = document.getElementById('w-edit-msg');
+    btn.disabled = true;
+    msg.textContent = '';
+    var pathsText = (document.getElementById('w-path').value || '').trim();
+    try {
+      var res = await fetch('/api/watchers/<%= watcher.id %>', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('w-name').value.trim(),
+          workContextId: parseInt(document.getElementById('w-edit-wctx').value, 10),
+          sourceRefs: pathsText ? pathsText.split('\n').map(function(s) { return { path: s.trim() }; }).filter(function(s) { return s.path; }) : []
+        })
+      });
+      var data = await res.json().catch(function() { return null; });
+      if (res.ok) { window.location.reload(); return; }
+      msg.textContent = (data && data.error) ? data.error : 'Save failed';
+    } catch (err) { msg.textContent = 'Save failed'; }
+    btn.disabled = false;
+  });
+})();
+</script>
 
 <h2>Recent observations</h2>
 <% if (!observations || observations.length === 0) { %>

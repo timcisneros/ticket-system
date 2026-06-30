@@ -32,7 +32,7 @@
 <% } %>
 <% if (canUpdateTickets) { %>
 <p class="form-hint">Simulation tests the agent plan without creating a run or mutating the workspace. "Test agent plan" calls the model; "Test gate" returns the objective clarification verdict only.</p>
-<div id="simulation-result" style="display:none;margin-top:8px;padding:8px;border:1px solid #ccc;border-radius:4px;"></div>
+<div id="simulation-result" class="simulation-result"></div>
 <% } %>
 
 <%
@@ -191,7 +191,7 @@
 <% } %>
 
 <% if (ticket.triage && ticket.triage.required) { %>
-<section class="detail-section failure-summary">
+  <section class="detail-section">
   <h2>Ticket-Level Triage</h2>
   <dl class="detail-grid">
     <div><dt>Reason</dt><dd><code><%= ticket.triage.reasonCode %></code></dd></div>
@@ -209,7 +209,7 @@
   <form class="triage-resolve" data-resolve-url="/api/tickets/<%= ticket.id %>/triage/resolve">
     <p class="text-muted">Resolving records an operator acknowledgement only — it does not rerun, complete, or change status.</p>
     <input type="text" class="triage-resolution-input" placeholder="Resolution note (required)">
-    <button type="button" class="triage-resolve-btn">Resolve triage</button>
+    <button type="button" class="btn-small">Resolve triage</button>
     <span class="triage-resolve-msg text-muted"></span>
   </form>
   <% } %>
@@ -229,7 +229,7 @@
 <% } %>
 
 <% if (typeof latestTriage !== 'undefined' && latestTriage && latestTriage.required) { %>
-<section class="detail-section failure-summary">
+<section class="detail-section">
   <h2>Latest Run Triage</h2>
   <dl class="detail-grid">
     <div><dt>Reason</dt><dd><code><%= latestTriage.reasonCode %></code></dd></div>
@@ -247,7 +247,7 @@
   <form class="triage-resolve" data-resolve-url="/api/runs/<%= latestRuntimeRunId %>/triage/resolve">
     <p class="text-muted">Resolving records an operator acknowledgement only — it does not rerun, complete, or change status.</p>
     <input type="text" class="triage-resolution-input" placeholder="Resolution note (required)">
-    <button type="button" class="triage-resolve-btn">Resolve triage</button>
+    <button type="button" class="btn-small">Resolve triage</button>
     <span class="triage-resolve-msg text-muted"></span>
   </form>
   <% } %>
@@ -271,7 +271,7 @@
     var url = form.getAttribute('data-resolve-url');
     var input = form.querySelector('.triage-resolution-input');
     var msg = form.querySelector('.triage-resolve-msg');
-    form.querySelector('.triage-resolve-btn').addEventListener('click', async function () {
+    form.querySelector('button').addEventListener('click', async function () {
       msg.textContent = '';
       var value = input.value.trim();
       if (!value) { msg.textContent = 'Resolution note is required.'; return; }
@@ -306,8 +306,8 @@
   <div class="max-attempts-control" data-ticket-id="<%= ticket.id %>">
     <p class="text-muted">Set the manual rerun-from-start ceiling. Leave blank to clear (unlimited). Measurement/limit applies only to manual reruns — no automatic retry.</p>
     <input type="number" id="max-attempts-input" min="1" step="1" placeholder="unlimited" value="<%= ticket.executionPolicy.maxAttempts === null ? '' : ticket.executionPolicy.maxAttempts %>">
-    <button type="button" id="max-attempts-set">Set</button>
-    <button type="button" id="max-attempts-clear">Clear (unlimited)</button>
+    <button type="button" id="max-attempts-set" class="btn-small">Set</button>
+    <button type="button" id="max-attempts-clear" class="btn-small">Clear (unlimited)</button>
     <span id="max-attempts-msg" class="text-muted"></span>
   </div>
   <script>
@@ -869,7 +869,7 @@
           <% } %>
           <% if (canUpdateTickets && !record.isRecovery && record.recoveryStatus && record.recoveryStatus.status === 'recoverable') { %>
             <div class="recovery-controls">
-              <button type="button" class="btn-small btn-secondary" data-preview-recovery-id="<%= record.id %>">Preview Recovery</button>
+              <button type="button" class="btn-small" data-preview-recovery-id="<%= record.id %>">Preview Recovery</button>
             </div>
             <div class="recovery-preview-panel" id="recovery-preview-<%= record.id %>" style="display: none;"></div>
           <% } %>
@@ -890,7 +890,8 @@
   const terminalStatuses = new Set(['completed', 'failed', 'interrupted']);
   let hadActiveRun = section.dataset.ticketRuntimeActive === 'true';
   let currentRunStatus = document.getElementById('ticket-live-run-status')?.textContent || '';
-  let polling = null;
+  let elapsedInterval = null;
+  let eventSource = null;
   let terminalReloaded = false;
 
   const ticketStatusEl = document.getElementById('ticket-live-status');
@@ -999,10 +1000,11 @@
       return;
     }
 
-    if (polling) {
-      window.clearInterval(polling);
-      polling = null;
+    if (elapsedInterval) {
+      window.clearInterval(elapsedInterval);
+      elapsedInterval = null;
     }
+    if (eventSource) { eventSource.close(); eventSource = null; }
     if (hadActiveRun && run && terminalStatuses.has(run.status) && !terminalReloaded) {
       terminalReloaded = true;
       window.location.reload();
@@ -1020,11 +1022,22 @@
 
   updateElapsed(elapsedEl && elapsedEl.dataset.startedAt, elapsedEl && elapsedEl.dataset.completedAt, currentRunStatus);
   if (hadActiveRun || activeStatuses.has(currentRunStatus)) {
-    polling = window.setInterval(() => {
+    if (window.EventSource) {
+      eventSource = new EventSource('/api/events');
+      eventSource.addEventListener('run:status-changed', function(e) {
+        var data;
+        try { data = JSON.parse(e.data); } catch (_) { return; }
+        if (data && data.ticketId === ticketId) refreshTicketRuntime().catch(function(){});
+      });
+      eventSource.addEventListener('error', function() {
+        if (eventSource) eventSource.close();
+        eventSource = null;
+      });
+    }
+    elapsedInterval = window.setInterval(function() {
       updateElapsed(elapsedEl && elapsedEl.dataset.startedAt, elapsedEl && elapsedEl.dataset.completedAt, currentRunStatus);
-      refreshTicketRuntime().catch(() => {});
     }, 1000);
-    refreshTicketRuntime().catch(() => {});
+    refreshTicketRuntime().catch(function(){});
   }
 })();
 </script>
@@ -1050,6 +1063,7 @@ document.addEventListener('click', async event => {
       parts.push('<strong>Gate verdict:</strong> ' + escapeHtml(data.gateVerdict));
       if (data.reasonCode) parts.push('<strong>Reason:</strong> ' + escapeHtml(data.reasonCode));
       if (data.gateSummary) parts.push('<strong>Summary:</strong> ' + escapeHtml(data.gateSummary));
+      if (data.simulatedAgent) parts.push('<strong>Simulated agent:</strong> ' + escapeHtml(data.simulatedAgent));
       if (data.modelError) parts.push('<strong>Model error:</strong> ' + escapeHtml(data.modelError));
       if (data.parseError) parts.push('<strong>Parse error:</strong> ' + escapeHtml(data.parseError));
       if (Array.isArray(data.actionsProposed) && data.actionsProposed.length > 0) {

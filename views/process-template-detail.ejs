@@ -1,0 +1,131 @@
+<p><a href="/process-templates">← Process Templates</a></p>
+<h1><%= template.name %> <% if (!template.enabled) { %><span class="text-muted">(disabled)</span><% } %> <span class="text-muted">v<%= template.version || 1 %></span></h1>
+
+<% var tt = template.ticketTemplate || {}; %>
+
+<table class="data-table">
+  <tbody>
+    <tr><th>Status</th><td><%= template.enabled ? 'Enabled' : 'Disabled' %></td></tr>
+    <tr><th>Objective</th><td><%= tt.objective || '' %></td></tr>
+    <tr><th>Assignment</th><td><%= tt.assignmentTargetType || '?' %> #<%= tt.assignmentTargetId == null ? '?' : tt.assignmentTargetId %></td></tr>
+    <tr><th>Capability</th><td><%= tt.capabilityType || 'directAction' %></td></tr>
+    <% if (template.workContextId) { %>
+      <tr><th>Work Context</th><td>#<%= template.workContextId %></td></tr>
+    <% } %>
+    <% if (template.schedule) { %>
+      <tr><th>Schedule</th><td><%= template.schedule.kind === 'interval' ? 'Every ' + template.schedule.everySeconds + 's' : template.schedule.kind %></td></tr>
+    <% } %>
+    <tr><th>Created</th><td class="text-muted"><%= template.createdAt || '—' %></td></tr>
+    <tr><th>Updated</th><td class="text-muted"><%= template.updatedAt || '—' %></td></tr>
+  </tbody>
+</table>
+
+<% if (userPermissions.includes('processTemplate:manage')) { %>
+<section class="admin-block admin-block--spaced">
+  <h2>Edit Template</h2>
+  <form id="edit-pt-form" class="ticket-form">
+    <div class="form-group">
+      <label for="ept-name">Template Name *</label>
+      <input type="text" id="ept-name" name="name" required value="<%= template.name %>">
+    </div>
+    <div class="form-group">
+      <label for="ept-objective">Ticket Objective *</label>
+      <textarea id="ept-objective" name="objective" required rows="2"><%= tt.objective || '' %></textarea>
+    </div>
+    <div class="form-group">
+      <label for="ept-assign-type">Assignment target type</label>
+      <select id="ept-assign-type" name="assignmentTargetType">
+        <option value="">Select worker type</option>
+        <option value="agent" <%= tt.assignmentTargetType === 'agent' ? 'selected' : '' %>>One agent</option>
+        <option value="group" <%= tt.assignmentTargetType === 'group' ? 'selected' : '' %>>Agent group</option>
+      </select>
+    </div>
+    <div class="form-group" id="ept-assign-target-group" style="display:<%= tt.assignmentTargetType ? '' : 'none' %>">
+      <label for="ept-assign-target">Assignment target</label>
+      <select id="ept-assign-target" name="assignmentTargetId">
+        <option value="">Select a target type first</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Capability</label>
+      <label class="checkbox-label"><input type="radio" name="capabilityType" value="directAction" <%= tt.capabilityType !== 'workflow' ? 'checked' : '' %>> Direct action</label>
+      <label class="checkbox-label"><input type="radio" name="capabilityType" value="workflow" <%= tt.capabilityType === 'workflow' ? 'checked' : '' %>> Workflow</label>
+    </div>
+    <button type="submit" class="btn-submit">Save Changes</button>
+    <span id="ept-edit-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
+<script>
+(function() {
+  var form = document.getElementById('edit-pt-form');
+  if (!form) return;
+  var agents = <%- JSON.stringify(agents || []) %>;
+  var groups = <%- JSON.stringify(groups || []) %>;
+  var typeSelect = document.getElementById('ept-assign-type');
+  var targetSelect = document.getElementById('ept-assign-target');
+  var targetGroup = document.getElementById('ept-assign-target-group');
+  var currentAssignType = '<%= tt.assignmentTargetType || '' %>';
+  var currentAssignId = '<%= tt.assignmentTargetId != null ? tt.assignmentTargetId : '' %>';
+
+  function populateTargets() {
+    var type = typeSelect.value;
+    if (!type) { targetGroup.style.display = 'none'; return; }
+    var items = type === 'agent' ? agents : groups;
+    targetSelect.innerHTML = '<option value="">' + (type === 'agent' ? 'Select an agent' : 'Select an agent group') + '</option>' +
+      items.map(function(item) {
+        var selected = type === currentAssignType && String(item.id) === String(currentAssignId) ? ' selected' : '';
+        return '<option value="' + item.id + '"' + selected + '>' + item.name + '</option>';
+      }).join('');
+    targetGroup.style.display = '';
+  }
+  populateTargets();
+  typeSelect.addEventListener('change', function() {
+    currentAssignType = typeSelect.value;
+    currentAssignId = '';
+    populateTargets();
+  });
+
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var msg = document.getElementById('ept-edit-msg');
+    btn.disabled = true;
+    msg.textContent = '';
+    var assignType = typeSelect.value;
+    var assignId = targetSelect.value;
+    try {
+      var res = await fetch('/api/process-templates/<%= template.id %>/versions/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('ept-name').value.trim(),
+          ticketTemplate: {
+            objective: document.getElementById('ept-objective').value.trim(),
+            assignmentTargetType: assignType || null,
+            assignmentTargetId: assignId ? parseInt(assignId, 10) : null,
+            capabilityType: form.querySelector('input[name="capabilityType"]:checked').value
+          }
+        })
+      });
+      var data = await res.json().catch(function() { return null; });
+      if (!res.ok || !data || !data.draft) {
+        msg.textContent = (data && data.error) ? data.error : 'Draft failed';
+        btn.disabled = false;
+        return;
+      }
+      var draftId = data.draft.id;
+      var res2 = await fetch('/api/process-templates/<%= template.id %>/versions/' + encodeURIComponent(draftId) + '/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      var data2 = await res2.json().catch(function() { return null; });
+      if (res2.ok && data2 && data2.ok) { window.location.reload(); return; }
+      msg.textContent = (data2 && data2.error) ? data2.error : 'Activation failed';
+    } catch (err) { msg.textContent = 'Edit failed'; }
+    btn.disabled = false;
+  });
+})();
+</script>

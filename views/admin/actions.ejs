@@ -1,67 +1,67 @@
 <h1>Actions Catalog</h1>
 <p class="text-muted">Actions available to direct agent work and composed workflows, with concrete inputs, outputs, and errors.</p>
 
-<div style="margin-bottom: 16px; display: flex; gap: 12px; flex-wrap: wrap;">
-  <label style="display: flex; align-items: center; gap: 6px; font-size: 0.88rem;">
+<div class="action-filter-bar">
+  <label class="filter-label">
     Invoker:
-    <select id="filter-invoker" onchange="applyFilters()" style="padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px;">
+    <select id="filter-invoker" onchange="applyFilters()" class="filter-select">
       <option value="">All</option>
       <% invokers.forEach(function(inv) { %>
         <option value="<%= inv %>"><%= inv %></option>
       <% }); %>
     </select>
   </label>
-  <label style="display: flex; align-items: center; gap: 6px; font-size: 0.88rem;">
+  <label class="filter-label">
     <input type="checkbox" id="filter-mutating-only" onchange="applyFilters()">
     Mutating only
   </label>
-  <span style="font-size: 0.82rem; color: #6b7280; align-self: center;">Total: <strong id="action-count"><%= actions.length %></strong> actions</span>
+  <span class="filter-count">Total: <strong id="action-count"><%= actions.length %></strong> actions</span>
 </div>
 
 <table class="tickets-table" id="actions-table">
   <thead>
     <tr>
-      <th style="min-width: 160px;">Action</th>
+      <th>Action</th>
       <th>Invoker</th>
       <th>Mutating</th>
-      <th style="width: 100%;">Contract</th>
+      <th>Contract</th>
     </tr>
   </thead>
   <tbody>
     <% function renderShape(shape) {
       if (shape === null || shape === undefined) return '<span class="text-muted">No body</span>';
-      return '<pre class="code-block" style="margin: 0; font-size: 0.78rem;">' + JSON.stringify(shape, null, 2) + '</pre>';
+      return '<pre class="code-block code-block--compact">' + JSON.stringify(shape, null, 2) + '</pre>';
     } %>
     <% actions.forEach(function(action) { %>
       <tr class="action-row"
           data-invoker="<%= action.invoker %>"
           data-mutating="<%= action.mutating %>">
-        <td style="white-space: nowrap;"><strong><%= action.displayName || action.name %></strong></td>
-        <td><span class="status-badge" style="background: #f0fdf4; color: #166534; border-color: #bbf7d0;"><%= action.invoker %></span></td>
+        <td><strong><%= action.displayName || action.name %></strong></td>
+        <td><span class="status-badge status-badge--invoker"><%= action.invoker %></span></td>
         <td>
           <% if (action.mutating) { %>
-            <span class="status-badge" style="background: #fef2f2; color: #991b1b; border-color: #fecaca;">yes</span>
+            <span class="status-badge status-badge--mutating-yes">yes</span>
           <% } else { %>
-            <span class="status-badge" style="background: #f3f4f6; color: #6b7280; border-color: #e5e7eb;">no</span>
+            <span class="status-badge status-badge--mutating-no">no</span>
           <% } %>
         </td>
         <td>
-          <details class="collapsible" style="border: none; margin: 0;">
-            <summary style="padding: 4px 8px; background: transparent; border: none; font-weight: 400; color: #2563eb;">Show contract</summary>
-            <div class="collapsible__content" style="border-top: none; padding: 8px 0;">
+          <details class="log-details">
+            <summary>Contract</summary>
+            <div class="log-json">
 
-              <div style="margin-bottom: 10px;">
-                <div style="font-size: 0.78rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Input</div>
+              <div class="contract-section">
+                <div class="contract-section-header">Input</div>
                 <%- renderShape(action.inputSchema) %>
               </div>
 
-              <div style="margin-bottom: 10px;">
-                <div style="font-size: 0.78rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Output</div>
+              <div class="contract-section">
+                <div class="contract-section-header">Output</div>
                 <%- renderShape(action.outputSchema) %>
               </div>
 
-              <div style="margin-bottom: 10px;">
-                <div style="font-size: 0.78rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Error</div>
+              <div class="contract-section">
+                <div class="contract-section-header">Error</div>
                 <%- renderShape(action.errorSchema) %>
               </div>
 

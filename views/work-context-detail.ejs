@@ -31,6 +31,52 @@
   <a href="/process-templates?workContextId=<%= ctx.id %>">All templates</a>
 </p>
 
+<% if (userPermissions.includes('workContext:manage')) { %>
+<section class="admin-block">
+  <h2>Edit Work Context</h2>
+  <form id="edit-wctx-form" class="ticket-form">
+    <div class="form-group">
+      <label for="wc-name">Name *</label>
+      <input type="text" id="wc-name" name="name" required value="<%= ctx.name %>">
+    </div>
+    <div class="form-group">
+      <label for="wc-purpose">Purpose</label>
+      <textarea id="wc-purpose" name="purpose" rows="2"><%= ctx.purpose || '' %></textarea>
+    </div>
+    <button type="submit" class="btn-submit">Save Changes</button>
+    <span id="wc-edit-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
+<script>
+(function() {
+  var form = document.getElementById('edit-wctx-form');
+  if (!form) return;
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var msg = document.getElementById('wc-edit-msg');
+    btn.disabled = true;
+    msg.textContent = '';
+    try {
+      var res = await fetch('/api/work-contexts/<%= ctx.id %>', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('wc-name').value.trim(),
+          purpose: (document.getElementById('wc-purpose').value || '').trim()
+        })
+      });
+      var data = await res.json().catch(function() { return null; });
+      if (res.ok) { window.location.reload(); return; }
+      msg.textContent = (data && data.error) ? data.error : 'Save failed';
+    } catch (err) { msg.textContent = 'Save failed'; }
+    btn.disabled = false;
+  });
+})();
+</script>
+
 <h2>Tickets</h2>
 <% if (summary.tickets.length === 0) { %>
   <p class="text-muted">No tickets in this Work Context.</p>

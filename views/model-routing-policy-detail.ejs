@@ -18,3 +18,81 @@
     <tr><th>Triage on no route</th><td class="text-muted"><%= policy.triageOnNoRoute !== false ? 'yes' : 'no' %></td></tr>
   </tbody>
 </table>
+
+<% if (userPermissions.includes('modelRouting:manage')) { %>
+<section class="admin-block">
+  <h2>Edit Policy</h2>
+  <form id="edit-policy-form" class="ticket-form">
+    <div class="form-group">
+      <label for="pol-name">Name *</label>
+      <input type="text" id="pol-name" name="name" required value="<%= policy.name %>">
+    </div>
+    <div class="form-group">
+      <label for="pol-wctx">Work Context (optional)</label>
+      <select id="pol-wctx" name="workContextId">
+        <option value="">None</option>
+        <% (workContexts || []).forEach(function(wc) { %>
+          <option value="<%= wc.id %>" <%= policy.workContextId === wc.id ? 'selected' : '' %>><%= wc.name %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="pol-providers">Allowed providers (comma separated)</label>
+      <input type="text" id="pol-providers" name="allowedProviders" value="<%= (policy.allowedProviders || []).join(', ') %>">
+    </div>
+    <div class="form-group">
+      <label for="pol-pref-prov">Preferred provider</label>
+      <input type="text" id="pol-pref-prov" name="preferredProvider" value="<%= policy.preferredProvider || '' %>">
+    </div>
+    <div class="form-group">
+      <label for="pol-pref-model">Preferred model</label>
+      <input type="text" id="pol-pref-model" name="preferredModel" value="<%= policy.preferredModel || '' %>">
+    </div>
+    <div class="form-group">
+      <label for="pol-risk">Risk class</label>
+      <select id="pol-risk" name="riskClass">
+        <option value="standard" <%= policy.riskClass === 'standard' || !policy.riskClass ? 'selected' : '' %>>standard</option>
+        <option value="low" <%= policy.riskClass === 'low' ? 'selected' : '' %>>low</option>
+        <option value="medium" <%= policy.riskClass === 'medium' ? 'selected' : '' %>>medium</option>
+        <option value="high" <%= policy.riskClass === 'high' ? 'selected' : '' %>>high</option>
+      </select>
+    </div>
+    <button type="submit" class="btn-submit">Save Changes</button>
+    <span id="pol-edit-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
+<script>
+(function() {
+  var form = document.getElementById('edit-policy-form');
+  if (!form) return;
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var msg = document.getElementById('pol-edit-msg');
+    btn.disabled = true;
+    msg.textContent = '';
+    var wctx = (document.getElementById('pol-wctx').value || '').trim();
+    var providers = (document.getElementById('pol-providers').value || '').trim();
+    try {
+      var res = await fetch('/api/model-routing-policies/<%= policy.id %>', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('pol-name').value.trim(),
+          workContextId: wctx ? parseInt(wctx, 10) : null,
+          allowedProviders: providers ? providers.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [],
+          preferredProvider: document.getElementById('pol-pref-prov').value.trim() || null,
+          preferredModel: document.getElementById('pol-pref-model').value.trim() || null,
+          riskClass: document.getElementById('pol-risk').value
+        })
+      });
+      var data = await res.json().catch(function() { return null; });
+      if (res.ok) { window.location.reload(); return; }
+      msg.textContent = (data && data.error) ? data.error : 'Save failed';
+    } catch (err) { msg.textContent = 'Save failed'; }
+    btn.disabled = false;
+  });
+})();
+</script>

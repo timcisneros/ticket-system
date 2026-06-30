@@ -96,35 +96,33 @@
   <% if (modelQualityMetrics.length === 0) { %>
     <p class="text-muted">No terminal model runs found.</p>
   <% } else { %>
-    <div class="table-wrap">
-      <table>
-        <thead>
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Runs</th>
+          <th>Artifact Avg</th>
+          <th>Completion Rate</th>
+          <th>Path Coverage</th>
+          <th>Disagreements A/S</th>
+          <th>Disagreements S/C</th>
+          <th>Disagreements A/C</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% modelQualityMetrics.forEach(metric => { %>
           <tr>
-            <th>Model</th>
-            <th>Runs</th>
-            <th>Artifact Avg</th>
-            <th>Completion Rate</th>
-            <th>Path Coverage</th>
-            <th>Disagreements A/S</th>
-            <th>Disagreements S/C</th>
-            <th>Disagreements A/C</th>
+            <td><%= metric.model %></td>
+            <td><%= metric.runs %></td>
+            <td><%= metricPercent(metric.artifactAccuracyAvg) %></td>
+            <td><%= metricPercent(metric.objectiveSuccessRate) %></td>
+            <td><%= metricPercent(metric.objectivePathCoverageAvg) %></td>
+            <td><%= metric.disagreements.accuracyVsSuccess %></td>
+            <td><%= metric.disagreements.successVsCoverage %></td>
+            <td><%= metric.disagreements.accuracyVsCoverage %></td>
           </tr>
-        </thead>
-        <tbody>
-          <% modelQualityMetrics.forEach(metric => { %>
-            <tr>
-              <td><%= metric.model %></td>
-              <td><%= metric.runs %></td>
-              <td><%= metricPercent(metric.artifactAccuracyAvg) %></td>
-              <td><%= metricPercent(metric.objectiveSuccessRate) %></td>
-              <td><%= metricPercent(metric.objectivePathCoverageAvg) %></td>
-              <td><%= metric.disagreements.accuracyVsSuccess %></td>
-              <td><%= metric.disagreements.successVsCoverage %></td>
-              <td><%= metric.disagreements.accuracyVsCoverage %></td>
-            </tr>
-          <% }); %>
-        </tbody>
-      </table>
-    </div>
+        <% }); %>
+      </tbody>
+    </table>
   <% } %>
 </section>

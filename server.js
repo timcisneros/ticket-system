@@ -90,6 +90,35 @@ const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__di
 const LOCAL_WORKSPACE_TARGET_ID = 'local-workspace';
 const LOCAL_WORKSPACE_TARGET_KIND = 'localWorkspace';
 
+const BUILTIN_PERMISSIONS = Object.freeze([
+  'ticket:create',
+  'ticket:read',
+  'ticket:update',
+  'ticket:delete',
+  'user:create',
+  'user:read',
+  'user:update',
+  'user:delete',
+  'group:create',
+  'group:read',
+  'group:update',
+  'group:delete',
+  'permission:assign',
+  'workspace:read',
+  'workspace:write',
+  'workspace:reset',
+  'workspace.delete.cross_ticket_artifact',
+  'processTemplate:manage',
+  'workContext:manage',
+  'watcher:manage',
+  'modelRouting:manage',
+  'connector:manage',
+  'connector:read',
+  'connector:write',
+  'ops:read',
+  'runtimeLimits:manage'
+]);
+
 function isRepoDataDir() {
   return path.resolve(DATA_DIR) === path.resolve(REPO_DATA_DIR);
 }
@@ -153,6 +182,7 @@ function seedOperationalDataDir() {
     maxModelRequestsPerRun: null,
     maxWorkspaceOperationsPerRun: null,
     maxRuntimeDurationMs: null,
+    localModelConcurrency: null,
     updatedBy: null,
     updatedAt: null
   }, null, 2));
@@ -297,6 +327,15 @@ const RUNTIME_LIMIT_MINIMUMS = Object.freeze({
   maxModelRequestsPerRun: 1,
   maxWorkspaceOperationsPerRun: 1,
   maxRuntimeDurationMs: 5000
+});
+const RUNTIME_SYSTEM_CONFIG_KEYS = Object.freeze([
+  'localModelConcurrency'
+]);
+const RUNTIME_SYSTEM_DISPLAY = Object.freeze({
+  localModelConcurrency: { label: 'Max concurrent local model runs', help: 'Max concurrent runs using local model providers (Ollama, etc.). 1 = serial, 2 = two parallel.' }
+});
+const RUNTIME_SYSTEM_MINIMUMS = Object.freeze({
+  localModelConcurrency: 1
 });
 const DEFAULT_LOCAL_MODEL_CONCURRENCY = 1;
 const DEFAULT_PROTECTED_WORKSPACE_PATHS = ['.git', '.env', '.env.*', 'node_modules', 'package.json', 'pnpm-lock.yaml'];
@@ -599,7 +638,8 @@ const CROSS_TICKET_DELETE_PERMISSION = 'workspace.delete.cross_ticket_artifact';
 // prior-owner guard) for a destructive op overlapping another ticket's artifact.
 function buildCrossTicketConflictError(operation, args, candidatePath, owner) {
   const ownerPath = getSuccessfulArtifactOwnershipPath(owner);
-  const error = new Error(`Workspace ${operation === 'deletePath' ? 'delete' : 'rename'} conflict: path ${candidatePath} overlaps an artifact (${ownerPath}) previously produced by ticket ${owner.ticketId}, run ${owner.runId}`);
+  const action = operation === 'deletePath' ? 'delete' : operation === 'writeFile' ? 'write' : operation === 'createFolder' ? 'create' : 'rename';
+  const error = new Error(`Workspace ${action} conflict: path ${candidatePath} overlaps an artifact (${ownerPath}) previously produced by ticket ${owner.ticketId}, run ${owner.runId}`);
   error.code = 'WORKSPACE_WRITE_CONFLICT';
   error.failureKind = 'invalid_action';
   error.workspaceAction = {
@@ -688,21 +728,92 @@ function recordPermissionedCrossTicketDelete(run, operation, args, candidatePath
   );
 }
 
+// Returns true when the given ticket still has owned content on disk inside
+// dirPath (non-recursive single depth, which works because any writeFile or
+// createFolder under dirPath creates an entry visible in the parent listing).
+// Used by both the prior-owner and overlap stale-ownership checks.
+function ticketHasOwnedContentInDirectory(provider, ticketId, dirPath) {
+  const history = readOperationHistory();
+  const listing = provider.list(dirPath);
+  return listing.entries.some(entry => {
+    const entryPath = path.posix.join(dirPath, entry.name);
+    return (history || []).some(record => {
+      if (record.error) return false;
+      if (record.ticketId !== ticketId) return false;
+      const recordPath = getSuccessfulArtifactOwnershipPath(record);
+      if (!recordPath || recordPath === dirPath) return false;
+      if (!workspacePathsOverlap(recordPath, entryPath)) return false;
+      if (!provider.exists(recordPath)) return false;
+      if (record.operation === 'createFolder') {
+        try { return !isEffectivelyEmptyDirectory(provider, recordPath); }
+        catch (e) { return false; }
+      }
+      return true;
+    });
+  });
+}
+
 // Guard a destructive op whose path overlaps another ticket's produced artifact.
-// renamePath is always blocked. deletePath is blocked too, UNLESS the user who
-// INITIATED this run (run.delegatedUserId) holds
-// workspace.delete.cross_ticket_artifact — in which case the delete is allowed and
-// recorded as a permissioned, audited action. Permission is evaluated live against
-// that fixed initiator identity. Throws before any fs mutation or history persist;
-// same-ticket never reaches here.
-function assertNoCrossTicketOverlap(run, operation, args, candidatePath) {
+// deletePath is blocked UNLESS the user who INITIATED this run
+// (run.delegatedUserId) holds workspace.delete.cross_ticket_artifact — in which
+// case the delete is allowed and recorded as a permissioned, audited action.
+// Permission is evaluated live against that fixed initiator identity. Throws
+// before any fs mutation or history persist; same-ticket never reaches here.
+function assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, args, candidatePath) {
   const owner = findOverlappingSuccessfulArtifactOwner(readOperationHistory(), run, candidatePath);
   if (!owner) return;
+  const ownerPath = getSuccessfulArtifactOwnershipPath(owner);
+  if (ownerPath) {
+    const stale = (() => {
+      if (!runWorkspaceProvider.exists(ownerPath)) return true;
+      const info = runWorkspaceProvider.getPathInfo(ownerPath);
+      if (info.exists && info.type === 'directory') {
+        const listing = runWorkspaceProvider.list(ownerPath);
+        if (listing.entries.length === 0) return true;
+        if (operation === 'deletePath') {
+          // Destructive delete: only skip if completely empty — files from
+          // other tickets (even if not the conflicting owner) could be
+          // destroyed.  Rename is safe because it moves a single file,
+          // leaving other entries untouched.
+          return false;
+        }
+        // Non-destructive (writeFile/createFolder/renamePath): skip if the
+        // conflicting ticket has no owned content on disk inside this
+        // directory.  Other tickets' files are protected by their own
+        // ownership, not by this ticket's ownership of the containing
+        // directory.  RenamePath is non-destructive to the directory — it only
+        // moves one file, leaving other entries untouched.
+        return !ticketHasOwnedContentInDirectory(runWorkspaceProvider, owner.ticketId, ownerPath);
+      }
+      return false;
+    })();
+    if (stale) {
+      appendRunLog(run, 'workspace:stale_ownership',
+        `Skipping cross-ticket overlap check for ${candidatePath}: owner path ${ownerPath} (ticket ${owner.ticketId}, run ${owner.runId}) no longer contains any owned content on disk.`,
+        { operation, candidatePath, ownerPath, ownerTicketId: owner.ticketId, ownerRunId: owner.runId }
+      );
+      return;
+    }
+  }
   if (operation === 'deletePath' && run && run.delegatedUserId != null && hasPermission(run.delegatedUserId, CROSS_TICKET_DELETE_PERMISSION)) {
     recordPermissionedCrossTicketDelete(run, operation, args, candidatePath, owner);
     return;
   }
   throw buildCrossTicketConflictError(operation, args, candidatePath, owner);
+}
+
+// True when the directory at dirPath (which must exist) contains no
+// files at any depth — only empty directories. Used to detect stale
+// createFolder ownership: an empty directory tree has no meaningful
+// content to protect.
+function isEffectivelyEmptyDirectory(provider, dirPath) {
+  let listing;
+  try { listing = provider.list(dirPath); }
+  catch (e) { return false; }
+  return listing.entries.every(entry => {
+    if (entry.type === 'file') return false;
+    return isEffectivelyEmptyDirectory(provider, path.posix.join(dirPath, entry.name));
+  });
 }
 
 // ── Phase-aware execution helpers ─────────────────────────────────
@@ -1395,8 +1506,7 @@ function isWorkflowUsableAction(action) {
     action.name === 'stop';
 }
 
-const ticketEventClients = new Set();
-const logEventClients = new Set();
+const eventClients = new Set();
 const runningRunKeys = new Set();
 const startingRunIds = new Set();
 const startingLocalModelRunIds = new Set();
@@ -4510,26 +4620,23 @@ function buildRunAuthorityContext(run, ticket, agent, snapshot) {
   };
 }
 
-function broadcastTicketChange() {
-  const event = `event: tickets-changed\ndata: ${JSON.stringify({ updatedAt: new Date().toISOString() })}\n\n`;
-  ticketEventClients.forEach(client => {
+function broadcastEvent(type, data) {
+  const event = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  eventClients.forEach(client => {
     try {
       client.write(event);
     } catch (error) {
-      ticketEventClients.delete(client);
+      eventClients.delete(client);
     }
   });
 }
 
+function broadcastTicketChange() {
+  broadcastEvent('tickets-changed', { updatedAt: new Date().toISOString() });
+}
+
 function broadcastLogEntry(log) {
-  const event = `event: log\ndata: ${JSON.stringify(sanitizeWorkspaceDisplayValue(log))}\n\n`;
-  logEventClients.forEach(client => {
-    try {
-      client.write(event);
-    } catch (error) {
-      logEventClients.delete(client);
-    }
-  });
+  broadcastEvent('log', sanitizeWorkspaceDisplayValue(log));
 }
 
 function sanitizeLogMessage(message) {
@@ -5014,7 +5121,12 @@ function writeGroups(groups) {
 }
 
 function readPermissions() {
-  return readJsonArrayCached(PERMISSIONS_FILE);
+  const filePermissions = readJsonArrayCached(PERMISSIONS_FILE);
+  const merged = [...BUILTIN_PERMISSIONS];
+  for (const p of filePermissions) {
+    if (!merged.includes(p)) merged.push(p);
+  }
+  return merged;
 }
 
 function readMemberships() {
@@ -8701,6 +8813,7 @@ function updateRunStatus(runId, status, error = null) {
   if (error) run.error = sanitizeLogMessage(error);
   writeRuns(runs);
   updateAllocationItemStatus(run, status);
+  broadcastEvent('run:status-changed', { runId: run.id, ticketId: run.ticketId, status, error: error || null });
   return run;
 }
 
@@ -8900,6 +9013,7 @@ function emptyRuntimeLimitsConfig() {
     maxModelRequestsPerRun: null,
     maxWorkspaceOperationsPerRun: null,
     maxRuntimeDurationMs: null,
+    localModelConcurrency: null,
     updatedBy: null,
     updatedAt: null
   };
@@ -8913,6 +9027,7 @@ function readRuntimeLimitsConfig() {
     return {
       ...emptyRuntimeLimitsConfig(),
       ...Object.fromEntries(RUNTIME_LIMIT_CONFIG_KEYS.map(key => [key, value[key] ?? null])),
+      ...Object.fromEntries(RUNTIME_SYSTEM_CONFIG_KEYS.map(key => [key, value[key] ?? null])),
       updatedBy: typeof value.updatedBy === 'string' && value.updatedBy.trim() ? value.updatedBy : null,
       updatedAt: typeof value.updatedAt === 'string' && isValidIsoTimestamp(value.updatedAt) ? value.updatedAt : null
     };
@@ -8926,7 +9041,8 @@ function getDeploymentRuntimeLimits() {
     maxExecutionSteps: getPositiveIntegerEnv('AGENT_MAX_EXECUTION_STEPS', DEFAULT_AGENT_RUNTIME_LIMITS.maxExecutionSteps),
     maxWorkspaceOperationsPerRun: getPositiveIntegerEnv('AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxWorkspaceOperationsPerRun),
     maxModelRequestsPerRun: getPositiveIntegerEnv('AGENT_MAX_MODEL_REQUESTS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxModelRequestsPerRun),
-    maxRuntimeDurationMs: getPositiveIntegerEnv('AGENT_MAX_RUNTIME_DURATION_MS', DEFAULT_AGENT_RUNTIME_LIMITS.maxRuntimeDurationMs)
+    maxRuntimeDurationMs: getPositiveIntegerEnv('AGENT_MAX_RUNTIME_DURATION_MS', DEFAULT_AGENT_RUNTIME_LIMITS.maxRuntimeDurationMs),
+    localModelConcurrency: getPositiveIntegerEnv('LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY)
   };
 }
 
@@ -9010,6 +9126,8 @@ function getRunRuntimeLimitsSnapshot(run, objective = null, options = {}) {
   return persisted || resolveAgentRuntimeLimits(objective, options).snapshot;
 }
 
+const ALL_RUNTIME_CONFIG_KEYS = Object.freeze([...RUNTIME_LIMIT_CONFIG_KEYS, ...RUNTIME_SYSTEM_CONFIG_KEYS]);
+
 function validateRuntimeLimitsConfigInput(input, existing = readRuntimeLimitsConfig()) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return { ok: false, error: 'Runtime limits payload must be an object' };
@@ -9017,9 +9135,9 @@ function validateRuntimeLimitsConfigInput(input, existing = readRuntimeLimitsCon
   const deployment = getDeploymentRuntimeLimits();
   const value = { ...existing };
   for (const key of Object.keys(input)) {
-    if (!RUNTIME_LIMIT_CONFIG_KEYS.includes(key)) return { ok: false, error: `Unknown runtime limit: ${key}` };
+    if (!ALL_RUNTIME_CONFIG_KEYS.includes(key)) return { ok: false, error: `Unknown runtime limit: ${key}` };
   }
-  for (const key of RUNTIME_LIMIT_CONFIG_KEYS) {
+  for (const key of ALL_RUNTIME_CONFIG_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
     const candidate = input[key];
     if (candidate === null) {
@@ -9043,11 +9161,16 @@ function writeRuntimeLimitsConfig(config, actor) {
   const value = {
     ...emptyRuntimeLimitsConfig(),
     ...pickRuntimeLimitValues(config),
+    ...Object.fromEntries(RUNTIME_SYSTEM_CONFIG_KEYS.map(key => [key, config[key] ?? null])),
     updatedBy: actor,
     updatedAt: now
   };
   writeFileAtomic(RUNTIME_LIMITS_FILE, JSON.stringify(value, null, 2));
   return value;
+}
+
+function pickRuntimeSystemValues(source) {
+  return Object.fromEntries(RUNTIME_SYSTEM_CONFIG_KEYS.map(key => [key, source[key]]));
 }
 
 function persistRuntimeLimitsUpdate(parsedValue, request) {
@@ -9076,6 +9199,19 @@ const RUNTIME_LIMIT_DISPLAY = Object.freeze({
 function buildRuntimeLimitsAdminState(formValues = null) {
   const config = readRuntimeLimitsConfig();
   const resolved = resolveAgentRuntimeLimits(null, { config });
+  const deployment = getDeploymentRuntimeLimits();
+  const systemRows = RUNTIME_SYSTEM_CONFIG_KEYS.map(key => ({
+    key,
+    label: RUNTIME_SYSTEM_DISPLAY[key].label,
+    help: RUNTIME_SYSTEM_DISPLAY[key].help,
+    minimum: RUNTIME_SYSTEM_MINIMUMS[key],
+    deploymentCap: deployment[key],
+    configuredValue: config[key],
+    effectiveValue: config[key] ?? deployment[key],
+    inputValue: formValues && Object.prototype.hasOwnProperty.call(formValues, key)
+      ? formValues[key]
+      : config[key]
+  }));
   return {
     config,
     deploymentCaps: resolved.deployment,
@@ -9091,13 +9227,14 @@ function buildRuntimeLimitsAdminState(formValues = null) {
       inputValue: formValues && Object.prototype.hasOwnProperty.call(formValues, key)
         ? formValues[key]
         : config[key]
-    }))
+    })),
+    systemRows
   };
 }
 
 function parseRuntimeLimitsForm(body = {}) {
   const parsed = {};
-  for (const key of RUNTIME_LIMIT_CONFIG_KEYS) {
+  for (const key of ALL_RUNTIME_CONFIG_KEYS) {
     const raw = body[key];
     const text = raw === undefined || raw === null ? '' : String(raw).trim();
     if (!text) parsed[key] = null;
@@ -9680,6 +9817,8 @@ function isLocalModelAgent(agent) {
 }
 
 function getLocalModelConcurrencyLimit() {
+  const configured = readRuntimeLimitsConfig().localModelConcurrency;
+  if (Number.isInteger(configured) && configured >= 1) return configured;
   return getPositiveIntegerEnv('LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY);
 }
 
@@ -13569,7 +13708,8 @@ function extractRequestedDestinationFolder(objective, candidatePath) {
 
 function isRecoverablePriorArtifactOwnerConflict(error, ticket, modelRequestCount, step, limits) {
   if (!error || error.code !== 'WORKSPACE_WRITE_CONFLICT') return false;
-  if (!error.workspaceAction || error.workspaceAction.reason !== 'prior_artifact_owner') return false;
+  if (!error.workspaceAction) return false;
+  if (!['prior_artifact_owner', 'overlapping_artifact_owner'].includes(error.workspaceAction.reason)) return false;
   if (!['writeFile', 'createFolder'].includes(error.workspaceAction.operation)) return false;
   if (objectiveRequiresExactArtifactPath(ticket && ticket.objective)) return false;
   return modelRequestCount < limits.maxModelRequestsPerRun && step + 1 < limits.maxExecutionSteps;
@@ -13580,6 +13720,20 @@ function buildPriorArtifactOwnerRetryResult(error, ticket) {
   const destination = extractRequestedDestinationFolder(ticket && ticket.objective, action.path);
   const destinationText = destination ? `${destination}/` : 'the requested destination folder';
   const replacementKind = action.operation === 'createFolder' ? 'name' : 'filename';
+  if (action.reason === 'overlapping_artifact_owner') {
+    const ownerPath = action.conflictingPath || '(unknown)';
+    return {
+      warning: 'workspace.overlapping_artifact_owner',
+      error: error.message,
+      blocked: true,
+      reason: 'overlapping_artifact_owner',
+      conflictingTicketId: action.conflictingTicketId,
+      conflictingRunId: action.conflictingRunId,
+      conflictingPath: action.path,
+      requestedDestination: destination,
+      message: `The path ${action.path} overlaps an artifact tree owned by ticket ${action.conflictingTicketId}/run ${action.conflictingRunId} (${ownerPath}) and was not ${action.operation === 'createFolder' ? 'created' : 'written'}. Choose a path outside ${ownerPath}. Emit only the corrected mutation action next.`
+    };
+  }
   const attemptedOutcome = action.operation === 'createFolder' ? 'created' : 'written';
   const existingArtifact = action.operation === 'createFolder' ? 'artifact' : 'file';
   return {
@@ -13721,9 +13875,38 @@ function isUnsupportedObjectiveModelPlan(modelPlan) {
     /\b(allowed operations|normal agents?|workflow drafts?|branching|conditional|createWorkflowDraftIntent|operation|operations)\b/i.test(message);
 }
 
+// Strip any extra keys from args that are not in the allowed set for the operation.
+// Models sometimes hallucinate extra fields (e.g. encoding, charset). Returns
+// { args, strippedKeys } so the caller can log what was discarded.
+function sanitizeOperationArgs(operation, args) {
+  const allowedKeys = AGENT_OPERATION_ARGS[operation];
+  if (!allowedKeys) return { args, strippedKeys: [] };
+  const sanitized = {};
+  const strippedKeys = [];
+  for (const key of Object.keys(args)) {
+    if (allowedKeys.includes(key)) {
+      sanitized[key] = args[key];
+    } else {
+      strippedKeys.push(key);
+    }
+  }
+  return { args: sanitized, strippedKeys };
+}
+
 function executeWorkspaceOperation(run, action, step = 0) {
-  const { operation, args } = parseWorkspaceOperation(action);
+  const { operation, args: rawArgs } = parseWorkspaceOperation(action);
+  const { args, strippedKeys } = sanitizeOperationArgs(operation, rawArgs);
   const runWorkspaceProvider = getRunWorkspaceProvider(run);
+
+  // Surface extra fields the model sent so the diagnostic is fully transparent.
+  if (strippedKeys.length > 0) {
+    appendRunLog(run, 'workspace:args_sanitized',
+      `Args sanitized: removed unexpected field(s): ${strippedKeys.join(', ')} from ${operation} args. ` +
+      `Original args included keys: ${Object.keys(rawArgs).join(', ')}. ` +
+      `Allowed keys: ${AGENT_OPERATION_ARGS[operation].join(', ')}.`,
+      { operation, args: rawArgs }
+    );
+  }
   let result;
 
   if (operation === 'listDirectory') {
@@ -13805,8 +13988,27 @@ function executeWorkspaceOperation(run, action, step = 0) {
 
     const priorOwner = findPriorSuccessfulArtifactOwner(readOperationHistory(), run, pathValue);
     if (priorOwner) {
-      throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue }, pathValue, priorOwner);
+      const ownerPath = getSuccessfulArtifactOwnershipPath(priorOwner);
+      const stale = (() => {
+        if (!ownerPath || !runWorkspaceProvider.exists(ownerPath)) return true;
+        const info = runWorkspaceProvider.getPathInfo(ownerPath);
+        if (info.exists && info.type === 'directory') {
+          const dirContents = runWorkspaceProvider.list(ownerPath);
+          if (dirContents.entries.length === 0) return true;
+          return !ticketHasOwnedContentInDirectory(runWorkspaceProvider, priorOwner.ticketId, ownerPath);
+        }
+        return false;
+      })();
+      if (stale) {
+        appendRunLog(run, 'workspace:stale_ownership',
+          `Skipping prior-artifact-owner check for ${pathValue}: owner path ${ownerPath} (ticket ${priorOwner.ticketId}, run ${priorOwner.runId}) no longer contains any owned content on disk.`,
+          { operation, path: pathValue, ownerPath, ownerTicketId: priorOwner.ticketId, ownerRunId: priorOwner.runId }
+        );
+      } else {
+        throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue }, pathValue, priorOwner);
+      }
     }
+    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
@@ -13866,8 +14068,27 @@ function executeWorkspaceOperation(run, action, step = 0) {
 
     const priorOwner = findPriorSuccessfulArtifactOwner(readOperationHistory(), run, pathValue);
     if (priorOwner) {
-      throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue, content }, pathValue, priorOwner);
+      const ownerPath = getSuccessfulArtifactOwnershipPath(priorOwner);
+      const stale = (() => {
+        if (!ownerPath || !runWorkspaceProvider.exists(ownerPath)) return true;
+        const info = runWorkspaceProvider.getPathInfo(ownerPath);
+        if (info.exists && info.type === 'directory') {
+          const dirContents = runWorkspaceProvider.list(ownerPath);
+          if (dirContents.entries.length === 0) return true;
+          return !ticketHasOwnedContentInDirectory(runWorkspaceProvider, priorOwner.ticketId, ownerPath);
+        }
+        return false;
+      })();
+      if (stale) {
+        appendRunLog(run, 'workspace:stale_ownership',
+          `Skipping prior-artifact-owner check for ${pathValue}: owner path ${ownerPath} (ticket ${priorOwner.ticketId}, run ${priorOwner.runId}) no longer contains any owned content on disk.`,
+          { operation, path: pathValue, ownerPath, ownerTicketId: priorOwner.ticketId, ownerRunId: priorOwner.runId }
+        );
+      } else {
+        throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue, content }, pathValue, priorOwner);
+      }
     }
+    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
@@ -13924,8 +14145,8 @@ function executeWorkspaceOperation(run, action, step = 0) {
     // Reject if either the source (or anything below it) or the destination
     // overlaps an artifact another ticket produced — a rename must not move away
     // or clobber another ticket's output.
-    assertNoCrossTicketOverlap(run, operation, { path: pathValue, nextPath }, pathValue);
-    assertNoCrossTicketOverlap(run, operation, { path: pathValue, nextPath }, nextPath);
+    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue, nextPath }, pathValue);
+    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue, nextPath }, nextPath);
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
@@ -13977,7 +14198,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
 
     // Reject if the path (or anything below it) holds an artifact another ticket
     // produced — a destructive delete must not remove another ticket's output.
-    assertNoCrossTicketOverlap(run, operation, { path: pathValue }, pathValue);
+    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
@@ -16608,7 +16829,7 @@ fastify.addHook('preHandler', async (request, reply) => {
   }
 });
 
-function setupSSEConnection(reply, request, clientSet) {
+function setupSSEConnection(reply, request) {
   reply.hijack();
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -16617,9 +16838,9 @@ function setupSSEConnection(reply, request, clientSet) {
     'X-Accel-Buffering': 'no'
   });
   reply.raw.write('retry: 5000\n\n');
-  clientSet.add(reply.raw);
+  eventClients.add(reply.raw);
   request.raw.on('close', () => {
-    clientSet.delete(reply.raw);
+    eventClients.delete(reply.raw);
   });
 }
 
@@ -17174,7 +17395,7 @@ fastify.get('/watchers', { preHandler: fastify.requireAuth }, async (request, re
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  return reply.view('watchers.ejs', viewData({ user: request.user, watchers: readWatchers() }, request.session.userId));
+  return reply.view('watchers.ejs', viewData({ user: request.user, watchers: readWatchers(), workContexts: readWorkContexts() }, request.session.userId));
 });
 
 fastify.get('/watchers/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -17186,7 +17407,7 @@ fastify.get('/watchers/:id', { preHandler: fastify.requireAuth }, async (request
   if (!watcher) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Watcher not found', user: request.user }, request.session.userId)); }
   const observations = readWatcherObservations().filter(o => o && o.watcherId === watcher.id).sort((a, b) => b.id - a.id).slice(0, WATCHER_OBSERVATION_LIMIT);
   const proposals = readWatcherProposals().filter(p => p && p.watcherId === watcher.id).sort((a, b) => b.id - a.id);
-  return reply.view('watcher-detail.ejs', viewData({ user: request.user, watcher, observations, proposals }, request.session.userId));
+  return reply.view('watcher-detail.ejs', viewData({ user: request.user, watcher, observations, proposals, workContexts: readWorkContexts() }, request.session.userId));
 });
 
 // ==================== MODEL ROUTING ROUTES (r1.28) ====================
@@ -17244,7 +17465,7 @@ fastify.get('/model-routing-policies', { preHandler: fastify.requireAuth }, asyn
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  return reply.view('model-routing-policies.ejs', viewData({ user: request.user, policies: readModelRoutingPolicies() }, request.session.userId));
+  return reply.view('model-routing-policies.ejs', viewData({ user: request.user, policies: readModelRoutingPolicies(), workContexts: readWorkContexts() }, request.session.userId));
 });
 
 fastify.get('/model-routing-policies/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -17254,7 +17475,7 @@ fastify.get('/model-routing-policies/:id', { preHandler: fastify.requireAuth }, 
   }
   const policy = getModelRoutingPolicyById(request.params.id);
   if (!policy) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Routing policy not found', user: request.user }, request.session.userId)); }
-  return reply.view('model-routing-policy-detail.ejs', viewData({ user: request.user, policy }, request.session.userId));
+  return reply.view('model-routing-policy-detail.ejs', viewData({ user: request.user, policy, workContexts: readWorkContexts() }, request.session.userId));
 });
 
 // ==================== LOCAL CONNECTOR ROUTES (r1.30) ====================
@@ -17363,7 +17584,7 @@ fastify.get('/connectors', { preHandler: fastify.requireAuth }, async (request, 
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  return reply.view('connectors.ejs', viewData({ user: request.user, connectors: readConnectors() }, request.session.userId));
+  return reply.view('connectors.ejs', viewData({ user: request.user, connectors: readConnectors(), workContexts: readWorkContexts() }, request.session.userId));
 });
 
 fastify.get('/connectors/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -17374,7 +17595,7 @@ fastify.get('/connectors/:id', { preHandler: fastify.requireAuth }, async (reque
   const connector = getConnectorById(request.params.id);
   if (!connector) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Connector not found', user: request.user }, request.session.userId)); }
   const receipts = readConnectorReceipts().filter(r => r && r.connectorId === connector.id).sort((a, b) => b.id - a.id).slice(0, CONNECTOR_RECEIPT_LIMIT);
-  return reply.view('connector-detail.ejs', viewData({ user: request.user, connector, receipts }, request.session.userId));
+  return reply.view('connector-detail.ejs', viewData({ user: request.user, connector, receipts, workContexts: readWorkContexts() }, request.session.userId));
 });
 
 // ==================== OPERATIONAL TRANSPARENCY (r1.31) ====================
@@ -17945,7 +18166,25 @@ fastify.get('/process-templates', { preHandler: fastify.requireAuth }, async (re
       ...template,
       ...(derivedById.get(template.id) || {})
     })),
-    canTrigger: hasPermission(request.session.userId, 'ticket:create')
+    canTrigger: hasPermission(request.session.userId, 'ticket:create'),
+    agents: readAgents(),
+    groups: readGroups()
+  }, request.session.userId));
+});
+
+fastify.get('/process-templates/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const template = getProcessTemplateById(request.params.id);
+  if (!template) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Process template not found', user: request.user }, request.session.userId)); }
+  return reply.view('process-template-detail.ejs', viewData({
+    user: request.user,
+    template,
+    agents: readAgents(),
+    groups: readGroups(),
+    workContexts: readWorkContexts()
   }, request.session.userId));
 });
 
@@ -18405,13 +18644,16 @@ fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }
   return { ticket };
 });
 
+fastify.get('/api/events', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  setupSSEConnection(reply, request);
+});
+
 fastify.get('/api/tickets/events', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
     return { error: 'Permission denied' };
   }
-
-  setupSSEConnection(reply, request, ticketEventClients);
+  setupSSEConnection(reply, request);
 });
 
 fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -18608,12 +18850,20 @@ fastify.post('/api/tickets/:id/simulate-plan', { preHandler: fastify.requireAuth
     workspaceMutated: false,
     actionsExecuted: 0,
     actionsProposed: [],
-    validationFindings: []
+    validationFindings: [],
+    simulatedAgent: null
   };
 
-  if (includeModelPlan && ticket.assignmentTargetType === 'agent') {
-    const agent = readAgents().find(a => a.id === ticket.assignmentTargetId);
+  if (includeModelPlan) {
+    let agent = null;
+    if (ticket.assignmentTargetType === 'agent') {
+      agent = readAgents().find(a => a.id === ticket.assignmentTargetId);
+    }
+    if (!agent || !agent.provider) {
+      agent = readAgents().find(a => a && a.provider);
+    }
     if (agent && agent.provider) {
+      result.simulatedAgent = agent.name;
       const runtimeEnvelope = buildSimulationRuntimeEnvelope(ticket, agent);
       const input = buildAgentPrompt(ticket, runtimeEnvelope, [], null, null);
 
@@ -19117,8 +19367,7 @@ fastify.get('/api/logs/events', { preHandler: fastify.requireAuth }, async (requ
     reply.code(403);
     return { error: 'Permission denied' };
   }
-
-  setupSSEConnection(reply, request, logEventClients);
+  setupSSEConnection(reply, request);
 });
 
 const DIAGNOSTIC_APP_VERSION = (() => {

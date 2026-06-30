@@ -8,11 +8,47 @@
   workspace. Fixtures here are test/demo only — businesses connect their own data later.
 </p>
 
+<% if (userPermissions.includes('connector:manage')) { %>
+<section class="admin-block">
+  <h2>Create Connector</h2>
+  <form id="create-connector-form" class="ticket-form">
+    <div class="form-group">
+      <label for="conn-name">Name *</label>
+      <input type="text" id="conn-name" name="name" required>
+    </div>
+    <div class="form-group">
+      <label for="conn-wctx">Work Context *</label>
+      <select id="conn-wctx" name="workContextId" required>
+        <option value="">Select work context</option>
+        <% (workContexts || []).forEach(function(wc) { %>
+          <option value="<%= wc.id %>"><%= wc.name %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Allowed scopes</label>
+      <label class="checkbox-label"><input type="checkbox" name="allowedScopes" value="read" checked> read</label>
+      <label class="checkbox-label"><input type="checkbox" name="allowedScopes" value="write"> write</label>
+    </div>
+    <div class="form-group">
+      <label for="conn-src">Source roots (one per line)</label>
+      <textarea id="conn-src" name="sourceRoots" rows="2"></textarea>
+    </div>
+    <div class="form-group">
+      <label for="conn-tgt">Target roots (one per line)</label>
+      <textarea id="conn-tgt" name="targetRoots" rows="2"></textarea>
+    </div>
+    <button type="submit" class="btn-submit">Create Connector</button>
+    <span id="conn-create-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
 <% if (!connectors || connectors.length === 0) { %>
-  <p class="text-muted">No connectors. Manage via <code>POST /api/connectors</code>.</p>
+  <p class="text-muted">No connectors yet.</p>
 <% } else { %>
   <table class="data-table">
-    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Kind</th><th>Work Context</th><th>Scopes</th><th>Credential</th></tr></thead>
+    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Kind</th><th>Work Context</th><th>Scopes</th><th>Credential</th><th>Actions</th></tr></thead>
     <tbody>
       <% connectors.forEach(function (c) { %>
         <tr>
@@ -23,8 +59,66 @@
           <td><a href="/work-contexts/<%= c.workContextId %>">#<%= c.workContextId %></a></td>
           <td class="text-muted"><%= (c.allowedScopes || []).join(', ') || 'none' %></td>
           <td class="text-muted"><%= c.credentialRef ? 'set (ref)' : 'none' %></td>
+          <td class="actions">
+            <a href="/connectors/<%= c.id %>" class="btn-small">Edit</a>
+            <% if (c.status !== 'archived') { %>
+              <button class="btn-small btn-danger archive-btn" data-id="<%= c.id %>" data-resource="connectors">Archive</button>
+            <% } %>
+          </td>
         </tr>
       <% }); %>
     </tbody>
   </table>
 <% } %>
+
+<script>
+(function() {
+  var form = document.getElementById('create-connector-form');
+  if (!form) return;
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var msg = document.getElementById('conn-create-msg');
+    btn.disabled = true;
+    msg.textContent = '';
+    var scopes = Array.from(form.querySelectorAll('input[name="allowedScopes"]:checked')).map(function(cb) { return cb.value; });
+    var srcText = (document.getElementById('conn-src').value || '').trim();
+    var tgtText = (document.getElementById('conn-tgt').value || '').trim();
+    try {
+      var res = await fetch('/api/connectors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('conn-name').value.trim(),
+          workContextId: parseInt(document.getElementById('conn-wctx').value, 10),
+          allowedScopes: scopes,
+          sourceRoots: srcText ? srcText.split('\n').map(function(s) { return s.trim(); }).filter(Boolean) : [],
+          targetRoots: tgtText ? tgtText.split('\n').map(function(s) { return s.trim(); }).filter(Boolean) : []
+        })
+      });
+      var data = await res.json().catch(function() { return null; });
+      if (res.ok && data && data.id != null) { window.location.reload(); return; }
+      msg.textContent = (data && data.error) ? data.error : 'Create failed';
+    } catch (err) { msg.textContent = 'Create failed'; }
+    btn.disabled = false;
+  });
+
+  document.querySelectorAll('.archive-btn').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      if (!confirm('Archive this connector?')) return;
+      btn.disabled = true;
+      try {
+        var res = await fetch('/api/' + btn.dataset.resource + '/' + btn.dataset.id, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'archived' })
+        });
+        var data = await res.json().catch(function() { return null; });
+        if (res.ok) { window.location.reload(); return; }
+        alert((data && data.error) || 'Archive failed');
+      } catch (err) { alert('Archive failed'); }
+      btn.disabled = false;
+    });
+  });
+})();
+</script>

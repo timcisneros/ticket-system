@@ -1,5 +1,7 @@
 <h1>Admin Dashboard</h1>
 
+<div id="scheduler-status-banner" class="scheduler-indicator" hidden></div>
+
 <section class="admin-block">
   <h2>Recent Admin Activity</h2>
   <% if (!recentAdminActivity || recentAdminActivity.length === 0) { %>
@@ -252,7 +254,7 @@
   </form>
 </section>
 
-<section class="admin-block" style="border-top: 2px solid #fecaca; padding-top: 22px;">
+<section class="admin-block admin-block--danger">
   <h2>Debug Reset</h2>
   <p class="text-muted">Destroys all local tickets, runs, logs, allocation plans, operation history, and workspace contents. Users, agents, groups, memberships, and permissions are preserved.</p>
   <p class="text-muted"><strong>This action cannot be undone.</strong></p>
@@ -266,10 +268,10 @@
   </form>
 
   <% if (resetError) { %>
-    <div class="error-message" style="margin-top: 12px;"><%= resetError %></div>
+    <div class="error-message"><%= resetError %></div>
   <% } %>
   <% if (resetSuccess) { %>
-    <div class="error-message" style="margin-top: 12px; color: #065f46; background: #d1fae5; border-color: #a7f3d0;">Debug data reset successfully.</div>
+    <div class="success-message">Debug data reset successfully.</div>
   <% } %>
 </section>
 
@@ -299,4 +301,20 @@ function updateAccountForm() {
 accountType.addEventListener('change', updateAccountForm);
 provider.addEventListener('change', updateAccountForm);
 updateAccountForm();
+
+(function() {
+  var banner = document.getElementById('scheduler-status-banner');
+  if (!banner) return;
+  (async function() {
+    try {
+      var res = await fetch('/api/runtime/status', { headers: { Accept: 'application/json' } });
+      if (!res.ok) { banner.hidden = true; return; }
+      var data = await res.json();
+      var running = Boolean(data.scheduler && data.scheduler.running);
+      banner.hidden = false;
+      banner.textContent = running ? 'Scheduler running' : 'Scheduler stopped';
+      banner.classList.toggle('scheduler-indicator--stopped', !running);
+    } catch (e) { banner.hidden = true; }
+  })();
+})();
 </script>

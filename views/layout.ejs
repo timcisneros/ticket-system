@@ -17,46 +17,71 @@
       <a href="/" class="nav-brand">Ticket System</a>
       <ul class="nav-links">
         <% if (typeof user !== 'undefined' && user) { %>
-          <li><a href="/">New Ticket</a></li>
-	          <li><a href="/tickets">Tickets</a></li>
-	          <% if (userPermissions.includes('ticket:read')) { %>
-	            <li><a href="/triage">Triage</a></li>
-	            <li><a href="/agents">Agents</a></li>
-	            <li><a href="/logs">Logs</a></li>
-	          <% } %>
-          <% if (userPermissions.includes('processTemplate:manage')) { %>
-            <li><a href="/process-templates">Templates</a></li>
+          <li class="dropdown">
+            <a class="dropdown-toggle">Tickets</a>
+            <ul class="dropdown-menu">
+              <li><a href="/">New Ticket</a></li>
+              <li><a href="/tickets">All Tickets</a></li>
+              <% if (userPermissions.includes('ticket:read')) { %>
+                <li><a href="/triage">Triage</a></li>
+              <% } %>
+            </ul>
+          </li>
+          <% if (userPermissions.includes('ticket:read') || userPermissions.includes('watcher:manage') || userPermissions.includes('ops:read')) { %>
+          <li class="dropdown">
+            <a class="dropdown-toggle">Monitoring</a>
+            <ul class="dropdown-menu">
+              <% if (userPermissions.includes('ticket:read')) { %>
+                <li><a href="/agents">Agents</a></li>
+                <li><a href="/logs">Logs</a></li>
+              <% } %>
+              <% if (userPermissions.includes('watcher:manage')) { %>
+                <li><a href="/watchers">Watchers</a></li>
+              <% } %>
+              <% if (userPermissions.includes('ops:read')) { %>
+                <li><a href="/ops">Ops</a></li>
+              <% } %>
+            </ul>
+          </li>
           <% } %>
-          <% if (userPermissions.includes('workContext:manage')) { %>
-            <li><a href="/work-contexts">Work Contexts</a></li>
+          <% if (userPermissions.includes('processTemplate:manage') || userPermissions.includes('workContext:manage') || userPermissions.includes('modelRouting:manage') || userPermissions.includes('connector:manage')) { %>
+          <li class="dropdown">
+            <a class="dropdown-toggle">Config</a>
+            <ul class="dropdown-menu">
+              <% if (userPermissions.includes('processTemplate:manage')) { %>
+                <li><a href="/process-templates">Templates</a></li>
+              <% } %>
+              <% if (userPermissions.includes('workContext:manage')) { %>
+                <li><a href="/work-contexts">Work Contexts</a></li>
+              <% } %>
+              <% if (userPermissions.includes('modelRouting:manage')) { %>
+                <li><a href="/model-routing-policies">Routing</a></li>
+              <% } %>
+              <% if (userPermissions.includes('connector:manage')) { %>
+                <li><a href="/connectors">Connectors</a></li>
+              <% } %>
+            </ul>
+          </li>
           <% } %>
-          <% if (userPermissions.includes('watcher:manage')) { %>
-            <li><a href="/watchers">Watchers</a></li>
-          <% } %>
-          <% if (userPermissions.includes('modelRouting:manage')) { %>
-            <li><a href="/model-routing-policies">Routing</a></li>
-          <% } %>
-          <% if (userPermissions.includes('connector:manage')) { %>
-            <li><a href="/connectors">Connectors</a></li>
-          <% } %>
-          <% if (userPermissions.includes('ops:read')) { %>
-            <li><a href="/ops">Ops</a></li>
+          <% if (userPermissions.includes('user:read') || userPermissions.includes('runtimeLimits:manage')) { %>
+          <li class="dropdown">
+            <a class="dropdown-toggle">Admin</a>
+            <ul class="dropdown-menu">
+              <% if (userPermissions.includes('user:read')) { %>
+                <li><a href="/admin">Dashboard</a></li>
+                <li><a href="/admin/workflows">Workflows</a></li>
+                <li><a href="/admin/actions">Actions</a></li>
+              <% } %>
+              <% if (userPermissions.includes('runtimeLimits:manage')) { %>
+                <li><a href="/admin/runtime-limits">Runtime Limits</a></li>
+              <% } %>
+            </ul>
+          </li>
           <% } %>
           <% if (userPermissions.includes('workspace:read')) { %>
             <li><a href="/workspace">Workspace</a></li>
           <% } %>
-          <% if (userPermissions.includes('user:read')) { %>
-            <li><a href="/admin">Admin</a></li>
-            <li><a href="/admin/workflows">Workflows</a></li>
-            <li><a href="/admin/actions">Actions</a></li>
-          <% } %>
-          <% if (userPermissions.includes('runtimeLimits:manage')) { %>
-            <li><a href="/admin/runtime-limits">Runtime Limits</a></li>
-          <% } %>
           <li><a href="/logout">Logout</a></li>
-          <% if (userPermissions.includes('ticket:read')) { %>
-            <li><span id="scheduler-indicator" class="scheduler-indicator" hidden></span></li>
-          <% } %>
         <% } else { %>
           <li><a href="/login">Login</a></li>
         <% } %>
@@ -65,25 +90,15 @@
   </nav>
   <% if (typeof user !== 'undefined' && user && userPermissions.includes('ticket:read')) { %>
   <script>
-  (() => {
-    const indicator = document.getElementById('scheduler-indicator');
-    if (!indicator) return;
-    async function refreshSchedulerStatus() {
-      try {
-        const response = await fetch('/api/runtime/status', { headers: { Accept: 'application/json' } });
-        if (!response.ok) { indicator.hidden = true; return; }
-        const data = await response.json();
-        const running = Boolean(data.scheduler && data.scheduler.running);
-        document.body.dataset.schedulerRunning = running ? 'true' : 'false';
-        indicator.hidden = false;
-        indicator.textContent = running ? 'Scheduler running' : 'Scheduler stopped';
-        indicator.classList.toggle('scheduler-indicator--stopped', !running);
-      } catch (error) {
-        indicator.hidden = true;
-      }
+  (async () => {
+    try {
+      const response = await fetch('/api/runtime/status', { headers: { Accept: 'application/json' } });
+      if (!response.ok) { delete document.body.dataset.schedulerRunning; return; }
+      const data = await response.json();
+      document.body.dataset.schedulerRunning = Boolean(data.scheduler && data.scheduler.running) ? 'true' : 'false';
+    } catch (error) {
+      delete document.body.dataset.schedulerRunning;
     }
-    refreshSchedulerStatus();
-    setInterval(refreshSchedulerStatus, 5000);
   })();
   </script>
   <% } %>

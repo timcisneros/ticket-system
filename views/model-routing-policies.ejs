@@ -8,12 +8,55 @@
   than guessing. The decision is recorded as an immutable <code>routingSnapshot</code> on the run.
 </p>
 
+<% if (userPermissions.includes('modelRouting:manage')) { %>
+<section class="admin-block">
+  <h2>Create Routing Policy</h2>
+  <form id="create-policy-form" class="ticket-form">
+    <div class="form-group">
+      <label for="pol-name">Name *</label>
+      <input type="text" id="pol-name" name="name" required>
+    </div>
+    <div class="form-group">
+      <label for="pol-wctx">Work Context (optional)</label>
+      <select id="pol-wctx" name="workContextId">
+        <option value="">None</option>
+        <% (workContexts || []).forEach(function(wc) { %>
+          <option value="<%= wc.id %>"><%= wc.name %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="pol-providers">Allowed providers (comma separated)</label>
+      <input type="text" id="pol-providers" name="allowedProviders" placeholder="openai, ollama">
+    </div>
+    <div class="form-group">
+      <label for="pol-pref-prov">Preferred provider</label>
+      <input type="text" id="pol-pref-prov" name="preferredProvider" placeholder="openai">
+    </div>
+    <div class="form-group">
+      <label for="pol-pref-model">Preferred model</label>
+      <input type="text" id="pol-pref-model" name="preferredModel" placeholder="gpt-4.1-mini">
+    </div>
+    <div class="form-group">
+      <label for="pol-risk">Risk class</label>
+      <select id="pol-risk" name="riskClass">
+        <option value="standard">standard</option>
+        <option value="low">low</option>
+        <option value="medium">medium</option>
+        <option value="high">high</option>
+      </select>
+    </div>
+    <button type="submit" class="btn-submit">Create Policy</button>
+    <span id="pol-create-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
 <% if (!policies || policies.length === 0) { %>
-  <p class="text-muted">No routing policies. With none, runs use the agent's own provider/model
-    (<code>no_policy</code>). Manage via <code>POST /api/model-routing-policies</code>.</p>
+  <p class="text-muted">No routing policies. With none, runs use the agent's own provider/model (<code>no_policy</code>).</p>
 <% } else { %>
   <table class="data-table">
-    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Work Context</th><th>Capability</th><th>Allowed providers</th></tr></thead>
+    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Work Context</th><th>Capability</th><th>Allowed providers</th><th>Actions</th></tr></thead>
     <tbody>
       <% policies.forEach(function (p) { %>
         <tr>
@@ -23,8 +66,66 @@
           <td class="text-muted"><%= p.workContextId != null ? ('#' + p.workContextId) : 'any' %></td>
           <td class="text-muted"><%= p.capabilityId || 'any' %></td>
           <td class="text-muted"><%= (p.allowedProviders && p.allowedProviders.length) ? p.allowedProviders.join(', ') : 'any' %></td>
+          <td class="actions">
+            <a href="/model-routing-policies/<%= p.id %>" class="btn-small">Edit</a>
+            <% if (p.status !== 'archived') { %>
+              <button class="btn-small btn-danger archive-btn" data-id="<%= p.id %>" data-resource="model-routing-policies">Archive</button>
+            <% } %>
+          </td>
         </tr>
       <% }); %>
     </tbody>
   </table>
 <% } %>
+
+<script>
+(function() {
+  var form = document.getElementById('create-policy-form');
+  if (!form) return;
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var msg = document.getElementById('pol-create-msg');
+    btn.disabled = true;
+    msg.textContent = '';
+    var wctx = (document.getElementById('pol-wctx').value || '').trim();
+    var providers = (document.getElementById('pol-providers').value || '').trim();
+    try {
+      var res = await fetch('/api/model-routing-policies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('pol-name').value.trim(),
+          workContextId: wctx ? parseInt(wctx, 10) : null,
+          allowedProviders: providers ? providers.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [],
+          preferredProvider: document.getElementById('pol-pref-prov').value.trim() || null,
+          preferredModel: document.getElementById('pol-pref-model').value.trim() || null,
+          riskClass: document.getElementById('pol-risk').value
+        })
+      });
+      var data = await res.json().catch(function() { return null; });
+      if (res.ok && data && data.id != null) { window.location.reload(); return; }
+      msg.textContent = (data && data.error) ? data.error : 'Create failed';
+    } catch (err) { msg.textContent = 'Create failed'; }
+    btn.disabled = false;
+  });
+
+  document.querySelectorAll('.archive-btn').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      if (!confirm('Archive this policy?')) return;
+      btn.disabled = true;
+      try {
+        var res = await fetch('/api/' + btn.dataset.resource + '/' + btn.dataset.id, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'archived' })
+        });
+        var data = await res.json().catch(function() { return null; });
+        if (res.ok) { window.location.reload(); return; }
+        alert((data && data.error) || 'Archive failed');
+      } catch (err) { alert('Archive failed'); }
+      btn.disabled = false;
+    });
+  });
+})();
+</script>

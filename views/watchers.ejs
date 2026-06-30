@@ -9,11 +9,38 @@
   notifications.
 </p>
 
+<% if (userPermissions.includes('watcher:manage')) { %>
+<section class="admin-block">
+  <h2>Create Watcher</h2>
+  <form id="create-watcher-form" class="ticket-form">
+    <div class="form-group">
+      <label for="w-name">Name *</label>
+      <input type="text" id="w-name" name="name" required>
+    </div>
+    <div class="form-group">
+      <label for="w-wctx">Work Context *</label>
+      <select id="w-wctx" name="workContextId" required>
+        <option value="">Select work context</option>
+        <% (workContexts || []).forEach(function(wc) { %>
+          <option value="<%= wc.id %>"><%= wc.name %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="w-path">Source path (one per line)</label>
+      <textarea id="w-path" name="sourceRefs" rows="2"></textarea>
+    </div>
+    <button type="submit" class="btn-submit">Create Watcher</button>
+    <span id="w-create-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
 <% if (!watchers || watchers.length === 0) { %>
-  <p class="text-muted">No watchers yet. Manage via the JSON API (<code>POST /api/watchers</code>).</p>
+  <p class="text-muted">No watchers yet.</p>
 <% } else { %>
   <table class="data-table">
-    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Work Context</th><th>Source</th><th>Last observed</th></tr></thead>
+    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Work Context</th><th>Source</th><th>Last observed</th><th>Actions</th></tr></thead>
     <tbody>
       <% watchers.forEach(function (w) { %>
         <tr>
@@ -23,8 +50,62 @@
           <td><a href="/work-contexts/<%= w.workContextId %>">#<%= w.workContextId %></a></td>
           <td class="text-muted"><%= w.sourceKind %></td>
           <td class="text-muted"><%= w.lastObservedAt || 'never' %></td>
+          <td class="actions">
+            <a href="/watchers/<%= w.id %>" class="btn-small">Edit</a>
+            <% if (w.status !== 'archived') { %>
+              <button class="btn-small btn-danger archive-btn" data-id="<%= w.id %>" data-resource="watchers">Archive</button>
+            <% } %>
+          </td>
         </tr>
       <% }); %>
     </tbody>
   </table>
 <% } %>
+
+<script>
+(function() {
+  var form = document.getElementById('create-watcher-form');
+  if (!form) return;
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var msg = document.getElementById('w-create-msg');
+    btn.disabled = true;
+    msg.textContent = '';
+    var pathsText = (document.getElementById('w-path').value || '').trim();
+    try {
+      var res = await fetch('/api/watchers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('w-name').value.trim(),
+          workContextId: parseInt(document.getElementById('w-wctx').value, 10),
+          sourceRefs: pathsText ? pathsText.split('\n').map(function(s) { return { path: s.trim() }; }).filter(function(s) { return s.path; }) : []
+        })
+      });
+      var data = await res.json().catch(function() { return null; });
+      if (res.ok && data && data.id != null) { window.location.reload(); return; }
+      msg.textContent = (data && data.error) ? data.error : 'Create failed';
+    } catch (err) { msg.textContent = 'Create failed'; }
+    btn.disabled = false;
+  });
+
+  document.querySelectorAll('.archive-btn').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      if (!confirm('Archive this watcher?')) return;
+      btn.disabled = true;
+      try {
+        var res = await fetch('/api/' + btn.dataset.resource + '/' + btn.dataset.id, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'archived' })
+        });
+        var data = await res.json().catch(function() { return null; });
+        if (res.ok) { window.location.reload(); return; }
+        alert((data && data.error) || 'Archive failed');
+      } catch (err) { alert('Archive failed'); }
+      btn.disabled = false;
+    });
+  });
+})();
+</script>

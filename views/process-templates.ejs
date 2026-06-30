@@ -9,6 +9,43 @@
   ticket or triggers a schedule.
 </p>
 
+<% if (userPermissions.includes('processTemplate:manage')) { %>
+<section class="admin-block">
+  <h2>Create Process Template</h2>
+  <form id="create-pt-form" class="ticket-form">
+    <div class="form-group">
+      <label for="pt-name">Template Name *</label>
+      <input type="text" id="pt-name" name="name" required>
+    </div>
+    <div class="form-group">
+      <label for="pt-objective">Ticket Objective *</label>
+      <textarea id="pt-objective" name="objective" required rows="2"></textarea>
+    </div>
+    <div class="form-group">
+      <label for="pt-assign-type">Assignment target type</label>
+      <select id="pt-assign-type" name="assignmentTargetType">
+        <option value="">Select worker type</option>
+        <option value="agent">One agent</option>
+        <option value="group">Agent group</option>
+      </select>
+    </div>
+    <div class="form-group" id="pt-assign-target-group" style="display:none">
+      <label for="pt-assign-target">Assignment target</label>
+      <select id="pt-assign-target" name="assignmentTargetId">
+        <option value="">Select a target type first</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Capability</label>
+      <label class="checkbox-label"><input type="radio" name="capabilityType" value="directAction" checked> Direct action</label>
+      <label class="checkbox-label"><input type="radio" name="capabilityType" value="workflow"> Workflow</label>
+    </div>
+    <button type="submit" class="btn-submit">Create Template</button>
+    <span id="pt-create-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
 <%
   var templateList = typeof templates === 'undefined' ? [] : templates;
   var allowTrigger = typeof canTrigger !== 'undefined' && canTrigger;
@@ -63,7 +100,7 @@
            var recent = template.recentGeneratedTickets || [];
       %>
         <tr>
-          <td><%= template.name %> <span class="text-muted">v<%= template.version || 1 %></span></td>
+          <td><a href="/process-templates/<%= template.id %>"><%= template.name %></a> <span class="text-muted">v<%= template.version || 1 %></span></td>
           <td>
             <span class="badge"><%= template.enabled ? 'Enabled' : 'Disabled' %></span>
             <span class="badge badge--due-<%= template.dueStatus %>"><%= dueLabel(template.dueStatus) %></span>
@@ -75,9 +112,9 @@
             <% } %>
             <div>
               <% if (template.enabled) { %>
-                <button type="button" class="process-template-control" data-template-id="<%= template.id %>" data-control="disable">Disable template</button>
+                <button type="button" class="btn-secondary" data-template-id="<%= template.id %>" data-control="disable">Disable template</button>
               <% } else if (allowTrigger) { %>
-                <button type="button" class="process-template-control" data-template-id="<%= template.id %>" data-control="enable">Enable template</button>
+                <button type="button" class="btn-secondary" data-template-id="<%= template.id %>" data-control="enable">Enable template</button>
               <% } else { %>
                 <span class="text-muted">disabled — enabling requires ticket:create</span>
               <% } %>
@@ -91,11 +128,11 @@
               <div class="text-muted">next: <%= sch.nextRunAt || '—' %> · last: <%= sch.lastScheduledTriggerAt || 'never' %></div>
             <% } %>
             <% if (sch && sch.enabled) { %>
-              <div><button type="button" class="process-template-control" data-template-id="<%= template.id %>" data-control="schedule/pause">Pause scheduled ticket creation</button></div>
+              <div><button type="button" class="btn-secondary" data-template-id="<%= template.id %>" data-control="schedule/pause">Pause scheduled ticket creation</button></div>
             <% } else if (hasReusableInterval(sch)) { %>
               <div class="text-muted">Paused schedules do not create tickets. Manual ticket creation is still available while only the schedule is paused.</div>
               <% if (allowTrigger) { %>
-                <div><button type="button" class="process-template-control" data-template-id="<%= template.id %>" data-control="schedule/resume">Resume scheduled ticket creation</button></div>
+                <div><button type="button" class="btn-secondary" data-template-id="<%= template.id %>" data-control="schedule/resume">Resume scheduled ticket creation</button></div>
               <% } else { %>
                 <div class="text-muted">resuming requires ticket:create</div>
               <% } %>
@@ -104,9 +141,9 @@
               <form class="process-template-schedule" data-template-id="<%= template.id %>">
                 <input type="number" name="everySeconds" min="60" step="1"
                   value="<%= sch && sch.everySeconds ? sch.everySeconds : '' %>" placeholder="seconds (UTC)">
-                <button type="submit" data-action="enable">Schedule ticket creation</button>
+                <button type="submit" class="btn-small" data-action="enable">Schedule ticket creation</button>
                 <% if (sch && sch.enabled) { %>
-                  <button type="button" data-action="disable">Disable schedule</button>
+                  <button type="button" class="btn-small" data-action="disable">Disable schedule</button>
                 <% } %>
               </form>
             <% } %>
@@ -138,7 +175,7 @@
           <td>
             <% if (allowTrigger && template.enabled) { %>
               <form class="process-template-trigger" data-template-id="<%= template.id %>" method="post" action="/api/process-templates/<%= template.id %>/trigger">
-                <button type="submit">Create ticket from template</button>
+                <button type="submit" class="btn-submit">Create ticket from template</button>
               </form>
             <% } else if (!template.enabled) { %>
               <span class="text-muted">disabled</span>
@@ -212,7 +249,7 @@
   // Template enable/disable and schedule pause/resume controls. Each posts to its
   // dedicated endpoint and reloads. These stop/resume FUTURE template-created tickets
   // only — they never touch existing tickets, runs, or history.
-  document.querySelectorAll('button.process-template-control').forEach(function (button) {
+  document.querySelectorAll('button[data-template-id]').forEach(function (button) {
     button.addEventListener('click', function () {
       var id = button.getAttribute('data-template-id');
       var control = button.getAttribute('data-control'); // disable | enable | schedule/pause | schedule/resume
@@ -225,4 +262,55 @@
       }).catch(function () { button.disabled = false; alert('Action failed'); });
     });
   });
+
+  // Create template
+  (function() {
+    var form = document.getElementById('create-pt-form');
+    if (!form) return;
+    var agents = <%- JSON.stringify(agents || []) %>;
+    var groups = <%- JSON.stringify(groups || []) %>;
+    var typeSelect = document.getElementById('pt-assign-type');
+    var targetSelect = document.getElementById('pt-assign-target');
+    var targetGroup = document.getElementById('pt-assign-target-group');
+
+    function populateTargets() {
+      var type = typeSelect.value;
+      if (!type) { targetGroup.style.display = 'none'; return; }
+      var items = type === 'agent' ? agents : groups;
+      targetSelect.innerHTML = '<option value="">' + (type === 'agent' ? 'Select an agent' : 'Select an agent group') + '</option>' +
+        items.map(function(item) { return '<option value="' + item.id + '">' + item.name + '</option>'; }).join('');
+      targetGroup.style.display = '';
+    }
+    typeSelect.addEventListener('change', populateTargets);
+
+    form.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var btn = form.querySelector('button[type="submit"]');
+      var msg = document.getElementById('pt-create-msg');
+      btn.disabled = true;
+      msg.textContent = '';
+      var assignType = typeSelect.value;
+      var assignId = targetSelect.value;
+      try {
+        var res = await fetch('/api/process-templates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: document.getElementById('pt-name').value.trim(),
+            enabled: true,
+            ticketTemplate: {
+              objective: document.getElementById('pt-objective').value.trim(),
+              assignmentTargetType: assignType || null,
+              assignmentTargetId: assignId ? parseInt(assignId, 10) : null,
+              capabilityType: form.querySelector('input[name="capabilityType"]:checked').value
+            }
+          })
+        });
+        var data = await res.json().catch(function() { return null; });
+        if (res.ok && data && data.template && data.template.id != null) { window.location.reload(); return; }
+        msg.textContent = (data && data.error) ? data.error : 'Create failed';
+      } catch (err) { msg.textContent = 'Create failed'; }
+      btn.disabled = false;
+    });
+  })();
 </script>

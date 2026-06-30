@@ -19,6 +19,76 @@
   </tbody>
 </table>
 
+<% if (userPermissions.includes('connector:manage')) { %>
+<section class="admin-block">
+  <h2>Edit Connector</h2>
+  <form id="edit-connector-form" class="ticket-form">
+    <div class="form-group">
+      <label for="conn-name">Name *</label>
+      <input type="text" id="conn-name" name="name" required value="<%= connector.name %>">
+    </div>
+    <div class="form-group">
+      <label for="conn-edit-wctx">Work Context *</label>
+      <select id="conn-edit-wctx" name="workContextId" required>
+        <option value="">Select work context</option>
+        <% (workContexts || []).forEach(function(wc) { %>
+          <option value="<%= wc.id %>" <%= connector.workContextId === wc.id ? 'selected' : '' %>><%= wc.name %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Allowed scopes</label>
+      <label class="checkbox-label"><input type="checkbox" name="allowedScopes" value="read" <%= (connector.allowedScopes || []).includes('read') ? 'checked' : '' %>> read</label>
+      <label class="checkbox-label"><input type="checkbox" name="allowedScopes" value="write" <%= (connector.allowedScopes || []).includes('write') ? 'checked' : '' %>> write</label>
+    </div>
+    <div class="form-group">
+      <label for="conn-src">Source roots (one per line)</label>
+      <textarea id="conn-src" name="sourceRoots" rows="2"><%= (connector.sourceRoots || []).join('\n') %></textarea>
+    </div>
+    <div class="form-group">
+      <label for="conn-tgt">Target roots (one per line)</label>
+      <textarea id="conn-tgt" name="targetRoots" rows="2"><%= (connector.targetRoots || []).join('\n') %></textarea>
+    </div>
+    <button type="submit" class="btn-submit">Save Changes</button>
+    <span id="conn-edit-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
+<script>
+(function() {
+  var form = document.getElementById('edit-connector-form');
+  if (!form) return;
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var msg = document.getElementById('conn-edit-msg');
+    btn.disabled = true;
+    msg.textContent = '';
+    var scopes = Array.from(form.querySelectorAll('input[name="allowedScopes"]:checked')).map(function(cb) { return cb.value; });
+    var srcText = (document.getElementById('conn-src').value || '').trim();
+    var tgtText = (document.getElementById('conn-tgt').value || '').trim();
+    try {
+      var res = await fetch('/api/connectors/<%= connector.id %>', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('conn-name').value.trim(),
+          workContextId: parseInt(document.getElementById('conn-edit-wctx').value, 10),
+          allowedScopes: scopes,
+          sourceRoots: srcText ? srcText.split('\n').map(function(s) { return s.trim(); }).filter(Boolean) : [],
+          targetRoots: tgtText ? tgtText.split('\n').map(function(s) { return s.trim(); }).filter(Boolean) : []
+        })
+      });
+      var data = await res.json().catch(function() { return null; });
+      if (res.ok) { window.location.reload(); return; }
+      msg.textContent = (data && data.error) ? data.error : 'Save failed';
+    } catch (err) { msg.textContent = 'Save failed'; }
+    btn.disabled = false;
+  });
+})();
+</script>
+
 <h2>Recent receipts</h2>
 <% if (!receipts || receipts.length === 0) { %>
   <p class="text-muted">No receipts yet. Read via <code>POST /api/connectors/<%= connector.id %>/read</code>.</p>

@@ -7,12 +7,30 @@
   path. This page is read-only except for the create/update controls below.
 </p>
 
+<% if (userPermissions.includes('workContext:manage')) { %>
+<section class="admin-block">
+  <h2>Create Work Context</h2>
+  <form id="create-wctx-form" class="ticket-form">
+    <div class="form-group">
+      <label for="wc-name">Name *</label>
+      <input type="text" id="wc-name" name="name" required>
+    </div>
+    <div class="form-group">
+      <label for="wc-purpose">Purpose</label>
+      <textarea id="wc-purpose" name="purpose" rows="2"></textarea>
+    </div>
+    <button type="submit" class="btn-submit">Create Work Context</button>
+    <span id="wc-create-msg" class="text-muted"></span>
+  </form>
+</section>
+<% } %>
+
 <% if (!workContexts || workContexts.length === 0) { %>
   <p class="text-muted">No Work Contexts yet.</p>
 <% } else { %>
   <table class="data-table">
     <thead>
-      <tr><th>#</th><th>Name</th><th>Status</th><th>Tickets</th><th>Open</th><th>Blocked</th><th>Triage</th><th>Templates</th><th>Views</th></tr>
+      <tr><th>#</th><th>Name</th><th>Status</th><th>Tickets</th><th>Open</th><th>Blocked</th><th>Triage</th><th>Templates</th><th>Views</th><th>Actions</th></tr>
     </thead>
     <tbody>
       <% workContexts.forEach(function (ctx) { var c = ctx.counts || {}; %>
@@ -37,17 +55,60 @@
             <a href="/triage?workContextId=<%= ctx.id %>">Triage</a> ·
             <a href="/process-templates?workContextId=<%= ctx.id %>">Templates</a>
           </td>
+          <td class="actions">
+            <a href="/work-contexts/<%= ctx.id %>" class="btn-small">Edit</a>
+            <% if (ctx.status !== 'archived') { %>
+              <button class="btn-small btn-danger archive-btn" data-id="<%= ctx.id %>" data-resource="work-contexts">Archive</button>
+            <% } %>
+          </td>
         </tr>
       <% }); %>
     </tbody>
   </table>
 <% } %>
 
-<% if (canManage) { %>
-  <p class="text-muted">
-    Management is gated by <code>workContext:manage</code>. Create, update, and archive are served by
-    the JSON API (<code>POST /api/work-contexts</code>, <code>POST /api/work-contexts/:id</code>);
-    <code>GET /api/work-contexts</code> lists them. Defaults and allow-lists apply only at creation
-    time and never widen authority — the runtime never reads a Work Context.
-  </p>
-<% } %>
+<script>
+(function() {
+  var form = document.getElementById('create-wctx-form');
+  if (!form) return;
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var msg = document.getElementById('wc-create-msg');
+    btn.disabled = true;
+    msg.textContent = '';
+    try {
+      var res = await fetch('/api/work-contexts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('wc-name').value.trim(),
+          purpose: (document.getElementById('wc-purpose').value || '').trim()
+        })
+      });
+      var data = await res.json().catch(function() { return null; });
+      if (res.ok && data && data.id != null) { window.location.reload(); return; }
+      msg.textContent = (data && data.error) ? data.error : 'Create failed';
+    } catch (err) { msg.textContent = 'Create failed'; }
+    btn.disabled = false;
+  });
+
+  document.querySelectorAll('.archive-btn').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      if (!confirm('Archive this work context?')) return;
+      btn.disabled = true;
+      try {
+        var res = await fetch('/api/' + btn.dataset.resource + '/' + btn.dataset.id, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'archived' })
+        });
+        var data = await res.json().catch(function() { return null; });
+        if (res.ok) { window.location.reload(); return; }
+        alert((data && data.error) || 'Archive failed');
+      } catch (err) { alert('Archive failed'); }
+      btn.disabled = false;
+    });
+  });
+})();
+</script>

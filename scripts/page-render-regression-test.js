@@ -377,7 +377,7 @@ async function main() {
     assert(!actionsPage.body.includes('Invoke Workflow'), 'actions catalog should not list agent workflow invocation');
     assert(actionsPage.body.includes('Actions Catalog'), 'actions catalog page heading should render');
     assert(actionsPage.body.includes('agent'), 'actions catalog should include agent invoker');
-    assert(actionsPage.body.includes('Show contract'), 'actions catalog should have expandable contract');
+    assert(actionsPage.body.includes('Contract'), 'actions catalog should have expandable contract');
     assert(actionsPage.body.includes('Input'), 'actions catalog should label input shape');
     assert(actionsPage.body.includes('Output'), 'actions catalog should label output shape');
     assert(actionsPage.body.includes('Error'), 'actions catalog should label error shape');

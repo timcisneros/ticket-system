@@ -41,6 +41,7 @@
       %>
       <div class="ticket-card <%= accentClass %>" data-ticket-id="<%= ticket.id %>">
         <div class="ticket-card__header">
+          <span class="ticket-card__number">#<%= ticket.id %></span>
           <a href="/tickets/<%= ticket.id %>" class="ticket-card__objective"><%= ticket.objective %></a>
           <div class="ticket-card__status">
             <% if (canUpdateTickets && ticketStatuses.includes(ticket.status)) { %>
@@ -180,6 +181,11 @@ function createTicketCard(ticket) {
   // Header
   const header = document.createElement('div');
   header.className = 'ticket-card__header';
+
+  const numberSpan = document.createElement('span');
+  numberSpan.className = 'ticket-card__number';
+  numberSpan.textContent = '#' + ticket.id;
+  header.appendChild(numberSpan);
 
   const objectiveLink = document.createElement('a');
   objectiveLink.href = '/tickets/' + ticket.id;
