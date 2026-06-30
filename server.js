@@ -338,6 +338,10 @@ const RUNTIME_SYSTEM_MINIMUMS = Object.freeze({
   localModelConcurrency: 1
 });
 const DEFAULT_LOCAL_MODEL_CONCURRENCY = 1;
+// Absolute ceiling the admin UI/CLI may raise localModelConcurrency to. Distinct from
+// DEFAULT_LOCAL_MODEL_CONCURRENCY (the inherited value when unconfigured): the UI is meant to
+// raise concurrency above the default, so the ceiling must not collapse onto that default.
+const DEFAULT_LOCAL_MODEL_CONCURRENCY_CAP = 32;
 const DEFAULT_PROTECTED_WORKSPACE_PATHS = ['.git', '.env', '.env.*', 'node_modules', 'package.json', 'pnpm-lock.yaml'];
 const WORKSPACE_FIXTURES = [
   { id: 'empty', name: 'Empty workspace' },
@@ -9046,6 +9050,14 @@ function getDeploymentRuntimeLimits() {
   };
 }
 
+// Hard ceilings for system-wide config keys. Unlike the limit-key deployment caps, a system key's
+// ceiling is independent of its inherited default value, so the UI can raise it above that default.
+function getRuntimeSystemMaximums() {
+  return {
+    localModelConcurrency: getPositiveIntegerEnv('MAX_LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY_CAP)
+  };
+}
+
 function pickRuntimeLimitValues(source) {
   return Object.fromEntries(RUNTIME_LIMIT_CONFIG_KEYS.map(key => [key, source[key]]));
 }
@@ -9127,12 +9139,14 @@ function getRunRuntimeLimitsSnapshot(run, objective = null, options = {}) {
 }
 
 const ALL_RUNTIME_CONFIG_KEYS = Object.freeze([...RUNTIME_LIMIT_CONFIG_KEYS, ...RUNTIME_SYSTEM_CONFIG_KEYS]);
+const ALL_RUNTIME_MINIMUMS = Object.freeze({ ...RUNTIME_LIMIT_MINIMUMS, ...RUNTIME_SYSTEM_MINIMUMS });
 
 function validateRuntimeLimitsConfigInput(input, existing = readRuntimeLimitsConfig()) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return { ok: false, error: 'Runtime limits payload must be an object' };
   }
   const deployment = getDeploymentRuntimeLimits();
+  const systemMaximums = getRuntimeSystemMaximums();
   const value = { ...existing };
   for (const key of Object.keys(input)) {
     if (!ALL_RUNTIME_CONFIG_KEYS.includes(key)) return { ok: false, error: `Unknown runtime limit: ${key}` };
@@ -9145,15 +9159,19 @@ function validateRuntimeLimitsConfigInput(input, existing = readRuntimeLimitsCon
       continue;
     }
     if (!Number.isInteger(candidate)) return { ok: false, error: `${key} must be a positive integer or null` };
-    if (candidate < RUNTIME_LIMIT_MINIMUMS[key]) {
-      return { ok: false, error: `${key} must be at least ${RUNTIME_LIMIT_MINIMUMS[key]}` };
+    if (candidate < ALL_RUNTIME_MINIMUMS[key]) {
+      return { ok: false, error: `${key} must be at least ${ALL_RUNTIME_MINIMUMS[key]}` };
     }
-    if (candidate > deployment[key]) {
-      return { ok: false, error: `${key} cannot exceed the deployment cap of ${deployment[key]}` };
+    if (RUNTIME_LIMIT_CONFIG_KEYS.includes(key)) {
+      if (candidate > deployment[key]) {
+        return { ok: false, error: `${key} cannot exceed the deployment cap of ${deployment[key]}` };
+      }
+    } else if (candidate > systemMaximums[key]) {
+      return { ok: false, error: `${key} cannot exceed the maximum of ${systemMaximums[key]}` };
     }
     value[key] = candidate;
   }
-  return { ok: true, value: { ...emptyRuntimeLimitsConfig(), ...pickRuntimeLimitValues(value) }, deployment };
+  return { ok: true, value: { ...emptyRuntimeLimitsConfig(), ...pickRuntimeLimitValues(value), ...pickRuntimeSystemValues(value) }, deployment };
 }
 
 function writeRuntimeLimitsConfig(config, actor) {
@@ -9200,12 +9218,13 @@ function buildRuntimeLimitsAdminState(formValues = null) {
   const config = readRuntimeLimitsConfig();
   const resolved = resolveAgentRuntimeLimits(null, { config });
   const deployment = getDeploymentRuntimeLimits();
+  const systemMaximums = getRuntimeSystemMaximums();
   const systemRows = RUNTIME_SYSTEM_CONFIG_KEYS.map(key => ({
     key,
     label: RUNTIME_SYSTEM_DISPLAY[key].label,
     help: RUNTIME_SYSTEM_DISPLAY[key].help,
     minimum: RUNTIME_SYSTEM_MINIMUMS[key],
-    deploymentCap: deployment[key],
+    deploymentCap: systemMaximums[key],
     configuredValue: config[key],
     effectiveValue: config[key] ?? deployment[key],
     inputValue: formValues && Object.prototype.hasOwnProperty.call(formValues, key)

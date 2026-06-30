@@ -154,7 +154,7 @@ async function main() {
 
     const initial = await request('GET', '/admin/runtime-limits', { cookie: admin });
     assert(initial.statusCode === 200 && initial.body.includes('Runtime Limits'), 'authorized page should render');
-    assert(initial.body.includes('Applies to newly started runs.'), 'new-run scope note missing');
+    assert(initial.body.includes('newly started agent runs'), 'new-run scope note missing');
     assert(initial.body.includes('cannot raise above deployment caps'), 'deployment cap note missing');
     assert(initial.body.includes('<code>10</code>') && initial.body.includes('<code>20000</code>'), 'deployment/effective values missing');
     assert(initial.body.includes('name="maxExecutionSteps"') && initial.body.includes('value=""'), 'inherit input should render blank');
