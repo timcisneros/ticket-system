@@ -49,7 +49,7 @@
       <div><dt>Run</dt><dd id="ticket-live-run"><% if (visibleRuntimeRun) { %><a href="/runs/<%= visibleRuntimeRun.id %>">Run #<%= visibleRuntimeRun.id %></a><% } else { %>-<% } %></dd></div>
       <div><dt>Run Status</dt><dd><span id="ticket-live-run-status" class="status-badge <%= visibleRuntimeRun ? 'status-' + visibleRuntimeRun.status : '' %>"><%= visibleRuntimeRun ? visibleRuntimeRun.status : '-' %></span></dd></div>
       <div><dt>Assigned to</dt><dd><%= executionState ? executionState.assignmentTargetLabel : '-' %></dd></div>
-      <div><dt>Latest Outcome</dt><dd id="ticket-live-outcome"><%= visibleRuntimeRun && visibleRuntimeRun.operationalOutcome ? visibleRuntimeRun.operationalOutcome : '-' %></dd></div>
+      <div><dt>Latest Outcome</dt><dd id="ticket-live-outcome"><%= (executionState && executionState.lastOutcomeLabel) ? executionState.lastOutcomeLabel : (visibleRuntimeRun && visibleRuntimeRun.operationalOutcome ? visibleRuntimeRun.operationalOutcome : '-') %></dd></div>
       <div><dt>Current Step</dt><dd id="ticket-live-step"><%= visibleRuntimeRun && visibleRuntimeRun.currentStepId ? visibleRuntimeRun.currentStepId : '-' %></dd></div>
       <div><dt>Elapsed Time</dt><dd id="ticket-live-elapsed" data-started-at="<%= initialRuntimeStart %>" data-completed-at="<%= initialRuntimeComplete %>">-</dd></div>
       <div><dt>Lease State</dt><dd id="ticket-live-lease"><%= initialLeaseState %></dd></div>
