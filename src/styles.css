@@ -269,13 +269,17 @@ code {
 }
 
 /* ---- ticket page zones (redesign) ---- */
-.zone { margin-top: 30px; }
+.zone { margin-top: 36px; }
 .zone:first-of-type { margin-top: 4px; }
+/* Every zone boundary gets the same deliberate gap. Zone 1 is wrapped in a
+   .zone section (spacing from .zone above); Zones 2-4 are bare .zone-head
+   blocks, so the header itself carries the inter-zone margin. */
 .zone-head {
   display: flex; align-items: baseline; gap: 12px;
-  margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #e5e7eb;
+  margin-top: 36px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #e5e7eb;
   flex-wrap: wrap;
 }
+.zone > .zone-head { margin-top: 0; }
 .zone-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #374151; }
 .zone-q { font-size: 13px; color: #6b7280; font-style: italic; }
 
