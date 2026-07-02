@@ -481,14 +481,6 @@
   <div class="body">
     <dl class="detail-grid">
       <div>
-        <dt>Worker</dt>
-        <dd><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %></dd>
-      </div>
-      <div>
-        <dt>Work Split</dt>
-        <dd><%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></dd>
-      </div>
-      <div>
         <dt>Created</dt>
         <dd><%= ticket.createdAt ? new Date(ticket.createdAt).toLocaleString() : '-' %></dd>
       </div>
