@@ -542,7 +542,15 @@
       </tbody>
     </table>
     <% if (typeof budgetSummary !== 'undefined' && budgetSummary && budgetSummary.runCount > 0) { %>
-      <p class="text-muted">Budget advisory (no execution blocked): overall <%= budgetSummary.overall %> · <%= budgetSummary.counts.exceeded %> exceeded, <%= budgetSummary.counts.within_threshold %> within, <%= budgetSummary.counts.unavailable %> unavailable, <%= budgetSummary.counts.not_configured %> not configured.</p>
+      <%
+        function budgetRollupLabel(status) {
+          if (status === 'exceeded') return 'exceeded (advisory)';
+          if (status === 'unavailable') return 'unavailable';
+          if (status === 'within_threshold') return 'within limit';
+          return 'not configured';
+        }
+      %>
+      <p class="text-muted">Budget advisory (no execution blocked): overall <%= budgetRollupLabel(budgetSummary.overall) %> · runtime <%= budgetRollupLabel(budgetSummary.metrics.runtimeMs) %> · model requests <%= budgetRollupLabel(budgetSummary.metrics.modelRequests) %> · workspace operations <%= budgetRollupLabel(budgetSummary.metrics.workspaceOperations) %>. Runs: <%= budgetSummary.counts.exceeded %> exceeded, <%= budgetSummary.counts.within_threshold %> within, <%= budgetSummary.counts.unavailable %> unavailable, <%= budgetSummary.counts.not_configured %> not configured.</p>
     <% } %>
     <p class="text-muted">Each run is one attempt — measurement only, no retry triggered.</p>
   <% } %>
