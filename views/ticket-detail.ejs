@@ -230,7 +230,7 @@
 </div>
 <% } %>
 
-<% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable) { %>
+<% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable && reviewStatus.needsReview) { %>
 <div class="attn">
   <h3><span class="sev"><%= reviewStatus.needsReview ? 'Needs review' : 'Reviewed' %></span> Review status</h3>
   <% if (reviewStatus.needsReview) { %>
