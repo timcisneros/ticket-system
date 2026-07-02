@@ -501,116 +501,56 @@
 </details>
 
 <div class="zone-head"><span class="zone-eyebrow">What has happened</span><span class="zone-q">What did the system actually do?</span></div>
-<% if (typeof attemptSummary !== 'undefined' && attemptSummary && attemptSummary.attemptCount > 0) { %>
-<section class="detail-section">
-  <h2>Execution Attempts (<%= attemptSummary.attemptCount %>)</h2>
-  <p class="text-muted">Each run on this ticket is one attempt. Measurement only — no retry is triggered and no limit is enforced. "unavailable" means a metric was not observable for that run.</p>
-  <table class="tickets-table">
-    <thead>
-      <tr>
-        <th>Attempt</th>
-        <th>Run #</th>
-        <th>Outcome</th>
-        <th>Duration</th>
-        <th>Model reqs</th>
-        <th>Workspace ops</th>
-        <th>Mutating ops</th>
-        <th>Verification</th>
-        <th>Triage</th>
-      </tr>
-    </thead>
-    <tbody>
-      <% attemptSummary.attempts.forEach(a => { %>
-        <tr>
-          <td><%= a.attemptNumber === null ? '-' : a.attemptNumber %></td>
-          <td><a href="/runs/<%= a.runId %>">Run #<%= a.runId %></a></td>
-          <td><code><%= a.outcome || 'unavailable' %></code></td>
-          <td><%= a.durationMs === null ? 'unavailable' : a.durationMs + 'ms' %></td>
-          <td><%= a.modelRequestCount === null ? 'unavailable' : a.modelRequestCount %></td>
-          <td><%= a.workspaceOperationCount === null ? 'unavailable' : a.workspaceOperationCount %></td>
-          <td><%= a.mutatingWorkspaceOperationCount === null ? 'unavailable' : a.mutatingWorkspaceOperationCount %></td>
-          <td><%= a.verificationRequired ? 'required · ' + a.verificationOutcome : 'not required' %></td>
-          <td><%= a.triageRequired ? 'required' : 'none' %></td>
-        </tr>
-      <% }) %>
-    </tbody>
-  </table>
-</section>
-<% } %>
-
-<% if (typeof budgetSummary !== 'undefined' && budgetSummary && budgetSummary.runCount > 0) { %>
-<%
-  function budgetRollupLabel(status) {
-    if (status === 'exceeded') return 'exceeded (advisory)';
-    if (status === 'unavailable') return 'unavailable';
-    if (status === 'within_threshold') return 'within limit';
-    return 'not configured';
-  }
-%>
-<section class="detail-section">
-  <h2>Budget Advisory</h2>
-  <p class="text-muted">Advisory only — no execution is blocked. Summarized across this ticket's runs; each run is compared against its own recorded thresholds, not the current ticket policy.</p>
-  <dl class="detail-grid">
-    <div><dt>Overall</dt><dd><%= budgetRollupLabel(budgetSummary.overall) %></dd></div>
-    <div><dt>Runtime</dt><dd><%= budgetRollupLabel(budgetSummary.metrics.runtimeMs) %></dd></div>
-    <div><dt>Model requests</dt><dd><%= budgetRollupLabel(budgetSummary.metrics.modelRequests) %></dd></div>
-    <div><dt>Workspace operations</dt><dd><%= budgetRollupLabel(budgetSummary.metrics.workspaceOperations) %></dd></div>
-  </dl>
-  <p class="text-muted">Runs: <%= budgetSummary.counts.exceeded %> exceeded, <%= budgetSummary.counts.unavailable %> unavailable, <%= budgetSummary.counts.within_threshold %> within, <%= budgetSummary.counts.not_configured %> not configured.</p>
-</section>
-<% } %>
 
 <section class="detail-section">
-  <h2>Runs</h2>
+  <h2>Runs &amp; attempts</h2>
   <% if (ticketRuns.length === 0) { %>
     <p class="text-muted">No runs yet.</p>
   <% } else { %>
+    <% const attemptByRun = {}; (typeof attemptSummary !== 'undefined' && attemptSummary ? attemptSummary.attempts : []).forEach(a => { attemptByRun[a.runId] = a; }); %>
+    <% const showAttemptCols = typeof attemptSummary !== 'undefined' && attemptSummary && attemptSummary.attemptCount > 0; %>
     <% const hasScopedRuns = ticketRuns.some(run => run.allocationPlanId || run.allocationItemId); %>
     <table class="tickets-table">
-      <thead>
-        <tr>
-          <th>Run #</th>
-          <th>Agent</th>
-          <th>Status</th>
-          <th>Run Outcome</th>
-          <th>Mutations</th>
-          <% if (hasScopedRuns) { %>
-            <th>Work Split</th>
-            <th>Work Unit</th>
-          <% } %>
-          <th>Created</th>
-        </tr>
-      </thead>
+      <thead><tr>
+        <% if (showAttemptCols) { %><th>Attempt</th><% } %>
+        <th>Run #</th><th>Agent</th><th>Status</th><th>Run Outcome</th><th>Mutations</th>
+        <% if (showAttemptCols) { %><th>Duration</th><th>Model reqs</th><th>Workspace ops</th><th>Mutating ops</th><th>Verification</th><th>Triage</th><% } %>
+        <% if (hasScopedRuns) { %><th>Work Split</th><th>Work Unit</th><% } %>
+        <th>Created</th>
+      </tr></thead>
       <tbody>
-        <% ticketRuns.forEach(run => { %>
+        <% ticketRuns.forEach(run => { const a = attemptByRun[run.id]; %>
           <tr>
+            <% if (showAttemptCols) { %><td><%= a && a.attemptNumber !== null && a.attemptNumber !== undefined ? a.attemptNumber : '-' %></td><% } %>
             <td><a href="/runs/<%= run.id %>">Run #<%= run.id %></a></td>
             <td><%= run.agentName %></td>
-            <td>
-              <span class="status-badge status-<%= run.status %>"><%= run.status %></span>
-            </td>
+            <td><span class="status-badge status-<%= run.status %>"><%= run.status %></span></td>
             <td><code><%= run.operationalOutcome || '-' %></code></td>
-            <td>
-              <% if (run.partialMutationCount > 0) { %>
-                <%= run.partialMutationCount %>
-              <% } else { %>
-                -
-              <% } %>
-            </td>
-            <% if (hasScopedRuns) { %>
-              <td><%= run.allocationPlanId || '-' %></td>
-              <td><%= run.allocationItemId || '-' %></td>
+            <td><%= run.partialMutationCount > 0 ? run.partialMutationCount : '-' %></td>
+            <% if (showAttemptCols) { %>
+              <td><%= a && a.durationMs !== null && a.durationMs !== undefined ? a.durationMs + 'ms' : 'unavailable' %></td>
+              <td><%= a && a.modelRequestCount !== null && a.modelRequestCount !== undefined ? a.modelRequestCount : 'unavailable' %></td>
+              <td><%= a && a.workspaceOperationCount !== null && a.workspaceOperationCount !== undefined ? a.workspaceOperationCount : 'unavailable' %></td>
+              <td><%= a && a.mutatingWorkspaceOperationCount !== null && a.mutatingWorkspaceOperationCount !== undefined ? a.mutatingWorkspaceOperationCount : 'unavailable' %></td>
+              <td><%= a && a.verificationRequired ? 'required · ' + a.verificationOutcome : 'not required' %></td>
+              <td><%= a && a.triageRequired ? 'required' : 'none' %></td>
             <% } %>
+            <% if (hasScopedRuns) { %><td><%= run.allocationPlanId || '-' %></td><td><%= run.allocationItemId || '-' %></td><% } %>
             <td><%= run.createdAt ? new Date(run.createdAt).toLocaleString() : '-' %></td>
           </tr>
         <% }) %>
       </tbody>
     </table>
+    <% if (typeof budgetSummary !== 'undefined' && budgetSummary && budgetSummary.runCount > 0) { %>
+      <p class="text-muted">Budget advisory (no execution blocked): overall <%= budgetSummary.overall %> · <%= budgetSummary.counts.exceeded %> exceeded, <%= budgetSummary.counts.within_threshold %> within, <%= budgetSummary.counts.unavailable %> unavailable, <%= budgetSummary.counts.not_configured %> not configured.</p>
+    <% } %>
+    <p class="text-muted">Each run is one attempt — measurement only, no retry triggered.</p>
   <% } %>
 </section>
 
-<section class="detail-section">
-  <h2>Artifacts</h2>
+<details class="disclosure">
+  <summary>Artifacts <span class="sub"><%= (typeof artifacts === 'undefined' ? [] : artifacts).length %> item(s)</span></summary>
+  <div class="body">
   <% const ticketArtifacts = typeof artifacts === 'undefined' ? [] : artifacts; %>
   <% if (ticketArtifacts.length === 0) { %>
     <p class="text-muted">No artifacts produced yet.</p>
@@ -646,11 +586,13 @@
       </tbody>
     </table>
   <% } %>
-</section>
+  </div>
+</details>
 
 <% const ticketTimeline = typeof timeline === 'undefined' || !timeline ? { entries: [] } : timeline; %>
-<section class="detail-section">
-  <h2>Timeline</h2>
+<details class="disclosure">
+  <summary>Timeline <span class="sub"><%= ticketTimeline.entries.length %> entries</span></summary>
+  <div class="body">
   <p class="text-muted">Read-only projection from ticket/run state, structured events, target receipts, replay evidence, and selected diagnostic logs.</p>
   <% if (ticketTimeline.entries.length === 0) { %>
     <p class="text-muted">No timeline evidence available.</p>
@@ -690,32 +632,13 @@
       </tbody>
     </table>
   <% } %>
-</section>
-
-<% const ticketRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
-<% if (ticketRecentLogs.length > 0) { %>
-<section class="detail-section">
-  <h2>Recent Activity</h2>
-  <div class="inline-log-list">
-    <% ticketRecentLogs.forEach(log => { %>
-      <div class="inline-log-item">
-        <span class="inline-log-type"><%= log.displayType || log.type %></span>
-        <span class="inline-log-message"><%= log.displayMessage || log.message %></span>
-        <% if (log.changedBy || log.requestedBy) { %>
-          <span class="audit-meta">Changed by <%= log.changedBy || log.requestedBy %> at <%= log.changedAt || log.timestamp || '-' %></span>
-        <% } %>
-        <% if (log.runId !== null && log.runId !== undefined) { %>
-          <a href="/runs/<%= log.runId %>">Run #<%= log.runId %></a>
-        <% } %>
-      </div>
-    <% }) %>
   </div>
-</section>
-<% } %>
+</details>
 
 <% if (operationHistory && operationHistory.length > 0) { %>
-<section class="detail-section">
-  <h2>Operation History</h2>
+<details class="disclosure">
+  <summary>Operation History <span class="sub"><%= operationHistory.length %> record(s)</span></summary>
+  <div class="body">
   <div class="operation-history">
     <% operationHistory.forEach((record, index) => { %>
       <div class="operation-history-item <%= record.isRecovery ? 'is-recovery' : '' %>">
@@ -805,7 +728,8 @@
       </div>
     <% }) %>
   </div>
-</section>
+  </div>
+</details>
 <% } %>
 
 <script>
