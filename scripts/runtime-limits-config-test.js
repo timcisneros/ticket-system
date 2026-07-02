@@ -156,7 +156,9 @@ async function main() {
       AGENT_MAX_EXECUTION_STEPS: String(DEPLOYMENT.maxExecutionSteps),
       AGENT_MAX_MODEL_REQUESTS_PER_RUN: String(DEPLOYMENT.maxModelRequestsPerRun),
       AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: String(DEPLOYMENT.maxWorkspaceOperationsPerRun),
-      AGENT_MAX_RUNTIME_DURATION_MS: String(DEPLOYMENT.maxRuntimeDurationMs)
+      AGENT_MAX_RUNTIME_DURATION_MS: String(DEPLOYMENT.maxRuntimeDurationMs),
+      LOCAL_MODEL_CONCURRENCY: '4',
+      MAX_LOCAL_MODEL_CONCURRENCY: '8'
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -209,6 +211,27 @@ async function main() {
     const stored = readJson('runtime-limits.json');
     assertLimits(stored, configured, 'valid config persisted');
     assert(stored.updatedBy === 'admin' && typeof stored.updatedAt === 'string', 'config audit metadata missing');
+
+    // System config keys (localModelConcurrency) must round-trip through validate -> persist -> read.
+    // Regression: the validator previously returned only pickRuntimeLimitValues(), silently dropping
+    // localModelConcurrency so it always persisted as null and the setting was inert.
+    // The ceiling (MAX_LOCAL_MODEL_CONCURRENCY=8) is decoupled from the inherited default
+    // (LOCAL_MODEL_CONCURRENCY=4), so the UI may raise concurrency above the default up to the ceiling.
+    for (const body of [{ localModelConcurrency: 0 }, { localModelConcurrency: -1 }, { localModelConcurrency: 1.5 }, { localModelConcurrency: '2' }, { localModelConcurrency: 9 }]) {
+      const response = await request('POST', '/api/runtime-limits', { cookie: admin, body });
+      assert(response.statusCode === 400, `invalid localModelConcurrency should be rejected: ${JSON.stringify(body)}`);
+    }
+    // 6 exceeds the inherited default (4) but is within the ceiling (8); this was wrongly rejected
+    // before the deployment-cap decoupling.
+    const concurrencyUpdate = await request('POST', '/api/runtime-limits', { cookie: admin, body: { localModelConcurrency: 6 } });
+    assert(concurrencyUpdate.statusCode === 200, `valid localModelConcurrency rejected: ${concurrencyUpdate.body}`);
+    assert(concurrencyUpdate.json.config.localModelConcurrency === 6, `localModelConcurrency not returned: ${concurrencyUpdate.body}`);
+    assert(readJson('runtime-limits.json').localModelConcurrency === 6, 'localModelConcurrency must persist to disk');
+    // A subsequent limit-only update that omits the system key must not wipe the persisted value.
+    // (Re-applying `configured` also restores the limit state the run-snapshot assertions below expect.)
+    assert((await request('POST', '/api/runtime-limits', { cookie: admin, body: configured })).statusCode === 200, 'limit-only update failed');
+    assert(readJson('runtime-limits.json').localModelConcurrency === 6, 'localModelConcurrency must survive unrelated updates');
+    assertLimits(readJson('runtime-limits.json'), configured, 'limit-only update preserves configured limits');
 
     const objective = `Create a runtime snapshot ${Date.now()}`;
     const ticket = await createTicket(admin, objective);
