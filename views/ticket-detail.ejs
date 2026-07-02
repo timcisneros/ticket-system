@@ -55,12 +55,6 @@
       <div><dt>Lease State</dt><dd id="ticket-live-lease"><%= initialLeaseState %></dd></div>
       <div style="grid-column:1/-1;"><dt>Current Message</dt><dd id="ticket-live-message"><%= ticket.currentMessage || '-' %></dd></div>
     </dl>
-    <% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
-      <div class="state-inconsistency-warning state-inconsistency-warning--inline" id="ticket-runtime-state-warning">
-        <strong>State Warning</strong><p><%= runStateInconsistency.message %></p>
-        <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %><ul><% runStateInconsistency.reasons.forEach(reason => { %><li><%= reason %></li><% }) %></ul><% } %>
-      </div>
-    <% } %>
     <% if (openStateNote) { %><p class="text-muted"><%= openStateNote %></p><% } %>
   </div>
   <% if (canUpdateTickets && hasUnresolvedTriage) { %>
@@ -89,10 +83,18 @@
 %>
 <% if (hasAttention) { %>
 <div class="zone-head" data-attn-zone><span class="zone-eyebrow">Needs your attention</span><span class="zone-q">Does it need me, and what do I decide?</span></div>
+
+<% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
+  <div class="attn critical" id="ticket-runtime-state-warning">
+    <h3><span class="sev">Critical</span> State Warning</h3>
+    <p><%= runStateInconsistency.message %></p>
+    <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %><ul><% runStateInconsistency.reasons.forEach(reason => { %><li><%= reason %></li><% }) %></ul><% } %>
+  </div>
 <% } %>
+
 <% if (ticketBlockedReason || ticketFeasibility) { %>
-<section class="detail-section failure-summary">
-  <h2>Why this ticket is blocked</h2>
+<div class="attn critical failure-summary">
+  <h3><span class="sev">Critical</span> Why this ticket is blocked</h3>
   <% if (ticketBlockedReason) { %>
     <p class="failure-reason"><%= ticketBlockedReason %></p>
   <% } %>
@@ -149,12 +151,12 @@
       </div>
     </details>
   <% } %>
-</section>
+</div>
 <% } %>
 
 <% if (ticket.triage && ticket.triage.required) { %>
-  <section class="detail-section">
-  <h2>Ticket-Level Triage</h2>
+  <div class="attn critical">
+  <h3><span class="sev">Critical</span> Ticket-Level Triage</h3>
   <dl class="detail-grid">
     <div><dt>Reason</dt><dd><code><%= ticket.triage.reasonCode %></code></dd></div>
     <div><dt>Required decision</dt><dd><code><%= ticket.triage.requiredDecision %></code></dd></div>
@@ -175,10 +177,10 @@
     <span class="triage-resolve-msg text-muted"></span>
   </form>
   <% } %>
-</section>
+</div>
 <% } else if (ticket.triage && ticket.triage.resolvedAt) { %>
-<section class="detail-section">
-  <h2>Ticket-Level Triage (resolved)</h2>
+<div class="attn">
+  <h3><span class="sev">Resolved</span> Ticket-Level Triage (resolved)</h3>
   <dl class="detail-grid">
     <div><dt>Reason</dt><dd><code><%= ticket.triage.reasonCode %></code></dd></div>
     <div><dt>Required decision</dt><dd><code><%= ticket.triage.requiredDecision %></code></dd></div>
@@ -187,12 +189,12 @@
     <div><dt>Resolved at</dt><dd><%= ticket.triage.resolvedAt || '-' %></dd></div>
     <div><dt>Resolution</dt><dd><%= ticket.triage.resolution || '-' %></dd></div>
   </dl>
-</section>
+</div>
 <% } %>
 
 <% if (typeof latestTriage !== 'undefined' && latestTriage && latestTriage.required) { %>
-<section class="detail-section">
-  <h2>Latest Run Triage</h2>
+<div class="attn critical">
+  <h3><span class="sev">Critical</span> Latest Run Triage</h3>
   <dl class="detail-grid">
     <div><dt>Reason</dt><dd><code><%= latestTriage.reasonCode %></code></dd></div>
     <div><dt>Required decision</dt><dd><code><%= latestTriage.requiredDecision %></code></dd></div>
@@ -213,10 +215,10 @@
     <span class="triage-resolve-msg text-muted"></span>
   </form>
   <% } %>
-</section>
+</div>
 <% } else if (typeof latestTriage !== 'undefined' && latestTriage && latestTriage.resolvedAt) { %>
-<section class="detail-section">
-  <h2>Latest Run Triage (resolved)</h2>
+<div class="attn">
+  <h3><span class="sev">Resolved</span> Latest Run Triage (resolved)</h3>
   <dl class="detail-grid">
     <div><dt>Reason</dt><dd><code><%= latestTriage.reasonCode %></code></dd></div>
     <div><dt>Required decision</dt><dd><code><%= latestTriage.requiredDecision %></code></dd></div>
@@ -225,7 +227,25 @@
     <div><dt>Resolved at</dt><dd><%= latestTriage.resolvedAt || '-' %></dd></div>
     <div><dt>Resolution</dt><dd><%= latestTriage.resolution || '-' %></dd></div>
   </dl>
-</section>
+</div>
+<% } %>
+
+<% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable) { %>
+<div class="attn">
+  <h3><span class="sev"><%= reviewStatus.needsReview ? 'Needs review' : 'Reviewed' %></span> Review status</h3>
+  <% if (reviewStatus.needsReview) { %>
+    <p><strong>Needs review</strong> — the latest run finished, but its result should be checked.</p>
+    <p class="text-muted">Why:</p>
+    <ul class="text-muted">
+      <% reviewStatus.reasons.forEach(reason => { %>
+        <li><%= reason %></li>
+      <% }) %>
+    </ul>
+  <% } else { %>
+    <p><strong>No review flag</strong> — no evidence warnings were detected for the latest run.</p>
+  <% } %>
+</div>
+<% } %>
 <% } %>
 
 <script>
@@ -356,23 +376,6 @@
       document.getElementById('max-attempts-clear').addEventListener('click', function () { submit(''); });
     })();
   </script>
-  <% } %>
-</section>
-<% } %>
-
-<% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable) { %>
-<section class="detail-section">
-  <h2>Review status</h2>
-  <% if (reviewStatus.needsReview) { %>
-    <p><strong>Needs review</strong> — the latest run finished, but its result should be checked.</p>
-    <p class="text-muted">Why:</p>
-    <ul class="text-muted">
-      <% reviewStatus.reasons.forEach(reason => { %>
-        <li><%= reason %></li>
-      <% }) %>
-    </ul>
-  <% } else { %>
-    <p><strong>No review flag</strong> — no evidence warnings were detected for the latest run.</p>
   <% } %>
 </section>
 <% } %>
