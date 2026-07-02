@@ -378,7 +378,9 @@ async function main() {
     assert(!ticketDetail.body.includes('>Runtime</h2>'), 'standalone Runtime heading should be gone (merged into hero)');
     // ticket status badge appears once in the hero, not duplicated in a separate Runtime block
     assert((ticketDetail.body.match(/id="ticket-live-status"/g) || []).length === 1, 'live status id must be unique');
-    assert(ticketDetail.body.includes('<summary>Ticket Details</summary>'), 'ticket detail should collapse metadata');
+    assert(ticketDetail.body.includes('Assignment &amp; work split') || ticketDetail.body.includes('Assignment & work split'), 'Zone 3 should have an assignment disclosure');
+    assert(ticketDetail.body.includes('class="disclosure"'), 'Zone 3 config should use disclosure rows');
+    assert(ticketDetail.body.includes('Ticket details'), 'Zone 3 should keep ticket metadata');
     assert(ticketDetail.body.includes('Recent Activity'), 'ticket detail should include inline recent activity');
     assert(!ticketDetail.body.includes('<th>Work Unit</th>'), 'single-agent ticket detail should not show group-only work unit column');
     const attention = seedAttentionFixture();

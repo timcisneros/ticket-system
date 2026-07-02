@@ -268,121 +268,217 @@
 </script>
 
 <div class="zone-head"><span class="zone-eyebrow">How it's set up</span><span class="zone-q">How is this ticket configured?</span></div>
-<% if (typeof executionState !== 'undefined' && executionState) { %>
-<div id="zone1-config-carry">
-  <dl class="detail-grid">
-  <% if (ticket.source && ticket.source.type === 'process_template') { %>
-    <div>
-      <dt>Created from template</dt>
-      <dd>
-        <a href="/process-templates"><%= ticket.source.templateName %></a><% if (ticket.source.templateVersion) { %> v<%= ticket.source.templateVersion %><% } %>
-        (#<%= ticket.source.templateId %>, <%= ticket.source.triggerType === 'schedule' ? 'scheduled' : 'manual' %> trigger by <%= ticket.source.triggeredBy %>)
-      </dd>
-    </div>
-  <% } %>
-  <% if (ticket.workContextId && ticket.workContextSnapshot) { %>
-    <div>
-      <dt>Work Context</dt>
-      <dd>
-        <a href="/tickets?workContextId=<%= ticket.workContextId %>"><%= ticket.workContextSnapshot.name %></a>
-        (#<%= ticket.workContextId %><% if (ticket.workContextSnapshot.status && ticket.workContextSnapshot.status !== 'active') { %>, <%= ticket.workContextSnapshot.status %><% } %>)
-      </dd>
-    </div>
-  <% } %>
-  <% if (executionState.isGroup && executionState.assignmentMode) { %>
-    <div>
-      <dt>Assignment mode</dt>
-      <dd><%= executionState.assignmentModeLabel %></dd>
-    </div>
-  <% } %>
-  <div>
-    <dt>Auto-run behavior</dt>
-    <dd><%= executionState.autoRun.label %></dd>
-  </div>
-  </dl>
-  <% if (executionState.group) { %>
-    <p class="text-muted">Group fan-out: <%= executionState.group.memberCount %> member<%= executionState.group.memberCount === 1 ? '' : 's' %> ·
-      work units: <%= executionState.group.workUnitsTotal %> generated, <%= executionState.group.workUnitsCompleted %> completed<%= executionState.group.workUnitsFailed > 0 ? ', ' + executionState.group.workUnitsFailed + ' failed' : '' %>.
-      Completes when all work units complete; fails if any required work unit fails.</p>
-  <% } %>
-  <% if (ticket.assignmentTargetType === 'group' && ticket.assignmentMode === 'dynamic') { %>
-    <%
-      const dynamicScopeMap = ticket.ownedOutputPaths && typeof ticket.ownedOutputPaths === 'object' && !Array.isArray(ticket.ownedOutputPaths)
-        ? ticket.ownedOutputPaths : null;
-    %>
-    <p class="text-muted">Automatic folder scopes: group agents are assigned to existing top-level workspace folders in deterministic order (folders by name, agents by id). The ticket runs only when there are at least as many usable folders as group agents.</p>
-    <% if (dynamicScopeMap && Object.keys(dynamicScopeMap).length > 0) { %>
-      <ul class="text-muted">
-        <% Object.keys(dynamicScopeMap).forEach(agentId => { %>
-          <% const scopedAgent = agents.find(a => String(a.id) === String(agentId)); %>
-          <li><%= scopedAgent ? scopedAgent.name : 'Agent #' + agentId %> → <code class="owned-path"><%= dynamicScopeMap[agentId] %></code></li>
-        <% }) %>
-      </ul>
+<details class="disclosure" open>
+  <summary>Assignment &amp; work split <span class="sub"><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %> · <%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></span></summary>
+  <div class="body">
+    <dl class="grid">
+      <div><dt>Worker</dt><dd><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %></dd></div>
+      <div><dt>Work Split</dt><dd><%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></dd></div>
+      <% if (typeof executionState !== 'undefined' && executionState) { %>
+      <% if (ticket.source && ticket.source.type === 'process_template') { %>
+        <div>
+          <dt>Created from template</dt>
+          <dd>
+            <a href="/process-templates"><%= ticket.source.templateName %></a><% if (ticket.source.templateVersion) { %> v<%= ticket.source.templateVersion %><% } %>
+            (#<%= ticket.source.templateId %>, <%= ticket.source.triggerType === 'schedule' ? 'scheduled' : 'manual' %> trigger by <%= ticket.source.triggeredBy %>)
+          </dd>
+        </div>
+      <% } %>
+      <% if (ticket.workContextId && ticket.workContextSnapshot) { %>
+        <div>
+          <dt>Work Context</dt>
+          <dd>
+            <a href="/tickets?workContextId=<%= ticket.workContextId %>"><%= ticket.workContextSnapshot.name %></a>
+            (#<%= ticket.workContextId %><% if (ticket.workContextSnapshot.status && ticket.workContextSnapshot.status !== 'active') { %>, <%= ticket.workContextSnapshot.status %><% } %>)
+          </dd>
+        </div>
+      <% } %>
+      <% if (executionState.isGroup && executionState.assignmentMode) { %>
+        <div>
+          <dt>Assignment mode</dt>
+          <dd><%= executionState.assignmentModeLabel %></dd>
+        </div>
+      <% } %>
+      <div>
+        <dt>Auto-run behavior</dt>
+        <dd><%= executionState.autoRun.label %></dd>
+      </div>
+      <% } %>
+    </dl>
+    <% if (typeof executionState !== 'undefined' && executionState) { %>
+    <% if (executionState.group) { %>
+      <p class="text-muted">Group fan-out: <%= executionState.group.memberCount %> member<%= executionState.group.memberCount === 1 ? '' : 's' %> ·
+        work units: <%= executionState.group.workUnitsTotal %> generated, <%= executionState.group.workUnitsCompleted %> completed<%= executionState.group.workUnitsFailed > 0 ? ', ' + executionState.group.workUnitsFailed + ' failed' : '' %>.
+        Completes when all work units complete; fails if any required work unit fails.</p>
     <% } %>
-  <% } %>
-</div>
-<% } %>
-<% if (ticket.executionPolicy) { %>
-<section class="detail-section">
-  <h2>Execution Policy</h2>
-  <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
-  <dl class="detail-grid">
-    <div><dt>Verification</dt><dd><code><%= ticket.executionPolicy.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
-    <div><dt>Workspace scope</dt><dd><code><%= ticket.executionPolicy.workspaceScope %></code> · enforced by the current workspace path</dd></div>
-    <div><dt>Mode</dt><dd><code><%= ticket.executionPolicy.mode %></code> · recorded intent, not enforced</dd></div>
-    <div><dt>Workspace writes</dt><dd><%= ticket.executionPolicy.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Parallel runs</dt><dd><%= ticket.executionPolicy.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Child tickets</dt><dd><%= ticket.executionPolicy.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Max attempts</dt><dd><%= ticket.executionPolicy.maxAttempts === null ? 'unlimited · enforced for manual rerun-from-start when set' : ticket.executionPolicy.maxAttempts + ' · enforced for manual rerun-from-start' %></dd></div>
-    <div><dt>Automatic retry</dt><dd><%= !ticket.executionPolicy.autoRetry ? 'disabled' : (ticket.executionPolicy.maxAttempts === null ? 'enabled but inactive — set maxAttempts to bound automatic retry' : 'enabled · bounded by maxAttempts ' + ticket.executionPolicy.maxAttempts) %></dd></div>
-    <div><dt>Max runtime</dt><dd><%= ticket.executionPolicy.maxRuntimeMs === null ? 'unspecified' : ticket.executionPolicy.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Max model requests</dt><dd><%= ticket.executionPolicy.maxModelRequests === null ? 'unspecified' : ticket.executionPolicy.maxModelRequests %> · recorded intent, not enforced</dd></div>
-    <div><dt>Max workspace operations</dt><dd><%= ticket.executionPolicy.maxWorkspaceOperations === null ? 'unspecified' : ticket.executionPolicy.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
-  </dl>
-  <% if (typeof canUpdateTickets !== 'undefined' && canUpdateTickets) { %>
-  <div class="max-attempts-control" data-ticket-id="<%= ticket.id %>">
-    <p class="text-muted">Set the manual rerun-from-start ceiling. Leave blank to clear (unlimited). Measurement/limit applies only to manual reruns — no automatic retry.</p>
-    <input type="number" id="max-attempts-input" min="1" step="1" placeholder="unlimited" value="<%= ticket.executionPolicy.maxAttempts === null ? '' : ticket.executionPolicy.maxAttempts %>">
-    <button type="button" id="max-attempts-set" class="btn-small">Set</button>
-    <button type="button" id="max-attempts-clear" class="btn-small">Clear (unlimited)</button>
-    <span id="max-attempts-msg" class="text-muted"></span>
+    <% if (ticket.assignmentTargetType === 'group' && ticket.assignmentMode === 'dynamic') { %>
+      <%
+        const dynamicScopeMap = ticket.ownedOutputPaths && typeof ticket.ownedOutputPaths === 'object' && !Array.isArray(ticket.ownedOutputPaths)
+          ? ticket.ownedOutputPaths : null;
+      %>
+      <p class="text-muted">Automatic folder scopes: group agents are assigned to existing top-level workspace folders in deterministic order (folders by name, agents by id). The ticket runs only when there are at least as many usable folders as group agents.</p>
+      <% if (dynamicScopeMap && Object.keys(dynamicScopeMap).length > 0) { %>
+        <ul class="text-muted">
+          <% Object.keys(dynamicScopeMap).forEach(agentId => { %>
+            <% const scopedAgent = agents.find(a => String(a.id) === String(agentId)); %>
+            <li><%= scopedAgent ? scopedAgent.name : 'Agent #' + agentId %> → <code class="owned-path"><%= dynamicScopeMap[agentId] %></code></li>
+          <% }) %>
+        </ul>
+      <% } %>
+    <% } %>
+    <% } %>
+    <% if (allocationPlan) { %>
+    <dl class="grid">
+      <div>
+        <dt>Plan</dt>
+        <dd>#<%= allocationPlan.id %></dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd><span class="status-badge status-<%= allocationPlan.status %>"><%= allocationPlan.status %></span></dd>
+      </div>
+      <div>
+        <dt>Created</dt>
+        <dd><%= allocationPlan.createdAt ? new Date(allocationPlan.createdAt).toLocaleString() : '-' %></dd>
+      </div>
+      <div>
+        <dt>Ticket Opened At</dt>
+        <dd><%= allocationPlan.ticketOpenedAt ? new Date(allocationPlan.ticketOpenedAt).toLocaleString() : '-' %></dd>
+      </div>
+    </dl>
+    <% const workUnitCount = allocationPlan.items ? allocationPlan.items.length : 0; %>
+    <h3>Work Units<%= workUnitCount > 0 ? ' (' + workUnitCount + ')' : '' %></h3>
+    <p class="text-muted">Group work — one work unit per assigned agent. Completes when all work units complete; fails if any required work unit fails.</p>
+    <% if (!allocationPlan.items || allocationPlan.items.length === 0) { %>
+      <p class="text-muted">No work units.</p>
+    <% } else { %>
+      <div class="allocation-items">
+        <% allocationPlan.items.forEach(item => { %>
+          <%
+            const itemRuns = ticketRuns.filter(run =>
+              run.allocationPlanId === allocationPlan.id &&
+              run.allocationItemId === item.allocationItemId
+            );
+            const assignedAgent = agents.find(agent => agent.id === item.assignedAgentId);
+          %>
+          <div class="allocation-item">
+            <div class="allocation-item-header">
+              <div class="allocation-item-id">Work Unit #<%= item.allocationItemId %></div>
+              <div class="allocation-item-status">
+                <span class="status-badge status-<%= item.status %>"><%= item.status %></span>
+              </div>
+            </div>
+            <div class="allocation-item-body">
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Agent</span>
+                <span class="allocation-item-value">
+                  <% if (assignedAgent) { %>
+                    <%= assignedAgent.name %> (Agent #<%= item.assignedAgentId %>)
+                  <% } else { %>
+                    Agent #<%= item.assignedAgentId %>
+                  <% } %>
+                </span>
+              </div>
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Subtask</span>
+                <span class="allocation-item-value"><%= item.allocationSubtask || '-' %></span>
+              </div>
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Allowed Folders</span>
+                <span class="allocation-item-value">
+                  <% if (item.ownedOutputPaths && item.ownedOutputPaths.length > 0) { %>
+                    <code class="owned-path"><%= item.ownedOutputPaths.join(', ') %></code>
+                  <% } else { %>
+                    -
+                  <% } %>
+                </span>
+              </div>
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Runs</span>
+                <span class="allocation-item-value">
+                  <% if (itemRuns.length === 0) { %>
+                    -
+                  <% } else { %>
+                    <span class="run-links">
+                      <% itemRuns.forEach((run, idx) => { %>
+                        <a href="/runs/<%= run.id %>" class="run-link run-status-<%= run.status %>">Run #<%= run.id %></a><% if (idx < itemRuns.length - 1) { %>, <% } %>
+                      <% }) %>
+                    </span>
+                  <% } %>
+                </span>
+              </div>
+            </div>
+          </div>
+        <% }) %>
+      </div>
+    <% } %>
+    <% } %>
   </div>
-  <script>
-    (function () {
-      var wrap = document.querySelector('.max-attempts-control');
-      if (!wrap) return;
-      var ticketId = wrap.getAttribute('data-ticket-id');
-      var input = document.getElementById('max-attempts-input');
-      var msg = document.getElementById('max-attempts-msg');
-      async function submit(value) {
-        msg.textContent = '';
-        try {
-          var res = await fetch('/api/tickets/' + ticketId + '/execution-policy/max-attempts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ maxAttempts: value })
-          });
-          var payload = await res.json().catch(function () { return null; });
-          if (!res.ok) {
-            msg.textContent = (payload && payload.error) ? payload.error : 'Update rejected.';
-            return;
+</details>
+
+<% if (ticket.executionPolicy) { %>
+<details class="disclosure">
+  <summary>Execution policy <span class="sub"><%= ticket.executionPolicy.mode %></span></summary>
+  <div class="body">
+    <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
+    <dl class="detail-grid">
+      <div><dt>Verification</dt><dd><code><%= ticket.executionPolicy.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
+      <div><dt>Workspace scope</dt><dd><code><%= ticket.executionPolicy.workspaceScope %></code> · enforced by the current workspace path</dd></div>
+      <div><dt>Mode</dt><dd><code><%= ticket.executionPolicy.mode %></code> · <span class="intent">recorded intent</span></dd></div>
+      <div><dt>Workspace writes</dt><dd><%= ticket.executionPolicy.allowWorkspaceWrites ? 'requested' : 'not requested' %> · <span class="intent">recorded intent</span></dd></div>
+      <div><dt>Parallel runs</dt><dd><%= ticket.executionPolicy.allowParallelRuns ? 'requested' : 'not requested' %> · <span class="intent">recorded intent</span></dd></div>
+      <div><dt>Child tickets</dt><dd><%= ticket.executionPolicy.allowChildTickets ? 'requested' : 'not requested' %> · <span class="intent">recorded intent</span></dd></div>
+      <div><dt>Max attempts</dt><dd><%= ticket.executionPolicy.maxAttempts === null ? 'unlimited · enforced for manual rerun-from-start when set' : ticket.executionPolicy.maxAttempts + ' · enforced for manual rerun-from-start' %></dd></div>
+      <div><dt>Automatic retry</dt><dd><%= !ticket.executionPolicy.autoRetry ? 'disabled' : (ticket.executionPolicy.maxAttempts === null ? 'enabled but inactive — set maxAttempts to bound automatic retry' : 'enabled · bounded by maxAttempts ' + ticket.executionPolicy.maxAttempts) %></dd></div>
+      <div><dt>Max runtime</dt><dd><%= ticket.executionPolicy.maxRuntimeMs === null ? 'unspecified' : ticket.executionPolicy.maxRuntimeMs + 'ms' %> · <span class="intent">recorded intent</span></dd></div>
+      <div><dt>Max model requests</dt><dd><%= ticket.executionPolicy.maxModelRequests === null ? 'unspecified' : ticket.executionPolicy.maxModelRequests %> · <span class="intent">recorded intent</span></dd></div>
+      <div><dt>Max workspace operations</dt><dd><%= ticket.executionPolicy.maxWorkspaceOperations === null ? 'unspecified' : ticket.executionPolicy.maxWorkspaceOperations %> · <span class="intent">recorded intent</span></dd></div>
+    </dl>
+    <% if (typeof canUpdateTickets !== 'undefined' && canUpdateTickets) { %>
+    <div class="max-attempts-control" data-ticket-id="<%= ticket.id %>">
+      <p class="text-muted">Set the manual rerun-from-start ceiling. Leave blank to clear (unlimited). Measurement/limit applies only to manual reruns — no automatic retry.</p>
+      <input type="number" id="max-attempts-input" min="1" step="1" placeholder="unlimited" value="<%= ticket.executionPolicy.maxAttempts === null ? '' : ticket.executionPolicy.maxAttempts %>">
+      <button type="button" id="max-attempts-set" class="btn-small">Set</button>
+      <button type="button" id="max-attempts-clear" class="btn-small">Clear (unlimited)</button>
+      <span id="max-attempts-msg" class="text-muted"></span>
+    </div>
+    <script>
+      (function () {
+        var wrap = document.querySelector('.max-attempts-control');
+        if (!wrap) return;
+        var ticketId = wrap.getAttribute('data-ticket-id');
+        var input = document.getElementById('max-attempts-input');
+        var msg = document.getElementById('max-attempts-msg');
+        async function submit(value) {
+          msg.textContent = '';
+          try {
+            var res = await fetch('/api/tickets/' + ticketId + '/execution-policy/max-attempts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ maxAttempts: value })
+            });
+            var payload = await res.json().catch(function () { return null; });
+            if (!res.ok) {
+              msg.textContent = (payload && payload.error) ? payload.error : 'Update rejected.';
+              return;
+            }
+            window.location.reload();
+          } catch (e) {
+            msg.textContent = 'Update failed.';
           }
-          window.location.reload();
-        } catch (e) {
-          msg.textContent = 'Update failed.';
         }
-      }
-      document.getElementById('max-attempts-set').addEventListener('click', function () { submit(input.value.trim() === '' ? '' : input.value.trim()); });
-      document.getElementById('max-attempts-clear').addEventListener('click', function () { submit(''); });
-    })();
-  </script>
-  <% } %>
-</section>
+        document.getElementById('max-attempts-set').addEventListener('click', function () { submit(input.value.trim() === '' ? '' : input.value.trim()); });
+        document.getElementById('max-attempts-clear').addEventListener('click', function () { submit(''); });
+      })();
+    </script>
+    <% } %>
+  </div>
+</details>
 <% } %>
 
-<section class="detail-section">
-  <details class="collapsible">
-    <summary>Ticket Details</summary>
+<details class="disclosure">
+  <summary>Ticket details <span class="sub">Created <%= ticket.createdAt ? new Date(ticket.createdAt).toLocaleString() : '-' %></span></summary>
+  <div class="body">
     <dl class="detail-grid">
       <div>
         <dt>Worker</dt>
@@ -409,103 +505,8 @@
         <dd><%= ticket.changedAt ? new Date(ticket.changedAt).toLocaleString() : '-' %></dd>
       </div>
     </dl>
-  </details>
-</section>
-
-<% if (allocationPlan) { %>
-<section class="detail-section">
-  <details class="collapsible">
-    <summary>Work Split Details</summary>
-    <dl class="detail-grid">
-      <div>
-        <dt>Plan</dt>
-        <dd>#<%= allocationPlan.id %></dd>
-      </div>
-      <div>
-        <dt>Status</dt>
-        <dd><span class="status-badge status-<%= allocationPlan.status %>"><%= allocationPlan.status %></span></dd>
-      </div>
-      <div>
-        <dt>Created</dt>
-        <dd><%= allocationPlan.createdAt ? new Date(allocationPlan.createdAt).toLocaleString() : '-' %></dd>
-      </div>
-      <div>
-        <dt>Ticket Opened At</dt>
-        <dd><%= allocationPlan.ticketOpenedAt ? new Date(allocationPlan.ticketOpenedAt).toLocaleString() : '-' %></dd>
-      </div>
-    </dl>
-  </details>
-</section>
-
-<section class="detail-section">
-  <% const workUnitCount = allocationPlan.items ? allocationPlan.items.length : 0; %>
-  <h2>Work Units<%= workUnitCount > 0 ? ' (' + workUnitCount + ')' : '' %></h2>
-  <p class="text-muted">Group work — one work unit per assigned agent. Completes when all work units complete; fails if any required work unit fails.</p>
-  <% if (!allocationPlan.items || allocationPlan.items.length === 0) { %>
-    <p class="text-muted">No work units.</p>
-  <% } else { %>
-    <div class="allocation-items">
-      <% allocationPlan.items.forEach(item => { %>
-        <%
-          const itemRuns = ticketRuns.filter(run =>
-            run.allocationPlanId === allocationPlan.id &&
-            run.allocationItemId === item.allocationItemId
-          );
-          const assignedAgent = agents.find(agent => agent.id === item.assignedAgentId);
-        %>
-        <div class="allocation-item">
-          <div class="allocation-item-header">
-            <div class="allocation-item-id">Work Unit #<%= item.allocationItemId %></div>
-            <div class="allocation-item-status">
-              <span class="status-badge status-<%= item.status %>"><%= item.status %></span>
-            </div>
-          </div>
-          <div class="allocation-item-body">
-            <div class="allocation-item-row">
-              <span class="allocation-item-label">Agent</span>
-              <span class="allocation-item-value">
-                <% if (assignedAgent) { %>
-                  <%= assignedAgent.name %> (Agent #<%= item.assignedAgentId %>)
-                <% } else { %>
-                  Agent #<%= item.assignedAgentId %>
-                <% } %>
-              </span>
-            </div>
-            <div class="allocation-item-row">
-              <span class="allocation-item-label">Subtask</span>
-              <span class="allocation-item-value"><%= item.allocationSubtask || '-' %></span>
-            </div>
-            <div class="allocation-item-row">
-              <span class="allocation-item-label">Allowed Folders</span>
-              <span class="allocation-item-value">
-                <% if (item.ownedOutputPaths && item.ownedOutputPaths.length > 0) { %>
-                  <code class="owned-path"><%= item.ownedOutputPaths.join(', ') %></code>
-                <% } else { %>
-                  -
-                <% } %>
-              </span>
-            </div>
-            <div class="allocation-item-row">
-              <span class="allocation-item-label">Runs</span>
-              <span class="allocation-item-value">
-                <% if (itemRuns.length === 0) { %>
-                  -
-                <% } else { %>
-                  <span class="run-links">
-                    <% itemRuns.forEach((run, idx) => { %>
-                      <a href="/runs/<%= run.id %>" class="run-link run-status-<%= run.status %>">Run #<%= run.id %></a><% if (idx < itemRuns.length - 1) { %>, <% } %>
-                    <% }) %>
-                  </span>
-                <% } %>
-              </span>
-            </div>
-          </div>
-        </div>
-      <% }) %>
-    </div>
-  <% } %>
-</section>
-<% } %>
+  </div>
+</details>
 
 <div class="zone-head"><span class="zone-eyebrow">What has happened</span><span class="zone-q">What did the system actually do?</span></div>
 <% if (typeof attemptSummary !== 'undefined' && attemptSummary && attemptSummary.attemptCount > 0) { %>
