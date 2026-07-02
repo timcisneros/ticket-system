@@ -271,7 +271,7 @@
 <details class="disclosure" open>
   <summary>Assignment &amp; work split <span class="sub"><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %> · <%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></span></summary>
   <div class="body">
-    <dl class="grid">
+    <dl class="detail-grid">
       <div><dt>Worker</dt><dd><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %></dd></div>
       <div><dt>Work Split</dt><dd><%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></dd></div>
       <% if (typeof executionState !== 'undefined' && executionState) { %>
@@ -328,7 +328,7 @@
     <% } %>
     <% } %>
     <% if (allocationPlan) { %>
-    <dl class="grid">
+    <dl class="detail-grid">
       <div>
         <dt>Plan</dt>
         <dd>#<%= allocationPlan.id %></dd>

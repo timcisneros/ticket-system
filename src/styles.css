@@ -309,7 +309,7 @@ code {
 .disclosure[open] > summary::before { transform: rotate(90deg); }
 .disclosure > summary .sub { margin-left: auto; font-weight: 400; color: #6b7280; font-size: 12.5px; }
 .disclosure .body { padding: 4px 18px 18px 40px; border-top: 1px solid #e5e7eb; }
-.disclosure .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px,1fr)); gap: 14px 26px; margin-top: 14px; }
+.disclosure .detail-grid { margin-top: 14px; padding: 0; }
 .intent { color: #9ca3af; font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { .disclosure > summary::before { transition: none; } }
 
