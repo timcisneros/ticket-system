@@ -349,6 +349,10 @@ async function main() {
     assert(ticketsPayload.tickets.length === 1, 'tickets API should return requested page size');
     assert(ticketsPayload.pagination && ticketsPayload.pagination.total >= 4, 'tickets API should include pagination total');
     const ticketDetail = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id}`, 'ticket detail', 'Run Outcome');
+    assert(ticketDetail.body.includes('>At a glance<'), 'ticket detail should render Zone 1 eyebrow');
+    assert(ticketDetail.body.includes('>Needs your attention<') || ticketDetail.body.includes('data-attn-zone'), 'ticket detail should support Zone 2 attention');
+    assert(ticketDetail.body.includes('>How it&#39;s set up<') || ticketDetail.body.includes("How it's set up"), 'ticket detail should render Zone 3 eyebrow');
+    assert(ticketDetail.body.includes('>What has happened<'), 'ticket detail should render Zone 4 eyebrow');
     assert(ticketDetail.body.includes('<summary>Ticket Details</summary>'), 'ticket detail should collapse metadata');
     assert(ticketDetail.body.includes('Recent Activity'), 'ticket detail should include inline recent activity');
     assert(!ticketDetail.body.includes('<th>Work Unit</th>'), 'single-agent ticket detail should not show group-only work unit column');

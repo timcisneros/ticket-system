@@ -1,3 +1,4 @@
+<section class="zone"><div class="zone-head"><span class="zone-eyebrow">At a glance</span><span class="zone-q">What is this, and what's it doing right now?</span></div>
 <div class="page-header">
   <div>
     <h1>Ticket #<%= ticket.id %></h1>
@@ -38,7 +39,15 @@
 <%
   const ticketFeasibility = ticket.feasibility || null;
   const ticketBlockedReason = ticket.blockedReason || (ticketFeasibility && ticketFeasibility.reason) || null;
+  const hasAttention = Boolean(ticketBlockedReason || ticketFeasibility)
+    || (ticket.triage && (ticket.triage.required || ticket.triage.resolvedAt))
+    || (typeof latestTriage !== 'undefined' && latestTriage && (latestTriage.required || latestTriage.resolvedAt))
+    || (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable && reviewStatus.needsReview)
+    || (typeof runStateInconsistency !== 'undefined' && runStateInconsistency);
 %>
+<% if (hasAttention) { %>
+<div class="zone-head" data-attn-zone><span class="zone-eyebrow">Needs your attention</span><span class="zone-q">Does it need me, and what do I decide?</span></div>
+<% } %>
 <% if (ticketBlockedReason || ticketFeasibility) { %>
 <section class="detail-section failure-summary">
   <h2>Why this ticket is blocked</h2>
@@ -285,6 +294,7 @@
   });
 </script>
 
+<div class="zone-head"><span class="zone-eyebrow">How it's set up</span><span class="zone-q">How is this ticket configured?</span></div>
 <% if (ticket.executionPolicy) { %>
 <section class="detail-section">
   <h2>Execution Policy</h2>
@@ -477,6 +487,7 @@
     <p class="text-muted"><%= openStateNote %></p>
   <% } %>
 </section>
+</section>
 
 <% if (allocationPlan) { %>
 <section class="detail-section">
@@ -573,6 +584,7 @@
 </section>
 <% } %>
 
+<div class="zone-head"><span class="zone-eyebrow">What has happened</span><span class="zone-q">What did the system actually do?</span></div>
 <% if (typeof attemptSummary !== 'undefined' && attemptSummary && attemptSummary.attemptCount > 0) { %>
 <section class="detail-section">
   <h2>Execution Attempts (<%= attemptSummary.attemptCount %>)</h2>
