@@ -353,6 +353,12 @@ async function main() {
     assert(ticketDetail.body.includes('>Needs your attention<') || ticketDetail.body.includes('data-attn-zone'), 'ticket detail should support Zone 2 attention');
     assert(ticketDetail.body.includes('>How it&#39;s set up<') || ticketDetail.body.includes("How it's set up"), 'ticket detail should render Zone 3 eyebrow');
     assert(ticketDetail.body.includes('>What has happened<'), 'ticket detail should render Zone 4 eyebrow');
+    assert(ticketDetail.body.includes('id="ticket-runtime-section"'), 'hero must keep the live runtime container id');
+    assert(ticketDetail.body.includes('id="ticket-live-status"'), 'hero must keep the live status id');
+    assert(!ticketDetail.body.includes('>Execution State<'), 'standalone Execution State heading should be gone (merged into hero)');
+    assert(!ticketDetail.body.includes('>Runtime</h2>'), 'standalone Runtime heading should be gone (merged into hero)');
+    // ticket status badge appears once in the hero, not duplicated in a separate Runtime block
+    assert((ticketDetail.body.match(/id="ticket-live-status"/g) || []).length === 1, 'live status id must be unique');
     assert(ticketDetail.body.includes('<summary>Ticket Details</summary>'), 'ticket detail should collapse metadata');
     assert(ticketDetail.body.includes('Recent Activity'), 'ticket detail should include inline recent activity');
     assert(!ticketDetail.body.includes('<th>Work Unit</th>'), 'single-agent ticket detail should not show group-only work unit column');

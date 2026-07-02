@@ -1,28 +1,69 @@
-<section class="zone"><div class="zone-head"><span class="zone-eyebrow">At a glance</span><span class="zone-q">What is this, and what's it doing right now?</span></div>
-<div class="page-header">
-  <div>
-    <h1>Ticket #<%= ticket.id %></h1>
-    <p class="text-muted">
-      <span class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span>
-      <span><%= ticket.objective %></span>
-    </p>
-  </div>
-  <div class="actions">
-    <a class="btn-secondary" href="/tickets">Back to Tickets</a>
-    <a class="btn-secondary" href="/logs?ticketId=<%= ticket.id %>">Ticket Logs</a>
-    <%
-      const hasUnresolvedTriage = ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt;
-    %>
-    <% if (canUpdateTickets && !hasUnresolvedTriage && ticket.status !== 'open') { %>
-      <button type="button" class="btn-secondary" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %></button>
+<%
+  const hasUnresolvedTriage = ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt;
+  const activeRuntimeRun = ticketRuns
+    .filter(run => ['pending', 'running'].includes(run.status))
+    .sort((a, b) => new Date(b.updatedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.startedAt || a.createdAt || 0))[0] || null;
+  const latestRuntimeRun = ticketRuns
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0))[0] || null;
+  const visibleRuntimeRun = activeRuntimeRun || latestRuntimeRun;
+  const initialRuntimeStart = visibleRuntimeRun ? (visibleRuntimeRun.startedAt || visibleRuntimeRun.createdAt || '') : '';
+  const initialRuntimeComplete = visibleRuntimeRun ? (visibleRuntimeRun.completedAt || '') : '';
+  const initialLeaseState = visibleRuntimeRun && visibleRuntimeRun.leaseOwner
+    ? (visibleRuntimeRun.leaseOwner + (visibleRuntimeRun.leaseExpiresAt ? ' until ' + visibleRuntimeRun.leaseExpiresAt : ''))
+    : '-';
+  const detailIsOpen = ticket.status === 'open';
+  const detailHasAssignment = Boolean(ticket.assignmentTargetId);
+  let openStateNote = null;
+  if (detailIsOpen && !detailHasAssignment) {
+    openStateNote = 'Unassigned — not started.';
+  } else if (detailIsOpen && detailHasAssignment && ticketRuns.length === 0 && ticket.assignmentTargetType === 'group' && ticket.assignmentMode === 'dynamic') {
+    openStateNote = 'No run started yet. Automatic folder scopes need at least one usable top-level workspace folder per group agent.';
+  } else if (detailIsOpen && detailHasAssignment && ticketRuns.length === 0) {
+    openStateNote = 'No run started yet for the assigned target. Check the agent or group configuration.';
+  }
+%>
+<section class="zone">
+  <div class="zone-head"><span class="zone-eyebrow">At a glance</span><span class="zone-q">What is this, and what's it doing right now?</span></div>
+  <div class="hero" id="ticket-runtime-section" data-ticket-runtime-id="<%= ticket.id %>" data-ticket-runtime-active="<%= activeRuntimeRun ? 'true' : 'false' %>">
+    <div class="hero-top">
+      <div>
+        <h1 style="margin:0;font-size:26px;">Ticket #<%= ticket.id %>
+          <span id="ticket-live-status" class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span>
+        </h1>
+        <p class="text-muted" style="margin:8px 0 0;max-width:62ch;"><%= ticket.objective %></p>
+      </div>
+      <div class="hero-actions">
+        <a class="btn-secondary" href="/tickets">Back to Tickets</a>
+        <a class="btn-secondary" href="/logs?ticketId=<%= ticket.id %>">Ticket Logs</a>
+        <% if (canUpdateTickets && !hasUnresolvedTriage && ticket.status !== 'open') { %>
+          <button type="button" class="btn-secondary" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %></button>
+        <% } %>
+        <% if (canUpdateTickets) { %>
+          <button type="button" class="btn-secondary" data-simulate-plan-id="<%= ticket.id %>" data-simulate-mode="gate">Test gate</button>
+          <button type="button" class="btn-secondary" data-simulate-plan-id="<%= ticket.id %>" data-simulate-mode="model">Test agent plan (simulation)</button>
+        <% } %>
+      </div>
+    </div>
+    <dl class="live">
+      <div><dt>Run</dt><dd id="ticket-live-run"><% if (visibleRuntimeRun) { %><a href="/runs/<%= visibleRuntimeRun.id %>">Run #<%= visibleRuntimeRun.id %></a><% } else { %>-<% } %></dd></div>
+      <div><dt>Run Status</dt><dd><span id="ticket-live-run-status" class="status-badge <%= visibleRuntimeRun ? 'status-' + visibleRuntimeRun.status : '' %>"><%= visibleRuntimeRun ? visibleRuntimeRun.status : '-' %></span></dd></div>
+      <div><dt>Assigned to</dt><dd><%= executionState ? executionState.assignmentTargetLabel : '-' %></dd></div>
+      <div><dt>Latest Outcome</dt><dd id="ticket-live-outcome"><%= visibleRuntimeRun && visibleRuntimeRun.operationalOutcome ? visibleRuntimeRun.operationalOutcome : '-' %></dd></div>
+      <div><dt>Current Step</dt><dd id="ticket-live-step"><%= visibleRuntimeRun && visibleRuntimeRun.currentStepId ? visibleRuntimeRun.currentStepId : '-' %></dd></div>
+      <div><dt>Elapsed Time</dt><dd id="ticket-live-elapsed" data-started-at="<%= initialRuntimeStart %>" data-completed-at="<%= initialRuntimeComplete %>">-</dd></div>
+      <div><dt>Lease State</dt><dd id="ticket-live-lease"><%= initialLeaseState %></dd></div>
+      <div style="grid-column:1/-1;"><dt>Current Message</dt><dd id="ticket-live-message"><%= ticket.currentMessage || '-' %></dd></div>
+    </dl>
+    <% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
+      <div class="state-inconsistency-warning state-inconsistency-warning--inline" id="ticket-runtime-state-warning">
+        <strong>State Warning</strong><p><%= runStateInconsistency.message %></p>
+        <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %><ul><% runStateInconsistency.reasons.forEach(reason => { %><li><%= reason %></li><% }) %></ul><% } %>
+      </div>
     <% } %>
-    <% if (canUpdateTickets) { %>
-      <button type="button" class="btn-secondary" data-simulate-plan-id="<%= ticket.id %>" data-simulate-mode="gate">Test gate</button>
-      <button type="button" class="btn-secondary" data-simulate-plan-id="<%= ticket.id %>" data-simulate-mode="model">Test agent plan (simulation)</button>
-    <% } %>
+    <% if (openStateNote) { %><p class="text-muted"><%= openStateNote %></p><% } %>
   </div>
-</div>
-<% if (canUpdateTickets && hasUnresolvedTriage) { %>
+  <% if (canUpdateTickets && hasUnresolvedTriage) { %>
   <p class="form-hint">Rerun disabled: unresolved ticket-level triage must be resolved or the ticket objective must be changed first.</p>
 <% } else if (canUpdateTickets && ticket.status !== 'open') { %>
   <%
@@ -35,6 +76,7 @@
 <p class="form-hint">Simulation tests the agent plan without creating a run or mutating the workspace. "Test agent plan" calls the model; "Test gate" returns the objective clarification verdict only.</p>
 <div id="simulation-result" class="simulation-result"></div>
 <% } %>
+</section>
 
 <%
   const ticketFeasibility = ticket.feasibility || null;
@@ -106,95 +148,6 @@
         </dl>
       </div>
     </details>
-  <% } %>
-</section>
-<% } %>
-
-<% if (typeof executionState !== 'undefined' && executionState) { %>
-<section class="detail-section">
-  <h2>Execution State</h2>
-  <dl class="detail-grid">
-    <div>
-      <dt>Assigned to</dt>
-      <dd><%= executionState.assignmentTargetLabel %></dd>
-    </div>
-    <% if (ticket.source && ticket.source.type === 'process_template') { %>
-      <div>
-        <dt>Created from template</dt>
-        <dd>
-          <a href="/process-templates"><%= ticket.source.templateName %></a><% if (ticket.source.templateVersion) { %> v<%= ticket.source.templateVersion %><% } %>
-          (#<%= ticket.source.templateId %>, <%= ticket.source.triggerType === 'schedule' ? 'scheduled' : 'manual' %> trigger by <%= ticket.source.triggeredBy %>)
-        </dd>
-      </div>
-    <% } %>
-    <% if (ticket.workContextId && ticket.workContextSnapshot) { %>
-      <div>
-        <dt>Work Context</dt>
-        <dd>
-          <a href="/tickets?workContextId=<%= ticket.workContextId %>"><%= ticket.workContextSnapshot.name %></a>
-          (#<%= ticket.workContextId %><% if (ticket.workContextSnapshot.status && ticket.workContextSnapshot.status !== 'active') { %>, <%= ticket.workContextSnapshot.status %><% } %>)
-        </dd>
-      </div>
-    <% } %>
-    <% if (executionState.isGroup && executionState.assignmentMode) { %>
-      <div>
-        <dt>Assignment mode</dt>
-        <dd><%= executionState.assignmentModeLabel %></dd>
-      </div>
-    <% } %>
-    <div>
-      <dt>Auto-run behavior</dt>
-      <dd><%= executionState.autoRun.label %></dd>
-    </div>
-    <div>
-      <dt>Latest run</dt>
-      <dd>
-        <% if (executionState.latestRun) { %>
-          <a href="/runs/<%= executionState.latestRun.id %>">Run #<%= executionState.latestRun.id %></a>
-          <span class="status-badge status-<%= executionState.latestRun.status %>"><%= executionState.latestRun.status %></span>
-        <% } else { %>
-          - (no run yet)
-        <% } %>
-      </dd>
-    </div>
-    <div>
-      <dt>Last outcome</dt>
-      <dd><%= executionState.lastOutcomeLabel || '-' %></dd>
-    </div>
-    <div>
-      <dt>Current message</dt>
-      <dd>
-        <% if (executionState.currentMessage.text) { %>
-          <%= executionState.currentMessage.text %>
-          <span class="message-source">(source: <%= executionState.currentMessage.source %>)</span>
-        <% } else { %>
-          <span class="text-muted">none (source: <%= executionState.currentMessage.source %>)</span>
-        <% } %>
-      </dd>
-    </div>
-  </dl>
-  <% if (executionState.blocked && executionState.blockedReason) { %>
-    <p class="failure-reason"><%= executionState.blockedReason %></p>
-  <% } %>
-  <% if (executionState.group) { %>
-    <p class="text-muted">Group fan-out: <%= executionState.group.memberCount %> member<%= executionState.group.memberCount === 1 ? '' : 's' %> ·
-      work units: <%= executionState.group.workUnitsTotal %> generated, <%= executionState.group.workUnitsCompleted %> completed<%= executionState.group.workUnitsFailed > 0 ? ', ' + executionState.group.workUnitsFailed + ' failed' : '' %>.
-      Completes when all work units complete; fails if any required work unit fails.</p>
-  <% } %>
-  <% if (ticket.assignmentTargetType === 'group' && ticket.assignmentMode === 'dynamic') { %>
-    <%
-      const dynamicScopeMap = ticket.ownedOutputPaths && typeof ticket.ownedOutputPaths === 'object' && !Array.isArray(ticket.ownedOutputPaths)
-        ? ticket.ownedOutputPaths : null;
-    %>
-    <p class="text-muted">Automatic folder scopes: group agents are assigned to existing top-level workspace folders in deterministic order (folders by name, agents by id). The ticket runs only when there are at least as many usable folders as group agents.</p>
-    <% if (dynamicScopeMap && Object.keys(dynamicScopeMap).length > 0) { %>
-      <ul class="text-muted">
-        <% Object.keys(dynamicScopeMap).forEach(agentId => { %>
-          <% const scopedAgent = agents.find(a => String(a.id) === String(agentId)); %>
-          <li><%= scopedAgent ? scopedAgent.name : 'Agent #' + agentId %> → <code class="owned-path"><%= dynamicScopeMap[agentId] %></code></li>
-        <% }) %>
-      </ul>
-    <% } %>
   <% } %>
 </section>
 <% } %>
@@ -295,6 +248,60 @@
 </script>
 
 <div class="zone-head"><span class="zone-eyebrow">How it's set up</span><span class="zone-q">How is this ticket configured?</span></div>
+<% if (typeof executionState !== 'undefined' && executionState) { %>
+<div id="zone1-config-carry">
+  <dl class="detail-grid">
+  <% if (ticket.source && ticket.source.type === 'process_template') { %>
+    <div>
+      <dt>Created from template</dt>
+      <dd>
+        <a href="/process-templates"><%= ticket.source.templateName %></a><% if (ticket.source.templateVersion) { %> v<%= ticket.source.templateVersion %><% } %>
+        (#<%= ticket.source.templateId %>, <%= ticket.source.triggerType === 'schedule' ? 'scheduled' : 'manual' %> trigger by <%= ticket.source.triggeredBy %>)
+      </dd>
+    </div>
+  <% } %>
+  <% if (ticket.workContextId && ticket.workContextSnapshot) { %>
+    <div>
+      <dt>Work Context</dt>
+      <dd>
+        <a href="/tickets?workContextId=<%= ticket.workContextId %>"><%= ticket.workContextSnapshot.name %></a>
+        (#<%= ticket.workContextId %><% if (ticket.workContextSnapshot.status && ticket.workContextSnapshot.status !== 'active') { %>, <%= ticket.workContextSnapshot.status %><% } %>)
+      </dd>
+    </div>
+  <% } %>
+  <% if (executionState.isGroup && executionState.assignmentMode) { %>
+    <div>
+      <dt>Assignment mode</dt>
+      <dd><%= executionState.assignmentModeLabel %></dd>
+    </div>
+  <% } %>
+  <div>
+    <dt>Auto-run behavior</dt>
+    <dd><%= executionState.autoRun.label %></dd>
+  </div>
+  </dl>
+  <% if (executionState.group) { %>
+    <p class="text-muted">Group fan-out: <%= executionState.group.memberCount %> member<%= executionState.group.memberCount === 1 ? '' : 's' %> ·
+      work units: <%= executionState.group.workUnitsTotal %> generated, <%= executionState.group.workUnitsCompleted %> completed<%= executionState.group.workUnitsFailed > 0 ? ', ' + executionState.group.workUnitsFailed + ' failed' : '' %>.
+      Completes when all work units complete; fails if any required work unit fails.</p>
+  <% } %>
+  <% if (ticket.assignmentTargetType === 'group' && ticket.assignmentMode === 'dynamic') { %>
+    <%
+      const dynamicScopeMap = ticket.ownedOutputPaths && typeof ticket.ownedOutputPaths === 'object' && !Array.isArray(ticket.ownedOutputPaths)
+        ? ticket.ownedOutputPaths : null;
+    %>
+    <p class="text-muted">Automatic folder scopes: group agents are assigned to existing top-level workspace folders in deterministic order (folders by name, agents by id). The ticket runs only when there are at least as many usable folders as group agents.</p>
+    <% if (dynamicScopeMap && Object.keys(dynamicScopeMap).length > 0) { %>
+      <ul class="text-muted">
+        <% Object.keys(dynamicScopeMap).forEach(agentId => { %>
+          <% const scopedAgent = agents.find(a => String(a.id) === String(agentId)); %>
+          <li><%= scopedAgent ? scopedAgent.name : 'Agent #' + agentId %> → <code class="owned-path"><%= dynamicScopeMap[agentId] %></code></li>
+        <% }) %>
+      </ul>
+    <% } %>
+  <% } %>
+</div>
+<% } %>
 <% if (ticket.executionPolicy) { %>
 <section class="detail-section">
   <h2>Execution Policy</h2>
@@ -400,93 +407,6 @@
       </div>
     </dl>
   </details>
-</section>
-
-<%
-  const activeRuntimeRun = ticketRuns
-    .filter(run => ['pending', 'running'].includes(run.status))
-    .sort((a, b) => new Date(b.updatedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.startedAt || a.createdAt || 0))[0] || null;
-  const latestRuntimeRun = ticketRuns
-    .slice()
-    .sort((a, b) => new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0))[0] || null;
-  const visibleRuntimeRun = activeRuntimeRun || latestRuntimeRun;
-  const initialRuntimeStart = visibleRuntimeRun ? (visibleRuntimeRun.startedAt || visibleRuntimeRun.createdAt || '') : '';
-  const initialRuntimeComplete = visibleRuntimeRun ? (visibleRuntimeRun.completedAt || '') : '';
-  const initialLeaseState = visibleRuntimeRun && visibleRuntimeRun.leaseOwner
-    ? (visibleRuntimeRun.leaseOwner + (visibleRuntimeRun.leaseExpiresAt ? ' until ' + visibleRuntimeRun.leaseExpiresAt : ''))
-    : '-';
-%>
-<section class="detail-section" id="ticket-runtime-section" data-ticket-runtime-id="<%= ticket.id %>" data-ticket-runtime-active="<%= activeRuntimeRun ? 'true' : 'false' %>">
-  <h2>Runtime</h2>
-  <dl class="detail-grid">
-    <div>
-      <dt>Ticket Status</dt>
-      <dd><span id="ticket-live-status" class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span></dd>
-    </div>
-    <div>
-      <dt>Run</dt>
-      <dd id="ticket-live-run">
-        <% if (visibleRuntimeRun) { %>
-          <a href="/runs/<%= visibleRuntimeRun.id %>">Run #<%= visibleRuntimeRun.id %></a>
-        <% } else { %>
-          -
-        <% } %>
-      </dd>
-    </div>
-    <div>
-      <dt>Run Status</dt>
-      <dd><span id="ticket-live-run-status" class="status-badge <%= visibleRuntimeRun ? 'status-' + visibleRuntimeRun.status : '' %>"><%= visibleRuntimeRun ? visibleRuntimeRun.status : '-' %></span></dd>
-    </div>
-    <div>
-      <dt>Current Message</dt>
-      <dd id="ticket-live-message"><%= ticket.currentMessage || '-' %></dd>
-    </div>
-    <div>
-      <dt>Current Step</dt>
-      <dd id="ticket-live-step"><%= visibleRuntimeRun && visibleRuntimeRun.currentStepId ? visibleRuntimeRun.currentStepId : '-' %></dd>
-    </div>
-    <div>
-      <dt>Lease State</dt>
-      <dd id="ticket-live-lease"><%= initialLeaseState %></dd>
-    </div>
-    <div>
-      <dt>Elapsed Time</dt>
-      <dd id="ticket-live-elapsed" data-started-at="<%= initialRuntimeStart %>" data-completed-at="<%= initialRuntimeComplete %>">-</dd>
-    </div>
-    <div>
-      <dt>Latest Outcome</dt>
-      <dd id="ticket-live-outcome"><%= visibleRuntimeRun && visibleRuntimeRun.operationalOutcome ? visibleRuntimeRun.operationalOutcome : '-' %></dd>
-    </div>
-  </dl>
-  <% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
-    <div class="state-inconsistency-warning state-inconsistency-warning--inline" id="ticket-runtime-state-warning">
-      <strong>State Warning</strong>
-      <p><%= runStateInconsistency.message %></p>
-      <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %>
-        <ul>
-          <% runStateInconsistency.reasons.forEach(reason => { %>
-            <li><%= reason %></li>
-          <% }) %>
-        </ul>
-      <% } %>
-    </div>
-  <% } %>
-  <%
-    const detailIsOpen = ticket.status === 'open';
-    const detailHasAssignment = Boolean(ticket.assignmentTargetId);
-    let openStateNote = null;
-    if (detailIsOpen && !detailHasAssignment) {
-      openStateNote = 'Unassigned — not started.';
-    } else if (detailIsOpen && detailHasAssignment && ticketRuns.length === 0 && ticket.assignmentTargetType === 'group' && ticket.assignmentMode === 'dynamic') {
-      openStateNote = 'No run started yet. Automatic folder scopes need at least one usable top-level workspace folder per group agent.';
-    } else if (detailIsOpen && detailHasAssignment && ticketRuns.length === 0) {
-      openStateNote = 'No run started yet for the assigned target. Check the agent or group configuration.';
-    }
-  %>
-  <% if (openStateNote) { %>
-    <p class="text-muted"><%= openStateNote %></p>
-  <% } %>
-</section>
 </section>
 
 <% if (allocationPlan) { %>
