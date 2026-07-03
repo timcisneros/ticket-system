@@ -396,6 +396,9 @@ async function main() {
     const cleanTicketPage = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id + 2}`, 'clean ticket', 'At a glance');
     assert(!cleanTicketPage.body.includes('Needs your attention'), 'completed ticket without triage or runs should omit the attention zone');
     const runDetail = await assertPageRenders(cookie, `/runs/${fixture.run.id}`, 'run detail', 'Run Outcome');
+    assert(runDetail.body.includes('>At a glance<'), 'run detail should render Zone 1 eyebrow');
+    assert(runDetail.body.includes("How it's set up") || runDetail.body.includes('>How it&#39;s set up<'), 'run detail should render Zone 3 eyebrow');
+    assert(runDetail.body.includes('>What has happened<'), 'run detail should render Zone 4 eyebrow');
     assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');

@@ -1,3 +1,5 @@
+<section class="zone">
+<div class="zone-head"><span class="zone-eyebrow">At a glance</span><span class="zone-q">What is this run, and what's it doing right now?</span></div>
 <div class="page-header">
   <% const viewOperationalOutcome = typeof operationalOutcomeLabel === 'undefined' ? '-' : operationalOutcomeLabel; %>
   <div>
@@ -17,6 +19,15 @@
     <a class="btn-secondary" href="/logs?runId=<%= run.id %>">Run Logs</a>
   </div>
 </div>
+
+<% const runHasAttention = (typeof completionSummary !== 'undefined' && completionSummary)
+  || (run.triage && (run.triage.required || run.triage.resolvedAt))
+  || (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable && reviewStatus.needsReview)
+  || (typeof runStateInconsistency !== 'undefined' && runStateInconsistency)
+  || (typeof failureSummary !== 'undefined' && failureSummary); %>
+<% if (runHasAttention) { %>
+<div class="zone-head" data-attn-zone><span class="zone-eyebrow">Needs your attention</span><span class="zone-q">Does it need me, and what do I decide?</span></div>
+<% } %>
 
 <% if (['failed', 'interrupted'].includes(run.status) && partialMutationCount > 0) { %>
 <section class="detail-section partial-execution-banner">
@@ -154,6 +165,8 @@
   });
 </script>
 
+<div class="zone-head"><span class="zone-eyebrow">How it's set up</span><span class="zone-q">How was this run configured?</span></div>
+
 <% if (typeof attemptUsage !== 'undefined' && attemptUsage) { %>
 <section class="detail-section">
   <h2>Usage / Attempt</h2>
@@ -196,6 +209,8 @@
   </dl>
 </section>
 <% } %>
+
+<div class="zone-head"><span class="zone-eyebrow">What has happened</span><span class="zone-q">What did the run actually do?</span></div>
 
 <% if (typeof budgetStatus !== 'undefined' && budgetStatus) { %>
 <%
@@ -516,6 +531,7 @@
       </div>
     </details>
   <% } %>
+</section>
 </section>
 
 <section class="detail-section">
