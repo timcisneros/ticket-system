@@ -411,13 +411,14 @@ async function main() {
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
     assert(runDetail.body.includes('class="attn'), 'run detail attention items should render as .attn cards');
     assert(!runDetail.body.includes('<section class="detail-section failure-summary">'), 'Failure Summary should be an attention card, not a standalone detail-section');
-    assert((runDetail.body.match(/Why this run stopped<\/h3>/g) || []).length === 1, 'Why this run stopped should appear exactly once');
+    // "Why this run stopped" is gated to abnormal completions (failed/interrupted/capped/timed-out).
+    // The regression fixture run is a clean 'completed' run, so the card must be absent for it.
+    assert(!runDetail.body.includes('Why this run stopped</h3>'), 'completed fixture run should not show the abnormal-only "Why this run stopped" card');
     assert((runDetail.body.match(/State Warning<\/h3>/g) || []).length <= 1, 'State Warning should appear at most once');
     assert((runDetail.body.match(/Failure Summary<\/h3>/g) || []).length <= 1, 'Failure Summary should appear at most once');
     const attnZoneIdx = runDetail.body.indexOf('data-attn-zone');
     const zone3Idx = runDetail.body.indexOf("How it's set up");
-    const whyStoppedIdx = runDetail.body.indexOf('Why this run stopped</h3>');
-    assert(attnZoneIdx !== -1 && whyStoppedIdx !== -1 && zone3Idx !== -1 && attnZoneIdx < whyStoppedIdx && whyStoppedIdx < zone3Idx, 'Why this run stopped should be inside Zone 2, before Zone 3');
+    assert(zone3Idx !== -1 && (attnZoneIdx === -1 || attnZoneIdx < zone3Idx), 'Zone 2 attention header, when present, should render before Zone 3');
     assert(runDetail.body.includes('<summary>Execution policy snapshot'), 'Zone 3 should present execution policy in a disclosure');
     assert(runDetail.body.includes('<summary>Authority &amp; scope') || runDetail.body.includes('<summary>Authority &amp; Scope'), 'Zone 3 should present authority & scope in a disclosure');
     assert(runDetail.body.includes('<summary>Run context') || runDetail.body.includes('<summary>Run Context'), 'Zone 3 should present run context in an open disclosure');

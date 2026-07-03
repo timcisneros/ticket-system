@@ -108,7 +108,9 @@
 </div>
 </section>
 
-<% const runHasAttention = (typeof completionSummary !== 'undefined' && completionSummary)
+<% const runStoppedAbnormally = (typeof completionSummary !== 'undefined' && completionSummary)
+  && (['failed', 'interrupted'].includes(completionSummary.state) || completionSummary.capNote || completionSummary.timeoutNote); %>
+<% const runHasAttention = runStoppedAbnormally
   || (run.triage && (run.triage.required || run.triage.resolvedAt))
   || (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable && reviewStatus.needsReview)
   || (typeof runStateInconsistency !== 'undefined' && runStateInconsistency)
@@ -138,7 +140,7 @@
 </div>
 <% } %>
 
-<% if (typeof completionSummary !== 'undefined' && completionSummary) { %>
+<% if (runStoppedAbnormally) { %>
 <div class="attn critical completion-summary">
   <h3><span class="sev">Critical</span> Why this run stopped</h3>
   <dl class="detail-grid">
