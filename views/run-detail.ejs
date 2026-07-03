@@ -631,37 +631,82 @@
 
 <div class="zone-head"><span class="zone-eyebrow">What has happened</span><span class="zone-q">What did the run actually do?</span></div>
 
-<div id="run-zone-carry-events">
-  <% if (typeof runEvents !== 'undefined' && runEvents && runEvents.length > 0) { %>
-    <details class="collapsible collapsible--compact">
-      <summary>Operational Events</summary>
-      <div class="collapsible__content">
-        <pre class="code-block"><%= JSON.stringify(runEvents, null, 2) %></pre>
+<% if (!snapshot) { %>
+  <section class="detail-section">
+    <h2>Replay Snapshot</h2>
+    <p class="text-muted">No replay snapshot is available for this run.</p>
+  </section>
+<% } else { %>
+  <section class="detail-section replay-section" id="replay-workspace-actions" data-replay-section="workspaceOperations">
+    <h2>Workspace Actions</h2>
+    <% if (!snapshot.workspaceOperations || snapshot.workspaceOperations.length === 0) { %>
+      <p class="text-muted">No workspace operations captured.</p>
+    <% } %>
+    <% (snapshot.workspaceOperations || []).forEach((op, index) => { %>
+      <%
+        let opStatusClass = 'op-neutral';
+        let opStatusLabel = '';
+        const opIsFailure = op.blocked || op.error;
+        const opIsMutation = op.operation && ['createFolder','writeFile','renamePath','deletePath'].includes(op.operation.operation);
+        if (op.blocked) {
+          opStatusClass = 'op-blocked';
+          opStatusLabel = 'BLOCKED';
+        } else if (op.error) {
+          opStatusClass = 'op-error';
+          opStatusLabel = 'ERROR';
+        } else if (op.result && op.result.status === 'already_exists_noop') {
+          opStatusClass = 'op-noop';
+          opStatusLabel = 'NO-OP';
+        } else if (op.result && op.result.status === 'created') {
+          opStatusClass = 'op-created';
+          opStatusLabel = 'CREATED';
+        } else if (op.result) {
+          opStatusClass = 'op-success';
+          opStatusLabel = 'OK';
+        }
+        const opReason = op.reason || (op.error && op.error) || '';
+      %>
+      <div class="workspace-operation <%= opStatusClass %>" data-op-failure="<%= opIsFailure %>" data-op-mutation="<%= opIsMutation %>">
+        <div class="workspace-operation-header">
+          <span class="workspace-operation-number">Op <%= index + 1 %></span>
+          <span class="workspace-operation-type"><%= op.operation && op.operation.operation || (typeof op.operation === 'string' ? op.operation : '-') %></span>
+          <span class="badge badge--outcome-<%= opStatusClass.replace(/^op-/, '') %>"><%= opStatusLabel %></span>
+          <% if (op.durationMs !== undefined) { %>
+            <span class="badge badge--timing"><%= op.durationMs %>ms</span>
+          <% } %>
+          <% if (typeof opAllowance !== 'undefined') { %>
+            <% const allowKey = op.historyId != null ? 'h:' + op.historyId : 's:' + index; %>
+            <% const allow = opAllowance[allowKey]; %>
+            <% if (allow) { %>
+              <span class="badge badge--allowance badge--allowance-<%= allow.type %>"><%= allow.label %></span>
+            <% } %>
+          <% } %>
+        </div>
+        <% if (typeof opErrorInfo !== 'undefined') { %>
+          <% const errorKey = op.historyId != null ? 'h:' + op.historyId : 's:' + index; %>
+          <% const errorInfo = opErrorInfo[errorKey]; %>
+          <% if (errorInfo) { %>
+            <div class="operation-error-info">
+              <code><%= errorInfo.code %></code>
+              <span><%= errorInfo.explanation %></span>
+            </div>
+          <% } %>
+        <% } %>
+        <% if (opReason) { %>
+          <div class="workspace-operation-reason"><%= opReason %></div>
+        <% } %>
+        <details class="collapsible">
+          <summary>Payload</summary>
+          <pre class="code-block"><%= JSON.stringify(op, null, 2) %></pre>
+        </details>
       </div>
-    </details>
-  <% } %>
-</div>
-
-<% if (typeof budgetStatus !== 'undefined' && budgetStatus) { %>
-<%
-  function budgetCell(m, unit) {
-    unit = unit || '';
-    if (m.status === 'not_configured') return 'not configured';
-    if (m.status === 'unavailable') return 'unavailable';
-    var pair = m.usage + unit + ' / ' + m.threshold + unit;
-    return m.status === 'exceeded' ? (pair + ' · exceeded (advisory)') : (pair + ' · within limit');
-  }
-%>
-<section class="detail-section">
-  <h2>Budget (advisory)</h2>
-  <p class="text-muted">Advisory only — no execution is blocked. Recorded usage compared against this run's recorded thresholds; an exceeded threshold is a warning, not a limit.</p>
-  <dl class="detail-grid">
-    <div><dt>Runtime</dt><dd><%= budgetCell(budgetStatus.runtimeMs, 'ms') %></dd></div>
-    <div><dt>Model requests</dt><dd><%= budgetCell(budgetStatus.modelRequests, '') %></dd></div>
-    <div><dt>Workspace operations</dt><dd><%= budgetCell(budgetStatus.workspaceOperations, '') %></dd></div>
-  </dl>
-</section>
+    <% }) %>
+  </section>
 <% } %>
+
+<details class="disclosure">
+  <summary>Artifacts <span class="sub">prediction vs. actual</span></summary>
+  <div class="body">
 
 <section class="detail-section">
   <h2>Artifact Prediction</h2>
@@ -762,30 +807,205 @@
   <% } %>
 </section>
 
-<% const runRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
-<% if (runRecentLogs.length > 0) { %>
+  </div>
+</details>
+
+<% if (operationHistory && operationHistory.length > 0) { %>
+<details class="disclosure">
+  <summary>Operation History <span class="sub"><%= operationHistory.length %> record<%= operationHistory.length === 1 ? '' : 's' %></span></summary>
+  <div class="body">
 <section class="detail-section">
-  <h2>Recent Activity</h2>
-  <div class="inline-log-list">
-    <% runRecentLogs.forEach(log => { %>
-      <div class="inline-log-item">
-        <span class="inline-log-type"><%= log.displayType || log.type %></span>
-        <span class="inline-log-message"><%= log.displayMessage || log.message %></span>
-        <% if (log.changedBy || log.requestedBy) { %>
-          <span class="audit-meta">Changed by <%= log.changedBy || log.requestedBy %> at <%= log.changedAt || log.timestamp || '-' %></span>
-        <% } %>
+  <h2>Operation History</h2>
+  <div class="operation-history">
+    <% operationHistory.forEach((record, index) => { %>
+      <div class="operation-history-item <%= record.isRecovery ? 'is-recovery' : '' %>">
+        <div class="operation-history-header">
+          <span class="operation-history-number">#<%= record.id %></span>
+          <span class="operation-history-type"><%= record.operation %></span>
+          <span class="operation-history-step">step <%= record.step %></span>
+          <% if (record.isRecovery) { %>
+            <span class="badge badge--recovery-action">RECOVERY</span>
+          <% } else if (record.recoveryStatus) { %>
+            <% if (record.recoveryStatus.status === 'recoverable') { %>
+              <span class="badge badge--recovery-recoverable">RECOVERABLE</span>
+            <% } else if (record.recoveryStatus.status === 'unrecoverable') { %>
+              <span class="badge badge--recovery-unrecoverable">UNRECOVERABLE</span>
+            <% } else if (record.recoveryStatus.status === 'recovery_available') { %>
+              <span class="badge badge--recovery-available">RECOVERY AVAILABLE</span>
+            <% } %>
+          <% } %>
+          <% if (record.error) { %>
+            <span class="badge badge--outcome-error">ERROR</span>
+          <% } else if (record.result && record.result.status === 'already_exists_noop') { %>
+            <span class="badge badge--outcome-noop">NO-OP</span>
+          <% } else { %>
+            <span class="badge badge--outcome-success">OK</span>
+          <% } %>
+          <% if (record.allowance) { %>
+            <span class="badge badge--allowance badge--allowance-<%= record.allowance.type %>"><%= record.allowance.label %></span>
+          <% } %>
+          <% if (record.errorInfo) { %>
+            <span class="badge badge--outcome-error"><%= record.errorInfo.code %></span>
+          <% } %>
+        </div>
+        <div class="operation-history-body">
+          <div class="allocation-item-row">
+            <span class="allocation-item-label">Path</span>
+            <span class="allocation-item-value"><code class="owned-path"><%= record.args.path %></code></span>
+          </div>
+          <% if (record.args.nextPath) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Next Path</span>
+              <span class="allocation-item-value"><code class="owned-path"><%= record.args.nextPath %></code></span>
+            </div>
+          <% } %>
+          <% if (record.isRecovery && record.recoveredHistoryId) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Recovered</span>
+              <span class="allocation-item-value">History #<%= record.recoveredHistoryId %></span>
+            </div>
+          <% } %>
+          <% if (record.error) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Error</span>
+              <span class="allocation-item-value"><span class="failure-reason"><%= record.error %></span></span>
+            </div>
+            <% if (record.errorInfo) { %>
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Error Code</span>
+                <span class="allocation-item-value"><code><%= record.errorInfo.code %></code> · <%= record.errorInfo.explanation %></span>
+              </div>
+            <% } %>
+          <% } %>
+          <% if (record.preState) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">State diff</span>
+              <span class="allocation-item-value">
+                <details class="collapsible">
+                  <summary>View diff</summary>
+                  <div class="diff-container">
+                    <div class="diff-panel">
+                      <div class="diff-panel-label">Before</div>
+                      <pre class="code-block code-block--diff"><%= JSON.stringify(record.preState, null, 2) %></pre>
+                    </div>
+                    <div class="diff-panel">
+                      <div class="diff-panel-label">After</div>
+                      <pre class="code-block code-block--diff"><%= JSON.stringify(record.postState, null, 2) %></pre>
+                    </div>
+                  </div>
+                </details>
+              </span>
+            </div>
+          <% } else if (record.postState) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Post-State</span>
+              <span class="allocation-item-value">
+                <details class="collapsible">
+                  <summary>View Post-State</summary>
+                  <pre class="code-block"><%= JSON.stringify(record.postState, null, 2) %></pre>
+                </details>
+              </span>
+            </div>
+          <% } %>
+          <% if (canUpdateRuns && !record.isRecovery && record.recoveryStatus && record.recoveryStatus.status === 'recoverable') { %>
+            <div class="recovery-controls">
+              <button type="button" class="btn-small" data-preview-recovery-id="<%= record.id %>">Preview Recovery</button>
+            </div>
+            <div class="recovery-preview-panel" id="recovery-preview-<%= record.id %>" style="display: none;"></div>
+          <% } %>
+        </div>
       </div>
     <% }) %>
   </div>
 </section>
+  </div>
+</details>
 <% } %>
 
-<% if (!snapshot) { %>
-  <section class="detail-section">
-    <h2>Replay Snapshot</h2>
-    <p class="text-muted">No replay snapshot is available for this run.</p>
-  </section>
-<% } else { %>
+<details class="disclosure">
+  <summary>Events</summary>
+  <div class="body">
+    <% if (typeof runEvents !== 'undefined' && runEvents && runEvents.length > 0) { %>
+      <details class="collapsible collapsible--compact">
+        <summary>Operational Events</summary>
+        <div class="collapsible__content">
+          <pre class="code-block"><%= JSON.stringify(runEvents, null, 2) %></pre>
+        </div>
+      </details>
+    <% } %>
+    <% if (snapshot) { %>
+      <section class="detail-section replay-section" data-replay-section="events">
+        <h2>Events</h2>
+        <p class="text-muted">Replay events record notable runtime conditions (limits, truncation, postconditions, no-progress). A clean run can have none even though provider, model, and workspace evidence exist.</p>
+        <% if (!snapshot.events || snapshot.events.length === 0) { %>
+          <%
+            const hasOtherEvidence = (snapshot.providerRequests && snapshot.providerRequests.length > 0)
+              || (snapshot.modelResponses && snapshot.modelResponses.length > 0)
+              || (snapshot.workspaceOperations && snapshot.workspaceOperations.length > 0);
+          %>
+          <% if (hasOtherEvidence) { %>
+            <p class="text-muted">No replay events for this run. Replay events are a separate category from provider, model, and workspace evidence, which is shown in its own sections above (see the "Why this run stopped" evidence counts). Absent replay events do not mean the other evidence is missing.</p>
+          <% } else { %>
+            <p class="text-muted">No replay events captured.</p>
+          <% } %>
+        <% } %>
+        <% (snapshot.events || []).forEach((event, index) => { %>
+          <%
+            let eventClass = 'event-neutral';
+            const eventIsFailure = event.type && (event.type.includes('fail') || event.type.includes('error') || event.type.includes('limit'));
+            if (event.type && event.type.includes('limit')) eventClass = 'event-limit';
+            else if (event.type && event.type.includes('fail')) eventClass = 'event-error';
+            else if (event.type && event.type.includes('stalled')) eventClass = 'event-warn';
+            else if (event.type && event.type.includes('no_progress')) eventClass = 'event-warn';
+            else if (event.type === 'run:completed_noop') eventClass = 'event-noop';
+          %>
+          <div class="replay-event <%= eventClass %>" data-event-failure="<%= eventIsFailure %>">
+            <div class="replay-event-header">
+              <span class="replay-event-number">#<%= index + 1 %></span>
+              <span class="replay-event-type"><%= event.type %></span>
+            </div>
+            <details class="collapsible">
+              <summary>Payload</summary>
+              <pre class="code-block"><%= JSON.stringify(event, null, 2) %></pre>
+            </details>
+          </div>
+        <% }) %>
+      </section>
+    <% } %>
+  </div>
+</details>
+
+<% if (typeof budgetStatus !== 'undefined' && budgetStatus) { %>
+<%
+  function budgetCell(m, unit) {
+    unit = unit || '';
+    if (m.status === 'not_configured') return 'not configured';
+    if (m.status === 'unavailable') return 'unavailable';
+    var pair = m.usage + unit + ' / ' + m.threshold + unit;
+    return m.status === 'exceeded' ? (pair + ' · exceeded (advisory)') : (pair + ' · within limit');
+  }
+%>
+<details class="disclosure">
+  <summary>Budget (advisory)</summary>
+  <div class="body">
+<section class="detail-section">
+  <h2>Budget (advisory)</h2>
+  <p class="text-muted">Advisory only — no execution is blocked. Recorded usage compared against this run's recorded thresholds; an exceeded threshold is a warning, not a limit.</p>
+  <dl class="detail-grid">
+    <div><dt>Runtime</dt><dd><%= budgetCell(budgetStatus.runtimeMs, 'ms') %></dd></div>
+    <div><dt>Model requests</dt><dd><%= budgetCell(budgetStatus.modelRequests, '') %></dd></div>
+    <div><dt>Workspace operations</dt><dd><%= budgetCell(budgetStatus.workspaceOperations, '') %></dd></div>
+  </dl>
+</section>
+  </div>
+</details>
+<% } %>
+
+<details class="evidence-group">
+  <summary>Model interaction &amp; raw evidence</summary>
+  <div class="evidence-group-body">
+
+<% if (snapshot) { %>
   <%
     const replayWorkspaceOps = snapshot.workspaceOperations || [];
     const replayEvents = snapshot.events || [];
@@ -908,217 +1128,6 @@
     <% }) %>
   </section>
   <% } %>
-
-  <section class="detail-section replay-section" id="replay-workspace-actions" data-replay-section="workspaceOperations">
-    <h2>Workspace Actions</h2>
-    <% if (!snapshot.workspaceOperations || snapshot.workspaceOperations.length === 0) { %>
-      <p class="text-muted">No workspace operations captured.</p>
-    <% } %>
-    <% (snapshot.workspaceOperations || []).forEach((op, index) => { %>
-      <%
-        let opStatusClass = 'op-neutral';
-        let opStatusLabel = '';
-        const opIsFailure = op.blocked || op.error;
-        const opIsMutation = op.operation && ['createFolder','writeFile','renamePath','deletePath'].includes(op.operation.operation);
-        if (op.blocked) {
-          opStatusClass = 'op-blocked';
-          opStatusLabel = 'BLOCKED';
-        } else if (op.error) {
-          opStatusClass = 'op-error';
-          opStatusLabel = 'ERROR';
-        } else if (op.result && op.result.status === 'already_exists_noop') {
-          opStatusClass = 'op-noop';
-          opStatusLabel = 'NO-OP';
-        } else if (op.result && op.result.status === 'created') {
-          opStatusClass = 'op-created';
-          opStatusLabel = 'CREATED';
-        } else if (op.result) {
-          opStatusClass = 'op-success';
-          opStatusLabel = 'OK';
-        }
-        const opReason = op.reason || (op.error && op.error) || '';
-      %>
-      <div class="workspace-operation <%= opStatusClass %>" data-op-failure="<%= opIsFailure %>" data-op-mutation="<%= opIsMutation %>">
-        <div class="workspace-operation-header">
-          <span class="workspace-operation-number">Op <%= index + 1 %></span>
-          <span class="workspace-operation-type"><%= op.operation && op.operation.operation || (typeof op.operation === 'string' ? op.operation : '-') %></span>
-          <span class="badge badge--outcome-<%= opStatusClass.replace(/^op-/, '') %>"><%= opStatusLabel %></span>
-          <% if (op.durationMs !== undefined) { %>
-            <span class="badge badge--timing"><%= op.durationMs %>ms</span>
-          <% } %>
-          <% if (typeof opAllowance !== 'undefined') { %>
-            <% const allowKey = op.historyId != null ? 'h:' + op.historyId : 's:' + index; %>
-            <% const allow = opAllowance[allowKey]; %>
-            <% if (allow) { %>
-              <span class="badge badge--allowance badge--allowance-<%= allow.type %>"><%= allow.label %></span>
-            <% } %>
-          <% } %>
-        </div>
-        <% if (typeof opErrorInfo !== 'undefined') { %>
-          <% const errorKey = op.historyId != null ? 'h:' + op.historyId : 's:' + index; %>
-          <% const errorInfo = opErrorInfo[errorKey]; %>
-          <% if (errorInfo) { %>
-            <div class="operation-error-info">
-              <code><%= errorInfo.code %></code>
-              <span><%= errorInfo.explanation %></span>
-            </div>
-          <% } %>
-        <% } %>
-        <% if (opReason) { %>
-          <div class="workspace-operation-reason"><%= opReason %></div>
-        <% } %>
-        <details class="collapsible">
-          <summary>Payload</summary>
-          <pre class="code-block"><%= JSON.stringify(op, null, 2) %></pre>
-        </details>
-      </div>
-    <% }) %>
-  </section>
-
-  <section class="detail-section replay-section" data-replay-section="events">
-    <h2>Events</h2>
-    <p class="text-muted">Replay events record notable runtime conditions (limits, truncation, postconditions, no-progress). A clean run can have none even though provider, model, and workspace evidence exist.</p>
-    <% if (!snapshot.events || snapshot.events.length === 0) { %>
-      <%
-        const hasOtherEvidence = (snapshot.providerRequests && snapshot.providerRequests.length > 0)
-          || (snapshot.modelResponses && snapshot.modelResponses.length > 0)
-          || (snapshot.workspaceOperations && snapshot.workspaceOperations.length > 0);
-      %>
-      <% if (hasOtherEvidence) { %>
-        <p class="text-muted">No replay events for this run. Replay events are a separate category from provider, model, and workspace evidence, which is shown in its own sections above (see the "Why this run stopped" evidence counts). Absent replay events do not mean the other evidence is missing.</p>
-      <% } else { %>
-        <p class="text-muted">No replay events captured.</p>
-      <% } %>
-    <% } %>
-    <% (snapshot.events || []).forEach((event, index) => { %>
-      <%
-        let eventClass = 'event-neutral';
-        const eventIsFailure = event.type && (event.type.includes('fail') || event.type.includes('error') || event.type.includes('limit'));
-        if (event.type && event.type.includes('limit')) eventClass = 'event-limit';
-        else if (event.type && event.type.includes('fail')) eventClass = 'event-error';
-        else if (event.type && event.type.includes('stalled')) eventClass = 'event-warn';
-        else if (event.type && event.type.includes('no_progress')) eventClass = 'event-warn';
-        else if (event.type === 'run:completed_noop') eventClass = 'event-noop';
-      %>
-      <div class="replay-event <%= eventClass %>" data-event-failure="<%= eventIsFailure %>">
-        <div class="replay-event-header">
-          <span class="replay-event-number">#<%= index + 1 %></span>
-          <span class="replay-event-type"><%= event.type %></span>
-        </div>
-        <details class="collapsible">
-          <summary>Payload</summary>
-          <pre class="code-block"><%= JSON.stringify(event, null, 2) %></pre>
-        </details>
-      </div>
-    <% }) %>
-  </section>
-<% } %>
-
-<% if (operationHistory && operationHistory.length > 0) { %>
-<section class="detail-section">
-  <h2>Operation History</h2>
-  <div class="operation-history">
-    <% operationHistory.forEach((record, index) => { %>
-      <div class="operation-history-item <%= record.isRecovery ? 'is-recovery' : '' %>">
-        <div class="operation-history-header">
-          <span class="operation-history-number">#<%= record.id %></span>
-          <span class="operation-history-type"><%= record.operation %></span>
-          <span class="operation-history-step">step <%= record.step %></span>
-          <% if (record.isRecovery) { %>
-            <span class="badge badge--recovery-action">RECOVERY</span>
-          <% } else if (record.recoveryStatus) { %>
-            <% if (record.recoveryStatus.status === 'recoverable') { %>
-              <span class="badge badge--recovery-recoverable">RECOVERABLE</span>
-            <% } else if (record.recoveryStatus.status === 'unrecoverable') { %>
-              <span class="badge badge--recovery-unrecoverable">UNRECOVERABLE</span>
-            <% } else if (record.recoveryStatus.status === 'recovery_available') { %>
-              <span class="badge badge--recovery-available">RECOVERY AVAILABLE</span>
-            <% } %>
-          <% } %>
-          <% if (record.error) { %>
-            <span class="badge badge--outcome-error">ERROR</span>
-          <% } else if (record.result && record.result.status === 'already_exists_noop') { %>
-            <span class="badge badge--outcome-noop">NO-OP</span>
-          <% } else { %>
-            <span class="badge badge--outcome-success">OK</span>
-          <% } %>
-          <% if (record.allowance) { %>
-            <span class="badge badge--allowance badge--allowance-<%= record.allowance.type %>"><%= record.allowance.label %></span>
-          <% } %>
-          <% if (record.errorInfo) { %>
-            <span class="badge badge--outcome-error"><%= record.errorInfo.code %></span>
-          <% } %>
-        </div>
-        <div class="operation-history-body">
-          <div class="allocation-item-row">
-            <span class="allocation-item-label">Path</span>
-            <span class="allocation-item-value"><code class="owned-path"><%= record.args.path %></code></span>
-          </div>
-          <% if (record.args.nextPath) { %>
-            <div class="allocation-item-row">
-              <span class="allocation-item-label">Next Path</span>
-              <span class="allocation-item-value"><code class="owned-path"><%= record.args.nextPath %></code></span>
-            </div>
-          <% } %>
-          <% if (record.isRecovery && record.recoveredHistoryId) { %>
-            <div class="allocation-item-row">
-              <span class="allocation-item-label">Recovered</span>
-              <span class="allocation-item-value">History #<%= record.recoveredHistoryId %></span>
-            </div>
-          <% } %>
-          <% if (record.error) { %>
-            <div class="allocation-item-row">
-              <span class="allocation-item-label">Error</span>
-              <span class="allocation-item-value"><span class="failure-reason"><%= record.error %></span></span>
-            </div>
-            <% if (record.errorInfo) { %>
-              <div class="allocation-item-row">
-                <span class="allocation-item-label">Error Code</span>
-                <span class="allocation-item-value"><code><%= record.errorInfo.code %></code> · <%= record.errorInfo.explanation %></span>
-              </div>
-            <% } %>
-          <% } %>
-          <% if (record.preState) { %>
-            <div class="allocation-item-row">
-              <span class="allocation-item-label">State diff</span>
-              <span class="allocation-item-value">
-                <details class="collapsible">
-                  <summary>View diff</summary>
-                  <div class="diff-container">
-                    <div class="diff-panel">
-                      <div class="diff-panel-label">Before</div>
-                      <pre class="code-block code-block--diff"><%= JSON.stringify(record.preState, null, 2) %></pre>
-                    </div>
-                    <div class="diff-panel">
-                      <div class="diff-panel-label">After</div>
-                      <pre class="code-block code-block--diff"><%= JSON.stringify(record.postState, null, 2) %></pre>
-                    </div>
-                  </div>
-                </details>
-              </span>
-            </div>
-          <% } else if (record.postState) { %>
-            <div class="allocation-item-row">
-              <span class="allocation-item-label">Post-State</span>
-              <span class="allocation-item-value">
-                <details class="collapsible">
-                  <summary>View Post-State</summary>
-                  <pre class="code-block"><%= JSON.stringify(record.postState, null, 2) %></pre>
-                </details>
-              </span>
-            </div>
-          <% } %>
-          <% if (canUpdateRuns && !record.isRecovery && record.recoveryStatus && record.recoveryStatus.status === 'recoverable') { %>
-            <div class="recovery-controls">
-              <button type="button" class="btn-small" data-preview-recovery-id="<%= record.id %>">Preview Recovery</button>
-            </div>
-            <div class="recovery-preview-panel" id="recovery-preview-<%= record.id %>" style="display: none;"></div>
-          <% } %>
-        </div>
-      </div>
-    <% }) %>
-  </div>
-</section>
 <% } %>
 
 <% if (typeof runDiagnosticBundle !== 'undefined' && runDiagnosticBundle) { %>
@@ -1153,6 +1162,9 @@
 })();
 </script>
 <% } %>
+
+  </div>
+</details>
 
 <script>
 (function() {

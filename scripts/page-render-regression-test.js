@@ -403,7 +403,10 @@ async function main() {
     assert((runDetail.body.match(/id="run-live-status"/g) || []).length === 1, 'live status id must be unique');
     assert(!runDetail.body.includes('>Run Summary</h2>'), 'standalone Run Summary heading should be merged into the hero');
     assert(runDetail.body.includes('Run Outcome'), 'hero must still expose Run Outcome');
-    assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
+    assert(!runDetail.body.includes('>Recent Activity<'), 'Recent Activity should be removed from run detail (duplicates Events)');
+    assert(runDetail.body.includes('class="evidence-group"'), 'Zone 4 should have a collapsed developer-evidence group');
+    assert(runDetail.body.includes('id="replay-workspace-actions"'), 'Workspace Actions (jump target) must remain present');
+    assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'deep replay content stays reachable in the evidence group');
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
     assert(runDetail.body.includes('class="attn'), 'run detail attention items should render as .attn cards');
