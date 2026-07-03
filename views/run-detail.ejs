@@ -118,11 +118,11 @@
 <% } %>
 
 <% if (['failed', 'interrupted'].includes(run.status) && partialMutationCount > 0) { %>
-<section class="detail-section partial-execution-banner">
+<div class="attn critical partial-execution-banner">
+  <h3><span class="sev">Critical</span> Partial execution</h3>
   <div class="partial-execution-header">
     <span class="partial-execution-icon">&#9888;</span>
     <div>
-      <strong>Partial execution</strong>
       <span class="text-muted">This run failed after performing <%= partialMutationCount %> workspace mutation<%= partialMutationCount === 1 ? '' : 's' %>.</span>
     </div>
   </div>
@@ -135,12 +135,12 @@
       <% } %>
     </div>
   <% } %>
-</section>
+</div>
 <% } %>
 
 <% if (typeof completionSummary !== 'undefined' && completionSummary) { %>
-<section class="detail-section completion-summary">
-  <h2>Why this run stopped</h2>
+<div class="attn critical completion-summary">
+  <h3><span class="sev">Critical</span> Why this run stopped</h3>
   <dl class="detail-grid">
     <div>
       <dt>Outcome</dt>
@@ -183,12 +183,12 @@
     <%= completionSummary.evidence.workspaceOperations %> workspace action(s),
     <%= completionSummary.evidence.operationHistory %> operation-history record(s),
     <%= completionSummary.evidence.replayEvents %> replay event(s).</p>
-</section>
+</div>
 <% } %>
 
 <% if (run.triage && run.triage.required) { %>
-<section class="detail-section failure-summary">
-  <h2>Triage Required</h2>
+<div class="attn critical failure-summary">
+  <h3><span class="sev">Critical</span> Triage Required</h3>
   <dl class="detail-grid">
     <div><dt>Reason</dt><dd><code><%= run.triage.reasonCode %></code></dd></div>
     <div><dt>Required decision</dt><dd><code><%= run.triage.requiredDecision %></code></dd></div>
@@ -219,10 +219,10 @@
     <span class="triage-resolve-msg text-muted"></span>
   </form>
   <% } %>
-</section>
+</div>
 <% } else if (run.triage && run.triage.resolvedAt) { %>
-<section class="detail-section">
-  <h2>Triage (resolved)</h2>
+<div class="attn">
+  <h3><span class="sev">Resolved</span> Triage (resolved)</h3>
   <dl class="detail-grid">
     <div><dt>Reason</dt><dd><code><%= run.triage.reasonCode %></code></dd></div>
     <div><dt>Required decision</dt><dd><code><%= run.triage.requiredDecision %></code></dd></div>
@@ -231,7 +231,121 @@
     <div><dt>Resolved at</dt><dd><%= run.triage.resolvedAt || '-' %></dd></div>
     <div><dt>Resolution</dt><dd><%= run.triage.resolution || '-' %></dd></div>
   </dl>
-</section>
+</div>
+<% } %>
+
+<% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable && reviewStatus.needsReview) { %>
+<div class="attn">
+  <h3><span class="sev">Needs review</span> Review status</h3>
+    <p><strong>Needs review</strong> — execution completed, but the result should be checked.</p>
+    <p class="text-muted">The system verified declared postconditions / workspace evidence, not the full ticket objective.</p>
+    <ul class="text-muted">
+      <% reviewStatus.reasons.forEach(reason => { %>
+        <li><%= reason %></li>
+      <% }) %>
+    </ul>
+</div>
+<% } %>
+
+<% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
+<div class="attn critical state-inconsistency-warning">
+  <h3><span class="sev">Critical</span> State Warning</h3>
+  <p><%= runStateInconsistency.message %></p>
+  <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %>
+    <ul>
+      <% runStateInconsistency.reasons.forEach(reason => { %>
+        <li><%= reason %></li>
+      <% }) %>
+    </ul>
+  <% } %>
+</div>
+<% } %>
+
+<% if (typeof failureSummary !== 'undefined' && failureSummary) { %>
+<div class="attn critical failure-summary">
+  <h3><span class="sev">Critical</span> Failure Summary</h3>
+  <% if (failureSummary.retryGuidance) { %>
+    <p class="failure-reason"><%= failureSummary.retryGuidance %></p>
+  <% } %>
+  <dl class="detail-grid">
+    <div>
+      <dt>Run Ended As</dt>
+      <dd><span class="status-badge status-<%= failureSummary.status %>"><%= failureSummary.statusLabel %></span></dd>
+    </div>
+    <div>
+      <dt>Root Cause</dt>
+      <dd><span class="failure-reason"><%= failureSummary.rootCause %></span></dd>
+    </div>
+    <div>
+      <dt>Final Blocking Reason</dt>
+      <dd><%= failureSummary.finalBlockingReason %></dd>
+    </div>
+    <div>
+      <dt>Last Model Message</dt>
+      <dd><%= failureSummary.lastModelMessage %></dd>
+    </div>
+    <div>
+      <dt>Last Proposed Actions</dt>
+      <dd>
+        <% if (failureSummary.lastProposedActions.length > 0) { %>
+          <% failureSummary.lastProposedActions.forEach(action => { %>
+            <code class="owned-path"><%= action %></code>
+          <% }) %>
+        <% } else { %>
+          -
+        <% } %>
+      </dd>
+    </div>
+    <div>
+      <dt>Mutations Performed</dt>
+      <dd>
+        <% if (failureSummary.mutationSummary.length > 0) { %>
+          <% failureSummary.mutationSummary.forEach(action => { %>
+            <code class="owned-path"><%= action %></code>
+          <% }) %>
+        <% } else { %>
+          none
+        <% } %>
+      </dd>
+    </div>
+    <div>
+      <dt>Output State</dt>
+      <dd><%= failureSummary.outputSatisfaction.label %></dd>
+    </div>
+    <div>
+      <dt>Recovery Action</dt>
+      <dd><span class="badge badge--<%= failureSummary.recoveryAvailable ? 'recovery-recoverable' : 'outcome-noop' %>"><%= failureSummary.recoveryAvailable ? 'Available' : 'Not currently offered' %></span></dd>
+    </div>
+    <div>
+      <dt>Debug Details</dt>
+      <dd>
+        <details class="collapsible">
+          <summary>Raw failure details</summary>
+          <div class="collapsible__content">
+            <dl class="detail-grid">
+              <div>
+                <dt>Blocking Code</dt>
+                <dd><code><%= failureSummary.blockingErrorCode %></code></dd>
+              </div>
+              <div>
+                <dt>Code Meaning</dt>
+                <dd><%= failureSummary.blockingErrorExplanation %></dd>
+              </div>
+              <div>
+                <dt>First Failed Operation</dt>
+                <dd><code class="owned-path"><%= failureSummary.firstFailedOperation %></code></dd>
+              </div>
+              <div>
+                <dt>Bounded Rejections</dt>
+                <dd><%= failureSummary.boundedTransitionRejectionCount %></dd>
+              </div>
+            </dl>
+          </div>
+        </details>
+      </dd>
+    </div>
+  </dl>
+</div>
 <% } %>
 
 <script>
@@ -409,125 +523,6 @@
     <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'unspecified' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
     <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'unspecified' : run.executionPolicySnapshot.maxModelRequests %> · recorded intent, not enforced</dd></div>
     <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'unspecified' : run.executionPolicySnapshot.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
-  </dl>
-</section>
-<% } %>
-
-<% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable) { %>
-<section class="detail-section">
-  <h2>Review status</h2>
-  <% if (reviewStatus.needsReview) { %>
-    <p><strong>Needs review</strong> — execution completed, but the result should be checked.</p>
-    <p class="text-muted">The system verified declared postconditions / workspace evidence, not the full ticket objective.</p>
-    <ul class="text-muted">
-      <% reviewStatus.reasons.forEach(reason => { %>
-        <li><%= reason %></li>
-      <% }) %>
-    </ul>
-  <% } else { %>
-    <p><strong>No review flag</strong> — no evidence warnings were detected.</p>
-    <p class="text-muted">Completion reflects declared postconditions / workspace evidence, not independent verification of the full ticket objective.</p>
-  <% } %>
-</section>
-<% } %>
-
-<% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
-<section class="detail-section state-inconsistency-warning">
-  <h2>State Warning</h2>
-  <p><%= runStateInconsistency.message %></p>
-  <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %>
-    <ul>
-      <% runStateInconsistency.reasons.forEach(reason => { %>
-        <li><%= reason %></li>
-      <% }) %>
-    </ul>
-  <% } %>
-</section>
-<% } %>
-
-<% if (typeof failureSummary !== 'undefined' && failureSummary) { %>
-<section class="detail-section failure-summary">
-  <h2>Failure Summary</h2>
-  <% if (failureSummary.retryGuidance) { %>
-    <p class="failure-reason"><%= failureSummary.retryGuidance %></p>
-  <% } %>
-  <dl class="detail-grid">
-    <div>
-      <dt>Run Ended As</dt>
-      <dd><span class="status-badge status-<%= failureSummary.status %>"><%= failureSummary.statusLabel %></span></dd>
-    </div>
-    <div>
-      <dt>Root Cause</dt>
-      <dd><span class="failure-reason"><%= failureSummary.rootCause %></span></dd>
-    </div>
-    <div>
-      <dt>Final Blocking Reason</dt>
-      <dd><%= failureSummary.finalBlockingReason %></dd>
-    </div>
-    <div>
-      <dt>Last Model Message</dt>
-      <dd><%= failureSummary.lastModelMessage %></dd>
-    </div>
-    <div>
-      <dt>Last Proposed Actions</dt>
-      <dd>
-        <% if (failureSummary.lastProposedActions.length > 0) { %>
-          <% failureSummary.lastProposedActions.forEach(action => { %>
-            <code class="owned-path"><%= action %></code>
-          <% }) %>
-        <% } else { %>
-          -
-        <% } %>
-      </dd>
-    </div>
-    <div>
-      <dt>Mutations Performed</dt>
-      <dd>
-        <% if (failureSummary.mutationSummary.length > 0) { %>
-          <% failureSummary.mutationSummary.forEach(action => { %>
-            <code class="owned-path"><%= action %></code>
-          <% }) %>
-        <% } else { %>
-          none
-        <% } %>
-      </dd>
-    </div>
-    <div>
-      <dt>Output State</dt>
-      <dd><%= failureSummary.outputSatisfaction.label %></dd>
-    </div>
-    <div>
-      <dt>Recovery Action</dt>
-      <dd><span class="badge badge--<%= failureSummary.recoveryAvailable ? 'recovery-recoverable' : 'outcome-noop' %>"><%= failureSummary.recoveryAvailable ? 'Available' : 'Not currently offered' %></span></dd>
-    </div>
-    <div>
-      <dt>Debug Details</dt>
-      <dd>
-        <details class="collapsible">
-          <summary>Raw failure details</summary>
-          <div class="collapsible__content">
-            <dl class="detail-grid">
-              <div>
-                <dt>Blocking Code</dt>
-                <dd><code><%= failureSummary.blockingErrorCode %></code></dd>
-              </div>
-              <div>
-                <dt>Code Meaning</dt>
-                <dd><%= failureSummary.blockingErrorExplanation %></dd>
-              </div>
-              <div>
-                <dt>First Failed Operation</dt>
-                <dd><code class="owned-path"><%= failureSummary.firstFailedOperation %></code></dd>
-              </div>
-              <div>
-                <dt>Bounded Rejections</dt>
-                <dd><%= failureSummary.boundedTransitionRejectionCount %></dd>
-              </div>
-            </dl>
-          </div>
-        </details>
-      </dd>
-    </div>
   </dl>
 </section>
 <% } %>

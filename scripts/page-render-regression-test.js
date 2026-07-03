@@ -406,6 +406,15 @@ async function main() {
     assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
+    assert(runDetail.body.includes('class="attn'), 'run detail attention items should render as .attn cards');
+    assert(!runDetail.body.includes('<section class="detail-section failure-summary">'), 'Failure Summary should be an attention card, not a standalone detail-section');
+    assert((runDetail.body.match(/Why this run stopped<\/h3>/g) || []).length === 1, 'Why this run stopped should appear exactly once');
+    assert((runDetail.body.match(/State Warning<\/h3>/g) || []).length <= 1, 'State Warning should appear at most once');
+    assert((runDetail.body.match(/Failure Summary<\/h3>/g) || []).length <= 1, 'Failure Summary should appear at most once');
+    const attnZoneIdx = runDetail.body.indexOf('data-attn-zone');
+    const zone3Idx = runDetail.body.indexOf("How it's set up");
+    const whyStoppedIdx = runDetail.body.indexOf('Why this run stopped</h3>');
+    assert(attnZoneIdx !== -1 && whyStoppedIdx !== -1 && zone3Idx !== -1 && attnZoneIdx < whyStoppedIdx && whyStoppedIdx < zone3Idx, 'Why this run stopped should be inside Zone 2, before Zone 3');
     await assertPageRenders(cookie, '/admin', 'admin dashboard', 'Admin Dashboard');
     const workflowsPage = await assertPageRenders(cookie, '/admin/workflows', 'workflow capabilities admin', 'Workflow Capabilities');
     assert(workflowsPage.body.includes('demo-agent-write-if-approved'), 'workflows admin should list demo workflow');
