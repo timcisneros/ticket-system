@@ -1193,7 +1193,13 @@
       } else if (jump === 'mutation') {
         target = document.querySelector('[data-op-mutation="true"]');
       }
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (target) {
+        // Reveal the target if it sits inside one or more collapsed <details>
+        // (e.g. the Events disclosure), otherwise scrollIntoView lands on a
+        // zero-box hidden element and reveals nothing.
+        for (var d = target.closest('details'); d; d = d.parentElement ? d.parentElement.closest('details') : null) { d.open = true; }
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
     });
   });
 })();
