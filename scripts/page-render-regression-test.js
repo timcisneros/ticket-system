@@ -415,6 +415,14 @@ async function main() {
     const zone3Idx = runDetail.body.indexOf("How it's set up");
     const whyStoppedIdx = runDetail.body.indexOf('Why this run stopped</h3>');
     assert(attnZoneIdx !== -1 && whyStoppedIdx !== -1 && zone3Idx !== -1 && attnZoneIdx < whyStoppedIdx && whyStoppedIdx < zone3Idx, 'Why this run stopped should be inside Zone 2, before Zone 3');
+    assert(runDetail.body.includes('<summary>Execution policy snapshot'), 'Zone 3 should present execution policy in a disclosure');
+    assert(runDetail.body.includes('<summary>Authority &amp; scope') || runDetail.body.includes('<summary>Authority &amp; Scope'), 'Zone 3 should present authority & scope in a disclosure');
+    assert(runDetail.body.includes('<summary>Run context') || runDetail.body.includes('<summary>Run Context'), 'Zone 3 should present run context in an open disclosure');
+    assert(runDetail.body.includes('<summary>Usage / attempt') || runDetail.body.includes('<summary>Usage / Attempt'), 'Zone 3 should present usage/attempt in a disclosure');
+    assert(runDetail.body.includes('<summary>Runtime limits'), 'Zone 3 should present runtime limits in a disclosure');
+    assert((runDetail.body.match(/Execution policy snapshot/gi) || []).length === 1, 'Execution policy snapshot should appear exactly once (moved, not duplicated)');
+    assert((runDetail.body.match(/Authority (?:&amp;|&) [Ss]cope/g) || []).length === 1, 'Authority & scope should appear exactly once (moved, not duplicated)');
+    assert(!runDetail.body.includes('id="run-zone-carry-config"'), 'run-zone-carry-config carry div should be removed after folding into Run context disclosure');
     await assertPageRenders(cookie, '/admin', 'admin dashboard', 'Admin Dashboard');
     const workflowsPage = await assertPageRenders(cookie, '/admin/workflows', 'workflow capabilities admin', 'Workflow Capabilities');
     assert(workflowsPage.body.includes('demo-agent-write-if-approved'), 'workflows admin should list demo workflow');

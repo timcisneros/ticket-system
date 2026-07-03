@@ -369,82 +369,82 @@
 
 <div class="zone-head"><span class="zone-eyebrow">How it's set up</span><span class="zone-q">How was this run configured?</span></div>
 
-<div id="run-zone-carry-config">
-  <details class="collapsible collapsible--compact">
-    <summary>Run Context</summary>
-    <div class="collapsible__content">
-      <dl class="detail-grid">
+<details class="disclosure" open>
+  <summary>Run context <span class="sub">created, workspace, allocation, model</span></summary>
+  <div class="body">
+    <dl class="detail-grid">
+      <div>
+        <dt>Created</dt>
+        <dd><%= run.createdAt || '-' %></dd>
+      </div>
+      <div>
+        <dt>Batch Marker</dt>
+        <dd><%= run.ticketOpenedAt || '-' %></dd>
+      </div>
+      <div>
+        <dt>Workspace</dt>
+        <dd><%= run.executionWorkspaceType || (snapshot && snapshot.executionWorkspaceType) || 'main' %></dd>
+      </div>
+      <div>
+        <dt>Work Split</dt>
+        <dd><%= run.allocationPlanId || (snapshot && snapshot.allocationPlanId) || '-' %></dd>
+      </div>
+      <div>
+        <dt>Work Unit</dt>
+        <dd><%= run.allocationItemId || (snapshot && snapshot.allocationItemId) || '-' %></dd>
+      </div>
+      <div>
+        <dt>Main Workspace</dt>
+        <dd><%= authorityContext && authorityContext.authority ? authorityContext.authority.workspaceRoot : ((snapshot && snapshot.mainWorkspaceRoot) || '-') %></dd>
+      </div>
+      <div>
+        <dt>Allowed Folders</dt>
+        <dd>
+          <% const ownedPaths = (run.ownedOutputPaths && run.ownedOutputPaths.length ? run.ownedOutputPaths : (snapshot && snapshot.ownedOutputPaths) || []); %>
+          <% if (ownedPaths.length > 0) { %>
+            <code class="owned-path"><%= ownedPaths.join(', ') %></code>
+          <% } else { %>
+            -
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Subtask</dt>
+        <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
+      </div>
+      <% if (snapshot && snapshot.provider) { %>
         <div>
-          <dt>Created</dt>
-          <dd><%= run.createdAt || '-' %></dd>
+          <dt>Provider</dt>
+          <dd><%= snapshot.provider %></dd>
         </div>
+      <% } %>
+      <% if (snapshot && snapshot.model) { %>
         <div>
-          <dt>Batch Marker</dt>
-          <dd><%= run.ticketOpenedAt || '-' %></dd>
+          <dt>Model</dt>
+          <dd><%= snapshot.model %></dd>
         </div>
-        <div>
-          <dt>Workspace</dt>
-          <dd><%= run.executionWorkspaceType || (snapshot && snapshot.executionWorkspaceType) || 'main' %></dd>
-        </div>
-        <div>
-          <dt>Work Split</dt>
-          <dd><%= run.allocationPlanId || (snapshot && snapshot.allocationPlanId) || '-' %></dd>
-        </div>
-        <div>
-          <dt>Work Unit</dt>
-          <dd><%= run.allocationItemId || (snapshot && snapshot.allocationItemId) || '-' %></dd>
-        </div>
-        <div>
-          <dt>Main Workspace</dt>
-          <dd><%= authorityContext && authorityContext.authority ? authorityContext.authority.workspaceRoot : ((snapshot && snapshot.mainWorkspaceRoot) || '-') %></dd>
-        </div>
-        <div>
-          <dt>Allowed Folders</dt>
-          <dd>
-            <% const ownedPaths = (run.ownedOutputPaths && run.ownedOutputPaths.length ? run.ownedOutputPaths : (snapshot && snapshot.ownedOutputPaths) || []); %>
-            <% if (ownedPaths.length > 0) { %>
-              <code class="owned-path"><%= ownedPaths.join(', ') %></code>
-            <% } else { %>
-              -
-            <% } %>
-          </dd>
-        </div>
-        <div>
-          <dt>Subtask</dt>
-          <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
-        </div>
-        <% if (snapshot && snapshot.provider) { %>
-          <div>
-            <dt>Provider</dt>
-            <dd><%= snapshot.provider %></dd>
-          </div>
-        <% } %>
-        <% if (snapshot && snapshot.model) { %>
-          <div>
-            <dt>Model</dt>
-            <dd><%= snapshot.model %></dd>
-          </div>
-        <% } %>
-      </dl>
-    </div>
-  </details>
-</div>
+      <% } %>
+    </dl>
+  </div>
+</details>
 
 <% if (typeof attemptUsage !== 'undefined' && attemptUsage) { %>
-<section class="detail-section">
-  <h2>Usage / Attempt</h2>
-  <p class="text-muted">Measured from this run's recorded evidence. Counts shown as "unavailable" were not observable for this run. Measurement only — no limits are enforced.</p>
-  <dl class="detail-grid">
-    <div><dt>Attempt</dt><dd><%= attemptUsage.attemptNumber === null ? 'unavailable' : 'attempt ' + attemptUsage.attemptNumber + ' of ' + attemptUsage.attemptCount %></dd></div>
-    <div><dt>Outcome</dt><dd><code><%= attemptUsage.outcome || 'unavailable' %></code></dd></div>
-    <div><dt>Duration</dt><dd><%= attemptUsage.durationMs === null ? 'unavailable' : (typeof formatDurationHuman === 'function' ? formatDurationHuman(attemptUsage.durationMs) : attemptUsage.durationMs + 'ms') %></dd></div>
-    <div><dt>Model requests</dt><dd><%= attemptUsage.modelRequestCount === null ? 'unavailable' : attemptUsage.modelRequestCount %></dd></div>
-    <div><dt>Workspace operations</dt><dd><%= attemptUsage.workspaceOperationCount === null ? 'unavailable' : attemptUsage.workspaceOperationCount %></dd></div>
-    <div><dt>Mutating workspace operations</dt><dd><%= attemptUsage.mutatingWorkspaceOperationCount === null ? 'unavailable' : attemptUsage.mutatingWorkspaceOperationCount %></dd></div>
-    <div><dt>Verification</dt><dd><%= attemptUsage.verificationRequired ? 'required · ' + attemptUsage.verificationOutcome : 'not required' %></dd></div>
-    <div><dt>Triage</dt><dd><%= attemptUsage.triageRequired ? 'required' : 'none' %></dd></div>
-  </dl>
-</section>
+<details class="disclosure">
+  <summary>Usage / attempt <span class="sub">measured evidence, not enforced</span></summary>
+  <div class="body">
+    <p class="text-muted">Measured from this run's recorded evidence. Counts shown as "unavailable" were not observable for this run. Measurement only — no limits are enforced.</p>
+    <dl class="detail-grid">
+      <div><dt>Attempt</dt><dd><%= attemptUsage.attemptNumber === null ? 'unavailable' : 'attempt ' + attemptUsage.attemptNumber + ' of ' + attemptUsage.attemptCount %></dd></div>
+      <div><dt>Outcome</dt><dd><code><%= attemptUsage.outcome || 'unavailable' %></code></dd></div>
+      <div><dt>Duration</dt><dd><%= attemptUsage.durationMs === null ? 'unavailable' : (typeof formatDurationHuman === 'function' ? formatDurationHuman(attemptUsage.durationMs) : attemptUsage.durationMs + 'ms') %></dd></div>
+      <div><dt>Model requests</dt><dd><%= attemptUsage.modelRequestCount === null ? 'unavailable' : attemptUsage.modelRequestCount %></dd></div>
+      <div><dt>Workspace operations</dt><dd><%= attemptUsage.workspaceOperationCount === null ? 'unavailable' : attemptUsage.workspaceOperationCount %></dd></div>
+      <div><dt>Mutating workspace operations</dt><dd><%= attemptUsage.mutatingWorkspaceOperationCount === null ? 'unavailable' : attemptUsage.mutatingWorkspaceOperationCount %></dd></div>
+      <div><dt>Verification</dt><dd><%= attemptUsage.verificationRequired ? 'required · ' + attemptUsage.verificationOutcome : 'not required' %></dd></div>
+      <div><dt>Triage</dt><dd><%= attemptUsage.triageRequired ? 'required' : 'none' %></dd></div>
+    </dl>
+  </div>
+</details>
 <% } %>
 
 <% if (typeof runtimeLimitsDisplay !== 'undefined' && runtimeLimitsDisplay) { %>
@@ -457,21 +457,177 @@
     return usedText + ' / ' + limitText;
   }
 %>
-<section class="detail-section">
-  <h2>Runtime limits and usage</h2>
-  <p class="text-muted"><%= runtimeLimitsDisplay.sourceLabel %>.</p>
-  <dl class="detail-grid">
-    <div><dt>Execution turns</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.executionTurns, runtimeLimitsDisplay.limits.maxExecutionSteps, false) %></dd></div>
-    <div><dt>Runtime</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.runtimeMs, runtimeLimitsDisplay.limits.maxRuntimeDurationMs, true) %></dd></div>
-    <div><dt>Model requests</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.modelRequests, runtimeLimitsDisplay.limits.maxModelRequestsPerRun, false) %></dd></div>
-    <div><dt>Workspace operations</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.workspaceOperations, runtimeLimitsDisplay.limits.maxWorkspaceOperationsPerRun, false) %></dd></div>
-    <div><dt>Limit outcome</dt><dd><code><%= runtimeLimitsDisplay.limitOutcome %></code></dd></div>
-    <% if (runtimeLimitsDisplay.providerSymptom) { %>
-      <div><dt>Provider symptom</dt><dd><%= runtimeLimitsDisplay.providerSymptom %></dd></div>
-    <% } %>
-  </dl>
-</section>
+<details class="disclosure">
+  <summary>Runtime limits &amp; usage <span class="sub"><%= runtimeLimitsDisplay.sourceLabel %></span></summary>
+  <div class="body">
+    <dl class="detail-grid">
+      <div><dt>Execution turns</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.executionTurns, runtimeLimitsDisplay.limits.maxExecutionSteps, false) %></dd></div>
+      <div><dt>Runtime</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.runtimeMs, runtimeLimitsDisplay.limits.maxRuntimeDurationMs, true) %></dd></div>
+      <div><dt>Model requests</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.modelRequests, runtimeLimitsDisplay.limits.maxModelRequestsPerRun, false) %></dd></div>
+      <div><dt>Workspace operations</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.workspaceOperations, runtimeLimitsDisplay.limits.maxWorkspaceOperationsPerRun, false) %></dd></div>
+      <div><dt>Limit outcome</dt><dd><code><%= runtimeLimitsDisplay.limitOutcome %></code></dd></div>
+      <% if (runtimeLimitsDisplay.providerSymptom) { %>
+        <div><dt>Provider symptom</dt><dd><%= runtimeLimitsDisplay.providerSymptom %></dd></div>
+      <% } %>
+    </dl>
+  </div>
+</details>
 <% } %>
+
+<% if (run.executionPolicySnapshot) { %>
+<details class="disclosure">
+  <summary>Execution policy snapshot <span class="sub">copied from the ticket at run creation</span></summary>
+  <div class="body">
+    <p class="text-muted">Policy copied from the ticket when this run was created.</p>
+    <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
+    <dl class="detail-grid">
+      <div><dt>Verification</dt><dd><code><%= run.executionPolicySnapshot.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
+      <div><dt>Workspace scope</dt><dd><code><%= run.executionPolicySnapshot.workspaceScope %></code> · enforced by this run's workspace path</dd></div>
+      <div><dt>Mode</dt><dd><code><%= run.executionPolicySnapshot.mode %></code> · recorded intent, not enforced</dd></div>
+      <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+      <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+      <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+      <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts === null ? 'unlimited · enforced for manual rerun-from-start when set' : run.executionPolicySnapshot.maxAttempts + ' · enforced for manual rerun-from-start' %></dd></div>
+      <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'unspecified' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
+      <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'unspecified' : run.executionPolicySnapshot.maxModelRequests %> · recorded intent, not enforced</dd></div>
+      <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'unspecified' : run.executionPolicySnapshot.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
+    </dl>
+  </div>
+</details>
+<% } %>
+
+<details class="disclosure">
+  <summary>Authority &amp; scope <span class="sub">principal, authority, runtime controls</span></summary>
+  <div class="body">
+    <% const ac = typeof authorityContext === 'undefined' ? null : authorityContext; %>
+    <% if (ac) { %>
+
+    <div class="authority-grid">
+      <div class="authority-column">
+        <h3 class="authority-column-title">Principal</h3>
+        <dl class="authority-dl">
+          <div class="authority-row">
+            <dt>Agent</dt>
+            <dd><%= ac.principal.agentName %></dd>
+          </div>
+          <% if (ac.principal.allocationPlanId) { %>
+            <div class="authority-row">
+              <dt>Allocation Plan</dt>
+              <dd>#<%= ac.principal.allocationPlanId %></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Allocation Item</dt>
+              <dd>#<%= ac.principal.allocationItemId %><% if (ac.principal.allocationSubtask) { %> · <%= ac.principal.allocationSubtask %><% } %></dd>
+            </div>
+          <% } %>
+          <% if (ac.principal.ownedOutputPaths.length > 0) { %>
+            <div class="authority-row">
+              <dt>Owned Paths</dt>
+              <dd>
+                <% ac.principal.ownedOutputPaths.forEach(function(p) { %>
+                  <code class="owned-path"><%= p %></code>
+                <% }) %>
+              </dd>
+            </div>
+          <% } else { %>
+            <div class="authority-row">
+              <dt>Owned Paths</dt>
+              <dd><span class="text-muted">None (full workspace)</span></dd>
+            </div>
+          <% } %>
+        </dl>
+      </div>
+
+      <div class="authority-column">
+        <h3 class="authority-column-title">Authority</h3>
+        <dl class="authority-dl">
+          <div class="authority-row">
+            <dt>Allowed Ops</dt>
+            <dd><code class="auth-code"><%= ac.authority.allowedOperations.join(', ') %></code></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Mutating Ops</dt>
+            <dd><code class="auth-code"><%= ac.authority.mutatingOperations.join(', ') %></code></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Max Actions</dt>
+            <dd><%= ac.authority.maxActionsPerResponse %> per response · <%= ac.authority.maxMutatingActionsPerResponse %> mutating</dd>
+          </div>
+          <div class="authority-row">
+            <dt>Max Steps</dt>
+            <dd><%= ac.authority.maxSteps %></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Max Ops</dt>
+            <dd><%= ac.authority.maxWorkspaceOperations %> workspace · <%= ac.authority.maxModelRequests %> model requests</dd>
+          </div>
+          <div class="authority-row">
+            <dt>Max Runtime</dt>
+            <dd><%= typeof formatDurationHuman === 'function' ? formatDurationHuman(ac.authority.maxRuntimeDurationMs) : ac.authority.maxRuntimeDurationMs + 'ms' %></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Provider/Model</dt>
+            <dd><%= ac.authority.provider %> / <%= ac.authority.model %></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Workspace Type</dt>
+            <dd><%= ac.authority.executionWorkspaceType %></dd>
+          </div>
+          <% if (ac.authority.workspaceRoot !== '-') { %>
+            <div class="authority-row">
+              <dt>Workspace Root</dt>
+              <dd><code class="auth-code"><%= ac.authority.workspaceRoot %></code></dd>
+            </div>
+          <% } %>
+          <% if (ac.provenance) { %>
+            <div class="authority-row">
+              <dt>Granted By</dt>
+              <dd><%= ac.provenance.assignment %></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Agent Groups</dt>
+              <dd><%= ac.provenance.groups %></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Runtime Policy</dt>
+              <dd><%= ac.provenance.runtimePolicy %></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Scope Source</dt>
+              <dd><%= ac.provenance.scope %></dd>
+            </div>
+          <% } %>
+        </dl>
+      </div>
+
+      <div class="authority-column">
+        <h3 class="authority-column-title">Runtime Controls</h3>
+        <dl class="authority-dl">
+          <div class="authority-row">
+            <dt>Interruptible</dt>
+            <dd><span class="badge badge--<%= ac.controls.interruptible ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.interruptible ? 'Yes' : 'No' %></span></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Recovery Analysis</dt>
+            <dd><span class="badge badge--<%= ac.controls.recoverable ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.recoverable ? 'Possible' : 'Not available' %></span></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Replay Evidence</dt>
+            <dd><span class="badge badge--<%= ac.controls.replayAvailable ? 'outcome-success' : 'outcome-error' %>"><%= ac.controls.replayAvailable ? 'Available' : 'Not available' %></span></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Recovery Action</dt>
+            <dd><% if (ac.controls.recoveryAvailable === true) { %><span class="badge badge--recovery-recoverable">Available</span><% } else if (ac.controls.recoveryAvailable === false) { %><span class="badge badge--outcome-noop">Not currently offered</span><% } else { %><span class="badge badge--outcome-noop">N/A</span><% } %></dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+
+    <% } else { %>
+      <p class="text-muted">Authority context not available for this run.</p>
+    <% } %>
+  </div>
+</details>
 
 <div class="zone-head"><span class="zone-eyebrow">What has happened</span><span class="zone-q">What did the run actually do?</span></div>
 
@@ -503,26 +659,6 @@
     <div><dt>Runtime</dt><dd><%= budgetCell(budgetStatus.runtimeMs, 'ms') %></dd></div>
     <div><dt>Model requests</dt><dd><%= budgetCell(budgetStatus.modelRequests, '') %></dd></div>
     <div><dt>Workspace operations</dt><dd><%= budgetCell(budgetStatus.workspaceOperations, '') %></dd></div>
-  </dl>
-</section>
-<% } %>
-
-<% if (run.executionPolicySnapshot) { %>
-<section class="detail-section">
-  <h2>Execution Policy Snapshot</h2>
-  <p class="text-muted">Policy copied from the ticket when this run was created.</p>
-  <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
-  <dl class="detail-grid">
-    <div><dt>Verification</dt><dd><code><%= run.executionPolicySnapshot.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
-    <div><dt>Workspace scope</dt><dd><code><%= run.executionPolicySnapshot.workspaceScope %></code> · enforced by this run's workspace path</dd></div>
-    <div><dt>Mode</dt><dd><code><%= run.executionPolicySnapshot.mode %></code> · recorded intent, not enforced</dd></div>
-    <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts === null ? 'unlimited · enforced for manual rerun-from-start when set' : run.executionPolicySnapshot.maxAttempts + ' · enforced for manual rerun-from-start' %></dd></div>
-    <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'unspecified' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'unspecified' : run.executionPolicySnapshot.maxModelRequests %> · recorded intent, not enforced</dd></div>
-    <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'unspecified' : run.executionPolicySnapshot.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
   </dl>
 </section>
 <% } %>
@@ -624,141 +760,6 @@
       <span><%= artifactPrediction.capturedAt || '-' %></span>
     </div>
   <% } %>
-</section>
-
-<section class="detail-section">
-  <details class="collapsible" open>
-    <summary>Authority &amp; Scope</summary>
-    <div class="collapsible__content">
-      <% const ac = typeof authorityContext === 'undefined' ? null : authorityContext; %>
-      <% if (ac) { %>
-
-      <div class="authority-grid">
-        <div class="authority-column">
-          <h3 class="authority-column-title">Principal</h3>
-          <dl class="authority-dl">
-            <div class="authority-row">
-              <dt>Agent</dt>
-              <dd><%= ac.principal.agentName %></dd>
-            </div>
-            <% if (ac.principal.allocationPlanId) { %>
-              <div class="authority-row">
-                <dt>Allocation Plan</dt>
-                <dd>#<%= ac.principal.allocationPlanId %></dd>
-              </div>
-              <div class="authority-row">
-                <dt>Allocation Item</dt>
-                <dd>#<%= ac.principal.allocationItemId %><% if (ac.principal.allocationSubtask) { %> · <%= ac.principal.allocationSubtask %><% } %></dd>
-              </div>
-            <% } %>
-            <% if (ac.principal.ownedOutputPaths.length > 0) { %>
-              <div class="authority-row">
-                <dt>Owned Paths</dt>
-                <dd>
-                  <% ac.principal.ownedOutputPaths.forEach(function(p) { %>
-                    <code class="owned-path"><%= p %></code>
-                  <% }) %>
-                </dd>
-              </div>
-            <% } else { %>
-              <div class="authority-row">
-                <dt>Owned Paths</dt>
-                <dd><span class="text-muted">None (full workspace)</span></dd>
-              </div>
-            <% } %>
-          </dl>
-        </div>
-
-        <div class="authority-column">
-          <h3 class="authority-column-title">Authority</h3>
-          <dl class="authority-dl">
-            <div class="authority-row">
-              <dt>Allowed Ops</dt>
-              <dd><code class="auth-code"><%= ac.authority.allowedOperations.join(', ') %></code></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Mutating Ops</dt>
-              <dd><code class="auth-code"><%= ac.authority.mutatingOperations.join(', ') %></code></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Max Actions</dt>
-              <dd><%= ac.authority.maxActionsPerResponse %> per response · <%= ac.authority.maxMutatingActionsPerResponse %> mutating</dd>
-            </div>
-            <div class="authority-row">
-              <dt>Max Steps</dt>
-              <dd><%= ac.authority.maxSteps %></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Max Ops</dt>
-              <dd><%= ac.authority.maxWorkspaceOperations %> workspace · <%= ac.authority.maxModelRequests %> model requests</dd>
-            </div>
-            <div class="authority-row">
-              <dt>Max Runtime</dt>
-              <dd><%= typeof formatDurationHuman === 'function' ? formatDurationHuman(ac.authority.maxRuntimeDurationMs) : ac.authority.maxRuntimeDurationMs + 'ms' %></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Provider/Model</dt>
-              <dd><%= ac.authority.provider %> / <%= ac.authority.model %></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Workspace Type</dt>
-              <dd><%= ac.authority.executionWorkspaceType %></dd>
-            </div>
-            <% if (ac.authority.workspaceRoot !== '-') { %>
-              <div class="authority-row">
-                <dt>Workspace Root</dt>
-                <dd><code class="auth-code"><%= ac.authority.workspaceRoot %></code></dd>
-              </div>
-            <% } %>
-            <% if (ac.provenance) { %>
-              <div class="authority-row">
-                <dt>Granted By</dt>
-                <dd><%= ac.provenance.assignment %></dd>
-              </div>
-              <div class="authority-row">
-                <dt>Agent Groups</dt>
-                <dd><%= ac.provenance.groups %></dd>
-              </div>
-              <div class="authority-row">
-                <dt>Runtime Policy</dt>
-                <dd><%= ac.provenance.runtimePolicy %></dd>
-              </div>
-              <div class="authority-row">
-                <dt>Scope Source</dt>
-                <dd><%= ac.provenance.scope %></dd>
-              </div>
-            <% } %>
-          </dl>
-        </div>
-
-        <div class="authority-column">
-          <h3 class="authority-column-title">Runtime Controls</h3>
-          <dl class="authority-dl">
-            <div class="authority-row">
-              <dt>Interruptible</dt>
-              <dd><span class="badge badge--<%= ac.controls.interruptible ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.interruptible ? 'Yes' : 'No' %></span></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Recovery Analysis</dt>
-              <dd><span class="badge badge--<%= ac.controls.recoverable ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.recoverable ? 'Possible' : 'Not available' %></span></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Replay Evidence</dt>
-              <dd><span class="badge badge--<%= ac.controls.replayAvailable ? 'outcome-success' : 'outcome-error' %>"><%= ac.controls.replayAvailable ? 'Available' : 'Not available' %></span></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Recovery Action</dt>
-              <dd><% if (ac.controls.recoveryAvailable === true) { %><span class="badge badge--recovery-recoverable">Available</span><% } else if (ac.controls.recoveryAvailable === false) { %><span class="badge badge--outcome-noop">Not currently offered</span><% } else { %><span class="badge badge--outcome-noop">N/A</span><% } %></dd>
-            </div>
-          </dl>
-        </div>
-      </div>
-
-      <% } else { %>
-        <p class="text-muted">Authority context not available for this run.</p>
-      <% } %>
-    </div>
-  </details>
 </section>
 
 <% const runRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
