@@ -1,24 +1,112 @@
 <section class="zone">
 <div class="zone-head"><span class="zone-eyebrow">At a glance</span><span class="zone-q">What is this run, and what's it doing right now?</span></div>
-<div class="page-header">
-  <% const viewOperationalOutcome = typeof operationalOutcomeLabel === 'undefined' ? '-' : operationalOutcomeLabel; %>
-  <div>
-    <h1>Run #<%= run.id %></h1>
-    <p class="text-muted">Ticket <a href="/tickets/<%= run.ticketId %>">#<%= run.ticketId %></a> · <%= run.agentName %></p>
-    <% if (run.delegatedPermissionSource === 'auto_retry') { %>
-      <p class="text-muted">Created by: automatic retry</p>
-    <% } %>
+<% const viewOperationalOutcome = typeof operationalOutcomeLabel === 'undefined' ? '-' : operationalOutcomeLabel; %>
+<div class="hero">
+  <div class="hero-top">
+    <div>
+      <h1>Run #<%= run.id %> <span id="run-live-status" class="status-badge status-<%= run.status %>"><%= typeof runStatusLabel === 'undefined' ? run.status : runStatusLabel %></span></h1>
+      <p class="text-muted"><a href="/tickets/<%= ticket.id %>">Ticket #<%= ticket.id %></a> · <%= run.agentName %></p>
+      <% if (run.delegatedPermissionSource === 'auto_retry') { %>
+        <p class="text-muted">Created by: automatic retry</p>
+      <% } %>
+    </div>
+    <div class="hero-actions">
+      <% if (canUpdateRuns && ['pending', 'running'].includes(run.status)) { %>
+        <button type="button" class="btn-secondary btn-danger" data-stop-run-id="<%= run.id %>">Stop Run</button>
+      <% } %>
+      <% if (canUpdateRuns && ['failed', 'interrupted'].includes(run.status)) { %>
+        <button type="button" class="btn-secondary" data-retry-run-id="<%= run.id %>">Retry</button>
+      <% } %>
+      <a class="btn-secondary" href="/logs?runId=<%= run.id %>">Run Logs</a>
+    </div>
   </div>
-  <div class="actions">
-    <% if (canUpdateRuns && ['pending', 'running'].includes(run.status)) { %>
-      <button type="button" class="btn-secondary btn-danger" data-stop-run-id="<%= run.id %>">Stop Run</button>
+  <dl class="live">
+    <div>
+      <dt>Run Outcome</dt>
+      <dd id="run-live-outcome"><%= viewOperationalOutcome || '-' %></dd>
+    </div>
+    <div>
+      <dt>Agent</dt>
+      <dd><%= run.agentName %></dd>
+    </div>
+    <div>
+      <dt>Started</dt>
+      <dd><%= run.startedAt || '-' %></dd>
+    </div>
+    <div>
+      <dt>Completed</dt>
+      <dd id="run-live-completed"><%= run.completedAt || '-' %></dd>
+    </div>
+    <div>
+      <dt>Duration</dt>
+      <dd id="run-live-duration" data-started-at="<%= run.startedAt || run.createdAt || '' %>" data-completed-at="<%= run.completedAt || '' %>">
+        <% if (run.startedAt && run.completedAt) { %>
+          <%= typeof formatDurationHuman === 'function' ? formatDurationHuman(Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt)))) : Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt))) + 'ms' %>
+        <% } else if (['pending', 'running'].includes(run.status) && (run.startedAt || run.createdAt)) { %>
+          running for 0 seconds
+        <% } else { %>
+          -
+        <% } %>
+      </dd>
+    </div>
+    <div>
+      <dt>Current Message</dt>
+      <dd id="run-live-message">-</dd>
+    </div>
+    <div>
+      <dt>Mutations</dt>
+      <dd><%= partialMutationCount || 0 %></dd>
+    </div>
+    <% if (typeof eventSummary !== 'undefined' && eventSummary) { %>
+      <div>
+        <dt>Event Status</dt>
+        <dd id="run-live-event-status"><%= eventSummary.latestStatus ? eventSummary.latestStatus.status : '-' %></dd>
+      </div>
+      <div>
+        <dt>Latest Workflow Step</dt>
+        <dd>
+          <% if (eventSummary.currentStep) { %>
+            <code><%= eventSummary.currentStep.stepId %></code>
+            <span class="text-muted"><%= eventSummary.currentStep.action || '' %> <%= eventSummary.currentStep.status || '' %></span>
+          <% } else { %>
+            -
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Latest Workspace Mutation</dt>
+        <dd>
+          <% if (eventSummary.latestWorkspaceMutation) { %>
+            <code><%= eventSummary.latestWorkspaceMutation.operation %></code>
+            <% if (eventSummary.latestWorkspaceMutation.path) { %>
+              <code class="owned-path"><%= eventSummary.latestWorkspaceMutation.path %></code>
+            <% } %>
+          <% } else { %>
+            -
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Latest Event Error</dt>
+        <dd id="run-live-event-error"><%= eventSummary.latestError && eventSummary.latestError.message ? eventSummary.latestError.message : '-' %></dd>
+      </div>
     <% } %>
-    <% if (canUpdateRuns && ['failed', 'interrupted'].includes(run.status)) { %>
-      <button type="button" class="btn-secondary" data-retry-run-id="<%= run.id %>">Retry</button>
-    <% } %>
-    <a class="btn-secondary" href="/logs?runId=<%= run.id %>">Run Logs</a>
-  </div>
+  </dl>
+
+  <% if (snapshot && snapshot.terminalStatus && snapshot.terminalStatus !== run.status) { %>
+    <div class="terminal-status-divider">
+      <span class="text-muted">Terminal status:</span>
+      <span class="status-badge status-<%= snapshot.terminalStatus %>"><%= snapshot.terminalStatus %></span>
+    </div>
+  <% } %>
+
+  <% if (snapshot && (snapshot.failureReason || run.error)) { %>
+    <div class="failure-reason-block">
+      <span class="failure-reason"><%= failureSummary && failureSummary.finalBlockingReason ? failureSummary.finalBlockingReason : (snapshot.failureReason || run.error) %></span>
+    </div>
+  <% } %>
 </div>
+</section>
 
 <% const runHasAttention = (typeof completionSummary !== 'undefined' && completionSummary)
   || (run.triage && (run.triage.required || run.triage.resolvedAt))
@@ -167,6 +255,67 @@
 
 <div class="zone-head"><span class="zone-eyebrow">How it's set up</span><span class="zone-q">How was this run configured?</span></div>
 
+<div id="run-zone-carry-config">
+  <details class="collapsible collapsible--compact">
+    <summary>Run Context</summary>
+    <div class="collapsible__content">
+      <dl class="detail-grid">
+        <div>
+          <dt>Created</dt>
+          <dd><%= run.createdAt || '-' %></dd>
+        </div>
+        <div>
+          <dt>Batch Marker</dt>
+          <dd><%= run.ticketOpenedAt || '-' %></dd>
+        </div>
+        <div>
+          <dt>Workspace</dt>
+          <dd><%= run.executionWorkspaceType || (snapshot && snapshot.executionWorkspaceType) || 'main' %></dd>
+        </div>
+        <div>
+          <dt>Work Split</dt>
+          <dd><%= run.allocationPlanId || (snapshot && snapshot.allocationPlanId) || '-' %></dd>
+        </div>
+        <div>
+          <dt>Work Unit</dt>
+          <dd><%= run.allocationItemId || (snapshot && snapshot.allocationItemId) || '-' %></dd>
+        </div>
+        <div>
+          <dt>Main Workspace</dt>
+          <dd><%= authorityContext && authorityContext.authority ? authorityContext.authority.workspaceRoot : ((snapshot && snapshot.mainWorkspaceRoot) || '-') %></dd>
+        </div>
+        <div>
+          <dt>Allowed Folders</dt>
+          <dd>
+            <% const ownedPaths = (run.ownedOutputPaths && run.ownedOutputPaths.length ? run.ownedOutputPaths : (snapshot && snapshot.ownedOutputPaths) || []); %>
+            <% if (ownedPaths.length > 0) { %>
+              <code class="owned-path"><%= ownedPaths.join(', ') %></code>
+            <% } else { %>
+              -
+            <% } %>
+          </dd>
+        </div>
+        <div>
+          <dt>Subtask</dt>
+          <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
+        </div>
+        <% if (snapshot && snapshot.provider) { %>
+          <div>
+            <dt>Provider</dt>
+            <dd><%= snapshot.provider %></dd>
+          </div>
+        <% } %>
+        <% if (snapshot && snapshot.model) { %>
+          <div>
+            <dt>Model</dt>
+            <dd><%= snapshot.model %></dd>
+          </div>
+        <% } %>
+      </dl>
+    </div>
+  </details>
+</div>
+
 <% if (typeof attemptUsage !== 'undefined' && attemptUsage) { %>
 <section class="detail-section">
   <h2>Usage / Attempt</h2>
@@ -211,6 +360,17 @@
 <% } %>
 
 <div class="zone-head"><span class="zone-eyebrow">What has happened</span><span class="zone-q">What did the run actually do?</span></div>
+
+<div id="run-zone-carry-events">
+  <% if (typeof runEvents !== 'undefined' && runEvents && runEvents.length > 0) { %>
+    <details class="collapsible collapsible--compact">
+      <summary>Operational Events</summary>
+      <div class="collapsible__content">
+        <pre class="code-block"><%= JSON.stringify(runEvents, null, 2) %></pre>
+      </div>
+    </details>
+  <% } %>
+</div>
 
 <% if (typeof budgetStatus !== 'undefined' && budgetStatus) { %>
 <%
@@ -371,168 +531,6 @@
   </dl>
 </section>
 <% } %>
-
-<section class="detail-section">
-  <h2>Run Summary</h2>
-  <dl class="detail-grid">
-    <div>
-      <dt>Status</dt>
-      <dd><span id="run-live-status" class="status-badge status-<%= run.status %>"><%= typeof runStatusLabel === 'undefined' ? run.status : runStatusLabel %></span></dd>
-    </div>
-    <div>
-      <dt>Run Outcome</dt>
-      <dd id="run-live-outcome"><%= viewOperationalOutcome || '-' %></dd>
-    </div>
-    <div>
-      <dt>Agent</dt>
-      <dd><%= run.agentName %></dd>
-    </div>
-    <div>
-      <dt>Started</dt>
-      <dd><%= run.startedAt || '-' %></dd>
-    </div>
-    <div>
-      <dt>Completed</dt>
-      <dd id="run-live-completed"><%= run.completedAt || '-' %></dd>
-    </div>
-    <div>
-      <dt>Duration</dt>
-      <dd id="run-live-duration" data-started-at="<%= run.startedAt || run.createdAt || '' %>" data-completed-at="<%= run.completedAt || '' %>">
-        <% if (run.startedAt && run.completedAt) { %>
-          <%= typeof formatDurationHuman === 'function' ? formatDurationHuman(Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt)))) : Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt))) + 'ms' %>
-        <% } else if (['pending', 'running'].includes(run.status) && (run.startedAt || run.createdAt)) { %>
-          running for 0 seconds
-        <% } else { %>
-          -
-        <% } %>
-      </dd>
-    </div>
-    <div>
-      <dt>Current Message</dt>
-      <dd id="run-live-message">-</dd>
-    </div>
-    <div>
-      <dt>Mutations</dt>
-      <dd><%= partialMutationCount || 0 %></dd>
-    </div>
-    <% if (typeof eventSummary !== 'undefined' && eventSummary) { %>
-      <div>
-        <dt>Event Status</dt>
-        <dd id="run-live-event-status"><%= eventSummary.latestStatus ? eventSummary.latestStatus.status : '-' %></dd>
-      </div>
-      <div>
-        <dt>Latest Workflow Step</dt>
-        <dd>
-          <% if (eventSummary.currentStep) { %>
-            <code><%= eventSummary.currentStep.stepId %></code>
-            <span class="text-muted"><%= eventSummary.currentStep.action || '' %> <%= eventSummary.currentStep.status || '' %></span>
-          <% } else { %>
-            -
-          <% } %>
-        </dd>
-      </div>
-      <div>
-        <dt>Latest Workspace Mutation</dt>
-        <dd>
-          <% if (eventSummary.latestWorkspaceMutation) { %>
-            <code><%= eventSummary.latestWorkspaceMutation.operation %></code>
-            <% if (eventSummary.latestWorkspaceMutation.path) { %>
-              <code class="owned-path"><%= eventSummary.latestWorkspaceMutation.path %></code>
-            <% } %>
-          <% } else { %>
-            -
-          <% } %>
-        </dd>
-      </div>
-      <div>
-        <dt>Latest Event Error</dt>
-        <dd id="run-live-event-error"><%= eventSummary.latestError && eventSummary.latestError.message ? eventSummary.latestError.message : '-' %></dd>
-      </div>
-    <% } %>
-  </dl>
-
-  <% if (snapshot && snapshot.terminalStatus && snapshot.terminalStatus !== run.status) { %>
-    <div class="terminal-status-divider">
-      <span class="text-muted">Terminal status:</span>
-      <span class="status-badge status-<%= snapshot.terminalStatus %>"><%= snapshot.terminalStatus %></span>
-    </div>
-  <% } %>
-
-  <% if (snapshot && (snapshot.failureReason || run.error)) { %>
-    <div class="failure-reason-block">
-      <span class="failure-reason"><%= failureSummary && failureSummary.finalBlockingReason ? failureSummary.finalBlockingReason : (snapshot.failureReason || run.error) %></span>
-    </div>
-  <% } %>
-
-  <details class="collapsible collapsible--compact">
-    <summary>Run Context</summary>
-    <div class="collapsible__content">
-      <dl class="detail-grid">
-        <div>
-          <dt>Created</dt>
-          <dd><%= run.createdAt || '-' %></dd>
-        </div>
-        <div>
-          <dt>Batch Marker</dt>
-          <dd><%= run.ticketOpenedAt || '-' %></dd>
-        </div>
-        <div>
-          <dt>Workspace</dt>
-          <dd><%= run.executionWorkspaceType || (snapshot && snapshot.executionWorkspaceType) || 'main' %></dd>
-        </div>
-        <div>
-          <dt>Work Split</dt>
-          <dd><%= run.allocationPlanId || (snapshot && snapshot.allocationPlanId) || '-' %></dd>
-        </div>
-        <div>
-          <dt>Work Unit</dt>
-          <dd><%= run.allocationItemId || (snapshot && snapshot.allocationItemId) || '-' %></dd>
-        </div>
-        <div>
-          <dt>Main Workspace</dt>
-          <dd><%= authorityContext && authorityContext.authority ? authorityContext.authority.workspaceRoot : ((snapshot && snapshot.mainWorkspaceRoot) || '-') %></dd>
-        </div>
-        <div>
-          <dt>Allowed Folders</dt>
-          <dd>
-            <% const ownedPaths = (run.ownedOutputPaths && run.ownedOutputPaths.length ? run.ownedOutputPaths : (snapshot && snapshot.ownedOutputPaths) || []); %>
-            <% if (ownedPaths.length > 0) { %>
-              <code class="owned-path"><%= ownedPaths.join(', ') %></code>
-            <% } else { %>
-              -
-            <% } %>
-          </dd>
-        </div>
-        <div>
-          <dt>Subtask</dt>
-          <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
-        </div>
-        <% if (snapshot && snapshot.provider) { %>
-          <div>
-            <dt>Provider</dt>
-            <dd><%= snapshot.provider %></dd>
-          </div>
-        <% } %>
-        <% if (snapshot && snapshot.model) { %>
-          <div>
-            <dt>Model</dt>
-            <dd><%= snapshot.model %></dd>
-          </div>
-        <% } %>
-      </dl>
-    </div>
-  </details>
-
-  <% if (typeof runEvents !== 'undefined' && runEvents && runEvents.length > 0) { %>
-    <details class="collapsible collapsible--compact">
-      <summary>Operational Events</summary>
-      <div class="collapsible__content">
-        <pre class="code-block"><%= JSON.stringify(runEvents, null, 2) %></pre>
-      </div>
-    </details>
-  <% } %>
-</section>
-</section>
 
 <section class="detail-section">
   <h2>Artifact Prediction</h2>

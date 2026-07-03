@@ -399,6 +399,10 @@ async function main() {
     assert(runDetail.body.includes('>At a glance<'), 'run detail should render Zone 1 eyebrow');
     assert(runDetail.body.includes("How it's set up") || runDetail.body.includes('>How it&#39;s set up<'), 'run detail should render Zone 3 eyebrow');
     assert(runDetail.body.includes('>What has happened<'), 'run detail should render Zone 4 eyebrow');
+    assert(runDetail.body.includes('id="run-live-status"'), 'hero must keep the live status id');
+    assert((runDetail.body.match(/id="run-live-status"/g) || []).length === 1, 'live status id must be unique');
+    assert(!runDetail.body.includes('>Run Summary</h2>'), 'standalone Run Summary heading should be merged into the hero');
+    assert(runDetail.body.includes('Run Outcome'), 'hero must still expose Run Outcome');
     assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
