@@ -8873,13 +8873,18 @@ function updateRunReplaySnapshot(runId, updater) {
 function createReplaySnapshotBase(run, overrides = {}) {
   const targetProvider = getRunWorkspaceProvider(run);
   const target = getTargetProviderDescriptor(targetProvider);
+  const browserRun = isBrowserRun(run);
   return {
     version: 1,
     runId: run.id,
     ticketId: run.ticketId,
     assignedAgentId: run.agentId,
     agentNameSnapshot: run.agentName,
-    primitiveContract: {
+    primitiveContract: browserRun ? {
+      allowedOperations: [...AGENT_BROWSER_OPERATIONS],
+      mutatingOperations: [],
+      requiredArgs: BROWSER_OPERATION_ARGS
+    } : {
       allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
       mutatingOperations: [...AGENT_MUTATING_OPERATIONS],
       requiredArgs: AGENT_OPERATION_ARGS
@@ -12142,6 +12147,28 @@ function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLimits = 
   const workspaceRoot = run.workspaceRoot || workspaceProvider.root;
   const limits = resolvedLimits || getRunRuntimeLimitsSnapshot(run, objective);
 
+  if (isBrowserRun(run)) {
+    const target = run.browserTargetSnapshot;
+    return {
+      runId: run.id,
+      ticketId: run.ticketId,
+      assignedAgentId: run.agentId,
+      currentDateTime: formatDateTimeForTimezone(new Date(), timezone),
+      timezone,
+      targetKind: 'browser',
+      browserTargetId: target.id,
+      allowedOrigins: target.allowedOrigins,
+      startUrl: target.startUrl,
+      allowedOperations: [...AGENT_BROWSER_OPERATIONS],
+      maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+      maxMutatingActionsPerResponse: 0,
+      currentStep: step,
+      maxExecutionSteps: limits.maxExecutionSteps,
+      workloadProfile: null,
+      currentPhase: run.currentPhase || 'planning'
+    };
+  }
+
   const disabledConfigToOps = {
     allowHandoffTask: 'createHandoffTask',
     allowWorkflowDraftIntent: 'createWorkflowDraftIntent',
@@ -14461,6 +14488,23 @@ async function closeBrowserSession(run, reason = 'run_finished') {
   appendRunLog(run, 'browser:session_closed', `Browser session closed: ${reason}`);
 }
 
+async function captureBrowserCurrentState(run) {
+  const entry = run && browserSessions.get(run.id);
+  if (!entry) return null;
+  try {
+    const state = await entry.session.pageState();
+    return {
+      targetId: `browser:${run.browserTargetSnapshot.id}`,
+      targetKind: 'browser',
+      url: redactBrowserUrl(state.url),
+      titleHash: hashContent(state.title || ''),
+      capturedAt: new Date().toISOString()
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 async function executeBrowserOperation(run, action, step = 0) {
   const operation = action.operation;
   const args = action.args || {};
@@ -15691,6 +15735,35 @@ function captureRunWorkspaceRootSnapshot(run) {
 }
 
 function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null, workspaceContext = null) {
+  if (runtimeEnvelope && runtimeEnvelope.targetKind === 'browser') {
+    return [
+      {
+        role: 'system',
+        content: [
+          'You are a read-only browser agent. You may inspect only the configured browser target.',
+          'Allowed operations are navigate, observe, readPageText, screenshot, and wait. Never request click, fill, press, downloads, credentials, shell commands, filesystem operations, admin operations, or persistent sessions.',
+          'Use navigate with {"url":"absolute URL"}; observe, readPageText, and screenshot with {}; wait with {"forMs":number}.',
+          'All navigation and page requests must remain inside runtimeEnvelope.allowedOrigins. Begin at runtimeEnvelope.startUrl unless prior action results already show it was loaded.',
+          'Every response must be JSON: {"message":"string","actions":[{"operation":"navigate|observe|readPageText|screenshot|wait","args":{}}],"complete":boolean}.',
+          'Set complete:true as soon as the objective is satisfied by the returned browser evidence. Read-only browser runs do not complete through filesystem postconditions or no-progress detection; they end only when you set complete:true or a runtime limit is reached.',
+          `Emit at most ${MAX_AGENT_ACTIONS_PER_RESPONSE} actions in one response and keep each response within one inspection phase.`,
+          'Do not repeat inspections that are not needed for the objective.'
+        ].join('\n')
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({ runtimeEnvelope: compactRuntimeEnvelopeForPrompt(runtimeEnvelope) })
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          objective: ticket.objective,
+          previousActionResults: sanitizeSnapshotValue(actionResults),
+          browserContext: sanitizeSnapshotValue(workspaceContext)
+        })
+      }
+    ];
+  }
   const baseAllowedOps = runtimeEnvelope.allowedOperations || AGENT_DIRECT_OPERATIONS;
   const currentPhase = runtimeEnvelope.currentPhase || 'planning';
   // Operation vocabulary (the full set of operation names available — used for the
@@ -15933,7 +16006,9 @@ async function runAgentTicket(runId) {
     const runStartedAtMs = Date.now();
     // Captured once at run start and never updated, so it does not absorb
     // folders/files this run creates. Anchors relative objectives.
-    const initialWorkspaceSnapshot = captureRunWorkspaceRootSnapshot(run);
+    const initialWorkspaceSnapshot = isBrowserRun(run)
+      ? { targetKind: 'browser', target: run.browserTargetSnapshot, capturedAt: new Date().toISOString() }
+      : captureRunWorkspaceRootSnapshot(run);
     appendRunReplaySnapshotItem(run.id, 'targetSnapshots', {
       phase: 'run_start',
       snapshot: initialWorkspaceSnapshot
@@ -15989,7 +16064,7 @@ async function runAgentTicket(runId) {
     // Exact delete-target identity: for a simple "delete <X>" objective, the only
     // legitimate deletePath target is X. Used to reject near-miss deletes (e.g.
     // deletePath C for "Delete CD") before execution. null for non-simple objectives.
-    const simpleDeleteTargets = extractSimpleDeleteTargets(ticket && ticket.objective);
+    const simpleDeleteTargets = isBrowserRun(run) ? null : extractSimpleDeleteTargets(ticket && ticket.objective);
     const simpleDeleteTargetSet = simpleDeleteTargets
       ? new Set(simpleDeleteTargets.map(t => normalizeArtifactOwnershipPath(t)).filter(Boolean))
       : null;
@@ -16005,7 +16080,7 @@ async function runAgentTicket(runId) {
         const fs2 = require('fs');
       } catch(e) { 
       }
-      if (!resumedFromPersistedState) {
+      if (!isBrowserRun(run) && !resumedFromPersistedState) {
         const obviousPostcondition = checkObviousTicketPostcondition(ticket);
         if (obviousPostcondition) {
           recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
@@ -16036,7 +16111,9 @@ async function runAgentTicket(runId) {
       const currentEnvelope = buildRuntimeEnvelope(run, step, ticket.objective, limits);
       const workspaceContext = {
         initialWorkspaceSnapshot,
-        currentWorkspaceSnapshot: captureRunWorkspaceRootSnapshot(run),
+        currentWorkspaceSnapshot: isBrowserRun(run)
+          ? await captureBrowserCurrentState(run)
+          : captureRunWorkspaceRootSnapshot(run),
         mutationsByThisRun
       };
       const input = buildAgentPrompt(ticket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
@@ -16431,8 +16508,8 @@ async function runAgentTicket(runId) {
           }
 
           assertRunNotTimedOut(run, runStartedAtMs, limits);
-          operation = parseAgentDirectAction(action);
-          assertAgentOperationAllowed(run, agent, operation.operation, step);
+          operation = isBrowserRun(run) ? parseBrowserDirectAction(run, action) : parseAgentDirectAction(action);
+          if (!isBrowserRun(run)) assertAgentOperationAllowed(run, agent, operation.operation, step);
 
           // Report budget limits: listDirectory and readFile
           if (operation.operation === 'listDirectory' && limits.maxListDirectoryPerRun != null) {
@@ -16455,7 +16532,9 @@ async function runAgentTicket(runId) {
           }
 
           let result;
-          if (operation.operation === 'createWorkflowDraft') {
+          if (isBrowserRun(run)) {
+            result = await executeBrowserOperation(run, operation, step);
+          } else if (operation.operation === 'createWorkflowDraft') {
             result = createWorkflowDraftFromAgent(run, operation.args.workflow, step);
           } else if (operation.operation === 'createWorkflowDraftIntent') {
             result = createWorkflowDraftFromIntent(run, operation.args, step);
@@ -16470,7 +16549,7 @@ async function runAgentTicket(runId) {
           }
           const opDurationMs = Date.now() - actionStartedAt;
           const isResumeSkipped = result && result.skipped === true;
-          if (!isResumeSkipped && (AGENT_ALLOWED_OPERATIONS.includes(operation.operation) || operation.operation === 'createHandoffTask')) workspaceOperationCount += 1;
+          if (!isResumeSkipped && (AGENT_ALLOWED_OPERATIONS.includes(operation.operation) || AGENT_BROWSER_OPERATIONS.includes(operation.operation) || operation.operation === 'createHandoffTask')) workspaceOperationCount += 1;
 
           // Track mutations performed by this run so later steps can tell their
           // own outputs apart from pre-existing inputs.
@@ -16669,7 +16748,7 @@ async function runAgentTicket(runId) {
             }
           });
           }
-          error.workspaceAction = error.workspaceAction || action;
+          if (!isBrowserRun(run)) error.workspaceAction = error.workspaceAction || action;
           if (canRetryPriorOwnerConflict) {
             recoverableOwnershipConflict = true;
             break;
@@ -16699,7 +16778,7 @@ async function runAgentTicket(runId) {
         break;
       }
 
-      if (!resumedFromPersistedState && !modelPlan.complete && isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
+      if (!isBrowserRun(run) && !resumedFromPersistedState && !modelPlan.complete && isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
         recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
           step,
           source: 'successful_workspace_mutation',
@@ -16711,7 +16790,7 @@ async function runAgentTicket(runId) {
 
       // Bounded operation batch: repeated inspection without mutation is non-progress.
       // The model must produce exactly one bounded inspection phase, then emit a batch.
-      if (!modelPlan.complete && !hasMutatingAction && actions.length > 0) {
+      if (!isBrowserRun(run) && !modelPlan.complete && !hasMutatingAction && actions.length > 0) {
         // Any inspection-only response (listDirectory, readFile) after prior
         // inspection is non-progress. The model must emit mutations after
         // bounded inspection or fail explicitly.
@@ -16759,7 +16838,7 @@ async function runAgentTicket(runId) {
         }
       }
 
-      const postcondition = checkPostconditionCompletion(run, actions, actionResults, step);
+      const postcondition = isBrowserRun(run) ? null : checkPostconditionCompletion(run, actions, actionResults, step);
       if (postcondition) {
         recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
           step,
@@ -16798,6 +16877,7 @@ async function runAgentTicket(runId) {
 
     run = failAgentRun(run, error, error.workspaceAction || null);
   } finally {
+    await closeBrowserSession(run);
     startingRunIds.delete(runId);
     startingLocalModelRunIds.delete(runId);
     runningRunKeys.delete(runExecutionKey(run));
