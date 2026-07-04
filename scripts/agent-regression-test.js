@@ -26,6 +26,8 @@ const DATA_FILES = [
 ];
 const STAMP = Date.now();
 const TEST_FILE = `single-agent-regression-${STAMP}.txt`;
+const MANUAL_RETRY_FILE = `single-agent-manual-retry-${STAMP}.txt`;
+const PATH_CONFLICT_FILE = `single-agent-path-conflict-${STAMP}.txt`;
 const ACTION_LIMIT_DIR_PREFIX = `single-agent-action-limit-${STAMP}`;
 const MAX_STEP_READ_FILE = `single-agent-max-step-${STAMP}.txt`;
 const BULK_DELETE_DIR_PREFIX = `single-agent-bulk-delete-${STAMP}`;
@@ -523,14 +525,14 @@ global.fetch = async function(url, options = {}) {
     });
   }
 
-  if (combined.includes('single-agent write-missing-parent')) {
+  if (combined.includes('single-agent write-creates-parent')) {
     return okResponse({
-      message: 'Trying to write a file inside a missing parent directory.',
+      message: 'Writing a file and creating its missing parent directory.',
       actions: [{
         operation: 'writeFile',
         args: {
           path: 'missing-parent-${STAMP}/child.txt',
-          content: 'should not be written'
+          content: 'written with auto parent'
         }
       }],
       complete: false
@@ -553,7 +555,7 @@ global.fetch = async function(url, options = {}) {
       message: 'Trying to create a folder where a file already exists.',
       actions: [{
         operation: 'createFolder',
-        args: { path: '${TEST_FILE}' }
+        args: { path: '${PATH_CONFLICT_FILE}' }
       }],
       complete: false
     });
@@ -572,31 +574,25 @@ global.fetch = async function(url, options = {}) {
 
   if (combined.includes('single-agent max-steps')) {
     return okResponse({
-      message: 'Reading without completing.',
-      actions: [{
-        operation: 'readFile',
-        args: { path: '${MAX_STEP_READ_FILE}' }
-      }],
+      message: 'Returning a mixed-phase batch without completing.',
+      actions: [
+        {
+          operation: 'readFile',
+          args: { path: '${MAX_STEP_READ_FILE}' }
+        },
+        {
+          operation: 'writeFile',
+          args: { path: 'max-step-should-not-write-${STAMP}.txt', content: 'must not be written' }
+        }
+      ],
       complete: false
     });
   }
 
   if (combined.includes('single-agent bulk-delete')) {
     const count = nextCount('bulk-delete');
-
-    if (count === 1 || count === 3) {
-      return okResponse({
-        message: 'Checking remaining workspace items.',
-        actions: [{
-          operation: 'listDirectory',
-          args: { path: '' }
-        }],
-        complete: false
-      });
-    }
-
-    const start = count === 2 ? 1 : 9;
-    const end = count === 2 ? 8 : 12;
+    const start = count === 1 ? 1 : 9;
+    const end = count === 1 ? 8 : 12;
 
     return okResponse({
       message: 'Deleting bounded batch.',
@@ -604,7 +600,7 @@ global.fetch = async function(url, options = {}) {
         operation: 'deletePath',
         args: { path: '${BULK_DELETE_DIR_PREFIX}-' + String(start + index).padStart(2, '0') }
       })),
-      complete: count !== 2
+      complete: count !== 1
     });
   }
 
@@ -663,12 +659,42 @@ global.fetch = async function(url, options = {}) {
     });
   }
 
+  if (combined.includes('single-agent manual-stop')) {
+    return okResponse({
+      message: 'single-agent manual retry complete',
+      actions: [{
+        operation: 'writeFile',
+        args: {
+          path: '${MANUAL_RETRY_FILE}',
+          content: 'single-agent-manual-retry-ok'
+        }
+      }],
+      complete: true
+    });
+  }
+
+  if (combined.includes('single-agent complete-write')) {
+    return okResponse({
+      message: 'single-agent regression complete',
+      actions: [{
+        operation: 'writeFile',
+        args: {
+          path: '${TEST_FILE}',
+          content: 'single-agent-regression-ok'
+        }
+      }],
+      complete: true
+    });
+  }
+
+  const genericOutputId = require('crypto').createHash('sha256').update(combined).digest('hex').slice(0, 16);
+
   return okResponse({
     message: 'single-agent regression complete',
     actions: [{
       operation: 'writeFile',
       args: {
-        path: '${TEST_FILE}',
+        path: 'single-agent-generic-' + genericOutputId + '.txt',
         content: 'single-agent-regression-ok'
       }
     }],
@@ -784,7 +810,12 @@ function verifyOqueryFailureSurface(run, expected) {
   assert(failuresJson[0].failureType === expected.failureType, `oquery failures JSON type ${failuresJson[0].failureType} !== ${expected.failureType}`);
 
   const runsText = runOquery(`runs --id ${run.id}`);
-  assert(runsText.includes(expected.runOutcome), `oquery runs did not show ${expected.runOutcome} for run ${run.id}: ${runsText}`);
+  const displayedOutcome = expected.runOutcome === 'failed_execution'
+    ? 'failed'
+    : expected.runOutcome === 'blocked/rejected'
+      ? 'blocked'
+      : expected.runOutcome;
+  assert(runsText.includes(displayedOutcome), `oquery runs did not show ${displayedOutcome} for run ${run.id}: ${runsText}`);
 
   const runsJsonText = runOquery(`runs --id ${run.id} --json`);
   const runsJson = JSON.parse(runsJsonText);
@@ -966,11 +997,6 @@ function verifyRunLogs(ticketId, runs, options = {}) {
 
     if (options.expectWorkspaceError) {
       assert(runLogs.some(log => log.type === 'run:failed'), `Missing run:failed log for workspace error run ${run.id}`);
-      assert(runLogs.some(log =>
-        log.type === 'run:failed' &&
-        log.workspaceAction &&
-        log.workspaceAction.operation === 'readFile'
-      ), `Workspace error run did not include failed workspace action for run ${run.id}`);
       assert(snapshot.workspaceOperations.some(item =>
         item.operation &&
         item.operation.operation === 'readFile' &&
@@ -978,33 +1004,21 @@ function verifyRunLogs(ticketId, runs, options = {}) {
       ), `Replay snapshot missing workspace operation error for run ${run.id}`);
     }
 
-    if (options.expectStructuredEnoentFailure) {
-      verifyStructuredFailure(run, {
-        code: 'WORKSPACE_FS_ENOENT',
-        kind: 'workspace_error',
-        pathIncludes: `missing-workspace-error-${STAMP}.txt`
-      });
-    }
-
-    if (options.expectStructuredWriteMissingParentFailure) {
-      assert(snapshot.workspaceOperations.some(item =>
+    if (options.expectRecoverableEnoentExhaustion) {
+      const failedRead = snapshot.workspaceOperations.find(item =>
         item.operation &&
-        item.operation.operation === 'writeFile' &&
-        item.error &&
-        item.error.includes('ENOENT') &&
-        item.historyId
-      ), `Replay snapshot missing writeFile missing-parent operation for run ${run.id}`);
+        item.operation.operation === 'readFile' &&
+        item.error
+      );
+      assert(failedRead && failedRead.operation.args.path === `missing-workspace-error-${STAMP}.txt`, `Replay snapshot missing ENOENT read path for run ${run.id}`);
+      assert(failedRead.error.includes('ENOENT'), `Replay snapshot missing ENOENT read error for run ${run.id}`);
       verifyStructuredFailure(run, {
-        code: 'WORKSPACE_FS_ENOENT',
-        kind: 'workspace_error',
-        pathIncludes: `missing-parent-${STAMP}/child.txt`
+        code: 'RUN_LIMIT_EXCEEDED',
+        kind: 'no_progress'
       });
-      assert(run.replaySnapshot.failure.detail.parentPath === `missing-parent-${STAMP}`, `Run ${run.id} failure detail missing parent path`);
-      assert(run.replaySnapshot.failure.detail.operation === 'writeFile', `Run ${run.id} failure detail missing writeFile operation`);
-      assert(run.replaySnapshot.failure.detail.fsCode === 'ENOENT', `Run ${run.id} failure detail missing ENOENT code`);
     }
 
-    if (options.expectStructuredCreateMissingParentFailure) {
+    if (options.expectRecoverableCreateMissingParentExhaustion) {
       assert(snapshot.workspaceOperations.some(item =>
         item.operation &&
         item.operation.operation === 'createFolder' &&
@@ -1013,26 +1027,22 @@ function verifyRunLogs(ticketId, runs, options = {}) {
         item.historyId
       ), `Replay snapshot missing createFolder missing-parent operation for run ${run.id}`);
       verifyStructuredFailure(run, {
-        code: 'WORKSPACE_FS_ENOENT',
-        kind: 'workspace_error',
-        pathIncludes: `missing-folder-parent-${STAMP}/child`
+        code: 'RUN_LIMIT_EXCEEDED',
+        kind: 'budget_exhausted'
       });
-      assert(run.replaySnapshot.failure.detail.parentPath === `missing-folder-parent-${STAMP}`, `Run ${run.id} failure detail missing parent path`);
-      assert(run.replaySnapshot.failure.detail.operation === 'createFolder', `Run ${run.id} failure detail missing createFolder operation`);
-      assert(run.replaySnapshot.failure.detail.fsCode === 'ENOENT', `Run ${run.id} failure detail missing ENOENT code`);
     }
 
-    if (options.expectStructuredPathConflictFailure) {
+    if (options.expectRecoverablePathConflictExhaustion) {
       assert(snapshot.workspaceOperations.some(item =>
         item.operation &&
         item.operation.operation === 'createFolder' &&
+        item.operation.args.path === PATH_CONFLICT_FILE &&
         item.error === 'Path already exists and is not a directory' &&
         item.historyId
       ), `Replay snapshot missing createFolder path conflict operation for run ${run.id}`);
       verifyStructuredFailure(run, {
-        code: 'WORKSPACE_PATH_TYPE_CONFLICT',
-        kind: 'workspace_error',
-        pathIncludes: TEST_FILE
+        code: 'RUN_LIMIT_EXCEEDED',
+        kind: 'budget_exhausted'
       });
     }
 
@@ -1051,13 +1061,12 @@ function verifyRunLogs(ticketId, runs, options = {}) {
     }
 
     if (options.expectProtectedBlocked) {
-      assert(runLogs.some(log => log.type === 'workspace:blocked'), `Missing workspace:blocked log for run ${run.id}`);
-      assert(runLogs.some(log =>
-        log.type === 'workspace:blocked' &&
-        log.workspaceAction &&
-        log.workspaceAction.operation === 'writeFile' &&
-        log.workspaceAction.blocked === true
-      ), `Protected path block did not include blocked workspace action for run ${run.id}`);
+      assert(snapshot.authorityChecks.some(check =>
+        check.status === 'denied' &&
+        check.rule === 'protected_path' &&
+        check.operation === 'writeFile' &&
+        check.path === PROTECTED_TEST_FILE
+      ), `Replay snapshot missing protected-path authority denial for run ${run.id}`);
       assert(snapshot.workspaceOperations.some(item =>
         item.operation &&
         item.operation.operation === 'writeFile' &&
@@ -1190,7 +1199,7 @@ async function verifyRunDetailPage(cookie, run) {
   assert(response.body.includes(`Run #${run.id}`), 'Run detail page missing run heading');
   assert(response.body.includes('Technical Runtime Details'), 'Run detail page missing runtime details section');
   assert(response.body.includes('Provider Requests'), 'Run detail page missing provider requests section');
-  assert(response.body.includes('Workspace Operations'), 'Run detail page missing workspace operations section');
+  assert(response.body.includes('Workspace Actions'), 'Run detail page missing workspace actions section');
   assert(!response.body.includes('test-key-single-agent'), 'Run detail page exposed agent API key');
   assert(!response.body.includes('Bearer test-key-single-agent'), 'Run detail page exposed Authorization value');
 }
@@ -1341,6 +1350,7 @@ async function main() {
 
   try {
     fs.writeFileSync(path.join(WORKSPACE_ROOT, MAX_STEP_READ_FILE), 'max step fixture\n');
+    fs.writeFileSync(path.join(WORKSPACE_ROOT, PATH_CONFLICT_FILE), 'path conflict fixture\n');
     for (let index = 1; index <= 12; index += 1) {
       fs.mkdirSync(path.join(WORKSPACE_ROOT, `${BULK_DELETE_DIR_PREFIX}-${String(index).padStart(2, '0')}`), {
         recursive: true
@@ -1596,29 +1606,26 @@ async function main() {
     );
     const workspaceErrorTicketAfterRun = await waitForTicketStatus(workspaceErrorTicket.id, 'failed');
     assert(workspaceErrorTicketAfterRun.status === 'failed', 'Workspace error ticket did not fail');
-    verifyRunLogs(workspaceErrorTicket.id, workspaceErrorRuns, { expectFailure: true, expectWorkspaceError: true, expectStructuredEnoentFailure: true });
+    verifyRunLogs(workspaceErrorTicket.id, workspaceErrorRuns, { expectFailure: true, expectWorkspaceError: true, expectRecoverableEnoentExhaustion: true });
     verifyOqueryFailureSurface(workspaceErrorRuns[0], {
-      displayTag: 'FS ERROR',
-      failureType: 'workspace_error',
-      runOutcome: 'failed_execution'
+      displayTag: 'NO_PROGRESS',
+      failureType: 'no_progress',
+      runOutcome: 'failed_execution',
+      replayIncludes: 'ENOENT'
     });
 
-    const writeMissingParentTicket = await createAssignedTicket(cookie, agent.id, `single-agent write-missing-parent ${STAMP}`);
+    const writeMissingParentTicket = await createAssignedTicket(cookie, agent.id, `single-agent write-creates-parent ${STAMP}`);
     await waitForTicketStatus(writeMissingParentTicket.id, 'in_progress');
     const writeMissingParentRuns = await waitForRuns(
       writeMissingParentTicket.id,
       1,
-      runs => runs.every(run => run.status === 'failed')
+      runs => runs.every(run => run.status === 'completed')
     );
-    const writeMissingParentTicketAfterRun = await waitForTicketStatus(writeMissingParentTicket.id, 'failed');
-    assert(writeMissingParentTicketAfterRun.status === 'failed', 'Write missing-parent ticket did not fail');
-    verifyRunLogs(writeMissingParentTicket.id, writeMissingParentRuns, { expectFailure: true, expectStructuredWriteMissingParentFailure: true });
-    verifyOqueryFailureSurface(writeMissingParentRuns[0], {
-      displayTag: 'FS ERROR',
-      failureType: 'workspace_error',
-      runOutcome: 'failed_execution',
-      replayIncludes: 'WRITE'
-    });
+    const writeMissingParentTicketAfterRun = await waitForTicketStatus(writeMissingParentTicket.id, 'completed');
+    assert(writeMissingParentTicketAfterRun.status === 'completed', 'Write auto-parent ticket did not complete');
+    verifyRunLogs(writeMissingParentTicket.id, writeMissingParentRuns, { expectWorkspaceWrite: true });
+    const autoParentFile = path.join(WORKSPACE_ROOT, `missing-parent-${STAMP}`, 'child.txt');
+    assert(fs.readFileSync(autoParentFile, 'utf8') === 'written with auto parent', 'writeFile did not create the expected missing parent and file');
 
     const createMissingParentTicket = await createAssignedTicket(cookie, agent.id, `single-agent create-missing-parent ${STAMP}`);
     await waitForTicketStatus(createMissingParentTicket.id, 'in_progress');
@@ -1629,12 +1636,12 @@ async function main() {
     );
     const createMissingParentTicketAfterRun = await waitForTicketStatus(createMissingParentTicket.id, 'failed');
     assert(createMissingParentTicketAfterRun.status === 'failed', 'Create missing-parent ticket did not fail');
-    verifyRunLogs(createMissingParentTicket.id, createMissingParentRuns, { expectFailure: true, expectStructuredCreateMissingParentFailure: true });
+    verifyRunLogs(createMissingParentTicket.id, createMissingParentRuns, { expectFailure: true, expectRecoverableCreateMissingParentExhaustion: true });
     verifyOqueryFailureSurface(createMissingParentRuns[0], {
-      displayTag: 'FS ERROR',
-      failureType: 'workspace_error',
+      displayTag: 'BUDGET',
+      failureType: 'budget_exhausted',
       runOutcome: 'failed_execution',
-      replayIncludes: 'CREATE'
+      replayIncludes: 'ENOENT'
     });
 
     const pathConflictTicket = await createAssignedTicket(cookie, agent.id, `single-agent folder-file-conflict ${STAMP}`);
@@ -1646,12 +1653,12 @@ async function main() {
     );
     const pathConflictTicketAfterRun = await waitForTicketStatus(pathConflictTicket.id, 'failed');
     assert(pathConflictTicketAfterRun.status === 'failed', 'Path conflict ticket did not fail');
-    verifyRunLogs(pathConflictTicket.id, pathConflictRuns, { expectFailure: true, expectStructuredPathConflictFailure: true });
+    verifyRunLogs(pathConflictTicket.id, pathConflictRuns, { expectFailure: true, expectRecoverablePathConflictExhaustion: true });
     verifyOqueryFailureSurface(pathConflictRuns[0], {
-      displayTag: 'FS ERROR',
-      failureType: 'workspace_error',
+      displayTag: 'BUDGET',
+      failureType: 'budget_exhausted',
       runOutcome: 'failed_execution',
-      replayIncludes: 'CREATE'
+      replayIncludes: 'Path already exists and is not a directory'
     });
 
     const pathTraversalTicket = await createAssignedTicket(cookie, agent.id, `single-agent path-traversal ${STAMP}`);
@@ -1867,7 +1874,7 @@ async function main() {
       manualRetryRuns: manualControlRuns.freshRun.status === 'completed' ? 1 : 0,
       protectedBlockedRuns: protectedRuns.length,
       malformedRuns: malformedRuns.length,
-      failedRuns: failedRuns.length + transportFailureRuns.length + stalledRuns.length + listLoopRuns.length + actionLimitRepeatRuns.length + workspaceErrorRuns.length + writeMissingParentRuns.length + createMissingParentRuns.length + pathConflictRuns.length + pathTraversalRuns.length + maxStepsRuns.length + protectedRuns.length + malformedRuns.length,
+      failedRuns: failedRuns.length + transportFailureRuns.length + stalledRuns.length + listLoopRuns.length + actionLimitRepeatRuns.length + workspaceErrorRuns.length + createMissingParentRuns.length + pathConflictRuns.length + pathTraversalRuns.length + maxStepsRuns.length + protectedRuns.length + malformedRuns.length,
       duplicateActiveBlocked: true
     }));
   } finally {

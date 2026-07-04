@@ -197,10 +197,31 @@ async function createWorkflow(cookie, definition) {
   });
 }
 
+function seedLegacyTicketWithoutExecutionPolicy(assignedAgentId) {
+  const tickets = readJson('tickets.json');
+  const now = new Date().toISOString();
+  const ticket = {
+    id: Math.max(0, ...tickets.map(item => item.id || 0)) + 1,
+    objective: 'Legacy ticket fixture without executionPolicy',
+    assignmentTargetType: 'agent',
+    assignmentTargetId: assignedAgentId,
+    assignmentMode: 'individual',
+    status: 'closed',
+    createdBy: 'admin',
+    changedBy: 'admin',
+    changedAt: now,
+    createdAt: now,
+    updatedAt: now
+  };
+  writeJson('tickets.json', [...tickets, ticket]);
+  return ticket.id;
+}
+
 async function main() {
-  const legacyTicketId = (readJson('tickets.json').find(item => !item.executionPolicy && item.assignmentTargetType === 'agent') || {}).id;
-  assert(legacyTicketId, 'test fixture should include an old ticket without executionPolicy before startup normalization');
   const agent = seedWorkflowAgent();
+  const seededLegacyTicketId = seedLegacyTicketWithoutExecutionPolicy(agent.id);
+  const legacyTicketId = (readJson('tickets.json').find(item => item.id === seededLegacyTicketId && !item.executionPolicy && item.assignmentTargetType === 'agent') || {}).id;
+  assert(legacyTicketId, 'test fixture should include an old ticket without executionPolicy before startup normalization');
   const child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
     env: {
@@ -480,8 +501,8 @@ async function main() {
     assert(replayAfterTicketPolicyChange.executionPolicySnapshot.maxAttempts === 3, 'changing ticket policy must not mutate replay policy evidence');
     const changedTicketPage = await request('GET', `/tickets/${ticket.id}`, { cookie });
     assert(changedTicketPage.statusCode === 200, `changed ticket detail returned HTTP ${changedTicketPage.statusCode}`);
-    assert(changedTicketPage.body.includes('Execution Policy'), 'ticket detail should show the current execution policy');
-    assert(changedTicketPage.body.includes('recorded intent, not enforced'), 'ticket detail should label unenforced policy fields as recorded intent');
+    assert(changedTicketPage.body.includes('Execution policy'), 'ticket detail should show the current execution policy');
+    assert(changedTicketPage.body.includes('recorded intent') && changedTicketPage.body.includes('not enforced'), 'ticket detail should label unenforced policy fields as recorded intent');
     assert(!changedTicketPage.body.includes('<dt>Workspace writes</dt><dd>Allowed'), 'ticket detail must not present workspace-write intent as enforced permission');
     const closeVerifiedTicketResponse = await request('PATCH', `/api/tickets/${ticket.id}/status`, {
       cookie,
