@@ -7,6 +7,7 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
+const { createBrowserSession } = require('./runtime/browser-engine');
 const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 require('dotenv').config()
 
@@ -62,6 +63,7 @@ const MODEL_ROUTING_POLICIES_FILE = path.join(DATA_DIR, 'model-routing-policies.
 const CONNECTORS_FILE = path.join(DATA_DIR, 'connectors.json');
 const CONNECTOR_RECEIPTS_FILE = path.join(DATA_DIR, 'connector-receipts.json');
 const LOCAL_CONNECTOR_OBJECTS_FILE = path.join(DATA_DIR, 'local-connector-objects.json');
+const BROWSER_TARGETS_FILE = path.join(DATA_DIR, 'browser-targets.json');
 // Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
 // separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
@@ -157,6 +159,7 @@ function seedOperationalDataDir() {
     'memberships.json',
     'permissions.json',
     'workflows.json',
+    'browser-targets.json',
     'protected-paths.json'
   ].forEach(fileName => copyMissingSeedFile(fileName, '[]'));
 
@@ -290,6 +293,14 @@ function refreshDataDirWriterLockForDebugReset() {
 }
 
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
+const AGENT_BROWSER_OPERATIONS = ['navigate', 'observe', 'readPageText', 'screenshot', 'wait'];
+const BROWSER_OPERATION_ARGS = Object.freeze({
+  navigate: ['url'],
+  observe: [],
+  readPageText: [],
+  screenshot: [],
+  wait: ['forMs']
+});
 const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT === '1';
 const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
   ...(AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED ? ['createWorkflowDraft'] : []),
@@ -358,9 +369,9 @@ const WORKSPACE_FIXTURES = [
 const EXECUTION_PHASES = ['planning', 'inspection', 'mutation', 'verification', 'terminalization'];
 const PHASE_OPERATIONS = {
   planning: [],
-  inspection: ['listDirectory', 'readFile'],
+  inspection: ['listDirectory', 'readFile', ...AGENT_BROWSER_OPERATIONS],
   mutation: ['writeFile', 'createFolder', 'renamePath', 'deletePath', 'createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask'],
-  verification: ['listDirectory', 'readFile'],
+  verification: ['listDirectory', 'readFile', ...AGENT_BROWSER_OPERATIONS],
   terminalization: []
 };
 const ALLOWED_PHASE_TRANSITIONS = {
@@ -1600,6 +1611,33 @@ function readJsonArrayCached(filePath) {
 
 function readTickets() {
   return normalizeTickets(readJsonArrayCached(DATA_FILE));
+}
+
+function readBrowserTargets() {
+  return readJsonArrayCached(BROWSER_TARGETS_FILE);
+}
+
+function getBrowserTargetById(id) {
+  if (typeof id !== 'string' || !id.trim()) return null;
+  return readBrowserTargets().find(target => target && target.id === id.trim()) || null;
+}
+
+function normalizeBrowserTargetSnapshot(target) {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
+  return sanitizeSnapshotValue({
+    id: target.id,
+    name: target.name,
+    status: target.status,
+    allowedOrigins: Array.isArray(target.allowedOrigins) ? target.allowedOrigins : [],
+    startUrl: target.startUrl,
+    limits: target.limits && typeof target.limits === 'object' && !Array.isArray(target.limits)
+      ? target.limits
+      : {}
+  });
+}
+
+function isBrowserRun(run) {
+  return Boolean(run && run.targetRef && run.targetRef.kind === 'browser' && run.browserTargetSnapshot);
 }
 
 function createDemoWorkflowDefinition(now = new Date().toISOString()) {
@@ -6725,7 +6763,8 @@ function normalizeOperationHistory(history) {
     if (!isValidIsoTimestamp(record.timestamp)) return false;
     const run = runsById.get(record.runId);
     if (!run || run.ticketId !== record.ticketId) return false;
-    if (!AGENT_MUTATING_OPERATIONS.includes(record.operation)) return false;
+    const isBrowserReadOperation = record.targetKind === 'browser' && AGENT_BROWSER_OPERATIONS.includes(record.operation);
+    if (!AGENT_MUTATING_OPERATIONS.includes(record.operation) && !isBrowserReadOperation) return false;
     return true;
   });
 }
@@ -8835,13 +8874,18 @@ function updateRunReplaySnapshot(runId, updater) {
 function createReplaySnapshotBase(run, overrides = {}) {
   const targetProvider = getRunWorkspaceProvider(run);
   const target = getTargetProviderDescriptor(targetProvider);
+  const browserRun = isBrowserRun(run);
   return {
     version: 1,
     runId: run.id,
     ticketId: run.ticketId,
     assignedAgentId: run.agentId,
     agentNameSnapshot: run.agentName,
-    primitiveContract: {
+    primitiveContract: browserRun ? {
+      allowedOperations: [...AGENT_BROWSER_OPERATIONS],
+      mutatingOperations: [],
+      requiredArgs: BROWSER_OPERATION_ARGS
+    } : {
       allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
       mutatingOperations: [...AGENT_MUTATING_OPERATIONS],
       requiredArgs: AGENT_OPERATION_ARGS
@@ -8879,6 +8923,10 @@ function createReplaySnapshotBase(run, overrides = {}) {
     workflowActionPlans: [],
     workflowTicketPlans: [],
     workspaceOperations: [],
+    ...(browserRun ? {
+      browserOperations: [],
+      browserTargetSnapshot: run.browserTargetSnapshot
+    } : {}),
     targetSnapshots: [],
     events: [],
     terminalStatus: null,
@@ -11876,6 +11924,9 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
   const nextRunId = nextId(runs);
   const ownedOutputPaths = allocationItem ? allocationItem.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath) : [];
   const workflow = ticket.executionMode === 'workflow' ? getWorkflowById(ticket.workflowId) : null;
+  const browserTarget = ticket.targetRef && ticket.targetRef.kind === 'browser'
+    ? getBrowserTargetById(ticket.targetRef.browserTargetId)
+    : null;
   const runtimeLimitsSnapshot = resolveAgentRuntimeLimits(
     ticket.executionMode === 'workflow' ? null : ticket.objective,
     { workflow: Boolean(workflow) }
@@ -11895,6 +11946,8 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     ticketId: ticket.id,
     agentId: agent.id,
     agentName: agent.name,
+    targetRef: browserTarget ? { kind: 'browser', browserTargetId: browserTarget.id } : null,
+    browserTargetSnapshot: browserTarget ? normalizeBrowserTargetSnapshot(browserTarget) : null,
     workspaceRoot: workspaceProvider.root,
     mainWorkspaceRoot: workspaceProvider.root,
     executionWorkspaceType: usesOwnedScope ? 'main_owned_paths' : 'main',
@@ -12096,6 +12149,28 @@ function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLimits = 
   const timezone = getRuntimeTimezone();
   const workspaceRoot = run.workspaceRoot || workspaceProvider.root;
   const limits = resolvedLimits || getRunRuntimeLimitsSnapshot(run, objective);
+
+  if (isBrowserRun(run)) {
+    const target = run.browserTargetSnapshot;
+    return {
+      runId: run.id,
+      ticketId: run.ticketId,
+      assignedAgentId: run.agentId,
+      currentDateTime: formatDateTimeForTimezone(new Date(), timezone),
+      timezone,
+      targetKind: 'browser',
+      browserTargetId: target.id,
+      allowedOrigins: target.allowedOrigins,
+      startUrl: target.startUrl,
+      allowedOperations: [...AGENT_BROWSER_OPERATIONS],
+      maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+      maxMutatingActionsPerResponse: 0,
+      currentStep: step,
+      maxExecutionSteps: limits.maxExecutionSteps,
+      workloadProfile: null,
+      currentPhase: run.currentPhase || 'planning'
+    };
+  }
 
   const disabledConfigToOps = {
     allowHandoffTask: 'createHandoffTask',
@@ -13099,6 +13174,46 @@ function parseAgentDirectAction(action) {
   }
 
   return { operation, args: action.args };
+}
+
+function parseBrowserDirectAction(run, action) {
+  if (!action || typeof action !== 'object' || Array.isArray(action)) {
+    const error = new Error('Browser action must be an object');
+    error.code = 'AGENT_ACTION_MALFORMED';
+    error.failureKind = 'browser_error';
+    throw error;
+  }
+  if (typeof action.operation !== 'string' || !action.operation.trim()) {
+    const error = new Error('Browser action operation is required');
+    error.code = 'AGENT_ACTION_MALFORMED';
+    error.failureKind = 'browser_error';
+    throw error;
+  }
+  const operation = action.operation.trim();
+  if (!AGENT_BROWSER_OPERATIONS.includes(operation)) {
+    const error = new Error(`Unsupported browser operation: ${operation}`);
+    error.code = 'AGENT_ACTION_UNSUPPORTED';
+    error.failureKind = 'browser_error';
+    throw error;
+  }
+  if (!action.args || typeof action.args !== 'object' || Array.isArray(action.args)) {
+    const error = new Error(`Browser operation args must be an object: ${operation}`);
+    error.code = 'AGENT_ACTION_MALFORMED';
+    error.failureKind = 'browser_error';
+    throw error;
+  }
+  const allowedArgs = BROWSER_OPERATION_ARGS[operation];
+  const args = Object.fromEntries(Object.entries(action.args).filter(([key]) => allowedArgs.includes(key)));
+  const removedArgs = Object.keys(action.args).filter(key => !allowedArgs.includes(key));
+  const removedActionKeys = Object.keys(action).filter(key => !['operation', 'args'].includes(key));
+  if (removedArgs.length > 0 || removedActionKeys.length > 0) {
+    appendRunLog(run, 'browser:args_sanitized', `Removed unsupported browser action fields for ${operation}`, null, {
+      operation,
+      removedArgs,
+      removedActionKeys
+    });
+  }
+  return { operation, args };
 }
 
 function getActionContract(name) {
@@ -14246,6 +14361,336 @@ function executeWorkspaceOperation(run, action, step = 0) {
   throw new Error(`Unsupported workspace operation: ${operation}`);
 }
 
+const browserSessions = new Map();
+
+function createBrowserOperationError(code, message, detail = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.failureKind = 'browser_error';
+  error.detail = detail;
+  return error;
+}
+
+function browserLimit(target, key) {
+  const value = target && target.limits ? target.limits[key] : null;
+  if (!Number.isInteger(value) || value <= 0) {
+    throw createBrowserOperationError('BROWSER_TARGET_UNAVAILABLE', `Browser target limit ${key} must be a positive integer`);
+  }
+  return value;
+}
+
+function redactBrowserUrl(value) {
+  if (typeof value !== 'string' || !value) return null;
+  try {
+    const parsed = new URL(value);
+    parsed.username = '';
+    parsed.password = '';
+    for (const key of parsed.searchParams.keys()) parsed.searchParams.set(key, '[redacted]');
+    parsed.hash = '';
+    return parsed.href;
+  } catch (_) {
+    return '[invalid-url]';
+  }
+}
+
+function sanitizeBrowserProviderRequestEvidence(payload) {
+  const safe = sanitizeSnapshotValue(payload || {});
+  if (!safe || typeof safe !== 'object' || !safe.body || typeof safe.body !== 'object') return safe;
+  return {
+    ...safe,
+    body: {
+      ...safe.body,
+      input: '[redacted browser prompt payload]'
+    }
+  };
+}
+
+function sanitizeBrowserProviderResponseEvidence(payload) {
+  const safe = sanitizeSnapshotValue(payload || {});
+  if (!safe || typeof safe !== 'object') return safe;
+  return {
+    ...safe,
+    ...(Object.prototype.hasOwnProperty.call(safe, 'body') ? { body: '[redacted browser model payload]' } : {})
+  };
+}
+
+function sanitizeBrowserPlanEvidence(modelPlan) {
+  return {
+    message: '[redacted browser model message]',
+    actions: (modelPlan.actions || []).map(action => ({
+      operation: action && typeof action.operation === 'string' ? action.operation : null,
+      args: action && action.operation === 'navigate'
+        ? { url: redactBrowserUrl(action.args && action.args.url) }
+        : action && action.operation === 'wait'
+          ? { forMs: action.args && action.args.forMs }
+          : {}
+    })),
+    complete: modelPlan.complete
+  };
+}
+
+function browserTargetMetadata(run, resourceUrl = null) {
+  const target = run.browserTargetSnapshot || {};
+  const resource = redactBrowserUrl(resourceUrl);
+  return {
+    targetId: `browser:${target.id || 'unknown'}`,
+    targetKind: 'browser',
+    targetScope: Array.isArray(target.allowedOrigins) ? target.allowedOrigins : [],
+    targetPath: null,
+    targetResourceId: resource
+  };
+}
+
+function persistBrowserOperationHistory(run, step, operation, safeArgs, receipt, error = null) {
+  const histories = readOperationHistory();
+  const record = {
+    id: nextId(histories),
+    timestamp: createLogTimestamp(),
+    ticketId: run.ticketId,
+    allocationPlanId: run.allocationPlanId || null,
+    allocationItemId: run.allocationItemId || null,
+    runId: run.id,
+    step,
+    operation,
+    args: sanitizeSnapshotValue(safeArgs),
+    preState: null,
+    postState: null,
+    result: error ? null : sanitizeSnapshotValue(receipt),
+    error: error ? sanitizeLogMessage(error.message || String(error)) : null,
+    errorCode: error ? error.code || null : null,
+    failureKind: error ? error.failureKind || 'browser_error' : null,
+    ...browserTargetMetadata(run, receipt && receipt.resourceUrl),
+    authorityDecision: null,
+    readReceipt: sanitizeSnapshotValue(receipt),
+    mutationReceipt: null
+  };
+  histories.push(record);
+  writeOperationHistory(histories);
+  return record;
+}
+
+function recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, durationMs) {
+  const safeArgs = operation === 'navigate'
+    ? { url: redactBrowserUrl(args.url) }
+    : sanitizeSnapshotValue(args);
+  const history = persistBrowserOperationHistory(run, step, operation, safeArgs, receipt, error);
+  const evidence = {
+    operation: { operation, args: safeArgs },
+    receipt,
+    status: error ? 'refused' : 'ok',
+    error: error ? sanitizeLogMessage(error.message || String(error)) : null,
+    errorCode: error ? error.code || null : null,
+    startedAt: new Date(startedAt).toISOString(),
+    durationMs,
+    historyId: history.id,
+    ...browserTargetMetadata(run, receipt && receipt.resourceUrl)
+  };
+  appendRunLog(run, `browser:${operation}`, error ? evidence.error : `Ran browser ${operation}`, null, evidence);
+  appendEvent({
+    type: 'browser.operation',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: String(step),
+    payload: sanitizeSnapshotValue(evidence)
+  });
+  appendRunReplaySnapshotItem(run.id, 'browserOperations', evidence);
+  return history;
+}
+
+async function getOrCreateBrowserSession(run) {
+  const current = browserSessions.get(run.id);
+  if (current) return current;
+  const target = run.browserTargetSnapshot;
+  if (!target || target.status !== 'active') {
+    throw createBrowserOperationError('BROWSER_TARGET_UNAVAILABLE', 'Browser target snapshot is unavailable or inactive');
+  }
+  const session = await createBrowserSession({
+    allowedOrigins: target.allowedOrigins,
+    navTimeoutMs: browserLimit(target, 'navTimeoutMs')
+  });
+  const entry = { session, actions: 0, navigations: 0, screenshots: 0, artifactSequence: 0 };
+  browserSessions.set(run.id, entry);
+  return entry;
+}
+
+async function closeBrowserSession(run, reason = 'run_finished') {
+  const entry = run && browserSessions.get(run.id);
+  if (!entry) return;
+  browserSessions.delete(run.id);
+  await entry.session.close().catch(() => {});
+  appendEvent({
+    type: 'browser.session_closed',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: { reason }
+  });
+  appendRunLog(run, 'browser:session_closed', `Browser session closed: ${reason}`);
+}
+
+async function captureBrowserCurrentState(run) {
+  const entry = run && browserSessions.get(run.id);
+  if (!entry) return null;
+  try {
+    const state = await entry.session.pageState();
+    return {
+      targetId: `browser:${run.browserTargetSnapshot.id}`,
+      targetKind: 'browser',
+      url: redactBrowserUrl(state.url),
+      titleHash: hashContent(state.title || ''),
+      capturedAt: new Date().toISOString()
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function executeBrowserOperation(run, action, step = 0) {
+  const operation = action.operation;
+  const args = action.args || {};
+  const target = run.browserTargetSnapshot;
+  const startedAt = Date.now();
+  let entry = browserSessions.get(run.id) || null;
+  let receipt = {
+    operation,
+    timestamp: createLogTimestamp(),
+    metadata: {},
+    partial: false,
+    truncated: false,
+    ...browserTargetMetadata(run),
+    ...buildTargetActorContext(run)
+  };
+
+  try {
+    if (!target || target.status !== 'active') {
+      throw createBrowserOperationError('BROWSER_TARGET_UNAVAILABLE', 'Browser target snapshot is unavailable or inactive');
+    }
+    const maxActions = browserLimit(target, 'maxActionsPerRun');
+    const actionCount = entry ? entry.actions + 1 : 1;
+    if (actionCount > maxActions) {
+      throw createBrowserOperationError('BROWSER_ACTION_LIMIT_EXCEEDED', `Browser action limit of ${maxActions} exceeded`, {
+        currentValue: actionCount,
+        configuredLimit: maxActions
+      });
+    }
+    if (operation === 'navigate') {
+      const maxNavigations = browserLimit(target, 'maxNavigationsPerRun');
+      const navigationCount = entry ? entry.navigations + 1 : 1;
+      if (navigationCount > maxNavigations) {
+        throw createBrowserOperationError('BROWSER_NAV_LIMIT_EXCEEDED', `Browser navigation limit of ${maxNavigations} exceeded`, {
+          currentValue: navigationCount,
+          configuredLimit: maxNavigations
+        });
+      }
+    }
+    if (operation === 'screenshot') {
+      const maxScreenshots = browserLimit(target, 'maxScreenshotsPerRun');
+      const screenshotCount = entry ? entry.screenshots + 1 : 1;
+      if (screenshotCount > maxScreenshots) {
+        throw createBrowserOperationError('BROWSER_ACTION_LIMIT_EXCEEDED', `Browser screenshot limit of ${maxScreenshots} exceeded`, {
+          currentValue: screenshotCount,
+          configuredLimit: maxScreenshots
+        });
+      }
+    }
+
+    entry = await getOrCreateBrowserSession(run);
+    entry.actions += 1;
+    let result;
+    if (operation === 'navigate') {
+      if (typeof args.url !== 'string' || !args.url.trim()) {
+        throw createBrowserOperationError('BROWSER_ORIGIN_BLOCKED', 'navigate requires a non-empty URL');
+      }
+      entry.navigations += 1;
+      result = await entry.session.navigate(args.url.trim());
+      receipt.resourceUrl = redactBrowserUrl(result.finalUrl || result.requestedUrl);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.metadata = {
+        requestedUrl: redactBrowserUrl(result.requestedUrl),
+        finalUrl: redactBrowserUrl(result.finalUrl),
+        status: result.status,
+        redirectChain: Array.isArray(result.redirectChain) ? result.redirectChain.map(redactBrowserUrl) : [],
+        pageStateHash: hashContent(JSON.stringify({ url: result.finalUrl, title: result.title }))
+      };
+    } else if (operation === 'observe') {
+      result = await entry.session.observe();
+      const inventory = Array.isArray(result.elements) ? result.elements : [];
+      receipt.resourceUrl = redactBrowserUrl(result.url);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.truncated = Boolean(result.truncated);
+      receipt.metadata = {
+        elementCount: inventory.length,
+        pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title, elements: inventory }))
+      };
+    } else if (operation === 'readPageText') {
+      result = await entry.session.readPageText(browserLimit(target, 'maxPageTextBytes'));
+      receipt.resourceUrl = redactBrowserUrl(result.url);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.truncated = Boolean(result.truncated);
+      receipt.partial = Boolean(result.truncated);
+      receipt.metadata = {
+        bytes: result.bytes,
+        fullBytes: result.fullBytes,
+        contentHash: hashContent(result.text),
+        pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title, text: result.text }))
+      };
+    } else if (operation === 'screenshot') {
+      entry.screenshots += 1;
+      entry.artifactSequence += 1;
+      const artifactDir = path.join(DATA_DIR, 'browser-artifacts', `run-${run.id}`);
+      fs.mkdirSync(artifactDir, { recursive: true });
+      const artifactName = `step-${step}-${entry.artifactSequence}.png`;
+      const artifactPath = path.join(artifactDir, artifactName);
+      result = await entry.session.screenshot(artifactPath);
+      const bytes = fs.readFileSync(artifactPath);
+      const relativeArtifactPath = path.relative(DATA_DIR, artifactPath);
+      receipt.resourceUrl = redactBrowserUrl(result.url);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.metadata = {
+        artifactPath: relativeArtifactPath,
+        bytes: bytes.length,
+        sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+        pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title }))
+      };
+      result = { ...result, artifactPath: relativeArtifactPath, bytes: bytes.length, sha256: receipt.metadata.sha256 };
+      delete result.path;
+    } else if (operation === 'wait') {
+      if (!Number.isFinite(args.forMs) || args.forMs < 0) {
+        throw createBrowserOperationError('BROWSER_TIMEOUT', 'wait requires a non-negative numeric forMs');
+      }
+      result = await entry.session.wait(args.forMs, browserLimit(target, 'waitTimeoutMsCap'));
+      receipt.resourceUrl = redactBrowserUrl(result.url);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.truncated = Boolean(result.truncated);
+      receipt.metadata = { requestedMs: result.requestedMs, waitedMs: result.waitedMs };
+    } else {
+      throw createBrowserOperationError('AGENT_ACTION_UNSUPPORTED', `Unsupported browser operation: ${operation}`);
+    }
+
+    recordBrowserOperationEvidence(run, step, operation, args, receipt, null, startedAt, Date.now() - startedAt);
+    return { ...result, receipt };
+  } catch (cause) {
+    const error = cause && cause.code
+      ? cause
+      : createBrowserOperationError('BROWSER_SESSION_LOST', cause && cause.message ? cause.message : String(cause));
+    error.failureKind = 'browser_error';
+    if (error.detail && error.detail.blockedUrl) {
+      receipt.resourceUrl = redactBrowserUrl(error.detail.blockedUrl);
+      receipt.targetResourceId = receipt.resourceUrl;
+    }
+    receipt.metadata = {
+      status: 'refused',
+      code: error.code,
+      ...(error.detail && error.detail.blockedUrl ? { blockedUrl: redactBrowserUrl(error.detail.blockedUrl) } : {}),
+      ...(error.detail && error.detail.configuredLimit != null ? {
+        currentValue: error.detail.currentValue,
+        configuredLimit: error.detail.configuredLimit
+      } : {})
+    };
+    recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, Date.now() - startedAt);
+    throw error;
+  }
+}
+
 // ── Deterministic runtime verification ────────────────────────────
 // After executing a bounded operation batch, the runtime verifies structural
 // properties without re-entering the model. Only semantic ambiguity requires
@@ -15329,6 +15774,35 @@ function captureRunWorkspaceRootSnapshot(run) {
 }
 
 function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null, workspaceContext = null) {
+  if (runtimeEnvelope && runtimeEnvelope.targetKind === 'browser') {
+    return [
+      {
+        role: 'system',
+        content: [
+          'You are a read-only browser agent. You may inspect only the configured browser target.',
+          'Allowed operations are navigate, observe, readPageText, screenshot, and wait. Never request click, fill, press, downloads, credentials, shell commands, filesystem operations, admin operations, or persistent sessions.',
+          'Use navigate with {"url":"absolute URL"}; observe, readPageText, and screenshot with {}; wait with {"forMs":number}.',
+          'All navigation and page requests must remain inside runtimeEnvelope.allowedOrigins. Begin at runtimeEnvelope.startUrl unless prior action results already show it was loaded.',
+          'Every response must be JSON: {"message":"string","actions":[{"operation":"navigate|observe|readPageText|screenshot|wait","args":{}}],"complete":boolean}.',
+          'Set complete:true as soon as the objective is satisfied by the returned browser evidence. Read-only browser runs do not complete through filesystem postconditions or no-progress detection; they end only when you set complete:true or a runtime limit is reached.',
+          `Emit at most ${MAX_AGENT_ACTIONS_PER_RESPONSE} actions in one response and keep each response within one inspection phase.`,
+          'Do not repeat inspections that are not needed for the objective.'
+        ].join('\n')
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({ runtimeEnvelope: compactRuntimeEnvelopeForPrompt(runtimeEnvelope) })
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          objective: ticket.objective,
+          previousActionResults: sanitizeSnapshotValue(actionResults),
+          browserContext: sanitizeSnapshotValue(workspaceContext)
+        })
+      }
+    ];
+  }
   const baseAllowedOps = runtimeEnvelope.allowedOperations || AGENT_DIRECT_OPERATIONS;
   const currentPhase = runtimeEnvelope.currentPhase || 'planning';
   // Operation vocabulary (the full set of operation names available — used for the
@@ -15571,7 +16045,9 @@ async function runAgentTicket(runId) {
     const runStartedAtMs = Date.now();
     // Captured once at run start and never updated, so it does not absorb
     // folders/files this run creates. Anchors relative objectives.
-    const initialWorkspaceSnapshot = captureRunWorkspaceRootSnapshot(run);
+    const initialWorkspaceSnapshot = isBrowserRun(run)
+      ? { targetKind: 'browser', target: run.browserTargetSnapshot, capturedAt: new Date().toISOString() }
+      : captureRunWorkspaceRootSnapshot(run);
     appendRunReplaySnapshotItem(run.id, 'targetSnapshots', {
       phase: 'run_start',
       snapshot: initialWorkspaceSnapshot
@@ -15627,7 +16103,7 @@ async function runAgentTicket(runId) {
     // Exact delete-target identity: for a simple "delete <X>" objective, the only
     // legitimate deletePath target is X. Used to reject near-miss deletes (e.g.
     // deletePath C for "Delete CD") before execution. null for non-simple objectives.
-    const simpleDeleteTargets = extractSimpleDeleteTargets(ticket && ticket.objective);
+    const simpleDeleteTargets = isBrowserRun(run) ? null : extractSimpleDeleteTargets(ticket && ticket.objective);
     const simpleDeleteTargetSet = simpleDeleteTargets
       ? new Set(simpleDeleteTargets.map(t => normalizeArtifactOwnershipPath(t)).filter(Boolean))
       : null;
@@ -15643,7 +16119,7 @@ async function runAgentTicket(runId) {
         const fs2 = require('fs');
       } catch(e) { 
       }
-      if (!resumedFromPersistedState) {
+      if (!isBrowserRun(run) && !resumedFromPersistedState) {
         const obviousPostcondition = checkObviousTicketPostcondition(ticket);
         if (obviousPostcondition) {
           recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
@@ -15674,7 +16150,9 @@ async function runAgentTicket(runId) {
       const currentEnvelope = buildRuntimeEnvelope(run, step, ticket.objective, limits);
       const workspaceContext = {
         initialWorkspaceSnapshot,
-        currentWorkspaceSnapshot: captureRunWorkspaceRootSnapshot(run),
+        currentWorkspaceSnapshot: isBrowserRun(run)
+          ? await captureBrowserCurrentState(run)
+          : captureRunWorkspaceRootSnapshot(run),
         mutationsByThisRun
       };
       const input = buildAgentPrompt(ticket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
@@ -15685,7 +16163,7 @@ async function runAgentTicket(runId) {
       const modelResponse = await callModelProviderWithRunTimeout(run, agent, input, runStartedAtMs, limits, {
         onRequest: requestPayload => {
           appendRunReplaySnapshotItem(run.id, 'providerRequests', {
-            ...requestPayload,
+            ...(isBrowserRun(run) ? sanitizeBrowserProviderRequestEvidence(requestPayload) : requestPayload),
             startedAt: new Date(modelRequestStartedAt).toISOString(),
             durationMs: Date.now() - modelRequestStartedAt
           });
@@ -15699,7 +16177,7 @@ async function runAgentTicket(runId) {
       appendRunLog(
         run,
         'model:response',
-        modelText,
+        isBrowserRun(run) ? 'Browser model response received (content redacted from durable logs)' : modelText,
         null,
         {
           ...(modelResponse.usage ? { usage: modelResponse.usage } : {}),
@@ -15707,11 +16185,13 @@ async function runAgentTicket(runId) {
         }
       );
       appendRunReplaySnapshotItem(run.id, 'modelResponses', {
-        text: modelText,
+        text: isBrowserRun(run) ? '[redacted browser model response]' : modelText,
         usage: modelResponse.usage || null,
         provider: modelResponse.provider || providerConfig.provider,
         model: modelResponse.model || providerConfig.model,
-        providerResponsePayload: modelResponse.responsePayload,
+        providerResponsePayload: isBrowserRun(run)
+          ? sanitizeBrowserProviderResponseEvidence(modelResponse.responsePayload)
+          : modelResponse.responsePayload,
         startedAt: new Date(modelRequestStartedAt).toISOString(),
         completedAt: new Date(modelResponseCompletedAt).toISOString(),
         durationMs: modelCallDurationMs
@@ -15721,7 +16201,7 @@ async function runAgentTicket(runId) {
       if (modelPlan.parseError) {
         recordRunEvent(run, 'model:malformed', 'Model response was not valid execution JSON', {
           parseError: modelPlan.parseError,
-          rawText: modelText,
+          rawText: isBrowserRun(run) ? '[redacted browser model response]' : modelText,
           step
         });
         const error = new Error(`Model response was not valid execution JSON: ${modelPlan.parseError}`);
@@ -15732,9 +16212,11 @@ async function runAgentTicket(runId) {
       }
 
       appendRunReplaySnapshotItem(run.id, 'parsedModelPlans', {
-        message: modelPlan.message,
-        actions: modelPlan.actions,
-        complete: modelPlan.complete,
+        ...(isBrowserRun(run) ? sanitizeBrowserPlanEvidence(modelPlan) : {
+          message: modelPlan.message,
+          actions: modelPlan.actions,
+          complete: modelPlan.complete
+        }),
         step
       });
       captureRunArtifactPrediction(run.id, modelPlan.actions, step);
@@ -16069,8 +16551,8 @@ async function runAgentTicket(runId) {
           }
 
           assertRunNotTimedOut(run, runStartedAtMs, limits);
-          operation = parseAgentDirectAction(action);
-          assertAgentOperationAllowed(run, agent, operation.operation, step);
+          operation = isBrowserRun(run) ? parseBrowserDirectAction(run, action) : parseAgentDirectAction(action);
+          if (!isBrowserRun(run)) assertAgentOperationAllowed(run, agent, operation.operation, step);
 
           // Report budget limits: listDirectory and readFile
           if (operation.operation === 'listDirectory' && limits.maxListDirectoryPerRun != null) {
@@ -16093,7 +16575,9 @@ async function runAgentTicket(runId) {
           }
 
           let result;
-          if (operation.operation === 'createWorkflowDraft') {
+          if (isBrowserRun(run)) {
+            result = await executeBrowserOperation(run, operation, step);
+          } else if (operation.operation === 'createWorkflowDraft') {
             result = createWorkflowDraftFromAgent(run, operation.args.workflow, step);
           } else if (operation.operation === 'createWorkflowDraftIntent') {
             result = createWorkflowDraftFromIntent(run, operation.args, step);
@@ -16108,7 +16592,7 @@ async function runAgentTicket(runId) {
           }
           const opDurationMs = Date.now() - actionStartedAt;
           const isResumeSkipped = result && result.skipped === true;
-          if (!isResumeSkipped && (AGENT_ALLOWED_OPERATIONS.includes(operation.operation) || operation.operation === 'createHandoffTask')) workspaceOperationCount += 1;
+          if (!isResumeSkipped && (AGENT_ALLOWED_OPERATIONS.includes(operation.operation) || AGENT_BROWSER_OPERATIONS.includes(operation.operation) || operation.operation === 'createHandoffTask')) workspaceOperationCount += 1;
 
           // Track mutations performed by this run so later steps can tell their
           // own outputs apart from pre-existing inputs.
@@ -16307,7 +16791,7 @@ async function runAgentTicket(runId) {
             }
           });
           }
-          error.workspaceAction = error.workspaceAction || action;
+          if (!isBrowserRun(run)) error.workspaceAction = error.workspaceAction || action;
           if (canRetryPriorOwnerConflict) {
             recoverableOwnershipConflict = true;
             break;
@@ -16337,7 +16821,7 @@ async function runAgentTicket(runId) {
         break;
       }
 
-      if (!resumedFromPersistedState && !modelPlan.complete && isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
+      if (!isBrowserRun(run) && !resumedFromPersistedState && !modelPlan.complete && isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
         recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
           step,
           source: 'successful_workspace_mutation',
@@ -16349,7 +16833,7 @@ async function runAgentTicket(runId) {
 
       // Bounded operation batch: repeated inspection without mutation is non-progress.
       // The model must produce exactly one bounded inspection phase, then emit a batch.
-      if (!modelPlan.complete && !hasMutatingAction && actions.length > 0) {
+      if (!isBrowserRun(run) && !modelPlan.complete && !hasMutatingAction && actions.length > 0) {
         // Any inspection-only response (listDirectory, readFile) after prior
         // inspection is non-progress. The model must emit mutations after
         // bounded inspection or fail explicitly.
@@ -16397,7 +16881,7 @@ async function runAgentTicket(runId) {
         }
       }
 
-      const postcondition = checkPostconditionCompletion(run, actions, actionResults, step);
+      const postcondition = isBrowserRun(run) ? null : checkPostconditionCompletion(run, actions, actionResults, step);
       if (postcondition) {
         recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
           step,
@@ -16422,7 +16906,9 @@ async function runAgentTicket(runId) {
     run = completeAgentRun(run);
   } catch (error) {
     if (error.providerRequestPayload && !currentProviderRequestPersisted) {
-      appendRunReplaySnapshotItem(run.id, 'providerRequests', error.providerRequestPayload);
+      appendRunReplaySnapshotItem(run.id, 'providerRequests', isBrowserRun(run)
+        ? sanitizeBrowserProviderRequestEvidence(error.providerRequestPayload)
+        : error.providerRequestPayload);
     }
 
     if (error.providerResponsePayload) {
@@ -16430,12 +16916,15 @@ async function runAgentTicket(runId) {
         error: error.message,
         provider: providerConfig ? providerConfig.provider : null,
         model: providerConfig ? providerConfig.model : null,
-        providerResponsePayload: error.providerResponsePayload
+        providerResponsePayload: isBrowserRun(run)
+          ? sanitizeBrowserProviderResponseEvidence(error.providerResponsePayload)
+          : error.providerResponsePayload
       });
     }
 
     run = failAgentRun(run, error, error.workspaceAction || null);
   } finally {
+    await closeBrowserSession(run);
     startingRunIds.delete(runId);
     startingLocalModelRunIds.delete(runId);
     runningRunKeys.delete(runExecutionKey(run));
@@ -16952,6 +17441,22 @@ function createTicketFromInput(input, actor, options = {}) {
 
   const resolvedCapabilityType = input.capabilityType === 'workflow' || input.executionMode === 'workflow' ? 'workflow' : 'directAction';
   const resolvedExecutionMode = resolvedCapabilityType === 'workflow' ? 'workflow' : 'agent';
+  let resolvedTargetRef = null;
+  if (input.targetRef != null) {
+    if (!input.targetRef || typeof input.targetRef !== 'object' || Array.isArray(input.targetRef) ||
+        input.targetRef.kind !== 'browser' || typeof input.targetRef.browserTargetId !== 'string' ||
+        !input.targetRef.browserTargetId.trim()) {
+      return { ok: false, error: 'Browser target reference is invalid' };
+    }
+    if (resolvedExecutionMode === 'workflow') {
+      return { ok: false, error: 'Workflow tickets cannot use browser targets' };
+    }
+    const browserTarget = getBrowserTargetById(input.targetRef.browserTargetId);
+    if (!browserTarget || browserTarget.status !== 'active') {
+      return { ok: false, error: 'Selected browser target does not exist or is inactive' };
+    }
+    resolvedTargetRef = { kind: 'browser', browserTargetId: browserTarget.id };
+  }
   let selectedWorkflow = null;
   let parsedWorkflowInput = null;
 
@@ -16998,6 +17503,7 @@ function createTicketFromInput(input, actor, options = {}) {
     assignmentTargetId: parsedAssignmentTargetId,
     assignmentMode: resolvedAssignmentMode,
     ownedOutputPaths: parsedOwnedPaths,
+    targetRef: resolvedTargetRef,
     executionMode: resolvedExecutionMode,
     workflowId: selectedWorkflow ? selectedWorkflow.id : null,
     workflowInput: selectedWorkflow ? parsedWorkflowInput : null,
@@ -17137,6 +17643,15 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return renderTicketForm('Execution policy must be a JSON object');
   }
 
+  let parsedTargetRef = request.body.targetRef;
+  if (typeof parsedTargetRef === 'string' && parsedTargetRef.trim()) {
+    try {
+      parsedTargetRef = JSON.parse(parsedTargetRef);
+    } catch (error) {
+      return renderTicketForm('Browser target reference must be valid JSON');
+    }
+  }
+
   const result = createTicketFromInput({
     objective,
     assignmentTargetType,
@@ -17148,6 +17663,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     workflowInput: parsedWorkflowInput,
     ownedOutputPaths: parsedOwnedPaths,
     executionPolicy: parsedExecutionPolicy,
+    targetRef: parsedTargetRef || null,
     workContextId: request.body.workContextId !== undefined && request.body.workContextId !== '' ? request.body.workContextId : null,
     workContextTargetId: request.body.workContextTargetId !== undefined && request.body.workContextTargetId !== '' ? request.body.workContextTargetId : null
   }, actorFromRequest(request), { delegated: delegatedFromRequest(request, 'created_from_ticket') });

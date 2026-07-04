@@ -816,7 +816,7 @@
 
   <section class="detail-section">
     <details class="collapsible">
-      <summary>Allowed Workspace Actions</summary>
+      <summary><%= snapshot.browserTargetSnapshot ? 'Allowed Browser Actions' : 'Allowed Workspace Actions' %></summary>
       <pre class="code-block"><%= JSON.stringify(snapshot.primitiveContract || {}, null, 2) %></pre>
     </details>
   </section>
@@ -871,6 +871,37 @@
       </div>
     </details>
   </section>
+
+  <% if (snapshot.browserTargetSnapshot || (snapshot.browserOperations && snapshot.browserOperations.length > 0)) { %>
+  <section class="detail-section replay-section" data-replay-section="browserOperations">
+    <details class="collapsible">
+      <summary>Browser Operations (<%= (snapshot.browserOperations || []).length %>)</summary>
+      <div class="collapsible__content">
+        <% if (!snapshot.browserOperations || snapshot.browserOperations.length === 0) { %>
+          <p class="text-muted">No browser operations captured.</p>
+        <% } %>
+        <% (snapshot.browserOperations || []).forEach((item, index) => { %>
+          <% const receipt = item.receipt || {}; const metadata = receipt.metadata || {}; %>
+          <div class="replay-sub-item">
+            <div class="replay-sub-item-header">
+              <span class="replay-sub-item-label">Op <%= index + 1 %> · <%= item.operation && item.operation.operation ? item.operation.operation : '-' %></span>
+              <span class="badge badge--outcome-<%= item.status === 'ok' ? 'success' : 'error' %>"><%= item.status || '-' %></span>
+              <% if (item.durationMs !== undefined) { %><span class="badge badge--timing"><%= item.durationMs %>ms</span><% } %>
+            </div>
+            <dl class="detail-grid">
+              <div><dt>Resource</dt><dd><code><%= item.targetResourceId || receipt.resourceUrl || '-' %></code></dd></div>
+              <div><dt>Status</dt><dd><%= metadata.status !== undefined ? metadata.status : (item.status || '-') %></dd></div>
+              <div><dt>Hash</dt><dd><code><%= metadata.sha256 || metadata.contentHash || metadata.pageStateHash || '-' %></code></dd></div>
+              <div><dt>Artifact path</dt><dd><code><%= metadata.artifactPath || '-' %></code></dd></div>
+              <div><dt>Truncated</dt><dd><%= receipt.truncated ? 'yes' : 'no' %></dd></div>
+              <div><dt>Error</dt><dd><%= item.error || '-' %></dd></div>
+            </dl>
+          </div>
+        <% }) %>
+      </div>
+    </details>
+  </section>
+  <% } %>
 
   <% if (typeof permissionedDeleteAuditEvents !== 'undefined' && permissionedDeleteAuditEvents && permissionedDeleteAuditEvents.length > 0) { %>
   <% const dash = v => (v === null || v === undefined || v === '') ? '-' : v; %>

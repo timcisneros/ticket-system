@@ -15,6 +15,7 @@
     "demo:seed": "node scripts/seed-demo-data.js",
     "demo:dev": "NODE_ENV=development DATA_DIR=${DATA_DIR:-.local-demo-data} WORKSPACE_ROOT=${WORKSPACE_ROOT:-.local-demo-workspace} node server.js",
     "test:agent": "NODE_ENV=test node scripts/agent-regression-test.js",
+    "test:browser-target": "NODE_ENV=test node scripts/browser-target-regression-test.js",
     "test:runtime-budget": "NODE_ENV=test node scripts/runtime-budget-test.js",
     "test:allocated": "NODE_ENV=test node scripts/allocated-regression-test.js",
     "test:recovery": "NODE_ENV=test node scripts/recovery-regression-test.js",
@@ -41,7 +42,8 @@
     "argon2": "^0.44.0",
     "dotenv": "^17.4.2",
     "ejs": "^5.0.2",
-    "fastify": "^5.8.5"
+    "fastify": "^5.8.5",
+    "playwright-core": "^1.61.1"
   },
   "keywords": [
     "tickets",
