@@ -266,6 +266,25 @@ function seedNavigationFixture() {
   return { ticket, run, activeTicket, activeRun };
 }
 
+function seedAttentionFixture() {
+  const agents = readJson('agents.json');
+  const tickets = readJson('tickets.json');
+  const now = new Date().toISOString();
+  const agent = agents[0];
+  const ticketId = Math.max(0, ...tickets.map(t => t.id || 0)) + 1;
+  const ticket = {
+    id: ticketId, objective: 'attention fixture', assignmentTargetType: 'agent',
+    assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'failed',
+    createdBy: 'admin', createdAt: now, updatedAt: now,
+    blockedReason: 'Missing authority grant for /reports/q3',
+    triage: { required: true, reasonCode: 'authority.missing_grant', requiredDecision: 'grant_or_rescope',
+      summary: 'Objective clarification required', allowedActions: ['grant'], prohibitedActions: [],
+      evidenceRefs: ['/reports/q3'], resolvedAt: null }
+  };
+  writeJson('tickets.json', [...tickets, ticket]);
+  return { ticketId };
+}
+
 async function assertMainFormRenders(cookie, label) {
   const response = await request('GET', '/', { cookie });
   assert(response.statusCode === 200, `${label}: GET / returned HTTP ${response.statusCode}: ${response.body.slice(0, 240)}`);
@@ -348,10 +367,34 @@ async function main() {
     const ticketsPayload = JSON.parse(ticketsApi.body);
     assert(ticketsPayload.tickets.length === 1, 'tickets API should return requested page size');
     assert(ticketsPayload.pagination && ticketsPayload.pagination.total >= 4, 'tickets API should include pagination total');
-    const ticketDetail = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id}`, 'ticket detail', 'Run Outcome');
-    assert(ticketDetail.body.includes('<summary>Ticket Details</summary>'), 'ticket detail should collapse metadata');
-    assert(ticketDetail.body.includes('Recent Activity'), 'ticket detail should include inline recent activity');
+    const ticketDetail = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id}`, 'ticket detail', 'Runs &amp; attempts');
+    assert(ticketDetail.body.includes('>At a glance<'), 'ticket detail should render Zone 1 eyebrow');
+    assert(ticketDetail.body.includes('>Needs your attention<') || ticketDetail.body.includes('data-attn-zone'), 'ticket detail should support Zone 2 attention');
+    assert(ticketDetail.body.includes('>How it&#39;s set up<') || ticketDetail.body.includes("How it's set up"), 'ticket detail should render Zone 3 eyebrow');
+    assert(ticketDetail.body.includes('>What has happened<'), 'ticket detail should render Zone 4 eyebrow');
+    assert(ticketDetail.body.includes('id="ticket-runtime-section"'), 'hero must keep the live runtime container id');
+    assert(ticketDetail.body.includes('id="ticket-live-status"'), 'hero must keep the live status id');
+    assert(!ticketDetail.body.includes('>Execution State<'), 'standalone Execution State heading should be gone (merged into hero)');
+    assert(!ticketDetail.body.includes('>Runtime</h2>'), 'standalone Runtime heading should be gone (merged into hero)');
+    // ticket status badge appears once in the hero, not duplicated in a separate Runtime block
+    assert((ticketDetail.body.match(/id="ticket-live-status"/g) || []).length === 1, 'live status id must be unique');
+    assert(ticketDetail.body.includes('Assignment &amp; work split') || ticketDetail.body.includes('Assignment & work split'), 'Zone 3 should have an assignment disclosure');
+    assert(ticketDetail.body.includes('class="disclosure"'), 'Zone 3 config should use disclosure rows');
+    assert(ticketDetail.body.includes('Ticket details'), 'Zone 3 should keep ticket metadata');
+    assert(!ticketDetail.body.includes('>Recent Activity<'), 'Recent Activity section should be removed (folded into Timeline)');
+    assert(!ticketDetail.body.includes('>Execution Attempts'), 'Execution Attempts should be merged into the Runs table');
+    assert(ticketDetail.body.includes('Runs &amp; attempts') || ticketDetail.body.includes('Runs & attempts'), 'Zone 4 should have a merged runs/attempts table');
     assert(!ticketDetail.body.includes('<th>Work Unit</th>'), 'single-agent ticket detail should not show group-only work unit column');
+    const attention = seedAttentionFixture();
+    const attnPage = await assertPageRenders(cookie, `/tickets/${attention.ticketId}`, 'attention ticket', 'Needs your attention');
+    assert(attnPage.body.includes('class="attn critical"'), 'required triage should render a critical attention card');
+    assert(attnPage.body.includes('Missing authority grant for /reports/q3'), 'blocked reason should appear in the attention zone');
+    // clean completed ticket with no runs (so reviewStatus/latestTriage/runStateInconsistency
+    // never apply — unlike the shared `ticketDetail` run-bearing fixture, whose completed run
+    // always trips reviewStatus.needsReview because its objective has no scoreable file path;
+    // that's pre-existing Task-1 hasAttention behavior, not a Zone-2 layout concern) has no attention zone
+    const cleanTicketPage = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id + 2}`, 'clean ticket', 'At a glance');
+    assert(!cleanTicketPage.body.includes('Needs your attention'), 'completed ticket without triage or runs should omit the attention zone');
     const runDetail = await assertPageRenders(cookie, `/runs/${fixture.run.id}`, 'run detail', 'Run Outcome');
     assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');

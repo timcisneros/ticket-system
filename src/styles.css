@@ -268,6 +268,84 @@ code {
   overflow-x: auto;
 }
 
+/* ---- ticket page zones (redesign) ---- */
+/* ===== Ticket page spacing system =====
+   One scale, applied everywhere:
+     32px  between zones
+     14px  zone header -> first item
+     12px  between items within a zone (cards / disclosures)
+     20px  card inner padding (hero, attn, disclosure share one left edge)
+     18px / 28px  field-grid row / column gap
+   Card content across the hero, attention cards, and disclosures all begins
+   at the same ~20px left edge so the page reads as one column. */
+
+/* --- zones --- */
+.zone { margin-top: 32px; }
+.zone:first-of-type { margin-top: 0; }
+.zone-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin: 32px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #e5e7eb;
+}
+.zone > .zone-head { margin-top: 0; }
+.zone-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #374151; }
+.zone-q { font-size: 13px; color: #6b7280; font-style: italic; }
+.zone .form-hint { margin: 12px 2px 0; font-size: 12.5px; line-height: 1.5; color: #6b7280; }
+
+/* --- shared field grid inside any ticket card --- */
+.hero .live,
+.attn .detail-grid,
+.disclosure .detail-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 18px 28px; margin: 0; padding: 0;
+}
+.hero .live > div,
+.attn .detail-grid > div,
+.disclosure .detail-grid > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.hero .live dt,
+.attn .detail-grid dt,
+.disclosure .detail-grid dt {
+  margin: 0; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #9ca3af; font-weight: 600;
+}
+.hero .live dd,
+.attn .detail-grid dd,
+.disclosure .detail-grid dd { margin: 0; font-size: 14px; color: #111827; overflow-wrap: anywhere; }
+.hero .live dd { font-variant-numeric: tabular-nums; }
+
+/* --- hero --- */
+.hero { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px 22px; }
+.hero-top { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.hero-top > div:first-child { min-width: 0; }
+.hero-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.live { margin-top: 18px; padding-top: 18px; border-top: 1px solid #eef0f2; }
+
+/* --- attention cards --- */
+.attn { border: 1px solid #fcd34d; border-left: 4px solid #f59e0b; background: #fffbeb; border-radius: 10px; padding: 18px 20px; }
+.attn.critical { border-color: #fca5a5; border-left-color: #dc2626; background: #fef2f2; }
+.attn + .attn { margin-top: 12px; }
+.attn h3 { margin: 0 0 10px; font-size: 15px; font-weight: 650; }
+.attn .sev { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #92400e; }
+.attn.critical .sev { color: #dc2626; }
+.attn > p, .attn > .text-muted, .attn .triage-resolve { margin-top: 10px; }
+.attn .triage-resolve input[type="text"] { margin-top: 6px; }
+
+/* --- config disclosures --- */
+.disclosure { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; }
+.disclosure + .disclosure { margin-top: 12px; }
+.disclosure > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 14px 20px; font-size: 14px; font-weight: 550; }
+.disclosure > summary::-webkit-details-marker { display: none; }
+.disclosure > summary::before { content: "\203A"; font-size: 18px; color: #9ca3af; transition: transform .15s ease; }
+.disclosure[open] > summary::before { transform: rotate(90deg); }
+.disclosure > summary .sub { margin-left: auto; font-weight: 400; color: #6b7280; font-size: 12.5px; }
+.disclosure .body { padding: 16px 20px 18px; border-top: 1px solid #e5e7eb; }
+.disclosure .body > * + * { margin-top: 14px; }
+.intent { color: #9ca3af; font-size: 12px; }
+/* the always-open Runs & attempts card sits directly under Zone 4's header;
+   match the 12px inter-item gap the disclosures below it use */
+.zone-head + .detail-section { margin-bottom: 12px; }
+@media (prefers-reduced-motion: reduce) { .disclosure > summary::before { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .disclosure > summary::before { transition: none; } }
+
 .admin-block {
   margin-bottom: 34px;
 }
