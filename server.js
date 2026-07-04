@@ -62,6 +62,7 @@ const MODEL_ROUTING_POLICIES_FILE = path.join(DATA_DIR, 'model-routing-policies.
 const CONNECTORS_FILE = path.join(DATA_DIR, 'connectors.json');
 const CONNECTOR_RECEIPTS_FILE = path.join(DATA_DIR, 'connector-receipts.json');
 const LOCAL_CONNECTOR_OBJECTS_FILE = path.join(DATA_DIR, 'local-connector-objects.json');
+const BROWSER_TARGETS_FILE = path.join(DATA_DIR, 'browser-targets.json');
 // Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
 // separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
@@ -157,6 +158,7 @@ function seedOperationalDataDir() {
     'memberships.json',
     'permissions.json',
     'workflows.json',
+    'browser-targets.json',
     'protected-paths.json'
   ].forEach(fileName => copyMissingSeedFile(fileName, '[]'));
 
@@ -1600,6 +1602,33 @@ function readJsonArrayCached(filePath) {
 
 function readTickets() {
   return normalizeTickets(readJsonArrayCached(DATA_FILE));
+}
+
+function readBrowserTargets() {
+  return readJsonArrayCached(BROWSER_TARGETS_FILE);
+}
+
+function getBrowserTargetById(id) {
+  if (typeof id !== 'string' || !id.trim()) return null;
+  return readBrowserTargets().find(target => target && target.id === id.trim()) || null;
+}
+
+function normalizeBrowserTargetSnapshot(target) {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return null;
+  return sanitizeSnapshotValue({
+    id: target.id,
+    name: target.name,
+    status: target.status,
+    allowedOrigins: Array.isArray(target.allowedOrigins) ? target.allowedOrigins : [],
+    startUrl: target.startUrl,
+    limits: target.limits && typeof target.limits === 'object' && !Array.isArray(target.limits)
+      ? target.limits
+      : {}
+  });
+}
+
+function isBrowserRun(run) {
+  return Boolean(run && run.targetRef && run.targetRef.kind === 'browser' && run.browserTargetSnapshot);
 }
 
 function createDemoWorkflowDefinition(now = new Date().toISOString()) {
@@ -8879,6 +8908,8 @@ function createReplaySnapshotBase(run, overrides = {}) {
     workflowActionPlans: [],
     workflowTicketPlans: [],
     workspaceOperations: [],
+    browserOperations: [],
+    browserTargetSnapshot: run.browserTargetSnapshot || null,
     targetSnapshots: [],
     events: [],
     terminalStatus: null,
@@ -11876,6 +11907,9 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
   const nextRunId = nextId(runs);
   const ownedOutputPaths = allocationItem ? allocationItem.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath) : [];
   const workflow = ticket.executionMode === 'workflow' ? getWorkflowById(ticket.workflowId) : null;
+  const browserTarget = ticket.targetRef && ticket.targetRef.kind === 'browser'
+    ? getBrowserTargetById(ticket.targetRef.browserTargetId)
+    : null;
   const runtimeLimitsSnapshot = resolveAgentRuntimeLimits(
     ticket.executionMode === 'workflow' ? null : ticket.objective,
     { workflow: Boolean(workflow) }
@@ -11895,6 +11929,8 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     ticketId: ticket.id,
     agentId: agent.id,
     agentName: agent.name,
+    targetRef: browserTarget ? { kind: 'browser', browserTargetId: browserTarget.id } : null,
+    browserTargetSnapshot: browserTarget ? normalizeBrowserTargetSnapshot(browserTarget) : null,
     workspaceRoot: workspaceProvider.root,
     mainWorkspaceRoot: workspaceProvider.root,
     executionWorkspaceType: usesOwnedScope ? 'main_owned_paths' : 'main',
@@ -16952,6 +16988,22 @@ function createTicketFromInput(input, actor, options = {}) {
 
   const resolvedCapabilityType = input.capabilityType === 'workflow' || input.executionMode === 'workflow' ? 'workflow' : 'directAction';
   const resolvedExecutionMode = resolvedCapabilityType === 'workflow' ? 'workflow' : 'agent';
+  let resolvedTargetRef = null;
+  if (input.targetRef != null) {
+    if (!input.targetRef || typeof input.targetRef !== 'object' || Array.isArray(input.targetRef) ||
+        input.targetRef.kind !== 'browser' || typeof input.targetRef.browserTargetId !== 'string' ||
+        !input.targetRef.browserTargetId.trim()) {
+      return { ok: false, error: 'Browser target reference is invalid' };
+    }
+    if (resolvedExecutionMode === 'workflow') {
+      return { ok: false, error: 'Workflow tickets cannot use browser targets' };
+    }
+    const browserTarget = getBrowserTargetById(input.targetRef.browserTargetId);
+    if (!browserTarget || browserTarget.status !== 'active') {
+      return { ok: false, error: 'Selected browser target does not exist or is inactive' };
+    }
+    resolvedTargetRef = { kind: 'browser', browserTargetId: browserTarget.id };
+  }
   let selectedWorkflow = null;
   let parsedWorkflowInput = null;
 
@@ -16998,6 +17050,7 @@ function createTicketFromInput(input, actor, options = {}) {
     assignmentTargetId: parsedAssignmentTargetId,
     assignmentMode: resolvedAssignmentMode,
     ownedOutputPaths: parsedOwnedPaths,
+    targetRef: resolvedTargetRef,
     executionMode: resolvedExecutionMode,
     workflowId: selectedWorkflow ? selectedWorkflow.id : null,
     workflowInput: selectedWorkflow ? parsedWorkflowInput : null,
@@ -17137,6 +17190,15 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return renderTicketForm('Execution policy must be a JSON object');
   }
 
+  let parsedTargetRef = request.body.targetRef;
+  if (typeof parsedTargetRef === 'string' && parsedTargetRef.trim()) {
+    try {
+      parsedTargetRef = JSON.parse(parsedTargetRef);
+    } catch (error) {
+      return renderTicketForm('Browser target reference must be valid JSON');
+    }
+  }
+
   const result = createTicketFromInput({
     objective,
     assignmentTargetType,
@@ -17148,6 +17210,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     workflowInput: parsedWorkflowInput,
     ownedOutputPaths: parsedOwnedPaths,
     executionPolicy: parsedExecutionPolicy,
+    targetRef: parsedTargetRef || null,
     workContextId: request.body.workContextId !== undefined && request.body.workContextId !== '' ? request.body.workContextId : null,
     workContextTargetId: request.body.workContextTargetId !== undefined && request.body.workContextTargetId !== '' ? request.body.workContextTargetId : null
   }, actorFromRequest(request), { delegated: delegatedFromRequest(request, 'created_from_ticket') });
