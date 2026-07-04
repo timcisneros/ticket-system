@@ -6763,7 +6763,8 @@ function normalizeOperationHistory(history) {
     if (!isValidIsoTimestamp(record.timestamp)) return false;
     const run = runsById.get(record.runId);
     if (!run || run.ticketId !== record.ticketId) return false;
-    if (!AGENT_MUTATING_OPERATIONS.includes(record.operation)) return false;
+    const isBrowserReadOperation = record.targetKind === 'browser' && AGENT_BROWSER_OPERATIONS.includes(record.operation);
+    if (!AGENT_MUTATING_OPERATIONS.includes(record.operation) && !isBrowserReadOperation) return false;
     return true;
   });
 }
@@ -8922,8 +8923,10 @@ function createReplaySnapshotBase(run, overrides = {}) {
     workflowActionPlans: [],
     workflowTicketPlans: [],
     workspaceOperations: [],
-    browserOperations: [],
-    browserTargetSnapshot: run.browserTargetSnapshot || null,
+    ...(browserRun ? {
+      browserOperations: [],
+      browserTargetSnapshot: run.browserTargetSnapshot
+    } : {}),
     targetSnapshots: [],
     events: [],
     terminalStatus: null,
@@ -14390,6 +14393,42 @@ function redactBrowserUrl(value) {
   }
 }
 
+function sanitizeBrowserProviderRequestEvidence(payload) {
+  const safe = sanitizeSnapshotValue(payload || {});
+  if (!safe || typeof safe !== 'object' || !safe.body || typeof safe.body !== 'object') return safe;
+  return {
+    ...safe,
+    body: {
+      ...safe.body,
+      input: '[redacted browser prompt payload]'
+    }
+  };
+}
+
+function sanitizeBrowserProviderResponseEvidence(payload) {
+  const safe = sanitizeSnapshotValue(payload || {});
+  if (!safe || typeof safe !== 'object') return safe;
+  return {
+    ...safe,
+    ...(Object.prototype.hasOwnProperty.call(safe, 'body') ? { body: '[redacted browser model payload]' } : {})
+  };
+}
+
+function sanitizeBrowserPlanEvidence(modelPlan) {
+  return {
+    message: '[redacted browser model message]',
+    actions: (modelPlan.actions || []).map(action => ({
+      operation: action && typeof action.operation === 'string' ? action.operation : null,
+      args: action && action.operation === 'navigate'
+        ? { url: redactBrowserUrl(action.args && action.args.url) }
+        : action && action.operation === 'wait'
+          ? { forMs: action.args && action.args.forMs }
+          : {}
+    })),
+    complete: modelPlan.complete
+  };
+}
+
 function browserTargetMetadata(run, resourceUrl = null) {
   const target = run.browserTargetSnapshot || {};
   const resource = redactBrowserUrl(resourceUrl);
@@ -16124,7 +16163,7 @@ async function runAgentTicket(runId) {
       const modelResponse = await callModelProviderWithRunTimeout(run, agent, input, runStartedAtMs, limits, {
         onRequest: requestPayload => {
           appendRunReplaySnapshotItem(run.id, 'providerRequests', {
-            ...requestPayload,
+            ...(isBrowserRun(run) ? sanitizeBrowserProviderRequestEvidence(requestPayload) : requestPayload),
             startedAt: new Date(modelRequestStartedAt).toISOString(),
             durationMs: Date.now() - modelRequestStartedAt
           });
@@ -16138,7 +16177,7 @@ async function runAgentTicket(runId) {
       appendRunLog(
         run,
         'model:response',
-        modelText,
+        isBrowserRun(run) ? 'Browser model response received (content redacted from durable logs)' : modelText,
         null,
         {
           ...(modelResponse.usage ? { usage: modelResponse.usage } : {}),
@@ -16146,11 +16185,13 @@ async function runAgentTicket(runId) {
         }
       );
       appendRunReplaySnapshotItem(run.id, 'modelResponses', {
-        text: modelText,
+        text: isBrowserRun(run) ? '[redacted browser model response]' : modelText,
         usage: modelResponse.usage || null,
         provider: modelResponse.provider || providerConfig.provider,
         model: modelResponse.model || providerConfig.model,
-        providerResponsePayload: modelResponse.responsePayload,
+        providerResponsePayload: isBrowserRun(run)
+          ? sanitizeBrowserProviderResponseEvidence(modelResponse.responsePayload)
+          : modelResponse.responsePayload,
         startedAt: new Date(modelRequestStartedAt).toISOString(),
         completedAt: new Date(modelResponseCompletedAt).toISOString(),
         durationMs: modelCallDurationMs
@@ -16160,7 +16201,7 @@ async function runAgentTicket(runId) {
       if (modelPlan.parseError) {
         recordRunEvent(run, 'model:malformed', 'Model response was not valid execution JSON', {
           parseError: modelPlan.parseError,
-          rawText: modelText,
+          rawText: isBrowserRun(run) ? '[redacted browser model response]' : modelText,
           step
         });
         const error = new Error(`Model response was not valid execution JSON: ${modelPlan.parseError}`);
@@ -16171,9 +16212,11 @@ async function runAgentTicket(runId) {
       }
 
       appendRunReplaySnapshotItem(run.id, 'parsedModelPlans', {
-        message: modelPlan.message,
-        actions: modelPlan.actions,
-        complete: modelPlan.complete,
+        ...(isBrowserRun(run) ? sanitizeBrowserPlanEvidence(modelPlan) : {
+          message: modelPlan.message,
+          actions: modelPlan.actions,
+          complete: modelPlan.complete
+        }),
         step
       });
       captureRunArtifactPrediction(run.id, modelPlan.actions, step);
@@ -16863,7 +16906,9 @@ async function runAgentTicket(runId) {
     run = completeAgentRun(run);
   } catch (error) {
     if (error.providerRequestPayload && !currentProviderRequestPersisted) {
-      appendRunReplaySnapshotItem(run.id, 'providerRequests', error.providerRequestPayload);
+      appendRunReplaySnapshotItem(run.id, 'providerRequests', isBrowserRun(run)
+        ? sanitizeBrowserProviderRequestEvidence(error.providerRequestPayload)
+        : error.providerRequestPayload);
     }
 
     if (error.providerResponsePayload) {
@@ -16871,7 +16916,9 @@ async function runAgentTicket(runId) {
         error: error.message,
         provider: providerConfig ? providerConfig.provider : null,
         model: providerConfig ? providerConfig.model : null,
-        providerResponsePayload: error.providerResponsePayload
+        providerResponsePayload: isBrowserRun(run)
+          ? sanitizeBrowserProviderResponseEvidence(error.providerResponsePayload)
+          : error.providerResponsePayload
       });
     }
 
