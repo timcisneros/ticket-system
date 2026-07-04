@@ -7,6 +7,7 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
+const { createBrowserSession } = require('./runtime/browser-engine');
 const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 require('dotenv').config()
 
@@ -292,6 +293,14 @@ function refreshDataDirWriterLockForDebugReset() {
 }
 
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
+const AGENT_BROWSER_OPERATIONS = ['navigate', 'observe', 'readPageText', 'screenshot', 'wait'];
+const BROWSER_OPERATION_ARGS = Object.freeze({
+  navigate: ['url'],
+  observe: [],
+  readPageText: [],
+  screenshot: [],
+  wait: ['forMs']
+});
 const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT === '1';
 const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
   ...(AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED ? ['createWorkflowDraft'] : []),
@@ -360,9 +369,9 @@ const WORKSPACE_FIXTURES = [
 const EXECUTION_PHASES = ['planning', 'inspection', 'mutation', 'verification', 'terminalization'];
 const PHASE_OPERATIONS = {
   planning: [],
-  inspection: ['listDirectory', 'readFile'],
+  inspection: ['listDirectory', 'readFile', ...AGENT_BROWSER_OPERATIONS],
   mutation: ['writeFile', 'createFolder', 'renamePath', 'deletePath', 'createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask'],
-  verification: ['listDirectory', 'readFile'],
+  verification: ['listDirectory', 'readFile', ...AGENT_BROWSER_OPERATIONS],
   terminalization: []
 };
 const ALLOWED_PHASE_TRANSITIONS = {
@@ -13137,6 +13146,46 @@ function parseAgentDirectAction(action) {
   return { operation, args: action.args };
 }
 
+function parseBrowserDirectAction(run, action) {
+  if (!action || typeof action !== 'object' || Array.isArray(action)) {
+    const error = new Error('Browser action must be an object');
+    error.code = 'AGENT_ACTION_MALFORMED';
+    error.failureKind = 'browser_error';
+    throw error;
+  }
+  if (typeof action.operation !== 'string' || !action.operation.trim()) {
+    const error = new Error('Browser action operation is required');
+    error.code = 'AGENT_ACTION_MALFORMED';
+    error.failureKind = 'browser_error';
+    throw error;
+  }
+  const operation = action.operation.trim();
+  if (!AGENT_BROWSER_OPERATIONS.includes(operation)) {
+    const error = new Error(`Unsupported browser operation: ${operation}`);
+    error.code = 'AGENT_ACTION_UNSUPPORTED';
+    error.failureKind = 'browser_error';
+    throw error;
+  }
+  if (!action.args || typeof action.args !== 'object' || Array.isArray(action.args)) {
+    const error = new Error(`Browser operation args must be an object: ${operation}`);
+    error.code = 'AGENT_ACTION_MALFORMED';
+    error.failureKind = 'browser_error';
+    throw error;
+  }
+  const allowedArgs = BROWSER_OPERATION_ARGS[operation];
+  const args = Object.fromEntries(Object.entries(action.args).filter(([key]) => allowedArgs.includes(key)));
+  const removedArgs = Object.keys(action.args).filter(key => !allowedArgs.includes(key));
+  const removedActionKeys = Object.keys(action).filter(key => !['operation', 'args'].includes(key));
+  if (removedArgs.length > 0 || removedActionKeys.length > 0) {
+    appendRunLog(run, 'browser:args_sanitized', `Removed unsupported browser action fields for ${operation}`, null, {
+      operation,
+      removedArgs,
+      removedActionKeys
+    });
+  }
+  return { operation, args };
+}
+
 function getActionContract(name) {
   return ACTION_CONTRACTS_BY_NAME.get(name) || null;
 }
@@ -14280,6 +14329,283 @@ function executeWorkspaceOperation(run, action, step = 0) {
   }
 
   throw new Error(`Unsupported workspace operation: ${operation}`);
+}
+
+const browserSessions = new Map();
+
+function createBrowserOperationError(code, message, detail = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.failureKind = 'browser_error';
+  error.detail = detail;
+  return error;
+}
+
+function browserLimit(target, key) {
+  const value = target && target.limits ? target.limits[key] : null;
+  if (!Number.isInteger(value) || value <= 0) {
+    throw createBrowserOperationError('BROWSER_TARGET_UNAVAILABLE', `Browser target limit ${key} must be a positive integer`);
+  }
+  return value;
+}
+
+function redactBrowserUrl(value) {
+  if (typeof value !== 'string' || !value) return null;
+  try {
+    const parsed = new URL(value);
+    parsed.username = '';
+    parsed.password = '';
+    for (const key of parsed.searchParams.keys()) parsed.searchParams.set(key, '[redacted]');
+    parsed.hash = '';
+    return parsed.href;
+  } catch (_) {
+    return '[invalid-url]';
+  }
+}
+
+function browserTargetMetadata(run, resourceUrl = null) {
+  const target = run.browserTargetSnapshot || {};
+  const resource = redactBrowserUrl(resourceUrl);
+  return {
+    targetId: `browser:${target.id || 'unknown'}`,
+    targetKind: 'browser',
+    targetScope: Array.isArray(target.allowedOrigins) ? target.allowedOrigins : [],
+    targetPath: null,
+    targetResourceId: resource
+  };
+}
+
+function persistBrowserOperationHistory(run, step, operation, safeArgs, receipt, error = null) {
+  const histories = readOperationHistory();
+  const record = {
+    id: nextId(histories),
+    timestamp: createLogTimestamp(),
+    ticketId: run.ticketId,
+    allocationPlanId: run.allocationPlanId || null,
+    allocationItemId: run.allocationItemId || null,
+    runId: run.id,
+    step,
+    operation,
+    args: sanitizeSnapshotValue(safeArgs),
+    preState: null,
+    postState: null,
+    result: error ? null : sanitizeSnapshotValue(receipt),
+    error: error ? sanitizeLogMessage(error.message || String(error)) : null,
+    errorCode: error ? error.code || null : null,
+    failureKind: error ? error.failureKind || 'browser_error' : null,
+    ...browserTargetMetadata(run, receipt && receipt.resourceUrl),
+    authorityDecision: null,
+    readReceipt: sanitizeSnapshotValue(receipt),
+    mutationReceipt: null
+  };
+  histories.push(record);
+  writeOperationHistory(histories);
+  return record;
+}
+
+function recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, durationMs) {
+  const safeArgs = operation === 'navigate'
+    ? { url: redactBrowserUrl(args.url) }
+    : sanitizeSnapshotValue(args);
+  const history = persistBrowserOperationHistory(run, step, operation, safeArgs, receipt, error);
+  const evidence = {
+    operation: { operation, args: safeArgs },
+    receipt,
+    status: error ? 'refused' : 'ok',
+    error: error ? sanitizeLogMessage(error.message || String(error)) : null,
+    errorCode: error ? error.code || null : null,
+    startedAt: new Date(startedAt).toISOString(),
+    durationMs,
+    historyId: history.id,
+    ...browserTargetMetadata(run, receipt && receipt.resourceUrl)
+  };
+  appendRunLog(run, `browser:${operation}`, error ? evidence.error : `Ran browser ${operation}`, null, evidence);
+  appendEvent({
+    type: 'browser.operation',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: String(step),
+    payload: sanitizeSnapshotValue(evidence)
+  });
+  appendRunReplaySnapshotItem(run.id, 'browserOperations', evidence);
+  return history;
+}
+
+async function getOrCreateBrowserSession(run) {
+  const current = browserSessions.get(run.id);
+  if (current) return current;
+  const target = run.browserTargetSnapshot;
+  if (!target || target.status !== 'active') {
+    throw createBrowserOperationError('BROWSER_TARGET_UNAVAILABLE', 'Browser target snapshot is unavailable or inactive');
+  }
+  const session = await createBrowserSession({
+    allowedOrigins: target.allowedOrigins,
+    navTimeoutMs: browserLimit(target, 'navTimeoutMs')
+  });
+  const entry = { session, actions: 0, navigations: 0, screenshots: 0, artifactSequence: 0 };
+  browserSessions.set(run.id, entry);
+  return entry;
+}
+
+async function closeBrowserSession(run, reason = 'run_finished') {
+  const entry = run && browserSessions.get(run.id);
+  if (!entry) return;
+  browserSessions.delete(run.id);
+  await entry.session.close().catch(() => {});
+  appendEvent({
+    type: 'browser.session_closed',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: { reason }
+  });
+  appendRunLog(run, 'browser:session_closed', `Browser session closed: ${reason}`);
+}
+
+async function executeBrowserOperation(run, action, step = 0) {
+  const operation = action.operation;
+  const args = action.args || {};
+  const target = run.browserTargetSnapshot;
+  const startedAt = Date.now();
+  let entry = browserSessions.get(run.id) || null;
+  let receipt = {
+    operation,
+    timestamp: createLogTimestamp(),
+    metadata: {},
+    partial: false,
+    truncated: false,
+    ...browserTargetMetadata(run),
+    ...buildTargetActorContext(run)
+  };
+
+  try {
+    if (!target || target.status !== 'active') {
+      throw createBrowserOperationError('BROWSER_TARGET_UNAVAILABLE', 'Browser target snapshot is unavailable or inactive');
+    }
+    const maxActions = browserLimit(target, 'maxActionsPerRun');
+    const actionCount = entry ? entry.actions + 1 : 1;
+    if (actionCount > maxActions) {
+      throw createBrowserOperationError('BROWSER_ACTION_LIMIT_EXCEEDED', `Browser action limit of ${maxActions} exceeded`, {
+        currentValue: actionCount,
+        configuredLimit: maxActions
+      });
+    }
+    if (operation === 'navigate') {
+      const maxNavigations = browserLimit(target, 'maxNavigationsPerRun');
+      const navigationCount = entry ? entry.navigations + 1 : 1;
+      if (navigationCount > maxNavigations) {
+        throw createBrowserOperationError('BROWSER_NAV_LIMIT_EXCEEDED', `Browser navigation limit of ${maxNavigations} exceeded`, {
+          currentValue: navigationCount,
+          configuredLimit: maxNavigations
+        });
+      }
+    }
+    if (operation === 'screenshot') {
+      const maxScreenshots = browserLimit(target, 'maxScreenshotsPerRun');
+      const screenshotCount = entry ? entry.screenshots + 1 : 1;
+      if (screenshotCount > maxScreenshots) {
+        throw createBrowserOperationError('BROWSER_ACTION_LIMIT_EXCEEDED', `Browser screenshot limit of ${maxScreenshots} exceeded`, {
+          currentValue: screenshotCount,
+          configuredLimit: maxScreenshots
+        });
+      }
+    }
+
+    entry = await getOrCreateBrowserSession(run);
+    entry.actions += 1;
+    let result;
+    if (operation === 'navigate') {
+      if (typeof args.url !== 'string' || !args.url.trim()) {
+        throw createBrowserOperationError('BROWSER_ORIGIN_BLOCKED', 'navigate requires a non-empty URL');
+      }
+      entry.navigations += 1;
+      result = await entry.session.navigate(args.url.trim());
+      receipt.resourceUrl = redactBrowserUrl(result.finalUrl || result.requestedUrl);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.metadata = {
+        requestedUrl: redactBrowserUrl(result.requestedUrl),
+        finalUrl: redactBrowserUrl(result.finalUrl),
+        status: result.status,
+        redirectChain: Array.isArray(result.redirectChain) ? result.redirectChain.map(redactBrowserUrl) : [],
+        pageStateHash: hashContent(JSON.stringify({ url: result.finalUrl, title: result.title }))
+      };
+    } else if (operation === 'observe') {
+      result = await entry.session.observe();
+      const inventory = Array.isArray(result.elements) ? result.elements : [];
+      receipt.resourceUrl = redactBrowserUrl(result.url);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.truncated = Boolean(result.truncated);
+      receipt.metadata = {
+        elementCount: inventory.length,
+        pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title, elements: inventory }))
+      };
+    } else if (operation === 'readPageText') {
+      result = await entry.session.readPageText(browserLimit(target, 'maxPageTextBytes'));
+      receipt.resourceUrl = redactBrowserUrl(result.url);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.truncated = Boolean(result.truncated);
+      receipt.partial = Boolean(result.truncated);
+      receipt.metadata = {
+        bytes: result.bytes,
+        fullBytes: result.fullBytes,
+        contentHash: hashContent(result.text),
+        pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title, text: result.text }))
+      };
+    } else if (operation === 'screenshot') {
+      entry.screenshots += 1;
+      entry.artifactSequence += 1;
+      const artifactDir = path.join(DATA_DIR, 'browser-artifacts', `run-${run.id}`);
+      fs.mkdirSync(artifactDir, { recursive: true });
+      const artifactName = `step-${step}-${entry.artifactSequence}.png`;
+      const artifactPath = path.join(artifactDir, artifactName);
+      result = await entry.session.screenshot(artifactPath);
+      const bytes = fs.readFileSync(artifactPath);
+      const relativeArtifactPath = path.relative(DATA_DIR, artifactPath);
+      receipt.resourceUrl = redactBrowserUrl(result.url);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.metadata = {
+        artifactPath: relativeArtifactPath,
+        bytes: bytes.length,
+        sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+        pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title }))
+      };
+      result = { ...result, artifactPath: relativeArtifactPath, bytes: bytes.length, sha256: receipt.metadata.sha256 };
+      delete result.path;
+    } else if (operation === 'wait') {
+      if (!Number.isFinite(args.forMs) || args.forMs < 0) {
+        throw createBrowserOperationError('BROWSER_TIMEOUT', 'wait requires a non-negative numeric forMs');
+      }
+      result = await entry.session.wait(args.forMs, browserLimit(target, 'waitTimeoutMsCap'));
+      receipt.resourceUrl = redactBrowserUrl(result.url);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.truncated = Boolean(result.truncated);
+      receipt.metadata = { requestedMs: result.requestedMs, waitedMs: result.waitedMs };
+    } else {
+      throw createBrowserOperationError('AGENT_ACTION_UNSUPPORTED', `Unsupported browser operation: ${operation}`);
+    }
+
+    recordBrowserOperationEvidence(run, step, operation, args, receipt, null, startedAt, Date.now() - startedAt);
+    return { ...result, receipt };
+  } catch (cause) {
+    const error = cause && cause.code
+      ? cause
+      : createBrowserOperationError('BROWSER_SESSION_LOST', cause && cause.message ? cause.message : String(cause));
+    error.failureKind = 'browser_error';
+    if (error.detail && error.detail.blockedUrl) {
+      receipt.resourceUrl = redactBrowserUrl(error.detail.blockedUrl);
+      receipt.targetResourceId = receipt.resourceUrl;
+    }
+    receipt.metadata = {
+      status: 'refused',
+      code: error.code,
+      ...(error.detail && error.detail.blockedUrl ? { blockedUrl: redactBrowserUrl(error.detail.blockedUrl) } : {}),
+      ...(error.detail && error.detail.configuredLimit != null ? {
+        currentValue: error.detail.currentValue,
+        configuredLimit: error.detail.configuredLimit
+      } : {})
+    };
+    recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, Date.now() - startedAt);
+    throw error;
+  }
 }
 
 // ── Deterministic runtime verification ────────────────────────────
