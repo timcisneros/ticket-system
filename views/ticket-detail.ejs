@@ -444,6 +444,24 @@
   </div>
 </details>
 
+<details class="disclosure" open>
+  <summary>Work Type <span class="sub"><%= ticket.workTypeSnapshot ? ticket.workTypeSnapshot.name : 'Unspecified' %></span></summary>
+  <div class="body">
+    <% if (ticket.workTypeSnapshot) { %>
+      <dl class="detail-grid">
+        <div><dt>Name</dt><dd><strong><%= ticket.workTypeSnapshot.name %></strong> · <code><%= ticket.workTypeSnapshot.id %></code></dd></div>
+        <div><dt>Description</dt><dd><%= ticket.workTypeSnapshot.description %></dd></div>
+        <div><dt>Status when captured</dt><dd><code><%= ticket.workTypeSnapshot.status %></code></dd></div>
+        <div><dt>Allowed target kinds</dt><dd><% ticket.workTypeSnapshot.allowedTargetKinds.forEach(function(kind) { %><code><%= kind %></code> <% }); %></dd></div>
+        <div><dt>Captured</dt><dd><%= ticket.workTypeSnapshot.capturedAt %></dd></div>
+      </dl>
+    <% } else { %>
+      <p class="text-muted">Unspecified</p>
+    <% } %>
+    <p class="text-muted">Semantic context only. This Work Type does not grant authority or operations.</p>
+  </div>
+</details>
+
 <% if (ticket.executionPolicy) { %>
 <details class="disclosure">
   <summary>Execution policy <span class="sub"><%= ticket.executionPolicy.mode %></span></summary>

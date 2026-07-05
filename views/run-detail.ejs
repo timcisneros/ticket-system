@@ -39,6 +39,22 @@
 </section>
 <% } %>
 
+<section class="detail-section">
+  <h2>Work Type Snapshot</h2>
+  <% if (run.workTypeSnapshot) { %>
+    <dl class="detail-grid">
+      <div><dt>Name</dt><dd><strong><%= run.workTypeSnapshot.name %></strong> · <code><%= run.workTypeSnapshot.id %></code></dd></div>
+      <div><dt>Description</dt><dd><%= run.workTypeSnapshot.description %></dd></div>
+      <div><dt>Status when captured</dt><dd><code><%= run.workTypeSnapshot.status %></code></dd></div>
+      <div><dt>Allowed target kinds</dt><dd><% run.workTypeSnapshot.allowedTargetKinds.forEach(function(kind) { %><code><%= kind %></code> <% }); %></dd></div>
+      <div><dt>Captured on ticket</dt><dd><%= run.workTypeSnapshot.capturedAt %></dd></div>
+    </dl>
+  <% } else { %>
+    <p class="text-muted">Unspecified</p>
+  <% } %>
+  <p class="text-muted">Immutable semantic context copied from the ticket. It is not authority and does not grant operations.</p>
+</section>
+
 <% if (typeof completionSummary !== 'undefined' && completionSummary) { %>
 <section class="detail-section completion-summary">
   <h2>Why this run stopped</h2>

@@ -8,6 +8,7 @@ const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
+const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 require('dotenv').config()
 
@@ -64,6 +65,7 @@ const CONNECTORS_FILE = path.join(DATA_DIR, 'connectors.json');
 const CONNECTOR_RECEIPTS_FILE = path.join(DATA_DIR, 'connector-receipts.json');
 const LOCAL_CONNECTOR_OBJECTS_FILE = path.join(DATA_DIR, 'local-connector-objects.json');
 const BROWSER_TARGETS_FILE = path.join(DATA_DIR, 'browser-targets.json');
+const WORK_TYPES_FILE = path.join(DATA_DIR, 'work-types.json');
 // Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
 // separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
@@ -169,6 +171,7 @@ function seedOperationalDataDir() {
     'permissions.json',
     'workflows.json',
     'browser-targets.json',
+    'work-types.json',
     'protected-paths.json'
   ].forEach(fileName => copyMissingSeedFile(fileName, '[]'));
 
@@ -1626,6 +1629,15 @@ function readBrowserTargets() {
   return readJsonArrayCached(BROWSER_TARGETS_FILE);
 }
 
+function readWorkTypes() {
+  return readWorkTypeCatalog(WORK_TYPES_FILE);
+}
+
+function getWorkTypeById(id) {
+  if (typeof id !== 'string' || !id.trim()) return null;
+  return readWorkTypes().find(workType => workType.id === id.trim()) || null;
+}
+
 function writeBrowserTargets(targets) {
   writeFileAtomic(BROWSER_TARGETS_FILE, JSON.stringify(Array.isArray(targets) ? targets : [], null, 2));
 }
@@ -3029,6 +3041,8 @@ function normalizeTickets(tickets) {
     ticket.capabilityId = ticket.capabilityType === 'workflow' ? ticket.workflowId : 'agent-selected-actions';
     ticket.capabilityInput = ticket.capabilityType === 'workflow' ? ticket.workflowInput : null;
     ticket.executionPolicy = normalizeExecutionPolicy(ticket.executionPolicy, ticketWorkspaceScope(ticket));
+    ticket.workTypeSnapshot = normalizeWorkTypeSnapshot(ticket.workTypeSnapshot);
+    ticket.workTypeId = ticket.workTypeSnapshot ? ticket.workTypeSnapshot.id : null;
     ticket.triage = normalizeTriage(ticket.triage);
 
     return true;
@@ -5552,6 +5566,8 @@ function normalizeRuns(runs) {
     run.executionPolicySnapshot = copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run));
     run.runtimeLimitsSnapshot = normalizeRuntimeLimitsSnapshot(run.runtimeLimitsSnapshot);
     run.verificationContractSnapshot = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
+    run.workTypeSnapshot = normalizeWorkTypeSnapshot(run.workTypeSnapshot);
+    run.workTypeId = run.workTypeSnapshot ? run.workTypeSnapshot.id : null;
     run.leaseOwner = typeof run.leaseOwner === 'string' && run.leaseOwner.trim() ? run.leaseOwner : null;
     run.leaseExpiresAt = typeof run.leaseExpiresAt === 'string' && isValidIsoTimestamp(run.leaseExpiresAt) ? run.leaseExpiresAt : null;
     run.currentStepId = typeof run.currentStepId === 'string' && run.currentStepId.trim() ? run.currentStepId : null;
@@ -8986,6 +9002,9 @@ function createReplaySnapshotBase(run, overrides = {}) {
     executionWorkspaceType: run.executionWorkspaceType || 'main',
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
     verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
+    workTypeId: run.workTypeId || null,
+    workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
+    workTypeSnapshotSource: run.workTypeSnapshot ? 'ticket_snapshot' : null,
     triage: normalizeTriage(run.triage),
     allocationPlanId: run.allocationPlanId || null,
     allocationItemId: run.allocationItemId || null,
@@ -12035,6 +12054,8 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     agentName: agent.name,
     targetRef: browserTarget ? { kind: 'browser', browserTargetId: browserTarget.id } : null,
     browserTargetSnapshot: browserTarget ? normalizeBrowserTargetSnapshot(browserTarget) : null,
+    workTypeId: ticket.workTypeId || null,
+    workTypeSnapshot: copyWorkTypeSnapshot(ticket.workTypeSnapshot),
     workspaceRoot: workspaceProvider.root,
     mainWorkspaceRoot: workspaceProvider.root,
     executionWorkspaceType: usesOwnedScope ? 'main_owned_paths' : 'main',
@@ -12092,6 +12113,9 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
       executionPolicySnapshot: run.executionPolicySnapshot,
       runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
       verificationContractSnapshot: run.verificationContractSnapshot,
+      workTypeId: run.workTypeId,
+      workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
+      workTypeSnapshotSource: run.workTypeSnapshot ? 'ticket_snapshot' : null,
       createdAt: run.createdAt
     }
   });
@@ -17491,6 +17515,7 @@ fastify.get('/', { preHandler: fastify.requireAuth }, async (request, reply) => 
     agentGroupMembers: getAgentGroupMembers(),
     workflows: getEnabledWorkflows(),
     browserTargets: readBrowserTargets().filter(target => target && target.status === 'active'),
+    workTypes: readWorkTypes().filter(workType => workType.status === 'active'),
     error: null
   }, request.session.userId));
 });
@@ -17544,6 +17569,21 @@ function createTicketFromInput(input, actor, options = {}) {
       return { ok: false, error: 'Selected browser target does not exist or is inactive' };
     }
     resolvedTargetRef = { kind: 'browser', browserTargetId: browserTarget.id };
+  }
+  const targetKind = resolvedTargetRef ? 'browser' : 'workspace';
+  const requestedWorkTypeId = typeof input.workTypeId === 'string' ? input.workTypeId.trim() : '';
+  let selectedWorkType = null;
+  if (requestedWorkTypeId) {
+    selectedWorkType = getWorkTypeById(requestedWorkTypeId);
+    if (!selectedWorkType) {
+      return { ok: false, error: 'Selected Work Type does not exist' };
+    }
+    if (selectedWorkType.status !== 'active') {
+      return { ok: false, error: 'Selected Work Type is inactive' };
+    }
+    if (!selectedWorkType.allowedTargetKinds.includes(targetKind)) {
+      return { ok: false, error: `Selected Work Type is not compatible with ${targetKind} targets` };
+    }
   }
   let selectedWorkflow = null;
   let parsedWorkflowInput = null;
@@ -17599,6 +17639,8 @@ function createTicketFromInput(input, actor, options = {}) {
     capabilityId: selectedWorkflow ? selectedWorkflow.id : 'agent-selected-actions',
     capabilityInput: selectedWorkflow ? parsedWorkflowInput : null,
     executionPolicy: normalizeExecutionPolicy(input.executionPolicy, resolvedAssignmentMode === 'individual' ? 'shared' : 'owned_paths'),
+    workTypeId: selectedWorkType ? selectedWorkType.id : null,
+    workTypeSnapshot: selectedWorkType ? snapshotWorkType(selectedWorkType, now) : null,
     status: 'open',
     createdBy: actorName,
     changedBy: actorName,
@@ -17663,6 +17705,9 @@ function createTicketFromInput(input, actor, options = {}) {
       capabilityType: newTicket.capabilityType,
       capabilityId: newTicket.capabilityId,
       workflowId: newTicket.workflowId,
+      workTypeId: newTicket.workTypeId,
+      workTypeSnapshot: copyWorkTypeSnapshot(newTicket.workTypeSnapshot),
+      workTypeSnapshotSource: newTicket.workTypeSnapshot ? 'catalog_at_ticket_creation' : null,
       createdBy: newTicket.createdBy,
       createdAt: newTicket.createdAt,
       ...(newTicket.source ? { source: newTicket.source.type } : {})
@@ -17680,7 +17725,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return 'Permission denied';
   }
 
-  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy, executionTargetKind, browserTargetId } = request.body;
+  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy, executionTargetKind, browserTargetId, workTypeId } = request.body;
 
   function renderTicketForm(error) {
     reply.code(400);
@@ -17691,6 +17736,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
       agentGroupMembers: getAgentGroupMembers(),
       workflows: getEnabledWorkflows(),
       browserTargets: readBrowserTargets().filter(target => target && target.status === 'active'),
+      workTypes: readWorkTypes().filter(workType => workType.status === 'active'),
       error
     }, request.session.userId));
   }
@@ -17763,6 +17809,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     ownedOutputPaths: parsedOwnedPaths,
     executionPolicy: parsedExecutionPolicy,
     targetRef: parsedTargetRef || null,
+    workTypeId: workTypeId || null,
     workContextId: request.body.workContextId !== undefined && request.body.workContextId !== '' ? request.body.workContextId : null,
     workContextTargetId: request.body.workContextTargetId !== undefined && request.body.workContextTargetId !== '' ? request.body.workContextTargetId : null
   }, actorFromRequest(request), { delegated: delegatedFromRequest(request, 'created_from_ticket') });
