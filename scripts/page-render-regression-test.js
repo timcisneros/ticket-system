@@ -24,7 +24,8 @@ const DATA_FILES = [
   'runs.json',
   'tickets.json',
   'users.json',
-  'workflows.json'
+  'workflows.json',
+  'work-types.json'
 ];
 
 for (const file of DATA_FILES) {
@@ -130,6 +131,15 @@ function seedNavigationFixture() {
   const runs = readJson('runs.json');
   const logs = readJson('logs.json');
   const now = new Date().toISOString();
+  const workType = {
+    id: 'meeting-brief',
+    name: 'Meeting Brief',
+    description: 'Prepare a brief from available context.',
+    status: 'active',
+    allowedTargetKinds: ['workspace', 'browser']
+  };
+  const workTypeSnapshot = { ...workType, capturedAt: now };
+  writeJson('work-types.json', [workType]);
   const browserTarget = {
     id: BROWSER_TARGET_ID,
     name: 'Page Render Browser',
@@ -168,6 +178,8 @@ function seedNavigationFixture() {
     assignmentTargetType: 'agent',
     assignmentTargetId: agent.id,
     assignmentMode: 'individual',
+    workTypeId: workType.id,
+    workTypeSnapshot,
     status: 'completed',
     createdBy: 'admin',
     createdAt: now,
@@ -178,6 +190,8 @@ function seedNavigationFixture() {
     ticketId,
     agentId: agent.id,
     agentName: agent.name,
+    workTypeId: workType.id,
+    workTypeSnapshot,
     workspaceRoot: WORKSPACE_ROOT,
     mainWorkspaceRoot: WORKSPACE_ROOT,
     executionWorkspaceType: 'main',
@@ -197,6 +211,9 @@ function seedNavigationFixture() {
       model: agent.model,
       runtimeEnvelope: {},
       ticketObjectiveSnapshot: ticket.objective,
+      workTypeId: workType.id,
+      workTypeSnapshot,
+      workTypeSnapshotSource: 'ticket_snapshot',
       systemInstructionSnapshot: 'fixture',
       primitiveContract: {},
       workspaceRoot: WORKSPACE_ROOT,
@@ -266,7 +283,8 @@ function seedNavigationFixture() {
     ...ticket,
     id: ticketId + index + 2,
     objective: `page render extra ticket ${index + 1}`,
-    updatedAt: new Date(Date.now() - index - 1000).toISOString()
+    updatedAt: new Date(Date.now() - index - 1000).toISOString(),
+    ...(index === 0 ? { workTypeId: null, workTypeSnapshot: null } : {})
   }));
 
   const browserTicket = {
@@ -333,7 +351,7 @@ function seedNavigationFixture() {
       message: `Page render fixture log ${index + 1}`
     }))
   ]);
-  return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent };
+  return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent, workType, legacyTicket: extraTickets[0] };
 }
 
 function seedAttentionFixture() {
@@ -368,6 +386,10 @@ async function assertMainFormRenders(cookie, label) {
   assert(response.body.includes('const agentGroupMembers = '), `${label}: agentGroupMembers script missing`);
   assert(response.body.includes('value="agent" selected'), `${label}: one-agent path is not the default`);
   assert(response.body.includes('id="executionTargetKind"'), `${label}: execution target selector missing`);
+  assert(response.body.includes('id="workTypeId"'), `${label}: Work Type selector missing`);
+  assert(response.body.includes('Unspecified'), `${label}: Work Type selector must default to Unspecified`);
+  assert(response.body.includes('Meeting Brief'), `${label}: active Work Type option missing`);
+  assert(response.body.includes('does not grant target access or operations'), `${label}: Work Type authority boundary missing`);
   assert(response.body.includes('id="browserTargetId"'), `${label}: browser target selector missing`);
   assert(response.body.includes('Page Render Browser'), `${label}: active browser target missing`);
   assert(response.body.includes('Browser Phase 1 supports only'), `${label}: browser read-only warning missing`);
@@ -476,6 +498,11 @@ async function main() {
     assert(!ticketDetail.body.includes('>Execution Attempts'), 'Execution Attempts should be merged into the Runs table');
     assert(ticketDetail.body.includes('Runs &amp; attempts') || ticketDetail.body.includes('Runs & attempts'), 'Zone 4 should have a merged runs/attempts table');
     assert(!ticketDetail.body.includes('<th>Work Unit</th>'), 'single-agent ticket detail should not show group-only work unit column');
+    assert(ticketDetail.body.includes('Work Type'), 'ticket detail should show Work Type section');
+    assert(ticketDetail.body.includes(fixture.workType.name), 'ticket detail should show Work Type snapshot name');
+    assert(ticketDetail.body.includes('does not grant authority or operations'), 'ticket detail should state Work Type authority boundary');
+    const legacyTicketPage = await assertPageRenders(cookie, `/tickets/${fixture.legacyTicket.id}`, 'legacy ticket detail', 'Work Type');
+    assert(legacyTicketPage.body.includes('Unspecified'), 'legacy ticket detail should show an unspecified Work Type');
     const attention = seedAttentionFixture();
     const attnPage = await assertPageRenders(cookie, `/tickets/${attention.ticketId}`, 'attention ticket', 'Needs your attention');
     assert(attnPage.body.includes('class="attn critical"'), 'required triage should render a critical attention card');
@@ -490,6 +517,9 @@ async function main() {
     assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
+    assert(runDetail.body.includes('Work Type Snapshot'), 'run detail should show immutable Work Type snapshot');
+    assert(runDetail.body.includes(fixture.workType.name), 'run detail should show Work Type snapshot name');
+    assert(runDetail.body.includes('It is not authority and does not grant operations'), 'run detail should state Work Type authority boundary');
     const browserTicketDetail = await assertPageRenders(cookie, `/tickets/${fixture.browserTicket.id}`, 'browser ticket detail', 'Execution target');
     assert(browserTicketDetail.body.includes(fixture.browserTarget.name), 'browser ticket detail should show target name');
     assert(browserTicketDetail.body.includes(fixture.browserTarget.startUrl), 'browser ticket detail should show start URL');
