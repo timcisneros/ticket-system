@@ -28,6 +28,25 @@
     </select>
   </div>
 
+  <div class="form-group">
+    <label for="executionTargetKind">Execution Target *</label>
+    <select id="executionTargetKind" name="executionTargetKind" required>
+      <option value="workspace" selected>Workspace / filesystem</option>
+      <option value="browser" <%= (typeof browserTargets === 'undefined' || browserTargets.length === 0) ? 'disabled' : '' %>>Browser (read-only Phase 1)</option>
+    </select>
+  </div>
+
+  <div class="form-group" id="browserTargetGroup" hidden>
+    <label for="browserTargetId">Browser Target *</label>
+    <select id="browserTargetId" name="browserTargetId">
+      <option value="">Select an active browser target</option>
+      <% (typeof browserTargets === 'undefined' ? [] : browserTargets).forEach(target => { %>
+        <option value="<%= target.id %>"><%= target.name %> (<%= target.id %>)</option>
+      <% }); %>
+    </select>
+    <p class="form-hint"><strong>Read-only:</strong> Browser Phase 1 supports only <code>navigate</code>, <code>observe</code>, <code>readPageText</code>, <code>screenshot</code>, and <code>wait</code>. No click, fill, press, downloads, credentials, or persistent sessions.</p>
+  </div>
+
   <div class="form-group" id="workflowGroup" hidden>
     <label for="workflowId">Workflow *</label>
     <select id="workflowId" name="workflowId">
@@ -99,6 +118,10 @@ const assignmentModeGroup = document.getElementById('assignmentModeGroup');
 const assignmentModeSelect = document.getElementById('assignmentMode');
 const targetOptions = Array.from(targetSelect.querySelectorAll('option[data-target-type]'));
 const capabilityTypeSelect = document.getElementById('capabilityType');
+const executionTargetKindSelect = document.getElementById('executionTargetKind');
+const browserTargetKindOption = executionTargetKindSelect.querySelector('option[value="browser"]');
+const browserTargetGroup = document.getElementById('browserTargetGroup');
+const browserTargetSelect = document.getElementById('browserTargetId');
 const workflowGroup = document.getElementById('workflowGroup');
 const workflowInputGroup = document.getElementById('workflowInputGroup');
 const workflowSelect = document.getElementById('workflowId');
@@ -166,10 +189,23 @@ function updateWorkflowControls() {
   workflowInputGroup.hidden = !isWorkflow;
   workflowSelect.required = isWorkflow;
   workflowInput.required = isWorkflow;
+  browserTargetKindOption.disabled = isWorkflow || <%= (typeof browserTargets === 'undefined' || browserTargets.length === 0) ? 'true' : 'false' %>;
+  if (isWorkflow && executionTargetKindSelect.value === 'browser') {
+    executionTargetKindSelect.value = 'workspace';
+  }
+  updateExecutionTargetControls();
 
   if (isWorkflow && workflowSelect.value && !workflowInput.value.trim()) {
     workflowInput.value = workflowInputExample(workflowSchemas[workflowSelect.value]);
   }
+}
+
+function updateExecutionTargetControls() {
+  const isBrowser = executionTargetKindSelect.value === 'browser';
+  browserTargetGroup.hidden = !isBrowser;
+  browserTargetSelect.required = isBrowser;
+  browserTargetSelect.disabled = !isBrowser;
+  if (!isBrowser) browserTargetSelect.value = '';
 }
 
 function updateAssignmentTargets() {
@@ -291,6 +327,7 @@ targetTypeSelect.addEventListener('change', updateAssignmentTargets);
 targetSelect.addEventListener('change', updateOwnedPaths);
 assignmentModeSelect.addEventListener('change', updateOwnedPaths);
 capabilityTypeSelect.addEventListener('change', updateWorkflowControls);
+executionTargetKindSelect.addEventListener('change', updateExecutionTargetControls);
 workflowSelect.addEventListener('change', function() {
   workflowInput.value = workflowSelect.value ? workflowInputExample(workflowSchemas[workflowSelect.value]) : '';
   updateWorkflowControls();

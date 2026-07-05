@@ -787,7 +787,11 @@
   <div class="replay-nav">
     <span class="replay-nav-label">Replay navigation:</span>
     <button type="button" class="btn-small" data-replay-toggle-all>Expand details</button>
-    <button type="button" class="btn-small" data-replay-jump="workspace">Workspace actions</button>
+    <% if (snapshot.browserTargetSnapshot) { %>
+      <button type="button" class="btn-small" data-replay-jump="browser">Browser operations</button>
+    <% } else { %>
+      <button type="button" class="btn-small" data-replay-jump="workspace">Workspace actions</button>
+    <% } %>
     <% if (replayHasFailures) { %>
       <button type="button" class="btn-small" data-replay-jump="failure">Failures</button>
     <% } else { %>
@@ -873,10 +877,29 @@
   </section>
 
   <% if (snapshot.browserTargetSnapshot || (snapshot.browserOperations && snapshot.browserOperations.length > 0)) { %>
-  <section class="detail-section replay-section" data-replay-section="browserOperations">
+  <section class="detail-section replay-section" id="replay-browser-operations" data-replay-section="browserOperations">
     <details class="collapsible">
       <summary>Browser Operations (<%= (snapshot.browserOperations || []).length %>)</summary>
       <div class="collapsible__content">
+        <% if (snapshot.browserTargetSnapshot) { const browserSnapshotLimits = snapshot.browserTargetSnapshot.limits || {}; %>
+          <div class="replay-sub-item">
+            <div class="replay-sub-item-header"><span class="replay-sub-item-label">Browser Target Snapshot</span></div>
+            <p class="text-muted">Immutable configuration captured when this run was created.</p>
+            <dl class="detail-grid">
+              <div><dt>Target</dt><dd><strong><%= snapshot.browserTargetSnapshot.name || '-' %></strong> · <code><%= snapshot.browserTargetSnapshot.id || '-' %></code></dd></div>
+              <div><dt>Status</dt><dd><%= snapshot.browserTargetSnapshot.status || '-' %></dd></div>
+              <div><dt>Start URL</dt><dd><code><%= snapshot.browserTargetSnapshot.startUrl || '-' %></code></dd></div>
+              <div><dt>Allowed origins</dt><dd><% (snapshot.browserTargetSnapshot.allowedOrigins || []).forEach(function(origin) { %><div><code><%= origin %></code></div><% }); %></dd></div>
+              <div><dt>Read-only operations</dt><dd><code>navigate</code>, <code>observe</code>, <code>readPageText</code>, <code>screenshot</code>, <code>wait</code></dd></div>
+              <div><dt>maxNavigationsPerRun</dt><dd><code><%= browserSnapshotLimits.maxNavigationsPerRun || '-' %></code></dd></div>
+              <div><dt>maxActionsPerRun</dt><dd><code><%= browserSnapshotLimits.maxActionsPerRun || '-' %></code></dd></div>
+              <div><dt>navTimeoutMs</dt><dd><code><%= browserSnapshotLimits.navTimeoutMs || '-' %></code></dd></div>
+              <div><dt>waitTimeoutMsCap</dt><dd><code><%= browserSnapshotLimits.waitTimeoutMsCap || '-' %></code></dd></div>
+              <div><dt>maxPageTextBytes</dt><dd><code><%= browserSnapshotLimits.maxPageTextBytes || '-' %></code></dd></div>
+              <div><dt>maxScreenshotsPerRun</dt><dd><code><%= browserSnapshotLimits.maxScreenshotsPerRun || '-' %></code></dd></div>
+            </dl>
+          </div>
+        <% } %>
         <% if (!snapshot.browserOperations || snapshot.browserOperations.length === 0) { %>
           <p class="text-muted">No browser operations captured.</p>
         <% } %>
@@ -889,15 +912,23 @@
               <% if (item.durationMs !== undefined) { %><span class="badge badge--timing"><%= item.durationMs %>ms</span><% } %>
             </div>
             <dl class="detail-grid">
-              <div><dt>Resource</dt><dd><code><%= item.targetResourceId || receipt.resourceUrl || '-' %></code></dd></div>
-              <div><dt>Status</dt><dd><%= metadata.status !== undefined ? metadata.status : (item.status || '-') %></dd></div>
-              <div><dt>Hash</dt><dd><code><%= metadata.sha256 || metadata.contentHash || metadata.pageStateHash || '-' %></code></dd></div>
-              <div><dt>Artifact path</dt><dd><code><%= metadata.artifactPath || '-' %></code></dd></div>
+              <div><dt>Operation</dt><dd><code><%= item.operation && item.operation.operation ? item.operation.operation : '-' %></code></dd></div>
+              <div><dt>Receipt status</dt><dd><%= item.status || '-' %></dd></div>
+              <div><dt>Resource / final URL</dt><dd><code><%= metadata.finalUrl || item.targetResourceId || receipt.resourceUrl || '-' %></code></dd></div>
+              <div><dt>Requested URL</dt><dd><code><%= metadata.requestedUrl || (item.operation && item.operation.args && item.operation.args.url) || '-' %></code></dd></div>
+              <div><dt>HTTP / operation status</dt><dd><%= metadata.status !== undefined ? metadata.status : (item.status || '-') %></dd></div>
+              <div><dt>Duration</dt><dd><%= item.durationMs !== undefined ? item.durationMs + 'ms' : '-' %></dd></div>
+              <div><dt>Error code</dt><dd><code><%= item.errorCode || metadata.code || '-' %></code></dd></div>
+              <div><dt>Error message</dt><dd><%= item.error || '-' %></dd></div>
+              <div><dt>Page state hash</dt><dd><code><%= metadata.pageStateHash || '-' %></code></dd></div>
+              <div><dt>Content hash</dt><dd><code><%= metadata.contentHash || '-' %></code></dd></div>
+              <div><dt>Screenshot artifact path</dt><dd><code><%= metadata.artifactPath || '-' %></code></dd></div>
+              <div><dt>Screenshot SHA-256</dt><dd><code><%= metadata.sha256 || '-' %></code></dd></div>
               <div><dt>Truncated</dt><dd><%= receipt.truncated ? 'yes' : 'no' %></dd></div>
-              <div><dt>Error</dt><dd><%= item.error || '-' %></dd></div>
             </dl>
           </div>
         <% }) %>
+        <p class="text-muted">Screenshot artifacts remain server-side and are shown by recorded path and SHA-256 only. Phase 1 does not expose a public artifact-serving route, which avoids widening access to captured page content.</p>
       </div>
     </details>
   </section>
@@ -1195,6 +1226,8 @@
       var target = null;
       if (jump === 'workspace') {
         target = document.getElementById('replay-workspace-actions');
+      } else if (jump === 'browser') {
+        target = document.getElementById('replay-browser-operations');
       } else if (jump === 'failure') {
         target = document.querySelector('[data-op-failure="true"], [data-event-failure="true"]');
       } else if (jump === 'mutation') {

@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 
 function browserError(code, message, detail = {}) {
   const error = new Error(message);
@@ -26,6 +27,31 @@ function configuredExecutable() {
 
 function isEngineAvailable() {
   return Boolean(configuredExecutable());
+}
+
+function getEngineStatus() {
+  const configuredPath = typeof process.env.BROWSER_ENGINE_EXECUTABLE === 'string'
+    ? process.env.BROWSER_ENGINE_EXECUTABLE.trim()
+    : '';
+  const executablePath = configuredExecutable();
+  let version = null;
+  if (executablePath) {
+    try {
+      version = execFileSync(executablePath, ['--version'], {
+        encoding: 'utf8',
+        timeout: 2000,
+        stdio: ['ignore', 'pipe', 'ignore']
+      }).trim().slice(0, 200) || null;
+    } catch (_) {
+      version = null;
+    }
+  }
+  return {
+    configured: Boolean(configuredPath),
+    executableExists: Boolean(configuredPath && fs.existsSync(configuredPath)),
+    available: Boolean(executablePath),
+    version
+  };
 }
 
 function normalizeAllowedOrigins(origins) {
@@ -240,4 +266,4 @@ async function createBrowserSession(options = {}) {
   };
 }
 
-module.exports = { createBrowserSession, isEngineAvailable };
+module.exports = { createBrowserSession, isEngineAvailable, getEngineStatus };

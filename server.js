@@ -7,7 +7,7 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
-const { createBrowserSession } = require('./runtime/browser-engine');
+const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
 const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 require('dotenv').config()
 
@@ -91,6 +91,15 @@ const DEFAULT_EXECUTION_POLICY = Object.freeze({
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(__dirname, 'workspace-root'));
 const LOCAL_WORKSPACE_TARGET_ID = 'local-workspace';
 const LOCAL_WORKSPACE_TARGET_KIND = 'localWorkspace';
+const BROWSER_TARGET_LIMIT_FIELDS = Object.freeze([
+  'maxNavigationsPerRun',
+  'maxActionsPerRun',
+  'navTimeoutMs',
+  'waitTimeoutMsCap',
+  'maxPageTextBytes',
+  'maxScreenshotsPerRun'
+]);
+const BROWSER_PHASE_ONE_OPERATIONS = Object.freeze(['navigate', 'observe', 'readPageText', 'screenshot', 'wait']);
 
 const BUILTIN_PERMISSIONS = Object.freeze([
   'ticket:create',
@@ -1617,9 +1626,87 @@ function readBrowserTargets() {
   return readJsonArrayCached(BROWSER_TARGETS_FILE);
 }
 
+function writeBrowserTargets(targets) {
+  writeFileAtomic(BROWSER_TARGETS_FILE, JSON.stringify(Array.isArray(targets) ? targets : [], null, 2));
+}
+
 function getBrowserTargetById(id) {
   if (typeof id !== 'string' || !id.trim()) return null;
   return readBrowserTargets().find(target => target && target.id === id.trim()) || null;
+}
+
+function getBrowserEngineAdminStatus() {
+  return getEngineStatus();
+}
+
+function parseBrowserTargetForm(input = {}, expectedId = null) {
+  const forbiddenFields = [
+    'credentialRef', 'credentials', 'sessionMode', 'persistentSessions',
+    'artifactDir', 'maxInteractionsPerRun', 'maxDownloadBytes',
+    'downloads', 'uploads', 'allowDownloads', 'allowUploads',
+    'click', 'fill', 'press', 'allowClick', 'allowFill', 'allowPress',
+    'workflowId', 'allowedOperations'
+  ];
+  const forbidden = forbiddenFields.find(field => Object.prototype.hasOwnProperty.call(input, field));
+  if (forbidden) return { ok: false, error: `Browser target field is not supported in Phase 1: ${forbidden}` };
+
+  const id = String(input.id || '').trim();
+  const name = String(input.name || '').trim();
+  const status = String(input.status || '').trim();
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
+    return { ok: false, error: 'Browser target id must use lowercase letters, numbers, dots, underscores, or hyphens' };
+  }
+  if (expectedId !== null && id !== expectedId) {
+    return { ok: false, error: 'Browser target id cannot be changed' };
+  }
+  if (!name) return { ok: false, error: 'Browser target name is required' };
+  if (!['active', 'inactive'].includes(status)) {
+    return { ok: false, error: 'Browser target status must be active or inactive' };
+  }
+
+  const allowedOrigins = String(input.allowedOrigins || '')
+    .split(/[\r\n,]+/)
+    .map(value => value.trim())
+    .filter(Boolean);
+  if (allowedOrigins.length === 0) {
+    return { ok: false, error: 'At least one allowed origin is required' };
+  }
+  const normalizedOrigins = [];
+  for (const origin of allowedOrigins) {
+    try {
+      const parsed = new URL(origin);
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.origin !== origin || origin.includes('*')) {
+        throw new Error('invalid origin');
+      }
+      if (!normalizedOrigins.includes(origin)) normalizedOrigins.push(origin);
+    } catch (_) {
+      return { ok: false, error: `Allowed origin must be an exact HTTP(S) origin without credentials or wildcards: ${origin}` };
+    }
+  }
+
+  const startUrl = String(input.startUrl || '').trim();
+  try {
+    const parsedStart = new URL(startUrl);
+    if (!['http:', 'https:'].includes(parsedStart.protocol) || parsedStart.username || parsedStart.password || parsedStart.search || parsedStart.hash || !normalizedOrigins.includes(parsedStart.origin)) {
+      throw new Error('invalid start URL');
+    }
+  } catch (_) {
+    return { ok: false, error: 'Start URL must be an HTTP(S) URL inside an allowed origin and must not contain credentials, query parameters, or fragments' };
+  }
+
+  const limits = {};
+  for (const field of BROWSER_TARGET_LIMIT_FIELDS) {
+    const value = Number(input[field]);
+    if (!Number.isInteger(value) || value <= 0) {
+      return { ok: false, error: `${field} must be a positive integer` };
+    }
+    limits[field] = value;
+  }
+
+  return {
+    ok: true,
+    target: { id, name, status, allowedOrigins: normalizedOrigins, startUrl, limits }
+  };
 }
 
 function normalizeBrowserTargetSnapshot(target) {
@@ -17403,6 +17490,7 @@ fastify.get('/', { preHandler: fastify.requireAuth }, async (request, reply) => 
     agentGroups: getTicketAssignableGroups(),
     agentGroupMembers: getAgentGroupMembers(),
     workflows: getEnabledWorkflows(),
+    browserTargets: readBrowserTargets().filter(target => target && target.status === 'active'),
     error: null
   }, request.session.userId));
 });
@@ -17592,7 +17680,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return 'Permission denied';
   }
 
-  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy } = request.body;
+  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy, executionTargetKind, browserTargetId } = request.body;
 
   function renderTicketForm(error) {
     reply.code(400);
@@ -17602,6 +17690,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
       agentGroups: getTicketAssignableGroups(),
       agentGroupMembers: getAgentGroupMembers(),
       workflows: getEnabledWorkflows(),
+      browserTargets: readBrowserTargets().filter(target => target && target.status === 'active'),
       error
     }, request.session.userId));
   }
@@ -17643,7 +17732,17 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return renderTicketForm('Execution policy must be a JSON object');
   }
 
-  let parsedTargetRef = request.body.targetRef;
+  let parsedTargetRef = null;
+  if (executionTargetKind === 'browser') {
+    if (typeof browserTargetId !== 'string' || !browserTargetId.trim()) {
+      return renderTicketForm('Select an active browser target');
+    }
+    parsedTargetRef = { kind: 'browser', browserTargetId: browserTargetId.trim() };
+  } else if (executionTargetKind && executionTargetKind !== 'workspace') {
+    return renderTicketForm('Execution target type must be workspace/filesystem or browser');
+  } else {
+    parsedTargetRef = request.body.targetRef;
+  }
   if (typeof parsedTargetRef === 'string' && parsedTargetRef.trim()) {
     try {
       parsedTargetRef = JSON.parse(parsedTargetRef);
@@ -18835,6 +18934,9 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
     ticket,
+    browserTarget: ticket.targetRef && ticket.targetRef.kind === 'browser'
+      ? getBrowserTargetById(ticket.targetRef.browserTargetId)
+      : null,
     allocationPlan,
     ticketRuns,
     agents,
@@ -18873,6 +18975,142 @@ function runtimeLimitsManageGuard(request, reply) {
   }
   return true;
 }
+
+function browserTargetsAdminGuard(request, reply, requireManage = false) {
+  const permission = requireManage ? 'user:update' : 'user:read';
+  if (!hasPermission(request.session.userId, permission)) {
+    reply.code(403);
+    return false;
+  }
+  return true;
+}
+
+function browserTargetFormValues(input = {}) {
+  return {
+    id: input.id || '',
+    name: input.name || '',
+    status: input.status || 'active',
+    allowedOrigins: Array.isArray(input.allowedOrigins) ? input.allowedOrigins.join('\n') : (input.allowedOrigins || ''),
+    startUrl: input.startUrl || '',
+    ...Object.fromEntries(BROWSER_TARGET_LIMIT_FIELDS.map(field => [field,
+      input.limits && input.limits[field] !== undefined ? input.limits[field] : (input[field] || '')
+    ]))
+  };
+}
+
+function renderBrowserTargetsAdminPage(request, reply, options = {}) {
+  return reply.view('admin/browser-targets.ejs', viewData({
+    user: request.user,
+    browserTargets: readBrowserTargets(),
+    browserEngineStatus: getBrowserEngineAdminStatus(),
+    browserPhaseOneOperations: BROWSER_PHASE_ONE_OPERATIONS,
+    canManageBrowserTargets: hasPermission(request.session.userId, 'user:update'),
+    editTarget: options.editTarget || null,
+    formTarget: browserTargetFormValues(options.formTarget || options.editTarget || {}),
+    error: options.error || null,
+    saved: options.saved === true
+  }, request.session.userId));
+}
+
+fastify.get('/admin/browser-targets', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!browserTargetsAdminGuard(request, reply)) {
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  return renderBrowserTargetsAdminPage(request, reply, { saved: request.query && request.query.saved === '1' });
+});
+
+fastify.get('/admin/browser-targets/:id/edit', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!browserTargetsAdminGuard(request, reply)) {
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const target = getBrowserTargetById(request.params.id);
+  if (!target) {
+    reply.code(404);
+    return reply.view('error.ejs', viewData({ message: 'Browser target not found', user: request.user }, request.session.userId));
+  }
+  return renderBrowserTargetsAdminPage(request, reply, { editTarget: target });
+});
+
+fastify.post('/admin/browser-targets', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!browserTargetsAdminGuard(request, reply, true)) {
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const parsed = parseBrowserTargetForm(request.body || {});
+  if (!parsed.ok) {
+    reply.code(400);
+    return renderBrowserTargetsAdminPage(request, reply, { error: parsed.error, formTarget: request.body || {} });
+  }
+  const targets = readBrowserTargets();
+  if (targets.some(target => target && target.id === parsed.target.id)) {
+    reply.code(409);
+    return renderBrowserTargetsAdminPage(request, reply, { error: 'Browser target id already exists', formTarget: request.body || {} });
+  }
+  writeBrowserTargets([...targets, parsed.target]);
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  appendSystemLog('browser_target.created', `Browser target "${parsed.target.name}" created by ${changedBy}`, null, {
+    browserTargetId: parsed.target.id, changedBy
+  });
+  return reply.redirect('/admin/browser-targets?saved=1');
+});
+
+fastify.post('/admin/browser-targets/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!browserTargetsAdminGuard(request, reply, true)) {
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const targets = readBrowserTargets();
+  const index = targets.findIndex(target => target && target.id === request.params.id);
+  if (index === -1) {
+    reply.code(404);
+    return reply.view('error.ejs', viewData({ message: 'Browser target not found', user: request.user }, request.session.userId));
+  }
+  const parsed = parseBrowserTargetForm(request.body || {}, request.params.id);
+  if (!parsed.ok) {
+    reply.code(400);
+    return renderBrowserTargetsAdminPage(request, reply, {
+      error: parsed.error,
+      editTarget: targets[index],
+      formTarget: request.body || {}
+    });
+  }
+  targets[index] = parsed.target;
+  writeBrowserTargets(targets);
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  appendSystemLog('browser_target.updated', `Browser target "${parsed.target.name}" updated by ${changedBy}`, null, {
+    browserTargetId: parsed.target.id, changedBy
+  });
+  return reply.redirect('/admin/browser-targets?saved=1');
+});
+
+fastify.post('/admin/browser-targets/:id/status', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!browserTargetsAdminGuard(request, reply, true)) {
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const nextStatus = String(request.body && request.body.status || '').trim();
+  if (!['active', 'inactive'].includes(nextStatus)) {
+    reply.code(400);
+    return renderBrowserTargetsAdminPage(request, reply, { error: 'Browser target status must be active or inactive' });
+  }
+  const targets = readBrowserTargets();
+  const target = targets.find(item => item && item.id === request.params.id);
+  if (!target) {
+    reply.code(404);
+    return reply.view('error.ejs', viewData({ message: 'Browser target not found', user: request.user }, request.session.userId));
+  }
+  if (nextStatus === 'active') {
+    const activationCheck = parseBrowserTargetForm({ ...browserTargetFormValues(target), status: 'active' }, target.id);
+    if (!activationCheck.ok) {
+      reply.code(400);
+      return renderBrowserTargetsAdminPage(request, reply, { error: `Cannot activate browser target: ${activationCheck.error}` });
+    }
+  }
+  target.status = nextStatus;
+  writeBrowserTargets(targets);
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  appendSystemLog('browser_target.status_changed', `Browser target "${target.name}" set ${nextStatus} by ${changedBy}`, null, {
+    browserTargetId: target.id, status: nextStatus, changedBy
+  });
+  return reply.redirect('/admin/browser-targets?saved=1');
+});
 
 fastify.get('/api/runtime-limits', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!runtimeLimitsManageGuard(request, reply)) return { error: 'Permission denied' };

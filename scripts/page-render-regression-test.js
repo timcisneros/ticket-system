@@ -11,9 +11,11 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'page-render-data-'));
 const WORKSPACE_ROOT = createTempWorkspaceRoot('page-render');
 const PORT = process.env.PORT || '3425';
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+const BROWSER_TARGET_ID = 'page-render-browser';
 const DATA_FILES = [
   'agents.json',
   'allocation-plans.json',
+  'browser-targets.json',
   'groups.json',
   'logs.json',
   'memberships.json',
@@ -128,6 +130,22 @@ function seedNavigationFixture() {
   const runs = readJson('runs.json');
   const logs = readJson('logs.json');
   const now = new Date().toISOString();
+  const browserTarget = {
+    id: BROWSER_TARGET_ID,
+    name: 'Page Render Browser',
+    status: 'active',
+    allowedOrigins: ['https://example.com'],
+    startUrl: 'https://example.com/start',
+    limits: {
+      maxNavigationsPerRun: 4,
+      maxActionsPerRun: 8,
+      navTimeoutMs: 10000,
+      waitTimeoutMsCap: 1000,
+      maxPageTextBytes: 4096,
+      maxScreenshotsPerRun: 2
+    }
+  };
+  writeJson('browser-targets.json', [browserTarget]);
   const agent = agents[0] || {
     id: 1,
     name: 'PageRenderAgent',
@@ -251,8 +269,60 @@ function seedNavigationFixture() {
     updatedAt: new Date(Date.now() - index - 1000).toISOString()
   }));
 
-  writeJson('tickets.json', [...tickets, ticket, activeTicket, ...extraTickets]);
-  writeJson('runs.json', [...runs, run, activeRun]);
+  const browserTicket = {
+    ...ticket,
+    id: ticketId + 5,
+    objective: 'Inspect the allowed example page and capture read-only evidence',
+    targetRef: { kind: 'browser', browserTargetId: browserTarget.id },
+    updatedAt: new Date(Date.now() + 2000).toISOString()
+  };
+  const browserRun = {
+    ...run,
+    id: runId + 2,
+    ticketId: browserTicket.id,
+    targetRef: browserTicket.targetRef,
+    browserTargetSnapshot: browserTarget,
+    replaySnapshot: {
+      ...run.replaySnapshot,
+      runId: runId + 2,
+      ticketId: browserTicket.id,
+      ticketObjectiveSnapshot: browserTicket.objective,
+      browserTargetSnapshot: browserTarget,
+      primitiveContract: { allowedOperations: ['navigate', 'observe', 'readPageText', 'screenshot', 'wait'] },
+      browserOperations: [
+        {
+          operation: { operation: 'navigate', args: { url: 'https://example.com/start' } },
+          status: 'ok',
+          durationMs: 21,
+          targetResourceId: 'https://example.com/final',
+          receipt: {
+            resourceUrl: 'https://example.com/final', truncated: false,
+            metadata: { requestedUrl: 'https://example.com/start', finalUrl: 'https://example.com/final', status: 200, pageStateHash: 'page-state-hash' }
+          }
+        },
+        {
+          operation: { operation: 'readPageText', args: {} },
+          status: 'ok', durationMs: 8, targetResourceId: 'https://example.com/final',
+          receipt: { resourceUrl: 'https://example.com/final', truncated: true, metadata: { contentHash: 'content-hash', pageStateHash: 'text-page-hash', bytes: 4096, fullBytes: 9000 } }
+        },
+        {
+          operation: { operation: 'screenshot', args: {} },
+          status: 'ok', durationMs: 15, targetResourceId: 'https://example.com/final',
+          receipt: { resourceUrl: 'https://example.com/final', truncated: false, metadata: { artifactPath: 'browser-artifacts/run-fixture/step-2-1.png', sha256: 'fixture-screenshot-sha256', pageStateHash: 'screenshot-page-hash' } }
+        },
+        {
+          operation: { operation: 'navigate', args: { url: 'https://blocked.example/' } },
+          status: 'refused', errorCode: 'BROWSER_ORIGIN_BLOCKED', error: 'Browser origin is not allowed', durationMs: 1,
+          targetResourceId: 'https://blocked.example/',
+          receipt: { resourceUrl: 'https://blocked.example/', truncated: false, metadata: { status: 'refused', code: 'BROWSER_ORIGIN_BLOCKED' } }
+        }
+      ],
+      terminalStatus: 'completed'
+    }
+  };
+
+  writeJson('tickets.json', [...tickets, ticket, activeTicket, ...extraTickets, browserTicket]);
+  writeJson('runs.json', [...runs, run, activeRun, browserRun]);
   writeJson('logs.json', [
     ...logs,
     activeLog,
@@ -263,7 +333,7 @@ function seedNavigationFixture() {
       message: `Page render fixture log ${index + 1}`
     }))
   ]);
-  return { ticket, run, activeTicket, activeRun };
+  return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent };
 }
 
 function seedAttentionFixture() {
@@ -297,6 +367,27 @@ async function assertMainFormRenders(cookie, label) {
   assert(response.body.includes('Automatic folder scopes'), `${label}: dynamic scope option missing`);
   assert(response.body.includes('const agentGroupMembers = '), `${label}: agentGroupMembers script missing`);
   assert(response.body.includes('value="agent" selected'), `${label}: one-agent path is not the default`);
+  assert(response.body.includes('id="executionTargetKind"'), `${label}: execution target selector missing`);
+  assert(response.body.includes('id="browserTargetId"'), `${label}: browser target selector missing`);
+  assert(response.body.includes('Page Render Browser'), `${label}: active browser target missing`);
+  assert(response.body.includes('Browser Phase 1 supports only'), `${label}: browser read-only warning missing`);
+}
+
+function browserTargetForm(overrides = {}) {
+  return {
+    id: 'ui-created-browser',
+    name: 'UI Created Browser',
+    status: 'active',
+    allowedOrigins: 'https://ui.example.com',
+    startUrl: 'https://ui.example.com/start',
+    maxNavigationsPerRun: '3',
+    maxActionsPerRun: '7',
+    navTimeoutMs: '9000',
+    waitTimeoutMsCap: '750',
+    maxPageTextBytes: '2048',
+    maxScreenshotsPerRun: '2',
+    ...overrides
+  };
 }
 
 async function assertPageRenders(cookie, pathValue, label, expectedText) {
@@ -399,7 +490,90 @@ async function main() {
     assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
     assert(runDetail.body.includes('<summary>Ticket Objective</summary>'), 'run detail should collapse repeated ticket objective');
     assert(runDetail.body.includes('<summary>Prompt Instructions</summary>'), 'run detail should collapse prompt instructions');
+    const browserTicketDetail = await assertPageRenders(cookie, `/tickets/${fixture.browserTicket.id}`, 'browser ticket detail', 'Execution target');
+    assert(browserTicketDetail.body.includes(fixture.browserTarget.name), 'browser ticket detail should show target name');
+    assert(browserTicketDetail.body.includes(fixture.browserTarget.startUrl), 'browser ticket detail should show start URL');
+    assert(browserTicketDetail.body.includes('maxScreenshotsPerRun'), 'browser ticket detail should show configured limits');
+    assert(browserTicketDetail.body.includes('No click, fill, press'), 'browser ticket detail should show Phase 1 boundary');
+    const browserRunDetail = await assertPageRenders(cookie, `/runs/${fixture.browserRun.id}`, 'browser run detail', 'Browser Operations (4)');
+    assert(browserRunDetail.body.includes('Browser Target Snapshot'), 'browser run detail should show target snapshot');
+    assert(browserRunDetail.body.includes('Resource / final URL'), 'browser run detail should show final URL field');
+    assert(browserRunDetail.body.includes('BROWSER_ORIGIN_BLOCKED'), 'browser run detail should show refusal code');
+    assert(browserRunDetail.body.includes('fixture-screenshot-sha256'), 'browser run detail should show screenshot hash');
+    assert(browserRunDetail.body.includes('browser-artifacts/run-fixture/step-2-1.png'), 'browser run detail should show screenshot artifact path');
+    assert(browserRunDetail.body.includes('Screenshot artifacts remain server-side'), 'browser run detail should explain path-only artifact access');
+
+    const browserTicketCreate = await request('POST', '/tickets', {
+      cookie,
+      form: {
+        objective: 'improve things',
+        capabilityType: 'directAction',
+        executionTargetKind: 'browser',
+        browserTargetId: fixture.browserTarget.id,
+        assignmentTargetType: 'agent',
+        assignmentTargetId: String(fixture.agent.id),
+        assignmentMode: 'individual'
+      }
+    });
+    assert(browserTicketCreate.statusCode === 302, `browser ticket form returned HTTP ${browserTicketCreate.statusCode}: ${browserTicketCreate.body}`);
+    const createdBrowserTicket = readJson('tickets.json').slice().sort((a, b) => b.id - a.id)[0];
+    assert(createdBrowserTicket.targetRef && createdBrowserTicket.targetRef.kind === 'browser', 'browser ticket form did not create browser targetRef');
+    assert(createdBrowserTicket.targetRef.browserTargetId === fixture.browserTarget.id, 'browser ticket form stored the wrong browserTargetId');
+
     await assertPageRenders(cookie, '/admin', 'admin dashboard', 'Admin Dashboard');
+    const browserTargetsPage = await assertPageRenders(cookie, '/admin/browser-targets', 'browser targets admin', 'Browser Targets');
+    assert(browserTargetsPage.body.includes(fixture.browserTarget.id), 'browser targets admin should list target id');
+    assert(browserTargetsPage.body.includes('Browser Runtime'), 'browser targets admin should show engine status');
+    assert(browserTargetsPage.body.includes('Runtime available'), 'browser targets admin should show runtime availability');
+    assert(browserTargetsPage.body.includes('Engine version'), 'browser targets admin should show engine version status');
+    assert(browserTargetsPage.body.includes('No click, fill, press'), 'browser targets admin should show Phase 1 boundary');
+
+    const wildcardTarget = await request('POST', '/admin/browser-targets', {
+      cookie,
+      form: browserTargetForm({ id: 'wildcard-target', allowedOrigins: 'https://*.example.com', startUrl: 'https://example.com' })
+    });
+    assert(wildcardTarget.statusCode === 400 && wildcardTarget.body.includes('exact HTTP(S) origin'), 'browser target admin should reject wildcard origins');
+    const outsideStart = await request('POST', '/admin/browser-targets', {
+      cookie,
+      form: browserTargetForm({ id: 'outside-start', startUrl: 'https://outside.example.com/' })
+    });
+    assert(outsideStart.statusCode === 400 && outsideStart.body.includes('inside an allowed origin'), 'browser target admin should reject an out-of-origin start URL');
+    const credentialLikeStart = await request('POST', '/admin/browser-targets', {
+      cookie,
+      form: browserTargetForm({ id: 'credential-like-start', startUrl: 'https://ui.example.com/start?token=must-not-persist' })
+    });
+    assert(credentialLikeStart.statusCode === 400 && credentialLikeStart.body.includes('query parameters'), 'browser target admin should reject start URL query credentials');
+    const invalidLimit = await request('POST', '/admin/browser-targets', {
+      cookie,
+      form: browserTargetForm({ id: 'invalid-limit', maxActionsPerRun: '0' })
+    });
+    assert(invalidLimit.statusCode === 400 && invalidLimit.body.includes('positive integer'), 'browser target admin should reject non-positive limits');
+    const forbiddenCapability = await request('POST', '/admin/browser-targets', {
+      cookie,
+      form: browserTargetForm({ id: 'forbidden-capability', credentials: 'must-not-persist' })
+    });
+    assert(forbiddenCapability.statusCode === 400 && forbiddenCapability.body.includes('not supported in Phase 1'), 'browser target admin should reject Phase 2 fields');
+
+    const createBrowserTarget = await request('POST', '/admin/browser-targets', { cookie, form: browserTargetForm() });
+    assert(createBrowserTarget.statusCode === 302, `browser target create returned HTTP ${createBrowserTarget.statusCode}: ${createBrowserTarget.body}`);
+    const editBrowserTarget = await request('POST', '/admin/browser-targets/ui-created-browser', {
+      cookie,
+      form: browserTargetForm({ name: 'UI Browser Updated' })
+    });
+    assert(editBrowserTarget.statusCode === 302, `browser target edit returned HTTP ${editBrowserTarget.statusCode}: ${editBrowserTarget.body}`);
+    const deactivateBrowserTarget = await request('POST', '/admin/browser-targets/ui-created-browser/status', {
+      cookie, form: { status: 'inactive' }
+    });
+    assert(deactivateBrowserTarget.statusCode === 302, `browser target deactivate returned HTTP ${deactivateBrowserTarget.statusCode}`);
+    assert(readJson('browser-targets.json').find(target => target.id === 'ui-created-browser').status === 'inactive', 'browser target was not deactivated');
+    const reactivateBrowserTarget = await request('POST', '/admin/browser-targets/ui-created-browser/status', {
+      cookie, form: { status: 'active' }
+    });
+    assert(reactivateBrowserTarget.statusCode === 302, `browser target reactivate returned HTTP ${reactivateBrowserTarget.statusCode}`);
+    const managedTarget = readJson('browser-targets.json').find(target => target.id === 'ui-created-browser');
+    assert(managedTarget && managedTarget.name === 'UI Browser Updated' && managedTarget.status === 'active', 'browser target create/edit/reactivate state is incorrect');
+    assert(!JSON.stringify(readJson('browser-targets.json')).includes('must-not-persist'), 'browser target admin persisted forbidden credential data');
+
     const workflowsPage = await assertPageRenders(cookie, '/admin/workflows', 'workflow capabilities admin', 'Workflow Capabilities');
     assert(workflowsPage.body.includes('demo-agent-write-if-approved'), 'workflows admin should list demo workflow');
     assert(workflowsPage.body.includes('Edit JSON'), 'workflows admin should expose JSON editing');
@@ -436,7 +610,15 @@ async function main() {
     writeJson('memberships.json', readJson('memberships.json').filter(membership => membership.principalType !== 'agent'));
     await assertMainFormRenders(cookie, 'no ticket-capable groups');
 
-    console.log(JSON.stringify({ mainFormRender: true, noTicketCapableGroupsRender: true }));
+    console.log(JSON.stringify({
+      mainFormRender: true,
+      noTicketCapableGroupsRender: true,
+      browserTargetsAdminRender: true,
+      browserTicketTargetRef: true,
+      browserTicketDetailRender: true,
+      browserRunEvidenceRender: true,
+      browserTargetValidation: true
+    }));
   } finally {
     if (server) {
       server.kill();

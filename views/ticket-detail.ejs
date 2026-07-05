@@ -416,6 +416,34 @@
   </div>
 </details>
 
+<details class="disclosure" open>
+  <summary>Execution target <span class="sub"><%= ticket.targetRef && ticket.targetRef.kind === 'browser' ? 'Browser · read-only' : 'Workspace / filesystem' %></span></summary>
+  <div class="body">
+    <% if (ticket.targetRef && ticket.targetRef.kind === 'browser') { %>
+      <% const targetLimits = browserTarget && browserTarget.limits ? browserTarget.limits : {}; %>
+      <dl class="detail-grid">
+        <div><dt>Target</dt><dd><strong><%= browserTarget ? browserTarget.name : 'Unavailable target' %></strong> · <code><%= ticket.targetRef.browserTargetId %></code></dd></div>
+        <div><dt>Current status</dt><dd><span class="status-badge status-<%= browserTarget ? browserTarget.status : 'inactive' %>"><%= browserTarget ? browserTarget.status : 'missing' %></span></dd></div>
+        <div><dt>Start URL</dt><dd><code><%= browserTarget ? browserTarget.startUrl : '-' %></code></dd></div>
+        <div><dt>Allowed origins</dt><dd><% if (browserTarget && browserTarget.allowedOrigins) { browserTarget.allowedOrigins.forEach(function(origin) { %><div><code><%= origin %></code></div><% }); } else { %>-<% } %></dd></div>
+        <div><dt>Read-only operations</dt><dd><code>navigate</code>, <code>observe</code>, <code>readPageText</code>, <code>screenshot</code>, <code>wait</code></dd></div>
+        <div><dt>maxNavigationsPerRun</dt><dd><code><%= targetLimits.maxNavigationsPerRun || '-' %></code></dd></div>
+        <div><dt>maxActionsPerRun</dt><dd><code><%= targetLimits.maxActionsPerRun || '-' %></code></dd></div>
+        <div><dt>navTimeoutMs</dt><dd><code><%= targetLimits.navTimeoutMs || '-' %></code></dd></div>
+        <div><dt>waitTimeoutMsCap</dt><dd><code><%= targetLimits.waitTimeoutMsCap || '-' %></code></dd></div>
+        <div><dt>maxPageTextBytes</dt><dd><code><%= targetLimits.maxPageTextBytes || '-' %></code></dd></div>
+        <div><dt>maxScreenshotsPerRun</dt><dd><code><%= targetLimits.maxScreenshotsPerRun || '-' %></code></dd></div>
+      </dl>
+      <p class="text-muted">No click, fill, press, downloads, credentials, persistent sessions, or browser workflows.</p>
+    <% } else { %>
+      <dl class="detail-grid">
+        <div><dt>Target type</dt><dd>Workspace / filesystem</dd></div>
+        <div><dt>Execution scope</dt><dd><%= ticket.assignmentMode === 'individual' ? 'Shared workspace' : 'Allocated workspace paths' %></dd></div>
+      </dl>
+    <% } %>
+  </div>
+</details>
+
 <% if (ticket.executionPolicy) { %>
 <details class="disclosure">
   <summary>Execution policy <span class="sub"><%= ticket.executionPolicy.mode %></span></summary>
