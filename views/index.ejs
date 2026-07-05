@@ -47,6 +47,17 @@
     <p class="form-hint"><strong>Read-only:</strong> Browser Phase 1 supports only <code>navigate</code>, <code>observe</code>, <code>readPageText</code>, <code>screenshot</code>, and <code>wait</code>. No click, fill, press, downloads, credentials, or persistent sessions.</p>
   </div>
 
+  <div class="form-group">
+    <label for="workTypeId">Work Type</label>
+    <select id="workTypeId" name="workTypeId">
+      <option value="">Unspecified</option>
+      <% (typeof workTypes === 'undefined' ? [] : workTypes).forEach(workType => { %>
+        <option value="<%= workType.id %>" data-target-kinds="<%= workType.allowedTargetKinds.join(',') %>"><%= workType.name %></option>
+      <% }); %>
+    </select>
+    <p class="form-hint">Optional semantic context. A Work Type can narrow compatible target kinds; it does not grant target access or operations.</p>
+  </div>
+
   <div class="form-group" id="workflowGroup" hidden>
     <label for="workflowId">Workflow *</label>
     <select id="workflowId" name="workflowId">
@@ -122,6 +133,7 @@ const executionTargetKindSelect = document.getElementById('executionTargetKind')
 const browserTargetKindOption = executionTargetKindSelect.querySelector('option[value="browser"]');
 const browserTargetGroup = document.getElementById('browserTargetGroup');
 const browserTargetSelect = document.getElementById('browserTargetId');
+const workTypeSelect = document.getElementById('workTypeId');
 const workflowGroup = document.getElementById('workflowGroup');
 const workflowInputGroup = document.getElementById('workflowInputGroup');
 const workflowSelect = document.getElementById('workflowId');
@@ -206,6 +218,15 @@ function updateExecutionTargetControls() {
   browserTargetSelect.required = isBrowser;
   browserTargetSelect.disabled = !isBrowser;
   if (!isBrowser) browserTargetSelect.value = '';
+  const selectedTargetKind = isBrowser ? 'browser' : 'workspace';
+  Array.from(workTypeSelect.options).forEach(option => {
+    if (!option.value) return;
+    const allowedKinds = String(option.dataset.targetKinds || '').split(',');
+    option.disabled = !allowedKinds.includes(selectedTargetKind);
+  });
+  if (workTypeSelect.selectedOptions[0] && workTypeSelect.selectedOptions[0].disabled) {
+    workTypeSelect.value = '';
+  }
 }
 
 function updateAssignmentTargets() {
