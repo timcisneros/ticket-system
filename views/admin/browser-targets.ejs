@@ -1,0 +1,120 @@
+<h1>Browser Targets</h1>
+<p class="text-muted">Phase 1 browser targets authorize read-only navigation and inspection. They do not grant interaction, downloads, credentials, persistent sessions, or workflow execution.</p>
+
+<div class="actions actions--page-header">
+  <a href="/admin" class="btn-small">Back to Admin</a>
+</div>
+
+<% if (error) { %>
+  <div class="error-message"><%= error %></div>
+<% } %>
+<% if (saved) { %>
+  <div class="success-message">Browser target configuration saved.</div>
+<% } %>
+
+<section class="admin-block">
+  <h2>Browser Runtime</h2>
+  <dl class="detail-grid">
+    <div><dt>Executable configured</dt><dd><%= browserEngineStatus.configured ? 'yes' : 'no' %></dd></div>
+    <div><dt>Executable exists</dt><dd><%= browserEngineStatus.executableExists ? 'yes' : 'no' %></dd></div>
+    <div><dt>Runtime available</dt><dd><span class="status-badge status-<%= browserEngineStatus.available ? 'active' : 'inactive' %>"><%= browserEngineStatus.available ? 'available' : 'unavailable' %></span></dd></div>
+    <div><dt>Engine version</dt><dd><%= browserEngineStatus.version || 'unavailable' %></dd></div>
+  </dl>
+  <p class="form-hint">The executable path is intentionally not displayed. Configure it with <code>BROWSER_ENGINE_EXECUTABLE</code>. No browser is launched by this status check.</p>
+</section>
+
+<section class="admin-block admin-block--spaced">
+  <h2>Configured Targets</h2>
+  <% if (!browserTargets || browserTargets.length === 0) { %>
+    <p class="text-muted">No browser targets configured.</p>
+  <% } else { %>
+    <table class="tickets-table">
+      <thead>
+        <tr><th>ID / Name</th><th>Status</th><th>Origins and start URL</th><th>Limits</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        <% browserTargets.forEach(function(target) { const limits = target.limits || {}; %>
+          <tr>
+            <td><code><%= target.id %></code><br><strong><%= target.name %></strong></td>
+            <td><span class="status-badge status-<%= target.status %>"><%= target.status %></span></td>
+            <td>
+              <div><strong>Allowed origins</strong></div>
+              <% (target.allowedOrigins || []).forEach(function(origin) { %><div><code><%= origin %></code></div><% }); %>
+              <div><strong>Start URL</strong></div><code><%= target.startUrl || '-' %></code>
+            </td>
+            <td>
+              <div>maxNavigationsPerRun: <code><%= limits.maxNavigationsPerRun %></code></div>
+              <div>maxActionsPerRun: <code><%= limits.maxActionsPerRun %></code></div>
+              <div>navTimeoutMs: <code><%= limits.navTimeoutMs %></code></div>
+              <div>waitTimeoutMsCap: <code><%= limits.waitTimeoutMsCap %></code></div>
+              <div>maxPageTextBytes: <code><%= limits.maxPageTextBytes %></code></div>
+              <div>maxScreenshotsPerRun: <code><%= limits.maxScreenshotsPerRun %></code></div>
+            </td>
+            <td>
+              <% if (canManageBrowserTargets) { %>
+                <a href="/admin/browser-targets/<%= encodeURIComponent(target.id) %>/edit" class="btn-small">Edit</a>
+                <form action="/admin/browser-targets/<%= encodeURIComponent(target.id) %>/status" method="POST" class="inline-form">
+                  <input type="hidden" name="status" value="<%= target.status === 'active' ? 'inactive' : 'active' %>">
+                  <button type="submit" class="btn-small"><%= target.status === 'active' ? 'Deactivate' : 'Reactivate' %></button>
+                </form>
+              <% } %>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  <% } %>
+</section>
+
+<% if (canManageBrowserTargets) { %>
+<section class="admin-block admin-block--spaced">
+  <h2><%= editTarget ? 'Edit Browser Target' : 'Create Browser Target' %></h2>
+  <form action="<%= editTarget ? '/admin/browser-targets/' + encodeURIComponent(editTarget.id) : '/admin/browser-targets' %>" method="POST" class="ticket-form">
+    <div class="form-group">
+      <label for="id">ID *</label>
+      <input id="id" name="id" required pattern="[a-z0-9][a-z0-9._-]*" value="<%= formTarget.id %>" <%= editTarget ? 'readonly' : '' %>>
+      <p class="form-hint">Lowercase letters, numbers, dots, underscores, and hyphens. IDs cannot be renamed.</p>
+    </div>
+    <div class="form-group">
+      <label for="name">Name *</label>
+      <input id="name" name="name" required value="<%= formTarget.name %>">
+    </div>
+    <div class="form-group">
+      <label for="status">Status *</label>
+      <select id="status" name="status" required>
+        <option value="active" <%= formTarget.status === 'active' ? 'selected' : '' %>>Active</option>
+        <option value="inactive" <%= formTarget.status === 'inactive' ? 'selected' : '' %>>Inactive</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="allowedOrigins">Allowed origins *</label>
+      <textarea id="allowedOrigins" name="allowedOrigins" rows="4" required placeholder="https://example.com"><%= formTarget.allowedOrigins %></textarea>
+      <p class="form-hint">One exact HTTP(S) origin per line. Wildcards, paths, embedded credentials, and non-HTTP schemes are rejected.</p>
+    </div>
+    <div class="form-group">
+      <label for="startUrl">Start URL *</label>
+      <input id="startUrl" name="startUrl" type="url" required value="<%= formTarget.startUrl %>" placeholder="https://example.com/">
+      <p class="form-hint">Must resolve inside one of the exact allowed origins. Credentials, query parameters, and fragments are rejected so secrets cannot enter target snapshots.</p>
+    </div>
+
+    <h3>Per-run limits</h3>
+    <% ['maxNavigationsPerRun','maxActionsPerRun','navTimeoutMs','waitTimeoutMsCap','maxPageTextBytes','maxScreenshotsPerRun'].forEach(function(field) { %>
+      <div class="form-group">
+        <label for="<%= field %>"><%= field %> *</label>
+        <input id="<%= field %>" name="<%= field %>" type="number" min="1" step="1" required value="<%= formTarget[field] %>">
+      </div>
+    <% }); %>
+
+    <div class="actions">
+      <button type="submit" class="btn-submit"><%= editTarget ? 'Save Browser Target' : 'Create Browser Target' %></button>
+      <% if (editTarget) { %><a href="/admin/browser-targets" class="btn-secondary">Cancel</a><% } %>
+    </div>
+  </form>
+</section>
+<% } %>
+
+<section class="admin-block admin-block--spaced">
+  <h2>Phase 1 Boundary</h2>
+  <p>Allowed operations: <% browserPhaseOneOperations.forEach(function(operation, index) { %><code><%= operation %></code><%= index < browserPhaseOneOperations.length - 1 ? ', ' : '' %><% }); %>.</p>
+  <p class="text-muted">No click, fill, press, uploads, downloads, credentials, persistent sessions, browser workflows, skills, templates, or autonomy.</p>
+</section>
