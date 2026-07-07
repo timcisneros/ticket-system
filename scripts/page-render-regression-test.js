@@ -776,6 +776,11 @@ async function main() {
     const workflowsPage = await assertPageRenders(cookie, '/admin/workflows', 'workflow capabilities admin', 'Workflow Capabilities');
     assert(workflowsPage.body.includes('demo-agent-write-if-approved'), 'workflows admin should list demo workflow');
     assert(workflowsPage.body.includes('Edit JSON'), 'workflows admin should expose JSON editing');
+    assert(workflowsPage.body.includes('Postconditions'), 'workflows admin should render Postconditions column header');
+    assert(workflowsPage.body.includes('None'), 'workflows admin should show None for workflow without postconditions');
+    assert(workflowsPage.body.includes('legal-intake'), 'workflows admin should list legal-intake workflow with postconditions');
+    assert(workflowsPage.body.includes('file exists: {{workflow.input.basePath}}/intake-register.csv'), 'workflows admin should render fileExists assertion for legal-intake workflow');
+    assert(workflowsPage.body.includes('file {{workflow.input.basePath}}/intake-register.csv contains'), 'workflows admin should render fileContains assertion for legal-intake workflow');
     const workflowFormPage = await assertPageRenders(cookie, '/admin/workflows/demo-agent-write-if-approved/edit', 'workflow edit', 'Edit Workflow');
     assert(workflowFormPage.body.includes('agentStructuredOutput'), 'workflow edit should render workflow JSON');
     const actionsPage = await assertPageRenders(cookie, '/admin/actions', 'actions catalog', 'Actions Catalog');
