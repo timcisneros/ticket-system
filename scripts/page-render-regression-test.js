@@ -626,6 +626,14 @@ async function main() {
     assert(ticketDetail.body.includes('Acceptance Criteria'), 'ticket detail should show Acceptance Criteria section');
     assert(ticketDetail.body.includes(fixture.ticket.acceptanceCriteria), 'ticket detail should show declared acceptance criteria');
     assert(ticketDetail.body.includes('Stored for review; not automatically verified'), 'ticket detail should state acceptance criteria boundary');
+    assert(ticketDetail.body.includes('Verification Contract'), 'ticket detail should render Verification Contract column header');
+    assert(!ticketDetail.body.includes('<th>Run #</th><th>Agent</th><th>Status</th><th>Run Outcome</th><th>Mutations</th>'), 'ticket detail should not have duplicate old Runs & attempts header without Verification Contract');
+    assert(ticketDetail.body.includes('<span class="text-muted">None</span>'), 'ticket detail should show None for runs without a frozen verification contract');
+    const verifiedTicketDetail = await assertPageRenders(cookie, `/tickets/${fixture.verifiedRun.ticketId}`, 'verified workflow ticket detail', 'Runs &amp; attempts');
+    assert(verifiedTicketDetail.body.includes('Verification Contract'), 'verified ticket detail should render Verification Contract column header');
+    assert(verifiedTicketDetail.body.includes('frozen at run creation'), 'verified ticket detail should state verification contract is frozen at run creation');
+    assert(verifiedTicketDetail.body.includes('file exists: {{workflow.input.path}}'), 'verified ticket detail should render fileExists assertion');
+    assert(verifiedTicketDetail.body.includes('file {{workflow.input.path}} contains'), 'verified ticket detail should render fileContains assertion');
     const ticketWithoutAcceptanceCriteriaPage = await assertPageRenders(cookie, `/tickets/${fixture.ticketWithoutAcceptanceCriteria.id}`, 'ticket without acceptance criteria detail', 'Acceptance Criteria');
     assert(ticketWithoutAcceptanceCriteriaPage.body.includes('Unspecified'), 'ticket without acceptance criteria detail should show an unspecified Work Type');
     assert(ticketWithoutAcceptanceCriteriaPage.body.includes('None declared'), 'ticket without acceptance criteria detail should show none declared for missing acceptance criteria');
