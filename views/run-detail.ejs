@@ -55,6 +55,17 @@
   <p class="text-muted">Immutable semantic context copied from the ticket. It is not authority and does not grant operations.</p>
 </section>
 
+<section class="detail-section">
+  <h2>Acceptance Criteria Snapshot</h2>
+  <% if (run.acceptanceCriteriaSnapshot) { %>
+    <p style="white-space:pre-wrap;"><%= run.acceptanceCriteriaSnapshot %></p>
+  <% } else { %>
+    <p class="text-muted">No acceptance criteria were captured for this run.</p>
+    <p class="text-muted">Runs capture acceptance criteria at creation time; this run has no captured criteria.</p>
+  <% } %>
+  <p class="text-muted">Frozen at run creation for review; not automatically verified.</p>
+</section>
+
 <% if (typeof completionSummary !== 'undefined' && completionSummary) { %>
 <section class="detail-section completion-summary">
   <h2>Why this run stopped</h2>
