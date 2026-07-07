@@ -20511,7 +20511,7 @@ function buildRunDiagnosticBundle(ctx) {
   out('# Ticket System Diagnostic Bundle');
   out('');
   out('Generated At: ' + dash(generatedAt));
-  out('App Version / Tag: ' + dash(DIAGNOSTIC_APP_VERSION));
+  out('App Version: ' + dash(DIAGNOSTIC_APP_VERSION));
   out('Route: ' + dash(route));
   out('Ticket: ' + (ticket ? '#' + ticket.id : 'unavailable'));
   out('Run: ' + (run ? '#' + run.id : 'unavailable'));
