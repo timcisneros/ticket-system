@@ -672,6 +672,26 @@ async function main() {
     assert(childTicketDetail.body.includes(`<a href="/tickets/${fixture.ticket.id}">Ticket #${fixture.ticket.id}</a>`), 'child ticket detail should link back to parent ticket');
     assert(childTicketDetail.body.includes(`<a href="/runs/${fixture.run.id}">Run #${fixture.run.id}</a>`), 'child ticket detail should link to parent run');
     assert(childTicketDetail.body.includes(fixture.childTicket.spawnPlanId), 'child ticket detail should show spawn plan id');
+    // Blocked spawned child rerun guard assertions
+    assert(!childTicketDetail.body.includes(`data-rerun-ticket-id="${fixture.childTicket.id}"`), 'blocked child ticket detail should not render an active rerun button');
+    assert(childTicketDetail.body.includes('Rerun disabled: this child ticket was created by executeTicketPlan and is blocked by default'), 'blocked child ticket detail should show rerun-disabled explanation');
+    const blockedChildRerun = await request('POST', `/api/tickets/${fixture.childTicket.id}/rerun`, { cookie, body: {} });
+    assert(blockedChildRerun.statusCode === 409, `blocked child rerun should return 409, got HTTP ${blockedChildRerun.statusCode}: ${blockedChildRerun.body}`);
+    const blockedChildRerunBody = JSON.parse(blockedChildRerun.body);
+    assert(blockedChildRerunBody.error && blockedChildRerunBody.error.includes('blocked by default'), 'blocked child rerun error should mention blocked by default');
+    const childTicketAfterBlockedRerun = readJson('tickets.json').find(t => t.id === fixture.childTicket.id);
+    assert(childTicketAfterBlockedRerun && childTicketAfterBlockedRerun.status === 'blocked', 'child ticket must remain blocked after rejected rerun');
+    const openChildResponse = await request('PATCH', `/api/tickets/${fixture.childTicket.id}/status`, { cookie, body: { status: 'open' } });
+    assert(openChildResponse.statusCode === 200, `explicit open of blocked child should succeed, got HTTP ${openChildResponse.statusCode}: ${openChildResponse.body}`);
+    const openChildBody = JSON.parse(openChildResponse.body);
+    assert(openChildBody.ticket && openChildBody.ticket.status === 'open', 'blocked child ticket should be open after explicit status change');
+    const childRunsBeforeOpenRerun = readJson('runs.json').filter(r => r.ticketId === fixture.childTicket.id);
+    const openChildRerun = await request('POST', `/api/tickets/${fixture.childTicket.id}/rerun`, { cookie, body: {} });
+    assert(openChildRerun.statusCode === 200, `rerun after explicit open should succeed, got HTTP ${openChildRerun.statusCode}: ${openChildRerun.body}`);
+    const childTicketAfterOpenRerun = JSON.parse(openChildRerun.body).ticket;
+    assert(childTicketAfterOpenRerun && childTicketAfterOpenRerun.status === 'open', 'child ticket should be open after allowed rerun');
+    const childRunsAfterOpenRerun = readJson('runs.json').filter(r => r.ticketId === fixture.childTicket.id);
+    assert(childRunsAfterOpenRerun.length > childRunsBeforeOpenRerun.length, 'rerun after explicit open should create a new child run');
     const ticketWithoutAcceptanceCriteriaPage = await assertPageRenders(cookie, `/tickets/${fixture.ticketWithoutAcceptanceCriteria.id}`, 'ticket without acceptance criteria detail', 'Acceptance Criteria');
     assert(ticketWithoutAcceptanceCriteriaPage.body.includes('Unspecified'), 'ticket without acceptance criteria detail should show an unspecified Work Type');
     assert(ticketWithoutAcceptanceCriteriaPage.body.includes('None declared'), 'ticket without acceptance criteria detail should show none declared for missing acceptance criteria');

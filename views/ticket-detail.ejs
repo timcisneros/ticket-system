@@ -14,6 +14,7 @@
     : '-';
   const detailIsOpen = ticket.status === 'open';
   const detailHasAssignment = Boolean(ticket.assignmentTargetId);
+  const isBlockedSpawnedChild = ticket.status === 'blocked' && ticket.parentTicketId != null;
   let openStateNote = null;
   if (detailIsOpen && !detailHasAssignment) {
     openStateNote = 'Unassigned — not started.';
@@ -36,7 +37,7 @@
       <div class="hero-actions">
         <a class="btn-secondary" href="/tickets">Back to Tickets</a>
         <a class="btn-secondary" href="/logs?ticketId=<%= ticket.id %>">Ticket Logs</a>
-        <% if (canUpdateTickets && !hasUnresolvedTriage && ticket.status !== 'open') { %>
+      <% if (canUpdateTickets && !hasUnresolvedTriage && ticket.status !== 'open' && !isBlockedSpawnedChild) { %>
           <button type="button" class="btn-secondary" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %></button>
         <% } %>
         <% if (canUpdateTickets) { %>
@@ -59,6 +60,8 @@
   </div>
   <% if (canUpdateTickets && hasUnresolvedTriage) { %>
   <p class="form-hint">Rerun disabled: unresolved ticket-level triage must be resolved or the ticket objective must be changed first.</p>
+<% } else if (canUpdateTickets && isBlockedSpawnedChild) { %>
+  <p class="form-hint">Rerun disabled: this child ticket was created by executeTicketPlan and is blocked by default. Change status to Open to enable execution.</p>
 <% } else if (canUpdateTickets && ticket.status !== 'open') { %>
   <%
     const isGroupTicket = typeof executionState !== 'undefined' && executionState && executionState.isGroup;
