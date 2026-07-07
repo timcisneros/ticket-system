@@ -457,7 +457,28 @@ function seedNavigationFixture() {
     }
   };
 
-  writeJson('tickets.json', [...tickets, ticket, activeTicket, ...extraTickets, browserTicket, verifiedTicket]);
+  const parentTicket = ticket;
+  const childTicket = {
+    id: ticketId + 7,
+    objective: 'child lineage fixture',
+    parentTicketId: parentTicket.id,
+    parentRunId: run.id,
+    parentWorkflowId: verificationWorkflow.id,
+    spawnPlanId: `${run.id}:${verificationWorkflow.id}:child-step:${now}`,
+    spawnedByStepId: 'child-step',
+    status: 'blocked',
+    blockedReason: 'Created by executeTicketPlan; child workflow execution is not automatic in v1.',
+    assignmentTargetType: 'agent',
+    assignmentTargetId: agent.id,
+    assignmentMode: 'individual',
+    workTypeId: workType.id,
+    workTypeSnapshot,
+    createdBy: 'admin',
+    createdAt: now,
+    updatedAt: now
+  };
+
+  writeJson('tickets.json', [...tickets, ticket, activeTicket, ...extraTickets, browserTicket, verifiedTicket, childTicket]);
   writeJson('runs.json', [...runs, run, activeRun, browserRun, runWithoutAcceptanceCriteriaSnapshot, verifiedRun]);
   writeJson('logs.json', [
     ...logs,
@@ -470,7 +491,7 @@ function seedNavigationFixture() {
     }))
   ]);
   appendEvent(postconditionsCheckedEvent);
-  return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent, workType, ticketWithoutAcceptanceCriteria: extraTickets[0], runWithoutAcceptanceCriteriaSnapshot, verifiedRun };
+  return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent, workType, ticketWithoutAcceptanceCriteria: extraTickets[0], runWithoutAcceptanceCriteriaSnapshot, verifiedRun, childTicket };
 }
 
 function seedAttentionFixture() {
@@ -639,6 +660,18 @@ async function main() {
     assert(verifiedTicketDetail.body.includes('frozen at run creation'), 'verified ticket detail should state verification contract is frozen at run creation');
     assert(verifiedTicketDetail.body.includes('file exists: {{workflow.input.path}}'), 'verified ticket detail should render fileExists assertion');
     assert(verifiedTicketDetail.body.includes('file {{workflow.input.path}} contains'), 'verified ticket detail should render fileContains assertion');
+    const parentTicketDetail = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id}`, 'parent ticket detail', 'Child Tickets');
+    assert(parentTicketDetail.body.includes('Read-only lineage from this ticket'), 'parent ticket detail should state child lineage is read-only');
+    assert(parentTicketDetail.body.includes('Child outcomes do not automatically complete or fail the parent ticket'), 'parent ticket detail should state child outcomes do not affect parent status');
+    assert(parentTicketDetail.body.includes(`<a href="/tickets/${fixture.childTicket.id}">Ticket #${fixture.childTicket.id}</a>`), 'parent ticket detail should link to child ticket');
+    assert(parentTicketDetail.body.includes(fixture.childTicket.objective), 'parent ticket detail should show child ticket objective');
+    assert(parentTicketDetail.body.includes(fixture.childTicket.blockedReason), 'parent ticket detail should show child blocked reason');
+    const childTicketDetail = await assertPageRenders(cookie, `/tickets/${fixture.childTicket.id}`, 'child ticket detail', 'Parent Ticket');
+    assert(childTicketDetail.body.includes('This ticket was spawned from a parent ticket/run'), 'child ticket detail should explain parent lineage');
+    assert(childTicketDetail.body.includes('Parent and child statuses are independent'), 'child ticket detail should state statuses are independent');
+    assert(childTicketDetail.body.includes(`<a href="/tickets/${fixture.ticket.id}">Ticket #${fixture.ticket.id}</a>`), 'child ticket detail should link back to parent ticket');
+    assert(childTicketDetail.body.includes(`<a href="/runs/${fixture.run.id}">Run #${fixture.run.id}</a>`), 'child ticket detail should link to parent run');
+    assert(childTicketDetail.body.includes(fixture.childTicket.spawnPlanId), 'child ticket detail should show spawn plan id');
     const ticketWithoutAcceptanceCriteriaPage = await assertPageRenders(cookie, `/tickets/${fixture.ticketWithoutAcceptanceCriteria.id}`, 'ticket without acceptance criteria detail', 'Acceptance Criteria');
     assert(ticketWithoutAcceptanceCriteriaPage.body.includes('Unspecified'), 'ticket without acceptance criteria detail should show an unspecified Work Type');
     assert(ticketWithoutAcceptanceCriteriaPage.body.includes('None declared'), 'ticket without acceptance criteria detail should show none declared for missing acceptance criteria');

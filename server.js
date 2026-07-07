@@ -1625,6 +1625,35 @@ function readTickets() {
   return normalizeTickets(readJsonArrayCached(DATA_FILE));
 }
 
+function getTicketById(id) {
+  if (id == null) return null;
+  return readTickets().find(ticket => ticket.id === id) || null;
+}
+
+function getChildTickets(parentTicketId) {
+  if (parentTicketId == null) return [];
+  return readTickets().filter(ticket => ticket.parentTicketId === parentTicketId);
+}
+
+function getChildTicketSummaries(parentTicketId) {
+  const runs = readRuns();
+  return getChildTickets(parentTicketId).map(ticket => {
+    const latestChildRun = runs
+      .filter(run => run.ticketId === ticket.id)
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
+    return {
+      id: ticket.id,
+      objective: ticket.objective,
+      status: ticket.status,
+      blockedReason: ticket.blockedReason || null,
+      parentRunId: ticket.parentRunId || null,
+      spawnPlanId: ticket.spawnPlanId || null,
+      latestRunStatus: latestChildRun ? latestChildRun.status : null,
+      latestRunId: latestChildRun ? latestChildRun.id : null
+    };
+  });
+}
+
 function readBrowserTargets() {
   return readJsonArrayCached(BROWSER_TARGETS_FILE);
 }
@@ -19202,9 +19231,14 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     });
   }
 
+  const parentTicket = ticket.parentTicketId ? getTicketById(ticket.parentTicketId) : null;
+  const childTickets = getChildTicketSummaries(ticketId);
+
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
     ticket,
+    parentTicket,
+    childTickets,
     browserTarget: ticket.targetRef && ticket.targetRef.kind === 'browser'
       ? getBrowserTargetById(ticket.targetRef.browserTargetId)
       : null,

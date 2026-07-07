@@ -72,6 +72,20 @@
 <% } %>
 </section>
 
+<% if (typeof parentTicket !== 'undefined' && parentTicket) { %>
+<section class="detail-section">
+  <h2>Parent Ticket</h2>
+  <p class="text-muted">This ticket was spawned from a parent ticket/run. Parent and child statuses are independent.</p>
+  <dl class="detail-grid">
+    <div><dt>Ticket</dt><dd><a href="/tickets/<%= parentTicket.id %>">Ticket #<%= parentTicket.id %></a></dd></div>
+    <div><dt>Objective</dt><dd><%= parentTicket.objective %></dd></div>
+    <div><dt>Status</dt><dd><span class="status-badge status-<%= parentTicket.status %>"><%= parentTicket.status %></span></dd></div>
+    <% if (ticket.parentRunId) { %><div><dt>Parent Run</dt><dd><a href="/runs/<%= ticket.parentRunId %>">Run #<%= ticket.parentRunId %></a></dd></div><% } %>
+    <% if (ticket.spawnPlanId) { %><div><dt>Spawn Plan</dt><dd><code><%= ticket.spawnPlanId %></code></dd></div><% } %>
+  </dl>
+</section>
+<% } %>
+
 <%
   const ticketFeasibility = ticket.feasibility || null;
   const ticketBlockedReason = ticket.blockedReason || (ticketFeasibility && ticketFeasibility.reason) || null;
@@ -279,6 +293,43 @@
     <p class="text-muted">Stored for review; not automatically verified. Run completed &ne; objective verified.</p>
   </div>
 </details>
+
+<% if (typeof childTickets !== 'undefined' && childTickets && childTickets.length > 0) { %>
+<details class="disclosure" open>
+  <summary>Child Tickets <span class="sub"><%= childTickets.length %> spawned</span></summary>
+  <div class="body">
+    <p class="text-muted">Read-only lineage from this ticket. Child outcomes do not automatically complete or fail the parent ticket.</p>
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>Ticket</th>
+          <th>Objective</th>
+          <th>Status</th>
+          <th>Blocked Reason</th>
+          <th>Latest Run</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% childTickets.forEach(child => { %>
+          <tr>
+            <td><a href="/tickets/<%= child.id %>">Ticket #<%= child.id %></a></td>
+            <td><%= child.objective %></td>
+            <td><span class="status-badge status-<%= child.status %>"><%= child.status %></span></td>
+            <td><%= child.blockedReason || '-' %></td>
+            <td>
+              <% if (child.latestRunId) { %>
+                <a href="/runs/<%= child.latestRunId %>"><span class="status-badge status-<%= child.latestRunStatus %>"><%= child.latestRunStatus %></span></a>
+              <% } else { %>
+                <span class="text-muted">-</span>
+              <% } %>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</details>
+<% } %>
 
 <details class="disclosure" open>
   <summary>Assignment &amp; work split <span class="sub"><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %> · <%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></span></summary>
