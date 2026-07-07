@@ -893,6 +893,18 @@
   </section>
 
   <% if (snapshot.browserTargetSnapshot || (snapshot.browserOperations && snapshot.browserOperations.length > 0)) { %>
+  <% const browserEvidenceStatus = snapshot.browserEvidenceStatus || (run.replaySummary && run.replaySummary.browserEvidenceStatus) || null; %>
+  <% const browserEvidenceDetail = snapshot.browserEvidenceDetail || (run.replaySummary && run.replaySummary.browserEvidenceDetail) || null; %>
+  <% if (browserEvidenceStatus) { %>
+  <section class="detail-section" id="browser-evidence-status">
+    <h2>Browser Evidence Status</h2>
+    <dl class="detail-grid">
+      <div><dt>Status</dt><dd><strong class="badge badge--outcome-<%= browserEvidenceStatus === 'evidence_available' ? 'success' : browserEvidenceStatus === 'target_blocked_or_redirected' ? 'error' : 'warning' %>"><%= browserEvidenceStatus %></strong></dd></div>
+      <% if (browserEvidenceDetail) { %><div><dt>Detail</dt><dd><%= browserEvidenceDetail %></dd></div><% } %>
+      <div><dt>Runtime status</dt><dd><%= snapshot.terminalStatus || run.status || '-' %> (independent of browser evidence)</dd></div>
+    </dl>
+  </section>
+  <% } %>
   <section class="detail-section replay-section" id="replay-browser-operations" data-replay-section="browserOperations">
     <details class="collapsible">
       <summary>Browser Operations (<%= (snapshot.browserOperations || []).length %>)</summary>
