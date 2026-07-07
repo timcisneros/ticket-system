@@ -512,6 +512,11 @@ async function assertMainFormRenders(cookie, label) {
   assert(response.body.includes('id="acceptanceCriteria"'), `${label}: Acceptance Criteria textarea missing`);
   assert(response.body.includes('Acceptance Criteria'), `${label}: Acceptance Criteria label missing`);
   assert(response.body.includes('Stored for review; not automatically verified'), `${label}: Acceptance Criteria semantic boundary missing`);
+  assert(response.body.includes('id="workflowPostconditionsPreview"'), `${label}: workflow postconditions preview container missing`);
+  assert(response.body.includes('Executable deterministic checks this workflow will verify after the run executes.'), `${label}: workflow postconditions preview copy missing`);
+  assert(response.body.includes('No workflow postconditions declared.'), `${label}: no-postconditions preview copy missing`);
+  assert(response.body.includes('"legal-intake":') && response.body.includes('file exists: {{workflow.input.basePath}}/intake-register.csv'), `${label}: workflow postcondition preview data missing fileExists assertion`);
+  assert(response.body.includes('file {{workflow.input.basePath}}/intake-register.csv contains'), `${label}: workflow postcondition preview data missing fileContains assertion`);
   assert(response.body.includes('id="browserTargetId"'), `${label}: browser target selector missing`);
   assert(response.body.includes('Page Render Browser'), `${label}: active browser target missing`);
   assert(response.body.includes('Browser Phase 1 supports only'), `${label}: browser read-only warning missing`);
