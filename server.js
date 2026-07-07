@@ -11445,6 +11445,11 @@ function hasUnresolvedTicketTriage(ticket) {
   return !!(ticket && ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt);
 }
 
+// Low-level mutation primitive: opens a ticket so a rerun/retry can be created.
+// This is NOT a policy gate. Callers must already have applied the relevant
+// policy: validateManualRerun for operator-triggered reruns/retries, or
+// runAutoRetryAfterFailureIfPolicyAllows for automatic retries.
+// This primitive performs only a defensive unresolved-triage check.
 function forceTicketOpenForRerun(ticketId, rerunMode = null) {
   const tickets = readTickets();
   const ticket = tickets.find(item => item.id === ticketId);
