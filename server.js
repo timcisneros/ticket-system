@@ -11483,6 +11483,17 @@ function forceTicketOpenForRerun(ticketId, rerunMode = null) {
 // retry — nothing here schedules, backs off, or retries on failure.
 function validateManualRerun(ticket) {
   if (!ticket) return { allowed: false, reason: 'Ticket not found' };
+
+  // Preserve the blocked-by-default invariant for parent-spawned child tickets.
+  // executeTicketPlan creates children with status 'blocked' and no auto-run; they
+  // must be explicitly opened via PATCH /api/tickets/:id/status before rerun.
+  if (ticket.status === 'blocked' && ticket.parentTicketId != null) {
+    return {
+      allowed: false,
+      reason: 'Cannot rerun: child ticket created by executeTicketPlan is blocked by default. Open the ticket explicitly before rerunning.'
+    };
+  }
+
   const policy = ticket.executionPolicy;
   const maxAttempts = policy && Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0
     ? policy.maxAttempts
