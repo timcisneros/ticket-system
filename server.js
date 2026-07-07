@@ -11526,13 +11526,14 @@ function isAutoRetryableReason(prospectiveReasonCode, mutationCount) {
 }
 
 // Bounded automatic retry (v1). Called ONLY from failAgentRun, before run triage is
-// persisted. Creates at most one new pending run when the ticket policy explicitly
-// opts in AND a finite maxAttempts ceiling has room AND the failure is in the runtime
-// allowlist with no mutations AND no triage is required. It never resolves triage,
-// changes verification, mutates the workspace, or finalizes completion. On exhaustion
-// or any non-retryable failure it returns { retried: false } so the caller falls
-// through to today's triage behavior.
-function maybeAutoRetryAfterFailure(failedRun, failure, mutationCount) {
+// persisted. Evaluates the auto-retry policy and, if allowed, opens the ticket and
+// creates at most one new pending run. Requires the ticket policy to explicitly opt
+// in, a finite maxAttempts ceiling with room, a runtime allowlist failure with no
+// mutations, and no blocking ticket triage. It never resolves triage, changes
+// verification, mutates the workspace, or finalizes completion. On exhaustion or any
+// non-retryable failure it returns { retried: false } so the caller falls through to
+// today's triage behavior.
+function runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCount) {
   if (!failedRun) return { retried: false, reason: 'no_run' };
   const ticket = readTickets().find(item => item.id === failedRun.ticketId);
   if (!ticket) return { retried: false, reason: 'ticket_missing' };
@@ -11804,7 +11805,7 @@ function failAgentRun(run, error, workspaceAction = null) {
   // Bounded automatic retry (v1): decide BEFORE persisting run triage. The failed run
   // keeps all of its evidence below; only triage-creation and ticket-failure
   // finalization are skipped when an eligible immediate retry is created.
-  const autoRetry = maybeAutoRetryAfterFailure(failedRun, failure, countRunMutatingOperations(failedRun.id));
+  const autoRetry = runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, countRunMutatingOperations(failedRun.id));
   failedRun.triage = autoRetry.retried
     ? null
     : persistRunTriage(failedRun.id, buildRunTriage(failedRun, {

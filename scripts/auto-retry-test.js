@@ -258,7 +258,7 @@ async function main() {
 // Phase 2 (isolated server): the interrupt terminalization path must never auto-retry.
 // interruptStaleRunsOnStartup runs BEFORE the scheduler starts and interrupts an
 // event-less pending run via the SAME interruptAgentRun used by manual stop
-// (POST /api/runs/:id/stop). That path does not call maybeAutoRetryAfterFailure, so an
+// (POST /api/runs/:id/stop). That path does not call runAutoRetryAfterFailureIfPolicyAllows, so an
 // autoRetry+finite-maxAttempts ticket whose run is interrupted gets no retry. This is
 // the deterministic way to exercise interruptAgentRun (the scheduler's immediate first
 // tick would otherwise start any parked run).
