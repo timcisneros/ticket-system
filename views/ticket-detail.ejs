@@ -269,6 +269,18 @@
 
 <div class="zone-head"><span class="zone-eyebrow">How it's set up</span><span class="zone-q">How is this ticket configured?</span></div>
 <details class="disclosure" open>
+  <summary>Acceptance Criteria <span class="sub"><%= ticket.acceptanceCriteria ? 'Declared' : 'None declared' %></span></summary>
+  <div class="body">
+    <% if (ticket.acceptanceCriteria) { %>
+      <p style="white-space:pre-wrap;"><%= ticket.acceptanceCriteria %></p>
+    <% } else { %>
+      <p class="text-muted">None declared.</p>
+    <% } %>
+    <p class="text-muted">Stored for review; not automatically verified. Run completed &ne; objective verified.</p>
+  </div>
+</details>
+
+<details class="disclosure" open>
   <summary>Assignment &amp; work split <span class="sub"><%= ticket.assignmentTargetType === 'group' ? 'Group' : 'Agent' %> #<%= ticket.assignmentTargetId %> · <%= ticket.assignmentMode === 'allocated' ? 'Manual folder scopes' : ticket.assignmentMode === 'dynamic' ? 'Automatic folder scopes' : ticket.assignmentMode %></span></summary>
   <div class="body">
     <dl class="detail-grid">

@@ -12247,6 +12247,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     ),
     runtimeLimitsSnapshot,
     verificationContractSnapshot: buildVerificationContractSnapshot(workflow, now),
+    acceptanceCriteriaSnapshot: (typeof ticket.acceptanceCriteria === 'string' && ticket.acceptanceCriteria.trim()) ? ticket.acceptanceCriteria.trim() : null,
     // Immutable routing snapshot (r1.28): supporting metadata only, never rewritten.
     routingSnapshot: routeDecision.routingSnapshot,
     allocationPlanId: allocationPlanId || null,
@@ -12295,6 +12296,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
       executionPolicySnapshot: run.executionPolicySnapshot,
       runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
       verificationContractSnapshot: run.verificationContractSnapshot,
+      acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
       workTypeId: run.workTypeId,
       workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
       workTypeSnapshotSource: run.workTypeSnapshot ? 'ticket_snapshot' : null,
@@ -17825,9 +17827,11 @@ function createTicketFromInput(input, actor, options = {}) {
     ? actor.username
     : (actor && actor.userId != null ? String(actor.userId) : 'system');
 
+  const acceptanceCriteria = typeof input.acceptanceCriteria === 'string' ? input.acceptanceCriteria.trim() : '';
   const newTicket = {
     id: nextTicketId,
     objective,
+    acceptanceCriteria: acceptanceCriteria || null,
     assignmentTargetType,
     assignmentTargetId: parsedAssignmentTargetId,
     assignmentMode: resolvedAssignmentMode,
@@ -17926,7 +17930,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     return 'Permission denied';
   }
 
-  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy, executionTargetKind, browserTargetId, workTypeId } = request.body;
+  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy, executionTargetKind, browserTargetId, workTypeId, acceptanceCriteria } = request.body;
 
   function renderTicketForm(error) {
     reply.code(400);
@@ -18000,6 +18004,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
 
   const result = createTicketFromInput({
     objective,
+    acceptanceCriteria,
     assignmentTargetType,
     assignmentTargetId,
     assignmentMode,
@@ -20582,6 +20587,7 @@ function buildRunDiagnosticBundle(ctx) {
   if (ticket) {
     out('- Ticket id: ' + dash(ticket.id));
     out('- Objective/title: ' + dash(ticket.objective || ticket.title));
+    out('- Acceptance criteria: ' + dash(ticket.acceptanceCriteria));
     out('- Status: ' + dash(ticket.status));
     out('- Assignment target type: ' + dash(ticket.assignmentTargetType));
     out('- Assignment target id: ' + dash(ticket.assignmentTargetId));
@@ -20603,6 +20609,7 @@ function buildRunDiagnosticBundle(ctx) {
   if (run) {
     out('- Run id: ' + dash(run.id));
     out('- Ticket id: ' + dash(run.ticketId));
+    out('- Acceptance criteria snapshot: ' + dash(run.acceptanceCriteriaSnapshot));
     out('- Agent id: ' + dash(run.agentId));
     out('- Agent name: ' + dash(run.agentName || (agent && agent.name)));
     out('- Status: ' + dash(run.status));
@@ -20856,6 +20863,8 @@ function buildRunDiagnosticBundle(ctx) {
     run: run || null,
     ticket: ticket || null,
     agent: safeAgent,
+    acceptanceCriteriaSnapshot: run && run.acceptanceCriteriaSnapshot || null,
+    ticketAcceptanceCriteria: ticket && ticket.acceptanceCriteria || null,
     failureSummary: failureSummary || null,
     operationHistory: history,
     permissionedDeleteAuditEvents: permEvents,

@@ -175,6 +175,7 @@ function seedNavigationFixture() {
   const ticket = {
     id: ticketId,
     objective: 'page render fixture',
+    acceptanceCriteria: 'Page renders without errors and shows the example heading.',
     assignmentTargetType: 'agent',
     assignmentTargetId: agent.id,
     assignmentMode: 'individual',
@@ -192,6 +193,7 @@ function seedNavigationFixture() {
     agentName: agent.name,
     workTypeId: workType.id,
     workTypeSnapshot,
+    acceptanceCriteriaSnapshot: ticket.acceptanceCriteria,
     workspaceRoot: WORKSPACE_ROOT,
     mainWorkspaceRoot: WORKSPACE_ROOT,
     executionWorkspaceType: 'main',
@@ -284,7 +286,7 @@ function seedNavigationFixture() {
     id: ticketId + index + 2,
     objective: `page render extra ticket ${index + 1}`,
     updatedAt: new Date(Date.now() - index - 1000).toISOString(),
-    ...(index === 0 ? { workTypeId: null, workTypeSnapshot: null } : {})
+    ...(index === 0 ? { workTypeId: null, workTypeSnapshot: null, acceptanceCriteria: null } : {})
   }));
 
   const browserTicket = {
@@ -339,8 +341,24 @@ function seedNavigationFixture() {
     }
   };
 
+  const runWithoutAcceptanceCriteriaSnapshot = {
+    ...run,
+    id: runId + 3,
+    ticketId: extraTickets[0].id,
+    workTypeId: null,
+    workTypeSnapshot: null,
+    acceptanceCriteriaSnapshot: null,
+    replaySnapshot: {
+      ...run.replaySnapshot,
+      runId: runId + 3,
+      ticketId: extraTickets[0].id,
+      workTypeId: null,
+      workTypeSnapshot: null
+    }
+  };
+
   writeJson('tickets.json', [...tickets, ticket, activeTicket, ...extraTickets, browserTicket]);
-  writeJson('runs.json', [...runs, run, activeRun, browserRun]);
+  writeJson('runs.json', [...runs, run, activeRun, browserRun, runWithoutAcceptanceCriteriaSnapshot]);
   writeJson('logs.json', [
     ...logs,
     activeLog,
@@ -351,7 +369,7 @@ function seedNavigationFixture() {
       message: `Page render fixture log ${index + 1}`
     }))
   ]);
-  return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent, workType, legacyTicket: extraTickets[0] };
+  return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent, workType, ticketWithoutAcceptanceCriteria: extraTickets[0], runWithoutAcceptanceCriteriaSnapshot };
 }
 
 function seedAttentionFixture() {
@@ -390,6 +408,9 @@ async function assertMainFormRenders(cookie, label) {
   assert(response.body.includes('Unspecified'), `${label}: Work Type selector must default to Unspecified`);
   assert(response.body.includes('Meeting Brief'), `${label}: active Work Type option missing`);
   assert(response.body.includes('does not grant target access or operations'), `${label}: Work Type authority boundary missing`);
+  assert(response.body.includes('id="acceptanceCriteria"'), `${label}: Acceptance Criteria textarea missing`);
+  assert(response.body.includes('Acceptance Criteria'), `${label}: Acceptance Criteria label missing`);
+  assert(response.body.includes('Stored for review; not automatically verified'), `${label}: Acceptance Criteria semantic boundary missing`);
   assert(response.body.includes('id="browserTargetId"'), `${label}: browser target selector missing`);
   assert(response.body.includes('Page Render Browser'), `${label}: active browser target missing`);
   assert(response.body.includes('Browser Phase 1 supports only'), `${label}: browser read-only warning missing`);
@@ -501,8 +522,13 @@ async function main() {
     assert(ticketDetail.body.includes('Work Type'), 'ticket detail should show Work Type section');
     assert(ticketDetail.body.includes(fixture.workType.name), 'ticket detail should show Work Type snapshot name');
     assert(ticketDetail.body.includes('does not grant authority or operations'), 'ticket detail should state Work Type authority boundary');
-    const legacyTicketPage = await assertPageRenders(cookie, `/tickets/${fixture.legacyTicket.id}`, 'legacy ticket detail', 'Work Type');
-    assert(legacyTicketPage.body.includes('Unspecified'), 'legacy ticket detail should show an unspecified Work Type');
+    assert(ticketDetail.body.includes('Acceptance Criteria'), 'ticket detail should show Acceptance Criteria section');
+    assert(ticketDetail.body.includes(fixture.ticket.acceptanceCriteria), 'ticket detail should show declared acceptance criteria');
+    assert(ticketDetail.body.includes('Stored for review; not automatically verified'), 'ticket detail should state acceptance criteria boundary');
+    const ticketWithoutAcceptanceCriteriaPage = await assertPageRenders(cookie, `/tickets/${fixture.ticketWithoutAcceptanceCriteria.id}`, 'ticket without acceptance criteria detail', 'Acceptance Criteria');
+    assert(ticketWithoutAcceptanceCriteriaPage.body.includes('Unspecified'), 'ticket without acceptance criteria detail should show an unspecified Work Type');
+    assert(ticketWithoutAcceptanceCriteriaPage.body.includes('None declared'), 'ticket without acceptance criteria detail should show none declared for missing acceptance criteria');
+    assert(ticketWithoutAcceptanceCriteriaPage.body.includes('Run completed &ne; objective verified') || ticketWithoutAcceptanceCriteriaPage.body.includes('Run completed ≠ objective verified'), 'ticket without acceptance criteria detail should state acceptance criteria boundary');
     const attention = seedAttentionFixture();
     const attnPage = await assertPageRenders(cookie, `/tickets/${attention.ticketId}`, 'attention ticket', 'Needs your attention');
     assert(attnPage.body.includes('class="attn critical"'), 'required triage should render a critical attention card');
@@ -511,7 +537,7 @@ async function main() {
     // never apply — unlike the shared `ticketDetail` run-bearing fixture, whose completed run
     // always trips reviewStatus.needsReview because its objective has no scoreable file path;
     // that's pre-existing Task-1 hasAttention behavior, not a Zone-2 layout concern) has no attention zone
-    const cleanTicketPage = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id + 2}`, 'clean ticket', 'At a glance');
+    const cleanTicketPage = await assertPageRenders(cookie, `/tickets/${fixture.ticket.id + 3}`, 'clean ticket', 'At a glance');
     assert(!cleanTicketPage.body.includes('Needs your attention'), 'completed ticket without triage or runs should omit the attention zone');
     const runDetail = await assertPageRenders(cookie, `/runs/${fixture.run.id}`, 'run detail', 'Run Outcome');
     assert(runDetail.body.includes('Recent Activity'), 'run detail should include inline recent activity');
@@ -520,6 +546,13 @@ async function main() {
     assert(runDetail.body.includes('Work Type Snapshot'), 'run detail should show immutable Work Type snapshot');
     assert(runDetail.body.includes(fixture.workType.name), 'run detail should show Work Type snapshot name');
     assert(runDetail.body.includes('It is not authority and does not grant operations'), 'run detail should state Work Type authority boundary');
+    assert(runDetail.body.includes('Acceptance Criteria Snapshot'), 'run detail should show Acceptance Criteria Snapshot section');
+    assert(runDetail.body.includes(fixture.run.acceptanceCriteriaSnapshot), 'run detail should show frozen acceptance criteria snapshot');
+    assert(runDetail.body.includes('Frozen at run creation for review'), 'run detail should state acceptance criteria snapshot boundary');
+    const missingAcceptanceCriteriaSnapshotRunDetail = await assertPageRenders(cookie, `/runs/${fixture.runWithoutAcceptanceCriteriaSnapshot.id}`, 'run without acceptance criteria snapshot detail', 'Acceptance Criteria Snapshot');
+    assert(missingAcceptanceCriteriaSnapshotRunDetail.body.includes('No acceptance criteria were captured for this run'), 'run without acceptance criteria snapshot detail should show missing captured criteria wording');
+    assert(missingAcceptanceCriteriaSnapshotRunDetail.body.includes('Runs capture acceptance criteria at creation time; this run has no captured criteria'), 'run without acceptance criteria snapshot detail should explain creation-time capture');
+    assert(missingAcceptanceCriteriaSnapshotRunDetail.body.includes('Frozen at run creation for review'), 'run without acceptance criteria snapshot detail should state snapshot boundary');
     assert(runDetail.body.includes('Routing decision'), 'run detail should show routing decision section');
     assert(runDetail.body.includes('Routing reason'), 'run detail should show routing reason field');
     assert(runDetail.body.includes('Fallback used'), 'run detail should show fallback status field');
@@ -572,6 +605,7 @@ async function main() {
     const createdBrowserTicket = readJson('tickets.json').slice().sort((a, b) => b.id - a.id)[0];
     assert(createdBrowserTicket.targetRef && createdBrowserTicket.targetRef.kind === 'browser', 'browser ticket form did not create browser targetRef');
     assert(createdBrowserTicket.targetRef.browserTargetId === fixture.browserTarget.id, 'browser ticket form stored the wrong browserTargetId');
+    assert(createdBrowserTicket.acceptanceCriteria === null, 'ticket form should default missing acceptance criteria to null');
 
     await assertPageRenders(cookie, '/admin', 'admin dashboard', 'Admin Dashboard');
     const browserTargetsPage = await assertPageRenders(cookie, '/admin/browser-targets', 'browser targets admin', 'Browser Targets');

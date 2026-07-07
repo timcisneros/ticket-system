@@ -58,6 +58,12 @@
     <p class="form-hint">Optional semantic context. A Work Type can narrow compatible target kinds; it does not grant target access or operations.</p>
   </div>
 
+  <div class="form-group">
+    <label for="acceptanceCriteria">Acceptance Criteria</label>
+    <textarea id="acceptanceCriteria" name="acceptanceCriteria" rows="3" placeholder="What would confirm this ticket is complete?"></textarea>
+    <p class="form-hint">Stored for review; not automatically verified. Run completed &ne; objective verified.</p>
+  </div>
+
   <div class="form-group" id="workflowGroup" hidden>
     <label for="workflowId">Workflow *</label>
     <select id="workflowId" name="workflowId">
