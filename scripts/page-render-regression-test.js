@@ -525,6 +525,8 @@ async function main() {
     assert(browserTicketDetail.body.includes(fixture.browserTarget.startUrl), 'browser ticket detail should show start URL');
     assert(browserTicketDetail.body.includes('maxScreenshotsPerRun'), 'browser ticket detail should show configured limits');
     assert(browserTicketDetail.body.includes('No click, fill, press'), 'browser ticket detail should show Phase 1 boundary');
+    // Verify no warning when target is active
+    assert(!browserTicketDetail.body.includes('Browser target unavailable'), 'active target should not show warning banner');
     const browserRunDetail = await assertPageRenders(cookie, `/runs/${fixture.browserRun.id}`, 'browser run detail', 'Browser Operations (4)');
     assert(browserRunDetail.body.includes('Browser Target Snapshot'), 'browser run detail should show target snapshot');
     assert(browserRunDetail.body.includes('Resource / final URL'), 'browser run detail should show final URL field');
@@ -532,6 +534,21 @@ async function main() {
     assert(browserRunDetail.body.includes('fixture-screenshot-sha256'), 'browser run detail should show screenshot hash');
     assert(browserRunDetail.body.includes('browser-artifacts/run-fixture/step-2-1.png'), 'browser run detail should show screenshot artifact path');
     assert(browserRunDetail.body.includes('Screenshot artifacts remain server-side'), 'browser run detail should explain path-only artifact access');
+
+    // Inactive browser target warning renders on ticket detail
+    const deactivateForWarning = await request('POST', `/admin/browser-targets/${fixture.browserTarget.id}/status`, {
+      cookie, form: { status: 'inactive' }
+    });
+    assert(deactivateForWarning.statusCode === 302, `deactivate browser target returned HTTP ${deactivateForWarning.statusCode}`);
+    const inactiveWarningPage = await assertPageRenders(cookie, `/tickets/${fixture.browserTicket.id}`, 'browser ticket detail with inactive target', 'Browser target unavailable');
+    assert(inactiveWarningPage.body.includes('no longer active'), 'inactive target should show warning about target unavailability');
+    const reactivateForWarning = await request('POST', `/admin/browser-targets/${fixture.browserTarget.id}/status`, {
+      cookie, form: { status: 'active' }
+    });
+    assert(reactivateForWarning.statusCode === 302, `reactivate browser target returned HTTP ${reactivateForWarning.statusCode}`);
+    const reactivatedWarningPage = await request('GET', `/tickets/${fixture.browserTicket.id}`, { cookie });
+    assert(reactivatedWarningPage.statusCode === 200, `browser ticket detail after reactivation returned HTTP ${reactivatedWarningPage.statusCode}`);
+    assert(!reactivatedWarningPage.body.includes('no longer active'), 'reactivated target should not show warning');
 
     const browserTicketCreate = await request('POST', '/tickets', {
       cookie,
@@ -647,7 +664,9 @@ async function main() {
       browserTicketTargetRef: true,
       browserTicketDetailRender: true,
       browserRunEvidenceRender: true,
-      browserTargetValidation: true
+      browserTargetValidation: true,
+      browserTargetWarningRender: true,
+      browserTargetRerunGuard: true
     }));
   } finally {
     if (server) {

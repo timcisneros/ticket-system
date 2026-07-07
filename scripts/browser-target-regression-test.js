@@ -291,6 +291,39 @@ async function assertFilesystemNonRegression(cookie, agent) {
   assert(!Object.prototype.hasOwnProperty.call(snapshot, 'browserTargetSnapshot'), 'Filesystem replay gained browserTargetSnapshot');
 }
 
+async function assertRerunBlockForInactiveTarget(cookie, agent) {
+  const targetId = 'rerun-test-target';
+  const targets = readJson('browser-targets.json');
+  if (!targets.find(t => t.id === targetId)) {
+    writeJson('browser-targets.json', [...targets, {
+      id: targetId, name: 'Rerun Test Target', status: 'active',
+      allowedOrigins: ['https://example.com'], startUrl: 'https://example.com/start',
+      limits: { maxNavigationsPerRun: 4, maxActionsPerRun: 8, navTimeoutMs: 5000, waitTimeoutMsCap: 10, maxPageTextBytes: 128, maxScreenshotsPerRun: 2 }
+    }]);
+  }
+  const objective = `rerun-guardrails ${STAMP}: test rerun block for inactive browser target`;
+  const ticket = await createTicket(cookie, agent.id, objective, targetId);
+
+  writeJson('browser-targets.json', readJson('browser-targets.json').map(t =>
+    t.id === targetId ? { ...t, status: 'inactive' } : t
+  ));
+
+  const blockedRerun = await request('POST', `/api/tickets/${ticket.id}/rerun`, { cookie, body: {} });
+  assert(blockedRerun.statusCode === 409, `Inactive-target rerun should be blocked with 409, got HTTP ${blockedRerun.statusCode}: ${blockedRerun.body}`);
+  assert(blockedRerun.body.includes('no longer active'), `Inactive-target rerun error should mention target status, got: ${blockedRerun.body}`);
+
+  writeJson('browser-targets.json', readJson('browser-targets.json').map(t =>
+    t.id === targetId ? { ...t, status: 'active' } : t
+  ));
+
+  const allowedRerun = await request('POST', `/api/tickets/${ticket.id}/rerun`, { cookie, body: {} });
+  assert(allowedRerun.statusCode === 200, `Active-target rerun should succeed with 200, got HTTP ${allowedRerun.statusCode}: ${allowedRerun.body}`);
+  const rerunTicket = JSON.parse(allowedRerun.body).ticket;
+  assert(rerunTicket && rerunTicket.id === ticket.id, 'Active-target rerun should return the same ticket');
+
+  writeJson('browser-targets.json', readJson('browser-targets.json').filter(t => t.id !== targetId));
+}
+
 async function assertLiveBrowserRuns(cookie, agent, fixtureCounts, blockedCounts) {
   const blockedBefore = blockedCounts.requests;
   const blockedTicket = await createTicket(
@@ -385,11 +418,13 @@ async function main() {
     } else {
       appServer = await startServer(preloadPath, executablePath);
       cookie = await login();
+      await assertRerunBlockForInactiveTarget(cookie, agent);
       await assertLiveBrowserRuns(cookie, agent, fixtureCounts, blockedCounts);
     }
     console.log(JSON.stringify({
       engineMissingRefusal: true,
       filesystemNonRegression: true,
+      rerunGuardrails: Boolean(executablePath),
       liveBrowserChecks: Boolean(executablePath)
     }));
   } finally {

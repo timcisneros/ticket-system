@@ -19777,6 +19777,13 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
       reply.code(409);
       return { error: rerunCheck.reason };
     }
+    if (rerunGateTicket.targetRef && rerunGateTicket.targetRef.kind === 'browser') {
+      const browserTarget = getBrowserTargetById(rerunGateTicket.targetRef.browserTargetId);
+      if (!browserTarget || browserTarget.status !== 'active') {
+        reply.code(409);
+        return { error: 'Cannot rerun: the browser target is no longer active or is unavailable. Reactivate the target or choose a valid target before rerunning.' };
+      }
+    }
   }
 
   try {
