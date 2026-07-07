@@ -5447,7 +5447,9 @@ function extractReplaySummary(snapshot) {
     modelResponses: modelResponses.length,
     hasBlockedOrRejected: workspaceOperations.some(item => item && (item.blocked || item.reason || (item.operation && item.operation.blocked))),
     hasCompletedNoop: events.some(item => item && item.type === 'run:completed_noop'),
-    hasPostconditionCompleted: events.some(item => item && item.type === 'run:postcondition_completed')
+    hasPostconditionCompleted: events.some(item => item && item.type === 'run:postcondition_completed'),
+    browserEvidenceStatus: snapshot.browserEvidenceStatus || null,
+    browserEvidenceDetail: snapshot.browserEvidenceDetail || null
   };
 }
 
@@ -5761,6 +5763,8 @@ function buildRunEvaluation(run) {
       }
     : null;
 
+  const browserEvidence = classifyBrowserEvidence(run, snapshot);
+
   return {
     effectiveness: {
       status: postconditionFailedEvents.length > 0
@@ -5789,7 +5793,86 @@ function buildRunEvaluation(run) {
       status: violationStatus,
       items: violationItems
     },
-    effectiveRuntimeConfig
+    effectiveRuntimeConfig,
+    browserEvidence
+  };
+}
+
+function classifyBrowserEvidence(run, snapshot) {
+  if (!isBrowserRun(run)) {
+    return { status: 'not_applicable', detail: null };
+  }
+
+  const browserOps = Array.isArray(snapshot && snapshot.browserOperations) ? snapshot.browserOperations : [];
+  const parsedModelPlans = Array.isArray(snapshot && snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
+  const modelCompleted = parsedModelPlans.some(plan => plan && plan.complete === true);
+
+  if (browserOps.length === 0) {
+    return { status: 'objective_unverified', detail: 'No browser operations captured; objective cannot be verified.' };
+  }
+
+  // Check for target blocked/redirected by examining all navigate operations
+  for (const op of browserOps) {
+    if (op.operation && op.operation.operation === 'navigate' && op.receipt && op.receipt.metadata) {
+      const finalUrl = op.receipt.metadata.finalUrl || '';
+      const requestedUrl = op.receipt.metadata.requestedUrl || '';
+      const blockedPatterns = ['/sorry/', '/captcha', '/login', '/signin', '/403', '/blocked'];
+      const isBlocked = blockedPatterns.some(pattern => finalUrl.includes(pattern));
+      if (isBlocked) {
+        return {
+          status: 'target_blocked_or_redirected',
+          detail: `Navigation landed on blocked page: ${finalUrl}`
+        };
+      }
+    }
+  }
+
+  // Check for content-bearing evidence
+  let hasReadPageText = false;
+  let hasScreenshot = false;
+  let maxElementCount = 0;
+
+  for (const op of browserOps) {
+    if (op.operation && op.operation.operation === 'readPageText' && op.status === 'ok' && op.receipt && op.receipt.metadata) {
+      const bytes = op.receipt.metadata.bytes;
+      if (typeof bytes === 'number' && bytes > 0) {
+        hasReadPageText = true;
+      }
+    }
+    if (op.operation && op.operation.operation === 'observe' && op.receipt && op.receipt.metadata) {
+      const count = op.receipt.metadata.elementCount;
+      if (typeof count === 'number' && count > maxElementCount) {
+        maxElementCount = count;
+      }
+    }
+    if (op.operation && op.operation.operation === 'screenshot' && op.status === 'ok') {
+      hasScreenshot = true;
+    }
+  }
+
+  const hasContentEvidence = hasReadPageText || maxElementCount >= 3 || hasScreenshot;
+
+  if (hasContentEvidence) {
+    return {
+      status: 'evidence_available',
+      detail: hasReadPageText
+        ? 'Page text was read successfully.'
+        : hasScreenshot
+          ? 'Screenshot captured.'
+          : `Observed ${maxElementCount} interactive elements.`
+    };
+  }
+
+  if (modelCompleted) {
+    return {
+      status: 'browser_evidence_insufficient',
+      detail: `Model completed with insufficient evidence. ${maxElementCount > 0 ? `Only ${maxElementCount} element(s) observed.` : 'No elements observed.'} No page text was read and no screenshot was taken.`
+    };
+  }
+
+  return {
+    status: 'browser_evidence_insufficient',
+    detail: `Browser evidence is insufficient. ${maxElementCount > 0 ? `Only ${maxElementCount} element(s) observed.` : 'No elements observed.'}`
   };
 }
 
@@ -9897,6 +9980,8 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
   maybeTestInterrupt(run, 'before_run.snapshot_finalized');
   const effectiveMutationCount = mutationCount !== null ? mutationCount : countRunMutatingOperations(run.id);
   const finalizedAt = new Date().toISOString();
+  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const browserEvidence = classifyBrowserEvidence(run, snapshot);
   updateRunReplaySnapshot(run.id, snapshot => snapshot ? {
     ...snapshot,
     terminalStatus: status,
@@ -9904,6 +9989,8 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
     failure: failure ? sanitizeSnapshotValue(failure) : null,
     mutationOutcome: effectiveMutationCount === 0 ? 'no_mutations' : status === 'completed' ? 'all_intended' : 'partial_mutations',
     mutationCount: effectiveMutationCount,
+    browserEvidenceStatus: browserEvidence.status,
+    browserEvidenceDetail: browserEvidence.detail,
     finalizedAt
   } : snapshot);
   appendEvent({
@@ -20483,8 +20570,42 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 8. Workspace Actions
-  out('## 8. Workspace Actions');
+  // 8. Browser Evidence
+  const browserOps = Array.isArray(s.browserOperations) ? s.browserOperations : [];
+  const browserEvidenceStatus = s.browserEvidenceStatus || null;
+  const browserEvidenceDetail = s.browserEvidenceDetail || null;
+  const isBr = isBrowserRun(run);
+  out('## 8. Browser Evidence');
+  if (!isBr) {
+    out('- Not a browser run (target kind: ' + dash(run && run.targetRef && run.targetRef.kind) + ').');
+  } else {
+    out('- Browser target: ' + dash(run && run.browserTargetSnapshot && run.browserTargetSnapshot.id));
+    out('- Browser operations count: ' + browserOps.length);
+    out('- Browser evidence status: ' + dash(browserEvidenceStatus));
+    out('- Browser evidence detail: ' + dash(browserEvidenceDetail));
+    out('- Terminal (runtime) status: ' + dash(s.terminalStatus || run && run.status));
+    if (browserOps.length > 0) {
+      out('');
+      out('### Browser Operations');
+      browserOps.forEach((op, i) => {
+        const receipt = op.receipt || {};
+        const meta = receipt.metadata || {};
+        const opName = op.operation && op.operation.operation;
+        const opStatus = op.status || '-';
+        const finalUrl = meta.finalUrl || meta.requestedUrl || op.targetResourceId || '-';
+        const elementInfo = meta.elementCount != null ? ' elements=' + meta.elementCount : '';
+        const bytesInfo = meta.bytes != null ? ' bytes=' + meta.bytes : '';
+        const duration = op.durationMs != null ? ' ' + op.durationMs + 'ms' : '';
+        out('- Op ' + (i + 1) + ': ' + dash(opName) + ' status=' + opStatus + duration + (elementInfo || bytesInfo) + ' url=' + finalUrl);
+      });
+    }
+    out('');
+    out('- Note: Browser evidence status is independent of runtime terminal status. A completed run may have unverified or insufficient evidence.');
+  }
+  out('');
+
+  // 9. Workspace Actions
+  out('## 9. Workspace Actions');
   out('- Model-proposed workspace actions' + countSuffix + ': ' + proposedCount);
   out('- Runtime-accepted workspace operations' + countSuffix + ': ' + runtimeAcceptedCount);
   out('- Mutations committed' + countSuffix + ': ' + committedCount);
@@ -20495,8 +20616,8 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 9. Operation History / Artifact Ownership
-  out('## 9. Operation History / Artifact Ownership');
+  // 10. Operation History / Artifact Ownership
+  out('## 10. Operation History / Artifact Ownership');
   if (history.length > 0) {
     history.forEach(h => {
       out(`- #${dash(h.id)} ${dash(h.operation)} path=${dash(opPath(h))} ${h.error ? 'ERROR=' + h.error : 'ok'}`);
@@ -20510,7 +20631,7 @@ function buildRunDiagnosticBundle(ctx) {
   out('');
 
   // 10. Permissioned Cross-Ticket Delete Audit
-  out('## 10. Permissioned Cross-Ticket Delete Audit');
+  out('## 11. Permissioned Cross-Ticket Delete Audit');
   if (permEvents.length > 0) {
     permEvents.forEach((e, i) => {
       out(`- [${i}] event type: ${dash(e.type)}`);
@@ -20545,7 +20666,7 @@ function buildRunDiagnosticBundle(ctx) {
   out('');
 
   // 11. Replay Events (canonical: snapshot.events)
-  out('## 11. Replay Events');
+  out('## 12. Replay Events');
   out('- Replay event count: ' + replayEvents.length);
   out('- Phase violations (execution.phase_violation): ' + phaseViolationCount);
   out('- Model stalls (model:stalled): ' + modelStallCount);
@@ -20556,7 +20677,7 @@ function buildRunDiagnosticBundle(ctx) {
   out('');
 
   // 12. Provider / Model Evidence
-  out('## 12. Provider / Model Evidence');
+  out('## 13. Provider / Model Evidence');
   out('- Provider request count: ' + (Array.isArray(s.providerRequests) ? s.providerRequests.length : 0));
   out('- Model response count: ' + (Array.isArray(s.modelResponses) ? s.modelResponses.length : 0));
   out('- Last model message: ' + dash(fs2.lastModelMessage));
@@ -20568,7 +20689,7 @@ function buildRunDiagnosticBundle(ctx) {
   out('');
 
   // 13. Artifact Prediction / Output Analysis
-  out('## 13. Artifact Prediction / Output Analysis');
+  out('## 14. Artifact Prediction / Output Analysis');
   const cmp = artifactPredictionComparison || { matched: [], missing: [], unexpected: [] };
   out('- Matched: ' + (Array.isArray(cmp.matched) ? cmp.matched.length : 0));
   out('- Missing: ' + (Array.isArray(cmp.missing) ? cmp.missing.length : 0));
@@ -20578,7 +20699,7 @@ function buildRunDiagnosticBundle(ctx) {
   out('');
 
   // 14. Recent Activity
-  out('## 14. Recent Activity');
+  out('## 15. Recent Activity');
   const logs = Array.isArray(recentLogs) ? recentLogs : [];
   if (logs.length > 0) {
     logs.forEach(l => out('- ' + dash(l.displayType || l.type) + ': ' + dash(l.displayMessage || l.message)));
@@ -20588,7 +20709,7 @@ function buildRunDiagnosticBundle(ctx) {
   out('');
 
   // 15. Raw Debug JSON (secret-free projection)
-  out('## 15. Raw Debug JSON');
+  out('## 16. Raw Debug JSON');
   const safeAgent = agent ? { id: agent.id, name: agent.name, provider: agent.provider, model: agent.model } : null;
   const rawDebug = {
     route, generatedAt, appVersion: DIAGNOSTIC_APP_VERSION,
@@ -20607,6 +20728,9 @@ function buildRunDiagnosticBundle(ctx) {
       providerRequests: Array.isArray(s.providerRequests) ? s.providerRequests.length : 0,
       modelResponses: Array.isArray(s.modelResponses) ? s.modelResponses.length : 0,
       workspaceOperations: workspaceOps,
+      browserOperations: browserOps,
+      browserEvidenceStatus: s.browserEvidenceStatus || null,
+      browserEvidenceDetail: s.browserEvidenceDetail || null,
       replayEvents
     },
     delegatedAuthority: {
@@ -20621,7 +20745,7 @@ function buildRunDiagnosticBundle(ctx) {
   out('');
 
   // 16. Redaction Notice
-  out('## 16. Redaction Notice');
+  out('## 17. Redaction Notice');
   out('Provider keys, session cookies, password hashes, auth tokens, and environment secrets are excluded from this diagnostic bundle.');
   out('');
 
