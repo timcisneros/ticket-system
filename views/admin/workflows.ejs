@@ -17,6 +17,7 @@
         <th>ID</th>
         <th>Status</th>
         <th>Steps</th>
+        <th>Postconditions</th>
         <th>Updated</th>
         <th>Actions</th>
       </tr>
@@ -36,6 +37,19 @@
           </td>
           <td><%= workflow.enabled === false ? 'disabled' : 'enabled' %></td>
           <td><%= Array.isArray(workflow.actions) ? workflow.actions.length : 0 %></td>
+          <td>
+            <% const postconditions = Array.isArray(workflow.postconditions) ? workflow.postconditions : []; %>
+            <% if (postconditions.length === 0) { %>
+              <span class="text-muted">None</span>
+            <% } else { %>
+              <%= postconditions.length %> check<%= postconditions.length === 1 ? '' : 's' %>
+              <ul class="text-muted" style="margin:4px 0 0;padding-left:18px;">
+                <% postconditions.forEach(function(pc) { %>
+                  <li><code><%= typeof formatPostconditionAssertion === 'function' ? formatPostconditionAssertion(pc) : (pc.type || 'unknown') %></code></li>
+                <% }) %>
+              </ul>
+            <% } %>
+          </td>
           <td><%= workflow.updatedAt || workflow.createdAt || 'Unknown' %></td>
           <td class="actions">
             <a href="/admin/workflows/<%= workflow.id %>/edit" class="btn-small">Edit JSON</a>
