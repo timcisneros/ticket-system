@@ -6051,6 +6051,31 @@ function buildTicketAttemptSummary(ticketRuns) {
   };
 }
 
+// Display-only routing decision summary. Uses the immutable run.routingSnapshot if
+// available, falling back to the replay snapshot's provider/model for older runs.
+// Does not affect routing, provider selection, or fallback behavior.
+function buildRoutingDisplay(run, snapshot) {
+  const rs = run && run.routingSnapshot;
+  if (rs) {
+    return {
+      source: 'routing_decision',
+      sourceLabel: 'Routing decision',
+      provider: rs.selectedProvider || null,
+      model: rs.selectedModel || null,
+      reason: rs.reason || null,
+      fallbackUsed: rs.fallbackUsed === true
+    };
+  }
+  return {
+    source: 'runtime_context',
+    sourceLabel: 'Runtime context',
+    provider: snapshot && snapshot.provider ? snapshot.provider : null,
+    model: snapshot && snapshot.model ? snapshot.model : null,
+    reason: null,
+    fallbackUsed: null
+  };
+}
+
 // Advisory-only budget status: compares a run's recorded usage against the budget
 // threshold fields recorded in its execution policy snapshot. This NEVER blocks,
 // stops, fails, or reruns anything — it is purely a visibility signal derived from
@@ -20966,6 +20991,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const diagnosticsGeneratedAt = new Date().toISOString();
   const runDetailAttemptUsage = buildRunAttemptUsage(run, readRuns().filter(item => item.ticketId === run.ticketId));
   const runtimeLimitsDisplay = buildRunRuntimeLimitsDisplay(run, snapshot, runDetailAttemptUsage, ticket && ticket.objective);
+  const routingDisplay = buildRoutingDisplay(run, snapshot);
   const runDiagnosticBundle = buildRunDiagnosticBundle({
     run, ticket, agent, snapshot, authorityContext, failureSummary,
     operationHistory: enrichedHistory, permissionedDeleteAuditEvents, completionSummary,
@@ -20997,6 +21023,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     operationalOutcomeLabel: displayOperationalOutcome(operationalOutcome, runPartialMutationCount),
     attemptUsage: runDetailAttemptUsage,
     runtimeLimitsDisplay,
+    routingDisplay,
     budgetStatus: buildRunBudgetStatus(run, runDetailAttemptUsage),
     runStatusLabel: displayRunStatus(run.status),
     runEvents,

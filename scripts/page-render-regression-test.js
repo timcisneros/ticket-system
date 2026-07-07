@@ -520,6 +520,9 @@ async function main() {
     assert(runDetail.body.includes('Work Type Snapshot'), 'run detail should show immutable Work Type snapshot');
     assert(runDetail.body.includes(fixture.workType.name), 'run detail should show Work Type snapshot name');
     assert(runDetail.body.includes('It is not authority and does not grant operations'), 'run detail should state Work Type authority boundary');
+    assert(runDetail.body.includes('Routing decision'), 'run detail should show routing decision section');
+    assert(runDetail.body.includes('Routing reason'), 'run detail should show routing reason field');
+    assert(runDetail.body.includes('Fallback used'), 'run detail should show fallback status field');
     const browserTicketDetail = await assertPageRenders(cookie, `/tickets/${fixture.browserTicket.id}`, 'browser ticket detail', 'Execution target');
     assert(browserTicketDetail.body.includes(fixture.browserTarget.name), 'browser ticket detail should show target name');
     assert(browserTicketDetail.body.includes(fixture.browserTarget.startUrl), 'browser ticket detail should show start URL');
@@ -534,6 +537,9 @@ async function main() {
     assert(browserRunDetail.body.includes('fixture-screenshot-sha256'), 'browser run detail should show screenshot hash');
     assert(browserRunDetail.body.includes('browser-artifacts/run-fixture/step-2-1.png'), 'browser run detail should show screenshot artifact path');
     assert(browserRunDetail.body.includes('Screenshot artifacts remain server-side'), 'browser run detail should explain path-only artifact access');
+    assert(browserRunDetail.body.includes('Routing decision'), 'browser run detail should show routing decision section');
+    assert(browserRunDetail.body.includes('Provider'), 'browser run detail should show routing provider');
+    assert(browserRunDetail.body.includes('Model'), 'browser run detail should show routing model');
 
     // Inactive browser target warning renders on ticket detail
     const deactivateForWarning = await request('POST', `/admin/browser-targets/${fixture.browserTarget.id}/status`, {
@@ -666,7 +672,8 @@ async function main() {
       browserRunEvidenceRender: true,
       browserTargetValidation: true,
       browserTargetWarningRender: true,
-      browserTargetRerunGuard: true
+      browserTargetRerunGuard: true,
+      routingDecisionRender: true
     }));
   } finally {
     if (server) {

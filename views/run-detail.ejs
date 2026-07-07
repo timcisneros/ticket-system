@@ -213,6 +213,19 @@
 </section>
 <% } %>
 
+<% if (typeof routingDisplay !== 'undefined' && routingDisplay) { %>
+<section class="detail-section">
+  <h2>Routing decision</h2>
+  <p class="text-muted"><%= routingDisplay.sourceLabel %> — may differ from the runtime context.</p>
+  <dl class="detail-grid">
+    <div><dt>Provider</dt><dd><%= routingDisplay.provider || 'unavailable' %></dd></div>
+    <div><dt>Model</dt><dd><%= routingDisplay.model || 'unavailable' %></dd></div>
+    <div><dt>Routing reason</dt><dd><code><%= routingDisplay.reason || 'unavailable' %></code></dd></div>
+    <div><dt>Fallback used</dt><dd><code><%= routingDisplay.fallbackUsed === true ? 'yes' : (routingDisplay.fallbackUsed === false ? 'no' : 'unavailable') %></code></dd></div>
+  </dl>
+</section>
+<% } %>
+
 <% if (typeof budgetStatus !== 'undefined' && budgetStatus) { %>
 <%
   function budgetCell(m, unit) {
