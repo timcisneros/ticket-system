@@ -73,6 +73,9 @@
       <% }); %>
     </select>
     <p class="form-hint">Inputs are JSON. File and folder actions are recorded for replay and recovery.</p>
+    <div id="workflowPostconditionsPreview" class="form-hint" style="margin-top:8px;">
+      <span class="text-muted">No workflow postconditions declared.</span>
+    </div>
   </div>
 
   <div class="form-group" id="workflowInputGroup" hidden>
@@ -128,6 +131,17 @@
   <button type="submit" class="btn-submit" id="createTicketSubmit">Create Ticket</button>
 </form>
 
+<%
+  const workflowPostconditionPreviews = (typeof workflows === 'undefined' ? [] : workflows).reduce((acc, workflow) => {
+    const postconditions = Array.isArray(workflow.postconditions) ? workflow.postconditions : [];
+    acc[workflow.id] = postconditions.map(pc => (
+      typeof formatPostconditionAssertion === 'function'
+        ? formatPostconditionAssertion(pc)
+        : (pc && pc.type ? pc.type : 'unknown postcondition')
+    ));
+    return acc;
+  }, {});
+%>
 <script>
 const targetTypeSelect = document.getElementById('assignmentTargetType');
 const targetSelect = document.getElementById('assignmentTargetId');
@@ -164,6 +178,7 @@ const workflowSchemas = <%- JSON.stringify((typeof workflows === 'undefined' ? [
   acc[workflow.id] = workflow.inputSchema || {};
   return acc;
 }, {})) %>;
+const workflowPostconditionPreviews = <%- JSON.stringify(workflowPostconditionPreviews) %>;
 
 function updateOwnedPaths() {
   const selectedGroupId = parseInt(targetSelect.value);
@@ -201,6 +216,36 @@ function workflowInputExample(schema) {
   return JSON.stringify(example, null, 2);
 }
 
+function updateWorkflowPostconditionsPreview() {
+  const preview = document.getElementById('workflowPostconditionsPreview');
+  if (!preview) return;
+  const assertions = workflowPostconditionPreviews[workflowSelect.value] || [];
+  preview.innerHTML = '';
+  if (!workflowSelect.value || assertions.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'text-muted';
+    empty.textContent = 'No workflow postconditions declared.';
+    preview.appendChild(empty);
+    return;
+  }
+  const label = document.createElement('p');
+  label.className = 'text-muted';
+  label.style.margin = '0 0 4px';
+  label.textContent = 'Executable deterministic checks this workflow will verify after the run executes.';
+  preview.appendChild(label);
+  const list = document.createElement('ul');
+  list.style.margin = '0';
+  list.style.paddingLeft = '18px';
+  assertions.forEach(assertion => {
+    const item = document.createElement('li');
+    const code = document.createElement('code');
+    code.textContent = assertion;
+    item.appendChild(code);
+    list.appendChild(item);
+  });
+  preview.appendChild(list);
+}
+
 function updateWorkflowControls() {
   const isWorkflow = capabilityTypeSelect.value === 'workflow';
   workflowGroup.hidden = !isWorkflow;
@@ -216,6 +261,7 @@ function updateWorkflowControls() {
   if (isWorkflow && workflowSelect.value && !workflowInput.value.trim()) {
     workflowInput.value = workflowInputExample(workflowSchemas[workflowSelect.value]);
   }
+  updateWorkflowPostconditionsPreview();
 }
 
 function updateExecutionTargetControls() {
