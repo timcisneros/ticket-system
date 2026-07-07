@@ -895,6 +895,7 @@
   <% if (snapshot.browserTargetSnapshot || (snapshot.browserOperations && snapshot.browserOperations.length > 0)) { %>
   <% const browserEvidenceStatus = snapshot.browserEvidenceStatus || (run.replaySummary && run.replaySummary.browserEvidenceStatus) || null; %>
   <% const browserEvidenceDetail = snapshot.browserEvidenceDetail || (run.replaySummary && run.replaySummary.browserEvidenceDetail) || null; %>
+  <% const browserReport = snapshot.browserReport || run.browserReport || null; %>
   <% if (browserEvidenceStatus) { %>
   <section class="detail-section" id="browser-evidence-status">
     <h2>Browser Evidence Status</h2>
@@ -903,6 +904,25 @@
       <% if (browserEvidenceDetail) { %><div><dt>Detail</dt><dd><%= browserEvidenceDetail %></dd></div><% } %>
       <div><dt>Runtime status</dt><dd><%= snapshot.terminalStatus || run.status || '-' %> (independent of browser evidence)</dd></div>
     </dl>
+  </section>
+  <% } %>
+  <% if (browserReport && browserReport.status === 'available') { %>
+  <section class="detail-section" id="browser-report">
+    <h2>Browser Report</h2>
+    <div class="browser-report-text">
+      <p><%= browserReport.text %></p>
+    </div>
+    <dl class="detail-grid">
+      <div><dt>Runtime status</dt><dd><%= snapshot.terminalStatus || run.status || '-' %></dd></div>
+      <div><dt>Browser evidence status</dt><dd><%= browserEvidenceStatus || '-' %></dd></div>
+      <div><dt>Browser report</dt><dd>available</dd></div>
+      <div><dt>Objective success</dt><dd>unverified</dd></div>
+    </dl>
+  </section>
+  <% } else if (snapshot.browserTargetSnapshot || (snapshot.browserOperations && snapshot.browserOperations.length > 0)) { %>
+  <section class="detail-section" id="browser-report">
+    <h2>Browser Report</h2>
+    <p class="text-muted">Browser report: not available.</p>
   </section>
   <% } %>
   <section class="detail-section replay-section" id="replay-browser-operations" data-replay-section="browserOperations">

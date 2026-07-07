@@ -5876,6 +5876,60 @@ function classifyBrowserEvidence(run, snapshot) {
   };
 }
 
+function extractBrowserReport(run, snapshot) {
+  if (!isBrowserRun(run)) return null;
+
+  if (!snapshot || typeof snapshot !== 'object') {
+    return makeUnavailableBrowserReport();
+  }
+
+  const message = snapshot.browserReportMessage || null;
+  const browserOps = Array.isArray(snapshot.browserOperations) ? snapshot.browserOperations : [];
+
+  // Require at least one content-bearing browser operation
+  const hasContentOp = browserOps.some(op =>
+    op.status === 'ok' && (
+      (op.operation && op.operation.operation === 'readPageText' &&
+        op.receipt && op.receipt.metadata &&
+        typeof op.receipt.metadata.bytes === 'number' && op.receipt.metadata.bytes > 0) ||
+      (op.operation && op.operation.operation === 'observe' &&
+        op.receipt && op.receipt.metadata &&
+        typeof op.receipt.metadata.elementCount === 'number' && op.receipt.metadata.elementCount >= 3) ||
+      (op.operation && op.operation.operation === 'screenshot' && op.status === 'ok')
+    )
+  );
+
+  if (!hasContentOp || !message || typeof message !== 'string' || message.trim().length === 0) {
+    return makeUnavailableBrowserReport();
+  }
+
+  const terminalPlan = Array.isArray(snapshot.parsedModelPlans)
+    ? snapshot.parsedModelPlans.find(p => p && p.complete === true)
+    : null;
+  const sourceStep = terminalPlan && terminalPlan.step != null ? terminalPlan.step : null;
+  const sourceOperationCount = browserOps.filter(op => op.status === 'ok').length;
+
+  return {
+    status: 'available',
+    text: message,
+    generatedAt: new Date().toISOString(),
+    source: 'terminal_browser_model_message',
+    sourceStep,
+    sourceOperationCount
+  };
+}
+
+function makeUnavailableBrowserReport() {
+  return {
+    status: 'not_available',
+    text: null,
+    generatedAt: new Date().toISOString(),
+    source: null,
+    sourceStep: null,
+    sourceOperationCount: 0
+  };
+}
+
 // Measurement-only attempt/usage summary for a single run. Pure derivation from
 // existing runs/events/evaluation — no new persisted fields, no enforcement, no
 // limits. Unobservable metrics are reported as null (rendered as "unavailable")
@@ -9114,7 +9168,8 @@ function createReplaySnapshotBase(run, overrides = {}) {
     workspaceOperations: [],
     ...(browserRun ? {
       browserOperations: [],
-      browserTargetSnapshot: run.browserTargetSnapshot
+      browserTargetSnapshot: run.browserTargetSnapshot,
+      browserReportMessage: null
     } : {}),
     targetSnapshots: [],
     events: [],
@@ -9982,6 +10037,7 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
   const finalizedAt = new Date().toISOString();
   const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
   const browserEvidence = classifyBrowserEvidence(run, snapshot);
+  const browserReport = extractBrowserReport(run, snapshot);
   updateRunReplaySnapshot(run.id, snapshot => snapshot ? {
     ...snapshot,
     terminalStatus: status,
@@ -9991,8 +10047,14 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
     mutationCount: effectiveMutationCount,
     browserEvidenceStatus: browserEvidence.status,
     browserEvidenceDetail: browserEvidence.detail,
+    browserReport,
     finalizedAt
   } : snapshot);
+
+  // Persist browserReport on the run record for direct query access.
+  // The snapshot already carries it for replay/diagnostic evidence.
+  persistBrowserReportOnRun(run.id, browserReport);
+
   appendEvent({
     type: 'run.snapshot_finalized',
     ticketId: run.ticketId,
@@ -10005,6 +10067,14 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
     }
   });
   maybeTestInterrupt(run, 'after_run.snapshot_finalized');
+}
+
+function persistBrowserReportOnRun(runId, browserReport) {
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+  if (!run) return;
+  run.browserReport = browserReport;
+  writeRuns(runs);
 }
 
 function classifyInterruptionPhase(run) {
@@ -16417,6 +16487,25 @@ async function runAgentTicket(runId) {
         }),
         step
       });
+
+      // Capture the terminal browser model message for the user-facing browser
+      // report before sanitization replaces it. Only the final plan (complete:true)
+      // with a non-empty message that is not raw JSON is captured. Non-browser runs
+      // are excluded.
+      if (isBrowserRun(run) && modelPlan.complete === true) {
+        const rawMessage = (modelPlan.message || '').trim();
+        if (rawMessage.length > 0) {
+          let isRawJson = false;
+          try { JSON.parse(rawMessage); isRawJson = true; } catch (_) { /* not JSON */ }
+          if (!isRawJson) {
+            updateRunReplaySnapshot(run.id, s => s ? {
+              ...s,
+              browserReportMessage: sanitizeLogMessage(rawMessage)
+            } : s);
+          }
+        }
+      }
+
       captureRunArtifactPrediction(run.id, modelPlan.actions, step);
       broadcastTicketChange();
       const priorStepActionResults = actionResults;
@@ -20604,8 +20693,27 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 9. Workspace Actions
-  out('## 9. Workspace Actions');
+  // 9. Browser Report
+  const browserReport = s.browserReport || (run && run.browserReport) || null;
+  out('## 9. Browser Report');
+  if (!isBr) {
+    out('- Not a browser run.');
+  } else if (!browserReport || browserReport.status !== 'available') {
+    out('- Browser report status: not_available');
+  } else {
+    out('- Browser report status: ' + dash(browserReport.status));
+    out('- Browser report text: ' + dash(browserReport.text));
+    out('- Generated at: ' + dash(browserReport.generatedAt));
+    out('- Source: ' + dash(browserReport.source));
+    out('- Source step: ' + dash(browserReport.sourceStep));
+    out('- Source operation count: ' + dash(browserReport.sourceOperationCount));
+    out('');
+    out('- Note: Browser report is user-facing output, not objective verification. Objective success remains independent.');
+  }
+  out('');
+
+  // 10. Workspace Actions
+  out('## 10. Workspace Actions');
   out('- Model-proposed workspace actions' + countSuffix + ': ' + proposedCount);
   out('- Runtime-accepted workspace operations' + countSuffix + ': ' + runtimeAcceptedCount);
   out('- Mutations committed' + countSuffix + ': ' + committedCount);
@@ -20616,8 +20724,8 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 10. Operation History / Artifact Ownership
-  out('## 10. Operation History / Artifact Ownership');
+  // 11. Operation History / Artifact Ownership
+  out('## 11. Operation History / Artifact Ownership');
   if (history.length > 0) {
     history.forEach(h => {
       out(`- #${dash(h.id)} ${dash(h.operation)} path=${dash(opPath(h))} ${h.error ? 'ERROR=' + h.error : 'ok'}`);
@@ -20630,8 +20738,8 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 10. Permissioned Cross-Ticket Delete Audit
-  out('## 11. Permissioned Cross-Ticket Delete Audit');
+  // 12. Permissioned Cross-Ticket Delete Audit
+  out('## 12. Permissioned Cross-Ticket Delete Audit');
   if (permEvents.length > 0) {
     permEvents.forEach((e, i) => {
       out(`- [${i}] event type: ${dash(e.type)}`);
@@ -20665,8 +20773,8 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 11. Replay Events (canonical: snapshot.events)
-  out('## 12. Replay Events');
+  // 13. Replay Events (canonical: snapshot.events)
+  out('## 13. Replay Events');
   out('- Replay event count: ' + replayEvents.length);
   out('- Phase violations (execution.phase_violation): ' + phaseViolationCount);
   out('- Model stalls (model:stalled): ' + modelStallCount);
@@ -20676,8 +20784,8 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 12. Provider / Model Evidence
-  out('## 13. Provider / Model Evidence');
+  // 14. Provider / Model Evidence
+  out('## 14. Provider / Model Evidence');
   out('- Provider request count: ' + (Array.isArray(s.providerRequests) ? s.providerRequests.length : 0));
   out('- Model response count: ' + (Array.isArray(s.modelResponses) ? s.modelResponses.length : 0));
   out('- Last model message: ' + dash(fs2.lastModelMessage));
@@ -20688,8 +20796,8 @@ function buildRunDiagnosticBundle(ctx) {
   out('- Replay event count: ' + replayEvents.length);
   out('');
 
-  // 13. Artifact Prediction / Output Analysis
-  out('## 14. Artifact Prediction / Output Analysis');
+  // 15. Artifact Prediction / Output Analysis
+  out('## 15. Artifact Prediction / Output Analysis');
   const cmp = artifactPredictionComparison || { matched: [], missing: [], unexpected: [] };
   out('- Matched: ' + (Array.isArray(cmp.matched) ? cmp.matched.length : 0));
   out('- Missing: ' + (Array.isArray(cmp.missing) ? cmp.missing.length : 0));
@@ -20698,8 +20806,8 @@ function buildRunDiagnosticBundle(ctx) {
   out('- Objective success: ' + dash(objectiveSuccess && objectiveSuccess.status));
   out('');
 
-  // 14. Recent Activity
-  out('## 15. Recent Activity');
+  // 16. Recent Activity
+  out('## 16. Recent Activity');
   const logs = Array.isArray(recentLogs) ? recentLogs : [];
   if (logs.length > 0) {
     logs.forEach(l => out('- ' + dash(l.displayType || l.type) + ': ' + dash(l.displayMessage || l.message)));
@@ -20708,8 +20816,8 @@ function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 15. Raw Debug JSON (secret-free projection)
-  out('## 16. Raw Debug JSON');
+  // 17. Raw Debug JSON (secret-free projection)
+  out('## 17. Raw Debug JSON');
   const safeAgent = agent ? { id: agent.id, name: agent.name, provider: agent.provider, model: agent.model } : null;
   const rawDebug = {
     route, generatedAt, appVersion: DIAGNOSTIC_APP_VERSION,
@@ -20731,6 +20839,7 @@ function buildRunDiagnosticBundle(ctx) {
       browserOperations: browserOps,
       browserEvidenceStatus: s.browserEvidenceStatus || null,
       browserEvidenceDetail: s.browserEvidenceDetail || null,
+      browserReport: browserReport || (run && run.browserReport) || null,
       replayEvents
     },
     delegatedAuthority: {
@@ -20744,8 +20853,8 @@ function buildRunDiagnosticBundle(ctx) {
   out('```');
   out('');
 
-  // 16. Redaction Notice
-  out('## 17. Redaction Notice');
+  // 18. Redaction Notice
+  out('## 18. Redaction Notice');
   out('Provider keys, session cookies, password hashes, auth tokens, and environment secrets are excluded from this diagnostic bundle.');
   out('');
 
