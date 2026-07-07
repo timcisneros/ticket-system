@@ -34,12 +34,18 @@ for (const file of DATA_FILES) {
   fs.writeFileSync(dst, fs.existsSync(src) ? fs.readFileSync(src, 'utf8') : '[]');
 }
 
+fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), '');
+
 function readJson(file) {
   return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
 }
 
 function writeJson(file, value) {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
+}
+
+function appendEvent(event) {
+  fs.appendFileSync(path.join(DATA_DIR, 'events.jsonl'), JSON.stringify(event) + '\n');
 }
 
 function request(method, urlPath, options = {}) {
@@ -156,6 +162,26 @@ function seedNavigationFixture() {
     }
   };
   writeJson('browser-targets.json', [browserTarget]);
+  const workflows = readJson('workflows.json');
+  const verificationWorkflow = {
+    id: 'page-render-verified-note',
+    name: 'Page Render Verified Note',
+    version: '1',
+    enabled: true,
+    inputSchema: { path: 'string', content: 'string' },
+    actions: [
+      { id: 'done', action: 'stop', input: { result: { written: true } } }
+    ],
+    postconditions: [
+      { id: 'note-exists', type: 'fileExists', path: '{{workflow.input.path}}' },
+      { id: 'note-contains', type: 'fileContains', path: '{{workflow.input.path}}', contains: '{{workflow.input.content}}' }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+  if (!workflows.some(item => item.id === verificationWorkflow.id)) {
+    writeJson('workflows.json', [...workflows, verificationWorkflow]);
+  }
   const agent = agents[0] || {
     id: 1,
     name: 'PageRenderAgent',
@@ -357,8 +383,82 @@ function seedNavigationFixture() {
     }
   };
 
-  writeJson('tickets.json', [...tickets, ticket, activeTicket, ...extraTickets, browserTicket]);
-  writeJson('runs.json', [...runs, run, activeRun, browserRun, runWithoutAcceptanceCriteriaSnapshot]);
+  const verifiedTicketId = ticketId + 6;
+  const verifiedRunId = runId + 4;
+  const verificationContractSnapshot = {
+    workflowId: verificationWorkflow.id,
+    workflowName: verificationWorkflow.name,
+    workflowVersion: verificationWorkflow.version,
+    postconditions: verificationWorkflow.postconditions,
+    verifierContract: null,
+    capturedAt: now
+  };
+  const verifiedTicket = {
+    id: verifiedTicketId,
+    objective: 'verified note fixture',
+    assignmentTargetType: 'agent',
+    assignmentTargetId: agent.id,
+    assignmentMode: 'individual',
+    workTypeId: workType.id,
+    workTypeSnapshot,
+    capabilityType: 'workflow',
+    executionMode: 'workflow',
+    workflowId: verificationWorkflow.id,
+    status: 'completed',
+    createdBy: 'admin',
+    createdAt: now,
+    updatedAt: now
+  };
+  const verifiedRun = {
+    ...run,
+    id: verifiedRunId,
+    ticketId: verifiedTicketId,
+    capabilityType: 'workflow',
+    executionMode: 'workflow',
+    workflowId: verificationWorkflow.id,
+    verificationContractSnapshot,
+    replaySnapshot: {
+      ...run.replaySnapshot,
+      runId: verifiedRunId,
+      ticketId: verifiedTicketId,
+      ticketObjectiveSnapshot: verifiedTicket.objective,
+      terminalStatus: 'completed'
+    }
+  };
+  const postconditionsCheckedEvent = {
+    type: 'run.postconditions_checked',
+    ticketId: verifiedTicketId,
+    runId: verifiedRunId,
+    seq: 1,
+    ts: now,
+    payload: {
+      workflowId: verificationWorkflow.id,
+      contractSource: 'run_snapshot',
+      status: 'failed',
+      passed: 1,
+      failed: 1,
+      total: 2,
+      results: [
+        {
+          id: 'note-exists',
+          type: 'fileExists',
+          passed: true,
+          expected: { path: '{{workflow.input.path}}', exists: true, type: 'file' },
+          actual: { exists: true, type: 'file' }
+        },
+        {
+          id: 'note-contains',
+          type: 'fileContains',
+          passed: false,
+          expected: { path: '{{workflow.input.path}}', contains: '{{workflow.input.content}}' },
+          actual: { exists: true }
+        }
+      ]
+    }
+  };
+
+  writeJson('tickets.json', [...tickets, ticket, activeTicket, ...extraTickets, browserTicket, verifiedTicket]);
+  writeJson('runs.json', [...runs, run, activeRun, browserRun, runWithoutAcceptanceCriteriaSnapshot, verifiedRun]);
   writeJson('logs.json', [
     ...logs,
     activeLog,
@@ -369,7 +469,8 @@ function seedNavigationFixture() {
       message: `Page render fixture log ${index + 1}`
     }))
   ]);
-  return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent, workType, ticketWithoutAcceptanceCriteria: extraTickets[0], runWithoutAcceptanceCriteriaSnapshot };
+  appendEvent(postconditionsCheckedEvent);
+  return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent, workType, ticketWithoutAcceptanceCriteria: extraTickets[0], runWithoutAcceptanceCriteriaSnapshot, verifiedRun };
 }
 
 function seedAttentionFixture() {
@@ -549,6 +650,17 @@ async function main() {
     assert(runDetail.body.includes('Acceptance Criteria Snapshot'), 'run detail should show Acceptance Criteria Snapshot section');
     assert(runDetail.body.includes(fixture.run.acceptanceCriteriaSnapshot), 'run detail should show frozen acceptance criteria snapshot');
     assert(runDetail.body.includes('Frozen at run creation for review'), 'run detail should state acceptance criteria snapshot boundary');
+    assert(runDetail.body.includes('Workflow Postconditions'), 'run detail should show Workflow Postconditions section');
+    assert(runDetail.body.includes('No workflow postconditions were declared for this run'), 'run detail should show no-postconditions message for runs without a verification contract');
+    const verifiedRunDetail = await assertPageRenders(cookie, `/runs/${fixture.verifiedRun.id}`, 'verified workflow run detail', 'Workflow Postconditions');
+    assert(verifiedRunDetail.body.includes('Deterministic checks declared by the workflow'), 'verified run detail should explain postconditions are deterministic');
+    assert(verifiedRunDetail.body.includes('file exists: {{workflow.input.path}}'), 'verified run detail should render fileExists assertion');
+    assert(verifiedRunDetail.body.includes('file {{workflow.input.path}} contains'), 'verified run detail should render fileContains assertion');
+    assert(verifiedRunDetail.body.includes('{{workflow.input.content}}'), 'verified run detail should render fileContains expected content');
+    assert(verifiedRunDetail.body.includes('passed') && verifiedRunDetail.body.includes('failed'), 'verified run detail should render passed and failed status badges');
+    assert(verifiedRunDetail.body.includes('not checked') || verifiedRunDetail.body.includes('passed'), 'verified run detail should render postcondition status');
+    assert(verifiedRunDetail.body.includes('Expected:'), 'verified run detail should show expected value for failed postcondition');
+    assert(verifiedRunDetail.body.includes('Acceptance Criteria Snapshot'), 'verified run detail should keep acceptance criteria section separate');
     const missingAcceptanceCriteriaSnapshotRunDetail = await assertPageRenders(cookie, `/runs/${fixture.runWithoutAcceptanceCriteriaSnapshot.id}`, 'run without acceptance criteria snapshot detail', 'Acceptance Criteria Snapshot');
     assert(missingAcceptanceCriteriaSnapshotRunDetail.body.includes('No acceptance criteria were captured for this run'), 'run without acceptance criteria snapshot detail should show missing captured criteria wording');
     assert(missingAcceptanceCriteriaSnapshotRunDetail.body.includes('Runs capture acceptance criteria at creation time; this run has no captured criteria'), 'run without acceptance criteria snapshot detail should explain creation-time capture');

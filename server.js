@@ -17624,12 +17624,30 @@ async function resetDebugData(changedBy = 'system') {
   });
 }
 
+function formatPostconditionAssertion(pc) {
+  if (!pc || typeof pc !== 'object') return 'unknown postcondition';
+  const id = pc.id ? `[${pc.id}] ` : '';
+  switch (pc.type) {
+    case 'fileExists':
+      return `${id}file exists: ${pc.path || ''}`;
+    case 'fileContains':
+      return `${id}file ${pc.path || ''} contains "${pc.contains || ''}"`;
+    case 'jsonPathEquals':
+      return `${id}JSON path ${pc.jsonPath || ''} in ${pc.path || ''} equals ${JSON.stringify(pc.equals)}`;
+    case 'outputFieldEquals':
+      return `${id}output field ${pc.field || ''} equals ${JSON.stringify(pc.equals)}`;
+    default:
+      return `${id}${pc.type || 'unknown'}: ${JSON.stringify(pc)}`;
+  }
+}
+
 function viewData(data, userId = null) {
   const permissions = userId ? getUserPermissions(userId) : [];
   return {
     ...data,
     assets: { css: '/styles.css', js: null },
-    userPermissions: permissions
+    userPermissions: permissions,
+    formatPostconditionAssertion
   };
 }
 

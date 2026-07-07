@@ -296,6 +296,40 @@
 </section>
 <% } %>
 
+<section class="detail-section">
+  <h2>Workflow Postconditions</h2>
+  <% const declaredPostconditions = run.verificationContractSnapshot && Array.isArray(run.verificationContractSnapshot.postconditions) ? run.verificationContractSnapshot.postconditions : []; %>
+  <% const checkedEvent = (typeof runEvents !== 'undefined' && runEvents ? runEvents.filter(event => event && event.type === 'run.postconditions_checked').pop() : null); %>
+  <% const resultById = {}; %>
+  <% if (checkedEvent && checkedEvent.payload && Array.isArray(checkedEvent.payload.results)) { %>
+    <% checkedEvent.payload.results.forEach(result => { if (result && result.id) resultById[result.id] = result; }); %>
+  <% } %>
+  <% if (declaredPostconditions.length === 0) { %>
+    <p class="text-muted">No workflow postconditions were declared for this run.</p>
+  <% } else { %>
+    <p class="text-muted">Deterministic checks declared by the workflow. Checked against recorded workspace/output evidence, not model judgment.</p>
+    <ul class="postcondition-list">
+      <% declaredPostconditions.forEach(pc => { %>
+        <% const result = resultById[pc.id]; %>
+        <li class="postcondition-item">
+          <% if (result) { %>
+            <span class="status-badge status-<%= result.passed ? 'completed' : 'failed' %>"><%= result.passed ? 'passed' : 'failed' %></span>
+          <% } else { %>
+            <span class="status-badge">not checked</span>
+          <% } %>
+          <code><%= typeof formatPostconditionAssertion === 'function' ? formatPostconditionAssertion(pc) : pc.type %></code>
+          <% if (result && !result.passed && result.expected) { %>
+            <div class="text-muted">Expected: <code><%= JSON.stringify(result.expected) %></code></div>
+          <% } %>
+          <% if (result && !result.passed && result.actual) { %>
+            <div class="text-muted">Actual: <code><%= JSON.stringify(result.actual) %></code></div>
+          <% } %>
+        </li>
+      <% }) %>
+    </ul>
+  <% } %>
+</section>
+
 <% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
 <section class="detail-section state-inconsistency-warning">
   <h2>State Warning</h2>
