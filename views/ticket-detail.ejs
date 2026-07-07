@@ -420,6 +420,11 @@
   <summary>Execution target <span class="sub"><%= ticket.targetRef && ticket.targetRef.kind === 'browser' ? 'Browser · read-only' : 'Workspace / filesystem' %></span></summary>
   <div class="body">
     <% if (ticket.targetRef && ticket.targetRef.kind === 'browser') { %>
+      <% if (!browserTarget || browserTarget.status !== 'active') { %>
+        <div style="padding:8px 12px;margin-bottom:12px;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;color:#856404;">
+          <strong>Browser target unavailable:</strong> This ticket’s browser target is no longer active or is unavailable. Reactivate the target or choose a valid target before rerunning.
+        </div>
+      <% } %>
       <% const targetLimits = browserTarget && browserTarget.limits ? browserTarget.limits : {}; %>
       <dl class="detail-grid">
         <div><dt>Target</dt><dd><strong><%= browserTarget ? browserTarget.name : 'Unavailable target' %></strong> · <code><%= ticket.targetRef.browserTargetId %></code></dd></div>
