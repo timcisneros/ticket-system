@@ -4119,7 +4119,10 @@ function buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, g
     .slice()
     .sort((a, b) => new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0))[0] || null;
 
-  const blocked = ticket.status === 'blocked' || Boolean(ticket.blockedReason);
+  // blockedReason is preserved as audit/history; current blocked state is determined
+  // by ticket.status only. An explicitly opened ticket is no longer blocked even if
+  // blockedReason still exists on the record.
+  const blocked = ticket.status === 'blocked';
   const blockedReason = ticket.blockedReason || (ticket.feasibility && ticket.feasibility.reason) || null;
   const memberCount = isGroup ? (getAgentGroupMembers()[ticket.assignmentTargetId] || []).length : 0;
 
@@ -4285,7 +4288,9 @@ function enrichTicketForDisplay(ticket, context) {
 
   // Display-only compact execution summary for the card. Describes existing
   // runtime behavior; does not change scheduling or assignment.
-  const ticketBlocked = ticket.status === 'blocked' || Boolean(ticket.blockedReason);
+  // blockedReason is preserved as audit/history; current blocked state is determined
+  // by ticket.status only.
+  const ticketBlocked = ticket.status === 'blocked';
   const hasRunnableTarget = ticket.assignmentTargetType === 'group'
     ? (groupMemberCount || 0) > 0
     : Boolean(target);
