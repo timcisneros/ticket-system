@@ -111,10 +111,14 @@
 <% } %>
 
 <% if (ticketBlockedReason || ticketFeasibility) { %>
-<div class="attn critical failure-summary">
-  <h3><span class="sev">Critical</span> Why this ticket is blocked</h3>
+<% const isCurrentlyBlocked = ticket.status === 'blocked'; %>
+<div class="attn <%= isCurrentlyBlocked ? 'critical' : '' %> failure-summary">
+  <h3><span class="sev"><%= isCurrentlyBlocked ? 'Critical' : 'Historical' %></span> <%= isCurrentlyBlocked ? 'Why this ticket is blocked' : 'Previously blocked' %></h3>
   <% if (ticketBlockedReason) { %>
     <p class="failure-reason"><%= ticketBlockedReason %></p>
+  <% } %>
+  <% if (!isCurrentlyBlocked && ticketBlockedReason) { %>
+    <p class="text-muted">This reason is preserved as history. The ticket is no longer blocked unless its current status is blocked.</p>
   <% } %>
   <% if (ticketFeasibility) { %>
     <dl class="detail-grid">
