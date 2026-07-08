@@ -8043,8 +8043,31 @@ function buildTicketTimeline(ticketId) {
     }
   }
 
-  const selectedLogTypes = new Set(['ticket:triage_resolve', 'run:triage_resolve']);
+  const selectedLogTypes = new Set(['ticket:triage_resolve', 'run:triage_resolve', 'ticket:status_change']);
   for (const log of logs.filter(item => selectedLogTypes.has(item.type))) {
+    if (log.type === 'ticket:status_change') {
+      addEntry({
+        id: `log:${log.id}`,
+        timestamp: log.timestamp || log.changedAt || null,
+        type: log.type,
+        title: 'Ticket status changed',
+        summary: `${log.fromStatus || 'unknown'} → ${log.toStatus || 'unknown'}${log.changedBy ? ' by ' + log.changedBy : ''}`,
+        sourceType: 'log',
+        sourceRef: `logs.json:${log.id}`,
+        sourceRole: 'diagnostic_log',
+        runId: log.runId || log.contextRunId || null,
+        status: log.toStatus || null,
+        severity: null,
+        details: {
+          changedBy: log.changedBy || null,
+          changedAt: log.changedAt || null,
+          fromStatus: log.fromStatus || null,
+          toStatus: log.toStatus || null,
+          authoritativeStateSource: `tickets.json:${parsedTicketId}`
+        }
+      });
+      continue;
+    }
     addEntry({
       id: `log:${log.id}`,
       timestamp: log.timestamp || log.changedAt || null,
@@ -20325,7 +20348,10 @@ function getPaginatedLogs(query = {}) {
   const logs = readLogs();
   const matchesFilter = log => {
     if (filters.runId !== null && log.runId !== filters.runId) return false;
-    if (filters.ticketId !== null && log.ticketId !== filters.ticketId) return false;
+    if (filters.ticketId !== null) {
+      const ticketMatch = log.ticketId === filters.ticketId || log.contextTicketId === filters.ticketId;
+      if (!ticketMatch) return false;
+    }
     return true;
   };
   let total = 0;
