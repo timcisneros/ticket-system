@@ -61,7 +61,8 @@
   <% if (canUpdateTickets && hasUnresolvedTriage) { %>
   <p class="form-hint">Rerun disabled: unresolved ticket-level triage must be resolved or the ticket objective must be changed first.</p>
 <% } else if (canUpdateTickets && isBlockedSpawnedChild) { %>
-  <p class="form-hint">Rerun disabled: this child ticket was created by executeTicketPlan and is blocked by default. Change status to Open to enable execution.</p>
+  <p class="form-hint">Rerun disabled: this child ticket was created by executeTicketPlan and is blocked by default. Open it explicitly to enable execution.</p>
+  <button type="button" class="btn-secondary" data-open-ticket-id="<%= ticket.id %>">Open Ticket</button>
 <% } else if (canUpdateTickets && ticket.status !== 'open') { %>
   <%
     const isGroupTicket = typeof executionState !== 'undefined' && executionState && executionState.isGroup;
@@ -1071,6 +1072,25 @@ document.addEventListener('click', async event => {
       if (resultDiv) resultDiv.innerHTML = '<strong>Simulation failed:</strong> ' + escapeHtml(e.message);
     }
     simulateButton.disabled = false;
+    return;
+  }
+
+  const openTicketButton = event.target.closest('[data-open-ticket-id]');
+  if (openTicketButton) {
+    openTicketButton.disabled = true;
+    fetch('/api/tickets/' + encodeURIComponent(openTicketButton.dataset.openTicketId) + '/status', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ status: 'open' })
+    }).then(response => {
+      if (!response.ok) {
+        return response.json().catch(() => ({})).then(data => {
+          window.alert(data.error || 'Ticket open failed');
+          window.location.reload();
+        });
+      }
+      window.location.reload();
+    });
     return;
   }
 
