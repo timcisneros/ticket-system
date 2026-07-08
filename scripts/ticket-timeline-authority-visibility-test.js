@@ -387,10 +387,14 @@ async function main() {
     assert(legacyProvenance && legacyProvenance.details.legacyUnversioned === true, 'legacy unversioned provenance should render safely');
 
     const page = await request('GET', '/tickets/1', { cookie: admin });
-    assert(page.statusCode === 200 && page.body.includes('<h2>Timeline</h2>'), 'ticket detail timeline section missing');
+    const timelineStart = page.body.indexOf('<summary>Timeline');
+    assert(page.statusCode === 200 && timelineStart !== -1, 'ticket detail timeline section missing');
     assert(page.body.includes('Authority denied workspace mutation'), 'ticket detail authority entry missing');
     assert(page.body.includes('operation_history') && page.body.includes('embedded_receipt'), 'ticket detail source labels missing');
-    const timelineSection = page.body.slice(page.body.indexOf('<h2>Timeline</h2>'), page.body.indexOf('<h2>Recent Activity</h2>'));
+    const timelineEnd = page.body.indexOf('</details>', timelineStart);
+    const timelineSection = timelineEnd !== -1
+      ? page.body.slice(timelineStart, timelineEnd + '</details>'.length)
+      : page.body.slice(timelineStart);
     assert(!timelineSection.includes('SECRET_FILE_CONTENT') && !timelineSection.includes('PRE_MUTATION_SECRET'), 'ticket timeline leaked source content');
 
     const after = dataDigest();
