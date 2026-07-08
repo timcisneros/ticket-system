@@ -237,7 +237,7 @@ async function main() {
     const snap = {}; FILES.forEach(f => { snap[f] = readRaw(f); });
     const wsSnap = ws();
     const page = await request('GET', '/process-templates', { cookie: admin });
-    assert(page.statusCode === 200 && /Editable manual\s*<span class="text-muted">v2<\/span>/.test(page.body), '/process-templates shows the active version (v2)');
+    assert(page.statusCode === 200 && /Editable manual\s*<\/a>\s*<span class="text-muted">v2<\/span>/.test(page.body), '/process-templates shows the active version (v2)');
     FILES.forEach(f => assert(readRaw(f) === snap[f], `${f} unchanged by GET /process-templates`));
     assert(ws() === wsSnap, 'workspace unchanged by GET /process-templates');
 

@@ -175,8 +175,8 @@ async function main() {
     const wsSnap = JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort());
     const page = await request('GET', '/process-templates', { cookie });
     assert(page.statusCode === 200 && /Versioned scheduled<\/td>/.test(page.body.replace(/\s+v\d+\s*<\/span>/, '</td>')) === false, 'templates page renders'); // sanity
-    assert(/Versioned scheduled\s*<span class="text-muted">v3<\/span>/.test(page.body), 'templates page shows the active version (v3) next to the name');
-    assert(/Legacy manual\s*<span class="text-muted">v1<\/span>/.test(page.body), 'legacy (no-version) template renders as v1 on the page');
+    assert(/Versioned scheduled\s*<\/a>\s*<span class="text-muted">v3<\/span>/.test(page.body), 'templates page shows the active version (v3) next to the name');
+    assert(/Legacy manual\s*<\/a>\s*<span class="text-muted">v1<\/span>/.test(page.body), 'legacy (no-version) template renders as v1 on the page');
 
     // 10: GET /process-templates remains read-only.
     FILES.forEach(f => assert(readRaw(f) === snap[f], `${f} unchanged by GET /process-templates`));

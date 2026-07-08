@@ -59,7 +59,7 @@ const C = {
 const newTickets = [
   ...tickets,
   // 1 + 4: agent-assigned, completed run with model-response message
-  { id: C.agentDone.tid, objective: 'agent done case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'completed', createdBy: 'admin', createdAt: now, updatedAt: now },
+  { id: C.agentDone.tid, objective: 'agent done case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'completed', currentMessage: 'Created the requested folders.', createdBy: 'admin', createdAt: now, updatedAt: now },
   // 6: open ticket with historical stopped run must not claim no run exists
   { id: C.openStopped.tid, objective: 'open stopped case', assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual', status: 'open', createdBy: 'admin', createdAt: now, updatedAt: now },
   // 2: blocked with feasibility reason
@@ -166,11 +166,11 @@ const ok = (n, c) => c ? (pass++, console.log('  ✓ ' + n)) : (fail++, console.
 
     // Case 1 + 4: agent-assigned completed ticket
     const d1 = (await req('GET', `/tickets/${C.agentDone.tid}`, { cookie })).body;
-    ok('1: Execution State block present', d1.includes('Execution State'));
+    ok('1: At a glance runtime block present', d1.includes('At a glance'));
     ok('1: assigned-to shows agent name', d1.includes('Agent: ' + agent.name));
     ok('1: auto-run says terminal/use rerun', d1.includes('Use Rerun to start a new run'));
-    ok('1: latest run linked with status', /Run #\d+<\/a>\s*<span class="status-badge status-completed">completed/.test(d1.replace(/\s+/g, ' ')));
-    ok('4: current message labeled with source (model response)', d1.includes('source: latest model response') && d1.includes('Created the requested folders.'));
+    ok('1: latest run linked with status', d1.includes(`Run #${C.agentDone.rid}</a>`) && d1.includes('status-completed') && d1.includes('>completed<'));
+    ok('4: current message shows model response text', d1.includes('Created the requested folders.'));
     ok('5: rerun wording describes actual behavior', d1.includes('interrupts any active run, reopens this ticket, and starts a new run'));
 
     // Case 2: blocked ticket
