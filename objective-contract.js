@@ -35,7 +35,7 @@ function parseSimpleFolderListObjective(text, command) {
   }
   if (!listText) return null;
 
-  if (/\b(?:for|named|called|with|inside|containing|write|file|note|summary|report|then|after|before|into|under)\b/i.test(listText)) {
+  if (/\b(?:for|named|called|with|inside|containing|write|file|note|summary|report|then|after|before|into|under|to|through|need|older|than|each|all|every|some|many|few|several|various|multiple|workspace|project|layout|quarter|quarters|setup|set\s+up|organize|standard)\b/i.test(listText)) {
     return null;
   }
 
@@ -54,6 +54,49 @@ function parseSimpleFolderListObjective(text, command) {
   if (paths.length === 0) return null;
   if (paths.some(folderPath => !/^[A-Za-z0-9._/-]+$/.test(folderPath))) return null;
   return Array.from(new Set(paths));
+}
+
+// Expand a single-letter alphabetical range such as "A" to "Z" or "a" to "z".
+// Returns an array of single-character folder names, or null if unsafe.
+function expandSingleLetterRange(start, end) {
+  const startCode = start.charCodeAt(0);
+  const endCode = end.charCodeAt(0);
+  if (startCode > endCode) return null;
+
+  const startUpper = start === start.toUpperCase();
+  const endUpper = end === end.toUpperCase();
+  if (startUpper !== endUpper) return null;
+
+  const result = [];
+  for (let code = startCode; code <= endCode; code += 1) {
+    const ch = String.fromCharCode(code);
+    if (startUpper && (ch < 'A' || ch > 'Z')) return null;
+    if (!startUpper && (ch < 'a' || ch > 'z')) return null;
+    result.push(ch);
+  }
+  return result;
+}
+
+// Expand a path token like "A-Z" into [A, B, ..., Z]. Returns null for non-ranges.
+function expandFolderRangeToken(token) {
+  const match = String(token || '').match(/^([A-Za-z])-([A-Za-z])$/);
+  if (!match) return null;
+  return expandSingleLetterRange(match[1], match[2]);
+}
+
+// Recognize safe explicit create-folder ranges:
+//   Create folders A-Z
+//   Create folders A through Z
+//   Create folders A to Z
+function parseCreateFolderRangeObjective(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  const match = normalized.match(/^(?:please\s+)?create\s+folders?\s+([A-Za-z])\s*(?:-|–|to|through)\s*([A-Za-z])\s*\.?$/i);
+  if (!match) return null;
+
+  const [, start, end] = match;
+  if (start === end) return [start];
+  const expanded = expandSingleLetterRange(start, end);
+  return expanded || null;
 }
 
 // Mirror of server.js extractSimpleDeleteTargets. Supports a single exact target
@@ -203,9 +246,21 @@ function buildObjectiveContract(objective) {
     };
   }
 
-  // 3. Create folder(s): "create folder X" / "create folders X Y".
-  const createPaths = parseSimpleFolderListObjective(text, 'create');
+  // 3. Create folder(s): explicit range, list, or single folder.
+  let createPaths = parseCreateFolderRangeObjective(text);
+  let createPathsFromList = false;
+  if (!createPaths) {
+    createPaths = parseSimpleFolderListObjective(text, 'create');
+    createPathsFromList = createPaths && createPaths.length > 0;
+  }
+  // Multi-token list forms must use an explicit enumerator (comma or "and") so
+  // vague space-separated phrases like "create folders I need" stay model-driven.
+  if (createPathsFromList && createPaths.length > 1 && !/,/.test(text) && !/\band\b/i.test(text)) {
+    createPaths = null;
+  }
   if (createPaths && createPaths.length > 0) {
+    // Expand any single-letter range tokens inside a list (e.g. "create folders A, C-Z").
+    createPaths = Array.from(new Set(createPaths.flatMap(p => expandFolderRangeToken(p) || [p])));
     return {
       source: 'objective-contract',
       recognized: true,

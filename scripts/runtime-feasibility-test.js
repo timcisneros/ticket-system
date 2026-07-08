@@ -28,6 +28,16 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
 }
 
+function readRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return null;
+  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
+  if (!run.replaySnapshotPath) return null;
+  const snapshotPath = path.resolve(DATA_DIR, run.replaySnapshotPath);
+  if (!snapshotPath.startsWith(DATA_DIR + path.sep)) return null;
+  if (!fs.existsSync(snapshotPath)) return null;
+  return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+}
+
 function readEvents() {
   const file = path.join(DATA_DIR, 'events.jsonl');
   if (!fs.existsSync(file)) return [];
@@ -224,35 +234,86 @@ function rmDirectoryWithRetry(dir) {
   }
 }
 
+async function runDeleteScenario(server, cookie, agent) {
+  const targets = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+  const objective = `Delete files ${targets.join(', ')}`;
+  const ticket = await createAssignedTicket(cookie, agent.id, objective);
+  const run = await waitForFailedRun(ticket.id);
+
+  assert(run.status === 'failed', `Expected run status failed, got ${run.status}`);
+  assert(/Runtime budget infeasible/i.test(run.error || ''), `Expected budget infeasibility error, got: ${run.error}`);
+  assert(run.triage && run.triage.reasonCode === 'runtime_budget_insufficient', `Expected triage reason runtime_budget_insufficient, got ${run.triage && run.triage.reasonCode}`);
+  assert(run.triage && run.triage.allowedActions.includes('raise_limit'), 'Expected raise_limit allowed action');
+  assert(run.triage && run.triage.allowedActions.includes('split_task'), 'Expected split_task allowed action');
+  assert(run.triage && run.triage.allowedActions.includes('manual_recovery'), 'Expected manual_recovery allowed action');
+
+  for (const name of targets) {
+    assert(fs.existsSync(path.join(WORKSPACE_ROOT, name)), `Target ${name} should not have been mutated`);
+  }
+
+  return run;
+}
+
+async function runCreateRangeScenario(server, cookie, agent) {
+  const existing = ['L', 'M'];
+  const objective = 'Create folders A-Z';
+  const ticket = await createAssignedTicket(cookie, agent.id, objective);
+  const run = await waitForFailedRun(ticket.id);
+
+  assert(run.status === 'failed', `Expected run status failed, got ${run.status}`);
+  assert(/Runtime budget infeasible/i.test(run.error || ''), `Expected budget infeasibility error, got: ${run.error}`);
+  assert(run.triage && run.triage.reasonCode === 'runtime_budget_insufficient', `Expected triage reason runtime_budget_insufficient, got ${run.triage && run.triage.reasonCode}`);
+  assert(run.triage && run.triage.allowedActions.includes('raise_limit'), 'Expected raise_limit allowed action');
+  assert(run.triage && run.triage.allowedActions.includes('split_task'), 'Expected split_task allowed action');
+  assert(run.triage && run.triage.allowedActions.includes('manual_recovery'), 'Expected manual_recovery allowed action');
+
+    for (const name of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
+      const createdPath = path.join(WORKSPACE_ROOT, name);
+      const isDir = fs.existsSync(createdPath) && fs.statSync(createdPath).isDirectory();
+      assert(!isDir, `Folder ${name} should not have been created`);
+    }
+    for (const name of existing) {
+      assert(fs.existsSync(path.join(WORKSPACE_ROOT, name)) && fs.statSync(path.join(WORKSPACE_ROOT, name)).isDirectory(), `Existing folder ${name} should remain`);
+    }
+
+  const replaySnapshot = readRunReplaySnapshot(run);
+  assert(!replaySnapshot || !replaySnapshot.providerRequests || replaySnapshot.providerRequests.length === 0, 'Provider should not have been called');
+
+  if (run.triage && run.triage.summary) {
+    assert(run.triage.summary.includes('24 required mutation'), `Expected 24 required mutations in summary, got: ${run.triage.summary}`);
+    assert(run.triage.summary.includes('12 execution step'), `Expected 12 required steps in summary, got: ${run.triage.summary}`);
+  }
+
+  return run;
+}
+
 async function main() {
   const preloadPath = createFakeOpenAIPreload();
-  const targets = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
 
   try {
-    for (const name of targets) {
+    const deleteTargets = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+    for (const name of deleteTargets) {
       fs.writeFileSync(path.join(WORKSPACE_ROOT, name), `target ${name}\n`);
+    }
+    for (const name of ['L', 'M']) {
+      fs.mkdirSync(path.join(WORKSPACE_ROOT, name));
     }
 
     const agent = seedAgent();
     const server = startServer(preloadPath);
     await waitForReady();
     const cookie = await login();
-    const objective = `Delete files ${targets.join(', ')}`;
-    const ticket = await createAssignedTicket(cookie, agent.id, objective);
-    const run = await waitForFailedRun(ticket.id);
 
-    assert(run.status === 'failed', `Expected run status failed, got ${run.status}`);
-    assert(/Runtime budget infeasible/i.test(run.error || ''), `Expected budget infeasibility error, got: ${run.error}`);
-    assert(run.triage && run.triage.reasonCode === 'runtime_budget_insufficient', `Expected triage reason runtime_budget_insufficient, got ${run.triage && run.triage.reasonCode}`);
-    assert(run.triage && run.triage.allowedActions.includes('raise_limit'), 'Expected raise_limit allowed action');
-    assert(run.triage && run.triage.allowedActions.includes('split_task'), 'Expected split_task allowed action');
-    assert(run.triage && run.triage.allowedActions.includes('manual_recovery'), 'Expected manual_recovery allowed action');
+    await runDeleteScenario(server, cookie, agent);
 
-    for (const name of targets) {
-      assert(fs.existsSync(path.join(WORKSPACE_ROOT, name)), `Target ${name} should not have been mutated`);
+    // Remove the delete-scenario seed files so the create-range scenario sees only L and M.
+    for (const name of deleteTargets) {
+      fs.rmSync(path.join(WORKSPACE_ROOT, name), { force: true, recursive: true });
     }
 
-    console.log(JSON.stringify({ runtimeBudgetFeasibility: true, reasonCode: run.triage.reasonCode }));
+    await runCreateRangeScenario(server, cookie, agent);
+
+    console.log(JSON.stringify({ deleteInfeasibility: true, createRangeInfeasibility: true }));
     server.kill('SIGTERM');
     await waitForExit(server);
   } finally {
