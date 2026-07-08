@@ -61,15 +61,16 @@
               <time datetime="<%= log.timestamp %>" title="<%= log.timestamp %>"><%= log.displayTimestamp || log.timestamp || '-' %></time>
             </td>
             <td class="log-context-cell">
+              <% const contextTicketId = log.ticketId != null ? log.ticketId : log.contextTicketId; %>
               <% if (log.runId === null || log.runId === undefined) { %>
-                <% if (log.ticketId === null) { %>
+                <% if (contextTicketId == null) { %>
                   <span class="text-muted">System</span>
                 <% } else { %>
-                  Ticket #<%= log.ticketId %>
+                  Ticket #<%= contextTicketId %>
                 <% } %>
               <% } else { %>
                 <a href="/runs/<%= log.runId %>">Run #<%= log.runId %></a>
-                <span class="text-muted">· Ticket #<%= log.ticketId %></span>
+                <span class="text-muted">· Ticket #<%= contextTicketId %></span>
               <% } %>
             </td>
             <td class="log-agent-cell">
@@ -150,14 +151,15 @@ function appendLog(log) {
   // Context
   const contextCell = document.createElement('td');
   contextCell.className = 'log-context-cell';
+  const liveContextTicketId = log.ticketId != null ? log.ticketId : log.contextTicketId;
   if (log.runId === null || log.runId === undefined) {
-    if (log.ticketId === null) {
+    if (liveContextTicketId == null) {
       const systemSpan = document.createElement('span');
       systemSpan.className = 'text-muted';
       systemSpan.textContent = 'System';
       contextCell.appendChild(systemSpan);
     } else {
-      contextCell.appendChild(document.createTextNode('Ticket #' + log.ticketId));
+      contextCell.appendChild(document.createTextNode('Ticket #' + liveContextTicketId));
     }
   } else {
     const runLink = document.createElement('a');
@@ -166,7 +168,7 @@ function appendLog(log) {
     contextCell.appendChild(runLink);
     const sep = document.createElement('span');
     sep.className = 'text-muted';
-    sep.textContent = ' \u00b7 Ticket #' + log.ticketId;
+    sep.textContent = ' \u00b7 Ticket #' + liveContextTicketId;
     contextCell.appendChild(sep);
   }
   row.appendChild(contextCell);
