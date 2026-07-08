@@ -189,7 +189,10 @@ global.fetch = async function(url, options = {}) {
 
   await new Promise(resolve => setTimeout(resolve, 50));
 
-  if (combined.includes('recovery-write')) {
+  // Match the current ticket objective exactly. Prior recovery cases leave
+  // filenames in workspace context that share the recovery-* prefix, so
+  // substring matching against the full combined prompt selects the wrong plan.
+  if (combined.includes('recovery-write ${STAMP}')) {
     return okResponse({
       message: 'Creating test file for recovery.',
       actions: [{
@@ -203,7 +206,7 @@ global.fetch = async function(url, options = {}) {
     });
   }
 
-  if (combined.includes('recovery-rename')) {
+  if (combined.includes('recovery-rename ${STAMP}')) {
     return okResponse({
       message: 'Creating and renaming test file for recovery.',
       actions: [
@@ -226,7 +229,7 @@ global.fetch = async function(url, options = {}) {
     });
   }
 
-  if (combined.includes('recovery-delete')) {
+  if (combined.includes('recovery-delete ${STAMP}')) {
     return okResponse({
       message: 'Deleting test file for recovery.',
       actions: [{
