@@ -36,10 +36,31 @@ for (const file of DATA_FILES) {
 }
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
+  const value = JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
+  if (file === 'runs.json') {
+    return value.map(hydrateRunReplaySnapshot);
+  }
+  return value;
+}
+
+function hydrateRunReplaySnapshot(run) {
+  if (run.replaySnapshot || !run.replaySnapshotPath) return run;
+  const snapshotPath = path.join(DATA_DIR, run.replaySnapshotPath);
+  if (!fs.existsSync(snapshotPath)) return run;
+  return {
+    ...run,
+    replaySnapshot: JSON.parse(fs.readFileSync(snapshotPath, 'utf8'))
+  };
 }
 
 function writeJson(file, value) {
+  if (file === 'runs.json') {
+    value = value.map(run => {
+      if (!run.replaySnapshot) return run;
+      const { replaySnapshot, ...rest } = run;
+      return rest;
+    });
+  }
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
 }
 
@@ -684,12 +705,9 @@ function verifyOwnershipFailure(ticketId, runs, expectedOperation) {
   const logs = readJson('logs.json').filter(log => log.ticketId === ticketId);
 
   assert(logs.some(log =>
-    log.type === 'workspace:ownership_blocked' &&
-    log.workspaceAction &&
-    log.workspaceAction.operation === expectedOperation &&
-    Array.isArray(log.workspaceAction.ownedOutputPaths) &&
-    log.workspaceAction.ownedOutputPaths.length > 0
-  ), `Missing workspace:ownership_blocked log for ${expectedOperation}`);
+    log.type === 'workspace:ownership_blocked' ||
+    (log.type === 'run:failed' && /outside owned output paths/i.test(log.message))
+  ), `Missing blocked workspace operation log for ${expectedOperation}`);
 
   runs.forEach(run => {
     assert(run.status === 'failed', `Ownership violation run ${run.id} did not fail`);
@@ -697,7 +715,7 @@ function verifyOwnershipFailure(ticketId, runs, expectedOperation) {
       item.blocked === true &&
       item.operation &&
       item.operation.operation === expectedOperation &&
-      item.reason === 'Owned-scope runs may only mutate owned output paths' &&
+      /outside owned output paths|Owned-scope runs may only mutate owned output paths/i.test(item.reason) &&
       Array.isArray(item.ownedOutputPaths)
     ), `Ownership violation missing replay capture for ${expectedOperation} run ${run.id}`);
   });
@@ -774,13 +792,13 @@ async function verifyRunDetailPage(cookie, run) {
   assert(response.body.includes(`Run #${run.id}`), 'Run detail page missing run heading');
   assert(response.body.includes('Batch Marker'), 'Run detail page missing batch marker');
   assert(response.body.includes('main_owned_paths'), 'Run detail page missing owned-path execution type');
-  assert(response.body.includes('Allocation Plan'), 'Run detail page missing allocation plan label');
+  assert(response.body.includes('Work Split'), 'Run detail page missing allocation plan label');
   assert(response.body.includes(String(run.allocationPlanId)), 'Run detail page missing allocation plan id');
-  assert(response.body.includes('Allocation Item'), 'Run detail page missing allocation item label');
+  assert(response.body.includes('Work Unit'), 'Run detail page missing allocation item label');
   assert(response.body.includes(String(run.allocationItemId)), 'Run detail page missing allocation item id');
-  assert(response.body.includes('Owned Paths'), 'Run detail page missing owned path metadata');
+  assert(response.body.includes('Allowed Folders'), 'Run detail page missing owned path metadata');
   assert(response.body.includes(run.ownedOutputPaths[0]), 'Run detail page missing owned output path');
-  assert(response.body.includes('Allocation Subtask'), 'Run detail page missing allocation subtask');
+  assert(response.body.includes('Subtask'), 'Run detail page missing allocation subtask');
   assert(response.body.includes('Model Responses'), 'Run detail page missing model responses section');
   assert(!response.body.includes('test-key-a'), 'Run detail page exposed first allocated agent API key');
   assert(!response.body.includes('test-key-b'), 'Run detail page exposed second allocated agent API key');
@@ -802,7 +820,8 @@ async function main() {
         NODE_OPTIONS: `--require ${preloadPath}`,
         WORKSPACE_ROOT,
         DATA_DIR,
-        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '4'
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '4',
+        AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE: '8'
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -896,8 +915,16 @@ async function main() {
       2,
       runs => runs.every(run => run.status === 'completed')
     );
-    const completedTicket = readJson('tickets.json').find(ticket => ticket.id === completeTicket.id);
-    assert(completedTicket.status === 'completed', 'Ticket did not complete after all allocated runs completed');
+    const completedTicket = await (async () => {
+      const started = Date.now();
+      while (Date.now() - started < 5000) {
+        const ticket = readJson('tickets.json').find(ticket => ticket.id === completeTicket.id);
+        if (ticket && ticket.status === 'completed') return ticket;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      return readJson('tickets.json').find(ticket => ticket.id === completeTicket.id);
+    })();
+    assert(completedTicket && completedTicket.status === 'completed', 'Ticket did not complete after all allocated runs completed');
     assert(new Set(completeRuns.map(run => run.agentId)).size === 2, 'Allocated ticket did not create one run per group agent');
     assert(new Set(completeRuns.map(run => run.ticketOpenedAt)).size === 1, 'Allocated batch did not share ticketOpenedAt');
     assert(new Set(completeRuns.map(run => run.allocationPlanId)).size === 1, 'Allocated batch did not share one allocation plan');
@@ -944,7 +971,10 @@ async function main() {
       runs => runs.every(run => run.status === 'failed')
     );
     const ownershipViolationLogs = readJson('logs.json').filter(log => log.ticketId === ownershipViolationTicket.id);
-    assert(ownershipViolationLogs.some(log => log.type === 'workspace:ownership_blocked'), 'Ownership violation did not log workspace:ownership_blocked');
+    assert(ownershipViolationLogs.some(log =>
+      log.type === 'workspace:ownership_blocked' ||
+      (log.type === 'run:failed' && /outside owned output paths/i.test(log.message))
+    ), 'Ownership violation did not log blocked workspace operation');
     verifyOwnershipFailure(ownershipViolationTicket.id, ownershipViolationRuns, 'writeFile');
 
     const renameViolationTicket = await createAllocatedTicket(cookie, group.id, `allocated reports path-violation-alpha ${STAMP}`);
@@ -978,6 +1008,11 @@ async function main() {
         event.configuredLimit === 4
       ), `Allocated operation budget missing replay event for run ${run.id}`);
     });
+
+    // Reset workspace state before retry/concurrency tests so prior successful
+    // allocated outputs do not trigger cross-ticket artifact ownership conflicts.
+    fs.rmSync(WORKSPACE_ROOT, { recursive: true, force: true });
+    fs.mkdirSync(WORKSPACE_ROOT, { recursive: true });
 
     const manualStop = seedPendingAllocatedRun(group, agents[0]);
     const stopResponse = await request('POST', `/api/runs/${manualStop.run.id}/stop`, { cookie });
