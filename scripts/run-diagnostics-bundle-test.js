@@ -256,7 +256,7 @@ async function main() {
       permBundle.includes('Permission present in live permissions data: yes') &&
       /Delegated user has permission according to live data: yes/.test(permBundle));
     assert('9. permissioned bundle includes audit section + fields',
-      permBundle.includes('## 10. Permissioned Cross-Ticket Delete Audit') &&
+      permBundle.includes('## 12. Permissioned Cross-Ticket Delete Audit') &&
       permBundle.includes('permissionUsed: workspace.delete.cross_ticket_artifact') &&
       permBundle.includes('priorOwnerTicketId: ' + permitted.owner.ticket.id) &&
       permBundle.includes('actorUsername: admin'));
