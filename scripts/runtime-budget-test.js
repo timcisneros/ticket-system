@@ -48,6 +48,19 @@ function readJson(file) {
   return value.map(hydrateRunReplaySnapshot);
 }
 
+function readEvents() {
+  const file = path.join(DATA_DIR, 'events.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    })
+    .filter(Boolean);
+}
+
 function writeJson(file, value) {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
 }
@@ -256,7 +269,9 @@ async function waitForFailedRun(ticketId) {
   while (Date.now() - started < 15000) {
     const runs = readJson('runs.json').filter(run => run.ticketId === ticketId);
     if (runs.length === 1 && runs[0].status === 'failed' && runs[0].replaySummary && runs[0].replaySummary.terminalStatus === 'failed') {
-      return runs[0];
+      const runId = runs[0].id;
+      const terminalized = readEvents().some(event => event.type === 'run.terminalized' && event.runId === runId);
+      if (terminalized) return runs[0];
     }
 
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -267,6 +282,20 @@ async function waitForFailedRun(ticketId) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function hasTmpFiles(dir) {
+  const entries = fs.readdirSync(dir);
+  return entries.some(entry => entry.endsWith('.tmp'));
+}
+
+async function waitForDataDirQuiescent() {
+  const started = Date.now();
+  while (Date.now() - started < 5000) {
+    if (!hasTmpFiles(DATA_DIR)) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('Timed out waiting for DATA_DIR tmp files to settle');
 }
 
 async function runLimitScenario(preloadPath, agent, objective, env, expectedEventType) {
@@ -327,6 +356,7 @@ async function main() {
 
     console.log(JSON.stringify({ operationLimit: true, modelRequestLimit: true, timeout: true }));
   } finally {
+    await waitForDataDirQuiescent();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     removeTempWorkspaceRoot(WORKSPACE_ROOT);
     fs.rmSync(preloadPath, { force: true });
