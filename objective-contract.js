@@ -56,12 +56,52 @@ function parseSimpleFolderListObjective(text, command) {
   return Array.from(new Set(paths));
 }
 
-// Mirror of server.js extractSimpleDeleteTargets.
+// Mirror of server.js extractSimpleDeleteTargets. Supports a single exact target
+// ("delete file X") or a conservative list ("delete files X, Y, Z" / "delete X and Y").
+// The list form requires an explicit enumerator (comma or "and") so vague objectives
+// like "delete files older than 30 days" are not misclassified as an enumeration.
 function extractDeleteTargets(text) {
-  const match = text.match(/^(?:please\s+)?(?:delete|remove)\s+(?:the\s+)?(?:file|folder|directory|path)?\s*([A-Za-z0-9._/-]+)\s*\.?$/i);
-  if (!match) return null;
-  const target = cleanObjectivePath(match[1]);
-  return target ? [target] : null;
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+
+  // List form: triggered only when an explicit enumerator (comma or "and") is present
+  // so vague objectives like "delete files older than 30 days" are not misclassified.
+  if (/,|\band\b/i.test(normalized)) {
+    const listMatch = normalized.match(/^(?:please\s+)?(?:delete|remove)\s+(?:the\s+)?(?:files?|folders?|directories?|paths?)?\s*(.+?)\s*[.!?]?$/i);
+    if (listMatch) {
+      let listText = listMatch[1].trim();
+      if (!listText) return null;
+
+      // Reject phrases that indicate additional instructions or generative naming.
+      if (/\b(?:for|named|called|with|inside|containing|write|note|summary|report|then|after|before|into|under|each)\b/i.test(listText)) {
+        return null;
+      }
+
+      const cleaned = listText
+        .replace(/\s*,\s*/g, ' ')
+        .replace(/\s+and\s+/gi, ' ')
+        .trim();
+
+      if (!cleaned || /[^A-Za-z0-9._/\-\s]/.test(cleaned)) return null;
+
+      const paths = cleaned
+        .split(/\s+/)
+        .map(cleanObjectivePath)
+        .filter(Boolean);
+
+      if (paths.length === 0) return null;
+      if (paths.some(p => !/^[A-Za-z0-9._/-]+$/.test(p))) return null;
+      return Array.from(new Set(paths));
+    }
+  }
+
+  // Single exact target.
+  const singleMatch = normalized.match(/^(?:please\s+)?(?:delete|remove)\s+(?:the\s+)?(?:file|folder|directory|path)?\s*([A-Za-z0-9._/-]+)\s*\.?$/i);
+  if (singleMatch) {
+    const target = cleanObjectivePath(singleMatch[1]);
+    return target ? [target] : null;
+  }
+
+  return null;
 }
 
 // Mirror of server.js isReportObjective: standalone report-keyword detector (no
@@ -107,17 +147,32 @@ function buildObjectiveContract(objective) {
   const text = String(objective || '').replace(/\s+/g, ' ').trim();
   if (!text) return unsupportedContract(['empty_objective']);
 
-  // 1. Simple exact delete.
+  // 1. Simple delete (single target or conservative list).
   const deleteTargets = extractDeleteTargets(text);
   if (deleteTargets) {
-    const targetPath = deleteTargets[0];
+    if (deleteTargets.length === 1) {
+      const targetPath = deleteTargets[0];
+      return {
+        source: 'objective-contract',
+        recognized: true,
+        intent: 'delete',
+        targetPath,
+        postconditions: [{ type: 'path_absent', path: targetPath }],
+        allowedMutations: [{ operation: 'deletePath', path: targetPath }],
+        completionPolicy: 'idempotent_if_already_satisfied',
+        scopeHints: [],
+        runtimeProfile: null,
+        notes: []
+      };
+    }
+
     return {
       source: 'objective-contract',
       recognized: true,
       intent: 'delete',
-      targetPath,
-      postconditions: [{ type: 'path_absent', path: targetPath }],
-      allowedMutations: [{ operation: 'deletePath', path: targetPath }],
+      targetPath: null,
+      postconditions: deleteTargets.map(p => ({ type: 'path_absent', path: p })),
+      allowedMutations: deleteTargets.map(p => ({ operation: 'deletePath', path: p })),
       completionPolicy: 'idempotent_if_already_satisfied',
       scopeHints: [],
       runtimeProfile: null,

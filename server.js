@@ -75,7 +75,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toSt
 const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed'];
-const TRIAGE_REASON_CODES = ['verification_failed', 'authority_blocked', 'runtime_failed', 'provider_failed', 'stopped', 'objective_ambiguous', 'unknown'];
+const TRIAGE_REASON_CODES = ['verification_failed', 'authority_blocked', 'runtime_failed', 'provider_failed', 'stopped', 'objective_ambiguous', 'runtime_budget_insufficient', 'unknown'];
 const TRIAGE_REQUIRED_DECISIONS = ['review_failure', 'approve_retry', 'change_scope', 'fix_input', 'manual_recovery', 'clarify_objective', 'none'];
 const DEFAULT_EXECUTION_POLICY = Object.freeze({
   mode: 'assisted',
@@ -9748,6 +9748,67 @@ function assertRunWorkspaceOperationAllowed(run, currentCount, incomingCount, li
   }
 }
 
+// Count mutations still required to satisfy a deterministic objective contract,
+// using the initial workspace snapshot. Returns null for unrecognized / model-driven
+// objectives so the normal model path decides feasibility.
+function countRequiredContractMutations(contract, initialWorkspaceSnapshot) {
+  if (!contract || !contract.recognized || !Array.isArray(contract.allowedMutations) || contract.allowedMutations.length === 0) {
+    return null;
+  }
+
+  let required = 0;
+  for (const mutation of contract.allowedMutations) {
+    if (!mutation || !mutation.operation || !mutation.path) return null;
+    const relativePath = normalizeArtifactOwnershipPath(mutation.path);
+    if (!relativePath) return null;
+
+    const exists = workspaceProvider.getPathInfo(relativePath).exists;
+    switch (mutation.operation) {
+      case 'deletePath':
+        if (exists) required += 1;
+        break;
+      case 'createFolder':
+        if (!exists) required += 1;
+        break;
+      case 'writeFile':
+        required += 1;
+        break;
+      case 'renamePath':
+        if (exists) required += 1;
+        break;
+      default:
+        return null;
+    }
+  }
+
+  return required;
+}
+
+function assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits) {
+  if (isBrowserRun(run)) return;
+  if (run.executionMode === 'workflow' || (ticket && ticket.executionMode === 'workflow')) return;
+
+  const contract = buildObjectiveContract(ticket && ticket.objective);
+  const required = countRequiredContractMutations(contract, initialWorkspaceSnapshot);
+  if (required === null || required === 0) return;
+
+  const requiredSteps = Math.ceil(required / MAX_MUTATING_ACTIONS_PER_RESPONSE);
+  if (requiredSteps > limits.maxExecutionSteps) {
+    const error = new Error(
+      `Runtime budget infeasible: ${required} required mutation(s) need at least ${requiredSteps} execution step(s), but maxExecutionSteps is ${limits.maxExecutionSteps}. Raise the mutating-action limit, split the task into smaller objectives, or manually recover.`
+    );
+    error.code = 'RUNTIME_BUDGET_INSUFFICIENT';
+    error.failureKind = 'runtime_budget_insufficient';
+    error.details = {
+      requiredMutations: required,
+      requiredSteps,
+      maxExecutionSteps: limits.maxExecutionSteps,
+      maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE
+    };
+    throw error;
+  }
+}
+
 function checkPostconditionCompletion(run, actions, actionResults, step) {
   if (!actions || actions.length === 0) return null;
 
@@ -9849,8 +9910,9 @@ function readWorkspaceFileIfExists(relativePath) {
 // delete, or null otherwise (callers rely on the null/array truthiness).
 function extractSimpleDeleteTargets(objective) {
   const contract = buildObjectiveContract(objective);
-  if (contract && contract.recognized && contract.intent === 'delete' && contract.targetPath) {
-    return [contract.targetPath];
+  if (contract && contract.recognized && contract.intent === 'delete' && Array.isArray(contract.allowedMutations) && contract.allowedMutations.length > 0) {
+    const targets = contract.allowedMutations.map(m => m.path).filter(Boolean);
+    return targets.length > 0 ? targets : null;
   }
   return null;
 }
@@ -10033,6 +10095,7 @@ function buildRunTriage(run, {
     failureKind === 'provider_error' ||
     /Agent API key is missing|Agent model is missing|Ollama model is missing/i.test(message)
   )) mappedReason = 'provider_failed';
+  if (!mappedReason && failureKind === 'runtime_budget_insufficient') mappedReason = 'runtime_budget_insufficient';
   if (!mappedReason && effectiveStatus === 'failed') mappedReason = 'runtime_failed';
   if (!mappedReason) mappedReason = 'unknown';
 
@@ -10066,6 +10129,12 @@ function buildRunTriage(run, {
       requiredDecision: mutationCount > 0 ? 'manual_recovery' : 'review_failure',
       evidenceRefs: ['event:run.execution_completed', 'event:run.terminalized', 'replay:failure'],
       allowedActions: mutationCount > 0 ? ['review', 'manual_recovery', 'rerun_from_start'] : ['review', 'rerun_from_start'],
+      prohibitedActions: ['automatic_retry']
+    },
+    runtime_budget_insufficient: {
+      requiredDecision: 'manual_recovery',
+      evidenceRefs: ['event:run.execution_completed', 'event:run.terminalized', 'replay:failure'],
+      allowedActions: ['raise_limit', 'split_task', 'manual_recovery'],
       prohibitedActions: ['automatic_retry']
     },
     unknown: {
@@ -16476,6 +16545,8 @@ async function runAgentTicket(runId) {
     const simpleDeleteTargetSet = simpleDeleteTargets
       ? new Set(simpleDeleteTargets.map(t => normalizeArtifactOwnershipPath(t)).filter(Boolean))
       : null;
+
+    assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits);
 
     for (let step = 0; !completed; step += 1) {
       heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
