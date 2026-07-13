@@ -100,9 +100,14 @@ for (const obj of deleteForms) {
   assert('empty objective → recognized false', c.recognized === false && c.intent === 'model_driven');
 }
 {
-  // multi-target / connective delete must NOT be treated as a simple delete
+  // Multi-target delete is represented as one bounded contract with an exact
+  // allowlist and postcondition for each requested path.
   const c = buildObjectiveContract('Delete CD and EF');
-  assert('"Delete CD and EF" is not a simple delete (recognized false)', c.recognized === false, JSON.stringify(c));
+  assert('"Delete CD and EF" produces an exact bounded multi-delete contract',
+    c.recognized === true && c.intent === 'delete' && c.targetPath === null &&
+    hasPostcondition(c, 'path_absent', 'CD') && hasPostcondition(c, 'path_absent', 'EF') &&
+    hasMutation(c, 'deletePath', 'CD') && hasMutation(c, 'deletePath', 'EF'),
+    JSON.stringify(c));
 }
 
 // ── source shape sanity ────────────────────────────────────────────

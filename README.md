@@ -1,5 +1,39 @@
 # Ticket System
 
+Auditable, controlled execution for agent-run work. Every task is a durable
+ticket, every run operates under explicit authority, every external effect
+passes through a target provider, and completion remains separate from
+independent verification.
+
+[Portfolio case study](https://timcis.com/projects/ticket-system)
+
+![Triage showing allowed and prohibited operator actions](docs/images/triage.png)
+
+## Recruiter overview
+
+The reference implementation demonstrates five reliability guarantees:
+
+1. **Durable state:** tickets and runs survive beyond a single model response.
+2. **Scoped authority:** operations are checked against explicit permissions.
+3. **Inspectable evidence:** external effects produce receipts on an append-only
+   evidence path.
+4. **Independent verification:** a completed run is not automatically accepted
+   as a completed objective.
+5. **Recoverable failure:** triage and replay expose allowed operator actions
+   without hiding blocked or failed work.
+
+Quick demo:
+
+```sh
+npm install
+npm run demo:seed
+npm run demo:dev
+```
+
+Then open `http://localhost:3099`. The seeded environment includes completed,
+failed, blocked, and unverified paths so the operational controls are visible
+without provider credentials.
+
 ## 1. Project summary
 
 A **bounded ticket/run substrate**. You create a **ticket** (a durable work object), it runs as
@@ -79,7 +113,7 @@ npm run checkpoint:release
 
 It runs `node --check server.js` plus the ordered `CHECKPOINT_TEST_SCRIPTS`, fails loudly if any
 referenced script is missing, and ends with `RELEASE CHECKPOINT PASSED: N/N checks`. The current
-count is **43/43**. See **`docs/RELEASE_CHECKPOINT.md`** for what a pass does and does not mean and
+count is **44/44**. See **`docs/RELEASE_CHECKPOINT.md`** for what a pass does and does not mean and
 the full release-hygiene flow.
 
 ## 8. Demo fixtures note
