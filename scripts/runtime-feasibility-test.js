@@ -198,7 +198,8 @@ function startServer(preloadPath) {
       AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE: '2',
       AGENT_MAX_MODEL_REQUESTS_PER_RUN: '10',
       AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '20',
-      AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+      AGENT_MAX_RUNTIME_DURATION_MS: '5000',
+      ENABLE_MODEL_CONTRACT_COMPILER: 'true'
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });

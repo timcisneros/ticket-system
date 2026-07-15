@@ -386,6 +386,7 @@ async function main() {
     assert(run.verificationContractSnapshot && run.verificationContractSnapshot.workflowId === workflowDefinition.id, 'workflow run should snapshot its verification contract');
     assert(JSON.stringify(run.verificationContractSnapshot.postconditions) === JSON.stringify(workflowDefinition.postconditions), 'verification contract snapshot should preserve declared postconditions');
     assert(run.verificationContractSnapshot.verifierContract.id === workflowDefinition.verifierContract.id, 'verification contract snapshot should preserve verifier contract metadata');
+    assert(run.verificationContractSnapshot.verifierContractExecution === 'metadata_only_not_executed', 'verification snapshot should state that fixture verifier metadata is not executed at runtime');
     assert(fs.readFileSync(path.join(WORKSPACE_ROOT, workflowInput.path), 'utf8') === workflowInput.content, 'workflow writeFile should mutate workspace through runtime');
 
     const snapshotPath = path.join(DATA_DIR, run.replaySnapshotPath);
@@ -400,6 +401,7 @@ async function main() {
     assert(typeof workflowInvocation.policyTextHash === 'string' && workflowInvocation.policyTextHash.length === 64, 'workflow invocation should record policy text hash');
     assert(workflowInvocation.verifierContractId === 'test-workflow-verifier', 'workflow invocation should record verifier contract id');
     assert(workflowInvocation.verifierContractVersion === '1', 'workflow invocation should record verifier contract version');
+    assert(workflowInvocation.verifierContractExecution === 'metadata_only_not_executed', 'workflow invocation should state that fixture verifier metadata is not executed');
     assert(snapshot.workflowActions.some(item => item.action === 'writeFile'), 'workflow run should record writeFile workflow action');
     assert(snapshot.workflowActions.some(item => item.action === 'stop'), 'workflow run should record stop workflow action');
     assert(snapshot.authorityChecks.some(item => item.status === 'allowed' && item.operation === 'writeFile' && item.path === workflowInput.path), 'workflow run should record allowed authority evidence');
@@ -433,6 +435,8 @@ async function main() {
     assert(eventTypes.includes('run.execution_completed'), 'events should include run.execution_completed');
     assert(eventTypes.includes('run.terminalized'), 'events should include run.terminalized');
     assert(eventTypes.includes('run.postconditions_checked'), 'events should include run.postconditions_checked');
+    const postconditionsCheckedEvent = eventsPayload.events.find(event => event.type === 'run.postconditions_checked');
+    assert(postconditionsCheckedEvent.payload.verifierContractExecution === 'metadata_only_not_executed', 'postcondition evidence should state that fixture verifier metadata was not executed');
     assert(eventTypes.includes('run.verification_passed'), 'events should include run.verification_passed before completed terminalization');
     assert(eventTypes.includes('run.violations_checked'), 'events should include run.violations_checked');
     assert(eventTypes.includes('run.evaluation_completed'), 'events should include run.evaluation_completed');

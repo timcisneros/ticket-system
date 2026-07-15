@@ -8,6 +8,7 @@ A compact map of the release documentation for the bounded ticket/run substrate.
 - [`SETUP_AND_FIRST_RUN.md`](SETUP_AND_FIRST_RUN.md) — install, env, first-run walkthrough.
 - [`OPERATOR_GUIDE.md`](OPERATOR_GUIDE.md) — how to operate the system; safe operating rules.
 - [`PRIMITIVE_GLOSSARY.md`](PRIMITIVE_GLOSSARY.md) — precise definitions + commonly confused terms.
+- [`SYSTEM_AUDIT_2026-07-15.md`](SYSTEM_AUDIT_2026-07-15.md) — current audit, remediations, and remaining work.
 
 ## Operator / primitive docs
 
@@ -33,7 +34,8 @@ A compact map of the release documentation for the bounded ticket/run substrate.
 ## Test / release docs
 
 - [`RELEASE_CHECKPOINT.md`](RELEASE_CHECKPOINT.md) — the release gate + hygiene flow.
-- [`RELEASE_CANDIDATE_AUDIT.md`](RELEASE_CANDIDATE_AUDIT.md) — the release-candidate verdict.
+- [`SYSTEM_AUDIT_2026-07-15.md`](SYSTEM_AUDIT_2026-07-15.md) — current system verdict.
+- [`RELEASE_CANDIDATE_AUDIT.md`](RELEASE_CANDIDATE_AUDIT.md) — r1.32 release-candidate verdict.
 - [`SAFETY_AND_NON_GOALS.md`](SAFETY_AND_NON_GOALS.md) — safety model + explicit non-goals.
 - [`RELEASE_NOTES_r1.33.md`](RELEASE_NOTES_r1.33.md) — release-candidate notes.
 - [`DEMO_WALKTHROUGH.md`](DEMO_WALKTHROUGH.md) — deterministic, no-provider demo click path.

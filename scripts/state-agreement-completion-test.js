@@ -3,8 +3,7 @@
 //
 // Two self-contained server boots over seeded data:
 //   Phase 1 (reconcile): startup convergence of the terminalized-run /
-//     unfinalized-ticket crash window, plus legacy_current_workflow fallback
-//     labeling during terminal reconciliation.
+//     unfinalized-ticket crash window and immutable run-snapshot verification.
 //   Phase 2 (manual guard): manual ticket completion accept/reject matrix,
 //     including Option A (postcondition-free completed-but-unverified accepts).
 //
@@ -16,6 +15,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 // argon2 hash for password 'admin123'
@@ -75,7 +75,8 @@ function writeJson(dataDir, file, value) {
 }
 
 function writeEvents(dataDir, events) {
-  fs.writeFileSync(path.join(dataDir, 'events.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
+  const currentEvents = sealCurrentRunEventChains(events);
+  fs.writeFileSync(path.join(dataDir, 'events.jsonl'), currentEvents.map(e => JSON.stringify(e)).join('\n') + '\n');
 }
 
 function readJson(dataDir, file) {
@@ -217,34 +218,34 @@ async function login(baseUrl) {
   return cookie;
 }
 
-// ── Phase 1: startup reconciliation (crash window + legacy fallback) ──────────
+// ── Phase 1: startup reconciliation and immutable verification snapshot ──────
 async function runReconcilePhase() {
   const { dataDir, workspaceRoot } = makeDirs();
   const port = 3486;
   const baseUrl = 'http://127.0.0.1:' + port;
   let server = null;
   try {
-    fs.writeFileSync(path.join(workspaceRoot, 'legacy-ok.txt'), 'present');
+    fs.writeFileSync(path.join(workspaceRoot, 'snapshot-ok.txt'), 'present');
 
     seedCommon(dataDir, workspaceRoot, {
       workflows: [{
-        id: 'wf-legacy', name: 'Legacy workflow', version: '1',
+        id: 'wf-current', name: 'Current workflow', version: '1',
         inputSchema: {},
         actions: [{ id: 'done', action: 'stop', input: {} }],
-        postconditions: [{ id: 'legacy-pc', type: 'fileExists', path: 'legacy-ok.txt' }]
+        postconditions: [{ id: 'current-pc', type: 'fileExists', path: 'snapshot-ok.txt' }]
       }]
     });
 
     // Ticket 11: completed+terminalized run, ticket stuck in_progress (crash window).
     // Ticket 12: failed+terminalized run, ticket stuck in_progress.
-    // Ticket 13: legacy workflow run (no verificationContractSnapshot), needs reconcile.
+    // Ticket 13: current workflow run with its immutable verification snapshot, needs reconcile.
     // Ticket 14: interrupted+terminalized run, ticket stuck in_progress.
     writeJson(dataDir, 'tickets.json', [
       ticketBase(11, 'in_progress'),
       ticketBase(12, 'in_progress'),
       ticketBase(13, 'in_progress', {
-        executionMode: 'workflow', workflowId: 'wf-legacy',
-        capabilityType: 'workflow', capabilityId: 'wf-legacy', workflowInput: {}
+        executionMode: 'workflow', workflowId: 'wf-current',
+        capabilityType: 'workflow', capabilityId: 'wf-current', workflowInput: {}
       }),
       ticketBase(14, 'in_progress')
     ]);
@@ -253,10 +254,14 @@ async function runReconcilePhase() {
       runBase(101, 11, 'completed', { replaySnapshotPath: 'replay-snapshots/run-101.json' }),
       runBase(102, 12, 'failed', { error: 'boom', replaySnapshotPath: 'replay-snapshots/run-102.json' }),
       runBase(103, 13, 'completed', {
-        executionMode: 'workflow', workflowId: 'wf-legacy',
-        capabilityType: 'workflow', capabilityId: 'wf-legacy', workflowInput: {},
-        replaySnapshotPath: 'replay-snapshots/run-103.json'
-        // intentionally NO verificationContractSnapshot → legacy fallback
+        executionMode: 'workflow', workflowId: 'wf-current',
+        capabilityType: 'workflow', capabilityId: 'wf-current', workflowInput: {},
+        replaySnapshotPath: 'replay-snapshots/run-103.json',
+        verificationContractSnapshot: {
+          workflowId: 'wf-current', workflowName: 'Current workflow', workflowVersion: '1',
+          postconditions: [{ id: 'current-pc', type: 'fileExists', path: 'snapshot-ok.txt' }],
+          verifierContract: null, capturedAt: ISO
+        }
       }),
       runBase(104, 14, 'interrupted', { error: 'process restarted', replaySnapshotPath: 'replay-snapshots/run-104.json' })
     ]);
@@ -278,7 +283,7 @@ async function runReconcilePhase() {
       { id: 'e102b', ts: ISO, type: 'run.execution_completed', ticketId: 12, runId: 102, payload: { status: 'failed', error: 'boom' } },
       { id: 'e102c', ts: ISO, type: 'run.snapshot_finalized', ticketId: 12, runId: 102, payload: { status: 'failed' } },
       { id: 'e102d', ts: ISO, type: 'run.terminalized', ticketId: 12, runId: 102, payload: { status: 'failed', error: 'boom' } },
-      // Run 103: legacy — execution completed, not terminalized, no snapshot (needs reconcile).
+      // Run 103: execution completed, not terminalized, current snapshot present.
       { id: 'e103a', ts: ISO, type: 'run.created', ticketId: 13, runId: 103, payload: { status: 'pending' } },
       { id: 'e103b', ts: ISO, type: 'run.execution_completed', ticketId: 13, runId: 103, payload: { status: 'completed' } },
       // Run 104: fully terminalized interrupted; ticket never finalized.
@@ -320,16 +325,16 @@ async function runReconcilePhase() {
     assert(t102.length === 1, `run 102 must have exactly one run.terminalized, got ${t102.length}`);
     assert(t104.length === 1, `run 104 must have exactly one run.terminalized, got ${t104.length}`);
 
-    // Legacy fallback labeling
+    // Verification always uses the immutable run snapshot.
     const checked103 = events.find(e => e.runId === 103 && e.type === 'run.postconditions_checked');
-    assert(checked103, 'legacy run reconciliation should emit run.postconditions_checked');
-    assert(checked103.payload.contractSource === 'legacy_current_workflow',
-      `legacy run must label contractSource legacy_current_workflow, got ${checked103.payload.contractSource}`);
+    assert(checked103, 'current run reconciliation should emit run.postconditions_checked');
+    assert(checked103.payload.contractSource === 'run_snapshot',
+      `run must label contractSource run_snapshot, got ${checked103.payload.contractSource}`);
     const passed103 = events.find(e => e.runId === 103 && e.type === 'run.verification_passed');
-    assert(passed103 && passed103.payload.contractSource === 'legacy_current_workflow',
-      'legacy run verification_passed should label legacy_current_workflow');
+    assert(passed103 && passed103.payload.contractSource === 'run_snapshot',
+      'run verification_passed should label run_snapshot');
 
-    console.log('PASS: startup converges completed/failed/interrupted terminalized tickets and labels legacy contract source');
+    console.log('PASS: startup converges completed/failed/interrupted terminalized tickets and uses immutable verification snapshots');
   } finally {
     await stopServer(server);
     fs.rmSync(dataDir, { recursive: true, force: true });

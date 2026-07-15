@@ -172,13 +172,13 @@ function updateSubmitLabel() {
   createTicketSubmit.textContent = hasWorker ? 'Create & Run' : 'Create Ticket';
 }
 
-const agentGroupMembers = <%- JSON.stringify(typeof agentGroupMembers === 'undefined' ? {} : agentGroupMembers) %>;
-const initialAgents = <%- JSON.stringify((agents || []).map(agent => ({ id: agent.id, name: agent.name }))) %>;
-const workflowSchemas = <%- JSON.stringify((typeof workflows === 'undefined' ? [] : workflows).reduce((acc, workflow) => {
+const agentGroupMembers = <%- serializeForInlineScript(typeof agentGroupMembers === 'undefined' ? {} : agentGroupMembers) %>;
+const initialAgents = <%- serializeForInlineScript((agents || []).map(agent => ({ id: agent.id, name: agent.name }))) %>;
+const workflowSchemas = <%- serializeForInlineScript((typeof workflows === 'undefined' ? [] : workflows).reduce((acc, workflow) => {
   acc[workflow.id] = workflow.inputSchema || {};
   return acc;
 }, {})) %>;
-const workflowPostconditionPreviews = <%- JSON.stringify(workflowPostconditionPreviews) %>;
+const workflowPostconditionPreviews = <%- serializeForInlineScript(workflowPostconditionPreviews) %>;
 
 function updateOwnedPaths() {
   const selectedGroupId = parseInt(targetSelect.value);

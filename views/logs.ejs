@@ -113,8 +113,8 @@
 
 <script>
 const logsBody = document.getElementById('logs-body');
-const activeLogFilters = <%- JSON.stringify(viewFilters || { runId: null, ticketId: null }) %>;
-const activeLogPagination = <%- JSON.stringify(viewPagination || { page: 1 }) %>;
+const activeLogFilters = <%- serializeForInlineScript(viewFilters || { runId: null, ticketId: null }) %>;
+const activeLogPagination = <%- serializeForInlineScript(viewPagination || { page: 1 }) %>;
 
 function formatLogTimestamp(timestamp) {
   if (!timestamp) return '-';

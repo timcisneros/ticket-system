@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Event Chain Verify Test — 7 scenarios proving tamper detection.
+// Event Chain Verify Test — 9 scenarios proving current-schema chain integrity.
 //
 // 1. clean chain passes
 // 2. modified payload fails
@@ -8,12 +8,14 @@
 // 5. reordered events fail
 // 6. broken prevHash fails
 // 7. replay fixture chain verifies
+// 8. modified final event fails against its stored hash
+// 9. modified forensic metadata fails
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash } = require('../runtime/event-integrity');
 
 const ROOT = path.resolve(__dirname, '..');
 const VERIFIER = path.join(ROOT, 'scripts', 'event-chain-verify.js');
@@ -35,25 +37,24 @@ function assert(value, msg) {
 }
 
 function makeEvent(seq, type, payload = {}, runId = 1, ticketId = 1) {
-  return { type, runId, ticketId, seq, ts: new Date().toISOString(), payload, stepId: null };
-}
-
-function computeEventHash(event) {
-  const canonical = {
-    type: event.type,
-    ticketId: event.ticketId,
-    runId: event.runId,
-    stepId: event.stepId,
-    payload: event.payload
+  return {
+    schemaVersion: RUN_EVENT_SCHEMA_VERSION,
+    id: `event-${runId}-${seq}-${type}`,
+    type,
+    runId,
+    ticketId,
+    seq,
+    ts: new Date(Date.UTC(2030, 0, 1, 0, 0, seq)).toISOString(),
+    payload,
+    stepId: null
   };
-  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
 
 function buildHashChain(events) {
   let prevHash = null;
   for (const ev of events) {
     ev.prevHash = prevHash;
-    ev.hash = computeEventHash(ev);
+    ev.hash = computeRunEventHash(ev);
     prevHash = ev.hash;
   }
   return events;
@@ -135,12 +136,12 @@ async function scenario2ModifiedPayload() {
   assert(report.chainValid === false, 'should detect broken chain');
   const runReport = Object.values(report.runs)[0];
   assert(runReport, 'should have run report');
-  const prevError = runReport.errors.find(e => e.type === 'prevhash_mismatch');
-  assert(prevError, `should have prevhash_mismatch error, got ${JSON.stringify(runReport.errors)}`);
-  assert(prevError.seq === 2, `error should be at seq 2 (next event after tamper), got ${prevError.seq}`);
+  const hashError = runReport.errors.find(e => e.type === 'hash_mismatch');
+  assert(hashError, `should have hash_mismatch error, got ${JSON.stringify(runReport.errors)}`);
+  assert(hashError.seq === 1, `error should identify the modified event at seq 1, got ${hashError.seq}`);
 
   fs.rmSync(dir, { recursive: true, force: true });
-  return { name: 'modified-payload', passed: true, detail: `detected at seq ${prevError.seq}` };
+  return { name: 'modified-payload', passed: true, detail: `detected at seq ${hashError.seq}` };
 }
 
 async function scenario3DeletedMiddleEvent() {
@@ -202,20 +203,18 @@ async function scenario5ReorderedEvents() {
   events[1].seq = 0;
   // Need to recompute prevHash to match new order
   events[0].prevHash = null;
-  events[0].hash = computeEventHash(events[0]);
+  events[0].hash = computeRunEventHash(events[0]);
   events[1].prevHash = events[0].hash;
-  events[1].hash = computeEventHash(events[1]);
+  events[1].hash = computeRunEventHash(events[1]);
   events[2].prevHash = events[1].hash;
-  events[2].hash = computeEventHash(events[2]);
+  events[2].hash = computeRunEventHash(events[2]);
   writeEvents(dir, events);
   const { report } = await runVerifier(dir);
 
   assert(report.chainValid === false, 'should detect broken chain after reorder');
   const runReport = Object.values(report.runs)[0];
-  // The reorder creates a prevHash mismatch because the original chain expected
-  // a different hash at seq 0
-  const prevError = runReport.errors.find(e => e.type === 'prevhash_mismatch');
-  assert(prevError, `should have prevhash_mismatch error, got ${JSON.stringify(runReport.errors)}`);
+  const orderError = runReport.errors.find(e => ['first_seq', 'prevhash_mismatch'].includes(e.type));
+  assert(orderError, `should have an order/linkage error, got ${JSON.stringify(runReport.errors)}`);
 
   fs.rmSync(dir, { recursive: true, force: true });
   return { name: 'reordered-events', passed: true, detail: `prevhash mismatch detected` };
@@ -254,6 +253,45 @@ async function scenario7ReplayFixture(fixture) {
   return { name: 'replay-fixture', passed: true, detail: `${report.runsVerified} run(s) verified` };
 }
 
+async function scenario8ModifiedFinalEvent() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chain-8-'));
+  const events = buildHashChain([
+    makeEvent(0, 'run.created', { agentId: 1 }),
+    makeEvent(1, 'run.started', { agentId: 1 }),
+    makeEvent(2, 'run.terminalized', { status: 'completed' })
+  ]);
+  events[2].payload.status = 'failed';
+  writeEvents(dir, events);
+  const { report, exitCode } = await runVerifier(dir, true);
+
+  assert(exitCode === 1, 'strict mode should reject a modified final event');
+  const runReport = Object.values(report.runs)[0];
+  const hashError = runReport.errors.find(error => error.type === 'hash_mismatch' && error.seq === 2);
+  assert(hashError, `should detect the final stored hash mismatch, got ${JSON.stringify(runReport.errors)}`);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { name: 'modified-final-event', passed: true, detail: 'stored final hash mismatch detected' };
+}
+
+async function scenario9ModifiedMetadata() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chain-9-'));
+  const events = buildHashChain([
+    makeEvent(0, 'run.created', { agentId: 1 }),
+    makeEvent(1, 'run.started', { agentId: 1 }),
+    makeEvent(2, 'run.terminalized', { status: 'completed' })
+  ]);
+  events[1].ts = '2031-01-01T00:00:00.000Z';
+  writeEvents(dir, events);
+  const { report, exitCode } = await runVerifier(dir, true);
+
+  const runReport = Object.values(report.runs)[0];
+  assert(exitCode === 1, 'strict mode should reject modified event metadata');
+  assert(runReport.errors.some(error => error.type === 'hash_mismatch' && error.seq === 1), `timestamp tamper was not detected: ${JSON.stringify(runReport.errors)}`);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { name: 'modified-metadata', passed: true, detail: 'timestamp tamper detected' };
+}
+
 // ── main ──────────────────────────────────────────────────────────
 
 async function main() {
@@ -274,6 +312,8 @@ async function main() {
   results.push(await scenario5ReorderedEvents());
   results.push(await scenario6BrokenPrevHash());
   results.push(await scenario7ReplayFixture(cleanFixture));
+  results.push(await scenario8ModifiedFinalEvent());
+  results.push(await scenario9ModifiedMetadata());
 
   try { fs.rmSync(cleanFixture, { recursive: true, force: true }); } catch (_) {}
 

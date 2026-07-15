@@ -5,14 +5,16 @@ verify from code/UI rather than assume.
 
 ## 1. Prerequisites
 
-- Node.js (a current LTS). The app is a single-process Fastify server backed by JSON files.
+- Node.js (a current LTS) and pnpm through Corepack. The app is a single-process Fastify server
+  backed by JSON files.
 - No external services are required for the demo path. Running **live agents** additionally needs a
   configured provider (OpenAI API key, or a local Ollama).
 
 ## 2. Install dependencies
 
 ```sh
-npm install
+corepack enable
+pnpm install --frozen-lockfile
 ```
 
 ## 3. Environment variables
@@ -23,7 +25,8 @@ variables (see README → Configuration for the full list):
 - `PORT` (default `3099`), `NODE_ENV` (`development` via `npm run dev`).
 - `DATA_DIR` (JSON store; demo/dev uses ignored `.local-data`), `WORKSPACE_ROOT` (mutation target;
   demo/dev uses ignored `.local-workspace`).
-- `ADMIN_BOOTSTRAP_PASSWORD` (bootstrap admin password), `SESSION_SECRET` (random if omitted).
+- `ADMIN_BOOTSTRAP_PASSWORD` (bootstrap admin password), `SESSION_SECRET` (random for the current
+  process if omitted), and optional `PUBLIC_BASE_URL` for exact-origin request checks.
 - Provider (optional, only for live agents): `OPENAI_API_KEY` / `OPENAI_MODEL`, or `OLLAMA_MODEL` /
   `OLLAMA_BASE_URL`.
 
@@ -81,7 +84,7 @@ via `POST /api/watcher-proposals/:id/approve` (needs `ticket:create`).
 ## 12. Inspect model routing
 
 `/model-routing-policies` (needs `modelRouting:manage`): list/detail. New runs carry a
-`routingSnapshot`; legacy runs render safely without one.
+`routingSnapshot`; development data should be reset when the run schema changes.
 
 ## 13. Inspect connectors
 
@@ -100,7 +103,7 @@ and links. Read-only.
 npm run checkpoint:release
 ```
 
-Provider-free, network-free, deterministic; ends with `RELEASE CHECKPOINT PASSED: 43/43 checks`. See
+Provider-free, network-free, deterministic; ends with `RELEASE CHECKPOINT PASSED: 50/50 checks`. See
 `docs/RELEASE_CHECKPOINT.md`.
 
 ## 16. Common local issues

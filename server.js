@@ -1,4 +1,9 @@
-const fastify = require('fastify')({ logger: false });
+require('dotenv').config();
+
+const fastify = require('fastify')({
+  logger: false,
+  trustProxy: process.env.TRUST_PROXY === 'true'
+});
 const path = require('path');
 const fs = require('fs');
 const argon2 = require('argon2');
@@ -7,10 +12,10 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
+const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
-require('dotenv').config()
 
 const PORT = process.env.PORT || 3099;
 
@@ -71,7 +76,12 @@ const WORK_TYPES_FILE = path.join(DATA_DIR, 'work-types.json');
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
 const REPLAY_SNAPSHOTS_DIR = path.join(DATA_DIR, 'replay-snapshots');
 const PROTECTED_PATHS_FILE = path.join(__dirname, 'config', 'protected-paths.json');
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+function resolveSessionSecret() {
+  const configured = String(process.env.SESSION_SECRET || '').trim();
+  return configured || crypto.randomBytes(32).toString('hex');
+}
+
+const SESSION_SECRET = resolveSessionSecret();
 const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed'];
@@ -117,6 +127,7 @@ const BUILTIN_PERMISSIONS = Object.freeze([
   'group:update',
   'group:delete',
   'permission:assign',
+  'workflow:manage',
   'workspace:read',
   'workspace:write',
   'workspace:reset',
@@ -163,6 +174,8 @@ function seedOperationalDataDir() {
   if (isRepoDataDir()) return;
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
+  // Every fresh local store starts from the same tracked internal-demo catalog.
+  // NODE_ENV selects runtime behavior; it is not a separate deployment product.
   [
     'users.json',
     'agents.json',
@@ -181,6 +194,9 @@ function seedOperationalDataDir() {
     'logs.json',
     'operation-history.json',
     'allocation-plans.json',
+    'process-templates.json',
+    'process-template-triggers.json',
+    'process-template-versions.json',
     'work-contexts.json',
     'watchers.json',
     'watcher-observations.json',
@@ -314,6 +330,10 @@ const BROWSER_OPERATION_ARGS = Object.freeze({
   wait: ['forMs']
 });
 const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT === '1';
+// Model-assisted objective compilation is an opt-in experimental capability. It
+// adds a provider request before direct execution, so unrelated runs and their
+// request budgets retain the established behavior unless explicitly enabled.
+const MODEL_CONTRACT_COMPILER_ENABLED = process.env.ENABLE_MODEL_CONTRACT_COMPILER === 'true';
 const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
   ...(AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED ? ['createWorkflowDraft'] : []),
   'createWorkflowDraftIntent'
@@ -476,6 +496,7 @@ const WORKLOAD_PROFILES = {
 // No production behavior change when the env var is absent.
 
 const TEST_INTERRUPTION_POINT = process.env.TEST_INTERRUPTION_POINT || '';
+const TEST_SKIP_STARTUP_RUN_RECOVERY = process.env.NODE_ENV === 'test' && process.env.TEST_SKIP_STARTUP_RUN_RECOVERY === 'true';
 const testInterruptFirstAuthority = new Set();
 const testInterruptFirstWorkspaceOp = new Set();
 
@@ -493,33 +514,10 @@ function maybeTestInterrupt(run, point) {
     testInterruptFirstWorkspaceOp.add(run.id);
   }
 
-  // Flush ALL pending events to disk synchronously before SIGKILL
-  // so that recovery tools can reconstruct state from persisted evidence.
-  // Avoid writing duplicates by skipping events already on disk.
-  let persistedIds = new Set();
-  try {
-    const lines = fs.readFileSync(EVENTS_FILE, 'utf8').split('\n').filter(Boolean);
-    for (const line of lines) {
-      try {
-        const ev = JSON.parse(line);
-        if (ev && ev.id) persistedIds.add(ev.id);
-      } catch (_) {}
-    }
-  } catch (_) {}
-
-  const eventsToFlush = pendingEventBuffer.filter(e => !persistedIds.has(e.id));
-  if (eventsToFlush.length > 0) {
-    const lines = eventsToFlush.map(ev => `${JSON.stringify(ev)}\n`).join('');
-    try {
-      fs.appendFileSync(EVENTS_FILE, lines, 'utf8');
-      pendingEventBuffer = pendingEventBuffer.filter(e => !eventsToFlush.includes(e));
-    } catch (e) {
-      console.error(`Failed to flush pending events: ${e.message}`);
-    }
-  }
-
-  // Write the interruption event itself
+  // All normal events are already durable because appendEvent is synchronous.
+  // Write the interruption event itself before simulating the crash.
   const event = {
+    schemaVersion: RUN_EVENT_SCHEMA_VERSION,
     id: normalizeEventId(),
     ts: createLogTimestamp(),
     type: 'interruption.test_hook',
@@ -535,17 +533,15 @@ function maybeTestInterrupt(run, point) {
     const chain = runEventChains.get(runId) || { seq: 0, prevHash: null };
     event.seq = chain.seq;
     event.prevHash = chain.prevHash;
-    const currentHash = computeEventHash(event);
-    runEventChains.set(runId, {
-      seq: chain.seq + 1,
-      prevHash: currentHash
-    });
+    event.hash = computeRunEventHash(event);
   }
 
   try {
     fs.appendFileSync(EVENTS_FILE, `${JSON.stringify(event)}\n`, 'utf8');
+    runEventChains.set(event.runId, { seq: event.seq + 1, prevHash: event.hash });
   } catch (e) {
-    console.error(`Failed to write interruption event: ${e.message}`);
+    fs.writeSync(process.stderr.fd, `Failed to write interruption event: ${e.message}\n`);
+    process.exit(1);
   }
 
   // Kill the server process to simulate a crash
@@ -975,13 +971,8 @@ function reconstructRunPhase(run) {
 }
 
 function reconstructResumableState(run) {
-  // Read all events for this run
-  const runEvents = readRunScopedEvents(run.id).sort((a, b) => {
-    const tsCmp = String(a.ts).localeCompare(String(b.ts));
-    if (tsCmp !== 0) return tsCmp;
-    if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq;
-    return 0;
-  });
+  // File order is the event order. Startup already rejects non-current chains.
+  const runEvents = readRunScopedEvents(run.id);
 
   if (runEvents.length === 0) return null;
 
@@ -990,46 +981,12 @@ function reconstructResumableState(run) {
   const listedDirectoryPaths = new Set();
   const stalledResponses = 0; // We don't track stalled across restarts
   const noProgressResponses = 0;
-  const hasLegacyTerminal = runEvents.some(e => ['run.completed', 'run.failed', 'run.interrupted'].includes(e.type));
   const hasTerminal = runEvents.some(e => e.type === 'run.terminalized');
-  const hasExecutionCompleted = runEvents.some(e => e.type === 'run.execution_completed') || hasLegacyTerminal;
+  const hasExecutionCompleted = runEvents.some(e => e.type === 'run.execution_completed');
   const hasSnapshotFinalized = runEvents.some(e => e.type === 'replay.snapshot.finalized' || e.type === 'run.snapshot_finalized');
+  const isTerminal = hasTerminal;
 
-  // Backward compat: treat legacy terminal events as also-terminalized
-  // (old logs have run.completed/failed/interrupted as the final event)
-  const isTerminal = hasTerminal || hasLegacyTerminal;
-
-  // Check hash chain integrity (allow seq resets after server restart)
-  let hashChainIntact = true;
-  let segmentStart = 0;
-  for (let i = 1; i < runEvents.length; i++) {
-    const ev = runEvents[i];
-    const prev = runEvents[i - 1];
-    // New chain segment starts with prevHash=null (run.created or run.resumed)
-    if (ev.prevHash !== undefined && ev.prevHash === null) {
-      segmentStart = i;
-      continue;
-    }
-    // Also detect seq reset (safety net for events missing prevHash)
-    if (ev.seq !== undefined && prev.seq !== undefined && ev.seq < prev.seq) {
-      segmentStart = i;
-      continue;
-    }
-    if (i <= segmentStart) continue;
-    if (ev.seq !== undefined && prev.seq !== undefined) {
-      if (ev.seq !== prev.seq + 1) {
-        hashChainIntact = false;
-        break;
-      }
-    }
-    if (ev.prevHash !== undefined) {
-      const expected = computeEventHash(prev);
-      if (ev.prevHash !== expected) {
-        hashChainIntact = false;
-        break;
-      }
-    }
-  }
+  const hashChainIntact = verifyCurrentRunEventChain(runEvents).chainValid;
 
   // Check for duplicate mutating operations
   const mutatingOps = runEvents.filter(e => e.type === 'workspace.operation' && e.payload && AGENT_MUTATING_OPERATIONS.includes(e.payload.operation));
@@ -1065,9 +1022,6 @@ function reconstructResumableState(run) {
   let expectedNextPhase = 'unknown';
   if (lastEvent) {
     if (lastEvent.type === 'run.terminalized') {
-      expectedNextPhase = 'already_terminal';
-    } else if (['run.completed', 'run.failed', 'run.interrupted'].includes(lastEvent.type)) {
-      // Legacy terminal events — old logs used these as final event
       expectedNextPhase = 'already_terminal';
     } else if (lastEvent.type === 'run.execution_completed') {
       expectedNextPhase = 'snapshot_finalization';
@@ -1129,7 +1083,7 @@ function reconstructResumableState(run) {
   // Three mutually-exclusive resume dispositions.
   // safeToResumeExecution:  model loop can continue (running normally or resuming mid-execution)
   // safeToReconcileTerminalState: execution completed but not yet terminalized — needs reconciliation
-  //   (triggered by run.execution_completed, or legacy run.completed/failed/interrupted)
+  //   (triggered by run.execution_completed)
   // unsafeToContinue:        integrity broken, cannot proceed at all
   const safeToResumeExecution =
     hashChainIntact &&
@@ -1159,7 +1113,6 @@ function reconstructResumableState(run) {
     noProgressResponses,
     isTerminal,
     hasTerminal,
-    hasLegacyTerminal,
     hasExecutionCompleted,
     hasSnapshotFinalized,
     hashChainIntact,
@@ -1419,7 +1372,7 @@ const ACTIONS_CATALOG = [
     optionalShape: { provider: 'string', groupIds: 'string' },
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
-    authorityConstraints: 'Requires user:create permission; admin only',
+    authorityConstraints: 'Requires user:create permission; setting group membership also requires permission:assign; admin only',
     provenanceSurface: 'Data file updated (users.json / agents.json); system log (user:created / agent:created)'
   },
   {
@@ -1428,7 +1381,7 @@ const ACTIONS_CATALOG = [
     optionalShape: { username: 'string', password: 'string', agentName: 'string', provider: 'string', model: 'string', apiKey: 'string', groupIds: 'string' },
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
-    authorityConstraints: 'Requires user:update permission; admin only',
+    authorityConstraints: 'Requires user:update permission; changing group membership also requires permission:assign; admin only',
     provenanceSurface: 'Data file updated (users.json / agents.json / memberships.json); system log'
   },
   {
@@ -1445,7 +1398,7 @@ const ACTIONS_CATALOG = [
     optionalShape: { canReceiveTickets: 'boolean', permissions: ['string'] },
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
-    authorityConstraints: 'Requires group:create permission; admin only',
+    authorityConstraints: 'Requires group:create permission; granting any permissions also requires permission:assign; admin only',
     provenanceSurface: 'Data file updated (groups.json); system log'
   },
   {
@@ -1454,7 +1407,7 @@ const ACTIONS_CATALOG = [
     optionalShape: { name: 'string', canReceiveTickets: 'boolean', permissions: ['string'] },
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
-    authorityConstraints: 'Requires group:update permission; admin only',
+    authorityConstraints: 'Requires group:update permission; changing granted permissions also requires permission:assign; admin only',
     provenanceSurface: 'Data file updated (groups.json); system log'
   },
   {
@@ -1548,17 +1501,64 @@ const pageRenderCache = new Map();
 const pageRenderInFlight = new Map();
 const PAGE_RENDER_CACHE_TTL_MS = 10000;
 const PAGE_RENDER_CACHE_MAX_ENTRIES = 100;
+const UNSAFE_HTTP_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function resolvePublicOrigin() {
+  const configured = String(process.env.PUBLIC_BASE_URL || '').trim();
+  if (!configured) return null;
+  let parsed;
+  try {
+    parsed = new URL(configured);
+  } catch (_) {
+    throw new Error('PUBLIC_BASE_URL must be a valid absolute HTTP(S) origin');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.origin !== configured.replace(/\/$/, '')) {
+    throw new Error('PUBLIC_BASE_URL must be an exact HTTP(S) origin without a path, credentials, query, or fragment');
+  }
+  return parsed.origin;
+}
+
+const PUBLIC_ORIGIN = resolvePublicOrigin();
+const SESSION_COOKIE_SECURE = Boolean(PUBLIC_ORIGIN && new URL(PUBLIC_ORIGIN).protocol === 'https:');
+
+function requestOriginAllowed(request) {
+  const origin = String(request.headers.origin || '').trim();
+  if (!origin) return true;
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch (_) {
+    return false;
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.origin !== origin) return false;
+  if (PUBLIC_ORIGIN) return parsed.origin === PUBLIC_ORIGIN;
+  return parsed.host === String(request.headers.host || '').trim();
+}
 
 // Register Fastify plugins
 fastify.register(require('@fastify/cookie'));
 fastify.register(require('@fastify/session'), {
   secret: SESSION_SECRET,
   cookie: {
-    secure: false,
+    secure: SESSION_COOKIE_SECURE,
+    httpOnly: true,
+    sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
   }
 });
 fastify.register(require('@fastify/formbody'));
+
+fastify.addHook('onRequest', async (request, reply) => {
+  request.routeStartedAtNs = process.hrtime.bigint();
+  if (UNSAFE_HTTP_METHODS.has(request.method) && eventAppendFailure) {
+    reply.code(503);
+    return reply.send({ error: 'Event persistence is unavailable; mutations are disabled' });
+  }
+  if (UNSAFE_HTTP_METHODS.has(request.method) && !requestOriginAllowed(request)) {
+    reply.code(403);
+    return reply.send({ error: 'Request origin is not allowed' });
+  }
+});
 
 fastify.get('/styles.css', async (request, reply) => {
   reply.type('text/css; charset=utf-8');
@@ -1566,9 +1566,9 @@ fastify.get('/styles.css', async (request, reply) => {
 });
 
 fastify.get('/health', async (request, reply) => {
-  if (!serverReady) {
+  if (!serverReady || eventAppendFailure) {
     reply.code(503);
-    return { status: 'starting', ready: false };
+    return { status: eventAppendFailure ? 'degraded' : 'starting', ready: false };
   }
   return { status: 'ok', ready: true };
 });
@@ -1579,15 +1579,18 @@ fastify.register(require('@fastify/view'), {
   layout: 'layout.ejs'
 });
 
-fastify.addHook('onRequest', async request => {
-  request.routeStartedAtNs = process.hrtime.bigint();
-});
-
 fastify.addHook('onSend', async (request, reply, payload) => {
+  reply.header('Content-Security-Policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'");
+  reply.header('Referrer-Policy', 'no-referrer');
+  reply.header('X-Content-Type-Options', 'nosniff');
+  reply.header('X-Frame-Options', 'DENY');
+  reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (SESSION_COOKIE_SECURE) {
+    reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   if (request.routeStartedAtNs) {
     const elapsedMs = Number(process.hrtime.bigint() - request.routeStartedAtNs) / 1e6;
     reply.header('X-Route-Time-Ms', elapsedMs.toFixed(1));
-    reply.header('X-Heap-Used-Mb', (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1));
   }
 
   return payload;
@@ -1612,12 +1615,23 @@ function readJsonArrayCached(filePath) {
     }
 
     const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    const arrayValue = Array.isArray(value) ? value : [];
+    if (!Array.isArray(value)) {
+      const error = new Error(`Data integrity check failed: ${filePath} must contain a JSON array`);
+      error.code = 'DATA_INTEGRITY_ERROR';
+      error.filePath = filePath;
+      throw error;
+    }
+    const arrayValue = value;
     jsonReadCache.set(filePath, { size: stat.size, mtimeNs, value: arrayValue });
     return arrayValue;
   } catch (error) {
     jsonReadCache.delete(filePath);
-    return [];
+    if (error && error.code === 'DATA_INTEGRITY_ERROR') throw error;
+    const integrityError = new Error(`Data integrity check failed: unable to read ${filePath}: ${error && error.message ? error.message : 'unknown error'}`);
+    integrityError.code = 'DATA_INTEGRITY_ERROR';
+    integrityError.filePath = filePath;
+    integrityError.cause = error;
+    throw integrityError;
   }
 }
 
@@ -2977,6 +2991,7 @@ function normalizeVerificationContractSnapshot(snapshot) {
     : null;
   if (!workflowId) return null;
 
+  const verifierContract = normalizeWorkflowVerifierContract(snapshot.verifierContract);
   return {
     workflowId,
     workflowName: typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()
@@ -2988,7 +3003,8 @@ function normalizeVerificationContractSnapshot(snapshot) {
     postconditions: Array.isArray(snapshot.postconditions)
       ? sanitizeSnapshotValue(snapshot.postconditions.filter(item => item && typeof item === 'object' && !Array.isArray(item)))
       : [],
-    verifierContract: normalizeWorkflowVerifierContract(snapshot.verifierContract),
+    verifierContract,
+    verifierContractExecution: verifierContract ? 'metadata_only_not_executed' : 'not_declared',
     capturedAt: typeof snapshot.capturedAt === 'string' && isValidIsoTimestamp(snapshot.capturedAt)
       ? snapshot.capturedAt
       : null
@@ -3835,7 +3851,8 @@ function buildWorkflowContractEvidence(workflow) {
     policyVersion: policy && typeof policy.version === 'string' ? policy.version : null,
     policyTextHash: hashWorkflowPolicyText(policy),
     verifierContractId: verifierContract && typeof verifierContract.id === 'string' ? verifierContract.id : null,
-    verifierContractVersion: verifierContract && typeof verifierContract.version === 'string' ? verifierContract.version : null
+    verifierContractVersion: verifierContract && typeof verifierContract.version === 'string' ? verifierContract.version : null,
+    verifierContractExecution: verifierContract ? 'metadata_only_not_executed' : 'not_declared'
   };
 }
 
@@ -4208,15 +4225,9 @@ function detectRunStateInconsistency(run, {
   const hasNoReplayExecution = providerRequestCount === 0 && modelResponseCount === 0;
   const reasons = [];
 
-  const hasLegacyTerminalLog = runLogs.some(log =>
-    log.type === 'run:skip_terminal' ||
-    /Run already in terminal state \(legacy\)/i.test(String(log.message || ''))
-  );
-  const hasTerminalEvent = runEvents.some(event =>
-    ['run.completed', 'run.failed', 'run.interrupted', 'run.terminalized'].includes(event.type)
-  );
-  if (hasNoReplayExecution && (hasLegacyTerminalLog || hasTerminalEvent)) {
-    reasons.push('Terminal legacy event appears on a running run.');
+  const hasTerminalEvent = runEvents.some(event => event.type === 'run.terminalized');
+  if (hasNoReplayExecution && hasTerminalEvent) {
+    reasons.push('Terminal event appears on a running run.');
   }
 
   const hasResumePriorEvents = runLogs.some(log => {
@@ -4240,7 +4251,7 @@ function detectRunStateInconsistency(run, {
       const timestampMs = Date.parse(timestamp || '');
       return !Number.isNaN(timestampMs) && timestampMs < runCreatedAtMs;
     });
-    if (hasOlderRunEvidence && (hasLegacyTerminalLog || hasTerminalEvent || hasResumePriorEvents || (eventSummary && eventSummary.latestWorkspaceMutation))) {
+    if (hasOlderRunEvidence && (hasTerminalEvent || hasResumePriorEvents || (eventSummary && eventSummary.latestWorkspaceMutation))) {
       reasons.push('Run evidence predates the current run creation time.');
     }
   }
@@ -4940,8 +4951,7 @@ function createLogTimestamp() {
   return `${baseIso}.${fractionalNs.toString().padStart(9, '0')}Z`;
 }
 
-let eventAppendChain = Promise.resolve();
-let pendingEventBuffer = [];
+let eventAppendFailure = null;
 
 // Per-run event chain state for forensic sequence numbers and hash chaining
 const runEventChains = new Map(); // runId -> { seq: number, prevHash: string | null }
@@ -4950,18 +4960,72 @@ function normalizeEventId(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : crypto.randomUUID();
 }
 
-function computeEventHash(event) {
-  // Canonical content excludes mutable/transient forensic metadata (id, ts, seq, prevHash)
-  const canonical = {
-    type: event.type,
-    ticketId: event.ticketId,
-    runId: event.runId,
-    stepId: event.stepId,
-    payload: event.payload
-  };
-  return crypto.createHash('sha256')
-    .update(JSON.stringify(canonical))
-    .digest('hex');
+function readPersistedEventsForChainRecovery() {
+  if (!fs.existsSync(EVENTS_FILE)) return [];
+  const raw = fs.readFileSync(EVENTS_FILE, 'utf8');
+  if (!raw.trim()) return [];
+  return raw.split('\n').reduce((events, line, index) => {
+    if (!line.trim()) return events;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch (error) {
+      throw dataIntegrityError('events.jsonl', `line ${index + 1} is not valid JSON`);
+    }
+    if (!event || typeof event !== 'object' || Array.isArray(event)) {
+      throw dataIntegrityError('events.jsonl', `line ${index + 1} must contain an event object`);
+    }
+    events.push(event);
+    return events;
+  }, []);
+}
+
+// Rebuild the in-memory chain tips before startup recovery can append events.
+// There is one current run-event schema and one continuous chain per run.
+function restoreRunEventChainsFromDisk() {
+  runEventChains.clear();
+  const states = new Map();
+
+  readPersistedEventsForChainRecovery().forEach((event, index) => {
+    if (event.runId === undefined || event.runId === null) return;
+    const runId = normalizeNullableInteger(event.runId);
+    if (runId === null) {
+      throw dataIntegrityError('events.jsonl', `line ${index + 1} has an invalid runId`);
+    }
+
+    if (event.schemaVersion !== RUN_EVENT_SCHEMA_VERSION) {
+      throw dataIntegrityError('events.jsonl', `line ${index + 1} has an unsupported run-event schema`);
+    }
+    if (!Number.isInteger(event.seq) || event.seq < 0) {
+      throw dataIntegrityError('events.jsonl', `line ${index + 1} has an invalid run-event sequence`);
+    }
+    const computedHash = computeRunEventHash(event);
+    if (typeof event.hash !== 'string' || event.hash !== computedHash) {
+      throw dataIntegrityError('events.jsonl', `line ${index + 1} has an invalid event hash`);
+    }
+
+    const state = states.get(runId) || {
+      nextSeq: 0,
+      previousHash: null
+    };
+    if (event.seq !== state.nextSeq) {
+      throw dataIntegrityError('events.jsonl', `line ${index + 1} breaks run ${runId} sequence continuity`);
+    }
+    if (event.prevHash !== state.previousHash) {
+      throw dataIntegrityError('events.jsonl', `line ${index + 1} breaks run ${runId} hash linkage`);
+    }
+
+    state.nextSeq += 1;
+    state.previousHash = event.hash;
+    states.set(runId, state);
+  });
+
+  states.forEach((state, runId) => {
+    runEventChains.set(runId, {
+      seq: state.nextSeq,
+      prevHash: state.previousHash
+    });
+  });
 }
 
 function normalizeNullableInteger(value) {
@@ -4971,7 +5035,13 @@ function normalizeNullableInteger(value) {
 }
 
 function appendEvent(event = {}) {
+  if (eventAppendFailure) {
+    const error = new Error(`Event persistence is unavailable: ${eventAppendFailure.message}`);
+    error.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
+    throw error;
+  }
   const normalized = {
+    schemaVersion: RUN_EVENT_SCHEMA_VERSION,
     id: normalizeEventId(event.id),
     ts: typeof event.ts === 'string' && event.ts.trim() ? event.ts : createLogTimestamp(),
     type: typeof event.type === 'string' && event.type.trim() ? event.type.trim() : 'event',
@@ -4981,53 +5051,41 @@ function appendEvent(event = {}) {
     payload: sanitizeSnapshotValue(event.payload && typeof event.payload === 'object' ? event.payload : {})
   };
 
-  // Add forensic sequence number and hash chain for run events
+  let nextChain = null;
+  // Add forensic sequence number and hash chain for run events. The in-memory
+  // tip advances only after the exact serialized event is durably appended.
   if (normalized.runId !== null) {
     const runId = normalized.runId;
     const chain = runEventChains.get(runId) || { seq: 0, prevHash: null };
     normalized.seq = chain.seq;
     normalized.prevHash = chain.prevHash;
-    // Advance chain for next event: current hash becomes previous for next
-    const currentHash = computeEventHash(normalized);
-    runEventChains.set(runId, {
-      seq: chain.seq + 1,
-      prevHash: currentHash
-    });
+    normalized.hash = computeRunEventHash(normalized);
+    nextChain = { seq: chain.seq + 1, prevHash: normalized.hash };
   }
 
   const line = `${JSON.stringify(normalized)}\n`;
-
-  pendingEventBuffer.push(normalized);
-  eventAppendChain = eventAppendChain
-    .then(() => {
-      // Skip write if this event was already flushed synchronously
-      // (e.g. by maybeTestInterrupt before SIGKILL).  The synchronous
-      // flush removes events from pendingEventBuffer, so the buffer
-      // membership check acts as a "was this already written?" guard.
-      if (!pendingEventBuffer.some(event => event.id === normalized.id)) return;
-      return new Promise((resolve, reject) => {
-        fs.appendFile(EVENTS_FILE, line, 'utf8', error => {
-          if (error) reject(error);
-          else resolve();
-        });
-      });
-    })
-    .then(() => {
-      pendingEventBuffer = pendingEventBuffer.filter(event => event.id !== normalized.id);
-    })
-    .catch(error => {
-      console.error(`Failed to append event ${normalized.type}: ${error.message}`);
-    });
+  try {
+    fs.appendFileSync(EVENTS_FILE, line, 'utf8');
+  } catch (error) {
+    if (!eventAppendFailure) eventAppendFailure = error;
+    serverReady = false;
+    if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
+    if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
+    const persistenceError = new Error(`Failed to append event ${normalized.type}: ${error.message}`);
+    persistenceError.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
+    persistenceError.cause = error;
+    throw persistenceError;
+  }
+  if (nextChain) runEventChains.set(normalized.runId, nextChain);
 
   return normalized;
 }
 
 function readEvents() {
-  let persistedEvents = [];
-  if (!fs.existsSync(EVENTS_FILE)) return pendingEventBuffer.slice();
+  if (!fs.existsSync(EVENTS_FILE)) return [];
 
   try {
-    persistedEvents = fs.readFileSync(EVENTS_FILE, 'utf8')
+    return fs.readFileSync(EVENTS_FILE, 'utf8')
       .split('\n')
       .filter(line => line.trim())
       .map(line => {
@@ -5040,26 +5098,12 @@ function readEvents() {
       })
       .filter(Boolean);
   } catch (error) {
-    persistedEvents = [];
+    return [];
   }
-
-  const persistedIds = new Set(persistedEvents.map(event => event.id));
-  const result = [
-    ...persistedEvents,
-    ...pendingEventBuffer.filter(event => !persistedIds.has(event.id))
-  ];
-  return result;
 }
 
-// Merge persisted matches with not-yet-flushed buffered events under the same
-// predicate, preserving persisted-then-buffered order. This mirrors the old
-// readEvents() composition (persisted events followed by buffer entries not yet
-// on disk) that these bounded readers replaced.
 function readBufferedAndMatchingEvents({ needles, predicate }) {
-  const persisted = readMatchingEvents(EVENTS_FILE, { needles, predicate });
-  const persistedIds = new Set(persisted.map(event => event.id));
-  const buffered = pendingEventBuffer.filter(event => !persistedIds.has(event.id) && predicate(event));
-  return [...persisted, ...buffered];
+  return readMatchingEvents(EVENTS_FILE, { needles, predicate });
 }
 
 function getRunEvents(runId) {
@@ -5103,7 +5147,7 @@ function recentEventSummary(runId, suppliedEvents = null) {
     latestError: null,
     latestWorkspaceMutation: null
   };
-  const statusTypes = new Set(['run.created', 'run.queued', 'run.started', 'run.completed', 'run.failed', 'run.interrupted', 'run.execution_completed', 'run.terminalized']);
+  const statusTypes = new Set(['run.created', 'run.queued', 'run.started', 'run.execution_completed', 'run.terminalized']);
 
   events.forEach(event => {
     const payload = event.payload || {};
@@ -5127,7 +5171,7 @@ function recentEventSummary(runId, suppliedEvents = null) {
       };
     }
 
-    if (event.type === 'run.failed' || event.type === 'run.terminalized' || event.type === 'workflow.step.failed') {
+    if (event.type === 'run.terminalized' || event.type === 'workflow.step.failed') {
       summary.latestError = {
         message: payload.error || payload.message || null,
         code: payload.code || null,
@@ -5371,6 +5415,23 @@ function normalizeSubmittedGroupIds(groupIds) {
   return normalizedGroupIds;
 }
 
+function sameValueSet(left, right) {
+  const leftSet = new Set(Array.isArray(left) ? left : []);
+  const rightSet = new Set(Array.isArray(right) ? right : []);
+  return leftSet.size === rightSet.size && [...leftSet].every(value => rightSet.has(value));
+}
+
+function getPrincipalGroupIds(principalType, principalId) {
+  return readMemberships()
+    .filter(membership => membership.principalType === principalType && membership.principalId === principalId)
+    .map(membership => membership.groupId);
+}
+
+function canAssignSubmittedGroups(userId, principalType, principalId, submittedGroupIds, { creating = false } = {}) {
+  const currentGroupIds = creating ? [] : getPrincipalGroupIds(principalType, principalId);
+  return sameValueSet(currentGroupIds, submittedGroupIds) || hasPermission(userId, 'permission:assign');
+}
+
 function setPrincipalGroupMemberships(principalType, principalId, groupIds) {
   const normalizedPrincipalType = principalType === 'agent' ? 'agent' : 'user';
   const normalizedPrincipalId = parseInt(principalId, 10);
@@ -5551,18 +5612,9 @@ function clearReplaySnapshotFiles() {
 }
 
 async function resetDebugEventState() {
-  pendingEventBuffer = [];
   runEventChains.clear();
-
-  eventAppendChain = eventAppendChain
-    .catch(() => {})
-    .then(() => {
-      pendingEventBuffer = [];
-      runEventChains.clear();
-      writeFileAtomic(EVENTS_FILE, '');
-    });
-
-  await eventAppendChain;
+  eventAppendFailure = null;
+  writeFileAtomic(EVENTS_FILE, '');
 }
 
 function normalizeRuns(runs) {
@@ -5725,11 +5777,9 @@ function buildRunEvaluation(run) {
   const replaySummary = run.replaySummary || extractReplaySummary(snapshot) || {};
   const events = getRunEvents(run.id);
   const runLogs = readLogs().filter(log => log.runId === run.id);
-  const snapshotEvents = Array.isArray(snapshot.events) ? snapshot.events : [];
   const workflowActions = Array.isArray(snapshot.workflowActions) ? snapshot.workflowActions : [];
   const providerRequests = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests : [];
   const modelResponses = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses : [];
-  const legacyPostconditionPassedEvents = snapshotEvents.filter(event => event && event.type === 'run:postcondition_completed');
   const postconditionsCheckedEvents = events.filter(event => event.type === 'run.postconditions_checked');
   const postconditionFailedEvents = events.filter(event => event.type === 'run.postcondition_failed');
   const latestPostconditionsChecked = postconditionsCheckedEvents[postconditionsCheckedEvents.length - 1] || null;
@@ -5746,7 +5796,7 @@ function buildRunEvaluation(run) {
       if (log.message) errorMessages.push(sanitizeLogMessage(log.message));
     });
   events
-    .filter(event => event.type === 'run.failed' || event.type === 'run.terminalized' || event.type === 'workflow.step.failed')
+    .filter(event => event.type === 'run.terminalized' || event.type === 'workflow.step.failed')
     .forEach(event => {
       const payload = event.payload || {};
       const message = payload.error || payload.message;
@@ -5808,7 +5858,7 @@ function buildRunEvaluation(run) {
           : 'unknown',
       postconditionsPassed: latestPostconditionsPayload && Number.isInteger(latestPostconditionsPayload.passed)
         ? latestPostconditionsPayload.passed
-        : legacyPostconditionPassedEvents.length,
+        : 0,
       postconditionsFailed: latestPostconditionsPayload && Number.isInteger(latestPostconditionsPayload.failed)
         ? latestPostconditionsPayload.failed
         : postconditionFailedEvents.length,
@@ -6447,17 +6497,20 @@ function completeRunPostconditionCheck(runId) {
   }
 
   const capturedContract = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
-  const fallbackWorkflow = capturedContract ? null : getWorkflowById(run.workflowId);
-  const workflow = capturedContract
-    ? {
-        id: capturedContract.workflowId,
-        name: capturedContract.workflowName,
-        version: capturedContract.workflowVersion,
-        verifierContract: capturedContract.verifierContract,
-        postconditions: capturedContract.postconditions
-      }
-    : fallbackWorkflow;
-  const contractSource = capturedContract ? 'run_snapshot' : 'legacy_current_workflow';
+  if (!capturedContract) {
+    const error = new Error(`Run ${run.id} is missing its verification contract snapshot`);
+    error.code = 'RUN_VERIFICATION_SNAPSHOT_MISSING';
+    error.failureKind = 'invalid_run_schema';
+    throw error;
+  }
+  const workflow = {
+    id: capturedContract.workflowId,
+    name: capturedContract.workflowName,
+    version: capturedContract.workflowVersion,
+    verifierContract: capturedContract.verifierContract,
+    postconditions: capturedContract.postconditions
+  };
+  const contractSource = 'run_snapshot';
   const postconditions = workflow && Array.isArray(workflow.postconditions) ? workflow.postconditions : [];
   if (postconditions.length === 0) return null;
 
@@ -6484,6 +6537,7 @@ function completeRunPostconditionCheck(runId) {
     payload: {
       workflowId: workflow.id,
       contractSource,
+      verifierContractExecution: workflow.verifierContract ? 'metadata_only_not_executed' : 'not_declared',
       status: failedResults.length > 0 ? 'failed' : 'passed',
       passed: results.length - failedResults.length,
       failed: failedResults.length,
@@ -9398,10 +9452,19 @@ function emptyRuntimeLimitsConfig() {
 }
 
 function readRuntimeLimitsConfig() {
-  if (!fs.existsSync(RUNTIME_LIMITS_FILE)) return emptyRuntimeLimitsConfig();
+  if (!fs.existsSync(RUNTIME_LIMITS_FILE)) {
+    throw dataIntegrityError('runtime-limits.json', 'file is missing');
+  }
   try {
     const value = JSON.parse(fs.readFileSync(RUNTIME_LIMITS_FILE, 'utf8'));
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyRuntimeLimitsConfig();
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw dataIntegrityError('runtime-limits.json', 'root value must be an object');
+    }
+    [...RUNTIME_LIMIT_CONFIG_KEYS, ...RUNTIME_SYSTEM_CONFIG_KEYS].forEach(key => {
+      if (value[key] !== undefined && value[key] !== null && (!Number.isInteger(value[key]) || value[key] <= 0)) {
+        throw dataIntegrityError('runtime-limits.json', `${key} must be a positive integer or null`);
+      }
+    });
     return {
       ...emptyRuntimeLimitsConfig(),
       ...Object.fromEntries(RUNTIME_LIMIT_CONFIG_KEYS.map(key => [key, value[key] ?? null])),
@@ -9409,8 +9472,9 @@ function readRuntimeLimitsConfig() {
       updatedBy: typeof value.updatedBy === 'string' && value.updatedBy.trim() ? value.updatedBy : null,
       updatedAt: typeof value.updatedAt === 'string' && isValidIsoTimestamp(value.updatedAt) ? value.updatedAt : null
     };
-  } catch (_) {
-    return emptyRuntimeLimitsConfig();
+  } catch (error) {
+    if (error && error.code === 'DATA_INTEGRITY_ERROR') throw error;
+    throw dataIntegrityError('runtime-limits.json', `unable to parse file: ${error && error.message ? error.message : 'unknown error'}`);
   }
 }
 
@@ -9821,8 +9885,6 @@ Allowed intents:
 - create_folders
 - ensure_folders
 - delete_paths
-- write_files
-- rename_paths
 - model_driven
 
 Output schema:
@@ -9863,7 +9925,8 @@ function tryParseCompiledContractJson(text) {
   }
 }
 
-async function compileObjectiveContract(run, ticket, agent, limits, modelRequestCountRef) {
+async function compileObjectiveContract(run, ticket, agent, limits, modelRequestCountRef, runStartedAtMs) {
+  if (!MODEL_CONTRACT_COMPILER_ENABLED) return { contract: null, fallback: false, modelRequestsUsed: 0 };
   if (isBrowserRun(run)) return { contract: null, fallback: true, modelRequestsUsed: 0 };
   if (run.executionMode === 'workflow' || (ticket && ticket.executionMode === 'workflow')) {
     return { contract: null, fallback: false, modelRequestsUsed: 0 };
@@ -9880,14 +9943,50 @@ async function compileObjectiveContract(run, ticket, agent, limits, modelRequest
     return { contract: deterministicContract, fallback: false, modelRequestsUsed: 0 };
   }
 
-  // 2. Model-assisted compilation.
+  // 2. Model-assisted compilation. Always preserve at least one request for the
+  // execution loop; compilation is an optimization, not the task itself.
+  const remainingRequests = limits.maxModelRequestsPerRun - modelRequestCountRef.count;
+  if (remainingRequests < 2) {
+    appendRunLog(run, 'run:contract_compile_skipped', 'Objective contract compilation skipped to preserve the final model request for execution', null, {
+      source: 'model',
+      reason: 'execution_request_reserved',
+      remainingRequests
+    });
+    return { contract: null, fallback: true, modelRequestsUsed: 0 };
+  }
+
   assertRunModelRequestAllowed(run, modelRequestCountRef.count, limits);
 
   const input = buildObjectiveCompilerPrompt(ticket.objective);
   let response = null;
+  let providerRequestPersisted = false;
+  const requestStartedAt = Date.now();
+  modelRequestCountRef.count += 1;
   try {
-    response = await callModelProvider(agent, input);
+    response = await callModelProviderWithRunTimeout(run, agent, input, runStartedAtMs, limits, {
+      onRequest: requestPayload => {
+        appendRunReplaySnapshotItem(run.id, 'providerRequests', {
+          ...requestPayload,
+          phase: 'contract_compile',
+          startedAt: new Date(requestStartedAt).toISOString()
+        });
+        providerRequestPersisted = true;
+      }
+    });
   } catch (error) {
+    if (error.providerRequestPayload && !providerRequestPersisted) {
+      appendRunReplaySnapshotItem(run.id, 'providerRequests', {
+        ...error.providerRequestPayload,
+        phase: 'contract_compile',
+        startedAt: new Date(requestStartedAt).toISOString()
+      });
+    }
+    appendRunReplaySnapshotItem(run.id, 'modelResponses', {
+      error: error.message,
+      provider: error.provider || null,
+      phase: 'contract_compile',
+      durationMs: Date.now() - requestStartedAt
+    });
     appendRunLog(run, 'run:contract_compile_failed', `Objective contract compilation failed: ${error.message}`, null, {
       source: 'model',
       reason: 'provider_error',
@@ -9896,16 +9995,21 @@ async function compileObjectiveContract(run, ticket, agent, limits, modelRequest
     return { contract: null, fallback: true, modelRequestsUsed: 1 };
   }
 
-  modelRequestCountRef.count += 1;
-
-  appendRunReplaySnapshotItem(run.id, 'providerRequests', response.requestPayload || null);
+  if (!providerRequestPersisted && response.requestPayload) {
+    appendRunReplaySnapshotItem(run.id, 'providerRequests', {
+      ...response.requestPayload,
+      phase: 'contract_compile',
+      startedAt: new Date(requestStartedAt).toISOString()
+    });
+  }
   appendRunReplaySnapshotItem(run.id, 'modelResponses', {
     text: response.text || '',
     usage: response.usage || null,
     provider: response.provider || null,
     model: response.model || null,
     providerResponsePayload: response.responsePayload || null,
-    phase: 'contract_compile'
+    phase: 'contract_compile',
+    durationMs: Date.now() - requestStartedAt
   });
   appendRunLog(run, 'model:request', `Objective contract compilation request (${response.provider}/${response.model})`, null, {
     phase: 'contract_compile',
@@ -9941,6 +10045,60 @@ async function compileObjectiveContract(run, ticket, agent, limits, modelRequest
   });
 
   return { contract, fallback: false, modelRequestsUsed: 1 };
+}
+
+function checkObjectiveContractPostcondition(contract) {
+  if (!contract || !contract.recognized || !Array.isArray(contract.postconditions) || contract.postconditions.length === 0) return null;
+
+  const checkedPaths = [];
+  for (const postcondition of contract.postconditions) {
+    if (!postcondition || !postcondition.path) return null;
+    const info = workspaceProvider.getPathInfo(postcondition.path);
+    let satisfied = false;
+    let type = postcondition.type;
+    if (postcondition.type === 'folder_exists') {
+      satisfied = info.exists && info.type === 'directory';
+      type = 'folder';
+    } else if (postcondition.type === 'path_absent') {
+      satisfied = !info.exists;
+      type = 'absent';
+    } else {
+      return null;
+    }
+    if (!satisfied) return null;
+    checkedPaths.push({ type, path: postcondition.path });
+  }
+
+  const absentDelete = checkedPaths.every(check => check.type === 'absent');
+  return {
+    reason: absentDelete
+      ? `Delete target already absent: ${checkedPaths.map(check => check.path).join(', ')}`
+      : 'Compiled objective contract is satisfied',
+    absentDelete,
+    checkedPaths
+  };
+}
+
+function findObjectiveContractMutationMismatches(contract, actions) {
+  if (!contract || !contract.recognized || !Array.isArray(contract.allowedMutations)) return [];
+  const allowed = new Set(contract.allowedMutations.map(mutation => {
+    const normalizedPath = mutation && normalizeArtifactOwnershipPath(mutation.path);
+    return mutation && mutation.operation && normalizedPath ? `${mutation.operation}:${normalizedPath}` : null;
+  }).filter(Boolean));
+  if (allowed.size === 0) return [];
+
+  return (Array.isArray(actions) ? actions : [])
+    .filter(action => action && AGENT_MUTATING_OPERATIONS.includes(action.operation))
+    .map(action => {
+      const normalizedPath = normalizeArtifactOwnershipPath(action.args && action.args.path);
+      return {
+        operation: action.operation,
+        path: action.args && action.args.path,
+        normalizedPath,
+        key: normalizedPath ? `${action.operation}:${normalizedPath}` : null
+      };
+    })
+    .filter(proposed => !proposed.key || !allowed.has(proposed.key));
 }
 
 function checkPostconditionCompletion(run, actions, actionResults, step) {
@@ -11446,8 +11604,8 @@ function validateManualTicketCompletion(ticket) {
 }
 
 function reconcileTerminalRun(run) {
-  // Idempotent reconciliation for runs that have run.execution_completed (or legacy
-  // run.completed/failed/interrupted) but not yet run.terminalized.
+  // Idempotent reconciliation for current runs that have run.execution_completed
+  // but not yet run.terminalized.
   // Call only when safeToReconcileTerminalState is true.
   const runId = run.id;
   const events = getRunEvents(runId);
@@ -11456,25 +11614,17 @@ function reconcileTerminalRun(run) {
   // Already fully terminalized — no-op
   if (existingTypes.has('run.terminalized')) return;
 
-  // Determine target status from execution_completed or legacy terminal event
   const execCompletedEvent = events.find(e => e.type === 'run.execution_completed');
-  const legacyTerminalEvent = events.find(e => ['run.completed', 'run.failed', 'run.interrupted'].includes(e.type));
-  const isLegacy = !execCompletedEvent && !!legacyTerminalEvent;
+  if (!execCompletedEvent) throw new Error(`Run ${runId} cannot be reconciled without run.execution_completed`);
 
-  let targetStatus = execCompletedEvent
-    ? (execCompletedEvent.payload && execCompletedEvent.payload.status) || 'completed'
-    : legacyTerminalEvent
-      ? legacyTerminalEvent.type.replace('run.', '')
-      : 'interrupted';
+  let targetStatus = (execCompletedEvent.payload && execCompletedEvent.payload.status) || 'completed';
   let verificationFailureReason = null;
   let verificationFailure = null;
 
-  const terminalPayload = (legacyTerminalEvent && legacyTerminalEvent.payload) ||
-    (execCompletedEvent && execCompletedEvent.payload) || {};
+  const terminalPayload = execCompletedEvent.payload || {};
 
   appendRunLog(run, 'run:reconciliation_started', `Reconciling run at terminal state ${targetStatus}`, {
     existingEvents: events.length,
-    isLegacy,
     hasSnapshotFinalized: existingTypes.has('replay.snapshot.finalized') || existingTypes.has('run.snapshot_finalized'),
     hasEvaluation: existingTypes.has('run.evaluation_completed'),
     hasConsequence: existingTypes.has('run.consequence_recorded')
@@ -11506,7 +11656,7 @@ function reconcileTerminalRun(run) {
         runId: run.id,
         payload: {
           status: 'passed',
-          contractSource: run.verificationContractSnapshot ? 'run_snapshot' : 'legacy_current_workflow'
+          contractSource: 'run_snapshot'
         }
       });
     }
@@ -11573,8 +11723,8 @@ function reconcileTerminalRun(run) {
     }
   }
 
-  // 8. Emit terminalized lifecycle event (skip for legacy logs — no migration)
-  if (!existingTypes.has('run.terminalized') && !isLegacy) {
+  // 8. Emit the current terminal lifecycle event.
+  if (!existingTypes.has('run.terminalized')) {
     appendEvent({
       type: 'run.terminalized',
       ticketId: run.ticketId,
@@ -11593,7 +11743,6 @@ function reconcileTerminalRun(run) {
 
   appendRunLog(run, 'run:reconciled', `Run reconciled to terminal state after restart (${targetStatus})`, {
     events,
-    isLegacy,
     didFinalize,
     didEvaluate,
     didConsequence
@@ -11929,9 +12078,7 @@ function interruptStaleRunsOnStartup() {
       if (r) {
         // Determine terminal status from events
         const terminalEvent = runEvents.find(e => e.type === 'run.terminalized');
-        const legacyEvent = runEvents.find(e => ['run.completed', 'run.failed', 'run.interrupted'].includes(e.type));
-        const status = terminalEvent ? (terminalEvent.payload && terminalEvent.payload.status) || 'completed'
-          : legacyEvent ? legacyEvent.type.replace('run.', '') : 'interrupted';
+        const status = (terminalEvent.payload && terminalEvent.payload.status) || 'completed';
         r.status = status;
         r.leaseOwner = null;
         r.leaseExpiresAt = null;
@@ -14604,6 +14751,13 @@ function executeWorkspaceOperation(run, action, step = 0) {
   const { args, strippedKeys } = sanitizeOperationArgs(operation, rawArgs);
   const runWorkspaceProvider = getRunWorkspaceProvider(run);
 
+  if (AGENT_MUTATING_OPERATIONS.includes(operation) && eventAppendFailure) {
+    const error = new Error(`Workspace mutations are disabled because event persistence failed: ${eventAppendFailure.message}`);
+    error.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
+    error.failureKind = 'runtime_failed';
+    throw error;
+  }
+
   // Surface extra fields the model sent so the diagnostic is fully transparent.
   if (strippedKeys.length > 0) {
     appendRunLog(run, 'workspace:args_sanitized',
@@ -16271,10 +16425,13 @@ function compactRuntimeEnvelopeForPrompt(runtimeEnvelope) {
   return compact;
 }
 
-function compactTicketContextForPrompt(ticketObjective, previousActionResults, priorFailureContext, workspaceContext) {
+function compactTicketContextForPrompt(ticketObjective, previousActionResults, priorFailureContext, workspaceContext, acceptanceCriteria = null) {
   const compact = {
     ticketObjective
   };
+  if (typeof acceptanceCriteria === 'string' && acceptanceCriteria.trim()) {
+    compact.acceptanceCriteria = acceptanceCriteria.trim();
+  }
 
   // Anchoring context: clearly separate the workspace as-of run start, the live
   // workspace, and the mutations this run already performed, so the model does
@@ -16357,6 +16514,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
           'All navigation and page requests must remain inside runtimeEnvelope.allowedOrigins. Begin at runtimeEnvelope.startUrl unless prior action results already show it was loaded.',
           'Every response must be JSON: {"message":"string","actions":[{"operation":"navigate|observe|readPageText|screenshot|wait","args":{}}],"complete":boolean}.',
           'Set complete:true as soon as the objective is satisfied by the returned browser evidence. Read-only browser runs do not complete through filesystem postconditions or no-progress detection; they end only when you set complete:true or a runtime limit is reached.',
+          'If acceptanceCriteria is present, treat it as part of the requested outcome and do not set complete:true until the returned evidence addresses it.',
           `Emit at most ${MAX_AGENT_ACTIONS_PER_RESPONSE} actions in one response and keep each response within one inspection phase.`,
           'Do not repeat inspections that are not needed for the objective.'
         ].join('\n')
@@ -16369,6 +16527,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         role: 'user',
         content: JSON.stringify({
           objective: ticket.objective,
+          acceptanceCriteria: ticket.acceptanceCriteria || null,
           previousActionResults: sanitizeSnapshotValue(actionResults),
           browserContext: sanitizeSnapshotValue(workspaceContext)
         })
@@ -16448,6 +16607,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         'If the task cannot be completed, explain the failure reason clearly in the message.',
         'Never return complete false with an empty actions array unless the requested workflow cannot be represented by the allowed operations.',
         'Set complete:true only when the ticket objective has been fully satisfied by completed actions in this response or by prior verified state.',
+        'If acceptanceCriteria is present in the ticket context, treat it as part of the requested outcome. Do not claim completion until it is satisfied; arbitrary prose criteria are still subject to deterministic runtime verification where available.',
         'Before setting complete:true, verify the ticket requirements have actually been satisfied. Do not assume an existing folder already contains required files or that earlier steps completed them.',
         'If the target path is clear or can be overwritten or created safely, emit the create or write operation.',
         `Budgets: runtimeEnvelope.maxExecutionSteps steps total; every response consumes one step, including retries. Emit at most runtimeEnvelope.maxActionsPerResponse (${MAX_AGENT_ACTIONS_PER_RESPONSE}) actions per response.`,
@@ -16485,7 +16645,8 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         actionResults.length === 0 && rerunMode === 'reassess'
           ? buildPriorFailureContext(ticket.id, runtimeEnvelope.runId)
           : null,
-        workspaceContext
+        workspaceContext,
+        ticket.acceptanceCriteria
       ))
     }
   ];
@@ -16542,6 +16703,10 @@ async function runAgentTicket(runId) {
 
     if (!ticket) throw new Error('Ticket not found');
     if (!agent) throw new Error('Agent not found');
+    const promptTicket = {
+      ...ticket,
+      acceptanceCriteria: run.acceptanceCriteriaSnapshot || null
+    };
     providerConfig = getAgentProviderConfig(agent);
     const runtimeLimitsSnapshot = getRunRuntimeLimitsSnapshot(
       run,
@@ -16550,7 +16715,7 @@ async function runAgentTicket(runId) {
     );
     const limits = runtimeLimitsForExecution(runtimeLimitsSnapshot);
     const runtimeEnvelope = buildRuntimeEnvelope(run, 0, ticket.objective, limits);
-    const initialInput = buildAgentPrompt(ticket, runtimeEnvelope, [], run.rerunMode);
+    const initialInput = buildAgentPrompt(promptTicket, runtimeEnvelope, [], run.rerunMode);
     createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
     appendRunLog(run, 'run:runtime', JSON.stringify(runtimeEnvelope));
 
@@ -16646,7 +16811,7 @@ async function runAgentTicket(runId) {
         return;
       }
       if (resumeState.isTerminal) {
-        appendRunLog(run, 'run:skip_terminal', `Run already in terminal state (legacy)`);
+        appendRunLog(run, 'run:skip_terminal', 'Run already has current terminal evidence');
         return;
       }
       if (!resumeState.safeToResumeExecution) {
@@ -16679,9 +16844,9 @@ async function runAgentTicket(runId) {
     // incomplete mutating batches on the final step.
     let compiledContract = null;
     let fallbackNoFutureBudgetGuard = false;
-    if (!isBrowserRun(run) && !resumedFromPersistedState) {
+    if (MODEL_CONTRACT_COMPILER_ENABLED && !isBrowserRun(run) && !resumedFromPersistedState) {
       const modelRequestCountRef = { count: modelRequestCount };
-      const compileResult = await compileObjectiveContract(run, ticket, agent, limits, modelRequestCountRef);
+      const compileResult = await compileObjectiveContract(run, ticket, agent, limits, modelRequestCountRef, runStartedAtMs);
       compiledContract = compileResult.contract || null;
       fallbackNoFutureBudgetGuard = compileResult.fallback === true;
       modelRequestCount = modelRequestCountRef.count;
@@ -16712,7 +16877,9 @@ async function runAgentTicket(runId) {
       } catch(e) { 
       }
       if (!isBrowserRun(run) && !resumedFromPersistedState) {
-        const obviousPostcondition = checkObviousTicketPostcondition(ticket);
+        const obviousPostcondition = compiledContract
+          ? checkObjectiveContractPostcondition(compiledContract)
+          : checkObviousTicketPostcondition(ticket);
         if (obviousPostcondition) {
           recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
             step,
@@ -16747,7 +16914,7 @@ async function runAgentTicket(runId) {
           : captureRunWorkspaceRootSnapshot(run),
         mutationsByThisRun
       };
-      const input = buildAgentPrompt(ticket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
+      const input = buildAgentPrompt(promptTicket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
       appendRunLog(run, 'model:request', `${providerConfig.provider} request sent with model ${providerConfig.model}`);
       modelRequestCount += 1;
       currentProviderRequestPersisted = false;
@@ -17117,6 +17284,35 @@ async function runAgentTicket(runId) {
           message: `The action batch was rejected before execution because action ${first.actionIndex} (${first.operation}) has invalid args: ${first.validationErrors.join('; ')}. listDirectory may use path "" for the workspace root, but readFile, createFolder, writeFile, renamePath, and deletePath may not. Emit a corrected single-phase action batch.`,
           operation: first.operation,
           actionIndex: first.actionIndex,
+          rejectedBatch: true,
+          executed: false
+        }];
+        continue;
+      }
+
+      // An accepted compiled contract is an execution constraint, not just a
+      // mutation-count estimate. Reject any mutation outside its exact operation
+      // and target set before the phase or authority layers can execute it.
+      const contractMismatches = findObjectiveContractMutationMismatches(compiledContract, actions);
+      if (contractMismatches.length > 0) {
+        const detail = {
+          step,
+          proposed: contractMismatches,
+          allowedMutations: compiledContract.allowedMutations,
+          rejectedBatch: true,
+          executed: false
+        };
+        recordRunEvent(run, 'workspace.contract_mutation_mismatch_rejected', 'Model proposed a mutation outside the compiled objective contract', detail);
+        appendEvent({
+          type: 'workspace.contract_mutation_mismatch_rejected',
+          ticketId: run.ticketId,
+          runId: run.id,
+          stepId: String(step),
+          payload: sanitizeSnapshotValue(detail)
+        });
+        actionResults = [{
+          warning: 'workspace.contract_mutation_mismatch_rejected',
+          message: `The action batch was rejected before execution. Use only these compiled mutations: ${compiledContract.allowedMutations.map(mutation => `${mutation.operation} ${mutation.path}`).join(', ')}.`,
           rejectedBatch: true,
           executed: false
         }];
@@ -17510,7 +17706,8 @@ async function runAgentTicket(runId) {
         }
       }
 
-      const postcondition = isBrowserRun(run) ? null : checkPostconditionCompletion(run, actions, actionResults, step);
+      const compiledPostcondition = isBrowserRun(run) ? null : checkObjectiveContractPostcondition(compiledContract);
+      const postcondition = compiledPostcondition || (isBrowserRun(run) ? null : checkPostconditionCompletion(run, actions, actionResults, step));
       if (postcondition) {
         recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
           step,
@@ -17962,8 +18159,18 @@ function viewData(data, userId = null) {
     ...data,
     assets: { css: '/styles.css', js: null },
     userPermissions: permissions,
-    formatPostconditionAssertion
+    formatPostconditionAssertion,
+    serializeForInlineScript
   };
+}
+
+function serializeForInlineScript(value) {
+  return JSON.stringify(value === undefined ? null : value)
+    .replace(/&/g, '\\u0026')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 // ==================== AUTH DECORATORS ====================
@@ -18001,6 +18208,36 @@ function setupSSEConnection(reply, request) {
 
 // ==================== PUBLIC ROUTES ====================
 
+const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_RATE_MAX_FAILURES = 10;
+const LOGIN_RATE_MAX_KEYS = 10000;
+const DUMMY_PASSWORD_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
+const loginFailures = new Map();
+
+function loginFailureKey(request, username) {
+  return `${request.ip || 'unknown'}:${String(username || '').trim().toLowerCase()}`;
+}
+
+function currentLoginFailure(key, now = Date.now()) {
+  const state = loginFailures.get(key);
+  if (!state || now - state.startedAt >= LOGIN_RATE_WINDOW_MS) {
+    if (state) loginFailures.delete(key);
+    return null;
+  }
+  return state;
+}
+
+function recordLoginFailure(key, now = Date.now()) {
+  const state = currentLoginFailure(key, now) || { count: 0, startedAt: now };
+  state.count += 1;
+  loginFailures.set(key, state);
+  if (loginFailures.size > LOGIN_RATE_MAX_KEYS) {
+    const oldestKey = loginFailures.keys().next().value;
+    if (oldestKey !== undefined) loginFailures.delete(oldestKey);
+  }
+  return state;
+}
+
 fastify.get('/login', async (request, reply) => {
   if (request.session.userId) {
     return reply.redirect('/');
@@ -18009,30 +18246,41 @@ fastify.get('/login', async (request, reply) => {
 });
 
 fastify.post('/login', async (request, reply) => {
-  const { username, password } = request.body;
+  const username = String(request.body.username || '').trim();
+  const password = String(request.body.password || '');
 
   if (!username || !password) {
     return reply.view('login.ejs', viewData({ error: 'Username and password are required', user: null }));
   }
 
+  const failureKey = loginFailureKey(request, username);
+  const existingFailures = currentLoginFailure(failureKey);
+  if (existingFailures && existingFailures.count >= LOGIN_RATE_MAX_FAILURES) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((existingFailures.startedAt + LOGIN_RATE_WINDOW_MS - Date.now()) / 1000));
+    reply.code(429).header('Retry-After', retryAfterSeconds);
+    return reply.view('login.ejs', viewData({ error: 'Too many failed login attempts. Try again later.', user: null }));
+  }
+
   const users = readUsers();
   const user = users.find(u => u.username === username);
+  let validPassword = false;
+  try {
+    validPassword = await argon2.verify(user && user.passwordHash ? user.passwordHash : DUMMY_PASSWORD_HASH, password);
+  } catch (_) {
+    validPassword = false;
+  }
 
-  if (!user) {
+  if (!user || !validPassword) {
+    recordLoginFailure(failureKey);
     return reply.view('login.ejs', viewData({ error: 'Invalid username or password', user: null }));
   }
 
-  const validPassword = await argon2.verify(user.passwordHash, password);
-
-  if (!validPassword) {
-    return reply.view('login.ejs', viewData({ error: 'Invalid username or password', user: null }));
-  }
-
+  loginFailures.delete(failureKey);
   request.session.userId = user.id;
   return reply.redirect('/');
 });
 
-fastify.get('/logout', async (request, reply) => {
+fastify.post('/logout', async (request, reply) => {
   request.session.destroy();
   return reply.redirect('/login');
 });
@@ -19387,8 +19635,8 @@ fastify.get('/process-templates', { preHandler: fastify.requireAuth }, async (re
       ...(derivedById.get(template.id) || {})
     })),
     canTrigger: hasPermission(request.session.userId, 'ticket:create'),
-    agents: readAgents(),
-    groups: readGroups()
+    agents: readAgents().map(agent => ({ id: agent.id, name: agent.name })),
+    groups: readGroups().map(group => ({ id: group.id, name: group.name }))
   }, request.session.userId));
 });
 
@@ -19402,8 +19650,8 @@ fastify.get('/process-templates/:id', { preHandler: fastify.requireAuth }, async
   return reply.view('process-template-detail.ejs', viewData({
     user: request.user,
     template,
-    agents: readAgents(),
-    groups: readGroups(),
+    agents: readAgents().map(agent => ({ id: agent.id, name: agent.name })),
+    groups: readGroups().map(group => ({ id: group.id, name: group.name })),
     workContexts: readWorkContexts()
   }, request.session.userId));
 });
@@ -19547,7 +19795,19 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
 });
 
 fastify.get('/api/health', async (request, reply) => {
-   return { status: 'ok', dataDir: DATA_DIR, workspaceRoot: workspaceProvider.root, port: PORT, uptime: Math.floor(process.uptime()) };
+  if (!serverReady || eventAppendFailure) {
+    reply.code(503);
+    return { status: eventAppendFailure ? 'degraded' : 'starting', ready: false };
+  }
+  return { status: 'ok', ready: true, uptime: Math.floor(process.uptime()) };
+});
+
+fastify.get('/api/runtime/identity', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  return { dataDir: DATA_DIR, workspaceRoot: workspaceProvider.root, port: PORT };
 });
 
 fastify.get('/api/runtime/status', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -20009,6 +20269,10 @@ fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }
 });
 
 fastify.get('/api/events', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
   setupSSEConnection(reply, request);
 });
 
@@ -21864,6 +22128,10 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
         error: error.message
       });
     }
+    if (!canAssignSubmittedGroups(request.session.userId, 'agent', null, normalizedGroupIds, { creating: true })) {
+      reply.code(403);
+      return 'permission:assign is required to set group membership';
+    }
 
     const newAgent = {
       id: nextId(agents),
@@ -21910,6 +22178,10 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
       accountType: 'user',
       error: error.message
     });
+  }
+  if (!canAssignSubmittedGroups(request.session.userId, 'user', null, normalizedGroupIds, { creating: true })) {
+    reply.code(403);
+    return 'permission:assign is required to set group membership';
   }
 
   const users = readUsers();
@@ -22029,6 +22301,10 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
         error: error.message
       });
     }
+    if (!canAssignSubmittedGroups(request.session.userId, 'agent', accountId, normalizedGroupIds)) {
+      reply.code(403);
+      return 'permission:assign is required to change group membership';
+    }
 
     agents[agentIndex].name = agentName.trim();
     agents[agentIndex].provider = provider;
@@ -22093,6 +22369,10 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
       accountType: 'user',
       error: error.message
     });
+  }
+  if (!canAssignSubmittedGroups(request.session.userId, 'user', accountId, normalizedGroupIds)) {
+    reply.code(403);
+    return 'permission:assign is required to change group membership';
   }
 
   users[userIndex].username = username.trim();
@@ -22210,6 +22490,10 @@ fastify.post('/admin/groups', { preHandler: fastify.requireAuth }, async (reques
       error: error.message
     });
   }
+  if (normalizedPermissions.length > 0 && !hasPermission(request.session.userId, 'permission:assign')) {
+    reply.code(403);
+    return 'permission:assign is required to grant group permissions';
+  }
 	  
   const newGroup = {
     id: nextId(groups),
@@ -22314,6 +22598,10 @@ fastify.post('/admin/groups/:id', { preHandler: fastify.requireAuth }, async (re
       error: error.message
     });
   }
+  if (!sameValueSet(groups[groupIndex].permissions, normalizedPermissions) && !hasPermission(request.session.userId, 'permission:assign')) {
+    reply.code(403);
+    return 'permission:assign is required to change group permissions';
+  }
 
   groups[groupIndex].name = name.trim();
   groups[groupIndex].permissions = normalizedPermissions;
@@ -22397,7 +22685,7 @@ function renderWorkflowForm(reply, request, { workflow = null, definition = null
 }
 
 fastify.get('/admin/workflows', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'user:read')) {
+  if (!hasPermission(request.session.userId, 'workflow:manage')) {
     reply.code(403);
     return reply.view('error.ejs', viewData({
       message: 'Access denied',
@@ -22412,7 +22700,7 @@ fastify.get('/admin/workflows', { preHandler: fastify.requireAuth }, async (requ
 });
 
 fastify.get('/admin/workflows/new', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'user:read')) {
+  if (!hasPermission(request.session.userId, 'workflow:manage')) {
     reply.code(403);
     return reply.view('error.ejs', viewData({
       message: 'Access denied',
@@ -22424,7 +22712,7 @@ fastify.get('/admin/workflows/new', { preHandler: fastify.requireAuth }, async (
 });
 
 fastify.post('/admin/workflows', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'user:read')) {
+  if (!hasPermission(request.session.userId, 'workflow:manage')) {
     reply.code(403);
     return 'Permission denied';
   }
@@ -22458,7 +22746,7 @@ fastify.post('/admin/workflows', { preHandler: fastify.requireAuth }, async (req
 });
 
 fastify.get('/admin/workflows/:id/edit', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'user:read')) {
+  if (!hasPermission(request.session.userId, 'workflow:manage')) {
     reply.code(403);
     return reply.view('error.ejs', viewData({
       message: 'Access denied',
@@ -22479,7 +22767,7 @@ fastify.get('/admin/workflows/:id/edit', { preHandler: fastify.requireAuth }, as
 });
 
 fastify.post('/admin/workflows/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'user:read')) {
+  if (!hasPermission(request.session.userId, 'workflow:manage')) {
     reply.code(403);
     return 'Permission denied';
   }
@@ -22617,28 +22905,133 @@ function startTemplateScheduler() {
   return runtimeTemplateScheduler;
 }
 
-// Note: this does not validate integrity. It rewrites all data files through
-// their normalize functions to ensure clean serialization on startup.
-function normalizeDataIntegrity() {
-  writeUsers(readUsers());
-  writeAgents(readAgents());
-  writeGroups(readGroups());
-  writeMemberships(readMemberships());
-  writeTickets(readTickets());
-  writeRuns(readRuns());
-  writeLogs(readLogs());
-  writeWorkflows(readWorkflows());
+function dataIntegrityError(storeName, message) {
+  const error = new Error(`Data integrity check failed for ${storeName}: ${message}`);
+  error.code = 'DATA_INTEGRITY_ERROR';
+  error.storeName = storeName;
+  return error;
+}
+
+function validateUniqueIntegerIds(storeName, records) {
+  const seen = new Set();
+  records.forEach((record, index) => {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+      throw dataIntegrityError(storeName, `record ${index} must be an object`);
+    }
+    const id = parseInt(record.id, 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw dataIntegrityError(storeName, `record ${index} has an invalid id`);
+    }
+    if (seen.has(id)) throw dataIntegrityError(storeName, `duplicate id ${id}`);
+    seen.add(id);
+  });
+  return seen;
+}
+
+// Startup validation is deliberately read-only. Normalization remains part of
+// explicit writes, but booting the server must never silently drop or rewrite
+// evidence just because a store is malformed or contains duplicate identities.
+function validateDataIntegrity() {
+  const users = readUsers();
+  const agents = readAgents();
+  const groups = readGroups();
+  const memberships = readMemberships();
+  const tickets = readTickets();
+  const runs = readRuns();
+  const logs = readLogs();
+  const workflows = readWorkflows();
+
+  // Every array-backed store must at least be present, parseable, and retain
+  // its array root. Domain-specific writers may normalize records on explicit
+  // mutation, but startup never hides a corrupt auxiliary store until its UI
+  // route happens to be opened.
+  [
+    ['permissions.json', PERMISSIONS_FILE],
+    ['allocation-plans.json', ALLOCATION_PLANS_FILE],
+    ['operation-history.json', OPERATION_HISTORY_FILE],
+    ['process-templates.json', PROCESS_TEMPLATES_FILE],
+    ['process-template-triggers.json', PROCESS_TEMPLATE_TRIGGERS_FILE],
+    ['process-template-versions.json', PROCESS_TEMPLATE_VERSIONS_FILE],
+    ['work-contexts.json', WORK_CONTEXTS_FILE],
+    ['watchers.json', WATCHERS_FILE],
+    ['watcher-observations.json', WATCHER_OBSERVATIONS_FILE],
+    ['watcher-ticket-proposals.json', WATCHER_TICKET_PROPOSALS_FILE],
+    ['model-routing-policies.json', MODEL_ROUTING_POLICIES_FILE],
+    ['connectors.json', CONNECTORS_FILE],
+    ['connector-receipts.json', CONNECTOR_RECEIPTS_FILE],
+    ['local-connector-objects.json', LOCAL_CONNECTOR_OBJECTS_FILE],
+    ['browser-targets.json', BROWSER_TARGETS_FILE],
+    ['work-types.json', WORK_TYPES_FILE]
+  ].forEach(([, filePath]) => readJsonArrayCached(filePath));
+  readRuntimeLimitsConfig();
+
+  const userIds = validateUniqueIntegerIds('users.json', users);
+  const agentIds = validateUniqueIntegerIds('agents.json', agents);
+  const groupIds = validateUniqueIntegerIds('groups.json', groups);
+  const ticketIds = validateUniqueIntegerIds('tickets.json', tickets);
+  const runIds = validateUniqueIntegerIds('runs.json', runs);
+  validateUniqueIntegerIds('logs.json', logs);
+
+  const membershipKeys = new Set();
+  memberships.forEach((membership, index) => {
+    if (!membership || typeof membership !== 'object' || Array.isArray(membership)) {
+      throw dataIntegrityError('memberships.json', `record ${index} must be an object`);
+    }
+    const principalType = membership.principalType === 'agent' ? 'agent' : membership.principalType === 'user' ? 'user' : null;
+    const principalId = parseInt(membership.principalId ?? membership.userId, 10);
+    const groupId = parseInt(membership.groupId, 10);
+    if (!principalType || !Number.isInteger(principalId) || !Number.isInteger(groupId)) {
+      throw dataIntegrityError('memberships.json', `record ${index} has an invalid principal or group`);
+    }
+    if (!groupIds.has(groupId) || (principalType === 'user' ? !userIds.has(principalId) : !agentIds.has(principalId))) {
+      throw dataIntegrityError('memberships.json', `record ${index} references a missing principal or group`);
+    }
+    const key = `${principalType}:${principalId}:${groupId}`;
+    if (membershipKeys.has(key)) throw dataIntegrityError('memberships.json', `duplicate membership ${key}`);
+    membershipKeys.add(key);
+  });
+
+  runs.forEach((run, index) => {
+    const ticketId = parseInt(run.ticketId, 10);
+    const agentId = parseInt(run.agentId, 10);
+    if (!ticketIds.has(ticketId) || !agentIds.has(agentId)) {
+      throw dataIntegrityError('runs.json', `record ${index} references a missing ticket or agent`);
+    }
+  });
+
+  logs.forEach((log, index) => {
+    const isSystemLog = log.runId === null && log.ticketId === null;
+    if (!isValidIsoTimestamp(log.timestamp)) throw dataIntegrityError('logs.json', `record ${index} has an invalid timestamp`);
+    if (isSystemLog) return;
+    const runId = parseInt(log.runId, 10);
+    const ticketId = parseInt(log.ticketId, 10);
+    const run = runs.find(item => item.id === runId);
+    if (!runIds.has(runId) || !ticketIds.has(ticketId) || !run || parseInt(run.ticketId, 10) !== ticketId) {
+      throw dataIntegrityError('logs.json', `record ${index} references an inconsistent run or ticket`);
+    }
+  });
+
+  const workflowIds = new Set();
+  workflows.forEach((workflow, index) => {
+    if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow) || typeof workflow.id !== 'string' || !workflow.id.trim()) {
+      throw dataIntegrityError('workflows.json', `record ${index} has an invalid workflow id`);
+    }
+    const id = workflow.id.trim();
+    if (workflowIds.has(id)) throw dataIntegrityError('workflows.json', `duplicate workflow id ${id}`);
+    workflowIds.add(id);
+  });
 }
 
 async function createDefaultData() {
   seedOperationalDataDir();
-  normalizeDataIntegrity();
+  validateDataIntegrity();
 
   const users = readUsers();
   let adminUser = users.find(user => user.username === 'admin');
 
   if (users.length === 0) {
-    const bootstrapPassword = String(process.env.ADMIN_BOOTSTRAP_PASSWORD || 'admin123');
+    const configuredBootstrapPassword = String(process.env.ADMIN_BOOTSTRAP_PASSWORD || '');
+    const bootstrapPassword = configuredBootstrapPassword || 'admin123';
     const passwordHash = await argon2.hash(bootstrapPassword);
     adminUser = {
       id: 1,
@@ -22648,11 +23041,12 @@ async function createDefaultData() {
     };
     users.push(adminUser);
     writeUsers(users);
-    console.log(`Default admin user created: username=admin, password=${bootstrapPassword}`);
+    console.log('Default admin user created: username=admin');
   }
 
   const groups = readGroups();
   let adminGroup = groups.find(group => group.name === 'Administrators');
+  let groupsChanged = false;
 
   if (!adminGroup) {
     adminGroup = {
@@ -22662,10 +23056,18 @@ async function createDefaultData() {
       canReceiveTickets: false
     };
     groups.push(adminGroup);
+    groupsChanged = true;
     console.log('Created Administrators group');
   } else {
-    adminGroup.permissions = readPermissions();
-    adminGroup.canReceiveTickets = false;
+    const administratorPermissions = readPermissions();
+    if (!sameValueSet(adminGroup.permissions, administratorPermissions)) {
+      adminGroup.permissions = administratorPermissions;
+      groupsChanged = true;
+    }
+    if (adminGroup.canReceiveTickets !== false) {
+      adminGroup.canReceiveTickets = false;
+      groupsChanged = true;
+    }
   }
 
   if (!groups.some(group => group.canReceiveTickets)) {
@@ -22675,10 +23077,11 @@ async function createDefaultData() {
       permissions: [],
       canReceiveTickets: true
     });
+    groupsChanged = true;
     console.log('Created Agent Support group');
   }
 
-  writeGroups(groups);
+  if (groupsChanged) writeGroups(groups);
 
   if (adminUser) {
     const memberships = readMemberships();
@@ -22776,7 +23179,8 @@ async function start() {
     startDataDirWriterLockHeartbeat();
 
     await createDefaultData();
-    interruptStaleRunsOnStartup();
+    restoreRunEventChainsFromDisk();
+    if (!TEST_SKIP_STARTUP_RUN_RECOVERY) interruptStaleRunsOnStartup();
     // Converge any root/version-store mismatch left by an activation that crashed between
     // its two atomic writes — before the template scheduler can trigger against a stale root.
     reconcileProcessTemplateVersionConsistencyOnStartup();
@@ -22787,24 +23191,63 @@ async function start() {
     console.log(`Server running on http://localhost:${PORT}`);
   } catch (err) {
     releaseDataDirWriterLock();
-    console.error(err && err.message ? err.message : err);
+    const startupError = err && err.message ? err.message : String(err);
+    // Startup guards are supervisory evidence. Write synchronously because an
+    // otherwise idle process can exit before an asynchronous stderr pipe flushes.
+    fs.writeSync(process.stderr.fd, `${startupError}\n`);
     fastify.log.error(err);
-    process.exit(1);
+    // Let stdout/stderr drain so startup refusals remain observable to operators
+    // and supervisors. The startup path has released its only recurring handle.
+    process.exitCode = 1;
+  }
+}
+
+let shutdownPromise = null;
+
+async function waitForActiveRunTasksToSettle(timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while ((startingRunIds.size > 0 || runningRunKeys.size > 0) && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 25));
   }
 }
 
 function shutdown(signal) {
-  try {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    serverReady = false;
     if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
     if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
+
+    // SSE responses otherwise keep Fastify open indefinitely during close.
+    eventClients.forEach(client => {
+      try { client.end(); } catch (_) {}
+    });
+    eventClients.clear();
+
+    try {
+      await fastify.close();
+    } catch (error) {
+      if (!error || error.code !== 'FST_ERR_REOPENED_CLOSE_SERVER') {
+        console.error(`Failed to close HTTP server cleanly: ${error && error.message ? error.message : error}`);
+      }
+    }
+
+    // Let already-dispatched work reach a stable boundary. Event appends are
+    // synchronous, so there is no separate evidence queue to drain.
+    await waitForActiveRunTasksToSettle();
+    if (eventAppendFailure) console.error(`Event persistence failed before ${signal}: ${eventAppendFailure.message}`);
     releaseDataDirWriterLock();
-  } finally {
     process.exit(signal === 'SIGINT' ? 130 : 143);
-  }
+  })().catch(error => {
+    console.error(`Shutdown failed: ${error && error.message ? error.message : error}`);
+    try { releaseDataDirWriterLock(); } catch (_) {}
+    process.exit(1);
+  });
+  return shutdownPromise;
 }
 
-process.once('SIGINT', () => shutdown('SIGINT'));
-process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => { void shutdown('SIGINT'); });
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 process.once('exit', () => {
   try {
     releaseDataDirWriterLock();

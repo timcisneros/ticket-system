@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { reconstructWorkspaceForRun } = require('./replay-workspace');
+const { verifyCurrentRunEventChain } = require('../runtime/event-integrity');
 
 const AGENT_MUTATING_OPERATIONS = ['createFolder', 'writeFile', 'renamePath', 'deletePath'];
 
@@ -47,11 +48,6 @@ function canonicalJson(obj) {
   return sorted;
 }
 
-function computeEventHash(event) {
-  const canonical = { type: event.type, ticketId: event.ticketId, runId: event.runId, stepId: event.stepId, payload: event.payload };
-  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
-}
-
 function computeReplayHash(replay) {
   return crypto.createHash('sha256').update(JSON.stringify(canonicalJson(replay))).digest('hex');
 }
@@ -59,51 +55,12 @@ function computeReplayHash(replay) {
 // ── Hash chain reconstruction ─────────────────────────────────────
 
 function verifyHashChain(events) {
-  const errors = [];
-  if (events.length === 0) return { errors, chainValid: true, breaks: [] };
-  const sorted = [...events].sort((a, b) => {
-    if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq;
-    return String(a.ts).localeCompare(String(b.ts));
-  });
-  const breaks = [];
-  for (let i = 0; i < sorted.length; i++) {
-    const ev = sorted[i];
-    if (ev._parseError) continue;
-    if (ev.seq !== undefined) {
-      if (i > 0) {
-        const prev = sorted[i - 1];
-        if (prev.seq !== undefined && ev.seq <= prev.seq) {
-          errors.push(`Sequence non-monotonic: seq=${ev.seq} <= prev.seq=${prev.seq} (type=${ev.type})`);
-          breaks.push({ index: i, type: 'seq_non_monotonic' });
-        }
-        if (ev.seq !== prev.seq + 1) {
-          errors.push(`Sequence gap: expected seq=${prev.seq + 1}, got seq=${ev.seq} (type=${ev.type})`);
-          breaks.push({ index: i, type: 'seq_gap', expectedSeq: prev.seq + 1, actualSeq: ev.seq });
-        }
-      } else if (ev.seq !== 0) {
-        errors.push(`First event seq must be 0, got ${ev.seq} (type=${ev.type})`);
-        breaks.push({ index: i, type: 'seq_first_not_zero' });
-      }
-    }
-    if (ev.prevHash !== undefined) {
-      if (i === 0) {
-        if (ev.prevHash !== null) { errors.push(`First event prevHash must be null (type=${ev.type})`); breaks.push({ index: i, type: 'first_prevhash_not_null' }); }
-      } else {
-        const prev = sorted[i - 1];
-        const expectedPrevHash = computeEventHash(prev);
-        if (ev.prevHash !== expectedPrevHash) {
-          errors.push(`Hash chain break at seq=${ev.seq}: prevHash mismatch (type=${ev.type})`);
-          breaks.push({ index: i, type: 'hash_chain_break', expected: expectedPrevHash, actual: ev.prevHash });
-        }
-      }
-    }
-  }
-  const seqCounts = {};
-  for (const ev of sorted) { if (ev.seq !== undefined) seqCounts[ev.seq] = (seqCounts[ev.seq] || 0) + 1; }
-  for (const [seq, count] of Object.entries(seqCounts)) {
-    if (count > 1) { errors.push(`Duplicate seq=${seq}: ${count} events`); breaks.push({ type: 'duplicate_seq', seq: parseInt(seq, 10), count }); }
-  }
-  return { errors, chainValid: errors.length === 0, breaks };
+  const result = verifyCurrentRunEventChain(events);
+  return {
+    errors: result.errors.map(error => error.message),
+    chainValid: result.chainValid,
+    breaks: result.errors
+  };
 }
 
 // ── State machine reconstruction ────────────────────────────────────
@@ -112,13 +69,10 @@ function reconstructStateMachine(events) {
   const transitions = [];
   const errors = [];
   let currentState = 'pending';
-  const terminalStates = ['completed', 'failed', 'interrupted', 'terminalized'];
+  const terminalStates = ['terminalized'];
   const validTransitions = {
-    pending: ['pending', 'running', 'failed', 'interrupted', 'terminalized'],
-    running: ['running', 'completed', 'failed', 'interrupted', 'terminalized'],
-    completed: ['completed'],
-    failed: ['failed'],
-    interrupted: ['interrupted'],
+    pending: ['pending', 'running', 'terminalized'],
+    running: ['running', 'terminalized'],
     terminalized: ['terminalized']
   };
 
@@ -127,9 +81,6 @@ function reconstructStateMachine(events) {
     'run.lease_acquired': 'pending',
     'run.started': 'running',
     'run.execution_completed': 'running',
-    'run.completed': 'completed',
-    'run.failed': 'failed',
-    'run.interrupted': 'interrupted',
     'run.terminalized': 'terminalized'
   };
 
@@ -242,9 +193,7 @@ function verifyTemporalConsistency(events, run) {
 
   // Evaluation after terminalization (currently allowed by runtime; note as warning only)
   const evalEvents = runEvents.filter(e => e.type === 'run.evaluation_completed');
-  const terminalEvent = runEvents.find(e =>
-    ['run.completed', 'run.failed', 'run.interrupted'].includes(e.type)
-  );
+  const terminalEvent = runEvents.find(e => e.type === 'run.terminalized');
   if (terminalEvent && evalEvents.length > 0) {
     const lastEval = evalEvents[evalEvents.length - 1];
     if (lastEval.ts > terminalEvent.ts) {

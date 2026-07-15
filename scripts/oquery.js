@@ -266,7 +266,9 @@ function sourceLabelLine(args) {
 
 async function fetchServerIdentity(url) {
   try {
-    const res = await httpReq('GET', `${url}/api/health`);
+    const cookie = readCookie();
+    const headers = cookie ? { Cookie: `sessionId=${cookie}` } : {};
+    const res = await httpReq('GET', `${url}/api/runtime/identity`, { headers });
     if (res.status === 200) return JSON.parse(res.body);
   } catch (e) { /* unreachable */ }
   return null;

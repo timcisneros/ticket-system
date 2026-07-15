@@ -580,6 +580,7 @@ function startServer(preloadPath, env) {
       WORKSPACE_ROOT,
       DATA_DIR,
       AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT: '1',
+      ENABLE_MODEL_CONTRACT_COMPILER: 'true',
       ...env
     },
     stdio: ['ignore', 'pipe', 'pipe']

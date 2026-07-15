@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 const http = require('http');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -132,12 +133,12 @@ writeJ('operation-history.json', [
   { id: 90001, runId: C.review.rid, ticketId: C.review.tid, agentId: agent.id, operation: 'writeFile', args: { path: 'review/other.txt' }, result: { path: 'review/other.txt', status: 'written' }, timestamp: now }
 ]);
 
-// Seed a run.failed event so recentEventSummary().latestError surfaces the
+// Seed a failed run.terminalized event so recentEventSummary().latestError surfaces the
 // reason (the same source Ticket Detail / Run Detail use). Written before the
 // server starts; the server's writeMissingFile leaves an existing log intact.
 fs.writeFileSync(
   path.join(DATA_DIR, 'events.jsonl'),
-  JSON.stringify({ id: 'evt-failed-reason', ts: now, type: 'run.failed', ticketId: C.failed.tid, runId: C.failed.rid, stepId: null, payload: { error: 'Agent API key is missing' } }) + '\n'
+  JSON.stringify(sealCurrentRunEventChains([{ id: 'evt-failed-reason', ts: now, type: 'run.terminalized', ticketId: C.failed.tid, runId: C.failed.rid, stepId: null, payload: { status: 'failed', error: 'Agent API key is missing' } }])[0]) + '\n'
 );
 
 writeJ('allocation-plans.json', [

@@ -30,6 +30,8 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'complete-flag-truncation-guard-test.js',
   'direct-folder-postcondition-completeness-test.js',
   'debug-reset-contamination-test.js',
+  'startup-data-integrity-test.js',
+  'rbac-and-inline-data-security-test.js',
   'run-state-inconsistency-warning-test.js',
   'run-detail-evidence-clarity-test.js',
   'run-timeout-attribution-clarity-test.js',
@@ -37,14 +39,18 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'ticket-execution-state-clarity-test.js',
   'oquery-cli-parity-test.js',
   'health-live-paths-test.js',
+  'internal-demo-security-test.js',
   'no-tracked-provider-keys-test.js',
   'concurrency-conflict-test.js',
   'run-detail-permissioned-delete-audit-test.js',
   'run-diagnostics-bundle-test.js',
   'phase-contract-alignment-test.js',
+  'event-chain-verify-test.js',
+  'event-chain-restart-test.js',
   'invalid-action-preflight-recovery-test.js',
   'exact-delete-target-absent-guard-test.js',
   'objective-contract-parity-test.js',
+  'objective-contract-compiler-test.js',
   'process-template-trigger-test.js',
   'scheduled-process-template-trigger-test.js',
   'process-template-state-observability-test.js',
@@ -72,7 +78,7 @@ function runCheckpoint() {
   const childEnv = { ...process.env, NODE_PATH: process.env.NODE_PATH || path.join(ROOT, 'node_modules') };
 
   const checks = [
-    { label: 'node --check server.js', args: ['--check', 'server.js'] },
+    { label: 'npm run build (project-wide JavaScript syntax)', args: [path.join('scripts', 'check-js-syntax.js')] },
     ...CHECKPOINT_TEST_SCRIPTS.map(name => ({ label: `NODE_PATH=./node_modules node scripts/${name}`, args: [path.join('scripts', name)] }))
   ];
 

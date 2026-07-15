@@ -6,7 +6,7 @@
   "scripts": {
     "start": "NODE_ENV=production node server.js",
     "dev": "NODE_ENV=development DATA_DIR=${DATA_DIR:-.local-data} WORKSPACE_ROOT=${WORKSPACE_ROOT:-.local-workspace} node server.js",
-    "build": "node --check server.js",
+    "build": "node scripts/check-js-syntax.js",
     "preview": "NODE_ENV=production node server.js",
     "codex:bootstrap": "node scripts/codex-bootstrap.js",
     "codex:trace": "node scripts/codex-trace.js",
@@ -32,7 +32,8 @@
     "test:truncation": "NODE_ENV=test node scripts/prefix-truncation-regression-test.js",
     "test:simulation": "node scripts/agent-behavior-simulation-test.js",
     "validate:truncation": "node scripts/tm3-replay-validation.js",
-    "checkpoint:release": "NODE_PATH=./node_modules node scripts/release-checkpoint.js"
+    "checkpoint:release": "NODE_PATH=./node_modules node scripts/release-checkpoint.js",
+    "test": "npm run checkpoint:release"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
@@ -51,5 +52,6 @@
     "node"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "packageManager": "pnpm@11.8.0"
 }

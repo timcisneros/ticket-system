@@ -267,8 +267,8 @@
   (function() {
     var form = document.getElementById('create-pt-form');
     if (!form) return;
-    var agents = <%- JSON.stringify(agents || []) %>;
-    var groups = <%- JSON.stringify(groups || []) %>;
+    var agents = <%- serializeForInlineScript(agents || []) %>;
+    var groups = <%- serializeForInlineScript(groups || []) %>;
     var typeSelect = document.getElementById('pt-assign-type');
     var targetSelect = document.getElementById('pt-assign-target');
     var targetGroup = document.getElementById('pt-assign-target-group');
@@ -277,8 +277,17 @@
       var type = typeSelect.value;
       if (!type) { targetGroup.style.display = 'none'; return; }
       var items = type === 'agent' ? agents : groups;
-      targetSelect.innerHTML = '<option value="">' + (type === 'agent' ? 'Select an agent' : 'Select an agent group') + '</option>' +
-        items.map(function(item) { return '<option value="' + item.id + '">' + item.name + '</option>'; }).join('');
+      targetSelect.replaceChildren();
+      var placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = type === 'agent' ? 'Select an agent' : 'Select an agent group';
+      targetSelect.appendChild(placeholder);
+      items.forEach(function(item) {
+        var option = document.createElement('option');
+        option.value = String(item.id);
+        option.textContent = String(item.name || '');
+        targetSelect.appendChild(option);
+      });
       targetGroup.style.display = '';
     }
     typeSelect.addEventListener('change', populateTargets);

@@ -4,6 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'run-state-warning-data-'));
@@ -241,13 +242,13 @@ function seedData() {
     }
   ]);
 
-  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), [
+  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), sealCurrentRunEventChains([
     { id: 'old-created', ts: '2026-01-01T00:00:00.000Z', type: 'run.created', ticketId: 1, runId: 1, payload: { status: 'pending' } },
     { id: 'old-mutation', ts: '2026-01-01T00:00:01.000Z', type: 'workspace.operation', ticketId: 1, runId: 1, stepId: '0', payload: { operation: 'createFolder', path: 'D-' + STAMP, mutating: true, result: { path: 'D-' + STAMP } } },
-    { id: 'old-completed', ts: '2026-01-01T00:00:02.000Z', type: 'run.completed', ticketId: 1, runId: 1, payload: { status: 'completed' } },
+    { id: 'old-completed', ts: '2026-01-01T00:00:02.000Z', type: 'run.terminalized', ticketId: 1, runId: 1, payload: { status: 'completed' } },
     { id: 'normal-started', ts: '2026-01-02T00:00:01.000Z', type: 'run.started', ticketId: 2, runId: 2, payload: { status: 'running' } },
-    { id: 'normal-terminal', ts: '2026-01-02T00:00:02.000Z', type: 'run.completed', ticketId: 3, runId: 3, payload: { status: 'completed' } }
-  ].map(event => JSON.stringify(event)).join('\n') + '\n');
+    { id: 'normal-terminal', ts: '2026-01-02T00:00:02.000Z', type: 'run.terminalized', ticketId: 3, runId: 3, payload: { status: 'completed' } }
+  ]).map(event => JSON.stringify(event)).join('\n') + '\n');
 
   fs.writeFileSync(path.join(DATA_DIR, 'replay-snapshots', 'run-1.json'), JSON.stringify({
     runId: 1,
@@ -272,7 +273,7 @@ function seedData() {
     providerRequests: [{ ok: true }],
     modelResponses: [{ ok: true }],
     workspaceOperations: [],
-    events: [{ type: 'run.completed' }]
+    events: [{ type: 'run.terminalized' }]
   }, null, 2));
 }
 
@@ -314,7 +315,7 @@ async function main() {
   try {
     server = spawn(process.execPath, ['server.js'], {
       cwd: ROOT,
-      env: { ...process.env, NODE_ENV: 'test', PORT, DATA_DIR, WORKSPACE_ROOT },
+      env: { ...process.env, NODE_ENV: 'test', PORT, DATA_DIR, WORKSPACE_ROOT, TEST_SKIP_STARTUP_RUN_RECOVERY: 'true' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     server.stdout.on('data', chunk => { output += String(chunk); });
@@ -322,11 +323,8 @@ async function main() {
 
     await waitForReady();
     const cookie = await login();
-    seedData();
-    await sleep(100);
-
     const contaminatedRunPage = await assertPageWarning(cookie, '/runs/1', true);
-    assert(contaminatedRunPage.includes('Terminal legacy event appears on a running run.'), 'Contaminated run page missing terminal reason');
+    assert(contaminatedRunPage.includes('Terminal event appears on a running run.'), 'Contaminated run page missing terminal reason');
     assert(contaminatedRunPage.includes('Event-derived mutation exists but replay has no workspace operations.'), 'Contaminated run page missing mutation/replay reason');
     assert(contaminatedRunPage.includes('Resume detected prior events before any provider request.'), 'Contaminated run page missing resume reason');
     await assertPageWarning(cookie, '/tickets/1', true);

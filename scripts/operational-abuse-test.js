@@ -427,7 +427,7 @@ async function testStalledResponses(cookie, agent) {
   const modelRequests = (replaySnapshot && replaySnapshot.providerRequests) || [];
   const modelResponses = (replaySnapshot && replaySnapshot.modelResponses) || [];
   const parsedPlans = (replaySnapshot && replaySnapshot.parsedModelPlans) || [];
-  const failureEvent = replayRunEvents.find(e => e.type === 'run.failed' || e.type === 'run.terminalized' || e.type.includes('failed'));
+  const failureEvent = replayRunEvents.find(e => e.type === 'run.terminalized' || e.type.includes('failed'));
   const snapshotEvents = replayRunEvents.map(e => e.type).join(', ');
 
   console.log(`  Result: ${run.status}`);
@@ -463,7 +463,7 @@ async function testRunInterruption(cookie, agent) {
   const runState = await getRunState(cookie, run.id);
   const events = await getRunEvents(cookie, run.id);
   assertRunIntegrity(runState, events);
-  const hasInterruptEvent = events.some(e => e.type === 'run.interrupted' || e.type === 'run.terminalized');
+  const hasInterruptEvent = events.some(e => e.type === 'run.terminalized');
   const isInterrupted = run.status === 'interrupted';
   console.log(`  Final status: ${run.status}, interrupted event: ${hasInterruptEvent}`);
   return { name: 'interruption', passed: true, run, runState, events };
@@ -662,8 +662,7 @@ async function testReplayEventConsistency(cookie, agent) {
   // Verify events contain required lifecycle markers
   const eventTypes = new Set(events.map(e => e.type));
   assert(eventTypes.has('run.started') || eventTypes.has('run.starting'), 'Missing run start event');
-  assert(eventTypes.has('run.terminalized') || eventTypes.has('run.failed') || eventTypes.has('run.interrupted'),
-    'Missing terminal run event (run.terminalized, run.failed, or run.interrupted)');
+  assert(eventTypes.has('run.terminalized'), 'Missing current terminal run event (run.terminalized)');
 
   console.log(`  Result: ${run.status}, events: ${events.length}, replay steps: ${replay.steps}`);
   return { name: 'replay-consistency', passed: true, run, runState, events };

@@ -2,9 +2,9 @@
 
 ## Internal Demo Baseline
 
-The `v0.1.0-internal-demo` baseline is intended for local internal/demo use. It
-is not production security hardened, multi-user/hosted deployment ready, final
-UX, an RL/training system, or a general verifier for all domains.
+The `v0.1.0-internal-demo` baseline is intended for local internal/demo use. It is
+not production security hardened, multi-user/hosted deployment ready, final UX,
+an RL/training system, or a general verifier for all domains.
 
 ## JSON Local Store
 
@@ -28,10 +28,10 @@ Provider keys and local secrets are user-managed. `.env`, `.env.local`, and
 `.env.test.local` are ignored by Git. Do not commit API keys, local provider
 credentials, or demo-only bootstrap secrets.
 
-Tracked seed agents do not contain provider API keys. Configure provider keys
-through ignored env files, shell environment, or the local Admin UI. If a real
-provider key was ever committed in historical data, revoke it at the provider;
-this repository does not rewrite release history.
+Tracked seed agents do not contain provider API keys. Configure provider keys through
+ignored env files, the shell environment, or the local Admin UI. If a real provider key
+was ever committed in historical data, revoke it at the provider; this repository does
+not rewrite release history.
 
 ## Local gemma3:latest Latency
 

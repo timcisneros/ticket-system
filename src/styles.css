@@ -84,7 +84,8 @@ a {
 }
 
 .nav-links a,
-.dropdown-toggle {
+.dropdown-toggle,
+.nav-link-button {
   min-height: 32px;
   padding: 0 10px;
   display: inline-flex;
@@ -94,6 +95,11 @@ a {
   text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.nav-link-button {
+  border: 0;
+  background: transparent;
 }
 
 .dropdown {

@@ -35,7 +35,7 @@ function tempStore() {
 function sampleLog() {
   return [
     '{"id":"a","type":"run.started","runId":1,"ticketId":10,"payload":{}}',
-    '{"id":"b","type":"run.completed","runId":1,"ticketId":10,"payload":{}}',
+    '{"id":"b","type":"run.terminalized","runId":1,"ticketId":10,"payload":{"status":"completed"}}',
     '{"id":"c","type":"scheduler.tick","runId":null,"ticketId":null,"payload":{"pendingRuns":2}}'
   ].join('\n') + '\n';
 }

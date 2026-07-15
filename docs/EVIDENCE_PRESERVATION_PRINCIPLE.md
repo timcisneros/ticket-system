@@ -82,11 +82,12 @@ None. The replay snapshot surface is fully append-only and complete.
 
 ### Evidence preserved?
 
-**Yes.** `appendEvent` (line 2075) writes to `data/events.jsonl` in append-only fashion:
+**Yes.** `appendEvent` writes each normalized event to `data/events.jsonl` synchronously before advancing the in-memory run-chain tip:
 
 ```javascript
 const line = `${JSON.stringify(normalized)}\n`;
-pendingEventBuffer.push(normalized);
+fs.appendFileSync(EVENTS_FILE, line, 'utf8');
+if (nextChain) runEventChains.set(normalized.runId, nextChain);
 ```
 
 ### Evidence lost?

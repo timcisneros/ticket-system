@@ -1,16 +1,13 @@
-// Objective contract (v0.1.27) — pure, side-effect-free objective interpretation.
+// Objective contract — pure, side-effect-free objective interpretation.
 //
 // This module is the future consolidation surface described in
 // docs/objective-semantics-consolidation-plan.md. It converts a ticket objective
 // string into a structured contract WITHOUT touching the workspace, events, runs,
 // or any global state. It performs no I/O and makes no completion decisions.
 //
-// IMPORTANT (v0.1.27): this module is NOT wired into the runtime. server.js still
-// uses its existing helpers. The grammar here mirrors those helpers exactly so a
-// later slice can switch the runtime to consume this contract with zero behavior
-// change. The regexes below are copied verbatim from server.js
-// (extractSimpleDeleteTargets, buildObviousPostconditionChecks ensure-folder match,
-// parseSimpleFolderListObjective, isReportObjective) and must stay in parity.
+// server.js delegates deterministic objective interpretation here. The optional
+// model compiler may also build a contract, but it is default-off and must remain
+// in exact operation/target parity with the deterministic runtime guardrails.
 
 'use strict';
 
@@ -391,8 +388,6 @@ const COMPILED_INTENTS = Object.freeze([
   'create_folders',
   'ensure_folders',
   'delete_paths',
-  'write_files',
-  'rename_paths',
   'model_driven'
 ]);
 
@@ -411,6 +406,7 @@ function isSafeCompiledPathSegment(value) {
 function normalizeCompiledTargetRoot(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
+  if (raw.startsWith('/') || raw.startsWith('\\')) return null;
   const normalized = raw.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
   if (!normalized) return '';
   if (normalized.split('/').some(segment => !isSafeCompiledPathSegment(segment))) return null;
@@ -420,6 +416,12 @@ function normalizeCompiledTargetRoot(value) {
 function joinTargetRoot(root, target) {
   if (!root) return target;
   return `${root}/${target}`;
+}
+
+function isSafeCompiledRelativePath(value) {
+  const relativePath = String(value || '').trim();
+  if (!relativePath || relativePath.startsWith('/') || relativePath.endsWith('/')) return false;
+  return relativePath.split('/').every(isSafeCompiledPathSegment);
 }
 
 // Validate a model-produced compiled contract and convert it into the standard
@@ -455,8 +457,7 @@ function buildObjectiveContractFromCompiled(compiled) {
       return unsupportedContract(['compiled_contract_unsafe_target', segment]);
     }
     const fullPath = joinTargetRoot(targetRoot, segment);
-    if (!isSafeCompiledPathSegment(fullPath) && fullPath.includes('/')) {
-      // Re-check combined path for traversal via root+segment.
+    if (!isSafeCompiledRelativePath(fullPath)) {
       return unsupportedContract(['compiled_contract_unsafe_target', fullPath]);
     }
     normalizedTargets.push(fullPath);
@@ -499,32 +500,6 @@ function buildObjectiveContractFromCompiled(compiled) {
         targetPath: uniqueTargets.length === 1 ? uniqueTargets[0] : null,
         postconditions: uniqueTargets.map(p => ({ type: 'path_absent', path: p })),
         allowedMutations: uniqueTargets.map(p => ({ operation: 'deletePath', path: p })),
-        completionPolicy: 'idempotent_if_already_satisfied',
-        scopeHints: [],
-        runtimeProfile: null,
-        notes: ['compiled_contract']
-      };
-    case 'write_files':
-      return {
-        source: 'objective-contract',
-        recognized: true,
-        intent: 'write_file',
-        targetPath: uniqueTargets.length === 1 ? uniqueTargets[0] : null,
-        postconditions: uniqueTargets.map(p => ({ type: 'path_exists', path: p })),
-        allowedMutations: uniqueTargets.map(p => ({ operation: 'writeFile', path: p })),
-        completionPolicy: 'idempotent_if_already_satisfied',
-        scopeHints: [],
-        runtimeProfile: null,
-        notes: ['compiled_contract']
-      };
-    case 'rename_paths':
-      return {
-        source: 'objective-contract',
-        recognized: true,
-        intent: 'rename',
-        targetPath: uniqueTargets.length === 1 ? uniqueTargets[0] : null,
-        postconditions: uniqueTargets.map(p => ({ type: 'path_renamed', path: p })),
-        allowedMutations: uniqueTargets.map(p => ({ operation: 'renamePath', path: p })),
         completionPolicy: 'idempotent_if_already_satisfied',
         scopeHints: [],
         runtimeProfile: null,

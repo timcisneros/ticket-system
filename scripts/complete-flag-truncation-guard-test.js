@@ -273,7 +273,7 @@ async function main() {
 
     // Post-terminal evidence lands through several sinks. operation-history is
     // persisted synchronously, but events.jsonl is appended asynchronously
-    // (eventAppendChain), and the replay snapshot is finalized around the same
+    // (appendEvent), and the replay snapshot is finalized around the same
     // time. Under back-to-back load the run can read terminal in runs.json before
     // the final workspace.operation / run.terminalized events have flushed, so
     // poll until all the evidence is present rather than reading once. This is a

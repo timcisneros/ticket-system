@@ -8,7 +8,8 @@ everything produces **evidence/receipts**. On top of that substrate sit grouping
 handoff, observation, and routing layers — all bounded and read-only or proposal-only.
 
 This is a **release candidate** (see `docs/RELEASE_CANDIDATE_AUDIT.md`), not a final `v1.0` tag and
-not production-hardened. It runs as a single-process Fastify server backed by JSON files.
+not production-hardened. It runs as a single-process Fastify server backed by JSON files. See
+`docs/SYSTEM_AUDIT_2026-07-15.md` for the latest internal-demo audit.
 
 ## 2. What this system is
 
@@ -45,14 +46,16 @@ process-template activation durability reconciliation; Work Context grouping & v
 handoff queue protocol (claim/work/handoff receipts) with a deterministic smoke loop; a bounded
 manual watcher (observer/proposer); model/provider routing (dispatch policy + immutable per-run
 snapshot); a local/mock connector contract (bounded read with receipt, write refused); a read-only
-operational transparency surface; and a hardened release checkpoint. Verdict: **ready for release
-docs, no P0/P1 blockers** (`docs/RELEASE_CANDIDATE_AUDIT.md`).
+operational transparency surface; restart-safe event integrity checks; fail-closed startup data
+validation; and a hardened release checkpoint. The current audit and remaining work are in
+`docs/SYSTEM_AUDIT_2026-07-15.md`.
 
 ## 6. Quick start
 
 ```sh
-npm install
-npm run dev        # serves on http://localhost:3099 against ignored .local-data / .local-workspace
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run dev       # serves on http://localhost:3099 against ignored .local-data / .local-workspace
 ```
 
 Login with the bootstrap admin (created only when missing): `admin` / `admin123` (override with
@@ -77,9 +80,9 @@ temp-`DATA_DIR`/`WORKSPACE_ROOT` safe:
 npm run checkpoint:release
 ```
 
-It runs `node --check server.js` plus the ordered `CHECKPOINT_TEST_SCRIPTS`, fails loudly if any
+It runs a project-wide JavaScript syntax build plus the ordered `CHECKPOINT_TEST_SCRIPTS`, fails loudly if any
 referenced script is missing, and ends with `RELEASE CHECKPOINT PASSED: N/N checks`. The current
-count is **43/43**. See **`docs/RELEASE_CHECKPOINT.md`** for what a pass does and does not mean and
+count is **50/50**. See **`docs/RELEASE_CHECKPOINT.md`** for what a pass does and does not mean and
 the full release-hygiene flow.
 
 ## 8. Demo fixtures note
@@ -97,7 +100,12 @@ external connector**, and it refuses writes. Tracked seed agents carry **no prov
 - Activation writes the version store then the root in two atomic writes; a crash between them is
   reconciled at startup (`docs/PROCESS_TEMPLATE_ACTIVATION_DURABILITY.md`) but is not fully
   transactional.
-- No production deployment guide yet. Not security-hardened for hosted/multi-tenant use.
+- No production deployment baseline. Sessions are in memory, persistence is multi-file JSON, and
+  hosted/multi-tenant isolation is not implemented.
+- Arbitrary acceptance criteria are supplied to agents but are not automatically proven; fixture
+  verifier contracts are offline benchmark metadata unless expressed as runtime postconditions.
+- The model contract compiler and prefix truncation are default-off experiments; dependent
+  mutation graphs remain unvalidated for truncation.
 - Naming care: *Model Provider* (who reasons) ≠ *Target Provider* (where mutations happen); see the
   glossary.
 
@@ -106,7 +114,8 @@ external connector**, and it refuses writes. Tracked seed agents carry **no prov
 **Start here:** this README → `docs/SETUP_AND_FIRST_RUN.md` → `docs/OPERATOR_GUIDE.md` →
 `docs/PRIMITIVE_GLOSSARY.md`.
 
-- **Release / safety:** `docs/RELEASE_CANDIDATE_AUDIT.md`, `docs/RELEASE_CHECKPOINT.md`,
+- **Release / safety:** `docs/SYSTEM_AUDIT_2026-07-15.md`, `docs/RELEASE_CANDIDATE_AUDIT.md`,
+  `docs/RELEASE_CHECKPOINT.md`,
   `docs/SAFETY_AND_NON_GOALS.md`, `docs/RELEASE_NOTES_r1.33.md`, `docs/INDEX.md`.
 - **Primitive docs:** `docs/TARGET_PROVIDER_CONTRACT.md`,
   `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH_AUDIT.md`,

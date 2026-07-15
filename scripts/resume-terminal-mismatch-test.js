@@ -119,7 +119,7 @@ async function main() {
   // Verify terminal event exists
   const raw = fs.readFileSync(path.join(testDir, 'events.jsonl'), 'utf8');
   const hasTerminal = raw.split('\n').some(l => {
-    try { const e = JSON.parse(l); return e.runId === runId && (['run.completed','run.failed','run.interrupted','run.terminalized'].includes(e.type)); }
+    try { const e = JSON.parse(l); return e.runId === runId && e.type === 'run.terminalized'; }
     catch(_) { return false; }
   });
   console.log(`    terminal event present: ${hasTerminal}`);

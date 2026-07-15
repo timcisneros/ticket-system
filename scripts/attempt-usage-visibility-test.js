@@ -11,6 +11,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
@@ -122,9 +123,9 @@ function seed() {
     run(120, 12, 'interrupted', { error: 'stopped', runEvaluation: evalWith(), replaySnapshotPath: 'replay-snapshots/run-120.json' })
   ]);
   [100, 110, 120].forEach(id => fs.writeFileSync(path.join(DATA_DIR, 'replay-snapshots', `run-${id}.json`), JSON.stringify({ runId: id, providerRequests: [], modelResponses: [], workspaceOperations: [], events: [] })));
-  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), [
+  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), sealCurrentRunEventChains([
     { id: 'v100', ts: ISO_END, type: 'run.verification_passed', ticketId: 10, runId: 100, payload: { status: 'passed' } }
-  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  ]).map(e => JSON.stringify(e)).join('\n') + '\n');
 }
 
 function waitForReady(timeoutMs = 12000) {

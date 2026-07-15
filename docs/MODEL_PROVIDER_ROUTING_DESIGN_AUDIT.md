@@ -13,7 +13,7 @@ the existing ticket/run substrate — not a new orchestration layer. Concretely,
 - **must not replace** Ticket, Run, Authority, Target Provider, Evidence, Verification, Triage,
   Timeline, Work Context, Handoff, or Watcher;
 - **must be auditable** and **snapshotted per run** (immutable once the run starts);
-- **must not silently change old tickets/runs** (legacy runs stay unrouted; no backfill);
+- **must not rewrite existing current-schema tickets/runs**;
 - **must not create hidden work**, **must not bypass authority**, and **must not bypass
   verification/triage**.
 
@@ -273,7 +273,7 @@ triage**. **No giant provider config UI** in the first implementation.
 
 **P2**
 
-- **legacy runs lack a `routingSnapshot`**;
+- **current runs always carry a `routingSnapshot`**;
 - **UI naming confusion**: agent, provider, model, target, worker;
 - **too much routing** before a real provider abstraction is needed.
 

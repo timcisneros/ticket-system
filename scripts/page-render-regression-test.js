@@ -651,7 +651,7 @@ async function main() {
     assert(ticketDetail.body.includes('does not grant authority or operations'), 'ticket detail should state Work Type authority boundary');
     assert(ticketDetail.body.includes('Acceptance Criteria'), 'ticket detail should show Acceptance Criteria section');
     assert(ticketDetail.body.includes(fixture.ticket.acceptanceCriteria), 'ticket detail should show declared acceptance criteria');
-    assert(ticketDetail.body.includes('Stored for review; not automatically verified'), 'ticket detail should state acceptance criteria boundary');
+    assert(ticketDetail.body.includes("Supplied to each run's agent as part of the requested outcome"), 'ticket detail should state acceptance criteria prompt/review boundary');
     assert(ticketDetail.body.includes('Verification Contract'), 'ticket detail should render Verification Contract column header');
     assert(!ticketDetail.body.includes('<th>Run #</th><th>Agent</th><th>Status</th><th>Run Outcome</th><th>Mutations</th>'), 'ticket detail should not have duplicate old Runs & attempts header without Verification Contract');
     assert(ticketDetail.body.includes('<span class="text-muted">None</span>'), 'ticket detail should show None for runs without a frozen verification contract');
@@ -727,7 +727,7 @@ async function main() {
     assert(runDetail.body.includes('It is not authority and does not grant operations'), 'run detail should state Work Type authority boundary');
     assert(runDetail.body.includes('Acceptance Criteria Snapshot'), 'run detail should show Acceptance Criteria Snapshot section');
     assert(runDetail.body.includes(fixture.run.acceptanceCriteriaSnapshot), 'run detail should show frozen acceptance criteria snapshot');
-    assert(runDetail.body.includes('Frozen at run creation for review'), 'run detail should state acceptance criteria snapshot boundary');
+    assert(runDetail.body.includes('Frozen at run creation and supplied to the agent'), 'run detail should state acceptance criteria snapshot/prompt boundary');
     assert(runDetail.body.includes('Workflow Postconditions'), 'run detail should show Workflow Postconditions section');
     assert(runDetail.body.includes('No workflow postconditions were declared for this run'), 'run detail should show no-postconditions message for runs without a verification contract');
     const verifiedRunDetail = await assertPageRenders(cookie, `/runs/${fixture.verifiedRun.id}`, 'verified workflow run detail', 'Workflow Postconditions');
@@ -742,7 +742,7 @@ async function main() {
     const missingAcceptanceCriteriaSnapshotRunDetail = await assertPageRenders(cookie, `/runs/${fixture.runWithoutAcceptanceCriteriaSnapshot.id}`, 'run without acceptance criteria snapshot detail', 'Acceptance Criteria Snapshot');
     assert(missingAcceptanceCriteriaSnapshotRunDetail.body.includes('No acceptance criteria were captured for this run'), 'run without acceptance criteria snapshot detail should show missing captured criteria wording');
     assert(missingAcceptanceCriteriaSnapshotRunDetail.body.includes('Runs capture acceptance criteria at creation time; this run has no captured criteria'), 'run without acceptance criteria snapshot detail should explain creation-time capture');
-    assert(missingAcceptanceCriteriaSnapshotRunDetail.body.includes('Frozen at run creation for review'), 'run without acceptance criteria snapshot detail should state snapshot boundary');
+    assert(missingAcceptanceCriteriaSnapshotRunDetail.body.includes('Frozen at run creation and supplied to the agent'), 'run without acceptance criteria snapshot detail should state snapshot boundary');
     assert(runDetail.body.includes('Routing decision'), 'run detail should show routing decision section');
     assert(runDetail.body.includes('Routing reason'), 'run detail should show routing reason field');
     assert(runDetail.body.includes('Fallback used'), 'run detail should show fallback status field');

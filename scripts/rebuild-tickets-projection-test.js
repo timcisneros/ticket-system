@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Rebuild Tickets Projection Test — 7 scenarios proving events are authoritative.
+// Rebuild Tickets Projection Test — 6 scenarios proving events are authoritative.
 //
 // 1. Clean projection materially matches tickets.json
 // 2. tickets.json deleted → projection still reconstructs
@@ -7,13 +7,12 @@
 // 4. terminalized run updates ticket status
 // 5. interrupted/failed run updates ticket outcome
 // 6. multiple runs for one ticket derive latest run correctly
-// 7. legacy terminal events still supported
 
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const REBUILDER = path.join(ROOT, 'scripts', 'rebuild-tickets-projection.js');
@@ -33,19 +32,8 @@ function makeEvent(seq, type, payload = {}, ticketId = 1, runId = null) {
   return { type, runId, ticketId, seq, ts: new Date().toISOString(), payload };
 }
 
-function computeEventHash(event) {
-  const canonical = { type: event.type, ticketId: event.ticketId, runId: event.runId, stepId: event.stepId, payload: event.payload };
-  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
-}
-
 function buildHashChain(events) {
-  let prevHash = null;
-  for (const ev of events) {
-    ev.prevHash = prevHash;
-    ev.hash = computeEventHash(ev);
-    prevHash = ev.hash;
-  }
-  return events;
+  return sealCurrentRunEventChains(events);
 }
 
 function writeDataDir(dir, events, tickets = null, runs = [], opHistory = []) {
@@ -227,30 +215,6 @@ async function scenario6MultipleRuns() {
   return { name: 'multiple-runs', passed: true, detail: `runs=${tkt.totalRuns}, latest=${tkt.latestRunId}, status=${tkt.status}` };
 }
 
-async function scenario7LegacyTerminal() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rebuild-tkt-7-'));
-  const events = buildHashChain([
-    makeEvent(0, 'ticket.created', { status: 'open', assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', executionMode: 'agent', capabilityType: 'directAction', capabilityId: 'agent-selected-actions', createdBy: 'admin', createdAt: '2026-01-01T00:00:00Z' }),
-    makeEvent(1, 'ticket.updated', { status: 'in_progress', updatedAt: '2026-01-01T00:00:01Z' }),
-    makeEvent(2, 'run.created', { agentId: 1, agentName: 'TestAgent', status: 'pending', executionMode: 'agent', capabilityType: 'directAction', capabilityId: 'agent-selected-actions', ticketId: 1 }, 1, 1),
-    makeEvent(3, 'run.started', { status: 'running', agentId: 1, agentName: 'TestAgent', startedAt: '2026-01-01T00:00:02Z' }, 1, 1),
-    makeEvent(4, 'run.completed', { status: 'completed' }, 1, 1),
-    makeEvent(5, 'ticket.updated', { status: 'completed', updatedAt: '2026-01-01T00:00:03Z' })
-  ]);
-  const tickets = [{ id: 1, status: 'completed' }];
-  const runs = [{ id: 1, ticketId: 1, status: 'completed' }];
-  writeDataDir(dir, events, tickets, runs);
-  const report = await runProjection(dir, true);
-  const tkt = report.tickets[0];
-
-  assert(tkt.status === 'completed', `legacy run.completed should derive status=completed, got ${tkt.status}`);
-  assert(tkt.latestRunTerminalStatus === 'completed', `latestRunTerminalStatus should be completed, got ${tkt.latestRunTerminalStatus}`);
-  assert(tkt.totalCompletedRuns === 1, `totalCompletedRuns should be 1, got ${tkt.totalCompletedRuns}`);
-
-  fs.rmSync(dir, { recursive: true, force: true });
-  return { name: 'legacy-terminal', passed: true, detail: `status=${tkt.status}, latestRunStatus=${tkt.latestRunTerminalStatus}` };
-}
-
 // ── main ──────────────────────────────────────────────────────────
 
 async function main() {
@@ -270,8 +234,6 @@ async function main() {
   results.push(await scenario4TerminalizedRun());
   results.push(await scenario5FailedInterruptedRun());
   results.push(await scenario6MultipleRuns());
-  results.push(await scenario7LegacyTerminal());
-
   try { fs.rmSync(cleanFixture, { recursive: true, force: true }); } catch (_) {}
 
   console.log('\n' + '='.repeat(70));

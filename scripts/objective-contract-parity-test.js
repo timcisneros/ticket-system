@@ -100,9 +100,15 @@ for (const obj of deleteForms) {
   assert('empty objective → recognized false', c.recognized === false && c.intent === 'model_driven');
 }
 {
-  // multi-target / connective delete must NOT be treated as a simple delete
+  // Explicit multi-target deletes are deterministic and retain exact targets.
   const c = buildObjectiveContract('Delete CD and EF');
-  assert('"Delete CD and EF" is not a simple delete (recognized false)', c.recognized === false, JSON.stringify(c));
+  assert('"Delete CD and EF" is a deterministic exact-target delete',
+    c.recognized === true && c.intent === 'delete' &&
+    JSON.stringify(c.allowedMutations) === JSON.stringify([
+      { operation: 'deletePath', path: 'CD' },
+      { operation: 'deletePath', path: 'EF' }
+    ]),
+    JSON.stringify(c));
 }
 
 // ── source shape sanity ────────────────────────────────────────────

@@ -121,8 +121,8 @@
 <script>
 const ticketsBody = document.getElementById('tickets-body');
 const canUpdateTickets = <%= canUpdateTickets ? 'true' : 'false' %>;
-const ticketStatuses = <%- JSON.stringify(ticketStatuses) %>;
-const agents = <%- JSON.stringify(agents.map(agent => ({ id: agent.id, name: agent.name }))) %>;
+const ticketStatuses = <%- serializeForInlineScript(ticketStatuses) %>;
+const agents = <%- serializeForInlineScript(agents.map(agent => ({ id: agent.id, name: agent.name }))) %>;
 const ticketsApiUrl = '/api/tickets' + window.location.search;
 let liveTicketsConnected = false;
 let ticketLoadPending = false;

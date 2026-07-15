@@ -9,6 +9,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
@@ -130,7 +131,7 @@ function seed() {
   // A single run.created event makes run 800 safely resumable at startup (an
   // event-less pending run is interrupted instead). The scheduler then runs it.
   fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'),
-    JSON.stringify({ type: 'run.created', ticketId: 8, runId: 800, ts: T0, seq: 0, prevHash: null, payload: {} }) + '\n');
+    JSON.stringify(sealCurrentRunEventChains([{ type: 'run.created', ticketId: 8, runId: 800, ts: T0, payload: {} }])[0]) + '\n');
 }
 
 function waitForReady(timeoutMs = 12000) {

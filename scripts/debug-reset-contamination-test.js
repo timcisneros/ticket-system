@@ -4,6 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const STAMP = Date.now();
@@ -39,6 +40,10 @@ function readEvents() {
     .split('\n')
     .filter(line => line.trim())
     .map(line => JSON.parse(line));
+}
+
+function sealEventChain(events) {
+  return sealCurrentRunEventChains(events);
 }
 
 function seedData() {
@@ -164,7 +169,7 @@ function seedData() {
     error: null
   }]);
   writeJson('allocation-plans.json', [{ id: 1, ticketId: 1, mode: 'owned_paths', status: 'completed', items: [], createdAt: staleTs }]);
-  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), [
+  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), sealEventChain([
     {
       id: 'stale-run-created-' + STAMP,
       ts: staleTs,
@@ -184,7 +189,6 @@ function seedData() {
       runId: 1,
       stepId: '0',
       seq: 1,
-      prevHash: 'stale',
       payload: {
         operation: 'createFolder',
         path: 'D-' + STALE_MARKER,
@@ -195,15 +199,14 @@ function seedData() {
     {
       id: 'stale-terminal-' + STAMP,
       ts: staleTs,
-      type: 'run.completed',
+      type: 'run.terminalized',
       ticketId: 1,
       runId: 1,
       stepId: null,
       seq: 2,
-      prevHash: 'stale',
       payload: { status: 'completed', marker: STALE_MARKER }
     }
-  ].map(event => JSON.stringify(event)).join('\n') + '\n');
+  ]).map(event => JSON.stringify(event)).join('\n') + '\n');
   fs.writeFileSync(path.join(DATA_DIR, 'replay-snapshots', 'run-1.json'), JSON.stringify({
     runId: 1,
     ticketId: 1,
@@ -211,7 +214,7 @@ function seedData() {
     providerRequests: [{ marker: STALE_MARKER }],
     modelResponses: [{ marker: STALE_MARKER }],
     workspaceOperations: [{ operation: { operation: 'createFolder', args: { path: 'D-' + STALE_MARKER } } }],
-    events: [{ type: 'run.completed', marker: STALE_MARKER }]
+    events: [{ type: 'run.terminalized', marker: STALE_MARKER }]
   }, null, 2));
 }
 
@@ -372,13 +375,13 @@ async function main() {
     const logs = readJson('logs.json');
     const logText = JSON.stringify(logs);
     assert(!logText.includes(STALE_MARKER), 'Logs retained stale marker after reset');
-    assert(!logText.includes('run:skip_terminal'), 'New run triggered legacy terminal skip from stale events');
+    assert(!logText.includes('run:skip_terminal'), 'New run triggered terminal skip from stale events');
     assert(!logText.includes('stale-owner-' + STAMP), 'New run retained stale lease owner message');
 
     const events = readEvents();
     const eventText = JSON.stringify(events);
     assert(!eventText.includes(STALE_MARKER), 'events.jsonl contains stale run events after reset and new run');
-    assert(!events.some(event => event.type === 'run.completed' && event.payload && event.payload.marker === STALE_MARKER), 'Stale terminal event survived reset');
+    assert(!events.some(event => event.type === 'run.terminalized' && event.payload && event.payload.marker === STALE_MARKER), 'Stale terminal event survived reset');
     assert(!events.some(event => event.type === 'workspace.operation' && event.payload && String(event.payload.path || '').includes(STALE_MARKER)), 'Stale workspace mutation survived reset');
 
     const runEventsResponse = await request('GET', '/api/runs/1/events', { cookie });

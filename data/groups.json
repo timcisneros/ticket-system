@@ -16,6 +16,7 @@
       "group:update",
       "group:delete",
       "permission:assign",
+      "workflow:manage",
       "workspace:read",
       "workspace:write",
       "workspace:reset",

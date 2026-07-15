@@ -1,60 +1,121 @@
-// Focused regression: /api/health must report the live, selected runtime
-// data/workspace paths (DATA_DIR / workspaceProvider.root), not hardcoded
-// literals. Display/observability only — does not exercise store/workspace
-// mutation behavior.
+#!/usr/bin/env node
+'use strict';
+
+// Public health is intentionally minimal. Detailed live data/workspace identity
+// remains available to authenticated operators and the oquery divergence check.
+
 const { spawn } = require('child_process');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
-const http = require('http');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'health-data-'));
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'health-ws-'));
 const PORT = process.env.PORT || '3571';
 const BASE = `http://127.0.0.1:${PORT}`;
-// Server resolves both paths with path.resolve(); compare against the same.
-const EXPECT_DATA_DIR = path.resolve(DATA_DIR);
-const EXPECT_WORKSPACE_ROOT = path.resolve(WORKSPACE_ROOT);
 
-function req(method, p) {
-  return new Promise((res, rej) => {
-    const r = http.request(`${BASE}${p}`, { method }, resp => { const c = []; resp.on('data', d => c.push(d)); resp.on('end', () => res({ status: resp.statusCode, body: Buffer.concat(c).toString('utf8') })); });
-    r.on('error', rej); r.end();
+function request(method, route, options = {}) {
+  const body = options.form ? new URLSearchParams(options.form).toString() : null;
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${BASE}${route}`, {
+      method,
+      headers: {
+        ...(options.cookie ? { Cookie: options.cookie } : {}),
+        ...(body ? {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': Buffer.byteLength(body)
+        } : {})
+      }
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => resolve({
+        status: response.statusCode,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString('utf8')
+      }));
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
   });
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
-(async () => {
-  const server = spawn(process.execPath, ['server.js'], { cwd: ROOT, env: { ...process.env, NODE_ENV: 'test', PORT, DATA_DIR, WORKSPACE_ROOT }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let err = ''; server.stderr.on('data', d => err += d);
-  let pass = 0, fail = 0;
-  const ok = (n, c) => c ? (pass++, console.log('  ✓ ' + n)) : (fail++, console.log('  ✗ FAIL: ' + n));
+function cookieFrom(response) {
+  return (response.headers['set-cookie'] || []).map(cookie => cookie.split(';')[0]).join('; ');
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function waitForReady() {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await request('GET', '/health');
+      if (response.status === 200 && JSON.parse(response.body).ready) return;
+    } catch (_) {
+      // Server is still starting.
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('Timed out waiting for server readiness');
+}
+
+function waitForExit(child) {
+  return new Promise(resolve => {
+    if (child.exitCode !== null) return resolve();
+    child.once('exit', resolve);
+  });
+}
+
+async function main() {
+  const server = spawn(process.execPath, ['server.js'], {
+    cwd: ROOT,
+    env: { ...process.env, NODE_ENV: 'test', PORT, DATA_DIR, WORKSPACE_ROOT },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let output = '';
+  server.stdout.on('data', chunk => { output += String(chunk); });
+  server.stderr.on('data', chunk => { output += String(chunk); });
+
   try {
-    let ready = false;
-    for (let i = 0; i < 150; i++) { try { const h = await req('GET', '/health'); if (h.status === 200 && JSON.parse(h.body).ready) { ready = true; break; } } catch {} await sleep(100); }
-    ok('server boots', ready); if (!ready) { console.log(err.slice(0, 400)); throw new Error('not ready'); }
+    await waitForReady();
+    const publicHealth = await request('GET', '/api/health');
+    assert(publicHealth.status === 200, `/api/health returned HTTP ${publicHealth.status}`);
+    const health = JSON.parse(publicHealth.body);
+    assert(health.status === 'ok' && health.ready === true, 'public health did not report ready');
+    assert(typeof health.uptime === 'number', 'public health omitted numeric uptime');
+    assert(!Object.hasOwn(health, 'dataDir') && !Object.hasOwn(health, 'workspaceRoot') && !Object.hasOwn(health, 'port'), 'public health leaked runtime paths or port');
 
-    const res = await req('GET', '/api/health');
-    ok('/api/health returns 200', res.status === 200);
-    const body = JSON.parse(res.body);
+    const anonymousIdentity = await request('GET', '/api/runtime/identity');
+    assert(anonymousIdentity.status === 302, `anonymous runtime identity returned HTTP ${anonymousIdentity.status}`);
 
-    ok('status is ok', body.status === 'ok');
-    ok('port matches selected PORT', String(body.port) === String(PORT));
-    ok('dataDir reports the selected DATA_DIR (not "data")', body.dataDir === EXPECT_DATA_DIR && body.dataDir !== 'data');
-    ok('workspaceRoot reports the selected WORKSPACE_ROOT (not "workspace-root")', body.workspaceRoot === EXPECT_WORKSPACE_ROOT && body.workspaceRoot !== 'workspace-root');
-    ok('uptime field preserved (number)', typeof body.uptime === 'number');
+    const login = await request('POST', '/login', { form: { username: 'admin', password: 'admin123' } });
+    assert(login.status === 302, `admin login returned HTTP ${login.status}`);
+    const identityResponse = await request('GET', '/api/runtime/identity', { cookie: cookieFrom(login) });
+    assert(identityResponse.status === 200, `authenticated runtime identity returned HTTP ${identityResponse.status}`);
+    const identity = JSON.parse(identityResponse.body);
+    assert(identity.dataDir === path.resolve(DATA_DIR), 'authenticated identity did not report selected DATA_DIR');
+    assert(identity.workspaceRoot === path.resolve(WORKSPACE_ROOT), 'authenticated identity did not report selected WORKSPACE_ROOT');
+    assert(String(identity.port) === String(PORT), 'authenticated identity did not report selected port');
+    assert(publicHealth.headers['x-content-type-options'] === 'nosniff', 'security headers were not applied to public health');
 
-    console.log('\n' + (fail === 0 ? 'PASS' : 'FAIL') + ': health live store paths (' + pass + ' passed, ' + fail + ' failed)');
-  } catch (e) {
-    console.error('ERROR', e.stack || e.message);
-    fail++;
+    console.log('PASS: public health is minimal and authenticated runtime identity preserves live-path diagnostics');
+  } catch (error) {
+    console.error(error.stack || error.message);
+    console.error(output.slice(-2000));
+    process.exitCode = 1;
   } finally {
-    server.kill();
-    await sleep(200);
+    server.kill('SIGTERM');
+    await Promise.race([waitForExit(server), new Promise(resolve => setTimeout(resolve, 3000))]);
+    if (server.exitCode === null) server.kill('SIGKILL');
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(WORKSPACE_ROOT, { recursive: true, force: true });
-    process.exit(fail ? 1 : 0);
   }
-})();
+}
+
+main();

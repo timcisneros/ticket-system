@@ -7,7 +7,7 @@ swallowed.
 
 ## What it is
 
-- `node --check server.js` (syntax/load) followed by an ordered list of deterministic test scripts
+- A project-wide JavaScript syntax build followed by an ordered list of deterministic test scripts
   (`CHECKPOINT_TEST_SCRIPTS`, exported from `release-checkpoint.js`).
 - Before running, it **verifies every referenced test script exists on disk** and fails loudly if
   any is missing — an omission can never be silently skipped.
@@ -23,6 +23,8 @@ Context primitive & visibility; agent handoff protocol & handoff smoke loop; bou
 provider routing; local connector contract; operational transparency; page-render regression; plus
 the older substrate regressions (feasibility gate, moving-goalpost, postcondition completeness,
 timeout attribution, evidence clarity, phase-contract alignment, objective-contract parity, etc.).
+It also covers fail-closed startup data validation, RBAC/inline-data security, event-chain tamper and
+restart continuity, internal-demo request/session hardening, and the opt-in objective compiler boundary.
 
 The **coverage guard** (`scripts/release-checkpoint-coverage-test.js`) is itself a checkpoint test:
 it asserts — without running the suite — that the checkpoint list is honest (every entry exists, no

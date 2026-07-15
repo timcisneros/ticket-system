@@ -1,0 +1,9 @@
+{
+  "maxExecutionSteps": null,
+  "maxModelRequestsPerRun": null,
+  "maxWorkspaceOperationsPerRun": null,
+  "maxRuntimeDurationMs": null,
+  "localModelConcurrency": null,
+  "updatedBy": null,
+  "updatedAt": null
+}

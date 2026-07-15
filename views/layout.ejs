@@ -63,15 +63,17 @@
             </ul>
           </li>
           <% } %>
-          <% if (userPermissions.includes('user:read') || userPermissions.includes('runtimeLimits:manage')) { %>
+          <% if (userPermissions.includes('user:read') || userPermissions.includes('workflow:manage') || userPermissions.includes('runtimeLimits:manage')) { %>
           <li class="dropdown">
             <a class="dropdown-toggle">Admin</a>
             <ul class="dropdown-menu">
               <% if (userPermissions.includes('user:read')) { %>
                 <li><a href="/admin">Dashboard</a></li>
-                <li><a href="/admin/workflows">Workflows</a></li>
                 <li><a href="/admin/actions">Actions</a></li>
                 <li><a href="/admin/browser-targets">Browser Targets</a></li>
+              <% } %>
+              <% if (userPermissions.includes('workflow:manage')) { %>
+                <li><a href="/admin/workflows">Workflows</a></li>
               <% } %>
               <% if (userPermissions.includes('runtimeLimits:manage')) { %>
                 <li><a href="/admin/runtime-limits">Runtime Limits</a></li>
@@ -82,7 +84,11 @@
           <% if (userPermissions.includes('workspace:read')) { %>
             <li><a href="/workspace">Workspace</a></li>
           <% } %>
-          <li><a href="/logout">Logout</a></li>
+          <li>
+            <form method="post" action="/logout" style="display:inline">
+              <button type="submit" class="nav-link-button">Logout</button>
+            </form>
+          </li>
         <% } else { %>
           <li><a href="/login">Login</a></li>
         <% } %>

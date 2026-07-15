@@ -55,8 +55,8 @@ function seedAgent() {
   return agent;
 }
 
-async function createTicket(cookie, agent, objective) {
-  const r = await request('POST', '/tickets', { cookie, form: { objective, assignmentTargetType: 'agent', assignmentTargetId: String(agent.id) } });
+async function createTicket(cookie, agent, objective, acceptanceCriteria) {
+  const r = await request('POST', '/tickets', { cookie, form: { objective, acceptanceCriteria, assignmentTargetType: 'agent', assignmentTargetId: String(agent.id) } });
   if (r.statusCode !== 302) throw new Error('ticket create failed ' + r.statusCode + ': ' + r.body);
   return readJson('tickets.json').find(t => t.objective === objective);
 }
@@ -91,7 +91,7 @@ global.fetch = async function(url, options = {}){
   const initialNames = ctx && ctx.initialWorkspaceSnapshot ? (ctx.initialWorkspaceSnapshot.entries || []).map(e => e.name) : [];
   const currentNames = ctx && ctx.currentWorkspaceSnapshot ? (ctx.currentWorkspaceSnapshot.entries || []).map(e => e.name) : [];
   const mutationPaths = ctx && ctx.mutationsByThisRun ? ctx.mutationsByThisRun.map(m => m.path) : [];
-  captures.push({ callCount, initial: initialNames, current: currentNames, mutations: mutationPaths, anchor: combined.includes('Do not treat files or folders created by this run'), completionDiscipline: combined.includes('Do not continue creating additional files or folders merely because the live workspace has changed') });
+  captures.push({ callCount, initial: initialNames, current: currentNames, mutations: mutationPaths, acceptanceCriteria: ctx && ctx.acceptanceCriteria, anchor: combined.includes('Do not treat files or folders created by this run'), completionDiscipline: combined.includes('Do not continue creating additional files or folders merely because the live workspace has changed'), criteriaDiscipline: combined.includes('If acceptanceCriteria is present in the ticket context') });
   fs.writeFileSync(captureFile, JSON.stringify(captures, null, 2));
 
   const letters = initialNames.filter(n => /^[A-Z]$/.test(n));
@@ -123,7 +123,8 @@ async function main() {
     const cookie = await login();
 
     const objective = 'Create folders with the 3 next letters of the alphabet from the ones that are currently there';
-    const ticket = await createTicket(cookie, agent, objective);
+    const acceptanceCriteria = 'Folders E, F, and G exist and no later alphabet folders are created.';
+    const ticket = await createTicket(cookie, agent, objective, acceptanceCriteria);
     const run = await waitForRunTerminal(ticket.id);
 
     // --- Behavioral outcome ---
@@ -142,6 +143,8 @@ async function main() {
     ok('model was called more than once (multi-step run)', caps.length >= 2);
     ok('every prompt carried the anchoring instruction', caps.every(c => c.anchor));
     ok('every prompt carried the completion-discipline instruction', caps.every(c => c.completionDiscipline));
+    ok('every prompt carried the frozen acceptance criteria', caps.every(c => c.acceptanceCriteria === acceptanceCriteria));
+    ok('every prompt carried acceptance-criteria completion discipline', caps.every(c => c.criteriaDiscipline));
     ok('initial snapshot is A/B/C/D on first call', JSON.stringify([...caps[0].initial].sort()) === JSON.stringify(['A','B','C','D']));
     ok('initial snapshot stays A/B/C/D on EVERY call (never absorbs E/F/G)', caps.every(c => JSON.stringify([...c.initial].sort()) === JSON.stringify(['A','B','C','D'])));
 

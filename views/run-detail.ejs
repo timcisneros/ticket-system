@@ -63,7 +63,7 @@
     <p class="text-muted">No acceptance criteria were captured for this run.</p>
     <p class="text-muted">Runs capture acceptance criteria at creation time; this run has no captured criteria.</p>
   <% } %>
-  <p class="text-muted">Frozen at run creation for review; not automatically verified.</p>
+  <p class="text-muted">Frozen at run creation and supplied to the agent as part of the requested outcome; arbitrary prose criteria are not automatically verified.</p>
 </section>
 
 <% if (typeof completionSummary !== 'undefined' && completionSummary) { %>
@@ -327,6 +327,9 @@
         </li>
       <% }) %>
     </ul>
+  <% } %>
+  <% if (run.verificationContractSnapshot && run.verificationContractSnapshot.verifierContract) { %>
+    <p class="text-muted"><strong>Fixture verifier not executed:</strong> <code><%= run.verificationContractSnapshot.verifierContract.id || 'unnamed' %></code> is offline benchmark metadata. Runtime completion is based only on the deterministic postconditions shown above.</p>
   <% } %>
 </section>
 
@@ -1349,7 +1352,7 @@
 <script>
 (() => {
   const runId = <%= JSON.stringify(run.id) %>;
-  let currentStatus = <%- JSON.stringify(run.status || '') %>;
+  let currentStatus = <%- serializeForInlineScript(run.status || '') %>;
   let terminalReloaded = false;
   let elapsedInterval = null;
   let eventSource = null;

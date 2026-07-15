@@ -2,8 +2,8 @@
 // Model/provider routing (r1.28). Dispatch policy + immutable per-run routingSnapshot. Routing
 // records WHICH provider/model a run dispatched to; it never changes actual execution (the agent's
 // own provider/model stays the backend), never widens authority, never bypasses target/scheduler/
-// verification/triage. Proves: policy CRUD is inert; new runs get a snapshot; legacy runs render
-// safely without one; selection is deterministic (explicit > wc+cap > wc > cap > default > none);
+// verification/triage. Proves: policy CRUD is inert; every new run gets a snapshot; selection is
+// deterministic (explicit > wc+cap > wc > cap > default > none);
 // provider restriction is enforced (refuse→triage, fallback only when explicitly allowed); and
 // handoff/watcher-created tickets still route normally.
 
@@ -55,11 +55,6 @@ function ws() { return JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()); }
 function ctx(id, name, status) {
   return { id, name, purpose: name, status, defaultTargetId: null, defaultAuthorityProfileId: null, allowedTargetIds: [], allowedCapabilities: [], allowedProcessTemplateIds: [], defaultVerificationProfile: null, memoryPolicy: { mode: 'none' }, visibilityPolicy: { mode: 'participants' }, participants: [], ticketQueueFilter: {}, triageQueueFilter: {}, scheduleFilter: {}, createdAt: ISO, updatedAt: ISO };
 }
-// A legacy completed run with NO routingSnapshot (must still render).
-function legacyRun(id, ticketId) {
-  return { id, ticketId, agentId: 1, agentName: 'A', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main', executionMode: 'agent', capabilityType: 'directAction', capabilityId: 'agent-selected-actions', executionPolicySnapshot: { requireVerification: 'when_declared' }, currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null, status: 'completed', createdAt: ISO, updatedAt: ISO, startedAt: ISO, completedAt: ISO, replaySnapshotPath: `replay-snapshots/run-${id}.json` };
-}
-
 function seed() {
   fs.mkdirSync(path.join(DATA_DIR, 'replay-snapshots'), { recursive: true });
   writeJson('users.json', [{ id: 1, username: 'admin', passwordHash: ADMIN_HASH, createdAt: ISO, type: 'user' }, { id: 2, username: 'viewer', passwordHash: ADMIN_HASH, createdAt: ISO, type: 'user' }]);
@@ -73,10 +68,8 @@ function seed() {
   writeJson('agents.json', [{ id: 1, name: 'A', type: 'agent', provider: 'openai', model: 'gpt-test', apiKey: 'k', createdAt: ISO, updatedAt: ISO }]);
   writeJson('workflows.json', []); writeJson('allocation-plans.json', []); writeJson('operation-history.json', []); writeJson('logs.json', []);
   writeJson('work-contexts.json', [ctx(1, 'Legal Ops', 'active'), ctx(2, 'Archived', 'archived')]);
-  // Legacy ticket+run with no routingSnapshot.
-  writeJson('tickets.json', [{ id: 5, objective: 'legacy', assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', ownedOutputPaths: null, executionMode: 'agent', workflowId: null, capabilityType: 'directAction', capabilityId: 'agent-selected-actions', executionPolicy: { maxAttempts: null }, status: 'completed', createdBy: 'admin', changedBy: 'admin', changedAt: ISO, createdAt: ISO, updatedAt: ISO }]);
-  writeJson('runs.json', [legacyRun(50, 5)]);
-  fs.writeFileSync(path.join(DATA_DIR, 'replay-snapshots', 'run-50.json'), JSON.stringify({ runId: 50, providerRequests: [], modelResponses: [], workspaceOperations: [], events: [] }, null, 2));
+  writeJson('tickets.json', []);
+  writeJson('runs.json', []);
   writeJson('process-templates.json', []); writeJson('process-template-triggers.json', []); writeJson('process-template-versions.json', []);
   writeJson('watchers.json', []); writeJson('watcher-observations.json', []); writeJson('watcher-ticket-proposals.json', []);
   writeJson('model-routing-policies.json', []);
@@ -112,7 +105,6 @@ async function main() {
     const filesBefore = dataFiles();
     const wsBefore = ws();
     const runsBefore = readRaw('runs.json');
-    const legacyTicketBefore = JSON.stringify(tickets().find(t => t.id === 5));
 
     // ---- 1: policy CRUD creates no ticket/run/workspace mutation; permission enforced. ----
     assert((await request('GET', '/api/model-routing-policies', { cookie: viewer })).statusCode === 403, 'routing management requires modelRouting:manage');
@@ -129,13 +121,7 @@ async function main() {
     assert(r1.routingSnapshot.selectedProvider === 'openai' && r1.routingSnapshot.selectedModel === 'gpt-test', 'snapshot records the agent provider/model (execution unchanged)');
     assert(r1.routingSnapshot.policyId === 1 && r1.routingSnapshot.reason === 'policy_preferred' && r1.routingSnapshot.fallbackUsed === false, 'unrestricted default policy → policy_preferred, no fallback');
 
-    // ---- 3: legacy run renders safely without a routingSnapshot. ----
-    const legacyRunNow = runs().find(r => r.id === 50);
-    assert(legacyRunNow && legacyRunNow.routingSnapshot === undefined, 'legacy run has no routingSnapshot');
-    const tlLegacy = await request('GET', '/api/tickets/5/timeline', { cookie: admin });
-    assert(tlLegacy.statusCode === 200 && !tlLegacy.json.entries.some(e => e.type === 'run.routing'), 'legacy ticket timeline renders with no routing entry');
-
-    // ---- 4: provider restriction enforced — disallowed provider with no fallback refuses into triage. ----
+    // ---- 3: provider restriction enforced — disallowed provider with no fallback refuses into triage. ----
     await request('POST', '/api/model-routing-policies/1', { cookie: admin, json: { allowedProviders: ['anthropic'] } }); // openai now disallowed
     const refusedRes = await createTicket(admin, { objective: 'should refuse, provider not allowed' });
     assert(refusedRes.statusCode === 302, 'ticket object still created');
@@ -178,7 +164,6 @@ async function main() {
     assert(tickets().find(t => t.id === tSpec).executionPolicy && tickets().find(t => t.id === tSpec).executionPolicy.allowChildTickets !== true, 'routing does not widen authority');
     assert(readRaw('process-templates.json') === '[]' && readRaw('process-template-triggers.json') === '[]' && readRaw('process-template-versions.json') === '[]', 'no scheduler/process-template/version data changed');
     assert(dataFiles() === filesBefore, 'no unexpected data files created (routing uses the declared store only)');
-    assert(JSON.stringify(tickets().find(t => t.id === 5)) === legacyTicketBefore && runs().find(r => r.id === 50).routingSnapshot === undefined, 'legacy ticket/run not rewritten');
     assert(ws() === wsBefore, 'no workspace mutation across the routing loop');
 
     // ---- 9: handoff-created and watcher-approved tickets still route normally. ----

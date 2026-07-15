@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Rebuild Runs Projection Test — 7 scenarios proving events are authoritative.
+// Rebuild Runs Projection Test — 6 scenarios proving events are authoritative.
 //
 // 1. Clean projection matches runs.json materially
 // 2. runs.json deleted → projection still reconstructs
@@ -7,13 +7,12 @@
 // 4. terminalized event present → status derived from event
 // 5. execution_completed without terminalized → reconcilable
 // 6. snapshot_finalized without terminalized → not final
-// 7. legacy terminal events still supported
 
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const REBUILDER = path.join(ROOT, 'scripts', 'rebuild-runs-projection.js');
@@ -33,19 +32,8 @@ function makeEvent(seq, type, payload = {}) {
   return { type, runId: 1, ticketId: 1, seq, ts: new Date().toISOString(), payload };
 }
 
-function computeEventHash(event) {
-  const canonical = { type: event.type, ticketId: event.ticketId, runId: event.runId, stepId: event.stepId, payload: event.payload };
-  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
-}
-
 function buildHashChain(events) {
-  let prevHash = null;
-  for (const ev of events) {
-    ev.prevHash = prevHash;
-    ev.hash = computeEventHash(ev);
-    prevHash = ev.hash;
-  }
-  return events;
+  return sealCurrentRunEventChains(events);
 }
 
 function writeDataDir(dir, events, runs = null, opHistory = []) {
@@ -206,27 +194,6 @@ async function scenario6SnapshotFinalizedNotTerminal() {
   return { name: 'snapshot-not-terminal', passed: true, detail: `status=${run.status}, phase=${run.lifecyclePhase}` };
 }
 
-async function scenario7LegacyTerminal() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rebuild-proj-7-'));
-  const events = buildHashChain([
-    makeEvent(0, 'run.created', { agentId: 1, agentName: 'TestAgent' }),
-    makeEvent(1, 'run.started', { status: 'running', agentId: 1, agentName: 'TestAgent', startedAt: '2026-01-01T00:00:00Z' }),
-    makeEvent(2, 'run.completed', { status: 'completed' })
-  ]);
-  const runs = [{ id: 1, ticketId: 1, status: 'completed' }];
-  writeDataDir(dir, events, runs);
-  const report = await runProjection(dir, false);
-  const run = report.runs[0];
-
-  assert(run.status === 'completed', `legacy run.completed should derive status=completed, got ${run.status}`);
-  assert(run.lifecyclePhase === 'legacy_terminal', `phase should be legacy_terminal, got ${run.lifecyclePhase}`);
-  assert(run.terminalizedStatus === 'completed', `terminalizedStatus should be completed, got ${run.terminalizedStatus}`);
-  assert(run.isReconcilable === false, 'legacy terminal should not be reconcilable');
-
-  fs.rmSync(dir, { recursive: true, force: true });
-  return { name: 'legacy-terminal', passed: true, detail: `status=${run.status}, phase=${run.lifecyclePhase}` };
-}
-
 // ── main ──────────────────────────────────────────────────────────
 
 async function main() {
@@ -249,8 +216,6 @@ async function main() {
   results.push(await scenario4TerminalizedEvent());
   results.push(await scenario5ExecutionCompletedNotTerminal());
   results.push(await scenario6SnapshotFinalizedNotTerminal());
-  results.push(await scenario7LegacyTerminal());
-
   try { fs.rmSync(cleanFixture, { recursive: true, force: true }); } catch (_) {}
 
   console.log('\n' + '='.repeat(70));

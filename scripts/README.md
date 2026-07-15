@@ -62,7 +62,7 @@ The runner executes this concise targeted set rather than every historical
 investigation harness:
 
 ```sh
-node --check server.js
+npm run build
 
 NODE_PATH=./node_modules node scripts/catalog-consistency-test.js
 NODE_PATH=./node_modules node scripts/page-render-regression-test.js

@@ -89,15 +89,28 @@ function seed() {
   writeJson('tickets.json', [{
     id: 101, objective: 'prior', assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', ownedOutputPaths: null,
     executionMode: 'agent', workflowId: null, workflowInput: null, capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
-    executionPolicy: { mode: 'assisted', requireVerification: 'when_declared', maxAttempts: null, allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared' },
+    executionPolicy: {
+      mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+      maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
+      allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
+    },
+    workTypeSnapshot: null, workTypeId: null, triage: null,
     status: 'completed', createdBy: 'system', changedBy: 'system', changedAt: ISO, createdAt: ISO, updatedAt: ISO,
     source: { type: 'process_template', templateId: 1, templateName: 'Disable target', triggeredBy: 'admin', triggerType: 'manual', triggerRunId: null, triggerToken: 'prior-101', createdAt: ISO }
   }]);
   writeJson('runs.json', [{
     id: 9101, ticketId: 101, agentId: 1, agentName: 'A', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
-    allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [], executionMode: 'agent', workflowId: null, workflowInput: null,
-    capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null, executionPolicySnapshot: { requireVerification: 'when_declared' },
+    allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [], allocationSubtask: null,
+    executionMode: 'agent', workflowId: null, workflowInput: null,
+    capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
+    executionPolicySnapshot: {
+      mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+      maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
+      allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
+    },
+    runtimeLimitsSnapshot: null, verificationContractSnapshot: null, workTypeSnapshot: null, workTypeId: null,
     currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null, currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
+    runEvaluation: null, runConsequence: null, triage: null, replaySnapshotPath: null, replaySummary: null,
     status: 'completed', createdAt: ISO, updatedAt: ISO, startedAt: ISO, completedAt: ISO
   }]);
   writeJson('process-template-triggers.json', [{ triggerToken: 'prior-101', templateId: 1, ticketId: 101, triggeredBy: 'admin', triggerType: 'manual', createdAt: ISO }]);

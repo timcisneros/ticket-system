@@ -67,17 +67,14 @@ refusal; watcher refusal/failure; verification failure; ambiguous objective; and
 process-template version consistency. Each records evidence and waits for a human where judgment is
 needed.
 
-## 11. What "release candidate" means
+## 11. What the current audit means
 
-The substrate is internally coherent, bounded, and test-covered (release checkpoint 43/43), with no
-P0/P1 blockers (`docs/RELEASE_CANDIDATE_AUDIT.md`). It is ready for **release documentation** — it is
-not yet a final `v1.0` tag and is not a production-readiness claim.
+The substrate is internally coherent, bounded, and test-covered (release checkpoint 50/50). The
+audit applies to the internal-demo boundary; it is not a production-readiness or semantic
+correctness claim. See `docs/SYSTEM_AUDIT_2026-07-15.md`.
 
-## 12. What a v1.0 tag will mean
+## 12. What a version tag does not mean
 
-A future `v1.0` tag (not created here) will mean the release documentation is complete and the
-maintainers have made an explicit decision that the bounded substrate, its safety boundaries, and its
-known limitations are accurately documented and acceptable for the intended use. It will **not** by
-itself imply real external connectors, production hosting, multi-tenant security hardening, or
-autonomous operation — those remain explicit non-goals until separately designed, implemented, and
-audited.
+A version tag identifies a tested code baseline. It does **not** by itself imply real external
+connectors, public hosting, multi-tenant isolation, semantic correctness, or autonomous operation —
+those remain explicit non-goals until separately designed, implemented, and audited.

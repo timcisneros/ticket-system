@@ -7,13 +7,12 @@
 // 3. run.evaluation_completed without run.terminalized → isTerminal=false
 // 4. run.consequence_recorded without run.terminalized → isTerminal=false
 // 5. run.terminalized → isTerminal=true, safeToResume=false
-// 6. Legacy run.completed → isTerminal=true (backward compat)
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const ANALYZER = path.join(ROOT, 'scripts', 'resume-analyzer.js');
@@ -22,21 +21,6 @@ const ANALYZER = path.join(ROOT, 'scripts', 'resume-analyzer.js');
 
 function makeEvent(seq, type, payload = {}) {
   return { type, runId: 1, ticketId: 1, seq, ts: new Date().toISOString(), payload };
-}
-
-function computeEventHash(event) {
-  const canonical = { type: event.type, ticketId: event.ticketId, runId: event.runId, stepId: event.stepId, payload: event.payload };
-  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
-}
-
-function buildHashChain(events) {
-  let prevHash = null;
-  for (const ev of events) {
-    ev.prevHash = prevHash;
-    ev.hash = computeEventHash(ev);
-    prevHash = ev.hash;
-  }
-  return events;
 }
 
 function writeDataDir(dir, events) {
@@ -74,7 +58,7 @@ function assert(value, msg) {
 async function testCase(name, events, checks) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `lifecycle-inv-${name}-`));
   try {
-    writeDataDir(dir, buildHashChain(events));
+    writeDataDir(dir, sealCurrentRunEventChains(events));
     const report = await runAnalyzer(dir, 1);
     const analysis = report.analyses && report.analyses[0];
     if (!analysis) throw new Error(`${name}: no analysis returned`);
@@ -179,15 +163,6 @@ async function main() {
       ['isTerminal', true, 'isTerminal'],
       ['safeToResume', false, 'safeToResume (terminal)'],
       ['hasExecutionCompleted', true, 'hasExecutionCompleted']
-    ]
-  ));
-
-  // ── Invariant 6: Legacy run.completed → isTerminal=true ──
-  results.push(await testCase('legacy_completed_is_terminal',
-    [...starter, makeEvent(2, 'run.completed')],
-    [
-      ['isTerminal', true, 'isTerminal (legacy)'],
-      ['safeToResume', false, 'safeToResume (legacy terminal)']
     ]
   ));
 

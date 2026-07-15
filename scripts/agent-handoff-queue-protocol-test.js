@@ -13,6 +13,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
@@ -57,15 +58,29 @@ function ws() { return JSON.stringify(fs.readdirSync(WORKSPACE_ROOT).sort()); }
 function baseTicket(id, objective, extra) {
   return { id, objective, assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', ownedOutputPaths: null,
     executionMode: 'agent', workflowId: null, workflowInput: null, capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
-    executionPolicy: { maxAttempts: null }, status: 'completed', createdBy: 'admin', changedBy: 'admin', changedAt: ISO, createdAt: ISO, updatedAt: ISO, ...extra };
+    executionPolicy: {
+      mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+      maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
+      allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
+    },
+    workTypeSnapshot: null, workTypeId: null, triage: null,
+    status: 'completed', createdBy: 'admin', changedBy: 'admin', changedAt: ISO, createdAt: ISO, updatedAt: ISO, ...extra };
 }
 // A CLAIMED, terminal run with rich evidence (lease + triage + replay with secret content/provider body).
 function claimedRun(id, ticketId, extra) {
   return { id, ticketId, agentId: 1, agentName: 'Planner', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
-    allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [], executionMode: 'agent', workflowId: null, workflowInput: null,
-    capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null, executionPolicySnapshot: { requireVerification: 'when_declared' },
+    allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [], allocationSubtask: null,
+    executionMode: 'agent', workflowId: null, workflowInput: null,
+    capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
+    executionPolicySnapshot: {
+      mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+      maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
+      allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
+    },
+    runtimeLimitsSnapshot: null, verificationContractSnapshot: null, workTypeSnapshot: null, workTypeId: null,
     currentPhase: 'terminalization', leaseOwner: 'proc-test-owner', leaseExpiresAt: '2030-01-01T00:00:00.000Z', currentStepId: null, currentWorkflowAction: null,
-    lastHeartbeatAt: ISO, status: 'completed', createdAt: ISO, updatedAt: ISO, startedAt: ISO, completedAt: ISO, replaySnapshotPath: `replay-snapshots/run-${id}.json`,
+    lastHeartbeatAt: ISO, status: 'completed', createdAt: ISO, updatedAt: ISO, startedAt: ISO, completedAt: ISO,
+    replaySnapshotPath: `replay-snapshots/run-${id}.json`, replaySummary: null, runConsequence: null, triage: null,
     runEvaluation: { effectiveness: { status: 'passed', postconditionsPassed: 1, postconditionsFailed: 0, errors: [] }, efficiency: { durationMs: 100, providerRequests: 1, modelResponses: 1, workspaceOperations: 1, mutationCount: 1, retryCount: 0 }, violations: { status: 'none', items: [] } }, ...extra };
 }
 
@@ -108,8 +123,8 @@ function seed() {
   }, null, 2));
   writeJson('process-template-triggers.json', []); writeJson('process-templates.json', []); writeJson('process-template-versions.json', []);
   // Seed a lease_acquired event so the timeline shows the claim (mirrors live acquireRunLease shape).
-  const ev = { id: 'ev-claim-100', ts: ISO, type: 'run.lease_acquired', ticketId: 10, runId: 100, seq: 1, payload: { leaseOwner: 'proc-test-owner', leaseExpiresAt: '2030-01-01T00:00:00.000Z', claimReceipt: { receiptKind: 'claim_receipt', ticketId: 10, runId: 100 } } };
-  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), JSON.stringify(ev) + '\n');
+  const ev = { id: 'ev-claim-100', ts: ISO, type: 'run.lease_acquired', ticketId: 10, runId: 100, stepId: null, seq: 0, prevHash: null, payload: { leaseOwner: 'proc-test-owner', leaseExpiresAt: '2030-01-01T00:00:00.000Z', claimReceipt: { receiptKind: 'claim_receipt', ticketId: 10, runId: 100 } } };
+  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), JSON.stringify(sealCurrentRunEventChains([ev])[0]) + '\n');
 }
 
 function waitForReady(timeoutMs = 12000) {

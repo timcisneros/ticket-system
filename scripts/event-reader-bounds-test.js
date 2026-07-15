@@ -42,7 +42,7 @@ function buildLargeLog() {
   // Run 7 (ticket 70): two run-scoped events + one ticket-scoped null-runId event.
   events.push({ id: 'r7-a', ts: stamp(n++), type: 'run.started', ticketId: 70, runId: 7, stepId: null, payload: { status: 'started' } });
   events.push({ id: 'r7-t', ts: stamp(n++), type: 'ticket.note', ticketId: 70, runId: null, stepId: null, payload: {} });
-  events.push({ id: 'r7-b', ts: stamp(n++), type: 'run.completed', ticketId: 70, runId: 7, stepId: null, payload: { status: 'completed' } });
+  events.push({ id: 'r7-b', ts: stamp(n++), type: 'run.terminalized', ticketId: 70, runId: 7, stepId: null, payload: { status: 'completed' } });
   // Run 8 (ticket 80): must never leak into run 7 lookups.
   events.push({ id: 'r8-a', ts: stamp(n++), type: 'run.started', ticketId: 80, runId: 8, stepId: null, payload: { status: 'started' } });
   // Run 70: its line contains the substring "runId":7 (prefix of 70) — a prefilter

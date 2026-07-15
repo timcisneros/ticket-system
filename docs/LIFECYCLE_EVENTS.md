@@ -64,14 +64,11 @@ Reconciliation (`reconcileTerminalRun`) emits only missing steps with the same t
 | `run.execution_completed` but NO snapshot | false | true | **Reconcilable** — snapshot and everything after missing |
 | No `run.execution_completed` and no `run.terminalized` | false | false | **Resumable** (if hash chain and authority intact) |
 
-## Legacy Compatibility
+## Current-Schema Boundary
 
-- `run.completed`, `run.failed`, `run.interrupted` are legacy terminal event names.
-- Terminal statuses `completed`, `failed`, and `interrupted` are current runtime truth, not legacy states.
-- Readers treat legacy event names as equivalent to `run.terminalized` for backward compatibility (`isTerminal = true`).
-- They are also treated as equivalent to `run.execution_completed` (`hasExecutionCompleted = true`).
-- No new code may emit `run.completed`/`run.failed`/`run.interrupted`. They are read-only legacy formats.
-- No new code may classify `run.execution_completed` or `run.snapshot_finalized` as terminal.
+Only the lifecycle events documented above are accepted. Development data and fixtures must be
+reset or regenerated when the schema changes; readers do not carry compatibility branches for old
+run events. `run.execution_completed` and `run.snapshot_finalized` are never terminal by themselves.
 
 ## State Machine
 
@@ -104,4 +101,3 @@ Transitions out of terminal statuses are invalid. Events permitted after termina
 3. `run.evaluation_completed` without `run.terminalized` → `isTerminal=false`
 4. `run.consequence_recorded` without `run.terminalized` → `isTerminal=false`
 5. `run.terminalized` → `isTerminal=true`, `safeToResume=false`
-6. Legacy `run.completed` → `isTerminal=true` (backward compat)

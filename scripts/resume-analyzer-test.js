@@ -106,6 +106,16 @@ function truncateEvents(dataDir, runId, keepCount) {
   fs.writeFileSync(path.join(dataDir, 'events.jsonl'), newLines.join('\n') + '\n');
 }
 
+function eventPrefixLength(dataDir, runId, type, occurrence = 'first') {
+  const { runLines } = getRunEventLines(dataDir, runId);
+  const indexes = runLines
+    .map((item, index) => item.ev.type === type ? index : -1)
+    .filter(index => index >= 0);
+  const index = occurrence === 'last' ? indexes[indexes.length - 1] : indexes[0];
+  if (!Number.isInteger(index)) throw new Error(`Fixture has no ${type} event`);
+  return index + 1;
+}
+
 function truncateOperationHistory(dataDir, runId, lastWorkspaceOpSeq) {
   // Remove history entries for workspace operations that are NOT in the
   // truncated event log. Match by (operation, path).
@@ -132,7 +142,7 @@ function stripTerminalEvents(dataDir, runId) {
   // (Events after a terminal event depend on it via prevHash; removing the terminal
   // event would break the chain for subsequent events.)
   const { runLines, otherLines } = getRunEventLines(dataDir, runId);
-  const terminalTypes = ['run.completed', 'run.failed', 'run.interrupted', 'run.terminalized', 'run.execution_completed'];
+  const terminalTypes = ['run.terminalized', 'run.execution_completed'];
   const firstTerminalIdx = runLines.findIndex(x => terminalTypes.includes(x.ev.type));
   let keep;
   if (firstTerminalIdx >= 0) {
@@ -157,30 +167,30 @@ function resetRunToRunning(dataDir, runId) {
 // ── Scenario builders (tail truncation only) ──────────────────────
 
 function scenarioTruncatedBeforeModelResponse(dataDir, runId) {
-  // Truncate after first heartbeat post-run.started (seq=5)
+  // Truncate after the first heartbeat following run.started.
   // Strip terminal events, truncate history to match
   stripTerminalEvents(dataDir, runId);
-  truncateEvents(dataDir, runId, 6);
+  truncateEvents(dataDir, runId, eventPrefixLength(dataDir, runId, 'run.heartbeat'));
   truncateOperationHistory(dataDir, runId);
   resetRunToRunning(dataDir, runId);
   return 'truncated_after_first_heartbeat';
 }
 
 function scenarioTruncatedAfterAuthorityBeforeOp(dataDir, runId) {
-  // Truncate after first authority.allowed (seq=6)
+  // Truncate after the first authority.allowed event.
   // Strip terminal events, truncate history to match
   stripTerminalEvents(dataDir, runId);
-  truncateEvents(dataDir, runId, 7);
+  truncateEvents(dataDir, runId, eventPrefixLength(dataDir, runId, 'authority.allowed'));
   truncateOperationHistory(dataDir, runId);
   resetRunToRunning(dataDir, runId);
   return 'truncated_after_first_authority';
 }
 
 function scenarioTruncatedAfterWorkspaceOpTerminalizationNext(dataDir, runId) {
-  // Truncate after final workspace.operation (seq=13)
+  // Truncate after the final workspace.operation.
   // All authority events are matched. Next phase = terminalization.
   stripTerminalEvents(dataDir, runId);
-  truncateEvents(dataDir, runId, 14);
+  truncateEvents(dataDir, runId, eventPrefixLength(dataDir, runId, 'workspace.operation', 'last'));
   // All history entries match (all 3 ops executed)
   resetRunToRunning(dataDir, runId);
   return 'truncated_after_final_workspace_op';

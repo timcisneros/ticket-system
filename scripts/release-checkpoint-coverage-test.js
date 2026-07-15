@@ -66,6 +66,12 @@ if (Array.isArray(list)) {
     'local-connector-contract-test.js',
     'operational-transparency-test.js',
     'page-render-regression-test.js',
+    'startup-data-integrity-test.js',
+    'rbac-and-inline-data-security-test.js',
+    'event-chain-verify-test.js',
+    'event-chain-restart-test.js',
+    'internal-demo-security-test.js',
+    'objective-contract-compiler-test.js',
     'release-checkpoint-coverage-test.js'
   ];
   for (const name of REQUIRED_IN_CHECKPOINT) {
@@ -82,6 +88,7 @@ if (Array.isArray(list)) {
   for (const name of REQUIRED_ON_DISK) {
     check(fs.existsSync(path.join(SCRIPTS_DIR, name)), `critical test "${name}" must exist on disk`);
   }
+  check(fs.existsSync(path.join(SCRIPTS_DIR, 'check-js-syntax.js')), 'project-wide JavaScript build check must exist on disk');
 }
 
 if (failures > 0) {

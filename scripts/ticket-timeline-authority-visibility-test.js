@@ -5,6 +5,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-timeline-data-'));
@@ -33,6 +34,10 @@ function event(id, type, ts, payload = {}, runId = 10, ticketId = 1, seq = null)
     payload,
     ...(seq === null ? {} : { seq, prevHash: seq === 0 ? null : `hash-${seq - 1}` })
   };
+}
+
+function sealRunEventChains(events) {
+  return sealCurrentRunEventChains(events);
 }
 
 function seed() {
@@ -183,7 +188,7 @@ function seed() {
     before: null, after: null, changedResources: [], createdResources: [], deletedResources: [], providerResponse: null,
     error: { message: 'Protected path', code: 'WORKSPACE_PROTECTED_PATH', failureKind: 'protected_path' }, runId: 10, ticketId: 1
   };
-  const events = [
+  const events = sealRunEventChains([
     event('ticket-created', 'ticket.created', T0, { status: 'open' }, null, 1, null),
     event('run-created', 'run.created', '2026-03-01T10:00:01.000Z', { status: 'pending' }, 10, 1, 0),
     event('run-lease', 'run.lease_acquired', '2026-03-01T10:00:01.500Z', { status: 'pending' }, 10, 1, 1),
@@ -202,7 +207,7 @@ function seed() {
     event('execution-complete', 'run.execution_completed', '2026-03-01T10:00:09.000Z', { status: 'completed' }, 10, 1, 14),
     event('snapshot-final', 'run.snapshot_finalized', '2026-03-01T10:00:09.100Z', { replaySnapshotPath: 'replay-snapshots/run-10.json' }, 10, 1, 15),
     event('terminal', 'run.terminalized', '2026-03-01T10:00:10.000Z', { status: 'completed' }, 10, 1, 16)
-  ];
+  ]);
   fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), `${events.map(item => JSON.stringify(item)).join('\n')}\n`);
 
   writeJson('logs.json', [

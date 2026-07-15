@@ -1,42 +1,30 @@
 #!/usr/bin/env node
-// Event Chain Verify — cryptographically verify append-only event history.
+// Verify the single current run-event schema and its continuous per-run chains.
 //
 // Usage:
 //   node scripts/event-chain-verify.js --data-dir <dir> [--strict] [--run-id <id>]
-//
-// Verifies per-run hash chains:
-//   - seq continuity (no gaps, no duplicates)
-//   - prevHash linkage (each event points to previous event's hash)
-//   - hash correctness (each event's hash matches canonical content hash)
-//
-// With --strict, exits non-zero if any chain is broken.
+
+'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+const { verifyCurrentRunEventChain } = require('../runtime/event-integrity');
 
 function readEventsJsonl(filePath) {
   try {
     const raw = fs.readFileSync(filePath, 'utf8').trim();
     if (!raw) return [];
     return raw.split('\n').filter(Boolean).map(line => {
-      try { return JSON.parse(line); } catch (e) { return { _parseError: true, _raw: line.substring(0, 200) }; }
+      try {
+        return JSON.parse(line);
+      } catch (_) {
+        return { _parseError: true, _raw: line.substring(0, 200) };
+      }
     });
-  } catch (e) { return []; }
+  } catch (_) {
+    return [];
+  }
 }
-
-function computeEventHash(event) {
-  const canonical = {
-    type: event.type,
-    ticketId: event.ticketId,
-    runId: event.runId,
-    stepId: event.stepId,
-    payload: event.payload
-  };
-  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
-}
-
-// ── Verification logic ────────────────────────────────────────────
 
 function verifyChain(events, targetRunId = null) {
   const report = {
@@ -51,106 +39,49 @@ function verifyChain(events, targetRunId = null) {
     runs: {}
   };
 
-  // Group run events by runId
   const byRun = {};
-  for (const ev of events) {
-    if (ev._parseError) {
-      report.errors.push({ type: 'parse', message: 'Event parse error', raw: ev._raw });
+  for (const event of events) {
+    if (event._parseError) {
+      report.errors.push({ type: 'parse', message: 'Event parse error', raw: event._raw });
       report.chainValid = false;
       continue;
     }
-    if (ev.runId == null) {
-      report.nonRunEvents++;
+    if (event.runId == null) {
+      report.nonRunEvents += 1;
       continue;
     }
-    report.runEvents++;
-    if (targetRunId != null && ev.runId !== targetRunId) continue;
-    if (!byRun[ev.runId]) byRun[ev.runId] = [];
-    byRun[ev.runId].push(ev);
+    report.runEvents += 1;
+    if (targetRunId != null && event.runId !== targetRunId) continue;
+    if (!byRun[event.runId]) byRun[event.runId] = [];
+    byRun[event.runId].push(event);
   }
 
   for (const runId of Object.keys(byRun).sort((a, b) => parseInt(a, 10) - parseInt(b, 10))) {
-    const runEvents = byRun[runId].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+    const runEvents = byRun[runId];
     const runReport = {
       runId: parseInt(runId, 10),
       eventCount: runEvents.length,
+      sealedEvents: 0,
       errors: [],
-      chainValid: true
+      chainValid: true,
+      sealStatus: 'current_schema'
     };
+    const verification = verifyCurrentRunEventChain(runEvents);
+    runReport.errors = verification.errors;
+    runReport.chainValid = verification.chainValid;
+    runReport.sealedEvents = runEvents.length - verification.errors.filter(error => ['missing_hash', 'hash_mismatch'].includes(error.type)).length;
 
-    // Verify each event
-    const seenSeqs = new Set();
-    for (let i = 0; i < runEvents.length; i++) {
-      const ev = runEvents[i];
-      const seq = ev.seq;
-
-      // Seq must be defined
-      if (seq === undefined || seq === null) {
-        runReport.errors.push({ type: 'missing_seq', seq: null, message: `Event missing seq` });
-        runReport.chainValid = false;
-        continue;
-      }
-
-      // Duplicate seq detection
-      if (seenSeqs.has(seq)) {
-        runReport.errors.push({ type: 'duplicate_seq', seq, message: `Duplicate seq ${seq}` });
-        runReport.chainValid = false;
-      }
-      seenSeqs.add(seq);
-
-      // prevHash linkage: prevHash of event N should equal computeEventHash(event N-1)
-      if (seq === 0) {
-        if (ev.prevHash !== null) {
-          runReport.errors.push({
-            type: 'first_prevhash',
-            seq,
-            message: `First event (seq=0) should have prevHash=null, got ${ev.prevHash}`
-          });
-          runReport.chainValid = false;
-        }
-      } else {
-        const prevEvent = runEvents[i - 1];
-        const expectedPrevHash = computeEventHash(prevEvent);
-        if (ev.prevHash !== expectedPrevHash) {
-          runReport.errors.push({
-            type: 'prevhash_mismatch',
-            seq,
-            message: `prevHash mismatch at seq ${seq}: expected=${expectedPrevHash}, got=${ev.prevHash}`,
-            expected: expectedPrevHash,
-            got: ev.prevHash
-          });
-          runReport.chainValid = false;
-        }
-      }
-    }
-
-    // Seq gap detection
-    const seqs = [...seenSeqs].sort((a, b) => a - b);
-    for (let i = 0; i < seqs.length; i++) {
-      if (seqs[i] !== i) {
-        runReport.errors.push({
-          type: 'seq_gap',
-          seq: i,
-          message: `Seq gap: expected seq ${i}, but found ${seqs[i]}`
-        });
-        runReport.chainValid = false;
-        break; // only report first gap
-      }
-    }
-
+    if (!runReport.chainValid) runReport.sealStatus = 'invalid';
     report.runs[runId] = runReport;
-    if (runReport.chainValid) {
-      report.runsVerified++;
-    } else {
-      report.runsBroken++;
+    if (runReport.chainValid) report.runsVerified += 1;
+    else {
+      report.runsBroken += 1;
       report.chainValid = false;
     }
   }
 
   return report;
 }
-
-// ── Main ──────────────────────────────────────────────────────────
 
 function main() {
   const args = process.argv.slice(2);
@@ -159,9 +90,13 @@ function main() {
   let targetRunId = null;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--data-dir' && args[i + 1]) { dataDir = path.resolve(args[i + 1]); i++; }
-    else if (args[i] === '--strict') { strictMode = true; }
-    else if (args[i] === '--run-id' && args[i + 1]) { targetRunId = parseInt(args[i + 1], 10); i++; }
+    if (args[i] === '--data-dir' && args[i + 1]) {
+      dataDir = path.resolve(args[++i]);
+    } else if (args[i] === '--strict') {
+      strictMode = true;
+    } else if (args[i] === '--run-id' && args[i + 1]) {
+      targetRunId = parseInt(args[++i], 10);
+    }
   }
 
   if (!fs.existsSync(dataDir)) {
@@ -169,15 +104,12 @@ function main() {
     process.exit(1);
   }
 
-  const events = readEventsJsonl(path.join(dataDir, 'events.jsonl'));
-  const report = verifyChain(events, targetRunId);
+  const report = verifyChain(readEventsJsonl(path.join(dataDir, 'events.jsonl')), targetRunId);
   report.dataDir = dataDir;
-
   console.log(JSON.stringify(report, null, 2));
-
-  if (strictMode && !report.chainValid) {
-    process.exit(1);
-  }
+  if (strictMode && !report.chainValid) process.exit(1);
 }
 
-main();
+module.exports = { readEventsJsonl, verifyChain };
+
+if (require.main === module) main();

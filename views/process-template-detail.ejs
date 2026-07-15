@@ -61,8 +61,8 @@
 (function() {
   var form = document.getElementById('edit-pt-form');
   if (!form) return;
-  var agents = <%- JSON.stringify(agents || []) %>;
-  var groups = <%- JSON.stringify(groups || []) %>;
+  var agents = <%- serializeForInlineScript(agents || []) %>;
+  var groups = <%- serializeForInlineScript(groups || []) %>;
   var typeSelect = document.getElementById('ept-assign-type');
   var targetSelect = document.getElementById('ept-assign-target');
   var targetGroup = document.getElementById('ept-assign-target-group');
@@ -73,11 +73,18 @@
     var type = typeSelect.value;
     if (!type) { targetGroup.style.display = 'none'; return; }
     var items = type === 'agent' ? agents : groups;
-    targetSelect.innerHTML = '<option value="">' + (type === 'agent' ? 'Select an agent' : 'Select an agent group') + '</option>' +
-      items.map(function(item) {
-        var selected = type === currentAssignType && String(item.id) === String(currentAssignId) ? ' selected' : '';
-        return '<option value="' + item.id + '"' + selected + '>' + item.name + '</option>';
-      }).join('');
+    targetSelect.replaceChildren();
+    var placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = type === 'agent' ? 'Select an agent' : 'Select an agent group';
+    targetSelect.appendChild(placeholder);
+    items.forEach(function(item) {
+      var option = document.createElement('option');
+      option.value = String(item.id);
+      option.textContent = String(item.name || '');
+      option.selected = type === currentAssignType && String(item.id) === String(currentAssignId);
+      targetSelect.appendChild(option);
+    });
     targetGroup.style.display = '';
   }
   populateTargets();

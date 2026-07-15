@@ -8,8 +8,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { reconstructWorkspaceForRun } = require('./replay-workspace');
+const { verifyCurrentRunEventChain } = require('../runtime/event-integrity');
 
 function readJson(filePath) {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (e) { return null; }
@@ -25,56 +25,11 @@ function readEventsJsonl(filePath) {
   } catch (e) { return []; }
 }
 
-function computeEventHash(event) {
-  const canonical = { type: event.type, ticketId: event.ticketId, runId: event.runId, stepId: event.stepId, payload: event.payload };
-  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
-}
-
 // ── Hash chain verification ───────────────────────────────────────
 
 function verifyHashChain(events) {
-  const errors = [];
-  if (events.length === 0) return { errors, chainValid: true, lastVerifiedSeq: null, lastVerifiedHash: null };
-  const sorted = [...events].sort((a, b) => {
-    if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq;
-    return String(a.ts).localeCompare(String(b.ts));
-  });
-  let lastVerifiedSeq = null;
-  let lastVerifiedHash = null;
-  let chainBroken = false;
-  for (let i = 0; i < sorted.length; i++) {
-    const ev = sorted[i];
-    if (ev._parseError) { chainBroken = true; continue; }
-    if (ev.seq !== undefined) {
-      if (i > 0) {
-        const prev = sorted[i - 1];
-        if (prev.seq !== undefined && ev.seq !== prev.seq + 1) {
-          errors.push(`seq gap at ${ev.seq}`); chainBroken = true;
-        }
-      } else if (ev.seq !== 0) {
-        errors.push(`first seq not 0`); chainBroken = true;
-      }
-    }
-    if (ev.prevHash !== undefined) {
-      if (i === 0) {
-        if (ev.prevHash !== null) { errors.push(`first prevHash not null`); chainBroken = true; }
-      } else {
-        const prev = sorted[i - 1];
-        const expected = computeEventHash(prev);
-        if (ev.prevHash !== expected) { errors.push(`hash break at seq=${ev.seq}`); chainBroken = true; }
-      }
-    }
-    if (!chainBroken) {
-      lastVerifiedSeq = ev.seq !== undefined ? ev.seq : i;
-      lastVerifiedHash = computeEventHash(ev);
-    }
-  }
-  const seqCounts = {};
-  for (const ev of sorted) { if (ev.seq !== undefined) seqCounts[ev.seq] = (seqCounts[ev.seq] || 0) + 1; }
-  for (const [seq, count] of Object.entries(seqCounts)) {
-    if (count > 1) { errors.push(`duplicate seq=${seq}`); chainBroken = true; }
-  }
-  return { errors, chainValid: !chainBroken, lastVerifiedSeq, lastVerifiedHash };
+  const result = verifyCurrentRunEventChain(events);
+  return { ...result, errors: result.errors.map(error => error.message) };
 }
 
 // ── State machine reconstruction ────────────────────────────────────
@@ -83,17 +38,16 @@ function reconstructStateMachine(events) {
   const transitions = [];
   const errors = [];
   let currentState = 'pending';
-  const terminalStates = ['completed', 'failed', 'interrupted', 'terminalized'];
+  const terminalStates = ['terminalized'];
   const validTransitions = {
-    pending: ['pending', 'running', 'failed', 'interrupted', 'terminalized'],
-    running: ['running', 'completed', 'failed', 'interrupted', 'terminalized'],
-    completed: ['completed'], failed: ['failed'], interrupted: ['interrupted'], terminalized: ['terminalized']
+    pending: ['pending', 'running', 'terminalized'],
+    running: ['running', 'terminalized'],
+    terminalized: ['terminalized']
   };
   const stateEventMap = {
     'run.created': 'pending', 'run.lease_acquired': 'pending', 'scheduler.run_selected': 'pending',
     'run.started': 'running',
     'run.execution_completed': 'running',
-    'run.completed': 'completed', 'run.failed': 'failed', 'run.interrupted': 'interrupted',
     'run.terminalized': 'terminalized'
   };
   for (const ev of events) {
@@ -180,8 +134,7 @@ function reconstructRun(data, runId) {
   const hasEvaluation = runEvents.some(e => e.type === 'run.evaluation_completed');
   const hasConsequence = runEvents.some(e => e.type === 'run.consequence_recorded');
   const hasTerminal = stateMachine.terminalReached;
-  const hasExecutionCompleted = runEvents.some(e => e.type === 'run.execution_completed') ||
-    runEvents.some(e => ['run.completed', 'run.failed', 'run.interrupted'].includes(e.type));
+  const hasExecutionCompleted = runEvents.some(e => e.type === 'run.execution_completed');
 
   // Mutations from operation history
   const mutations = runOps.map(op => ({

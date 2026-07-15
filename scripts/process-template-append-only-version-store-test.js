@@ -90,7 +90,12 @@ function seed() {
   writeJson('tickets.json', [{
     id: 50, objective: 'legacy', assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', ownedOutputPaths: null,
     executionMode: 'agent', workflowId: null, workflowInput: null, capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
-    executionPolicy: { mode: 'assisted', requireVerification: 'when_declared', maxAttempts: null, allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared' },
+    executionPolicy: {
+      mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+      maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
+      allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
+    },
+    workTypeSnapshot: null, workTypeId: null, triage: null,
     status: 'completed', createdBy: 'system', changedBy: 'system', changedAt: ISO, createdAt: ISO, updatedAt: ISO,
     source: { type: 'process_template', templateId: 1, templateName: 'Editable manual', triggeredBy: 'admin', triggerType: 'manual', triggerRunId: null, triggerToken: 'legacy-50', createdAt: ISO }
   }]);
