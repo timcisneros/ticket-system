@@ -138,7 +138,35 @@ function seedAgent() {
 function createFakeOpenAIPreload() {
   const preloadPath = path.join(os.tmpdir(), `runtime-feasibility-openai-${process.pid}-${Date.now()}.js`);
   const source = `
-global.fetch = async function() {
+global.fetch = async function(url, options = {}) {
+  const body = JSON.parse(options.body || '{}');
+  const input = Array.isArray(body.input) ? body.input : [];
+  const combined = input.map(item => item && item.content ? String(item.content) : '').join('\\n');
+
+  if (combined.includes('objective compiler')) {
+    const userContent = input
+      .filter(item => item && item.role === 'user')
+      .map(item => item.content)
+      .join(' ');
+    let intent = 'model_driven';
+    let targets = [];
+    if (/folder/i.test(userContent) && /A-Z/i.test(userContent)) {
+      intent = 'create_folders';
+      targets = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: new Map([['x-request-id', 'fake-runtime-feasibility-compiler']]),
+      async text() {
+        return JSON.stringify({
+          output_text: JSON.stringify({ intent, targetRoot: '', targets }),
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }
+        });
+      }
+    };
+  }
+
   return {
     ok: true,
     status: 200,
@@ -287,6 +315,39 @@ async function runCreateRangeScenario(server, cookie, agent) {
   return run;
 }
 
+async function runCompiledCreateRangeScenario(server, cookie, agent) {
+  const existing = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'L', 'M'];
+  const objective = 'Make folders for the letter A-Z in the workspace';
+  const ticket = await createAssignedTicket(cookie, agent.id, objective);
+  const run = await waitForFailedRun(ticket.id);
+
+  assert(run.status === 'failed', `Expected run status failed, got ${run.status}`);
+  assert(/Runtime budget infeasible/i.test(run.error || ''), `Expected budget infeasibility error, got: ${run.error}`);
+  assert(run.triage && run.triage.reasonCode === 'runtime_budget_insufficient', `Expected triage reason runtime_budget_insufficient, got ${run.triage && run.triage.reasonCode}`);
+  assert(run.triage && run.triage.allowedActions.includes('raise_limit'), 'Expected raise_limit allowed action');
+  assert(run.triage && run.triage.allowedActions.includes('split_task'), 'Expected split_task allowed action');
+  assert(run.triage && run.triage.allowedActions.includes('manual_recovery'), 'Expected manual_recovery allowed action');
+
+  for (const name of ['I', 'J', 'K', 'N', 'O', 'P', 'Q', 'R']) {
+    const createdPath = path.join(WORKSPACE_ROOT, name);
+    const isDir = fs.existsSync(createdPath) && fs.statSync(createdPath).isDirectory();
+    assert(!isDir, `Folder ${name} should not have been created`);
+  }
+  for (const name of existing) {
+    assert(fs.existsSync(path.join(WORKSPACE_ROOT, name)) && fs.statSync(path.join(WORKSPACE_ROOT, name)).isDirectory(), `Existing folder ${name} should remain`);
+  }
+
+  const replaySnapshot = readRunReplaySnapshot(run);
+  assert(replaySnapshot && replaySnapshot.providerRequests && replaySnapshot.providerRequests.length >= 1, 'Compiler provider request should be recorded');
+
+  if (run.triage && run.triage.summary) {
+    assert(run.triage.summary.includes('16 required mutation'), `Expected 16 required mutations in summary, got: ${run.triage.summary}`);
+    assert(run.triage.summary.includes('8 execution step'), `Expected 8 required steps in summary, got: ${run.triage.summary}`);
+  }
+
+  return run;
+}
+
 async function main() {
   const preloadPath = createFakeOpenAIPreload();
 
@@ -313,7 +374,14 @@ async function main() {
 
     await runCreateRangeScenario(server, cookie, agent);
 
-    console.log(JSON.stringify({ deleteInfeasibility: true, createRangeInfeasibility: true }));
+    // Seed additional existing folders for the compiled-contract create-range scenario.
+    for (const name of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
+      fs.mkdirSync(path.join(WORKSPACE_ROOT, name));
+    }
+
+    await runCompiledCreateRangeScenario(server, cookie, agent);
+
+    console.log(JSON.stringify({ deleteInfeasibility: true, createRangeInfeasibility: true, compiledCreateRangeInfeasibility: true }));
     server.kill('SIGTERM');
     await waitForExit(server);
   } finally {

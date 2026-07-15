@@ -242,6 +242,17 @@ function createFakeOpenAIPreload() {
     "",
     "  await new Promise(resolve => setTimeout(resolve, 50));",
     "",
+    "  // Preflight contract compiler: return model_driven so execution falls back",
+    "  // to the normal model path and the scenario-specific response counters stay",
+    "  // aligned with the execution loop.",
+    "  if (combined.includes('objective compiler')) {",
+    "    return okResponse({",
+    "      intent: 'model_driven',",
+    "      targetRoot: '',",
+    "      targets: []",
+    "    });",
+    "  }",
+    "",
     "  if (combined.includes('postcondition-create-folder-file')) {",
     "    const count = nextCount('create-folder-file');",
     "    if (count === 1) {",
@@ -797,7 +808,7 @@ async function main() {
           const storedRun = await waitForStoredRun(run.id, item => item.runEvaluation && item.runConsequence);
           assert(storedRun && storedRun.runEvaluation, 'Run evaluation should still be recorded');
           assert(storedRun && storedRun.runConsequence, 'Run consequence should still be recorded');
-          assert(storedRun.runEvaluation.efficiency.modelResponses === 1, 'Run evaluation should record one model response');
+          assert(storedRun.runEvaluation.efficiency.modelResponses === 2, 'Run evaluation should record compiler + execution model responses');
           assert(storedRun.runConsequence.created.some(item => item.path === 'workspace-objective-note.md'), 'Run consequence should record created note');
         }
       }
@@ -825,7 +836,7 @@ async function main() {
           const storedRun = await waitForStoredRun(run.id, item => item.runEvaluation && item.runConsequence);
           assert(storedRun && storedRun.runEvaluation, 'Run evaluation should be recorded for workspace-root path objective');
           assert(storedRun && storedRun.runConsequence, 'Run consequence should be recorded for workspace-root path objective');
-          assert(storedRun.runEvaluation.efficiency.modelResponses === 1, 'Run evaluation should record one model response');
+          assert(storedRun.runEvaluation.efficiency.modelResponses === 2, 'Run evaluation should record compiler + execution model responses');
           assert(storedRun.runConsequence.created.some(item => item.path === 'mike-repair-recommendation.md'), 'Run consequence should record created recommendation file');
         }
       }
@@ -1048,8 +1059,8 @@ async function main() {
           assert(run.error === 'Branching workflow drafts are not available to normal agents with the allowed operations.', 'Unsupported objective message should be preserved as run error');
           assert(snapshot.failureReason === run.error, 'Unsupported objective message should be preserved as failure reason');
           assert(snapshot.parsedModelPlans.length === 1, 'Unsupported objective should not trigger a second model turn');
-          assert(snapshot.providerRequests.length === 1, 'Unsupported objective should stop after one provider request');
-          assert(snapshot.modelResponses.length === 1, 'Unsupported objective should stop after one model response');
+          assert(snapshot.providerRequests.length === 2, 'Unsupported objective should record compiler + execution provider requests');
+          assert(snapshot.modelResponses.length === 2, 'Unsupported objective should record compiler + execution model responses');
           assert(snapshot.workflowDrafts.length === 0, 'Unsupported objective should not create a workflow draft');
           assert(snapshot.workspaceOperations.length === 0, 'Unsupported objective should not mutate workspace');
           assert(snapshot.events.some(event => event.type === 'model:unsupported_objective'), 'Replay should record unsupported objective event');
@@ -1075,8 +1086,8 @@ async function main() {
         expectedStatus: 'completed',
         expectNoPostcondition: true,
         verify: async ({ run, snapshot }) => {
-          assert(snapshot.providerRequests.length === 1, 'Handoff planner should use one model request');
-          assert(snapshot.modelResponses.length === 1, 'Handoff planner should use one model response');
+          assert(snapshot.providerRequests.length === 2, 'Handoff planner should record compiler + execution provider requests');
+          assert(snapshot.modelResponses.length === 2, 'Handoff planner should record compiler + execution model responses');
           assert(snapshot.handoffTasks && snapshot.handoffTasks.some(item => item.status === 'validated' && item.executorAgentId === mike.id), 'Handoff validation evidence missing');
           assert(snapshot.handoffTasks.some(item => item.status === 'executed' && item.executorAgentId === mike.id), 'Handoff execution evidence missing');
           assert(snapshot.workspaceOperations.length === 1, 'Handoff should record one workspace operation');

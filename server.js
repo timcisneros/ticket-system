@@ -9,7 +9,7 @@ const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
-const { buildObjectiveContract, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
+const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 require('dotenv').config()
 
 const PORT = process.env.PORT || 3099;
@@ -9784,11 +9784,11 @@ function countRequiredContractMutations(contract, initialWorkspaceSnapshot) {
   return required;
 }
 
-function assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits) {
+function assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract = null) {
   if (isBrowserRun(run)) return;
   if (run.executionMode === 'workflow' || (ticket && ticket.executionMode === 'workflow')) return;
 
-  const contract = buildObjectiveContract(ticket && ticket.objective);
+  const contract = compiledContract || buildObjectiveContract(ticket && ticket.objective);
   const required = countRequiredContractMutations(contract, initialWorkspaceSnapshot);
   if (required === null || required === 0) return;
 
@@ -9807,6 +9807,140 @@ function assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limi
     };
     throw error;
   }
+}
+
+// Preflight compiler prompt. Asks the model to normalize a vague user objective
+// into a strict JSON objective contract without executing any actions.
+function buildObjectiveCompilerPrompt(objective) {
+  return [
+    {
+      role: 'system',
+      content: `You are an objective compiler for a bounded agent runtime. Your job is to read the user's objective and output a strict JSON objective contract. Do not execute actions. Do not explain. Only output valid JSON.
+
+Allowed intents:
+- create_folders
+- ensure_folders
+- delete_paths
+- write_files
+- rename_paths
+- model_driven
+
+Output schema:
+{
+  "intent": "create_folders",
+  "targetRoot": "",
+  "targets": ["A", "B", "C"]
+}
+
+Rules:
+- targetRoot must be empty or a safe relative folder path using only letters, digits, dots, underscores, and hyphens. No traversal, no hidden segments.
+- targets must be relative names (no slashes, no traversal, no hidden names).
+- If the objective clearly maps to one of the allowed intents, emit the contract.
+- If the objective is vague, generative, conditional, or you cannot confidently enumerate exact targets, return {"intent":"model_driven","targetRoot":"","targets":[]}.
+- Do not include any keys other than intent, targetRoot, and targets.`
+    },
+    {
+      role: 'user',
+      content: String(objective || '').trim()
+    }
+  ];
+}
+
+function tryParseCompiledContractJson(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Try to extract the first JSON object from surrounding text.
+    const match = trimmed.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function compileObjectiveContract(run, ticket, agent, limits, modelRequestCountRef) {
+  if (isBrowserRun(run)) return { contract: null, fallback: true, modelRequestsUsed: 0 };
+  if (run.executionMode === 'workflow' || (ticket && ticket.executionMode === 'workflow')) {
+    return { contract: null, fallback: false, modelRequestsUsed: 0 };
+  }
+
+  // 1. Prefer the existing narrow deterministic grammar when it already matches.
+  const deterministicContract = buildObjectiveContract(ticket && ticket.objective);
+  if (deterministicContract && deterministicContract.recognized && Array.isArray(deterministicContract.allowedMutations) && deterministicContract.allowedMutations.length > 0) {
+    appendRunLog(run, 'run:contract_compiled', 'Objective contract recognized by deterministic grammar', null, {
+      source: 'deterministic',
+      intent: deterministicContract.intent,
+      targetCount: deterministicContract.allowedMutations.length
+    });
+    return { contract: deterministicContract, fallback: false, modelRequestsUsed: 0 };
+  }
+
+  // 2. Model-assisted compilation.
+  assertRunModelRequestAllowed(run, modelRequestCountRef.count, limits);
+
+  const input = buildObjectiveCompilerPrompt(ticket.objective);
+  let response = null;
+  try {
+    response = await callModelProvider(agent, input);
+  } catch (error) {
+    appendRunLog(run, 'run:contract_compile_failed', `Objective contract compilation failed: ${error.message}`, null, {
+      source: 'model',
+      reason: 'provider_error',
+      provider: error.provider || null
+    });
+    return { contract: null, fallback: true, modelRequestsUsed: 1 };
+  }
+
+  modelRequestCountRef.count += 1;
+
+  appendRunReplaySnapshotItem(run.id, 'providerRequests', response.requestPayload || null);
+  appendRunReplaySnapshotItem(run.id, 'modelResponses', {
+    text: response.text || '',
+    usage: response.usage || null,
+    provider: response.provider || null,
+    model: response.model || null,
+    providerResponsePayload: response.responsePayload || null,
+    phase: 'contract_compile'
+  });
+  appendRunLog(run, 'model:request', `Objective contract compilation request (${response.provider}/${response.model})`, null, {
+    phase: 'contract_compile',
+    usage: response.usage || null
+  });
+
+  const compiled = tryParseCompiledContractJson(response.text);
+  if (!compiled) {
+    appendRunLog(run, 'run:contract_compile_failed', 'Objective contract compilation returned non-JSON output; falling back to model-driven execution', null, {
+      source: 'model',
+      reason: 'non_json_output',
+      rawText: String(response.text || '').slice(0, 500)
+    });
+    return { contract: null, fallback: true, modelRequestsUsed: 1 };
+  }
+
+  const contract = buildObjectiveContractFromCompiled(compiled);
+  if (!contract || !contract.recognized) {
+    const notes = Array.isArray(contract && contract.notes) ? contract.notes : [];
+    appendRunLog(run, 'run:contract_compile_failed', `Compiled contract rejected: ${notes.join(', ')}; falling back to model-driven execution`, null, {
+      source: 'model',
+      reason: 'validation_failed',
+      compiled: sanitizeSnapshotValue(compiled)
+    });
+    return { contract: null, fallback: true, modelRequestsUsed: 1 };
+  }
+
+  appendRunLog(run, 'run:contract_compiled', 'Objective contract compiled by model', null, {
+    source: 'model',
+    intent: contract.intent,
+    targetCount: contract.allowedMutations.length,
+    compiled: sanitizeSnapshotValue(compiled)
+  });
+
+  return { contract, fallback: false, modelRequestsUsed: 1 };
 }
 
 function checkPostconditionCompletion(run, actions, actionResults, step) {
@@ -16538,15 +16672,33 @@ async function runAgentTicket(runId) {
       }
     }
 
+    // Preflight objective contract compilation. First try the narrow deterministic
+    // grammar; if it does not match, ask the model to compile a strict JSON contract.
+    // A compiled contract feeds the existing feasibility gate; if compilation fails
+    // or returns model_driven, fall back to normal execution with a guard against
+    // incomplete mutating batches on the final step.
+    let compiledContract = null;
+    let fallbackNoFutureBudgetGuard = false;
+    if (!isBrowserRun(run) && !resumedFromPersistedState) {
+      const modelRequestCountRef = { count: modelRequestCount };
+      const compileResult = await compileObjectiveContract(run, ticket, agent, limits, modelRequestCountRef);
+      compiledContract = compileResult.contract || null;
+      fallbackNoFutureBudgetGuard = compileResult.fallback === true;
+      modelRequestCount = modelRequestCountRef.count;
+    }
+
     // Exact delete-target identity: for a simple "delete <X>" objective, the only
     // legitimate deletePath target is X. Used to reject near-miss deletes (e.g.
     // deletePath C for "Delete CD") before execution. null for non-simple objectives.
-    const simpleDeleteTargets = isBrowserRun(run) ? null : extractSimpleDeleteTargets(ticket && ticket.objective);
+    let simpleDeleteTargets = isBrowserRun(run) ? null : extractSimpleDeleteTargets(ticket && ticket.objective);
+    if (!isBrowserRun(run) && compiledContract && compiledContract.intent === 'delete' && Array.isArray(compiledContract.allowedMutations)) {
+      simpleDeleteTargets = compiledContract.allowedMutations.map(m => m.path).filter(Boolean);
+    }
     const simpleDeleteTargetSet = simpleDeleteTargets
       ? new Set(simpleDeleteTargets.map(t => normalizeArtifactOwnershipPath(t)).filter(Boolean))
       : null;
 
-    assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits);
+    assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract);
 
     for (let step = 0; !completed; step += 1) {
       heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
@@ -16710,6 +16862,24 @@ async function runAgentTicket(runId) {
       }
 
       const mutatingActionCount = countMutatingActions(actions);
+
+      // Fallback guard: when no deterministic or compiled contract was available,
+      // refuse to execute an incomplete mutating batch on the final allowed step.
+      // Without future step budget, such a batch would leave partial workspace mutations.
+      if (fallbackNoFutureBudgetGuard && step + 1 >= limits.maxExecutionSteps && mutatingActionCount > 0 && !modelPlan.complete) {
+        const error = new Error(
+          `Runtime budget infeasible: model proposed ${mutatingActionCount} mutation(s) on the final step without signaling completion, and no execution budget remains. Raise the limit, split the task, or manually recover.`
+        );
+        error.code = 'RUNTIME_BUDGET_INSUFFICIENT';
+        error.failureKind = 'runtime_budget_insufficient';
+        error.details = {
+          mutatingActionCount,
+          step,
+          maxExecutionSteps: limits.maxExecutionSteps
+        };
+        throw error;
+      }
+
       if (mutatingActionCount > MAX_MUTATING_ACTIONS_PER_RESPONSE && !isAllowedFolderWriteBundle(actions)) {
         if (ENABLE_PREFIX_TRUNCATION) {
           // ── Prefix truncation path ──────────────────────────────

@@ -386,10 +386,161 @@ function runObjectiveClarificationGate(objective, ticket) {
   };
 }
 
+// Compiled contract intents produced by the model-assisted preflight compiler.
+const COMPILED_INTENTS = Object.freeze([
+  'create_folders',
+  'ensure_folders',
+  'delete_paths',
+  'write_files',
+  'rename_paths',
+  'model_driven'
+]);
+
+function isSafeCompiledPathSegment(value) {
+  const segment = String(value || '').trim();
+  if (!segment) return false;
+  if (segment === '.') return false;
+  if (segment.startsWith('.')) return false;
+  if (segment.includes('..')) return false;
+  if (segment.includes('/')) return false;
+  if (segment.includes('\\')) return false;
+  if (/[\0\x00-\x1f]/.test(segment)) return false;
+  return /^[A-Za-z0-9._-]+$/.test(segment);
+}
+
+function normalizeCompiledTargetRoot(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const normalized = raw.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!normalized) return '';
+  if (normalized.split('/').some(segment => !isSafeCompiledPathSegment(segment))) return null;
+  return normalized;
+}
+
+function joinTargetRoot(root, target) {
+  if (!root) return target;
+  return `${root}/${target}`;
+}
+
+// Validate a model-produced compiled contract and convert it into the standard
+// objective-contract shape so the existing feasibility gate can consume it.
+function buildObjectiveContractFromCompiled(compiled) {
+  if (!compiled || typeof compiled !== 'object' || Array.isArray(compiled)) {
+    return unsupportedContract(['compiled_contract_not_an_object']);
+  }
+
+  const intent = String(compiled.intent || '').trim();
+  if (!COMPILED_INTENTS.includes(intent)) {
+    return unsupportedContract(['compiled_contract_unknown_intent', intent]);
+  }
+
+  if (intent === 'model_driven') {
+    return unsupportedContract(['compiled_contract_model_driven']);
+  }
+
+  const targetRoot = normalizeCompiledTargetRoot(compiled.targetRoot);
+  if (targetRoot === null) {
+    return unsupportedContract(['compiled_contract_unsafe_target_root']);
+  }
+
+  const rawTargets = Array.isArray(compiled.targets) ? compiled.targets : [];
+  if (rawTargets.length === 0) {
+    return unsupportedContract(['compiled_contract_empty_targets']);
+  }
+
+  const normalizedTargets = [];
+  for (const raw of rawTargets) {
+    const segment = String(raw || '').trim();
+    if (!isSafeCompiledPathSegment(segment)) {
+      return unsupportedContract(['compiled_contract_unsafe_target', segment]);
+    }
+    const fullPath = joinTargetRoot(targetRoot, segment);
+    if (!isSafeCompiledPathSegment(fullPath) && fullPath.includes('/')) {
+      // Re-check combined path for traversal via root+segment.
+      return unsupportedContract(['compiled_contract_unsafe_target', fullPath]);
+    }
+    normalizedTargets.push(fullPath);
+  }
+
+  const uniqueTargets = Array.from(new Set(normalizedTargets));
+
+  switch (intent) {
+    case 'create_folders':
+      return {
+        source: 'objective-contract',
+        recognized: true,
+        intent: 'create_folder',
+        targetPath: uniqueTargets.length === 1 ? uniqueTargets[0] : null,
+        postconditions: uniqueTargets.map(p => ({ type: 'folder_exists', path: p })),
+        allowedMutations: uniqueTargets.map(p => ({ operation: 'createFolder', path: p })),
+        completionPolicy: 'idempotent_if_already_satisfied',
+        scopeHints: [],
+        runtimeProfile: null,
+        notes: ['compiled_contract']
+      };
+    case 'ensure_folders':
+      return {
+        source: 'objective-contract',
+        recognized: true,
+        intent: 'ensure_folder',
+        targetPath: uniqueTargets.length === 1 ? uniqueTargets[0] : null,
+        postconditions: uniqueTargets.map(p => ({ type: 'folder_exists', path: p })),
+        allowedMutations: uniqueTargets.map(p => ({ operation: 'createFolder', path: p })),
+        completionPolicy: 'idempotent_if_already_satisfied',
+        scopeHints: [],
+        runtimeProfile: null,
+        notes: ['compiled_contract']
+      };
+    case 'delete_paths':
+      return {
+        source: 'objective-contract',
+        recognized: true,
+        intent: 'delete',
+        targetPath: uniqueTargets.length === 1 ? uniqueTargets[0] : null,
+        postconditions: uniqueTargets.map(p => ({ type: 'path_absent', path: p })),
+        allowedMutations: uniqueTargets.map(p => ({ operation: 'deletePath', path: p })),
+        completionPolicy: 'idempotent_if_already_satisfied',
+        scopeHints: [],
+        runtimeProfile: null,
+        notes: ['compiled_contract']
+      };
+    case 'write_files':
+      return {
+        source: 'objective-contract',
+        recognized: true,
+        intent: 'write_file',
+        targetPath: uniqueTargets.length === 1 ? uniqueTargets[0] : null,
+        postconditions: uniqueTargets.map(p => ({ type: 'path_exists', path: p })),
+        allowedMutations: uniqueTargets.map(p => ({ operation: 'writeFile', path: p })),
+        completionPolicy: 'idempotent_if_already_satisfied',
+        scopeHints: [],
+        runtimeProfile: null,
+        notes: ['compiled_contract']
+      };
+    case 'rename_paths':
+      return {
+        source: 'objective-contract',
+        recognized: true,
+        intent: 'rename',
+        targetPath: uniqueTargets.length === 1 ? uniqueTargets[0] : null,
+        postconditions: uniqueTargets.map(p => ({ type: 'path_renamed', path: p })),
+        allowedMutations: uniqueTargets.map(p => ({ operation: 'renamePath', path: p })),
+        completionPolicy: 'idempotent_if_already_satisfied',
+        scopeHints: [],
+        runtimeProfile: null,
+        notes: ['compiled_contract']
+      };
+    default:
+      return unsupportedContract(['compiled_contract_unsupported_intent', intent]);
+  }
+}
+
 module.exports = {
   buildObjectiveContract,
   parseSimpleFolderListObjective,
   isReportObjective,
   getReportRuntimeLimits,
-  runObjectiveClarificationGate
+  runObjectiveClarificationGate,
+  COMPILED_INTENTS,
+  buildObjectiveContractFromCompiled
 };
