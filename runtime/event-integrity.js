@@ -4,6 +4,38 @@ const crypto = require('crypto');
 
 const RUN_EVENT_SCHEMA_VERSION = 1;
 
+function isCurrentEventIntegerId(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function validateCurrentEventEnvelope(event) {
+  const errors = [];
+  const add = (type, message) => errors.push({ type, message });
+
+  if (!event || typeof event !== 'object' || Array.isArray(event)) {
+    add('event_shape', 'Event must be an object');
+    return errors;
+  }
+  if (event.schemaVersion !== RUN_EVENT_SCHEMA_VERSION) {
+    add('schema_version', `Expected event schema ${RUN_EVENT_SCHEMA_VERSION}, got ${event.schemaVersion}`);
+  }
+  if (typeof event.id !== 'string' || !event.id.trim()) add('missing_id', 'Event is missing an id');
+  const currentTimestamp = typeof event.ts === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,9}Z$/.test(event.ts) &&
+    !Number.isNaN(Date.parse(event.ts));
+  if (!currentTimestamp) add('invalid_timestamp', 'Event timestamp must be an ISO-8601 UTC timestamp');
+  if (typeof event.type !== 'string' || !event.type.trim()) add('invalid_type', 'Event has an invalid type');
+  if (event.ticketId !== null && !isCurrentEventIntegerId(event.ticketId)) add('invalid_ticket_id', 'Event has an invalid ticketId');
+  if (event.runId !== null && !isCurrentEventIntegerId(event.runId)) add('invalid_run_id', 'Event has an invalid runId');
+  if (event.stepId !== null && typeof event.stepId !== 'string') add('invalid_step_id', 'Event has an invalid stepId');
+  if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) add('invalid_payload', 'Event payload must be an object');
+  if (event.runId === null && (event.seq !== undefined || event.prevHash !== undefined || event.hash !== undefined)) {
+    add('unexpected_chain_fields', 'Non-run event contains run-chain fields');
+  }
+
+  return errors;
+}
+
 function canonicalRunEvent(event) {
   return {
     schemaVersion: event.schemaVersion,
@@ -27,6 +59,7 @@ function computeRunEventHash(event) {
 
 function verifyCurrentRunEventChain(events) {
   const errors = [];
+  const seenIds = new Set();
   const seenSeqs = new Set();
   let lastVerifiedSeq = null;
   let lastVerifiedHash = null;
@@ -45,11 +78,11 @@ function verifyCurrentRunEventChain(events) {
       add('parse', 'Event is not valid JSON');
       return;
     }
-    if (event.schemaVersion !== RUN_EVENT_SCHEMA_VERSION) {
-      add('schema_version', `Expected run-event schema ${RUN_EVENT_SCHEMA_VERSION}, got ${event.schemaVersion}`);
+    validateCurrentEventEnvelope(event).forEach(error => add(error.type, error.message));
+    if (typeof event.id === 'string' && event.id.trim()) {
+      if (seenIds.has(event.id)) add('duplicate_id', `Duplicate event id ${event.id}`);
+      seenIds.add(event.id);
     }
-    if (typeof event.id !== 'string' || !event.id.trim()) add('missing_id', 'Run event is missing an id');
-    if (typeof event.ts !== 'string' || Number.isNaN(Date.parse(event.ts))) add('invalid_timestamp', 'Run event has an invalid timestamp');
 
     if (!Number.isInteger(seq) || seq < 0) {
       add('missing_seq', 'Run event is missing a non-negative integer seq');
@@ -92,6 +125,8 @@ function verifyCurrentRunEventChain(events) {
 
 module.exports = {
   RUN_EVENT_SCHEMA_VERSION,
+  isCurrentEventIntegerId,
+  validateCurrentEventEnvelope,
   canonicalRunEvent,
   computeRunEventHash,
   verifyCurrentRunEventChain

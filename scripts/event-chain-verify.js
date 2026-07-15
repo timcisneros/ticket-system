@@ -8,7 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { verifyCurrentRunEventChain } = require('../runtime/event-integrity');
+const { verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('../runtime/event-integrity');
 
 function readEventsJsonl(filePath) {
   try {
@@ -40,11 +40,24 @@ function verifyChain(events, targetRunId = null) {
   };
 
   const byRun = {};
+  const seenEventIds = new Set();
   for (const event of events) {
     if (event._parseError) {
       report.errors.push({ type: 'parse', message: 'Event parse error', raw: event._raw });
       report.chainValid = false;
       continue;
+    }
+    const envelopeErrors = validateCurrentEventEnvelope(event);
+    if (envelopeErrors.length > 0) {
+      report.errors.push(...envelopeErrors.map(error => ({ ...error, eventId: event.id || null })));
+      report.chainValid = false;
+    }
+    if (typeof event.id === 'string' && event.id.trim()) {
+      if (seenEventIds.has(event.id)) {
+        report.errors.push({ type: 'duplicate_id', message: `Duplicate event id ${event.id}`, eventId: event.id });
+        report.chainValid = false;
+      }
+      seenEventIds.add(event.id);
     }
     if (event.runId == null) {
       report.nonRunEvents += 1;

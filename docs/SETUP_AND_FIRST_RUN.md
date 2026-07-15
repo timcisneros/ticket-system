@@ -5,7 +5,7 @@ verify from code/UI rather than assume.
 
 ## 1. Prerequisites
 
-- Node.js (a current LTS) and pnpm through Corepack. The app is a single-process Fastify server
+- Node.js 24 and pnpm 11.8.0 through Corepack. The app is a single-process Fastify server
   backed by JSON files.
 - No external services are required for the demo path. Running **live agents** additionally needs a
   configured provider (OpenAI API key, or a local Ollama).

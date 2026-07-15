@@ -12,7 +12,7 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
-const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain } = require('./runtime/event-integrity');
+const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
@@ -1636,7 +1636,12 @@ function readJsonArrayCached(filePath) {
 }
 
 function readTickets() {
-  return normalizeTickets(readJsonArrayCached(DATA_FILE));
+  const tickets = readJsonArrayCached(DATA_FILE);
+  // Ticket normalization is a runtime convenience, never an integrity filter.
+  // Validate the persisted identities first so duplicates or malformed ids
+  // cannot disappear before startup/runtime checks see them.
+  validateUniqueIntegerIds('tickets.json', tickets);
+  return normalizeTickets(tickets);
 }
 
 function getTicketById(id) {
@@ -4758,7 +4763,8 @@ function buildRunAuthorityContext(run, ticket, agent, snapshot) {
   const allocationPlanId = run.allocationPlanId || s.allocationPlanId || null;
   const allocationItemId = run.allocationItemId || s.allocationItemId || null;
   const ownedOutputPaths = getRunOwnedOutputPaths(run);
-  const limits = getRunRuntimeLimitsSnapshot(run, ticket && ticket.objective);
+  const limits = normalizeRuntimeLimitsSnapshot(run && run.runtimeLimitsSnapshot) ||
+    normalizeRuntimeLimitsSnapshot(s.runtimeLimitsSnapshot);
   const groups = readGroups();
   const agentGroupNames = agent
     ? getPrincipalGroupIds('agent', agent.id).map(groupId => (groups.find(group => group.id === groupId) || {}).name).filter(Boolean)
@@ -4782,10 +4788,10 @@ function buildRunAuthorityContext(run, ticket, agent, snapshot) {
       mutatingOperations: (s.primitiveContract && s.primitiveContract.mutatingOperations) || AGENT_MUTATING_OPERATIONS,
       maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
       maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
-      maxSteps: limits.maxExecutionSteps,
-      maxWorkspaceOperations: limits.maxWorkspaceOperationsPerRun,
-      maxModelRequests: limits.maxModelRequestsPerRun,
-      maxRuntimeDurationMs: limits.maxRuntimeDurationMs,
+      maxSteps: limits ? limits.maxExecutionSteps : null,
+      maxWorkspaceOperations: limits ? limits.maxWorkspaceOperationsPerRun : null,
+      maxModelRequests: limits ? limits.maxModelRequestsPerRun : null,
+      maxRuntimeDurationMs: limits ? limits.maxRuntimeDurationMs : null,
       provider: s.provider || (agent ? agent.provider : null) || '-',
       model: s.model || (agent ? agent.model : null) || '-',
       executionWorkspaceType,
@@ -4796,7 +4802,9 @@ function buildRunAuthorityContext(run, ticket, agent, snapshot) {
         ? `Granted via ticket assignment group "${assignmentGroup.name}"`
         : 'Granted via direct ticket assignment',
       groups: agentGroupNames.length > 0 ? agentGroupNames.join(', ') : 'No agent group grant recorded',
-      runtimePolicy: 'Default bounded workspace runtime policy',
+      runtimePolicy: limits
+        ? 'Immutable run-start bounded workspace runtime policy'
+        : 'Unavailable: unsupported run record is missing its runtime-limits snapshot',
       scope: allocationPlanId ? 'Owned-scope allocation plan' : 'Direct assignment workspace scope'
     },
     controls: {
@@ -4955,6 +4963,7 @@ let eventAppendFailure = null;
 
 // Per-run event chain state for forensic sequence numbers and hash chaining
 const runEventChains = new Map(); // runId -> { seq: number, prevHash: string | null }
+const persistedEventIds = new Set();
 
 function normalizeEventId(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : crypto.randomUUID();
@@ -4982,20 +4991,20 @@ function readPersistedEventsForChainRecovery() {
 
 // Rebuild the in-memory chain tips before startup recovery can append events.
 // There is one current run-event schema and one continuous chain per run.
-function restoreRunEventChainsFromDisk() {
-  runEventChains.clear();
+function validatePersistedEventStore(events) {
   const states = new Map();
+  const eventIds = new Set();
 
-  readPersistedEventsForChainRecovery().forEach((event, index) => {
-    if (event.runId === undefined || event.runId === null) return;
-    const runId = normalizeNullableInteger(event.runId);
-    if (runId === null) {
-      throw dataIntegrityError('events.jsonl', `line ${index + 1} has an invalid runId`);
+  events.forEach((event, index) => {
+    const envelopeErrors = validateCurrentEventEnvelope(event);
+    if (envelopeErrors.length > 0) {
+      throw dataIntegrityError('events.jsonl', `line ${index + 1}: ${envelopeErrors[0].message}`);
     }
+    if (eventIds.has(event.id)) throw dataIntegrityError('events.jsonl', `line ${index + 1} has duplicate event id ${event.id}`);
+    eventIds.add(event.id);
+    if (event.runId === null) return;
+    const runId = event.runId;
 
-    if (event.schemaVersion !== RUN_EVENT_SCHEMA_VERSION) {
-      throw dataIntegrityError('events.jsonl', `line ${index + 1} has an unsupported run-event schema`);
-    }
     if (!Number.isInteger(event.seq) || event.seq < 0) {
       throw dataIntegrityError('events.jsonl', `line ${index + 1} has an invalid run-event sequence`);
     }
@@ -5020,18 +5029,29 @@ function restoreRunEventChainsFromDisk() {
     states.set(runId, state);
   });
 
+  return { states, eventIds };
+}
+
+function restoreRunEventChainsFromDisk() {
+  runEventChains.clear();
+  persistedEventIds.clear();
+  const { states, eventIds } = validatePersistedEventStore(readPersistedEventsForChainRecovery());
+
   states.forEach((state, runId) => {
     runEventChains.set(runId, {
       seq: state.nextSeq,
       prevHash: state.previousHash
     });
   });
+  eventIds.forEach(eventId => persistedEventIds.add(eventId));
 }
 
 function normalizeNullableInteger(value) {
   if (value === undefined || value === null || value === '') return null;
-  const parsed = parseInt(value, 10);
-  return Number.isNaN(parsed) ? null : parsed;
+  if (Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function appendEvent(event = {}) {
@@ -5040,20 +5060,35 @@ function appendEvent(event = {}) {
     error.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
     throw error;
   }
+  const ticketId = normalizeNullableInteger(event.ticketId);
+  const runId = normalizeNullableInteger(event.runId);
+  if (event.ticketId !== undefined && event.ticketId !== null && ticketId === null) {
+    throw dataIntegrityError('events.jsonl', `cannot append event ${event.type || 'event'} with invalid ticketId`);
+  }
+  if (event.runId !== undefined && event.runId !== null && runId === null) {
+    throw dataIntegrityError('events.jsonl', `cannot append event ${event.type || 'event'} with invalid runId`);
+  }
   const normalized = {
     schemaVersion: RUN_EVENT_SCHEMA_VERSION,
     id: normalizeEventId(event.id),
     ts: typeof event.ts === 'string' && event.ts.trim() ? event.ts : createLogTimestamp(),
     type: typeof event.type === 'string' && event.type.trim() ? event.type.trim() : 'event',
-    ticketId: normalizeNullableInteger(event.ticketId),
-    runId: normalizeNullableInteger(event.runId),
+    ticketId,
+    runId,
     stepId: event.stepId === undefined || event.stepId === null ? null : String(event.stepId),
     payload: sanitizeSnapshotValue(event.payload && typeof event.payload === 'object' ? event.payload : {})
   };
+  const envelopeErrors = validateCurrentEventEnvelope(normalized);
+  if (envelopeErrors.length > 0) {
+    throw dataIntegrityError('events.jsonl', `cannot append event ${normalized.type}: ${envelopeErrors[0].message}`);
+  }
+  if (persistedEventIds.has(normalized.id)) {
+    throw dataIntegrityError('events.jsonl', `cannot append duplicate event id ${normalized.id}`);
+  }
 
   let nextChain = null;
   // Add forensic sequence number and hash chain for run events. The in-memory
-  // tip advances only after the exact serialized event is durably appended.
+  // tip advances only after the exact serialized event is synchronously appended.
   if (normalized.runId !== null) {
     const runId = normalized.runId;
     const chain = runEventChains.get(runId) || { seq: 0, prevHash: null };
@@ -5077,33 +5112,60 @@ function appendEvent(event = {}) {
     throw persistenceError;
   }
   if (nextChain) runEventChains.set(normalized.runId, nextChain);
+  persistedEventIds.add(normalized.id);
 
   return normalized;
 }
 
 function readEvents() {
-  if (!fs.existsSync(EVENTS_FILE)) return [];
-
   try {
-    return fs.readFileSync(EVENTS_FILE, 'utf8')
-      .split('\n')
-      .filter(line => line.trim())
-      .map(line => {
-        try {
-          const event = JSON.parse(line);
-          return event && typeof event === 'object' ? event : null;
-        } catch (error) {
-          return null;
-        }
-      })
-      .filter(Boolean);
+    const events = readPersistedEventsForChainRecovery();
+    validatePersistedEventStore(events);
+    return events;
   } catch (error) {
-    return [];
+    return failClosedEventRead(error);
   }
 }
 
+function failClosedEventRead(error) {
+  if (!eventAppendFailure) eventAppendFailure = error;
+  serverReady = false;
+  if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
+  if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
+  throw error;
+}
+
+function validateProjectedEvents(events) {
+  const ids = new Set();
+  const byRunId = new Map();
+  events.forEach((event, index) => {
+    const envelopeErrors = validateCurrentEventEnvelope(event);
+    if (envelopeErrors.length > 0) {
+      throw dataIntegrityError('events.jsonl', `projected event ${index + 1}: ${envelopeErrors[0].message}`);
+    }
+    if (ids.has(event.id)) throw dataIntegrityError('events.jsonl', `projected events contain duplicate event id ${event.id}`);
+    ids.add(event.id);
+    if (event.runId !== null) {
+      const runEvents = byRunId.get(event.runId) || [];
+      runEvents.push(event);
+      byRunId.set(event.runId, runEvents);
+    }
+  });
+  byRunId.forEach((runEvents, runId) => {
+    const verification = verifyCurrentRunEventChain(runEvents);
+    if (!verification.chainValid) {
+      throw dataIntegrityError('events.jsonl', `run ${runId} projection failed current-schema verification: ${verification.errors[0].message}`);
+    }
+  });
+  return events;
+}
+
 function readBufferedAndMatchingEvents({ needles, predicate }) {
-  return readMatchingEvents(EVENTS_FILE, { needles, predicate });
+  try {
+    return validateProjectedEvents(readMatchingEvents(EVENTS_FILE, { needles, predicate, strict: true }));
+  } catch (error) {
+    return failClosedEventRead(error);
+  }
 }
 
 function getRunEvents(runId) {
@@ -5613,6 +5675,7 @@ function clearReplaySnapshotFiles() {
 
 async function resetDebugEventState() {
   runEventChains.clear();
+  persistedEventIds.clear();
   eventAppendFailure = null;
   writeFileAtomic(EVENTS_FILE, '');
 }
@@ -6078,13 +6141,10 @@ function buildRunAttemptUsage(run, ticketRuns = null) {
   };
 }
 
-function buildRunRuntimeLimitsDisplay(run, snapshot, attemptUsage, objective = null) {
+function buildRunRuntimeLimitsDisplay(run, snapshot, attemptUsage) {
   const persisted = normalizeRuntimeLimitsSnapshot(run && run.runtimeLimitsSnapshot) ||
     normalizeRuntimeLimitsSnapshot(snapshot && snapshot.runtimeLimitsSnapshot);
-  const historical = Boolean(persisted);
-  const limits = historical
-    ? persisted
-    : resolveAgentRuntimeLimits(objective).snapshot;
+  const available = Boolean(persisted);
   const parsedPlans = snapshot && Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
   const providerRequests = snapshot && Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests.length : null;
   const modelResponses = snapshot && Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses.length : null;
@@ -6102,11 +6162,11 @@ function buildRunRuntimeLimitsDisplay(run, snapshot, attemptUsage, objective = n
   };
   const timeoutFromRun = run && /runtime duration limit/i.test(run.error || '');
   return {
-    historical,
-    sourceLabel: historical
+    available,
+    sourceLabel: available
       ? 'Applied run-start limits'
-      : 'Historical applied limits unavailable; showing current fallback defaults',
-    limits: pickRuntimeLimitValues(limits),
+      : 'Unavailable: unsupported run record is missing its immutable run-start limits snapshot',
+    limits: available ? pickRuntimeLimitValues(persisted) : null,
     usage: {
       executionTurns: snapshot ? parsedPlans.length : null,
       runtimeMs: attemptUsage && attemptUsage.durationMs !== null ? attemptUsage.durationMs : null,
@@ -9571,9 +9631,10 @@ function getAgentRuntimeLimits(objective = null) {
   return resolveAgentRuntimeLimits(objective).limits;
 }
 
-function getRunRuntimeLimitsSnapshot(run, objective = null, options = {}) {
+function getRunRuntimeLimitsSnapshot(run) {
   const persisted = normalizeRuntimeLimitsSnapshot(run && run.runtimeLimitsSnapshot);
-  return persisted || resolveAgentRuntimeLimits(objective, options).snapshot;
+  if (persisted) return persisted;
+  throw dataIntegrityError('runs.json', `run ${run && run.id != null ? run.id : 'unknown'} is missing its required runtimeLimitsSnapshot`);
 }
 
 const ALL_RUNTIME_CONFIG_KEYS = Object.freeze([...RUNTIME_LIMIT_CONFIG_KEYS, ...RUNTIME_SYSTEM_CONFIG_KEYS]);
@@ -10047,7 +10108,7 @@ async function compileObjectiveContract(run, ticket, agent, limits, modelRequest
   return { contract, fallback: false, modelRequestsUsed: 1 };
 }
 
-function checkObjectiveContractPostcondition(contract) {
+function inspectObjectiveContractPostconditions(contract) {
   if (!contract || !contract.recognized || !Array.isArray(contract.postconditions) || contract.postconditions.length === 0) return null;
 
   const checkedPaths = [];
@@ -10065,10 +10126,17 @@ function checkObjectiveContractPostcondition(contract) {
     } else {
       return null;
     }
-    if (!satisfied) return null;
-    checkedPaths.push({ type, path: postcondition.path });
+    checkedPaths.push({ type, path: postcondition.path, satisfied });
   }
 
+  return checkedPaths;
+}
+
+function checkObjectiveContractPostcondition(contract) {
+  const inspected = inspectObjectiveContractPostconditions(contract);
+  if (!inspected || inspected.some(check => !check.satisfied)) return null;
+
+  const checkedPaths = inspected.map(({ type, path }) => ({ type, path }));
   const absentDelete = checkedPaths.every(check => check.type === 'absent');
   return {
     reason: absentDelete
@@ -17719,6 +17787,24 @@ async function runAgentTicket(runId) {
 
       if (modelPlan.complete && completionBlockedByActionTruncation) {
         recordRunEvent(run, 'run:completion_deferred_truncation', 'complete:true not honored: response was truncated by the mutating-action cap and proposed actions were dropped', { step });
+      } else if (modelPlan.complete && compiledContract) {
+        const pendingPostconditions = (inspectObjectiveContractPostconditions(compiledContract) || [])
+          .filter(check => !check.satisfied)
+          .map(({ type, path }) => ({ type, path }));
+        const detail = { step, pendingPostconditions };
+        recordRunEvent(run, 'run:contract_completion_deferred', 'complete:true not honored: compiled objective postconditions remain unsatisfied', detail);
+        appendEvent({
+          type: 'run.contract_completion_deferred',
+          ticketId: run.ticketId,
+          runId: run.id,
+          stepId: String(step),
+          payload: detail
+        });
+        actionResults.push({
+          warning: 'run:contract_completion_deferred',
+          message: `Completion was deferred. Satisfy every compiled postcondition before returning complete:true: ${pendingPostconditions.map(check => `${check.type} ${check.path}`).join(', ') || 'compiled contract remains unsatisfied'}.`,
+          pendingPostconditions
+        });
       } else if (modelPlan.complete) {
         if (actions.length === 0) {
           recordRunEvent(run, 'run:completed_noop', 'Agent run completed with no workspace changes', { step });
@@ -21239,7 +21325,7 @@ function buildRunDiagnosticBundle(ctx) {
   const runtimePolicy = runtimeLimitsDisplay || null;
   out('### Runtime limits and usage');
   out('- Limit source: ' + dash(runtimePolicy && runtimePolicy.sourceLabel));
-  if (runtimePolicy) {
+  if (runtimePolicy && runtimePolicy.available) {
     out('- Execution turns: ' + dash(runtimePolicy.usage.executionTurns) + ' / ' + dash(runtimePolicy.limits.maxExecutionSteps));
     out('- Runtime: ' + dash(runtimePolicy.usage.runtimeMs) + 'ms / ' + dash(runtimePolicy.limits.maxRuntimeDurationMs) + 'ms');
     out('- Model requests: ' + dash(runtimePolicy.usage.modelRequests) + ' / ' + dash(runtimePolicy.limits.maxModelRequestsPerRun));
@@ -22918,8 +23004,8 @@ function validateUniqueIntegerIds(storeName, records) {
     if (!record || typeof record !== 'object' || Array.isArray(record)) {
       throw dataIntegrityError(storeName, `record ${index} must be an object`);
     }
-    const id = parseInt(record.id, 10);
-    if (!Number.isInteger(id) || id <= 0) {
+    const id = record.id;
+    if (!Number.isSafeInteger(id) || id <= 0) {
       throw dataIntegrityError(storeName, `record ${index} has an invalid id`);
     }
     if (seen.has(id)) throw dataIntegrityError(storeName, `duplicate id ${id}`);

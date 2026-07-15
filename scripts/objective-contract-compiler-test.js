@@ -40,4 +40,13 @@ const deduped = buildObjectiveContractFromCompiled({
 });
 assert(deduped.recognized === true && deduped.allowedMutations.length === 1, 'Compiled targets were not deduplicated');
 
-console.log('PASS: objective contract compiler validates roots, targets, supported intents, and deduplication');
+const extraFields = buildObjectiveContractFromCompiled({
+  intent: 'create_folders',
+  targetRoot: '',
+  targets: ['A'],
+  explanation: 'ignore this'
+});
+assert(extraFields.recognized === false, 'Compiled contract with unknown fields was accepted');
+assert(extraFields.notes.includes('compiled_contract_unknown_fields'), 'Unknown-field rejection reason was not preserved');
+
+console.log('PASS: objective contract compiler validates exact schema, roots, targets, supported intents, and deduplication');

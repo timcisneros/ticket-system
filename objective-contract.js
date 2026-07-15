@@ -431,6 +431,12 @@ function buildObjectiveContractFromCompiled(compiled) {
     return unsupportedContract(['compiled_contract_not_an_object']);
   }
 
+  const allowedFields = new Set(['intent', 'targetRoot', 'targets']);
+  const unknownFields = Object.keys(compiled).filter(field => !allowedFields.has(field));
+  if (unknownFields.length > 0) {
+    return unsupportedContract(['compiled_contract_unknown_fields', ...unknownFields.sort()]);
+  }
+
   const intent = String(compiled.intent || '').trim();
   if (!COMPILED_INTENTS.includes(intent)) {
     return unsupportedContract(['compiled_contract_unknown_intent', intent]);

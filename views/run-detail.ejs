@@ -211,6 +211,7 @@
 <section class="detail-section">
   <h2>Runtime limits and usage</h2>
   <p class="text-muted"><%= runtimeLimitsDisplay.sourceLabel %>.</p>
+  <% if (runtimeLimitsDisplay.available) { %>
   <dl class="detail-grid">
     <div><dt>Execution turns</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.executionTurns, runtimeLimitsDisplay.limits.maxExecutionSteps, false) %></dd></div>
     <div><dt>Runtime</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.runtimeMs, runtimeLimitsDisplay.limits.maxRuntimeDurationMs, true) %></dd></div>
@@ -221,6 +222,7 @@
       <div><dt>Provider symptom</dt><dd><%= runtimeLimitsDisplay.providerSymptom %></dd></div>
     <% } %>
   </dl>
+  <% } %>
 </section>
 <% } %>
 

@@ -13,7 +13,7 @@ const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'rbac-inline-worksp
 const PORT = process.env.PORT || '3593';
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const PASSWORD_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
-const MALICIOUS_NAME = '</script><script>globalThis.__storedXss=1</script>';
+const MALICIOUS_NAME = '</script><img src=x onerror=globalThis.__storedXss=1>';
 const PROVIDER_SECRET = 'super-secret-provider-key';
 
 function writeJson(name, value) {
@@ -41,12 +41,14 @@ function seedData() {
       permissions: ['user:create', 'user:read', 'user:update', 'group:create', 'group:update'],
       canReceiveTickets: false
     },
-    { id: 3, name: 'Process managers', permissions: ['processTemplate:manage'], canReceiveTickets: false }
+    { id: 3, name: 'Process managers', permissions: ['processTemplate:manage'], canReceiveTickets: false },
+    { id: 4, name: 'Allocated agents', permissions: [], canReceiveTickets: true }
   ]);
   writeJson('memberships.json', [
     { id: 1, principalType: 'user', principalId: 1, groupId: 1 },
     { id: 2, principalType: 'user', principalId: 2, groupId: 2 },
-    { id: 3, principalType: 'user', principalId: 3, groupId: 3 }
+    { id: 3, principalType: 'user', principalId: 3, groupId: 3 },
+    { id: 4, principalType: 'agent', principalId: 1, groupId: 4 }
   ]);
   writeJson('permissions.json', JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'permissions.json'), 'utf8')));
   for (const file of ['tickets.json', 'runs.json', 'logs.json', 'workflows.json']) writeJson(file, []);
@@ -170,8 +172,16 @@ async function main() {
     assert(response.status === 200, `process template page returned HTTP ${response.status}`);
     assert(!response.body.includes(PROVIDER_SECRET), 'process template page leaked an agent provider key');
     assert(!response.body.includes(MALICIOUS_NAME), 'process template page embedded a raw script-closing agent name');
-    assert(response.body.includes('\\u003c/script\\u003e\\u003cscript\\u003e'), 'process template page did not script-escape the hostile agent name');
+    assert(response.body.includes('\\u003c/script\\u003e\\u003cimg'), 'process template page did not script-escape the hostile agent name');
     assert(response.body.includes('option.textContent'), 'process template selector does not populate labels through textContent');
+
+    response = await request('GET', '/', { cookie: adminCookie });
+    assert(response.status === 200, `ticket creation page returned HTTP ${response.status}`);
+    assert(!response.body.includes(MALICIOUS_NAME), 'ticket creation page embedded a raw hostile agent name');
+    assert(response.body.includes('\\u003c/script\\u003e\\u003cimg'), 'ticket creation page did not script-escape the hostile agent name');
+    assert(response.body.includes('ownedPathsContainer.replaceChildren()'), 'allocated-agent rows are not rebuilt through DOM APIs');
+    assert(response.body.includes('agentName.textContent'), 'allocated-agent labels are not assigned through textContent');
+    assert(!response.body.includes('ownedPathsContainer.innerHTML'), 'allocated-agent rows still use an HTML parsing sink');
 
     console.log('PASS: RBAC escalation paths, workflow authority, SSE reads, and inline agent data are constrained');
   } catch (error) {

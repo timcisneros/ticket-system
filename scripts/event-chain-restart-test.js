@@ -48,6 +48,13 @@ function seedRestartFixture(dataDir) {
     agentId: 1,
     status: 'running',
     executionMode: 'agent',
+    runtimeLimitsSnapshot: {
+      maxExecutionSteps: 4,
+      maxModelRequestsPerRun: 4,
+      maxWorkspaceOperationsPerRun: 10,
+      maxRuntimeDurationMs: 5000,
+      source: { uiConfigured: false, deploymentCapped: false, workloadProfile: null, workflowLimits: null }
+    },
     createdAt: now,
     updatedAt: now
   }]);

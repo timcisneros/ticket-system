@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Event Chain Verify Test — 9 scenarios proving current-schema chain integrity.
+// Event Chain Verify Test — current-schema envelope and chain integrity.
 //
 // 1. clean chain passes
 // 2. modified payload fails
@@ -10,6 +10,9 @@
 // 7. replay fixture chain verifies
 // 8. modified final event fails against its stored hash
 // 9. modified forensic metadata fails
+// 10. malformed run identity fails
+// 11. invalid payload shape fails
+// 12. non-run events must use the current envelope
 
 const fs = require('fs');
 const os = require('os');
@@ -292,6 +295,58 @@ async function scenario9ModifiedMetadata() {
   return { name: 'modified-metadata', passed: true, detail: 'timestamp tamper detected' };
 }
 
+async function scenario10MalformedRunIdentity() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chain-10-'));
+  const event = makeEvent(0, 'run.created', { agentId: 1 });
+  event.runId = '1junk';
+  buildHashChain([event]);
+  writeEvents(dir, [event]);
+  const { report, exitCode } = await runVerifier(dir, true);
+
+  assert(exitCode === 1, 'strict mode should reject malformed run identities');
+  assert(report.errors.some(error => error.type === 'invalid_run_id'), `malformed run id was not rejected: ${JSON.stringify(report.errors)}`);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { name: 'malformed-run-identity', passed: true, detail: 'strict run id validation' };
+}
+
+async function scenario11InvalidPayloadShape() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chain-11-'));
+  const event = makeEvent(0, 'run.created', {});
+  event.payload = [];
+  buildHashChain([event]);
+  writeEvents(dir, [event]);
+  const { report, exitCode } = await runVerifier(dir, true);
+
+  assert(exitCode === 1, 'strict mode should reject array payloads');
+  const runReport = Object.values(report.runs)[0];
+  assert(runReport && runReport.errors.some(error => error.type === 'invalid_payload'), `invalid payload was not rejected: ${JSON.stringify(report)}`);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { name: 'invalid-payload-shape', passed: true, detail: 'payload object required' };
+}
+
+async function scenario12LegacyNonRunEnvelope() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chain-12-'));
+  const event = {
+    id: 'legacy-system-event',
+    ts: '2030-01-01T00:00:00.000Z',
+    type: 'system.notice',
+    ticketId: null,
+    runId: null,
+    stepId: null,
+    payload: {}
+  };
+  writeEvents(dir, [event]);
+  const { report, exitCode } = await runVerifier(dir, true);
+
+  assert(exitCode === 1, 'strict mode should reject legacy non-run envelopes');
+  assert(report.errors.some(error => error.type === 'schema_version'), `legacy non-run event was not rejected: ${JSON.stringify(report.errors)}`);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { name: 'legacy-non-run-envelope', passed: true, detail: 'one schema for all events' };
+}
+
 // ── main ──────────────────────────────────────────────────────────
 
 async function main() {
@@ -314,6 +369,9 @@ async function main() {
   results.push(await scenario7ReplayFixture(cleanFixture));
   results.push(await scenario8ModifiedFinalEvent());
   results.push(await scenario9ModifiedMetadata());
+  results.push(await scenario10MalformedRunIdentity());
+  results.push(await scenario11InvalidPayloadShape());
+  results.push(await scenario12LegacyNonRunEnvelope());
 
   try { fs.rmSync(cleanFixture, { recursive: true, force: true }); } catch (_) {}
 

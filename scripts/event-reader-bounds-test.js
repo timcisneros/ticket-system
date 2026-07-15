@@ -98,6 +98,21 @@ function testRunDetailScoped() {
   console.log('  ✓ run-detail-scoped: returns only the target run/ticket events');
 }
 
+function testStrictMatchingReadFailsOnMalformedEvidence() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'event-reader-strict-'));
+  const file = path.join(dir, 'events.jsonl');
+  fs.writeFileSync(file, '{"runId":7,"broken":}\n', 'utf8');
+  let error = null;
+  try {
+    readMatchingEvents(file, { needles: ['"runId":7'], predicate: () => true, strict: true });
+  } catch (caught) {
+    error = caught;
+  }
+  assert(error && error.code === 'EVENT_PARSE_ERROR', 'strict matching reads must reject malformed relevant evidence');
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('  ✓ strict-malformed: relevant malformed evidence fails closed');
+}
+
 // ── Test 3: bounded recent reader returns newest events in order ──
 function testRecentReaderOrder() {
   const events = [];
@@ -141,6 +156,7 @@ function main() {
   const tests = [
     testNoFullParseForRunLookup,
     testRunDetailScoped,
+    testStrictMatchingReadFailsOnMalformedEvidence,
     testRecentReaderOrder,
     testSafeEdges
   ];

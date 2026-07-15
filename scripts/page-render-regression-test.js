@@ -4,6 +4,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
+const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const REAL_DATA_DIR = path.join(ROOT, 'data');
@@ -145,6 +146,13 @@ function seedNavigationFixture() {
     allowedTargetKinds: ['workspace', 'browser']
   };
   const workTypeSnapshot = { ...workType, capturedAt: now };
+  const runtimeLimitsSnapshot = {
+    maxExecutionSteps: 10,
+    maxModelRequestsPerRun: 10,
+    maxWorkspaceOperationsPerRun: 20,
+    maxRuntimeDurationMs: 20000,
+    source: { uiConfigured: false, deploymentCapped: false, workloadProfile: null, workflowLimits: null }
+  };
   writeJson('work-types.json', [workType]);
   const browserTarget = {
     id: BROWSER_TARGET_ID,
@@ -223,6 +231,7 @@ function seedNavigationFixture() {
     workspaceRoot: WORKSPACE_ROOT,
     mainWorkspaceRoot: WORKSPACE_ROOT,
     executionWorkspaceType: 'main',
+    runtimeLimitsSnapshot,
     status: 'completed',
     ticketOpenedAt: now,
     createdAt: now,
@@ -238,6 +247,7 @@ function seedNavigationFixture() {
       provider: 'openai',
       model: agent.model,
       runtimeEnvelope: {},
+      runtimeLimitsSnapshot,
       ticketObjectiveSnapshot: ticket.objective,
       workTypeId: workType.id,
       workTypeSnapshot,
@@ -490,7 +500,7 @@ function seedNavigationFixture() {
       message: `Page render fixture log ${index + 1}`
     }))
   ]);
-  appendEvent(postconditionsCheckedEvent);
+  appendEvent(sealCurrentRunEventChains([postconditionsCheckedEvent])[0]);
   return { ticket, run, activeTicket, activeRun, browserTarget, browserTicket, browserRun, agent, workType, ticketWithoutAcceptanceCriteria: extraTickets[0], runWithoutAcceptanceCriteriaSnapshot, verifiedRun, childTicket };
 }
 

@@ -242,14 +242,33 @@ function createFakeOpenAIPreload() {
     "",
     "  await new Promise(resolve => setTimeout(resolve, 50));",
     "",
-    "  // Preflight contract compiler: return model_driven so execution falls back",
-    "  // to the normal model path and the scenario-specific response counters stay",
-    "  // aligned with the execution loop.",
+    "  // Preflight contract compiler: one scenario uses a strict two-target",
+    "  // contract; all others fall back so their execution counters stay aligned.",
     "  if (combined.includes('objective compiler')) {",
+    "    const userContent = input.filter(item => item && item.role === 'user').map(item => String(item.content || '')).join(' ');",
+    "    if (userContent.includes('compiled-partial-completion')) {",
+    "      return okResponse({ intent: 'create_folders', targetRoot: '', targets: ['compiled-A', 'compiled-B'] });",
+    "    }",
     "    return okResponse({",
     "      intent: 'model_driven',",
     "      targetRoot: '',",
     "      targets: []",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('compiled-partial-completion')) {",
+    "    const count = nextCount('compiled-partial-completion');",
+    "    if (count === 1) {",
+    "      return okResponse({",
+    "        message: 'Creating only the first contracted folder.',",
+    "        actions: [{ operation: 'createFolder', args: { path: 'compiled-A' } }],",
+    "        complete: true",
+    "      });",
+    "    }",
+    "    return okResponse({",
+    "      message: 'Creating the remaining contracted folder.',",
+    "      actions: [{ operation: 'createFolder', args: { path: 'compiled-B' } }],",
+    "      complete: true",
     "    });",
     "  }",
     "",
@@ -1168,6 +1187,32 @@ async function main() {
       }
     );
 
+    // 15. a model complete:true cannot bypass unsatisfied compiled postconditions
+    await runScenario(
+      preloadPath,
+      agent,
+      `compiled-partial-completion ${STAMP}`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+      },
+      {
+        expectedStatus: 'completed',
+        expectPostconditionCompleted: true,
+        expectStepsAtLeast: 2,
+        verify: async ({ run, snapshot }) => {
+          assert(fs.statSync(path.join(WORKSPACE_ROOT, 'compiled-A')).isDirectory(), 'First compiled target was not created');
+          assert(fs.statSync(path.join(WORKSPACE_ROOT, 'compiled-B')).isDirectory(), 'Second compiled target was not created');
+          assert(snapshot.parsedModelPlans.length === 2, 'Partial complete:true should require a second execution turn');
+          assert(snapshot.events.some(event => event.type === 'run:contract_completion_deferred'), 'Deferred compiled completion evidence missing');
+          const persistedEvent = await waitForEvent(event => event.type === 'run.contract_completion_deferred' && event.runId === run.id);
+          assert(persistedEvent && persistedEvent.payload.pendingPostconditions.some(check => check.path === 'compiled-B'), 'Persisted deferred completion evidence missing pending target');
+        }
+      }
+    );
+
     console.log(JSON.stringify({
       folderFileAutoComplete: true,
       repeatedWriteAutoComplete: true,
@@ -1186,7 +1231,8 @@ async function main() {
       handoffTaskExecuted: true,
       handoffInvalidPathRejected: true,
       handoffUnknownExecutorRejected: true,
-      invalidWorkflowDraftRejected: true
+      invalidWorkflowDraftRejected: true,
+      compiledPartialCompletionDeferred: true
     }));
   } finally {
     // Servers are killed and awaited per scenario, so nothing should hold these

@@ -95,8 +95,10 @@ external connector**, and it refuses writes. Tracked seed agents carry **no prov
 ## 9. Current limitations
 
 - No real external connector yet (only the `local_mock` contract).
-- Legacy records may lack newer fields by design (e.g. pre-r1.10 tickets without `templateVersion`,
-  runs without `routingSnapshot`) — nullable, no backfill; they render safely.
+- Current run records must retain their immutable run-start evidence. Missing run-limit snapshots are
+  surfaced as unsupported records and are never reinterpreted using current configuration. Reset or
+  regenerate development run data after a run-schema change; do not add compatibility branches until
+  retained user data creates a concrete migration requirement.
 - Activation writes the version store then the root in two atomic writes; a crash between them is
   reconciled at startup (`docs/PROCESS_TEMPLATE_ACTIVATION_DURABILITY.md`) but is not fully
   transactional.

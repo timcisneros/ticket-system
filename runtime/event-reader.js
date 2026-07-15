@@ -19,11 +19,12 @@
 
 const fs = require('fs');
 
-function readFileSafe(filePath) {
+function readFileSafe(filePath, strict = false) {
   if (!fs.existsSync(filePath)) return null;
   try {
     return fs.readFileSync(filePath, 'utf8');
   } catch (error) {
+    if (strict) throw error;
     return null;
   }
 }
@@ -33,8 +34,8 @@ function readFileSafe(filePath) {
 // `onParse`, when provided, is invoked once per line that is actually parsed —
 // exposed so tests can assert that irrelevant lines are not parsed.
 // Returns events in file order.
-function readMatchingEvents(filePath, { needles = [], predicate = () => true, onParse = null } = {}) {
-  const raw = readFileSafe(filePath);
+function readMatchingEvents(filePath, { needles = [], predicate = () => true, onParse = null, strict = false } = {}) {
+  const raw = readFileSafe(filePath, strict);
   if (raw === null) return [];
 
   const lineMightMatch = needles.length === 0
@@ -54,6 +55,12 @@ function readMatchingEvents(filePath, { needles = [], predicate = () => true, on
         try {
           event = JSON.parse(line);
         } catch (error) {
+          if (strict) {
+            const parseError = new Error(`Malformed matching event line at byte ${start}: ${error.message}`);
+            parseError.code = 'EVENT_PARSE_ERROR';
+            parseError.cause = error;
+            throw parseError;
+          }
           event = null;
         }
         if (event && typeof event === 'object' && predicate(event)) {

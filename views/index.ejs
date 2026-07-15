@@ -196,12 +196,25 @@ function updateOwnedPaths() {
   }
 
   ownedPathsGroup.hidden = false;
-  ownedPathsContainer.innerHTML = members.map(m =>
-    '<div class="owned-path-row">' +
-      '<span class="owned-path-agent-name">' + m.name + ':</span>' +
-      '<input type="text" class="owned-path-input" data-agent-id="' + m.id + '" placeholder="e.g. projects/feature-x/" value="">' +
-    '</div>'
-  ).join('');
+  ownedPathsContainer.replaceChildren();
+  members.forEach(member => {
+    const row = document.createElement('div');
+    row.className = 'owned-path-row';
+
+    const agentName = document.createElement('span');
+    agentName.className = 'owned-path-agent-name';
+    agentName.textContent = `${member.name}:`;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'owned-path-input';
+    input.dataset.agentId = String(member.id);
+    input.placeholder = 'e.g. projects/feature-x/';
+    input.value = '';
+
+    row.append(agentName, input);
+    ownedPathsContainer.append(row);
+  });
 }
 
 function workflowInputExample(schema) {

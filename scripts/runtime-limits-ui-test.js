@@ -188,11 +188,12 @@ async function main() {
     assert(applied.body.includes('Limit source: Applied run-start limits'), 'diagnostics applied-limit source missing');
     assert(applied.body.includes('Execution turns: 2 / 3'), 'diagnostics usage/limit pair missing');
 
-    const legacy = await request('GET', '/runs/2', { cookie: admin });
-    assert(legacy.statusCode === 200 && legacy.body.includes('Historical applied limits unavailable; showing current fallback defaults'), 'legacy fallback label missing');
-    assert(legacy.body.includes('Limit source: Historical applied limits unavailable; showing current fallback defaults'), 'diagnostics legacy source missing');
+    const unsupported = await request('GET', '/runs/2', { cookie: admin });
+    assert(unsupported.statusCode === 200 && unsupported.body.includes('Unavailable: unsupported run record is missing its immutable run-start limits snapshot'), 'unsupported run-record label missing');
+    assert(unsupported.body.includes('Limit source: Unavailable: unsupported run record is missing its immutable run-start limits snapshot'), 'diagnostics unsupported-record source missing');
+    assert(!unsupported.body.includes('showing current fallback defaults'), 'unsupported run record was reinterpreted with current defaults');
 
-    console.log('PASS: runtime limits admin UI, run detail, legacy labeling, and diagnostics render correctly');
+    console.log('PASS: runtime limits admin UI, immutable run snapshots, unsupported-record labeling, and diagnostics render correctly');
   } finally {
     server.kill('SIGTERM');
     if (server.exitCode === null) {
