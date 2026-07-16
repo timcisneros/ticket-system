@@ -517,6 +517,67 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+  async createTicketWithEvent({ ticket, eventPayload = {} }, { client = null } = {}) {
+    const body = this.assertJsonRecord(ticket, 'ticket');
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+    const execute = async connection => {
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const now = isoTimestamp(clock.rows[0].ts, 'ticket clock');
+      const record = {
+        ...body,
+        createdAt: now,
+        updatedAt: now,
+        ...(Object.prototype.hasOwnProperty.call(body, 'changedAt') ? { changedAt: now } : {})
+      };
+      const spawnIdempotencyKey = optionalString(record.spawnIdempotencyKey);
+      if (spawnIdempotencyKey) record.spawnIdempotencyKey = spawnIdempotencyKey;
+      let created;
+      let inserted = true;
+      if (spawnIdempotencyKey) {
+        const status = requiredString(record.status || 'open', 'ticket.status');
+        if (!TICKET_STATUSES.has(status)) throw new TypeError(`Unsupported ticket.status: ${status}`);
+        const result = await connection.query(
+          `INSERT INTO ${this.table('tickets')}
+            (status, assignment_target_type, assignment_target_id, body)
+           VALUES ($1, $2, $3, $4::jsonb)
+           ON CONFLICT DO NOTHING
+           RETURNING *`,
+          [
+            status,
+            record.assignmentTargetType || null,
+            nullablePositiveSafeInteger(record.assignmentTargetId, 'ticket.assignmentTargetId'),
+            record
+          ]
+        );
+        if (result.rowCount > 0) {
+          created = ticketFromRow(result.rows[0]);
+        } else {
+          const existing = await connection.query(
+            `SELECT * FROM ${this.table('tickets')} WHERE body->>'spawnIdempotencyKey' = $1`,
+            [spawnIdempotencyKey]
+          );
+          if (existing.rowCount !== 1) throw new Error(`Ticket idempotency conflict for ${spawnIdempotencyKey}`);
+          created = ticketFromRow(existing.rows[0]);
+          inserted = false;
+        }
+      } else {
+        created = await this.createTicket(record, { client: connection });
+      }
+      if (!inserted) return { ticket: created, event: null, created: false };
+      const event = await this._appendEvent(connection, {
+        type: 'ticket.created',
+        ticketId: created.id,
+        payload: {
+          ...callerPayload,
+          status: created.status,
+          createdAt: created.createdAt
+        }
+      });
+      return { ticket: created, event, created: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async createRun(record, { client = null } = {}) {
     const run = this.assertJsonRecord(record, 'run');
     const status = requiredString(run.status || 'pending', 'run.status');
@@ -543,6 +604,130 @@ class PostgresRuntimeStore {
         values
       );
       return runFromRow(result.rows[0]);
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async createRunsAndStartTicket({
+    ticketId,
+    runDrafts,
+    afterTerminalRunId = null,
+    runEventPayload = () => ({}),
+    ticketEventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    if (!Array.isArray(runDrafts) || runDrafts.length === 0) {
+      throw new TypeError('runDrafts must be a non-empty array');
+    }
+    if (typeof runEventPayload !== 'function') throw new TypeError('runEventPayload must be a function');
+    const drafts = runDrafts.map((draft, index) => {
+      const run = this.assertJsonRecord(draft, `runDrafts[${index}]`);
+      if (positiveSafeInteger(run.ticketId, `runDrafts[${index}].ticketId`) !== id) {
+        throw new TypeError('Every run draft must belong to ticketId');
+      }
+      positiveSafeInteger(run.agentId, `runDrafts[${index}].agentId`);
+      if (run.status !== undefined && run.status !== 'pending') {
+        throw new TypeError('New runs must start pending');
+      }
+      return run;
+    });
+    const callerTicketPayload = this.assertJsonRecord(ticketEventPayload, 'ticketEventPayload');
+    const predecessorId = afterTerminalRunId === null || afterTerminalRunId === undefined
+      ? null
+      : positiveSafeInteger(afterTerminalRunId, 'afterTerminalRunId');
+    if (predecessorId !== null && drafts.length !== 1) {
+      throw new TypeError('A terminal predecessor can authorize exactly one new run');
+    }
+
+    const execute = async connection => {
+      const ticketResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (ticketResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(ticketResult.rows[0]);
+      if (ticket.status !== 'open') {
+        throw new StateTransitionConflictError('ticket', id, ['open'], ticket);
+      }
+      if (ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt) {
+        const error = new Error('Cannot start runs while unresolved ticket-level triage exists');
+        error.code = 'TICKET_TRIAGE_REQUIRED';
+        throw error;
+      }
+
+      const agentIds = drafts.map(run => run.agentId);
+      const active = await connection.query(
+        `SELECT * FROM ${this.table('runs')}
+         WHERE ticket_id = $1 AND agent_id = ANY($2::bigint[])
+           AND status = ANY(ARRAY['pending', 'running'])
+         ORDER BY id LIMIT 1`,
+        [id, agentIds]
+      );
+      if (active.rowCount > 0) {
+        const current = runFromRow(active.rows[0]);
+        throw new StateTransitionConflictError('run', current.id, ['no active run for this ticket and agent'], current);
+      }
+
+      if (predecessorId !== null) {
+        const predecessorResult = await connection.query(
+          `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
+          [predecessorId]
+        );
+        const predecessor = predecessorResult.rowCount === 0 ? null : runFromRow(predecessorResult.rows[0]);
+        if (!predecessor || predecessor.ticketId !== id || predecessor.agentId !== drafts[0].agentId ||
+            !TERMINAL_RUN_STATUSES.has(predecessor.status)) {
+          throw new StateTransitionConflictError(
+            'run',
+            predecessorId,
+            ['terminal predecessor for the requested retry'],
+            predecessor || { status: 'missing' }
+          );
+        }
+      }
+
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const now = isoTimestamp(clock.rows[0].ts, 'run creation clock');
+      const runs = [];
+      const events = [];
+      for (const draft of drafts) {
+        const run = await this.createRun({
+          ...draft,
+          status: 'pending',
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          lastHeartbeatAt: null,
+          ticketOpenedAt: ticket.updatedAt,
+          createdAt: now,
+          updatedAt: now
+        }, { client: connection });
+        runs.push(run);
+        const payload = this.assertJsonRecord(runEventPayload(run), `run ${run.id} event payload`);
+        events.push(await this._appendEvent(connection, {
+          type: 'run.created',
+          ticketId: id,
+          runId: run.id,
+          payload: { ...payload, status: run.status, createdAt: run.createdAt }
+        }));
+      }
+
+      const transitioned = await this.transitionTicket({
+        ticketId: id,
+        expectedRevision: ticket.revision,
+        fromStatuses: ['open'],
+        toStatus: 'in_progress',
+        eventPayload: callerTicketPayload
+      }, { client: connection });
+      events.push(transitioned.event);
+      return {
+        ticket: transitioned.ticket,
+        runs,
+        events,
+        previousStatus: transitioned.previousStatus
+      };
     };
     return client ? execute(client) : this.withTransaction(execute);
   }
@@ -711,6 +896,174 @@ class PostgresRuntimeStore {
       return { ticket, event, previousStatus };
     };
     return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async transitionTicketState({
+    ticketId,
+    fromStatuses,
+    toStatus,
+    patch = {},
+    eventType = 'ticket.updated',
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (result.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(result.rows[0]);
+      const bodyPatch = this.assertJsonRecord(patch, 'ticket patch');
+      let authoritativePatch = bodyPatch;
+      let authoritativeEventPayload = eventPayload;
+      if (Object.prototype.hasOwnProperty.call(bodyPatch, 'changedAt')) {
+        const clock = await connection.query('SELECT clock_timestamp() AS ts');
+        const changedAt = isoTimestamp(clock.rows[0].ts, 'ticket change clock');
+        authoritativePatch = { ...bodyPatch, changedAt };
+        authoritativeEventPayload = { ...eventPayload, changedAt };
+      }
+      return this.transitionTicket({
+        ticketId: id,
+        expectedRevision: ticket.revision,
+        fromStatuses,
+        toStatus,
+        patch: authoritativePatch,
+        eventType,
+        eventPayload: authoritativeEventPayload
+      }, { client: connection });
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async transitionTicketAfterRun({ runId }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const execute = async connection => {
+      const runIdentityResult = await connection.query(
+        `SELECT ticket_id FROM ${this.table('runs')} WHERE id = $1`,
+        [id]
+      );
+      if (runIdentityResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticketId = positiveSafeInteger(runIdentityResult.rows[0].ticket_id, 'run.ticketId');
+      const ticketResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [ticketId]
+      );
+      if (ticketResult.rowCount === 0) {
+        const error = new Error(`ticket ${ticketId} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(ticketResult.rows[0]);
+      const runResult = await connection.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const run = runFromRow(runResult.rows[0]);
+      if (run.ticketId !== ticketId || !TERMINAL_RUN_STATUSES.has(run.status)) {
+        throw new StateTransitionConflictError('run', id, [...TERMINAL_RUN_STATUSES], run);
+      }
+      const batchResult = await connection.query(
+        `SELECT * FROM ${this.table('runs')}
+         WHERE ticket_id = $1 AND body->>'ticketOpenedAt' = $2
+         ORDER BY id
+         FOR UPDATE`,
+        [run.ticketId, run.ticketOpenedAt]
+      );
+      const batchRuns = batchResult.rows.map(runFromRow);
+      const ownedScope = ticket.assignmentTargetType === 'group' &&
+        ['allocated', 'dynamic'].includes(ticket.assignmentMode);
+      let targetStatus = null;
+      if (run.status === 'interrupted') {
+        if (ticket.status === 'in_progress' &&
+            !batchRuns.some(item => ['pending', 'running'].includes(item.status))) {
+          targetStatus = 'open';
+        }
+      } else if (!ownedScope) {
+        targetStatus = run.status;
+      } else if (run.status === 'failed' || batchRuns.some(item => item.status === 'failed')) {
+        targetStatus = 'failed';
+      } else if (batchRuns.length > 0 && batchRuns.every(item => item.status === 'completed')) {
+        targetStatus = 'completed';
+      }
+
+      if (!targetStatus || ticket.status === targetStatus) {
+        return { ticket, event: null, previousStatus: ticket.status, changed: false };
+      }
+      const patch = ['completed', 'failed', 'interrupted'].includes(targetStatus)
+        ? { rerunMode: null }
+        : {};
+      const transitioned = await this.transitionTicket({
+        ticketId: ticket.id,
+        expectedRevision: ticket.revision,
+        fromStatuses: [ticket.status],
+        toStatus: targetStatus,
+        patch
+      }, { client: connection });
+      return { ...transitioned, changed: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async reopenTicket({ ticketId, rerunMode = null }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (result.rowCount === 0) return null;
+      const ticket = ticketFromRow(result.rows[0]);
+      if (ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt) {
+        const error = new Error('Cannot rerun: unresolved ticket-level triage exists on this ticket. Resolve triage first.');
+        error.code = 'TICKET_TRIAGE_REQUIRED';
+        throw error;
+      }
+      return this.transitionTicket({
+        ticketId: id,
+        expectedRevision: ticket.revision,
+        fromStatuses: [ticket.status],
+        toStatus: 'open',
+        patch: { rerunMode: rerunMode ? String(rerunMode) : null }
+      }, { client: connection });
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async createRetryRun({
+    ticketId,
+    predecessorRunId,
+    runDraft,
+    runEventPayload = () => ({})
+  }) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const predecessorId = positiveSafeInteger(predecessorRunId, 'predecessorRunId');
+    const draft = this.assertJsonRecord(runDraft, 'runDraft');
+    return this.withTransaction(async client => {
+      const reopened = await this.reopenTicket({ ticketId: id, rerunMode: 'auto_retry' }, { client });
+      if (!reopened) return null;
+      const created = await this.createRunsAndStartTicket({
+        ticketId: id,
+        runDrafts: [{ ...draft, rerunMode: 'auto_retry' }],
+        afterTerminalRunId: predecessorId,
+        runEventPayload,
+        ticketEventPayload: { rerunMode: 'auto_retry', predecessorRunId: predecessorId }
+      }, { client });
+      return { ...created, reopenEvent: reopened.event };
+    });
   }
 
   async transitionRun({

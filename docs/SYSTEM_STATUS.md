@@ -62,8 +62,16 @@ the intended deployment ceiling.
   non-transactional across its snapshot file, run projection, and journal; startup reconciliation
   remains required for a crash between those writes. Concurrent different-ticket JSON
   terminalizations re-read before their synchronous projection commit so they do not overwrite one
-  another. Retry creation is ordered after predecessor terminalization and remains outside this
-  transaction boundary.
+  another.
+- Ticket creation, status transitions, batch pending-run creation, ticket settlement from terminal
+  runs, manual reopen, and automatic retry creation use one ticket/run lifecycle repository
+  contract. PostgreSQL owns ticket/run IDs and lifecycle time, commits each state/event bundle in a
+  transaction, locks only the affected ticket during run admission, and verifies a terminal retry
+  predecessor before atomically reopening and creating its one pending successor. Workflow child
+  ticket idempotency is database-enforced. The JSON implementation preserves the same call
+  boundaries and same-ticket process ordering but cannot roll state and journal files back together.
+  Group run records are created as one ticket batch; the runs themselves remain independently
+  schedulable and executable.
 - Workflow verification uses the immutable run-start verification contract. Fixture-verifier
   metadata is identified as metadata and is not represented as an executed runtime verifier.
 - The build parses active CommonJS sources, and CI runs the deterministic release checkpoint.
@@ -80,12 +88,13 @@ recovered without granting their former owner continued authority. State and its
 roll back together. Its deterministic contract test runs in the release checkpoint, and CI runs the
 schema, rollback, idempotency, and concurrency suite against PostgreSQL 17.
 
-Two server-facing seams now have active JSON and tested PostgreSQL implementations. The scheduler
+Three server-facing seams now have active JSON and tested PostgreSQL implementations. The scheduler
 lease contract covers discovery, claim, renewal, workflow progress, release, and expired-run
 recovery. The run-terminalization contract covers terminal status/lease clear, final replay,
-violation evidence, evaluation, consequence, and ordered terminal events. These are integration
-boundaries, not a backend switch: the JSON adapter's state, snapshot, and event writes remain
-separate operations.
+violation evidence, evaluation, consequence, and ordered terminal events. The ticket/run lifecycle
+contract covers ticket identity and status evidence, atomic group run batches, terminal-run ticket
+settlement, and retry successor creation. These are integration boundaries, not a backend switch:
+the JSON adapter's state, snapshot, and event writes remain separate operations.
 
 This foundation is not yet the Fastify server's active authority. The server remains on JSON and
 explicitly refuses `PERSISTENCE_BACKEND=postgres` until the complete runtime cutover is assembled.
@@ -109,12 +118,13 @@ Compatibility is format-specific, not a system-wide no-legacy policy:
 ## Known work
 
 1. Complete the PostgreSQL runtime cutover before horizontal deployment. Core primitives plus the
-   scheduler lease and atomic run-terminalization slices are implemented. The next boundary is
-   ticket lifecycle and run creation: ticket status changes, initial run creation, and automatic
-   retry creation need shared database identity and transactionally paired events. Then migrate the
-   remaining whole authority slices without dual-writing, integrate target-side
-   idempotency/reconciliation for uncertain external effects, and remove the JSON runtime path.
-   Shared storage still needs explicit retention and tenant-isolation policy.
+   scheduler lease, atomic run-terminalization, and ticket/run lifecycle slices are implemented.
+   The next boundary is non-terminal execution evidence and mutation receipts: replay progress,
+   action/authority evidence, operation history, and stable target operation keys must use the same
+   selected authority, with target-side idempotency or explicit reconciliation for uncertain
+   external effects. Then migrate the remaining whole authority slices without dual-writing and
+   remove the JSON runtime path. Shared storage still needs explicit retention and tenant-isolation
+   policy.
 2. Add bounded deterministic postconditions where prose acceptance criteria do not prove outcomes;
    keep real-model benchmarks observational.
 3. Complete validation of the model contract compiler and prefix truncation before enabling them by

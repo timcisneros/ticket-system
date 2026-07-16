@@ -10,7 +10,6 @@ const { AsyncLocalStorage } = require('async_hooks');
 const argon2 = require('argon2');
 const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
-const { runBoundedWorkerPool } = require('./runtime/bounded-worker-pool');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
@@ -28,6 +27,10 @@ const {
   JsonRunTerminalizationRepository,
   assertRunTerminalizationRepository
 } = require('./persistence/json/run-terminalization-repository');
+const {
+  JsonTicketRunLifecycleRepository,
+  assertTicketRunLifecycleRepository
+} = require('./persistence/json/ticket-run-lifecycle-repository');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 
@@ -1572,6 +1575,7 @@ let dataDirWriterLock = null;
 let dataDirWriterLockHeartbeatTimer = null;
 let runLeaseRepository = null;
 let runTerminalizationRepository = null;
+let ticketRunLifecycleRepository = null;
 let dataVersion = 0;
 const pageRenderCache = new Map();
 const pageRenderInFlight = new Map();
@@ -5572,31 +5576,6 @@ function appendSystemLog(type, message, workspaceAction = null, extraFields = {}
   return log;
 }
 
-async function updateTicketStatusById(ticketId, status) {
-  const tickets = readTickets();
-  const ticket = tickets.find(item => item.id === ticketId);
-
-  if (!ticket) return null;
-  if (ticket.status === status) return ticket;
-
-  ticket.status = status;
-  ticket.updatedAt = new Date().toISOString();
-  if (['completed', 'failed', 'interrupted'].includes(status)) {
-    delete ticket.rerunMode;
-  }
-  writeTickets(tickets);
-  await appendEvent({
-    type: 'ticket.updated',
-    ticketId: ticket.id,
-    payload: {
-      status: ticket.status,
-      updatedAt: ticket.updatedAt
-    }
-  });
-  broadcastTicketChange();
-  return ticket;
-}
-
 function readUsers() {
   return readJsonArrayCached(USERS_FILE);
 }
@@ -6046,6 +6025,19 @@ function getRunTerminalizationRepository() {
     sanitizePayload: sanitizeSnapshotValue
   }));
   return runTerminalizationRepository;
+}
+
+function getTicketRunLifecycleRepository() {
+  if (ticketRunLifecycleRepository) return ticketRunLifecycleRepository;
+  ticketRunLifecycleRepository = assertTicketRunLifecycleRepository(new JsonTicketRunLifecycleRepository({
+    readTickets,
+    writeTickets,
+    readRuns,
+    writeRuns,
+    appendEvent,
+    sanitizePayload: sanitizeSnapshotValue
+  }));
+  return ticketRunLifecycleRepository;
 }
 
 function isRunLeaseExpired(run, nowMs = Date.now()) {
@@ -11756,14 +11748,11 @@ function buildTicketFeasibilityTriage(error, createdAt = new Date().toISOString(
 }
 
 async function blockTicketForFeasibility(ticket, error, context = {}) {
-  const tickets = readTickets();
-  const persistedTicket = tickets.find(item => item.id === ticket.id);
+  const persistedTicket = readTickets().find(item => item.id === ticket.id);
   if (!persistedTicket) return null;
 
   const now = new Date().toISOString();
-  persistedTicket.status = 'blocked';
-  persistedTicket.blockedReason = error.message;
-  persistedTicket.feasibility = {
+  const feasibility = {
     status: 'blocked',
     reason: error.message,
     code: error.code || 'TICKET_FEASIBILITY_ERROR',
@@ -11772,45 +11761,41 @@ async function blockTicketForFeasibility(ticket, error, context = {}) {
     grantedWritableRoots: error.grantedWritableRoots || [],
     missingAuthorityGrants: error.missingAuthorityGrants || []
   };
-  persistedTicket.triage = buildTicketFeasibilityTriage(error, now);
-  persistedTicket.updatedAt = now;
-  persistedTicket.changedAt = now;
-  if (context.changedBy) persistedTicket.changedBy = context.changedBy;
-  writeTickets(tickets);
-
-  await appendEvent({
-    type: 'ticket.blocked',
+  const triage = buildTicketFeasibilityTriage(error, now);
+  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
     ticketId: persistedTicket.id,
-    payload: {
-      status: persistedTicket.status,
-      reason: persistedTicket.blockedReason,
-      feasibility: persistedTicket.feasibility,
-      triage: persistedTicket.triage,
-      updatedAt: persistedTicket.updatedAt
-    }
+    fromStatuses: [persistedTicket.status],
+    toStatus: 'blocked',
+    patch: {
+      blockedReason: error.message,
+      feasibility,
+      triage,
+      changedAt: now,
+      ...(context.changedBy ? { changedBy: context.changedBy } : {})
+    },
+    eventType: 'ticket.blocked',
+    eventPayload: { reason: error.message, feasibility, triage }
   });
+  const blockedTicket = transitioned.ticket;
   appendSystemLog('ticket:feasibility_blocked', error.message, null, {
-    ticketId: persistedTicket.id,
-    code: persistedTicket.feasibility.code,
-    kind: persistedTicket.feasibility.kind,
-    missingAuthorityGrants: persistedTicket.feasibility.missingAuthorityGrants,
-    requiredWritableRoots: persistedTicket.feasibility.requiredWritableRoots,
-    grantedWritableRoots: persistedTicket.feasibility.grantedWritableRoots,
+    ticketId: blockedTicket.id,
+    code: blockedTicket.feasibility.code,
+    kind: blockedTicket.feasibility.kind,
+    missingAuthorityGrants: blockedTicket.feasibility.missingAuthorityGrants,
+    requiredWritableRoots: blockedTicket.feasibility.requiredWritableRoots,
+    grantedWritableRoots: blockedTicket.feasibility.grantedWritableRoots,
     changedBy: context.changedBy || null
   });
   broadcastTicketChange();
-  return persistedTicket;
+  return blockedTicket;
 }
 
 async function blockTicketForObjectiveAmbiguity(ticket, gateResult, context = {}) {
-  const tickets = readTickets();
-  const persistedTicket = tickets.find(item => item.id === ticket.id);
+  const persistedTicket = readTickets().find(item => item.id === ticket.id);
   if (!persistedTicket) return null;
 
   const now = new Date().toISOString();
-  persistedTicket.status = 'blocked';
-  persistedTicket.blockedReason = gateResult.summary;
-  persistedTicket.triage = normalizeTriage({
+  const triage = normalizeTriage({
     required: true,
     reasonCode: 'objective_ambiguous',
     summary: gateResult.summary,
@@ -11823,28 +11808,27 @@ async function blockTicketForObjectiveAmbiguity(ticket, gateResult, context = {}
     resolvedBy: null,
     resolution: null
   });
-  persistedTicket.updatedAt = now;
-  persistedTicket.changedAt = now;
-  if (context.changedBy) persistedTicket.changedBy = context.changedBy;
-  writeTickets(tickets);
-
-  await appendEvent({
-    type: 'ticket.blocked',
+  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
     ticketId: persistedTicket.id,
-    payload: {
-      status: persistedTicket.status,
-      reason: persistedTicket.blockedReason,
-      reasonCode: 'objective_ambiguous',
-      triage: persistedTicket.triage
-    }
+    fromStatuses: [persistedTicket.status],
+    toStatus: 'blocked',
+    patch: {
+      blockedReason: gateResult.summary,
+      triage,
+      changedAt: now,
+      ...(context.changedBy ? { changedBy: context.changedBy } : {})
+    },
+    eventType: 'ticket.blocked',
+    eventPayload: { reason: gateResult.summary, reasonCode: 'objective_ambiguous', triage }
   });
+  const blockedTicket = transitioned.ticket;
   appendSystemLog('ticket:objective_ambiguous', gateResult.summary, null, {
-    ticketId: persistedTicket.id,
+    ticketId: blockedTicket.id,
     ambiguityPatterns: gateResult.ambiguityPatterns || [],
     changedBy: context.changedBy || null
   });
   broadcastTicketChange();
-  return persistedTicket;
+  return blockedTicket;
 }
 
 function assertAllocatedObjectiveSupported(objective) {
@@ -12085,36 +12069,11 @@ function updateAllocationItemStatus(run, status) {
   return allocationItem;
 }
 
-async function updateTicketInProgressForRun(run) {
-  const ticket = readTickets().find(item => item.id === run.ticketId);
-
-  if (!ticket || ticket.status !== 'open') return ticket || null;
-  return updateTicketStatusById(run.ticketId, 'in_progress');
-}
-
 async function finalizeTicketForRun(run, terminalStatus) {
-  const ticket = readTickets().find(item => item.id === run.ticketId);
-
-  if (!ticket) return null;
-
-  if (!usesOwnedScopeAllocation(ticket)) {
-    return updateTicketStatusById(run.ticketId, terminalStatus);
-  }
-
-  const batchRuns = readRuns().filter(item =>
-    item.ticketId === run.ticketId &&
-    item.ticketOpenedAt === run.ticketOpenedAt
-  );
-
-  if (terminalStatus === 'failed' || batchRuns.some(item => item.status === 'failed')) {
-    return updateTicketStatusById(run.ticketId, 'failed');
-  }
-
-  if (batchRuns.length > 0 && batchRuns.every(item => item.status === 'completed')) {
-    return updateTicketStatusById(run.ticketId, 'completed');
-  }
-
-  return ticket;
+  if (!run || run.status !== terminalStatus) return null;
+  const result = await getTicketRunLifecycleRepository().transitionTicketAfterRun({ runId: run.id });
+  if (result && result.changed) broadcastTicketChange();
+  return result ? result.ticket : null;
 }
 
 function validateManualTicketCompletion(ticket) {
@@ -12327,18 +12286,10 @@ async function reconcileTerminalRunUnlocked(run) {
 }
 
 async function updateTicketAfterRunInterrupted(run) {
-  const ticket = readTickets().find(item => item.id === run.ticketId);
-
-  if (!ticket || ticket.status !== 'in_progress') return ticket || null;
-
-  const currentBatchRuns = readRuns().filter(item =>
-    item.ticketId === run.ticketId &&
-    item.ticketOpenedAt === run.ticketOpenedAt
-  );
-  const hasActiveCurrentBatchRun = currentBatchRuns.some(item => ['pending', 'running'].includes(item.status));
-
-  if (hasActiveCurrentBatchRun) return ticket;
-  return updateTicketStatusById(run.ticketId, 'open');
+  if (!run || run.status !== 'interrupted') return null;
+  const result = await getTicketRunLifecycleRepository().transitionTicketAfterRun({ runId: run.id });
+  if (result && result.changed) broadcastTicketChange();
+  return result ? result.ticket : null;
 }
 
 function allocationLogSuffix(run) {
@@ -12402,33 +12353,18 @@ function hasUnresolvedTicketTriage(ticket) {
 // runAutoRetryAfterFailureIfPolicyAllows for automatic retries.
 // This primitive performs only a defensive unresolved-triage check.
 async function forceTicketOpenForRerun(ticketId, rerunMode = null) {
-  const tickets = readTickets();
-  const ticket = tickets.find(item => item.id === ticketId);
-
-  if (!ticket) return null;
-
-  if (hasUnresolvedTicketTriage(ticket)) {
-    throw Object.assign(new Error('Cannot rerun: unresolved ticket-level triage exists on this ticket. Resolve triage first.'), { statusCode: 409 });
-  }
-
-  ticket.status = 'open';
-  ticket.updatedAt = new Date().toISOString();
-  if (rerunMode) {
-    ticket.rerunMode = rerunMode;
-  } else {
-    delete ticket.rerunMode;
-  }
-  writeTickets(tickets);
-  await appendEvent({
-    type: 'ticket.updated',
-    ticketId: ticket.id,
-    payload: {
-      status: ticket.status,
-      updatedAt: ticket.updatedAt
+  let result;
+  try {
+    result = await getTicketRunLifecycleRepository().reopenTicket({ ticketId, rerunMode });
+  } catch (error) {
+    if (error && (error.code === 'LIFECYCLE_CONFLICT' || error.code === 'TICKET_TRIAGE_REQUIRED')) {
+      error.statusCode = 409;
     }
-  });
+    throw error;
+  }
+  if (!result) return null;
   broadcastTicketChange();
-  return ticket;
+  return result.ticket;
 }
 
 // Manual rerun-from-start safety gate. This is the ONLY place maxAttempts is
@@ -12521,15 +12457,39 @@ async function runAutoRetryAfterFailureIfPolicyAllows(failedRun, assessment) {
   }
   let newRun = null;
   try {
-    const reopened = await forceTicketOpenForRerun(assessment.ticketId, 'auto_retry');
-    if (!reopened) return { retried: false, reason: 'reopen_failed' };
-    const created = await createRunsForTicket(
-      reopened,
+    const ticket = readTickets().find(item => item.id === assessment.ticketId);
+    const agent = ticket
+      ? readAgents().find(item => item.id === ticket.assignmentTargetId)
+      : null;
+    if (!ticket || !agent) return { retried: false, reason: 'retry_target_missing' };
+    const prepared = await prepareAgentRunDraft(
+      ticket,
+      agent,
+      null,
+      null,
       { userId: null, username: 'system', source: 'auto_retry' },
       { afterTerminalRunId: failedRun.id }
     );
-    newRun = (Array.isArray(created) && created[0]) || null;
+    if (!prepared || prepared.existingRun) return { retried: false, reason: 'no_run_created' };
+    const created = await getTicketRunLifecycleRepository().createRetryRun({
+      ticketId: assessment.ticketId,
+      predecessorRunId: failedRun.id,
+      runDraft: prepared.run,
+      runEventPayload: buildRunCreatedEventPayload
+    });
+    newRun = created && Array.isArray(created.runs) ? created.runs[0] || null : null;
+    if (newRun) {
+      broadcastTicketChange();
+      appendRunLog(newRun, 'run:created', `Agent rerun created${allocationLogSuffix(newRun)}`, null, {
+        allocationPlanId: newRun.allocationPlanId,
+        allocationItemId: newRun.allocationItemId
+      });
+      await maybeTestInterrupt(newRun, 'after_run.created');
+    }
   } catch (error) {
+    if (error && error.code === 'EVENT_RECORD_TOO_LARGE') {
+      await failRunsAfterOversizedCreationEvent(error);
+    }
     return { retried: false, reason: 'retry_creation_failed' };
   }
   if (!newRun || newRun.id === failedRun.id) return { retried: false, reason: 'no_run_created' };
@@ -12978,28 +12938,30 @@ function resolveModelRouteForRun({ ticket, agent, capabilityId, workContextId, e
 
 // Block a ticket when routing finds no permitted provider — reuses the existing triage mechanism.
 async function blockTicketForNoModelRoute(ticket, decision) {
-  const tickets = readTickets();
-  const persisted = tickets.find(item => item.id === ticket.id);
+  const persisted = readTickets().find(item => item.id === ticket.id);
   if (!persisted) return null;
   const now = new Date().toISOString();
   const summary = `No permitted model provider for this run (rejected: ${(decision.rejectedProviders || []).join(', ') || 'none'}). Edit the routing policy or reassign the ticket.`;
-  persisted.status = 'blocked';
-  persisted.blockedReason = summary;
   // Reuse the existing triage vocabulary (authority_blocked / change_scope) — routing introduces no
   // new triage semantics. The routing-specific signal lives in the summary, evidenceRefs, the
   // ticket.blocked event (reasonCode no_model_route), and the system log.
-  persisted.triage = normalizeTriage({
+  const triage = normalizeTriage({
     required: true, reasonCode: 'authority_blocked', summary, requiredDecision: 'change_scope',
     evidenceRefs: ['model-routing:policy:' + (decision.policyId != null ? decision.policyId : 'none'), 'model-routing:no_route'],
     allowedActions: ['edit_routing_policy', 'change_assignment'], prohibitedActions: ['start_run_without_permitted_provider'],
     createdAt: now, resolvedAt: null, resolvedBy: null, resolution: null
   });
-  persisted.updatedAt = now; persisted.changedAt = now;
-  writeTickets(tickets);
-  await appendEvent({ type: 'ticket.blocked', ticketId: persisted.id, payload: { status: 'blocked', reason: summary, reasonCode: 'no_model_route', triage: persisted.triage } });
-  appendSystemLog('ticket:no_model_route', summary, null, { ticketId: persisted.id, policyId: decision.policyId || null, rejectedProviders: decision.rejectedProviders || [] });
+  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
+    ticketId: persisted.id,
+    fromStatuses: [persisted.status],
+    toStatus: 'blocked',
+    patch: { blockedReason: summary, triage, changedAt: now },
+    eventType: 'ticket.blocked',
+    eventPayload: { reason: summary, reasonCode: 'no_model_route', triage }
+  });
+  appendSystemLog('ticket:no_model_route', summary, null, { ticketId: transitioned.ticket.id, policyId: decision.policyId || null, rejectedProviders: decision.rejectedProviders || [] });
   broadcastTicketChange();
-  return persisted;
+  return transitioned.ticket;
 }
 
 // ---- Local/mock connector contract (r1.30) ----
@@ -13202,7 +13164,7 @@ function buildOperationalSummary(options = {}) {
   };
 }
 
-async function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null, options = {}) {
+async function prepareAgentRunDraft(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null, options = {}) {
   const runs = readRuns();
   const activeRun = runs.find(run =>
     run.ticketId === ticket.id &&
@@ -13219,7 +13181,8 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
         ['completed', 'failed', 'interrupted'].includes(run.status)
       ) || null;
 
-  if (activeRun || (runningRunKeys.has(pendingRunKey) && !terminalPredecessor)) return activeRun || null;
+  if (activeRun) return { existingRun: activeRun };
+  if (runningRunKeys.has(pendingRunKey) && !terminalPredecessor) return null;
   if (usesOwnedScopeAllocation(ticket) && (!allocationPlanId || !allocationItem)) {
     throw new Error('Owned-scope run creation requires an allocation plan item');
   }
@@ -13227,7 +13190,6 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
   const now = new Date().toISOString();
   const isRerun = runs.some(run => run.ticketId === ticket.id);
   const usesOwnedScope = usesOwnedScopeAllocation(ticket);
-  const nextRunId = nextId(runs);
   const ownedOutputPaths = allocationItem ? allocationItem.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath) : [];
   const workflow = ticket.executionMode === 'workflow' ? getWorkflowById(ticket.workflowId) : null;
   const browserTarget = ticket.targetRef && ticket.targetRef.kind === 'browser'
@@ -13248,7 +13210,6 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
   });
   if (!routeDecision.ok) { await blockTicketForNoModelRoute(ticket, routeDecision); return null; }
   const run = {
-    id: nextRunId,
     ticketId: ticket.id,
     agentId: agent.id,
     agentName: agent.name,
@@ -13291,131 +13252,158 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
     currentStepId: null,
     currentWorkflowAction: null,
     lastHeartbeatAt: null,
-    status: 'pending',
-    ticketOpenedAt: ticket.updatedAt,
-    createdAt: now,
-    updatedAt: now
+    status: 'pending'
   };
 
-  runs.push(run);
+  return { run, isRerun };
+}
+
+function buildRunCreatedEventPayload(run) {
+  return {
+    agentId: run.agentId,
+    agentName: run.agentName,
+    status: run.status,
+    executionMode: run.executionMode,
+    capabilityType: run.capabilityType,
+    capabilityId: run.capabilityId,
+    workflowId: run.workflowId,
+    executionPolicySnapshot: run.executionPolicySnapshot,
+    runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
+    verificationContractSnapshot: run.verificationContractSnapshot,
+    acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
+    workTypeId: run.workTypeId,
+    workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
+    workTypeSnapshotSource: run.workTypeSnapshot ? 'ticket_snapshot' : null
+  };
+}
+
+async function failRunsAfterOversizedCreationEvent(error) {
+  const createdRuns = Array.isArray(error && error.lifecycleRuns) ? error.lifecycleRuns : [];
+  if (createdRuns.length === 0) return;
+  const failedAt = new Date().toISOString();
+  const runs = readRuns();
+  const failedRuns = [];
+  for (const createdRun of createdRuns) {
+    const run = runs.find(item => item.id === createdRun.id);
+    if (!run) continue;
+    run.status = 'failed';
+    run.error = error.message;
+    run.completedAt = failedAt;
+    run.updatedAt = failedAt;
+    run.leaseOwner = null;
+    run.leaseExpiresAt = null;
+    run.runEvaluation = {
+      effectiveness: {
+        status: 'failed',
+        postconditionsPassed: 0,
+        postconditionsFailed: 0,
+        errors: [error.message]
+      },
+      efficiency: {
+        durationMs: 0,
+        workflowSteps: 0,
+        providerRequests: 0,
+        modelResponses: 0,
+        workspaceOperations: 0,
+        mutationCount: 0,
+        retryCount: countRunRetryAttempts(run)
+      },
+      violations: { status: 'unknown', items: [] },
+      effectiveRuntimeConfig: null,
+      browserEvidence: { status: 'not_applicable', detail: null }
+    };
+    run.runConsequence = {
+      mutations: [],
+      created: [],
+      updated: [],
+      deleted: [],
+      renamed: [],
+      notifications: [],
+      externalEffects: [],
+      verification: { postconditionsStatus: 'failed', violationsStatus: 'unknown' }
+    };
+    failedRuns.push(run);
+  }
   writeRuns(runs);
-  try {
+
+  const tickets = readTickets();
+  const ticket = tickets.find(item => item.id === createdRuns[0].ticketId);
+  if (ticket && !['completed', 'closed'].includes(ticket.status)) {
+    ticket.status = 'failed';
+    ticket.blockedReason = error.message;
+    ticket.updatedAt = failedAt;
+    ticket.changedAt = failedAt;
+    writeTickets(tickets);
+  }
+
+  for (const run of failedRuns) {
+    appendRunLog(run, 'run:failed', error.message, null, {
+      code: error.code,
+      requestedType: error.requestedType,
+      requestedRecordBytes: error.requestedRecordBytes,
+      maxRecordBytes: error.maxRecordBytes
+    });
     await appendEvent({
-      type: 'run.created',
+      type: 'run.evaluation_completed',
+      ticketId: run.ticketId,
+      runId: run.id,
+      payload: { evaluation: run.runEvaluation }
+    });
+    await appendEvent({
+      type: 'run.consequence_recorded',
+      ticketId: run.ticketId,
+      runId: run.id,
+      payload: { consequence: run.runConsequence }
+    });
+    await appendEvent({
+      type: 'run.terminalized',
       ticketId: run.ticketId,
       runId: run.id,
       payload: {
-        agentId: run.agentId,
-        agentName: run.agentName,
-        status: run.status,
-        executionMode: run.executionMode,
-        capabilityType: run.capabilityType,
-        capabilityId: run.capabilityId,
-        workflowId: run.workflowId,
-        executionPolicySnapshot: run.executionPolicySnapshot,
-        runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
-        verificationContractSnapshot: run.verificationContractSnapshot,
-        acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
-        workTypeId: run.workTypeId,
-        workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
-        workTypeSnapshotSource: run.workTypeSnapshot ? 'ticket_snapshot' : null,
-        createdAt: run.createdAt
+        status: 'failed',
+        reasonCode: 'event_record_too_large',
+        rejectedEventType: error.requestedType
       }
+    });
+  }
+  broadcastTicketChange();
+}
+
+async function persistPreparedAgentRuns(ticket, preparedRuns, options = {}) {
+  if (!Array.isArray(preparedRuns) || preparedRuns.length === 0) return [];
+  let result;
+  try {
+    result = await getTicketRunLifecycleRepository().createRunsAndStartTicket({
+      ticketId: ticket.id,
+      runDrafts: preparedRuns.map(item => item.run),
+      afterTerminalRunId: options.afterTerminalRunId || null,
+      runEventPayload: buildRunCreatedEventPayload
     });
   } catch (error) {
     if (error && error.code === 'EVENT_RECORD_TOO_LARGE') {
-      const failedAt = new Date().toISOString();
-      run.status = 'failed';
-      run.error = error.message;
-      run.completedAt = failedAt;
-      run.updatedAt = failedAt;
-      run.leaseOwner = null;
-      run.leaseExpiresAt = null;
-      writeRuns(runs);
-
-      const tickets = readTickets();
-      const persistedTicket = tickets.find(item => item.id === run.ticketId);
-      if (persistedTicket && !['completed', 'closed'].includes(persistedTicket.status)) {
-        persistedTicket.status = 'failed';
-        persistedTicket.blockedReason = error.message;
-        persistedTicket.updatedAt = failedAt;
-        persistedTicket.changedAt = failedAt;
-        writeTickets(tickets);
-      }
-      appendRunLog(run, 'run:failed', error.message, null, {
-        code: error.code,
-        requestedType: error.requestedType,
-        requestedRecordBytes: error.requestedRecordBytes,
-        maxRecordBytes: error.maxRecordBytes
-      });
-      run.runEvaluation = {
-        effectiveness: {
-          status: 'failed',
-          postconditionsPassed: 0,
-          postconditionsFailed: 0,
-          errors: [error.message]
-        },
-        efficiency: {
-          durationMs: 0,
-          workflowSteps: 0,
-          providerRequests: 0,
-          modelResponses: 0,
-          workspaceOperations: 0,
-          mutationCount: 0,
-          retryCount: countRunRetryAttempts(run)
-        },
-        violations: { status: 'unknown', items: [] },
-        effectiveRuntimeConfig: null,
-        browserEvidence: { status: 'not_applicable', detail: null }
-      };
-      run.runConsequence = {
-        mutations: [],
-        created: [],
-        updated: [],
-        deleted: [],
-        renamed: [],
-        notifications: [],
-        externalEffects: [],
-        verification: { postconditionsStatus: 'failed', violationsStatus: 'unknown' }
-      };
-      writeRuns(runs);
-      await appendEvent({
-        type: 'run.evaluation_completed',
-        ticketId: run.ticketId,
-        runId: run.id,
-        payload: {
-          evaluation: run.runEvaluation
-        }
-      });
-      await appendEvent({
-        type: 'run.consequence_recorded',
-        ticketId: run.ticketId,
-        runId: run.id,
-        payload: {
-          consequence: run.runConsequence
-        }
-      });
-      await appendEvent({
-        type: 'run.terminalized',
-        ticketId: run.ticketId,
-        runId: run.id,
-        payload: {
-          status: 'failed',
-          reasonCode: 'event_record_too_large',
-          rejectedEventType: error.requestedType
-        }
-      });
-      broadcastTicketChange();
+      await failRunsAfterOversizedCreationEvent(error);
     }
     throw error;
   }
-  appendRunLog(run, 'run:created', `${isRerun ? 'Agent rerun created' : 'Agent run created'}${allocationLogSuffix(run)}`, null, {
-    allocationPlanId: run.allocationPlanId,
-    allocationItemId: run.allocationItemId
-  });
-  await updateTicketInProgressForRun(run);
-  await maybeTestInterrupt(run, 'after_run.created');
-  return run;
+
+  broadcastTicketChange();
+  for (const run of result.runs) {
+    const prepared = preparedRuns.find(item => item.run.agentId === run.agentId);
+    appendRunLog(run, 'run:created', `${prepared && prepared.isRerun ? 'Agent rerun created' : 'Agent run created'}${allocationLogSuffix(run)}`, null, {
+      allocationPlanId: run.allocationPlanId,
+      allocationItemId: run.allocationItemId
+    });
+    await maybeTestInterrupt(run, 'after_run.created');
+  }
+  return result.runs;
+}
+
+async function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null, options = {}) {
+  const prepared = await prepareAgentRunDraft(ticket, agent, allocationItem, allocationPlanId, delegated, options);
+  if (!prepared) return null;
+  if (prepared.existingRun) return prepared.existingRun;
+  const runs = await persistPreparedAgentRuns(ticket, [prepared], options);
+  return runs[0] || null;
 }
 
 async function createRunsForTicket(ticket, delegated = null, options = {}) {
@@ -13468,38 +13456,21 @@ async function createRunsForTicketAdmitted(ticket, delegated = null, options = {
 
     const allocationPlan = createAllocationPlan(ticket, agentsToRun);
 
-    const parentAdmission = currentEventJournalAdmission();
-    const workerAdmissions = [parentAdmission];
-    const childAdmissions = [];
-    while (workerAdmissions.length < agentsToRun.length) {
-      const admission = eventJournal.tryAcquireAdmission({
-        source: 'group_run_creation',
-        ticketId: ticket.id,
-        worker: workerAdmissions.length + 1
-      });
-      if (!admission) break;
-      childAdmissions.push(admission);
-      workerAdmissions.push(admission);
-    }
-
-    let createdRuns;
-    try {
-      // A fixed bounded worker pool replenishes each worker with the next agent
-      // as soon as its prior run creation finishes. Overflow is therefore not
-      // serialized after the first concurrent wave.
-      createdRuns = await runBoundedWorkerPool(agentsToRun, workerAdmissions, (agent, admission) =>
-        runWithEventJournalAdmission(admission, () => createAgentRun(
-          ticket,
-          agent,
-          allocationPlan.items.find(item => item.assignedAgentId === agent.id),
-          allocationPlan.id,
-          delegated
-        ))
+    const preparedRuns = [];
+    for (const agent of agentsToRun) {
+      const prepared = await prepareAgentRunDraft(
+        ticket,
+        agent,
+        allocationPlan.items.find(item => item.assignedAgentId === agent.id),
+        allocationPlan.id,
+        delegated
       );
-    } finally {
-      childAdmissions.forEach(admission => eventJournal.releaseAdmission(admission));
+      // A routing refusal blocks the ticket. Do not commit a partial allocation
+      // batch when one assigned member cannot receive an authoritative run.
+      if (!prepared) return [];
+      preparedRuns.push(prepared);
     }
-    return createdRuns.filter(Boolean);
+    return persistPreparedAgentRuns(ticket, preparedRuns);
   }
 
   return [];
@@ -16647,13 +16618,11 @@ function validateTicketPlanInput(run, input) {
 }
 
 async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket, spawnPlanId) {
-  const tickets = readTickets();
-  const existing = tickets.find(ticket => ticket && ticket.spawnIdempotencyKey === planTicket.idempotencyKey);
+  const existing = readTickets().find(ticket => ticket && ticket.spawnIdempotencyKey === planTicket.idempotencyKey);
   if (existing) return existing;
 
   const now = new Date().toISOString();
-  const childTicket = {
-    id: nextId(tickets),
+  const childTicketDraft = {
     objective: planTicket.objective,
     status: 'blocked',
     blockedReason: 'Created by executeTicketPlan; child workflow execution is not automatic in v1.',
@@ -16679,32 +16648,27 @@ async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket
     updatedAt: now
   };
 
-  tickets.push(childTicket);
-  writeTickets(tickets);
-  await appendEvent({
-    type: 'ticket.created',
-    ticketId: childTicket.id,
-    runId: run.id,
-    payload: {
-      objective: childTicket.objective,
-      assignmentTargetType: childTicket.assignmentTargetType,
-      assignmentTargetId: childTicket.assignmentTargetId,
-      assignmentMode: childTicket.assignmentMode,
-      executionMode: childTicket.executionMode,
-      workflowId: childTicket.workflowId,
-      blockedReason: childTicket.blockedReason || null,
-      parentTicketId: childTicket.parentTicketId,
-      parentRunId: childTicket.parentRunId,
-      parentWorkflowId: childTicket.parentWorkflowId,
-      spawnedByStepId: childTicket.spawnedByStepId,
-      spawnPlanId: childTicket.spawnPlanId,
-      spawnIdempotencyKey: childTicket.spawnIdempotencyKey,
-      createdBy: childTicket.createdBy,
-      createdAt: childTicket.createdAt
+  const created = await getTicketRunLifecycleRepository().createTicketWithEvent({
+    ticket: childTicketDraft,
+    eventPayload: {
+      objective: childTicketDraft.objective,
+      assignmentTargetType: childTicketDraft.assignmentTargetType,
+      assignmentTargetId: childTicketDraft.assignmentTargetId,
+      assignmentMode: childTicketDraft.assignmentMode,
+      executionMode: childTicketDraft.executionMode,
+      workflowId: childTicketDraft.workflowId,
+      blockedReason: childTicketDraft.blockedReason || null,
+      parentTicketId: childTicketDraft.parentTicketId,
+      parentRunId: childTicketDraft.parentRunId,
+      parentWorkflowId: childTicketDraft.parentWorkflowId,
+      spawnedByStepId: childTicketDraft.spawnedByStepId,
+      spawnPlanId: childTicketDraft.spawnPlanId,
+      spawnIdempotencyKey: childTicketDraft.spawnIdempotencyKey,
+      createdBy: childTicketDraft.createdBy
     }
   });
   broadcastTicketChange();
-  return childTicket;
+  return created.ticket;
 }
 
 async function executeTicketPlanWorkflowAction(run, workflow, step, input) {
@@ -17445,7 +17409,6 @@ async function runAgentTicket(runId) {
       allocationPlanId: startedRun.allocationPlanId || null,
       allocationItemId: startedRun.allocationItemId || null
     });
-    await updateTicketInProgressForRun(startedRun);
     return startedRun;
   });
   if (!run || run.status !== 'running') return;
@@ -19213,16 +19176,13 @@ async function createTicketFromInput(input, actor, options = {}) {
   const contextCheck = validateWorkContextAssignment(input.workContextId, { capabilityId: resolvedCapabilityIdForContext, targetId: input.workContextTargetId });
   if (!contextCheck.ok) return { ok: false, error: contextCheck.error };
 
-  const tickets = readTickets();
   const now = new Date().toISOString();
-  const nextTicketId = nextId(tickets);
   const actorName = actor && actor.username
     ? actor.username
     : (actor && actor.userId != null ? String(actor.userId) : 'system');
 
   const acceptanceCriteria = typeof input.acceptanceCriteria === 'string' ? input.acceptanceCriteria.trim() : '';
-  const newTicket = {
-    id: nextTicketId,
+  let newTicket = {
     objective,
     acceptanceCriteria: acceptanceCriteria || null,
     assignmentTargetType,
@@ -19265,7 +19225,7 @@ async function createTicketFromInput(input, actor, options = {}) {
     } catch (error) {
       appendSystemLog('allocation:setup_failed', error.message, null, {
         code: error.code || 'DYNAMIC_ALLOCATION_ERROR',
-        ticketId: newTicket.id,
+        ticketId: newTicket.id || null,
         assignmentTargetId: newTicket.assignmentTargetId,
         createdBy: newTicket.createdBy
       });
@@ -19281,7 +19241,7 @@ async function createTicketFromInput(input, actor, options = {}) {
         code: error.code || 'VALIDATION_ERROR',
         path: error.path || null,
         assignedAgentId: error.assignedAgentId || null,
-        ticketId: newTicket.id,
+        ticketId: newTicket.id || null,
         assignmentTargetId: newTicket.assignmentTargetId,
         createdBy: newTicket.createdBy
       });
@@ -19289,13 +19249,10 @@ async function createTicketFromInput(input, actor, options = {}) {
     }
   }
 
-  tickets.push(newTicket);
-  writeTickets(tickets);
   try {
-    await appendEvent({
-      type: 'ticket.created',
-      ticketId: newTicket.id,
-      payload: {
+    const created = await getTicketRunLifecycleRepository().createTicketWithEvent({
+      ticket: newTicket,
+      eventPayload: {
         status: newTicket.status,
         assignmentTargetType: newTicket.assignmentTargetType,
         assignmentTargetId: newTicket.assignmentTargetId,
@@ -19308,18 +19265,24 @@ async function createTicketFromInput(input, actor, options = {}) {
         workTypeSnapshot: copyWorkTypeSnapshot(newTicket.workTypeSnapshot),
         workTypeSnapshotSource: newTicket.workTypeSnapshot ? 'catalog_at_ticket_creation' : null,
         createdBy: newTicket.createdBy,
-        createdAt: newTicket.createdAt,
         ...(newTicket.source ? { source: newTicket.source.type } : {})
       }
     });
+    newTicket = created.ticket;
   } catch (error) {
     if (error && error.code === 'EVENT_RECORD_TOO_LARGE') {
+      newTicket = error.lifecycleTicket || newTicket;
       const failedAt = new Date().toISOString();
-      newTicket.status = 'failed';
-      newTicket.blockedReason = error.message;
-      newTicket.updatedAt = failedAt;
-      newTicket.changedAt = failedAt;
-      writeTickets(tickets);
+      const tickets = readTickets();
+      const persistedTicket = tickets.find(item => item.id === newTicket.id);
+      if (persistedTicket) {
+        persistedTicket.status = 'failed';
+        persistedTicket.blockedReason = error.message;
+        persistedTicket.updatedAt = failedAt;
+        persistedTicket.changedAt = failedAt;
+        writeTickets(tickets);
+        newTicket = persistedTicket;
+      }
       appendSystemLog('ticket:event_record_rejected', error.message, null, {
         ticketId: newTicket.id,
         code: error.code,
@@ -21227,11 +21190,14 @@ fastify.patch('/api/tickets/:id/status', {
   }
 
   const previousStatus = ticket.status;
-  ticket.status = status;
-  ticket.updatedAt = changedAt;
-  ticket.changedBy = changedBy;
-  ticket.changedAt = changedAt;
-  writeTickets(tickets);
+  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
+    ticketId,
+    fromStatuses: [previousStatus],
+    toStatus: status,
+    patch: { changedBy, changedAt },
+    eventPayload: { changedBy, changedAt }
+  });
+  const updatedTicket = transitioned.ticket;
   broadcastTicketChange();
 
   if (status === 'closed') {
@@ -21252,18 +21218,25 @@ fastify.patch('/api/tickets/:id/status', {
 
   if (status === 'open') {
     try {
-      await createRunsForTicket(ticket, delegatedFromRequest(request, 'reopen_auto_run'));
+      await createRunsForTicket(updatedTicket, delegatedFromRequest(request, 'reopen_auto_run'));
     } catch (error) {
-      ticket.status = 'failed';
-      ticket.updatedAt = changedAt;
-      writeTickets(tickets);
+      const currentTicket = readTickets().find(item => item.id === ticketId);
+      if (currentTicket && currentTicket.status !== 'failed') {
+        await getTicketRunLifecycleRepository().transitionTicketState({
+          ticketId,
+          fromStatuses: [currentTicket.status],
+          toStatus: 'failed',
+          patch: { changedBy, changedAt: new Date().toISOString(), blockedReason: error.message || 'Run creation failed' },
+          eventPayload: { reason: error.message || 'Run creation failed' }
+        });
+      }
       broadcastTicketChange();
       reply.code(400);
       return { error: error.message || 'Owned-scope execution rejected' };
     }
   }
 
-  return { ticket };
+  return { ticket: updatedTicket };
 });
 
 fastify.post('/api/tickets/:id/rerun', {

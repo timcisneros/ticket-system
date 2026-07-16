@@ -58,6 +58,7 @@ async function main() {
     const migrationResults = await Promise.all([store.migrate(), peer.migrate()]);
     assert.equal(migrationResults.flat().filter(name => name === '001_runtime_core.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name => name === '002_runtime_evidence.sql').length, 1);
+    assert.equal(migrationResults.flat().filter(name => name === '003_ticket_run_lifecycle.sql').length, 1);
     assert.deepEqual(await store.migrate(), []);
     assert.equal(await store.health(), true);
 
@@ -74,8 +75,44 @@ async function main() {
     const terminalBoundaryTicket = await store.createTicket({ status: 'open', title: 'Terminalization boundary' });
     const terminalRollbackTicket = await store.createTicket({ status: 'open', title: 'Terminalization rollback' });
     const terminalExpiredTicket = await store.createTicket({ status: 'open', title: 'Expired terminal recovery' });
+    const lifecycleBoundaryTicket = await store.createTicketWithEvent({
+      ticket: {
+        status: 'open',
+        title: 'Ticket/run lifecycle boundary',
+        assignmentTargetType: 'group',
+        assignmentTargetId: 20,
+        assignmentMode: 'allocated',
+        changedAt: '2000-01-01T00:00:00.000Z'
+      },
+      eventPayload: { source: 'integration' }
+    });
+    const lifecycleRaceTicket = await store.createTicket({
+      status: 'open', title: 'Lifecycle creation race', assignmentTargetType: 'agent', assignmentTargetId: 30
+    });
+    const retryBoundaryTicket = await store.createTicket({
+      status: 'open', title: 'Atomic retry boundary', assignmentTargetType: 'agent', assignmentTargetId: 40,
+      assignmentMode: 'individual'
+    });
     assert.notEqual(ticketOne.id, ticketTwo.id);
     assert.equal(ticketOne.revision, 1);
+    assert.equal(lifecycleBoundaryTicket.ticket.status, 'open');
+    assert.notEqual(lifecycleBoundaryTicket.ticket.changedAt, '2000-01-01T00:00:00.000Z');
+    assert.equal(lifecycleBoundaryTicket.event.type, 'ticket.created');
+    const childTicketRace = await Promise.all([
+      store.createTicketWithEvent({
+        ticket: { status: 'blocked', assignmentTargetType: 'agent', assignmentTargetId: 99,
+          spawnIdempotencyKey: 'integration-child-once' },
+        eventPayload: { parentRunId: 999 }
+      }),
+      peer.createTicketWithEvent({
+        ticket: { status: 'blocked', assignmentTargetType: 'agent', assignmentTargetId: 99,
+          spawnIdempotencyKey: 'integration-child-once' },
+        eventPayload: { parentRunId: 999 }
+      })
+    ]);
+    assert.equal(childTicketRace[0].ticket.id, childTicketRace[1].ticket.id);
+    assert.equal(childTicketRace.filter(result => result.created).length, 1,
+      'workflow child idempotency must survive multi-process creation races');
 
     const runOne = await store.createRun({ ticketId: ticketOne.id, agentId: 1, status: 'pending' });
     const runTwo = await store.createRun({ ticketId: ticketOne.id, agentId: 1, status: 'pending' });
@@ -100,6 +137,91 @@ async function main() {
     const terminalExpiredRun = await store.createRun({
       ticketId: terminalExpiredTicket.id, agentId: 11, status: 'pending'
     });
+
+    const lifecycleBatch = await store.createRunsAndStartTicket({
+      ticketId: lifecycleBoundaryTicket.ticket.id,
+      runDrafts: [{
+        ticketId: lifecycleBoundaryTicket.ticket.id, agentId: 20, agentName: 'Twenty', status: 'pending',
+        executionMode: 'agent'
+      }, {
+        ticketId: lifecycleBoundaryTicket.ticket.id, agentId: 21, agentName: 'Twenty One', status: 'pending',
+        executionMode: 'agent'
+      }],
+      runEventPayload: run => ({ agentId: run.agentId, agentName: run.agentName })
+    });
+    assert.equal(lifecycleBatch.ticket.status, 'in_progress');
+    assert.equal(lifecycleBatch.ticket.revision, 2);
+    assert.equal(lifecycleBatch.runs.length, 2);
+    assert.deepEqual(lifecycleBatch.events.map(event => event.type), ['run.created', 'run.created', 'ticket.updated']);
+    assert.ok(lifecycleBatch.runs.every(run => run.ticketOpenedAt === lifecycleBoundaryTicket.ticket.updatedAt));
+    const failedAllocationMember = await store.transitionRun({
+      runId: lifecycleBatch.runs[0].id,
+      expectedRevision: lifecycleBatch.runs[0].revision,
+      fromStatuses: ['pending'],
+      toStatus: 'failed',
+      eventType: 'run.execution_failed',
+      eventPayload: { source: 'lifecycle settlement integration' }
+    });
+    const failedAllocationSettlement = await store.transitionTicketAfterRun({ runId: failedAllocationMember.run.id });
+    assert.equal(failedAllocationSettlement.changed, true);
+    assert.equal(failedAllocationSettlement.ticket.status, 'failed');
+
+    const lifecycleCreationRace = await Promise.allSettled([
+      store.createRunsAndStartTicket({
+        ticketId: lifecycleRaceTicket.id,
+        runDrafts: [{ ticketId: lifecycleRaceTicket.id, agentId: 30, status: 'pending', executionMode: 'agent' }]
+      }),
+      peer.createRunsAndStartTicket({
+        ticketId: lifecycleRaceTicket.id,
+        runDrafts: [{ ticketId: lifecycleRaceTicket.id, agentId: 30, status: 'pending', executionMode: 'agent' }]
+      })
+    ]);
+    assert.equal(lifecycleCreationRace.filter(result => result.status === 'fulfilled').length, 1);
+    const lifecycleRaceCount = await store.pool.query(
+      `SELECT count(*)::int AS count FROM ${store.table('runs')} WHERE ticket_id = $1`,
+      [lifecycleRaceTicket.id]
+    );
+    assert.equal(lifecycleRaceCount.rows[0].count, 1, 'same-ticket lifecycle creation must not duplicate a run');
+
+    const retryInitial = await store.createRunsAndStartTicket({
+      ticketId: retryBoundaryTicket.id,
+      runDrafts: [{ ticketId: retryBoundaryTicket.id, agentId: 40, status: 'pending', executionMode: 'agent' }]
+    });
+    const retryFailed = await store.transitionRun({
+      runId: retryInitial.runs[0].id,
+      expectedRevision: retryInitial.runs[0].revision,
+      fromStatuses: ['pending'],
+      toStatus: 'failed',
+      eventType: 'run.execution_failed',
+      eventPayload: { reason: 'retryable integration failure' }
+    });
+    await assert.rejects(
+      smallRecordStore.createRetryRun({
+        ticketId: retryBoundaryTicket.id,
+        predecessorRunId: retryFailed.run.id,
+        runDraft: { ticketId: retryBoundaryTicket.id, agentId: 40, status: 'pending', executionMode: 'agent' },
+        runEventPayload: () => ({ padding: 'x'.repeat(300) })
+      }),
+      error => error && error.code === 'POSTGRES_RECORD_TOO_LARGE'
+    );
+    assert.equal((await store.getTicket(retryBoundaryTicket.id)).status, 'in_progress',
+      'failed retry evidence must roll back ticket reopen');
+    const retryCountAfterRollback = await store.pool.query(
+      `SELECT count(*)::int AS count FROM ${store.table('runs')} WHERE ticket_id = $1`,
+      [retryBoundaryTicket.id]
+    );
+    assert.equal(retryCountAfterRollback.rows[0].count, 1, 'failed retry evidence must roll back the new run');
+
+    const retryCreated = await store.createRetryRun({
+      ticketId: retryBoundaryTicket.id,
+      predecessorRunId: retryFailed.run.id,
+      runDraft: { ticketId: retryBoundaryTicket.id, agentId: 40, status: 'pending', executionMode: 'agent' },
+      runEventPayload: run => ({ agentId: run.agentId })
+    });
+    assert.equal(retryCreated.ticket.status, 'in_progress');
+    assert.equal(retryCreated.runs[0].status, 'pending');
+    assert.equal(retryCreated.runs[0].rerunMode, 'auto_retry');
+    assert.equal((await store.getRun(retryFailed.run.id)).status, 'failed');
 
     const ticketInProgress = await store.transitionTicket({
       ticketId: ticketRaceTicket.id,
@@ -879,7 +1001,7 @@ async function main() {
     );
     assert.equal(refusedMigration.rowCount, 0);
 
-    console.log('PASS: PostgreSQL integration — optimistic lifecycle, paged lease authority, immutable evidence, replay revisions, idempotent receipts, rollback, claims, and path concurrency');
+    console.log('PASS: PostgreSQL integration — transactional ticket/run lifecycle, paged lease authority, immutable evidence, replay revisions, idempotent receipts, rollback, claims, and path concurrency');
   } finally {
     try { await store.pool.query(`DROP SCHEMA IF EXISTS ${store.schemaSql} CASCADE`); } catch (_) {}
     try { await store.pool.query(`DROP SCHEMA IF EXISTS ${nonemptyFoundationStore.schemaSql} CASCADE`); } catch (_) {}
