@@ -2,12 +2,12 @@
 
 Date: 2026-06-11
 Scope: existing substrate only, observed evidence only. No proposals.
-Companion documents: `docs/FAILURE_TAXONOMY.md`, `anchored-summary.md` (terminal-path census).
+Companion documents: `docs/FAILURE_TAXONOMY.md`, `ARCHIVE/evidence-corpus/anchored-summary.md` (frozen point-in-time terminal-path census).
 
 ## 1. What currently causes a run to FAIL
 
-Every terminal-failure path is structural/runtime. The census (`anchored-summary.md`)
-counts 39 paths in four groups: boundedness budgets (6), authority/security (10),
+Every terminal-failure path observed in this analysis was structural/runtime. The frozen census
+(`ARCHIVE/evidence-corpus/anchored-summary.md`) recorded 39 paths in four groups: boundedness budgets (6), authority/security (10),
 implementation-convenience errors (14), truthfulness protection (9). Observed in
 the wild across this record:
 

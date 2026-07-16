@@ -25,6 +25,14 @@ substrate.
 - [`SYSTEM_STATUS.md`](SYSTEM_STATUS.md) — current guarantees, product direction, and known work.
 - [`POSTGRES_CUTOVER.md`](POSTGRES_CUTOVER.md) — living shared-storage cutover contract and status.
 
+## Direction and operating canon
+
+- [`DIRECTION.md`](DIRECTION.md) — invariants for system evolution and truth hierarchy.
+- [`OPERATIONS.md`](OPERATIONS.md) — learned operating practices for bounded execution.
+- [`OPERATIONAL_PRESSURES.md`](OPERATIONAL_PRESSURES.md) — recurring observed operator friction.
+- [`OPERATOR_CONTRACT.md`](OPERATOR_CONTRACT.md) — operator and mutation-pipeline boundaries.
+- [`STATE_SURFACES.md`](STATE_SURFACES.md) — explicit operational-state semantics.
+
 ## Operator / primitive docs
 
 - [`TARGET_PROVIDER_CONTRACT.md`](TARGET_PROVIDER_CONTRACT.md) — the mutation boundary.
@@ -60,6 +68,12 @@ substrate.
 
 - [`RELEASE_CANDIDATE_AUDIT.md`](RELEASE_CANDIDATE_AUDIT.md) — frozen r1.32 release-candidate verdict.
 - [`RELEASE_NOTES_r1.33.md`](RELEASE_NOTES_r1.33.md) — frozen r1.33 release-candidate notes.
+
+## Historical evidence
+
+- [`../ARCHIVE/evidence-corpus/`](../ARCHIVE/evidence-corpus/) — frozen terminal-path census,
+  business-workstream evidence ledger, and failure-cluster report.
+- [`archive/STRATEGY.md`](archive/STRATEGY.md) — superseded productization-transition strategy.
 
 ## Archived implementation reviews
 

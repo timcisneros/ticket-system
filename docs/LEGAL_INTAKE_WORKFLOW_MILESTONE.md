@@ -39,7 +39,7 @@ Replay `workflowInvocation` recorded:
 
 ## Remaining Untracked Docs
 
-- `anchored-summary.md`
+- `ARCHIVE/evidence-corpus/anchored-summary.md`
 - `docs/archive/BUSINESS_FIXTURE_PLAN.md`
 - `docs/archive/BUSINESS_FIXTURE_PLAN_V2.md`
 - `docs/BUSINESS_FIXTURE_REALISM_AUDIT.md`

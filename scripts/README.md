@@ -90,7 +90,7 @@ normal port-binding permission in sandboxed environments.
 
 ## Investigation harnesses (2026-06 evidence corpus)
 
-`run-customer-support-test`, `run-legal-intake-test`, `run-shared-drive-test`, `run-vendor-compliance-test`, `run-vendor-chunk-test`, `run-ticket-plan-test`, `run-er-validation`, `run-vc1-pipeline`, `recheck-er-cases`, `needs-arms-census`, `test-legal-impossibility`, `test-policy-gap-single`, `unverified-evaluation-test`, `verifier-contract-test`, `vendor-realism-benchmark` — harnesses behind the root evidence corpus (`evidence-ledger.md`, `failure-cluster-report.md`, etc.). Kept for provenance.
+`run-customer-support-test`, `run-legal-intake-test`, `run-shared-drive-test`, `run-vendor-compliance-test`, `run-vendor-chunk-test`, `run-ticket-plan-test`, `run-er-validation`, `run-vc1-pipeline`, `recheck-er-cases`, `needs-arms-census`, `test-legal-impossibility`, `test-policy-gap-single`, `unverified-evaluation-test`, `verifier-contract-test`, `vendor-realism-benchmark` — harnesses behind the frozen evidence corpus in `ARCHIVE/evidence-corpus/`. Kept for provenance.
 
 Closed-investigation leftovers kept in place for the same reason: `tm1-inspection-productivity-test.js`, `tm2-evidence-preservation-test.js` (siblings archived under `ARCHIVE/TM-ST-INVESTIGATIONS/`), and the five `er1*/er2*` error-recoverability probes.
 

@@ -1,7 +1,7 @@
 # Failure Taxonomy for the Execution Substrate
 
 Date: 2026-06-10
-Derivation: observed evidence only — vendor-compliance (baseline 2026-05 + adversarial corpus runs 7-18 + 2x2 ambiguity experiment), legal-intake (baseline + adversarial failure-class corpus + cross-model arm), customer-support (baseline + v1/v2 fixtures + 29 mechanism-isolation runs), plus substrate execution records (replay snapshots, terminal-path census in `anchored-summary.md`).
+Derivation: observed evidence only — vendor-compliance (baseline 2026-05 + adversarial corpus runs 7-18 + 2x2 ambiguity experiment), legal-intake (baseline + adversarial failure-class corpus + cross-model arm), customer-support (baseline + v1/v2 fixtures + 29 mechanism-isolation runs), plus substrate execution records (replay snapshots and the frozen point-in-time terminal-path census in `ARCHIVE/evidence-corpus/anchored-summary.md`).
 
 Every category below has at least one observed instance. No hypothetical categories.
 
@@ -86,7 +86,7 @@ Every category below has at least one observed instance. No hypothetical categor
 
 **Definition.** The run fails for non-business reasons: budget exhaustion, authority denial, malformed output handling, workspace conflicts. Business reasoning may have been entirely correct.
 
-**Detection signal.** Already structured: `terminalStatus: failed` + error code (`WORKSPACE_WRITE_CONFLICT`, `RUN_LIMIT_EXCEEDED`, …). The 39 terminal paths are censused in `anchored-summary.md` (6 boundedness, 10 security, 14 implementation-convenience, 9 truthfulness).
+**Detection signal.** Already structured: `terminalStatus: failed` + error code (`WORKSPACE_WRITE_CONFLICT`, `RUN_LIMIT_EXCEEDED`, …). The archived point-in-time census in `ARCHIVE/evidence-corpus/anchored-summary.md` recorded 39 terminal paths (6 boundedness, 10 security, 14 implementation-convenience, 9 truthfulness); current behavior must be verified from source and tests.
 
 **Observed instances.** Adversarial vendor runs 7 and 9: `WORKSPACE_WRITE_CONFLICT` ("path was previously produced by ticket 8, run 8") — terminal failure orthogonal to classification quality.
 

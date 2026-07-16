@@ -160,7 +160,7 @@ possibility. Its implemented boundary, verification, and remaining cutover steps
   `docs/WORK_CONTEXT_PRIMITIVE_DESIGN_AUDIT.md`.
 - **Configuration / data model / CLI detail:** `docs/SETUP_AND_FIRST_RUN.md` (env vars, ports,
   first run) and `docs/OPERATOR_GUIDE.md` (data/evidence model, headless `oquery` CLI). The deeper
-  semantics & operations canon live in `AGENTS.md`, `OPERATIONS.md`, the rest of `docs/`
+  semantics & operations canon live in `AGENTS.md`, `docs/OPERATIONS.md`, the rest of `docs/`
   (`ARCHITECTURE_INVARIANTS.md`, `EXECUTION_MODEL.md`, `LIFECYCLE_EVENTS.md`, `FAILURE_TAXONOMY.md`,
   `KNOWN_LIMITATIONS.md`, …), and `scripts/README.md`.
 

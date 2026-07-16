@@ -14,6 +14,9 @@ data/browser-artifacts/
 data/events.jsonl
 data/event-archive/
 
+# Local legacy runtime bundles may contain provider credentials and account hashes.
+ARCHIVE/pre-schema-v1-*/
+
 # Logs
 logs
 *.log

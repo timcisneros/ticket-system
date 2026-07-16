@@ -240,7 +240,7 @@ async function main() {
     // ====================================================================
     // Phase 2: Continuation ticket enumerating missing items
     // ====================================================================
-    console.log('\n=== PHASE 2: Continuation (OPERATIONS.md Section 3 template) ===');
+    console.log('\n=== PHASE 2: Continuation (docs/OPERATIONS.md Section 3 template) ===');
     const missingList = missingFolders.map(f => `- ${f}`).join('\n');
     const p2Obj = [
       `Remaining work after previous run:`,

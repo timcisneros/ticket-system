@@ -4,7 +4,7 @@
 
 The substrate exposes its behavior as measurable operational evidence. All telemetry is derived deterministically from the ledger (events.jsonl, runs.json, tickets.json, operation-history.json). No hidden mutable counters are maintained.
 
-> The semantic definitions these surfaces implement originate in root `STATE_SURFACES.md`, which also records surfaces not yet implemented.
+> The semantic definitions these surfaces implement originate in `docs/STATE_SURFACES.md`, which also records surfaces not yet implemented.
 
 ## Principles
 

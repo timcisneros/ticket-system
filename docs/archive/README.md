@@ -55,11 +55,15 @@ Provenance notes:
 
 - `EXECUTION_MODEL_AUDIT.md`, `EXECUTION_MODEL_CONSOLIDATION_AUDIT.md` — point-in-time audits (2026-06-06/07) whose primitives and verdict are distilled in `docs/EXECUTION_MODEL.md` (the sole execution-model authority)
 - `CHILD_TICKET_EXECUTION_MILESTONE.md`, `DYNAMIC_ACTION_PLAN_MILESTONE.md` — completed milestone records (WF-5, DX-2/DX-3) consolidated into `docs/EXECUTION_MODEL.md`
-- `terminal-classification.md` — strict subset of root `anchored-summary.md` (the terminal-path census authority)
+- `terminal-classification.md` — strict subset of the frozen point-in-time census at `ARCHIVE/evidence-corpus/anchored-summary.md`
 - `SHARED_DRIVE_CLEANUP_DESIGN.md` — closed design review: its recommendation was implemented (small fixture + strict verifier; every gap in its "Implementation Gaps" section now exists in `scripts/fixture-verifier.js`) and validated in the evidence corpus (Shared Drive baseline + v2, 0% failure)
 - `UNRESOLVED_EVENT_LOG_QUESTIONS.md` — merged verbatim into `docs/ARCHITECTURAL_DECISIONS_PENDING.md` ("Event Log Stream Semantics"); original preserved here
 
-## Early exploratory documents (May 2026, pre-productization; operational canon now in root `OPERATIONS.md`)
+## Superseded strategy snapshot
+
+- `STRATEGY.md` — transition-to-productization strategy preserved after its development phase ended
+
+## Early exploratory documents (May 2026, pre-productization; operational canon now in `docs/OPERATIONS.md`)
 
 - `ANALYSIS.md` — early experimental guidance synthesis
 - `OPerational-Findings.md` — first-pass observation synthesis (filename casing preserved as-committed)

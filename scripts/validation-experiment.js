@@ -230,7 +230,7 @@ async function main() {
     const cookie = await login();
 
     // ====================================================================
-    // Phase 1: Create docs structure using OPERATIONS.md Section 4 template
+    // Phase 1: Create docs structure using docs/OPERATIONS.md Section 4 template
     // ====================================================================
     const phase1Objective = [
       `Create a documentation project inside workspace:`,
@@ -251,12 +251,12 @@ async function main() {
       `Total expected work: 5 folder creates + 4 file writes = 9 operations.`,
     ].join('\n');
 
-    console.log('\n=== PHASE 1: Create docs structure (OPERATIONS.md Section 4 template) ===');
+    console.log('\n=== PHASE 1: Create docs structure (docs/OPERATIONS.md Section 4 template) ===');
     const t1Id = await runPhase(dataDir, wsRoot, cookie, agent, 1, phase1Objective);
     const m1 = collectMetrics(dataDir, t1Id, 'Phase 1 - Docs scaffold', wsRoot);
 
     // ====================================================================
-    // Phase 2: Continuation using OPERATIONS.md Section 3 template
+    // Phase 2: Continuation using docs/OPERATIONS.md Section 3 template
     // ====================================================================
     const phase2Objective = [
       `Remaining work after docs scaffold:`,
@@ -275,7 +275,7 @@ async function main() {
       `Total expected work: 4 file writes.`,
     ].join('\n');
 
-    console.log('\n=== PHASE 2: Continuation (OPERATIONS.md Section 3 template) ===');
+    console.log('\n=== PHASE 2: Continuation (docs/OPERATIONS.md Section 3 template) ===');
     const t2Id = await runPhase(dataDir, wsRoot, cookie, agent, 2, phase2Objective);
     const m2 = collectMetrics(dataDir, t2Id, 'Phase 2 - Continuation', wsRoot);
 
@@ -283,7 +283,7 @@ async function main() {
     // Report
     // ====================================================================
     console.log('\n============================================');
-    console.log('   OPERATIONS.md VALIDATION RESULTS');
+    console.log('   docs/OPERATIONS.md VALIDATION RESULTS');
     console.log('============================================\n');
 
     [m1, m2].forEach(m => {
@@ -326,7 +326,7 @@ async function main() {
     });
 
     const allPass = checks.every(c => c.pass);
-    console.log(`\n  Overall: ${allPass ? 'ALL PASS - OPERATIONS.md guidance validated' : 'SOME FAILURES - review above'}`);
+    console.log(`\n  Overall: ${allPass ? 'ALL PASS - docs/OPERATIONS.md guidance validated' : 'SOME FAILURES - review above'}`);
 
   } finally {
     if (server) { server.kill('SIGTERM'); await waitForExit(server); }
