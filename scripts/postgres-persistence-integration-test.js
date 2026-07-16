@@ -66,6 +66,7 @@ async function main() {
     assert.equal(migrationResults.flat().filter(name => name === '002_runtime_evidence.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name => name === '003_ticket_run_lifecycle.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name => name === '004_non_terminal_evidence.sql').length, 1);
+    assert.equal(migrationResults.flat().filter(name => name === '005_finalized_replay_append.sql').length, 1);
     assert.deepEqual(await store.migrate(), []);
     assert.equal(await store.health(), true);
 
@@ -128,6 +129,7 @@ async function main() {
     const lifecycleRun = await store.createRun({ ticketId: lifecycleTicket.id, agentId: 3, status: 'pending' });
     const rollbackRun = await store.createRun({ ticketId: rollbackTicket.id, agentId: 4, status: 'pending' });
     const replayIntegrityRun = await store.createRun({ ticketId: rollbackTicket.id, agentId: 4, status: 'pending' });
+    const replayBoundaryRun = await store.createRun({ ticketId: rollbackTicket.id, agentId: 4, status: 'pending' });
     const composedRun = await store.createRun({ ticketId: composedTicket.id, agentId: 5, status: 'pending' });
     const composedRollbackRun = await store.createRun({
       ticketId: composedRollbackTicket.id, agentId: 6, status: 'pending'
@@ -148,6 +150,49 @@ async function main() {
     const nonTerminalEvidenceRun = await store.createRun({
       ticketId: nonTerminalEvidenceTicket.id, agentId: 12, status: 'pending'
     });
+
+    const replayInitializationRace = await Promise.all([
+      store.initializeRunReplay({
+        runId: replayBoundaryRun.id,
+        ticketId: rollbackTicket.id,
+        snapshot: { version: 1, events: [], initializedBy: 'store' }
+      }),
+      peer.initializeRunReplay({
+        runId: replayBoundaryRun.id,
+        ticketId: rollbackTicket.id,
+        snapshot: { version: 1, events: [], initializedBy: 'peer' }
+      })
+    ]);
+    assert.equal(replayInitializationRace.filter(result => result.initialized).length, 1);
+    assert.equal(
+      replayInitializationRace[0].record.snapshot.initializedBy,
+      replayInitializationRace[1].record.snapshot.initializedBy,
+      'concurrent replay initialization must converge on the first committed document'
+    );
+    await Promise.all([
+      store.updateRunReplay({
+        runId: replayBoundaryRun.id,
+        update: snapshot => ({ ...snapshot, events: [...snapshot.events, { type: 'store' }] })
+      }),
+      peer.updateRunReplay({
+        runId: replayBoundaryRun.id,
+        update: snapshot => ({ ...snapshot, events: [...snapshot.events, { type: 'peer' }] })
+      })
+    ]);
+    const replayBoundaryRecord = await store.readRunReplay(replayBoundaryRun.id);
+    assert.deepEqual(
+      replayBoundaryRecord.snapshot.events.map(event => event.type).sort(),
+      ['peer', 'store'],
+      'per-run row serialization must preserve concurrent replay projections'
+    );
+    assert.deepEqual(
+      (await store.listRunReplays({ runIds: [replayBoundaryRun.id], limit: 1 })).map(record => record.runId),
+      [replayBoundaryRun.id]
+    );
+    await assert.rejects(
+      store.listRunReplays({ runIds: [runOne.id, runTwo.id, runThree.id], limit: 2 }),
+      /exceeds the requested limit/
+    );
 
     const nonTerminalClaim = await store.claimPendingRun({
       leaseOwner: 'evidence-worker', leaseDurationMs: 30_000, eligibleRunIds: [nonTerminalEvidenceRun.id]
@@ -690,6 +735,7 @@ async function main() {
       replaySnapshot: {
         version: 1,
         steps: ['started', 'completed'],
+        modelResponses: [],
         terminalStatus: 'completed',
         finalizedAt: '2026-07-16T12:00:00.000Z'
       },
@@ -734,6 +780,24 @@ async function main() {
       ]
     );
     assert.equal(verifyCurrentRunEventChain(await store.listRunEvents(terminalBoundaryRun.id)).chainValid, true);
+    const lateProviderEvidence = await store.appendRunEvidence({
+      runId: terminalBoundaryRun.id,
+      ticketId: terminalBoundaryTicket.id,
+      evidenceKey: `provider-response:${terminalBoundaryRun.id}:late`,
+      replayKey: 'modelResponses',
+      replayItem: { provider: 'openai', response: { complete: false } },
+      event: { type: 'provider.response.persisted', payload: { provider: 'openai', late: true } }
+    });
+    assert.equal(lateProviderEvidence.inserted, true);
+    assert.equal(lateProviderEvidence.replaySnapshot.snapshot.modelResponses.length, 1);
+    assert.ok(lateProviderEvidence.replaySnapshot.finalizedAt, 'late evidence must not unseal terminal fields');
+    await assert.rejects(
+      store.updateRunReplay({
+        runId: terminalBoundaryRun.id,
+        update: snapshot => ({ ...snapshot, terminalStatus: 'failed' })
+      }),
+      error => error instanceof ImmutableEvidenceConflictError
+    );
 
     const rollbackClaim = await smallRecordStore.claimPendingRun({
       leaseOwner: 'terminal-rollback-worker',
@@ -1010,7 +1074,7 @@ async function main() {
     );
     await assert.rejects(
       store.pool.query(`UPDATE ${store.table('replay_snapshots')} SET revision = revision + 1 WHERE run_id = $1`, [lifecycleRun.id]),
-      /finalized replay snapshots are immutable/
+      /finalized replay permits only one append-only evidence item/
     );
 
     const rollbackTerminalTransition = await store.transitionRun({

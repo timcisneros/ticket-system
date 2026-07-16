@@ -124,7 +124,7 @@ class JsonNonTerminalEvidenceRepository {
       throw new TargetOperationConflictError(id, key);
     }
 
-    const snapshot = this.readReplaySnapshot(id);
+    const snapshot = await this.readReplaySnapshot(id);
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
       throw new TypeError(`Run ${id} does not have a replay snapshot`);
     }
@@ -134,7 +134,7 @@ class JsonNonTerminalEvidenceRepository {
       throw new TargetOperationConflictError(id, key);
     }
     if (!existingItem) {
-      this.writeReplaySnapshot(id, { ...snapshot, [collection]: [...items, item] });
+      await this.writeReplaySnapshot(id, { ...snapshot, [collection]: [...items, item] });
     }
 
     if (existingEvent) {
@@ -300,7 +300,7 @@ class JsonNonTerminalEvidenceRepository {
     }
 
     const evidenceKey = `target-operation:${key}:completed`;
-    const snapshot = this.readReplaySnapshot(id);
+    const snapshot = await this.readReplaySnapshot(id);
     const existingReplayItem = snapshot && Array.isArray(snapshot.workspaceOperations)
       ? snapshot.workspaceOperations.find(item => item && item.evidenceKey === evidenceKey) || null
       : null;

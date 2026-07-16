@@ -32,6 +32,14 @@ The active JSON adapter cannot make its replay file, operation history, and jour
 transaction; PostgreSQL implements the same calls transactionally, but is not yet the active server
 backend.
 
+Replay initialization, scalar/diagnostic projection updates, and single/batch reads use the replay
+repository rather than server-level file access. Batch reads accept exact run IDs and enforce a
+per-query row limit; larger caller-owned sets are processed in bounded batches without scanning the
+replay directory or PostgreSQL replay table. Terminal fields and existing replay items are sealed.
+If an operation was admitted before terminalization, it may append exactly one new evidence item
+afterward; this preserves a late provider response without changing terminal status, evaluation,
+consequence, or action authority.
+
 ## Event journal contract
 
 `appendEvent` sanitizes the envelope, assigns the current schema version, id, and high-resolution

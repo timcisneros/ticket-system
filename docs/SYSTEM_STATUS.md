@@ -88,7 +88,7 @@ recovered without granting their former owner continued authority. State and its
 roll back together. Its deterministic contract test runs in the release checkpoint, and CI runs the
 schema, rollback, idempotency, and concurrency suite against PostgreSQL 17.
 
-Five server-facing seams now have active JSON and tested PostgreSQL implementations. The scheduler
+Six server-facing seams now have active JSON and tested PostgreSQL implementations. The scheduler
 lease contract covers discovery, claim, renewal, workflow progress, release, and expired-run
 recovery. The run-terminalization contract covers terminal status/lease clear, final replay,
 violation evidence, evaluation, consequence, and ordered terminal events. The ticket/run lifecycle
@@ -105,6 +105,11 @@ workflow-draft evidence, and handoff evidence. Provider request evidence is awai
 transport starts, and returned response evidence is stored before parsing or target actions.
 Observational keys include a persisted run-attempt ordinal; mutation keys intentionally do not, so
 same-run recovery can record fresh observations without duplicating reconciled target effects.
+The replay authority seam now owns idempotent initialization, synchronous projection transforms,
+exact-ID reads, and bounded exact-ID batch reads. PostgreSQL serializes only updates to the same run
+row. Terminal fields and prior evidence remain sealed; an operation admitted before terminalization
+may append one new evidence item afterward, preserving a late provider response without reopening
+the run or permitting workspace actions.
 
 This foundation is not yet the Fastify server's active authority. The server remains on JSON and
 explicitly refuses `PERSISTENCE_BACKEND=postgres` until the complete runtime cutover is assembled.
@@ -128,12 +133,13 @@ Compatibility is format-specific, not a system-wide no-legacy policy:
 ## Known work
 
 1. Complete the PostgreSQL runtime cutover before horizontal deployment. Core primitives plus the
-   scheduler lease, atomic run-terminalization, ticket/run lifecycle, target-mutation evidence, and
-   bounded non-terminal execution-evidence slices are implemented. The next boundary is replay
-   initialization, remaining scalar/diagnostic replay projections, and bounded replay reads; then
-   move startup/recovery and operator reads to the same authority, migrate the remaining whole
-   authority slices without dual-writing, and remove the JSON runtime path. Shared storage still
-   needs explicit retention and tenant-isolation policy.
+   scheduler lease, atomic run-terminalization, ticket/run lifecycle, target-mutation evidence,
+   bounded non-terminal execution evidence, and replay authority slices are implemented. The next
+   boundary is the remaining startup/recovery/operator state-read authority: ticket/run discovery,
+   events, evaluations, consequences, receipts, and related projections must use bounded indexed
+   queries from the selected store. Then migrate the remaining whole authority slices without
+   dual-writing and remove the JSON runtime path. Shared storage still needs explicit retention and
+   tenant-isolation policy.
 2. Add bounded deterministic postconditions where prose acceptance criteria do not prove outcomes;
    keep real-model benchmarks observational.
 3. Complete validation of the model contract compiler and prefix truncation before enabling them by

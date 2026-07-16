@@ -35,6 +35,10 @@ const {
   JsonNonTerminalEvidenceRepository,
   assertNonTerminalEvidenceRepository
 } = require('./persistence/json/non-terminal-evidence-repository');
+const {
+  JsonRunReplayRepository,
+  assertRunReplayRepository
+} = require('./persistence/json/run-replay-repository');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 
@@ -1660,6 +1664,7 @@ let runLeaseRepository = null;
 let runTerminalizationRepository = null;
 let ticketRunLifecycleRepository = null;
 let nonTerminalEvidenceRepository = null;
+let runReplayRepository = null;
 let dataVersion = 0;
 const pageRenderCache = new Map();
 const pageRenderInFlight = new Map();
@@ -4144,7 +4149,7 @@ function getTicketsForDisplay() {
 }
 
 function getRunLatestParsedPlanMessage(run) {
-  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || null;
+  const snapshot = run && run.replaySnapshot ? run.replaySnapshot : null;
   const plans = snapshot && Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
 
   for (let index = plans.length - 1; index >= 0; index -= 1) {
@@ -4425,7 +4430,7 @@ function detectRunStateInconsistency(run, {
 
   const runLogs = Array.isArray(logs) ? logs.filter(log => log && log.runId === run.id) : [];
   const runEvents = Array.isArray(events) ? events.filter(event => event && event.runId === run.id) : getRunEvents(run.id);
-  const snapshot = replaySnapshot || readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const snapshot = replaySnapshot || run.replaySnapshot || {};
   const eventSummary = suppliedEventSummary || recentEventSummary(run.id);
   const providerRequestCount = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests.length : 0;
   const modelResponseCount = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses.length : 0;
@@ -5928,7 +5933,7 @@ function extractReplaySummary(snapshot) {
   };
 }
 
-function readRunReplaySnapshot(run) {
+function readReplaySnapshotFile(run) {
   if (!run || typeof run !== 'object') return null;
   if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
   if (!run.replaySnapshotPath) return null;
@@ -5944,10 +5949,35 @@ function readRunReplaySnapshot(run) {
   }
 }
 
-function hydrateRunReplaySnapshot(run) {
+async function readRunReplaySnapshot(run) {
+  if (!run || typeof run !== 'object') return null;
+  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
+  if (!Number.isSafeInteger(run.id) || run.id <= 0) return null;
+  const record = await getRunReplayRepository().readRunReplay(run.id);
+  return record ? record.snapshot : null;
+}
+
+async function hydrateRunReplaySnapshot(run) {
   if (!run || typeof run !== 'object') return run;
-  const replaySnapshot = readRunReplaySnapshot(run);
+  const replaySnapshot = await readRunReplaySnapshot(run);
   return replaySnapshot ? { ...run, replaySnapshot } : { ...run };
+}
+
+async function hydrateRunReplaySnapshots(runs, { limit = getRuntimeSchedulerCandidateLimit() } = {}) {
+  if (!Array.isArray(runs) || runs.length === 0) return [];
+  if (!Number.isSafeInteger(limit) || limit <= 0) throw new TypeError('replay batch limit must be a positive safe integer');
+  const records = [];
+  for (let offset = 0; offset < runs.length; offset += limit) {
+    const batch = runs.slice(offset, offset + limit);
+    records.push(...await getRunReplayRepository().listRunReplays({
+      runIds: batch.map(run => run.id),
+      limit
+    }));
+  }
+  const snapshots = new Map(records.map(record => [record.runId, record.snapshot]));
+  return runs.map(run => snapshots.has(run.id)
+    ? { ...run, replaySnapshot: snapshots.get(run.id) }
+    : { ...run });
 }
 
 function writeReplaySnapshotFile(runId, snapshot) {
@@ -5970,17 +6000,13 @@ function attachReplayMetadata(run, snapshot) {
   return run;
 }
 
-function writeRunReplaySnapshot(runId, snapshot) {
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
-
-  if (!run) return null;
-
-  const sanitizedSnapshot = sanitizeSnapshotValue(snapshot);
-  writeReplaySnapshotFile(runId, sanitizedSnapshot);
-  attachReplayMetadata(run, sanitizedSnapshot);
-  writeRuns(runs);
-  return sanitizedSnapshot;
+async function writeRunReplaySnapshot(runId, snapshot, { allowFinalizedAppend = false } = {}) {
+  const result = await getRunReplayRepository().updateRunReplay({
+    runId,
+    update: () => sanitizeSnapshotValue(snapshot),
+    allowFinalizedAppend
+  });
+  return result ? result.record.snapshot : null;
 }
 
 function clearReplaySnapshotFiles() {
@@ -6124,16 +6150,32 @@ function getTicketRunLifecycleRepository() {
   return ticketRunLifecycleRepository;
 }
 
+function getRunReplayRepository() {
+  if (runReplayRepository) return runReplayRepository;
+  runReplayRepository = assertRunReplayRepository(new JsonRunReplayRepository({
+    readRuns,
+    writeRuns,
+    readReplaySnapshotFile,
+    writeReplaySnapshotFile,
+    attachReplayMetadata,
+    sanitizePayload: sanitizeSnapshotValue,
+    maxQueryRows: getRuntimeSchedulerCandidateLimit()
+  }));
+  return runReplayRepository;
+}
+
 function getNonTerminalEvidenceRepository() {
   if (nonTerminalEvidenceRepository) return nonTerminalEvidenceRepository;
   nonTerminalEvidenceRepository = assertNonTerminalEvidenceRepository(new JsonNonTerminalEvidenceRepository({
     readOperationHistory,
     writeOperationHistory,
-    readReplaySnapshot: runId => {
-      const run = readRuns().find(item => item.id === runId);
-      return run ? readRunReplaySnapshot(run) : null;
+    readReplaySnapshot: async runId => {
+      const record = await getRunReplayRepository().readRunReplay(runId);
+      return record ? record.snapshot : null;
     },
-    writeReplaySnapshot: writeRunReplaySnapshot,
+    writeReplaySnapshot: async (runId, snapshot) => writeRunReplaySnapshot(runId, snapshot, {
+      allowFinalizedAppend: true
+    }),
     getRunEvents,
     appendEvent,
     acquireTargetLock: ({ run, operation, args }) => acquireWorkspaceMutationLock(run, operation, args),
@@ -6215,7 +6257,7 @@ function countRunRetryAttempts(run) {
 function buildRunEvaluation(run, { snapshot: suppliedSnapshot = null, events: suppliedEvents = null } = {}) {
   if (!run) return null;
 
-  const snapshot = suppliedSnapshot || readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const snapshot = suppliedSnapshot || run.replaySnapshot || {};
   const replaySummary = suppliedSnapshot
     ? extractReplaySummary(snapshot) || {}
     : run.replaySummary || extractReplaySummary(snapshot) || {};
@@ -6750,7 +6792,7 @@ function collectFormalWorkspaceViolations(run, {
 } = {}) {
   if (!run) return [];
 
-  const snapshot = suppliedSnapshot || readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const snapshot = suppliedSnapshot || run.replaySnapshot || {};
   const workspaceOperations = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
   const workspaceOperationEvents = (suppliedEvents || getRunEvents(run.id))
     .filter(event => event.type === 'workspace.operation');
@@ -6791,7 +6833,7 @@ function collectFormalWorkspaceViolations(run, {
 }
 
 async function completeRunViolationCheck(runId) {
-  const run = readRuns().find(item => item.id === runId);
+  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
   if (!run) return [];
 
   const existingEvents = getRunEvents(run.id);
@@ -6839,7 +6881,7 @@ function valuesStrictlyEqual(actual, expected) {
 }
 
 function getRunWorkflowOutput(run) {
-  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const snapshot = run.replaySnapshot || {};
   const outputs = Array.isArray(snapshot.capabilityOutputs) ? snapshot.capabilityOutputs : [];
   const matchingOutput = outputs
     .slice()
@@ -6928,7 +6970,7 @@ function evaluateWorkflowPostcondition(run, workflow, postcondition, output) {
 }
 
 async function completeRunPostconditionCheck(runId) {
-  const run = readRuns().find(item => item.id === runId);
+  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
   if (!run || run.executionMode !== 'workflow' || !run.workflowId) return null;
 
   const existingEvents = getRunEvents(run.id);
@@ -7010,13 +7052,14 @@ function buildVerificationFailure(failedResults) {
 
 async function persistRunEvaluation(runId) {
   const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
+  const storedRun = runs.find(item => item.id === runId);
+  const run = await hydrateRunReplaySnapshot(storedRun);
   if (!run) return null;
 
   const runEvaluation = buildRunEvaluation(run);
   if (!runEvaluation) return null;
 
-  run.runEvaluation = runEvaluation;
+  storedRun.runEvaluation = runEvaluation;
   writeRuns(runs);
   await appendEvent({
     type: 'run.evaluation_completed',
@@ -7139,7 +7182,7 @@ function buildRunConsequence(run, {
 } = {}) {
   if (!run) return null;
 
-  const snapshot = suppliedSnapshot || readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const snapshot = suppliedSnapshot || run.replaySnapshot || {};
   const evaluation = suppliedEvaluation || run.runEvaluation || buildRunEvaluation(run, {
     snapshot,
     events: suppliedEvents
@@ -7177,7 +7220,8 @@ function buildRunConsequence(run, {
 
 async function persistRunConsequence(runId) {
   const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
+  const storedRun = runs.find(item => item.id === runId);
+  const run = await hydrateRunReplaySnapshot(storedRun);
   if (!run) return null;
 
   await maybeTestInterrupt(run, 'before_run.consequence_recorded');
@@ -7185,7 +7229,7 @@ async function persistRunConsequence(runId) {
   const runConsequence = buildRunConsequence(run);
   if (!runConsequence) return null;
 
-  run.runConsequence = runConsequence;
+  storedRun.runConsequence = runConsequence;
   writeRuns(runs);
   await appendEvent({
     type: 'run.consequence_recorded',
@@ -7400,7 +7444,7 @@ function serializeRunLease(run) {
 
 function getRunAuthorityEvidence(run) {
   if (!run) return [];
-  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const snapshot = run.replaySnapshot || {};
   const replayChecks = Array.isArray(snapshot.authorityChecks) ? snapshot.authorityChecks : [];
   const eventChecks = getRunEvents(run.id)
     .filter(event => event.type === 'authority.allowed' || event.type === 'authority.denied')
@@ -7427,10 +7471,10 @@ function getRunAuthorityEvidence(run) {
 function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
   if (!run) return null;
   const summary = options.eventSummary || recentEventSummary(run.id);
-  const replaySummary = run.replaySummary || extractReplaySummary(readRunReplaySnapshot(run)) || null;
+  const replaySummary = run.replaySummary || extractReplaySummary(run.replaySnapshot) || null;
   const effectiveLogsByRunId = logsByRunId || groupBy(readLogs(), log => log.runId);
   const runLogs = effectiveLogsByRunId.get(run.id) || [];
-  const replaySnapshot = readRunReplaySnapshot(run) || run.replaySnapshot || null;
+  const replaySnapshot = run.replaySnapshot || null;
   const serializedAttemptUsage = buildRunAttemptUsage(run, options.ticketRuns || null);
 
   return {
@@ -7476,8 +7520,9 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
   };
 }
 
-function getRuntimeStatusSnapshot() {
-  const runs = readRuns();
+async function getRuntimeStatusSnapshot() {
+  const runs = await hydrateRunReplaySnapshots(readRuns()
+    .filter(run => ['pending', 'running'].includes(run.status)));
   const activeRuns = runs.filter(run => ['pending', 'running'].includes(run.status));
   const pendingRuns = runs.filter(run => run.status === 'pending');
   const runningRuns = runs.filter(run => run.status === 'running');
@@ -7530,7 +7575,7 @@ function compareRunsNewestFirst(a, b) {
     new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0);
 }
 
-function serializeTicketRuntimeState(ticketId) {
+async function serializeTicketRuntimeState(ticketId) {
   const parsedTicketId = parseInt(ticketId, 10);
   if (Number.isNaN(parsedTicketId)) return null;
 
@@ -7538,9 +7583,9 @@ function serializeTicketRuntimeState(ticketId) {
   if (!ticket) return null;
 
   const logsByRunId = groupBy(readLogs(), log => log.runId);
-  const ticketRuns = readRuns()
+  const ticketRuns = await hydrateRunReplaySnapshots(readRuns()
     .filter(run => run.ticketId === parsedTicketId)
-    .sort(compareRunsNewestFirst);
+    .sort(compareRunsNewestFirst));
   const currentRun = ticketRuns.find(run => ['pending', 'running'].includes(run.status)) || null;
   const latestRun = ticketRuns[0] || null;
   const visibleRun = currentRun || latestRun;
@@ -7859,7 +7904,7 @@ function buildClaimReceipt(run, ticket) {
 function buildWorkReceipt(run, ticket) {
   if (!run) return null;
   const t = ticket || readTickets().find(item => item && item.id === run.ticketId) || null;
-  const snapshot = readRunReplaySnapshot(run) || {};
+  const snapshot = run.replaySnapshot || {};
   const summary = run.replaySummary || extractReplaySummary(snapshot) || {};
   const evaluation = run.runEvaluation || null;
   const effectiveness = evaluation && evaluation.effectiveness ? evaluation.effectiveness : null;
@@ -7909,15 +7954,15 @@ function deriveNeedsInput(triage) {
   };
 }
 
-function buildTicketTimeline(ticketId) {
+async function buildTicketTimeline(ticketId) {
   const parsedTicketId = parseInt(ticketId, 10);
   if (Number.isNaN(parsedTicketId)) return null;
   const ticket = readTickets().find(item => item.id === parsedTicketId);
   if (!ticket) return null;
 
-  const runs = readRuns()
+  const runs = await hydrateRunReplaySnapshots(readRuns()
     .filter(run => run.ticketId === parsedTicketId)
-    .sort((a, b) => (a.id || 0) - (b.id || 0));
+    .sort((a, b) => (a.id || 0) - (b.id || 0)));
   const runIds = new Set(runs.map(run => run.id));
   const eventNeedles = [`"ticketId":${parsedTicketId}`, ...runs.map(run => `"runId":${run.id}`)];
   const events = readBufferedAndMatchingEvents({
@@ -7940,7 +7985,7 @@ function buildTicketTimeline(ticketId) {
     runIds.has(log.runId) ||
     runIds.has(log.contextRunId)
   );
-  const snapshots = new Map(runs.map(run => [run.id, readRunReplaySnapshot(run)]).filter(([, snapshot]) => snapshot));
+  const snapshots = new Map(runs.map(run => [run.id, run.replaySnapshot]).filter(([, snapshot]) => snapshot));
   const trigger = ticket.source && ticket.source.type === 'process_template'
     ? readProcessTemplateTriggers().find(item =>
       item && (
@@ -8929,7 +8974,7 @@ function buildObjectiveSuccess(run) {
     if (verificationStatus === 'failed') {
       return { scored: true, status: 'failed', score: 0, percent: 0, reason: 'Verification failed' };
     }
-    const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+    const snapshot = run.replaySnapshot || {};
     const hasVerifiedDirectPostcondition = Array.isArray(snapshot.events) &&
       snapshot.events.some(event => event && event.type === 'run:postcondition_completed');
     if (verificationStatus === 'passed' || hasVerifiedDirectPostcondition) {
@@ -9566,7 +9611,7 @@ function getRunModelName(run, snapshot, agentsById = new Map()) {
 }
 
 function buildRunQualityMetrics(run, ticket, operationHistory = [], workflows = []) {
-  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const snapshot = run.replaySnapshot || {};
   const comparison = buildArtifactPredictionComparison(run, snapshot, operationHistory, workflows);
   return {
     artifactAccuracy: buildArtifactAccuracy(snapshot, comparison),
@@ -9629,8 +9674,8 @@ function aggregateQualityMetrics(runQualityItems = []) {
   return aggregation;
 }
 
-function getAgentPerformanceMetrics() {
-  const runs = readRuns();
+async function getAgentPerformanceMetrics() {
+  const runs = await hydrateRunReplaySnapshots(readRuns());
   const logs = readLogs();
   const ticketsById = new Map(readTickets().map(ticket => [ticket.id, ticket]));
   const workflows = readWorkflows();
@@ -9680,8 +9725,8 @@ function getAgentPerformanceMetrics() {
   });
 }
 
-function getModelPerformanceMetrics() {
-  const runs = readRuns();
+async function getModelPerformanceMetrics() {
+  const runs = await hydrateRunReplaySnapshots(readRuns());
   const ticketsById = new Map(readTickets().map(ticket => [ticket.id, ticket]));
   const workflows = readWorkflows();
   const operationHistory = readOperationHistory();
@@ -9689,7 +9734,7 @@ function getModelPerformanceMetrics() {
   const models = new Map();
 
   runs.filter(isTerminalRun).forEach(run => {
-    const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+    const snapshot = run.replaySnapshot || {};
     const model = getRunModelName(run, snapshot, agentsById);
     if (!models.has(model)) models.set(model, []);
     models.get(model).push(buildRunQualityMetrics(run, ticketsById.get(run.ticketId), operationHistory, workflows));
@@ -9799,15 +9844,13 @@ function updateRunStatus(runId, status, error = null) {
   return run;
 }
 
-function updateRunReplaySnapshot(runId, updater) {
-  const run = readRuns().find(item => item.id === runId);
-
-  if (!run) return null;
-
-  const currentSnapshot = readRunReplaySnapshot(run);
-  const nextSnapshot = updater(currentSnapshot);
-  if (!nextSnapshot) return null;
-  return writeRunReplaySnapshot(runId, nextSnapshot);
+async function updateRunReplaySnapshot(runId, updater, { allowFinalizedAppend = false } = {}) {
+  const result = await getRunReplayRepository().updateRunReplay({
+    runId,
+    update: updater,
+    allowFinalizedAppend
+  });
+  return result ? result.record.snapshot : null;
 }
 
 function createReplaySnapshotBase(run, overrides = {}) {
@@ -9879,8 +9922,11 @@ function createReplaySnapshotBase(run, overrides = {}) {
   };
 }
 
-function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, systemInstructionSnapshot) {
-  updateRunReplaySnapshot(run.id, currentSnapshot => currentSnapshot || createReplaySnapshotBase(run, {
+async function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, systemInstructionSnapshot) {
+  const result = await getRunReplayRepository().initializeRunReplay({
+    runId: run.id,
+    ticketId: run.ticketId,
+    snapshot: createReplaySnapshotBase(run, {
     provider: providerConfig.provider,
     model: providerConfig.model,
     runtimeEnvelope,
@@ -9890,12 +9936,14 @@ function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnve
     runtimeLimitsSnapshot: getRunRuntimeLimitsSnapshot(run),
     verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
     systemInstructionSnapshot,
-    effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent, getRunRuntimeLimitsSnapshot(run))
-  }));
+      effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent, getRunRuntimeLimitsSnapshot(run))
+    })
+  });
+  return result ? result.record.snapshot : null;
 }
 
-function appendRunReplaySnapshotItem(runId, key, item) {
-  updateRunReplaySnapshot(runId, snapshot => {
+async function appendRunReplaySnapshotItem(runId, key, item) {
+  return updateRunReplaySnapshot(runId, snapshot => {
     if (!snapshot) return snapshot;
     const items = Array.isArray(snapshot[key]) ? snapshot[key] : [];
 
@@ -9903,7 +9951,7 @@ function appendRunReplaySnapshotItem(runId, key, item) {
       ...snapshot,
       [key]: [...items, { ...item, capturedAt: new Date().toISOString() }]
     };
-  });
+  }, { allowFinalizedAppend: true });
 }
 
 function buildArtifactPredictionFromActions(actions = [], step = 0) {
@@ -9968,10 +10016,10 @@ function buildArtifactPredictionFromActions(actions = [], step = 0) {
   };
 }
 
-function captureRunArtifactPrediction(runId, actions = [], step = 0) {
+async function captureRunArtifactPrediction(runId, actions = [], step = 0) {
   const prediction = buildArtifactPredictionFromActions(actions, step);
   if (!prediction) return;
-  updateRunReplaySnapshot(runId, snapshot => {
+  await updateRunReplaySnapshot(runId, snapshot => {
     if (!snapshot || snapshot.artifactPrediction) return snapshot;
     return {
       ...snapshot,
@@ -9980,17 +10028,17 @@ function captureRunArtifactPrediction(runId, actions = [], step = 0) {
   });
 }
 
-function recordRunEvent(run, type, message, details = {}) {
+async function recordRunEvent(run, type, message, details = {}) {
   appendRunLog(run, type, message);
-  appendRunReplaySnapshotItem(run.id, 'events', {
+  await appendRunReplaySnapshotItem(run.id, 'events', {
     type,
     message,
     ...details
   });
 }
 
-function recordReplayEvent(run, type, message, details = {}) {
-  appendRunReplaySnapshotItem(run.id, 'events', {
+async function recordReplayEvent(run, type, message, details = {}) {
+  await appendRunReplaySnapshotItem(run.id, 'events', {
     type,
     message,
     ...details
@@ -10278,7 +10326,7 @@ function createRunLimitError(run, type, message, details) {
   };
   const eventType = eventTypeByLimitType[type];
 
-  recordRunEvent(run, eventType, message, {
+  const evidencePromise = recordRunEvent(run, eventType, message, {
     limitType: type,
     ...details
   });
@@ -10287,6 +10335,7 @@ function createRunLimitError(run, type, message, details) {
   error.code = 'RUN_LIMIT_EXCEEDED';
   error.limitType = type;
   error.details = details || {};
+  error.replayEvidencePromise = evidencePromise;
   return error;
 }
 
@@ -11152,7 +11201,7 @@ async function persistRunTriage(runId, triage) {
   if (!normalized) return null;
   run.triage = normalized;
   writeRuns(runs);
-  updateRunReplaySnapshot(runId, snapshot => snapshot ? { ...snapshot, triage: normalized } : snapshot);
+  await updateRunReplaySnapshot(runId, snapshot => snapshot ? { ...snapshot, triage: normalized } : snapshot);
   await appendEvent({
     type: 'run.triage_created',
     ticketId: run.ticketId,
@@ -11162,10 +11211,10 @@ async function persistRunTriage(runId, triage) {
   return normalized;
 }
 
-function buildFinalizedRunReplayState(run, status, failureReason = null, mutationCount = null, failure = null, finalizedAt = null) {
+async function buildFinalizedRunReplayState(run, status, failureReason = null, mutationCount = null, failure = null, finalizedAt = null) {
   const effectiveMutationCount = mutationCount !== null ? mutationCount : countRunMutatingOperations(run.id);
   const effectiveFinalizedAt = finalizedAt || new Date().toISOString();
-  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const snapshot = await readRunReplaySnapshot(run) || run.replaySnapshot || {};
   const browserEvidence = classifyBrowserEvidence(run, snapshot);
   const browserReport = extractBrowserReport(run, snapshot);
   const finalizedSnapshot = {
@@ -11193,8 +11242,8 @@ function buildFinalizedRunReplayState(run, status, failureReason = null, mutatio
 // this state with evaluation, consequence, and terminal events in one transaction.
 async function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
   await maybeTestInterrupt(run, 'before_run.snapshot_finalized');
-  const finalized = buildFinalizedRunReplayState(run, status, failureReason, mutationCount, failure);
-  writeRunReplaySnapshot(run.id, finalized.snapshot);
+  const finalized = await buildFinalizedRunReplayState(run, status, failureReason, mutationCount, failure);
+  await writeRunReplaySnapshot(run.id, finalized.snapshot);
 
   // Persist browserReport on the run record for direct query access.
   // The snapshot already carries it for replay/diagnostic evidence.
@@ -11253,7 +11302,7 @@ async function commitRunTerminalization(run, {
   // Reload through the selected authority before preparing the terminal bundle.
   run = await getRunLeaseRepository().getRun(run.id) || run;
   const completedAt = new Date().toISOString();
-  const finalized = buildFinalizedRunReplayState(
+  const finalized = await buildFinalizedRunReplayState(
     run,
     status,
     error,
@@ -11385,9 +11434,9 @@ async function commitRunTerminalization(run, {
   return terminalRun;
 }
 
-function classifyInterruptionPhase(run) {
+async function classifyInterruptionPhase(run) {
   const latestRun = readRuns().find(item => item.id === run.id) || run;
-  const snapshot = readRunReplaySnapshot(latestRun) || latestRun.replaySnapshot || {};
+  const snapshot = await readRunReplaySnapshot(latestRun) || latestRun.replaySnapshot || {};
   const logs = readLogs().filter(log => log.runId === run.id);
   const providerRequestLogs = logs.filter(log => log.type === 'model:request').length;
   const providerResponseLogs = logs.filter(log => log.type === 'model:response').length;
@@ -11405,11 +11454,14 @@ function classifyInterruptionPhase(run) {
   return 'unknown';
 }
 
-function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
+async function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
   const ticket = readTickets().find(item => item.id === run.ticketId) || null;
   const agent = readAgents().find(item => item.id === run.agentId) || null;
 
-  updateRunReplaySnapshot(run.id, snapshot => snapshot || createReplaySnapshotBase(run, {
+  await getRunReplayRepository().initializeRunReplay({
+    runId: run.id,
+    ticketId: run.ticketId,
+    snapshot: createReplaySnapshotBase(run, {
     agentNameSnapshot: run.agentName || (agent ? agent.name : 'Unknown agent'),
     provider: agent ? (agent.provider || 'openai') : null,
     model: agent ? (agent.model || null) : null,
@@ -11420,17 +11472,21 @@ function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
       allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
       mutatingOperations: [...AGENT_MUTATING_OPERATIONS]
     },
-    note: 'Run was interrupted before execution snapshot capture completed'
-  }));
+      note: 'Run was interrupted before execution snapshot capture completed'
+    })
+  });
 
-  recordReplayEvent(run, 'run:interrupted', reason, phase ? { phase } : {});
+  await recordReplayEvent(run, 'run:interrupted', reason, phase ? { phase } : {});
 }
 
-function ensureFailedRunReplaySnapshot(run, reason) {
+async function ensureFailedRunReplaySnapshot(run, reason) {
   const ticket = readTickets().find(item => item.id === run.ticketId) || null;
   const agent = readAgents().find(item => item.id === run.agentId) || null;
 
-  updateRunReplaySnapshot(run.id, snapshot => snapshot || createReplaySnapshotBase(run, {
+  await getRunReplayRepository().initializeRunReplay({
+    runId: run.id,
+    ticketId: run.ticketId,
+    snapshot: createReplaySnapshotBase(run, {
     agentNameSnapshot: run.agentName || (agent ? agent.name : 'Unknown agent'),
     provider: agent ? (agent.provider || 'openai') : null,
     model: agent ? (agent.model || null) : null,
@@ -11441,9 +11497,10 @@ function ensureFailedRunReplaySnapshot(run, reason) {
       allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
       mutatingOperations: [...AGENT_MUTATING_OPERATIONS]
     },
-    note: 'Run failed before execution snapshot capture completed'
-  }));
-  recordReplayEvent(run, 'run:failed', reason);
+      note: 'Run failed before execution snapshot capture completed'
+    })
+  });
+  await recordReplayEvent(run, 'run:failed', reason);
 }
 
 function runExecutionKey(run) {
@@ -12428,15 +12485,16 @@ async function finalizeTicketForRun(run, terminalStatus) {
   return result ? result.ticket : null;
 }
 
-function validateManualTicketCompletion(ticket) {
+async function validateManualTicketCompletion(ticket) {
   if (!ticket) return { allowed: false, reason: 'Ticket not found' };
   if (ticket.triage && ticket.triage.required) {
     return { allowed: false, reason: 'Ticket cannot be completed while ticket-level triage is required.' };
   }
 
-  const latestRun = readRuns()
+  const latestStoredRun = readRuns()
     .filter(run => run.ticketId === ticket.id)
     .sort(compareRunsNewestFirst)[0] || null;
+  const latestRun = await hydrateRunReplaySnapshot(latestStoredRun);
   if (!latestRun) {
     return { allowed: false, reason: 'Ticket cannot be completed without supporting runtime evidence.' };
   }
@@ -12552,7 +12610,7 @@ async function reconcileTerminalRunUnlocked(run) {
 
   if ((targetStatus === 'failed' || targetStatus === 'interrupted') && !run.triage) {
     const triageSummary = verificationFailureReason || terminalPayload.error || run.error || `Run reconciled to ${targetStatus}`;
-    if (targetStatus === 'failed') ensureFailedRunReplaySnapshot(run, triageSummary);
+    if (targetStatus === 'failed') await ensureFailedRunReplaySnapshot(run, triageSummary);
     run.triage = await persistRunTriage(runId, buildRunTriage(run, {
       failure: verificationFailure || terminalPayload.failure || null,
       status: targetStatus,
@@ -12655,8 +12713,8 @@ async function interruptAgentRun(run, reason, options = {}) {
 
 async function interruptAgentRunUnlocked(run, reason, options = {}) {
   advanceRunPhase(run, 'terminalization');
-  const phase = classifyInterruptionPhase(run);
-  ensureInterruptedRunReplaySnapshot(run, reason, phase);
+  const phase = await classifyInterruptionPhase(run);
+  await ensureInterruptedRunReplaySnapshot(run, reason, phase);
   const projectedInterruptedRun = {
     ...run,
     status: 'interrupted',
@@ -13071,6 +13129,7 @@ async function failAgentRun(run, error, workspaceAction = null) {
 }
 
 async function failAgentRunUnlocked(run, error, workspaceAction = null) {
+  if (error && error.replayEvidencePromise) await error.replayEvidencePromise;
   advanceRunPhase(run, 'terminalization');
   let message = error && error.message ? error.message : String(error || 'Agent run failed');
   const failure = buildFailureMetadata(error, 'failed', message);
@@ -13091,7 +13150,7 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
   };
 
   if (run.status === 'interrupted') return run;
-  ensureFailedRunReplaySnapshot(projectedFailedRun, message);
+  await ensureFailedRunReplaySnapshot(projectedFailedRun, message);
   await completeRunPostconditionCheck(run.id);
   const mutationCount = countRunMutatingOperations(run.id);
   // Decide retry eligibility before the terminal bundle, but create a retry only
@@ -16935,7 +16994,7 @@ async function verifyBatchOperation(run, action, result) {
         result: sanitizeSnapshotValue(result)
       }
     });
-    recordRunEvent(run, 'batch:verification_failed', `Batch verification failed for ${operation}`, {
+    await recordRunEvent(run, 'batch:verification_failed', `Batch verification failed for ${operation}`, {
       operation,
       checks
     });
@@ -18250,7 +18309,7 @@ async function runAgentTicket(runId) {
     const limits = runtimeLimitsForExecution(runtimeLimitsSnapshot);
     const runtimeEnvelope = buildRuntimeEnvelope(run, 0, ticket.objective, limits);
     const initialInput = buildAgentPrompt(promptTicket, runtimeEnvelope, [], run.rerunMode);
-    createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
+    await createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
     appendRunLog(run, 'run:runtime', JSON.stringify(runtimeEnvelope));
 
     if (ticket.executionMode === 'workflow' || run.executionMode === 'workflow') {
@@ -18454,7 +18513,7 @@ async function runAgentTicket(runId) {
           ? checkObjectiveContractPostcondition(compiledContract)
           : checkObviousTicketPostcondition(ticket);
         if (obviousPostcondition) {
-          recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
+          await recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
             step,
             mutatingActionCount: 0,
             checkedPaths: obviousPostcondition.checkedPaths,
@@ -18524,7 +18583,7 @@ async function runAgentTicket(runId) {
 
       const modelPlan = parseModelActions(modelText);
       if (modelPlan.parseError) {
-        recordRunEvent(run, 'model:malformed', 'Model response was not valid execution JSON', {
+        await recordRunEvent(run, 'model:malformed', 'Model response was not valid execution JSON', {
           parseError: modelPlan.parseError,
           rawText: isBrowserRun(run) ? '[redacted browser model response]' : modelText,
           step
@@ -18572,7 +18631,7 @@ async function runAgentTicket(runId) {
           let isRawJson = false;
           try { JSON.parse(rawMessage); isRawJson = true; } catch (_) { /* not JSON */ }
           if (!isRawJson) {
-            updateRunReplaySnapshot(run.id, s => s ? {
+            await updateRunReplaySnapshot(run.id, s => s ? {
               ...s,
               browserReportMessage: sanitizeLogMessage(rawMessage)
             } : s);
@@ -18580,7 +18639,7 @@ async function runAgentTicket(runId) {
         }
       }
 
-      captureRunArtifactPrediction(run.id, modelPlan.actions, step);
+      await captureRunArtifactPrediction(run.id, modelPlan.actions, step);
       broadcastTicketChange();
       const priorStepActionResults = actionResults;
       actionResults = [];
@@ -18599,7 +18658,7 @@ async function runAgentTicket(runId) {
       if (actions.length > MAX_AGENT_ACTIONS_PER_RESPONSE) {
         const message = `Model returned ${actions.length} workspace actions, exceeding the per-response limit of ${MAX_AGENT_ACTIONS_PER_RESPONSE}`;
 
-        recordRunEvent(run, 'model:action_limit', message, {
+        await recordRunEvent(run, 'model:action_limit', message, {
           actionCount: actions.length,
           maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
           step
@@ -18657,7 +18716,7 @@ async function runAgentTicket(runId) {
 
           const truncatedMessage = `Model returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Executed the first ${MAX_MUTATING_ACTIONS_PER_RESPONSE} mutating action(s) and dropped ${droppedActions.length}. Non-mutating actions were preserved.${droppedActions.length > 0 ? ` complete:true was not honored because ${droppedActions.length} proposed action(s) were not applied; continue from the executed state and re-emit the remaining action(s).` : ''}`;
 
-          recordRunEvent(run, 'model:mutating_action_truncated', truncatedMessage, {
+          await recordRunEvent(run, 'model:mutating_action_truncated', truncatedMessage, {
             actionCount: originalActions.length,
             mutatingActionCount,
             maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
@@ -18707,7 +18766,7 @@ async function runAgentTicket(runId) {
             : 1;
           lastMutatingActionLimitSignature = mutatingActionLimitSignature;
 
-          recordRunEvent(run, 'model:mutating_action_limit', message, {
+          await recordRunEvent(run, 'model:mutating_action_limit', message, {
             actionCount: actions.length,
             mutatingActionCount,
             maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
@@ -18762,7 +18821,7 @@ async function runAgentTicket(runId) {
       // ── Phase-aware execution enforcement ─────────────────────────
       const phaseCheck = checkPhaseCompliance(run, actions);
       if (!phaseCheck.compliant) {
-        recordRunEvent(run, 'execution.phase_violation', phaseCheck.reason, {
+        await recordRunEvent(run, 'execution.phase_violation', phaseCheck.reason, {
           step,
           currentPhase: phaseCheck.currentPhase,
           inferredPhase: phaseCheck.inferredPhase,
@@ -18807,7 +18866,7 @@ async function runAgentTicket(runId) {
       if (!modelPlan.complete && actions.length === 0) {
         if (isUnsupportedObjectiveModelPlan(modelPlan)) {
           const message = modelPlan.message.trim();
-          recordRunEvent(run, 'model:unsupported_objective', message, { step });
+          await recordRunEvent(run, 'model:unsupported_objective', message, { step });
           const error = new Error(message);
           error.code = 'OBJECTIVE_UNSUPPORTED_BY_ALLOWED_OPERATIONS';
           error.failureKind = 'unsupported_objective';
@@ -18816,7 +18875,7 @@ async function runAgentTicket(runId) {
         }
 
         stalledResponses += 1;
-        recordRunEvent(run, 'model:stalled', 'Model returned complete:false with no workspace actions', { step });
+        await recordRunEvent(run, 'model:stalled', 'Model returned complete:false with no workspace actions', { step });
 
         if (stalledResponses >= 2) {
           throw createRunLimitError(run, 'step', 'Model stalled twice with complete:false and no workspace actions', {
@@ -18854,7 +18913,7 @@ async function runAgentTicket(runId) {
           executed: false,
           capturedAt: new Date().toISOString()
         };
-        recordRunEvent(run, 'workspace.invalid_action_args', `Action batch rejected before execution: ${first.operation} ${first.validationErrors.join('; ')}`, detail);
+        await recordRunEvent(run, 'workspace.invalid_action_args', `Action batch rejected before execution: ${first.operation} ${first.validationErrors.join('; ')}`, detail);
         await appendEvent({
           type: 'workspace.invalid_action_args',
           ticketId: run.ticketId,
@@ -18885,7 +18944,7 @@ async function runAgentTicket(runId) {
           rejectedBatch: true,
           executed: false
         };
-        recordRunEvent(run, 'workspace.contract_mutation_mismatch_rejected', 'Model proposed a mutation outside the compiled objective contract', detail);
+        await recordRunEvent(run, 'workspace.contract_mutation_mismatch_rejected', 'Model proposed a mutation outside the compiled objective contract', detail);
         await appendEvent({
           type: 'workspace.contract_mutation_mismatch_rejected',
           ticketId: run.ticketId,
@@ -18922,7 +18981,7 @@ async function runAgentTicket(runId) {
             executed: false,
             capturedAt: new Date().toISOString()
           };
-          recordRunEvent(run, 'workspace.delete_target_mismatch_rejected', `deletePath ${first.proposed} does not match the objective's exact delete target (${targetList})`, detail);
+          await recordRunEvent(run, 'workspace.delete_target_mismatch_rejected', `deletePath ${first.proposed} does not match the objective's exact delete target (${targetList})`, detail);
           await appendEvent({
             type: 'workspace.delete_target_mismatch_rejected',
             ticketId: run.ticketId,
@@ -19260,7 +19319,7 @@ async function runAgentTicket(runId) {
       listPathsThisStep.forEach(listedPath => listedDirectoryPaths.add(listedPath));
 
       if (!modelPlan.complete && isWorkflowDraftObjective(ticket.objective) && hasSuccessfulWorkflowDraftAction(actionResults)) {
-        recordRunEvent(run, 'workflow.draft_objective_satisfied', 'Workflow draft objective satisfied by created disabled draft', {
+        await recordRunEvent(run, 'workflow.draft_objective_satisfied', 'Workflow draft objective satisfied by created disabled draft', {
           step,
           source: 'successful_workflow_draft_action'
         });
@@ -19269,7 +19328,7 @@ async function runAgentTicket(runId) {
       }
 
       if (!isBrowserRun(run) && !resumedFromPersistedState && !modelPlan.complete && isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
-        recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
+        await recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
           step,
           source: 'successful_workspace_mutation',
           objectivePaths: extractObjectivePathTokens(ticket.objective)
@@ -19299,7 +19358,7 @@ async function runAgentTicket(runId) {
             const message = uniqueRepeatedPaths.length > 0
               ? `Model repeated listDirectory without a write/create/rename/delete action: ${uniqueRepeatedPaths.join(', ')}`
               : 'Model emitted inspection-only actions without progress after bounded inspection phase';
-            recordRunEvent(run, 'model:no_progress', message, {
+            await recordRunEvent(run, 'model:no_progress', message, {
               repeatedListPaths: uniqueRepeatedPaths,
               step,
               isInspectionOnly: true
@@ -19331,7 +19390,7 @@ async function runAgentTicket(runId) {
       const compiledPostcondition = isBrowserRun(run) ? null : checkObjectiveContractPostcondition(compiledContract);
       const postcondition = compiledPostcondition || (isBrowserRun(run) ? null : checkPostconditionCompletion(run, actions, actionResults, step));
       if (postcondition) {
-        recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
+        await recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
           step,
           mutatingActionCount: postcondition.mutatingActionCount
         });
@@ -19340,13 +19399,13 @@ async function runAgentTicket(runId) {
       }
 
       if (modelPlan.complete && completionBlockedByActionTruncation) {
-        recordRunEvent(run, 'run:completion_deferred_truncation', 'complete:true not honored: response was truncated by the mutating-action cap and proposed actions were dropped', { step });
+        await recordRunEvent(run, 'run:completion_deferred_truncation', 'complete:true not honored: response was truncated by the mutating-action cap and proposed actions were dropped', { step });
       } else if (modelPlan.complete && compiledContract) {
         const pendingPostconditions = (inspectObjectiveContractPostconditions(compiledContract) || [])
           .filter(check => !check.satisfied)
           .map(({ type, path }) => ({ type, path }));
         const detail = { step, pendingPostconditions };
-        recordRunEvent(run, 'run:contract_completion_deferred', 'complete:true not honored: compiled objective postconditions remain unsatisfied', detail);
+        await recordRunEvent(run, 'run:contract_completion_deferred', 'complete:true not honored: compiled objective postconditions remain unsatisfied', detail);
         await appendEvent({
           type: 'run.contract_completion_deferred',
           ticketId: run.ticketId,
@@ -19361,7 +19420,7 @@ async function runAgentTicket(runId) {
         });
       } else if (modelPlan.complete) {
         if (actions.length === 0) {
-          recordRunEvent(run, 'run:completed_noop', 'Agent run completed with no workspace changes', { step });
+          await recordRunEvent(run, 'run:completed_noop', 'Agent run completed with no workspace changes', { step });
         }
 
         completed = true;
@@ -21418,7 +21477,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
 
   const allocationPlan = getTicketAllocationPlan(ticketId);
   const history = readOperationHistory();
-  const ticketRuns = getTicketRuns(ticketId, history);
+  const ticketRuns = await hydrateRunReplaySnapshots(getTicketRuns(ticketId, history));
   const agents = readAgents();
   const operationHistory = getOperationHistoryForTicket(ticketId, history);
   const activeRuntimeRun = ticketRuns
@@ -21431,18 +21490,18 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   const runStateInconsistency = visibleRuntimeRun
     ? detectRunStateInconsistency(visibleRuntimeRun, {
       logs: readLogs().filter(log => log.runId === visibleRuntimeRun.id),
-      replaySnapshot: readRunReplaySnapshot(visibleRuntimeRun) || visibleRuntimeRun.replaySnapshot || null
+      replaySnapshot: visibleRuntimeRun.replaySnapshot || null
     })
     : null;
 
   const executionState = buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, readGroups());
-  const timeline = buildTicketTimeline(ticketId);
+  const timeline = await buildTicketTimeline(ticketId);
 
   // Review status for the latest terminal run — separates "did it finish" from
   // "does the result need a look". Derived from existing evidence signals only.
   let reviewStatus = { applicable: false, needsReview: false, reasons: [] };
   if (latestRuntimeRun) {
-    const latestSnapshot = readRunReplaySnapshot(latestRuntimeRun) || latestRuntimeRun.replaySnapshot || null;
+    const latestSnapshot = latestRuntimeRun.replaySnapshot || null;
     const latestComparison = buildArtifactPredictionComparison(latestRuntimeRun, latestSnapshot, history, readWorkflows());
     reviewStatus = buildRunReviewStatus(latestRuntimeRun, {
       objectivePathCoverage: buildObjectivePathCoverage(ticket, latestSnapshot),
@@ -21748,7 +21807,7 @@ fastify.get('/api/tickets/:id/runtime', { preHandler: fastify.requireAuth }, asy
     return { error: 'Invalid ticket id' };
   }
 
-  const runtimeState = serializeTicketRuntimeState(ticketId);
+  const runtimeState = await serializeTicketRuntimeState(ticketId);
 
   if (!runtimeState) {
     reply.code(404);
@@ -21770,7 +21829,7 @@ fastify.get('/api/tickets/:id/timeline', { preHandler: fastify.requireAuth }, as
     return { error: 'Invalid ticket id' };
   }
 
-  const timeline = buildTicketTimeline(ticketId);
+  const timeline = await buildTicketTimeline(ticketId);
   if (!timeline) {
     reply.code(404);
     return { error: 'Ticket not found' };
@@ -21783,7 +21842,7 @@ fastify.get('/api/tickets/:id/timeline', { preHandler: fastify.requireAuth }, as
 // Read-only Claim Receipt derived from a run's existing lease evidence.
 fastify.get('/api/runs/:id/claim-receipt', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) { reply.code(403); return { error: 'Permission denied' }; }
-  const run = readRuns().find(item => item && item.id === parseInt(request.params.id, 10));
+  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item && item.id === parseInt(request.params.id, 10)));
   if (!run) { reply.code(404); return { error: 'Run not found' }; }
   return { ok: true, claimReceipt: buildClaimReceipt(run) };
 });
@@ -21791,7 +21850,7 @@ fastify.get('/api/runs/:id/claim-receipt', { preHandler: fastify.requireAuth }, 
 // Read-only Work Receipt derived from a run's existing evidence (refs/counts only).
 fastify.get('/api/runs/:id/work-receipt', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) { reply.code(403); return { error: 'Permission denied' }; }
-  const run = readRuns().find(item => item && item.id === parseInt(request.params.id, 10));
+  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item && item.id === parseInt(request.params.id, 10)));
   if (!run) { reply.code(404); return { error: 'Run not found' }; }
   return { ok: true, workReceipt: buildWorkReceipt(run) };
 });
@@ -22026,7 +22085,7 @@ fastify.patch('/api/tickets/:id/status', {
   const changedAt = new Date().toISOString();
 
   if (status === 'completed') {
-    const completionCheck = validateManualTicketCompletion(ticket);
+    const completionCheck = await validateManualTicketCompletion(ticket);
     if (!completionCheck.allowed) {
       reply.code(409);
       return { error: completionCheck.reason };
@@ -22722,7 +22781,7 @@ fastify.get('/api/export', { preHandler: fastify.requireAuth }, async (request, 
   }
   return {
     tickets: readTickets(),
-    runs: sanitizeWorkspaceDisplayValue(readRuns().map(hydrateRunReplaySnapshot)),
+    runs: sanitizeWorkspaceDisplayValue(await hydrateRunReplaySnapshots(readRuns())),
     logs: sanitizeWorkspaceDisplayValue(readLogs()),
     history: sanitizeWorkspaceDisplayValue(readOperationHistory()),
     plans: sanitizeWorkspaceDisplayValue(readAllocationPlans())
@@ -23255,7 +23314,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }, request.session.userId));
   }
 
-  const run = hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
+  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
 
   if (!run) {
     reply.code(404);
@@ -23421,7 +23480,7 @@ fastify.get('/api/runs/:id/state', { preHandler: fastify.requireAuth }, async (r
     return { error: 'Invalid run id' };
   }
 
-  const run = readRuns().find(item => item.id === runId);
+  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
 
   if (!run) {
     reply.code(404);
@@ -23538,10 +23597,14 @@ fastify.get('/agents', { preHandler: fastify.requireAuth }, async (request, repl
     }, request.session.userId));
   }
 
+  const [agentMetrics, modelMetrics] = await Promise.all([
+    getAgentPerformanceMetrics(),
+    getModelPerformanceMetrics()
+  ]);
   return reply.view('agents.ejs', viewData({
     user: request.user,
-    agentMetrics: getAgentPerformanceMetrics(),
-    modelMetrics: getModelPerformanceMetrics()
+    agentMetrics,
+    modelMetrics
   }, request.session.userId));
 });
 

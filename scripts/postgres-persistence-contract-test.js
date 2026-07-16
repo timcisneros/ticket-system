@@ -27,10 +27,12 @@ const MIGRATIONS_DIR = path.join(ROOT, 'persistence', 'postgres', 'migrations');
 const CORE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '001_runtime_core.sql');
 const EVIDENCE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '002_runtime_evidence.sql');
 const NON_TERMINAL_EVIDENCE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '004_non_terminal_evidence.sql');
+const FINALIZED_REPLAY_APPEND_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '005_finalized_replay_append.sql');
 const storeSource = fs.readFileSync(STORE_PATH, 'utf8');
 const coreMigration = fs.readFileSync(CORE_MIGRATION_PATH, 'utf8');
 const evidenceMigration = fs.readFileSync(EVIDENCE_MIGRATION_PATH, 'utf8');
 const nonTerminalEvidenceMigration = fs.readFileSync(NON_TERMINAL_EVIDENCE_MIGRATION_PATH, 'utf8');
+const finalizedReplayAppendMigration = fs.readFileSync(FINALIZED_REPLAY_APPEND_MIGRATION_PATH, 'utf8');
 
 assert.equal(quoteIdentifier('ticket_system'), '"ticket_system"');
 assert.throws(() => quoteIdentifier('public; DROP SCHEMA public'), /Invalid PostgreSQL identifier/);
@@ -151,6 +153,12 @@ for (const requiredPrimitive of [
   'async recordRunEvaluation',
   'async recordRunConsequence',
   'async writeReplaySnapshot',
+  'async initializeRunReplay',
+  'async readRunReplay',
+  'async listRunReplays',
+  'async updateRunReplay',
+  'WHERE run_id = ANY($1::bigint[])',
+  'update must return synchronously',
   'POSTGRES_REPLAY_INTEGRITY_FAILURE',
   'async recordOperationReceipt',
   'async appendRunEvidence',
@@ -178,6 +186,14 @@ for (const requiredSql of [
   'CREATE TRIGGER target_operation_intents_append_only'
 ]) {
   assert.ok(nonTerminalEvidenceMigration.includes(requiredSql), `non-terminal evidence migration must include: ${requiredSql}`);
+}
+
+for (const requiredSql of [
+  'CREATE OR REPLACE FUNCTION enforce_replay_snapshot_mutation()',
+  'finalized replay permits only one append-only evidence item',
+  'finalized replay evidence prefix is immutable'
+]) {
+  assert.ok(finalizedReplayAppendMigration.includes(requiredSql), `finalized replay append migration must include: ${requiredSql}`);
 }
 
 assert.ok(!/appendFileSync|writeFileSync/.test(storeSource), 'PostgreSQL authority must not write JSON files');

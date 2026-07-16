@@ -1696,6 +1696,104 @@ class PostgresRuntimeStore {
     return result.rowCount === 0 ? null : replaySnapshotFromRow(result.rows[0]);
   }
 
+  async initializeRunReplay({ runId, ticketId, snapshot }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
+    const document = this.assertJsonRecord(snapshot, 'replay snapshot');
+    const execute = async connection => {
+      const runResult = await connection.query(
+        `SELECT ticket_id FROM ${this.table('runs')} WHERE id = $1`,
+        [id]
+      );
+      if (runResult.rowCount === 0) return null;
+      if (positiveSafeInteger(runResult.rows[0].ticket_id, 'run.ticketId') !== ownerTicketId) {
+        throw new TypeError(`Run ${id} does not belong to ticket ${ownerTicketId}`);
+      }
+      const inserted = await connection.query(
+        `INSERT INTO ${this.table('replay_snapshots')}
+          (run_id, ticket_id, snapshot, snapshot_hash)
+         VALUES ($1, $2, $3::jsonb, $4)
+         ON CONFLICT (run_id) DO NOTHING
+         RETURNING *`,
+        [id, ownerTicketId, document, sha256Json(document)]
+      );
+      if (inserted.rowCount === 1) {
+        return { record: replaySnapshotFromRow(inserted.rows[0]), initialized: true };
+      }
+      const current = await connection.query(
+        `SELECT * FROM ${this.table('replay_snapshots')} WHERE run_id = $1`,
+        [id]
+      );
+      return current.rowCount === 0
+        ? null
+        : { record: replaySnapshotFromRow(current.rows[0]), initialized: false };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async readRunReplay(runId) {
+    return this.getReplaySnapshot(runId);
+  }
+
+  async listRunReplays({ runIds, limit = this.maxQueryRows } = {}) {
+    if (!Array.isArray(runIds)) throw new TypeError('runIds must be an array');
+    const boundedLimit = positiveSafeInteger(limit, 'limit');
+    if (boundedLimit > this.maxQueryRows) {
+      throw new RangeError(`limit exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    const ids = [...new Set(runIds.map((runId, index) => positiveSafeInteger(runId, `runIds[${index}]`)))];
+    if (ids.length > boundedLimit) {
+      throw new RangeError(`runIds exceeds the requested limit of ${boundedLimit}`);
+    }
+    if (ids.length === 0) return [];
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('replay_snapshots')}
+       WHERE run_id = ANY($1::bigint[])
+       ORDER BY run_id
+       LIMIT $2`,
+      [ids, boundedLimit]
+    );
+    return result.rows.map(replaySnapshotFromRow);
+  }
+
+  async updateRunReplay({ runId, update }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    if (typeof update !== 'function') throw new TypeError('update must be a function');
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT * FROM ${this.table('replay_snapshots')} WHERE run_id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (result.rowCount === 0) return null;
+      const current = replaySnapshotFromRow(result.rows[0]);
+      const proposed = update(structuredClone(current.snapshot));
+      if (proposed && typeof proposed.then === 'function') {
+        throw new TypeError('update must return synchronously');
+      }
+      if (proposed === null || proposed === undefined) return { record: current, updated: false };
+      const document = this.assertJsonRecord(proposed, 'replay snapshot');
+      if (canonicalJson(document) === canonicalJson(current.snapshot)) {
+        return { record: current, updated: false };
+      }
+      if (current.finalizedAt) throw new ImmutableEvidenceConflictError('finalized replay snapshot', id);
+      const updated = await connection.query(
+        `UPDATE ${this.table('replay_snapshots')}
+         SET snapshot = $3::jsonb,
+             snapshot_hash = $4,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE run_id = $1 AND revision = $2 AND finalized_at IS NULL
+         RETURNING *`,
+        [id, current.revision, document, sha256Json(document)]
+      );
+      if (updated.rowCount !== 1) {
+        throw new OptimisticConcurrencyError('replay snapshot', id, current.revision, current);
+      }
+      return { record: replaySnapshotFromRow(updated.rows[0]), updated: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async recordOperationReceipt({
     runId,
     idempotencyKey,
@@ -1856,7 +1954,6 @@ class PostgresRuntimeStore {
       );
       if (replayResult.rowCount === 0) throw new TypeError(`Run ${id} does not have a replay snapshot`);
       const currentReplay = replaySnapshotFromRow(replayResult.rows[0]);
-      if (currentReplay.finalizedAt) throw new ImmutableEvidenceConflictError('finalized replay snapshot', id);
       const snapshot = currentReplay.snapshot;
       const items = Array.isArray(snapshot[collection]) ? snapshot[collection] : [];
       const existingItem = items.find(candidate => candidate && candidate.evidenceKey === key) || null;
@@ -1875,7 +1972,7 @@ class PostgresRuntimeStore {
                snapshot_hash = $4,
                revision = revision + 1,
                updated_at = clock_timestamp()
-           WHERE run_id = $1 AND revision = $2 AND finalized_at IS NULL
+           WHERE run_id = $1 AND revision = $2
            RETURNING *`,
           [id, currentReplay.revision, document, sha256Json(document)]
         );

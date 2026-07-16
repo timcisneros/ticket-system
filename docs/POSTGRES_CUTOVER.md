@@ -6,7 +6,7 @@ not a claim that the server already runs on PostgreSQL.
 
 ## Current status
 
-The PostgreSQL foundation and the first five server authority seams are implemented:
+The PostgreSQL foundation and the first six server authority seams are implemented:
 
 - `persistence/postgres/migrations/001_runtime_core.sql` defines the ticket, run, append-only event,
   and per-run event-chain-tip schema.
@@ -21,8 +21,8 @@ The PostgreSQL foundation and the first five server authority seams are implemen
   real migration/concurrency integration test.
 - `002_runtime_evidence.sql` adds database-enforced entity revisions, authoritative run lifecycle
   timestamps, immutable final evaluation/consequence records, optimistically revised replay
-  snapshots that become immutable when finalized, and append-only operation receipts keyed for
-  idempotent persistence.
+  snapshots with sealed terminal fields, and append-only operation receipts keyed for idempotent
+  persistence.
 - `003_ticket_run_lifecycle.sql` adds database-enforced workflow-child idempotency and an indexed
   ticket-batch lookup used by lifecycle settlement.
 - Ticket and run transition APIs require an expected revision and allowed source status. Their state
@@ -92,6 +92,16 @@ The PostgreSQL foundation and the first five server authority seams are implemen
   append-only idempotent operation-receipt store. Observational keys include the persisted execution
   attempt so a legitimate same-run recovery does not conflict with earlier observations; mutation
   keys remain attempt-independent so target reconciliation still prevents duplicate effects.
+- Replay initialization, scalar/diagnostic projection updates, exact-ID single reads, and bounded
+  exact-ID batch reads now use one asynchronous replay repository. JSON serializes each synchronous
+  update within the process; PostgreSQL uses only the affected replay row lock. Concurrent
+  initialization converges on the first committed document, and unrelated runs do not serialize.
+  Operator replay hydration uses bounded batches rather than replay-table or replay-directory scans.
+- A stop can terminalize while a previously admitted provider request is still returning. Migration
+  `005_finalized_replay_append.sql` keeps terminal fields and every existing replay item immutable
+  while permitting that accepted operation to append exactly one evidence item. Arbitrary finalized
+  replay replacement remains refused. The paired compact event is committed in the same PostgreSQL
+  transaction, so preserving late raw evidence does not reopen execution or authorize actions.
 
 The Fastify server currently instantiates the JSON implementations of those repositories, and all
 remaining runtime domains still use JSON files as their authority. JSON state mutation and event
@@ -142,25 +152,24 @@ The server backend must not be enabled until all of these hold:
 
 ## Remaining implementation order
 
-1. Move replay initialization, remaining scalar/diagnostic replay projections, and bounded replay
-   reads to the selected shared authority. These paths still call JSON helpers directly even though
-   the bounded execution records listed above use the repository seam.
+1. Make every startup, recovery, and operator state read consume the same selected authority used by
+   schedulers and workers. Replay reads now meet this boundary; ticket/run discovery, event/evaluation/
+   consequence reads, operation receipts, and other state projections still include direct JSON
+   access. Use bounded indexed queries and no JSON fallback in PostgreSQL mode.
 2. Continue replacing the server's remaining synchronous JSON call sites with asynchronous
    repositories, one complete authority slice at a time. The scheduler lease, run terminalization,
    ticket/run lifecycle, target-mutation evidence, and bounded non-terminal execution-evidence
-   slices are complete. Do not publish the mixed implementation as horizontally scalable.
-3. Make every startup, recovery, and operator read consume the same selected authority used by
-   schedulers and workers; use bounded indexed queries and remove JSON fallback/scans from the
-   PostgreSQL path.
-4. Move workflows, templates, schedules, Work Contexts, routing, connectors, permissions, and other
+   slices plus replay authority are complete. Do not publish the mixed implementation as
+   horizontally scalable.
+3. Move workflows, templates, schedules, Work Contexts, routing, connectors, permissions, and other
    mutable control records to shared storage with their current validation and provenance rules.
-5. Replace in-memory sessions and process-local scheduler ownership where multi-process deployment
+4. Replace in-memory sessions and process-local scheduler ownership where multi-process deployment
    requires shared coordination. Keep provider and run admission bounded per deployment policy.
-6. Add indexed event retention/archive operations and tenant/isolation boundaries. PostgreSQL alone
+5. Add indexed event retention/archive operations and tenant/isolation boundaries. PostgreSQL alone
    does not supply those product policies.
-7. Run behavioral parity, restart/recovery, multi-process claim, overlapping-path, rollback, and
+6. Run behavioral parity, restart/recovery, multi-process claim, overlapping-path, rollback, and
    pressure tests against the assembled backend.
-8. Reset disposable development data, enable `PERSISTENCE_BACKEND=postgres`, and remove the JSON
+7. Reset disposable development data, enable `PERSISTENCE_BACKEND=postgres`, and remove the JSON
    runtime path rather than carrying it as a permanent compatibility backend.
 
 ## Commands
