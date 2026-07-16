@@ -47,6 +47,7 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'phase-contract-alignment-test.js',
   'event-chain-verify-test.js',
   'event-chain-restart-test.js',
+  'event-journal-streaming-startup-test.js',
   'durable-event-append-test.js',
   'bounded-worker-pool-test.js',
   'event-journal-route-admission-contract-test.js',

@@ -74,8 +74,9 @@ checkpoint is not a production-readiness or semantic-correctness claim. Current 
 product direction, and known work live in `docs/SYSTEM_STATUS.md`; historical results remain in Git
 history or explicitly historical release documents.
 
-## 12. What a version tag does not mean
+## 12. What a v1.0 tag will mean
 
-A version tag identifies a tested code baseline. It does **not** by itself imply real external
-connectors, public hosting, multi-tenant isolation, semantic correctness, or autonomous operation —
-those remain explicit non-goals until separately designed, implemented, and audited.
+A future `v1.0` tag will mean the release documentation is complete and the maintainers have made
+an explicit decision that the bounded substrate, its safety boundaries, its scale path, and its
+known limitations are accurately documented and acceptable for the intended use. It will **not** by
+itself imply capabilities that have not been separately designed, implemented, and audited.

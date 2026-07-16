@@ -157,6 +157,8 @@ async function main() {
       AGENT_MAX_MODEL_REQUESTS_PER_RUN: String(DEPLOYMENT.maxModelRequestsPerRun),
       AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: String(DEPLOYMENT.maxWorkspaceOperationsPerRun),
       AGENT_MAX_RUNTIME_DURATION_MS: String(DEPLOYMENT.maxRuntimeDurationMs),
+      MAX_ACTIVE_RUNS: '16',
+      MAX_ACTIVE_RUNS_CAP: '64',
       LOCAL_MODEL_CONCURRENCY: '4',
       MAX_LOCAL_MODEL_CONCURRENCY: '8'
     },
@@ -212,7 +214,7 @@ async function main() {
     assertLimits(stored, configured, 'valid config persisted');
     assert(stored.updatedBy === 'admin' && typeof stored.updatedAt === 'string', 'config audit metadata missing');
 
-    // System config keys (localModelConcurrency) must round-trip through validate -> persist -> read.
+    // System config keys must round-trip through validate -> persist -> read.
     // Regression: the validator previously returned only pickRuntimeLimitValues(), silently dropping
     // localModelConcurrency so it always persisted as null and the setting was inert.
     // The ceiling (MAX_LOCAL_MODEL_CONCURRENCY=8) is decoupled from the inherited default
@@ -227,10 +229,23 @@ async function main() {
     assert(concurrencyUpdate.statusCode === 200, `valid localModelConcurrency rejected: ${concurrencyUpdate.body}`);
     assert(concurrencyUpdate.json.config.localModelConcurrency === 6, `localModelConcurrency not returned: ${concurrencyUpdate.body}`);
     assert(readJson('runtime-limits.json').localModelConcurrency === 6, 'localModelConcurrency must persist to disk');
+    for (const body of [{ maxActiveRuns: 0 }, { maxActiveRuns: -1 }, { maxActiveRuns: 1.5 }, { maxActiveRuns: '2' }, { maxActiveRuns: 65 }]) {
+      const response = await request('POST', '/api/runtime-limits', { cookie: admin, body });
+      assert(response.statusCode === 400, `invalid maxActiveRuns should be rejected: ${JSON.stringify(body)}`);
+    }
+    const processConcurrencyUpdate = await request('POST', '/api/runtime-limits', { cookie: admin, body: { maxActiveRuns: 24 } });
+    assert(processConcurrencyUpdate.statusCode === 200, `valid maxActiveRuns rejected: ${processConcurrencyUpdate.body}`);
+    assert(processConcurrencyUpdate.json.config.maxActiveRuns === 24, `maxActiveRuns not returned: ${processConcurrencyUpdate.body}`);
+    assert(readJson('runtime-limits.json').maxActiveRuns === 24, 'maxActiveRuns must persist to disk');
+    const runtimeStatus = await request('GET', '/api/runtime/status', { cookie: admin });
+    assert(runtimeStatus.statusCode === 200, `runtime status rejected: ${runtimeStatus.body}`);
+    assert(runtimeStatus.json.concurrencyLimits.process === 24, 'runtime status does not expose effective process-wide concurrency');
+    assert(Number.isInteger(runtimeStatus.json.concurrencyLimits.activeProcessRuns), 'runtime status does not expose active process run slots');
     // A subsequent limit-only update that omits the system key must not wipe the persisted value.
     // (Re-applying `configured` also restores the limit state the run-snapshot assertions below expect.)
     assert((await request('POST', '/api/runtime-limits', { cookie: admin, body: configured })).statusCode === 200, 'limit-only update failed');
     assert(readJson('runtime-limits.json').localModelConcurrency === 6, 'localModelConcurrency must survive unrelated updates');
+    assert(readJson('runtime-limits.json').maxActiveRuns === 24, 'maxActiveRuns must survive unrelated updates');
     assertLimits(readJson('runtime-limits.json'), configured, 'limit-only update preserves configured limits');
 
     const objective = `Create a runtime snapshot ${Date.now()}`;
@@ -269,6 +284,7 @@ async function main() {
     await waitFor(() => fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8').includes('runtime_limits.updated'));
     const eventsText = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8');
     assert(eventsText.includes('oldValues') && eventsText.includes('newValues') && eventsText.includes('"actor":"admin"'), 'runtime limit audit event is incomplete');
+    assert(eventsText.includes('"maxActiveRuns"'), 'runtime limit audit event omits the process-wide concurrency policy');
     assert(readJson('logs.json').some(log => log.type === 'runtime_limits.updated' && log.actor === 'admin'), 'runtime limit operator log missing');
 
     console.log('PASS: configurable runtime limits are permissioned, validated, capped, audited, and immutable per run');

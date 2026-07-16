@@ -150,6 +150,7 @@ async function main() {
     assert(initial.body.includes('cannot raise above deployment caps'), 'deployment cap note missing');
     assert(initial.body.includes('<code>10</code>') && initial.body.includes('<code>20000</code>'), 'deployment/effective values missing');
     assert(initial.body.includes('name="maxExecutionSteps"') && initial.body.includes('value=""'), 'inherit input should render blank');
+    assert(initial.body.includes('Max active runs in this process') && initial.body.includes('name="maxActiveRuns"'), 'process-wide run admission setting is missing');
 
     const validForm = { maxExecutionSteps: '3', maxModelRequestsPerRun: '4', maxWorkspaceOperationsPerRun: '8', maxRuntimeDurationMs: '5000' };
     const saved = await request('POST', '/admin/runtime-limits', { cookie: admin, form: validForm });

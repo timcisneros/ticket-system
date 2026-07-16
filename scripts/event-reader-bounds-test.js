@@ -149,6 +149,49 @@ function testSafeEdges() {
   console.log('  ✓ safe-edges: missing/empty logs handled without error');
 }
 
+function testReadersDoNotMaterializeWholeFile() {
+  const { file } = buildLargeLog();
+  const originalReadFileSync = fs.readFileSync;
+  fs.readFileSync = () => {
+    throw new Error('whole-file reads are forbidden');
+  };
+  try {
+    const matches = readMatchingEvents(file, {
+      needles: ['"runId":7'],
+      predicate: event => event.runId === 7
+    });
+    const recent = readRecentEvents(file, 2);
+    assertEqual(matches.length, 2, 'matching reader works without readFileSync');
+    assertEqual(recent.length, 2, 'recent reader works without readFileSync');
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+  console.log('  ✓ bounded-file-io: readers never call readFileSync');
+}
+
+function testOversizedRecordBound() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'event-reader-oversized-'));
+  const file = path.join(dir, 'events.jsonl');
+  fs.writeFileSync(file, `${'x'.repeat(256)}\n${line({ id: 'ok', runId: 7 })}\n`, 'utf8');
+
+  let error = null;
+  try {
+    readMatchingEvents(file, { strict: true, maxLineBytes: 128 });
+  } catch (caught) {
+    error = caught;
+  }
+  assert(error && error.code === 'EVENT_RECORD_TOO_LARGE', 'strict reads reject oversized records at the configured bound');
+
+  const recovered = readMatchingEvents(file, {
+    maxLineBytes: 128,
+    needles: ['"runId":7'],
+    predicate: event => event.runId === 7
+  });
+  assertEqual(recovered.length, 1, 'non-strict reader discards only the oversized record');
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log('  ✓ oversized-record: corrupt records cannot force unbounded memory');
+}
+
 function main() {
   console.log('Event Reader Bounds Test Suite');
   console.log('='.repeat(70));
@@ -158,7 +201,9 @@ function main() {
     testRunDetailScoped,
     testStrictMatchingReadFailsOnMalformedEvidence,
     testRecentReaderOrder,
-    testSafeEdges
+    testSafeEdges,
+    testReadersDoNotMaterializeWholeFile,
+    testOversizedRecordBound
   ];
 
   let passed = 0;

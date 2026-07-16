@@ -78,9 +78,9 @@ assert(
 );
 
 const appendEventStart = source.indexOf('async function appendEvent(event = {})');
-const readEventsStart = source.indexOf('\nfunction readEvents()', appendEventStart);
-assert(appendEventStart >= 0 && readEventsStart > appendEventStart, 'appendEvent source boundary was not found');
-const appendEventSource = source.slice(appendEventStart, readEventsStart);
+const failClosedEventReadStart = source.indexOf('\nfunction failClosedEventRead(', appendEventStart);
+assert(appendEventStart >= 0 && failClosedEventReadStart > appendEventStart, 'appendEvent source boundary was not found');
+const appendEventSource = source.slice(appendEventStart, failClosedEventReadStart);
 assert(
   /await acquireRequiredEventJournalAdmission\(/.test(appendEventSource),
   'standalone events fail instead of waiting recoverably for journal capacity'

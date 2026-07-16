@@ -314,7 +314,7 @@ This process was exercised in the following document chain:
 7. `docs/archive/INSPECTION_TO_MUTATION_ANALYSIS.md` — Root cause identification
 8. `docs/archive/INSPECTION_COMPLETION_SEMANTICS.md` — Option evaluation
 9. `docs/archive/OPTION_B_RESULTS.md` — Experiment (evidence preservation)
-10. `docs/EVIDENCE_PRESERVATION_PRINCIPLE.md` — Candidate principle formulation
+10. `docs/archive/EVIDENCE_PRESERVATION_REVIEW.md` — Historical candidate-principle review
 11. `docs/archive/EVIDENCE_PRESERVATION_DECISION_MATRIX.md` — Remaining candidate analysis
 12. `docs/SUBSTRATE_DESIGN_PRINCIPLES.md` — Principle consolidation
 13. `docs/archive/INVARIANT_PROMOTION_REVIEW.md` — Promotion review

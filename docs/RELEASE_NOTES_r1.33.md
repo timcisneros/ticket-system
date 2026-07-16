@@ -1,8 +1,5 @@
 # Release Notes — r1.33 (Release Candidate)
 
-> Historical release notes. For current implementation status, see `SYSTEM_STATUS.md`. These notes
-> are not updated with later results.
-
 These notes summarize the release-candidate state captured by `docs/RELEASE_CANDIDATE_AUDIT.md` at
 master `f46d2b0` (tag `r1.33-release-candidate-audit`). This is a **release candidate**, not a final
 `v1.0` tag, and **not a production-readiness claim**.

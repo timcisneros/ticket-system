@@ -1,4 +1,4 @@
-function createRuntimeRunner({ runAgentTicket, markRunStarting, onError = () => {} }) {
+function createRuntimeRunner({ runAgentTicket, markRunStarting, markRunSettled, onError = () => {} }) {
   return {
     startRun(run) {
       if (!run || !run.id) return false;
@@ -6,7 +6,10 @@ function createRuntimeRunner({ runAgentTicket, markRunStarting, onError = () => 
       setImmediate(() => {
         void Promise.resolve()
           .then(() => runAgentTicket(run.id))
-          .catch(error => onError(run, error));
+          .catch(error => onError(run, error))
+          .finally(() => {
+            if (typeof markRunSettled === 'function') markRunSettled(run);
+          });
       });
       return true;
     }

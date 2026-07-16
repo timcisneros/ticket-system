@@ -5,6 +5,9 @@ function createRuntimeScheduler({
   appendRunLog,
   appendEvent,
   canStartRunNow,
+  getRunStartBlockReason = run => canStartRunNow(run) ? null : 'concurrency_limit',
+  tryReserveRunStart = run => ({ runId: run.id }),
+  releaseRunStartReservation = () => {},
   acquireRunLease,
   expireStaleRunLeases,
   isRunStarting,
@@ -22,10 +25,16 @@ function createRuntimeScheduler({
   let ticking = false;
   let idleWaiters = [];
 
-  async function logQueuedOnce(run) {
+  async function logQueuedOnce(run, reason) {
     const alreadyLogged = readLogs().some(log => log.runId === run.id && log.type === 'run:queued');
     if (alreadyLogged) return;
 
+    await appendEvent({
+      type: 'scheduler.capacity_blocked',
+      ticketId: run.ticketId,
+      runId: run.id,
+      payload: { reason }
+    });
     await appendEvent({
       type: 'run.queued',
       ticketId: run.ticketId,
@@ -34,7 +43,55 @@ function createRuntimeScheduler({
         status: 'queued'
       }
     });
-    appendRunLog(run, 'run:queued', 'Queued for local model capacity');
+    appendRunLog(run, 'run:queued', `Queued for ${reason.replaceAll('_', ' ')}`);
+  }
+
+  async function selectAndDispatchRun(run, runAdmission, startReservation) {
+    let admissionHeld = true;
+    let reservationHeld = true;
+    try {
+      const leasedRun = await runWithAdmission(runAdmission, async () => {
+        const selected = typeof acquireRunLease === 'function' ? await acquireRunLease(run.id) : run;
+        if (!selected) {
+          await appendEvent({
+            type: 'scheduler.run_skipped',
+            ticketId: run.ticketId,
+            runId: run.id,
+            payload: { reason: 'lease_not_acquired' }
+          });
+          return null;
+        }
+        await appendEvent({
+          type: 'scheduler.run_selected',
+          ticketId: selected.ticketId,
+          runId: selected.id,
+          payload: {
+            status: selected.status,
+            agentId: selected.agentId
+          }
+        });
+        return selected;
+      });
+
+      releaseRunAdmission(runAdmission);
+      admissionHeld = false;
+
+      if (!leasedRun) {
+        releaseRunStartReservation(startReservation);
+        reservationHeld = false;
+        return;
+      }
+
+      const started = runner.startRun(leasedRun);
+      if (started === false) {
+        releaseRunStartReservation(startReservation);
+        reservationHeld = false;
+      }
+    } catch (error) {
+      if (admissionHeld) releaseRunAdmission(runAdmission);
+      if (reservationHeld) releaseRunStartReservation(startReservation);
+      throw error;
+    }
   }
 
   async function tick() {
@@ -63,6 +120,7 @@ function createRuntimeScheduler({
         });
       }
 
+      const selections = [];
       for (const run of pendingRuns) {
         if (isRunStarting(run)) {
           await appendEvent({
@@ -84,68 +142,36 @@ function createRuntimeScheduler({
           continue;
         }
 
-        if (!canStartRunNow(run)) {
-          await appendEvent({
-            type: 'scheduler.capacity_blocked',
-            ticketId: run.ticketId,
-            runId: run.id,
-            payload: { reason: 'concurrency_limit' }
-          });
-          await logQueuedOnce(run);
+        const blockReason = getRunStartBlockReason(run);
+        if (blockReason) {
+          await logQueuedOnce(run, blockReason);
+          // A process-wide limit applies to every later run. Provider-specific
+          // pressure does not: keep scanning so another provider can start.
+          if (blockReason === 'process_concurrency_limit') break;
           continue;
         }
+
+        const startReservation = tryReserveRunStart(run);
+        if (!startReservation) continue;
 
         const runAdmission = acquireRunAdmission(run);
         if (!runAdmission) {
           // Another producer acquired the final bounded slot after this tick's
           // initial pressure check. Leave this and later pending runs untouched;
           // the next tick retries after a producer releases capacity.
+          releaseRunStartReservation(startReservation);
           break;
         }
+        // Start all bounded selections before awaiting them. The single writer
+        // can group their lease/selection records into durable batches instead
+        // of forcing one sync barrier per run.
+        selections.push(selectAndDispatchRun(run, runAdmission, startReservation));
+      }
 
-        let leasedRun;
-        let admissionHeld = true;
-        try {
-          leasedRun = typeof acquireRunLease === 'function' ? await acquireRunLease(run.id) : run;
-        } catch (error) {
-          releaseRunAdmission(runAdmission);
-          admissionHeld = false;
-          throw error;
-        }
-        if (!leasedRun) {
-          releaseRunAdmission(runAdmission);
-          admissionHeld = false;
-          await appendEvent({
-            type: 'scheduler.run_skipped',
-            ticketId: run.ticketId,
-            runId: run.id,
-            payload: { reason: 'lease_not_acquired' }
-          });
-          continue;
-        }
-
-        try {
-          await runWithAdmission(runAdmission, async () => {
-            await appendEvent({
-              type: 'scheduler.run_selected',
-              ticketId: leasedRun.ticketId,
-              runId: leasedRun.id,
-              payload: {
-                status: leasedRun.status,
-                agentId: leasedRun.agentId
-              }
-            });
-          });
-          // Admission protects only lease selection and its evidence. Active
-          // runs acquire their own short mutation scopes; they do not occupy a
-          // producer slot while waiting on providers or between actions.
-          releaseRunAdmission(runAdmission);
-          admissionHeld = false;
-          runner.startRun(leasedRun);
-        } catch (error) {
-          if (admissionHeld) releaseRunAdmission(runAdmission);
-          throw error;
-        }
+      const settledSelections = await Promise.allSettled(selections);
+      const failedSelection = settledSelections.find(result => result.status === 'rejected');
+      if (failedSelection) {
+        throw failedSelection.reason;
       }
     } finally {
       ticking = false;

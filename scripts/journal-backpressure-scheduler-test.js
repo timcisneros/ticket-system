@@ -104,11 +104,106 @@ async function testRuntimeSchedulerReservesBeforeLease() {
   assert(releases === 1, 'scheduler did not release admission after recording run selection');
 }
 
+async function testRuntimeSchedulerBatchesBoundedSelections() {
+  const runs = [1, 2, 3].map(id => ({
+    id,
+    ticketId: id,
+    agentId: 1,
+    status: 'pending',
+    createdAt: `2026-01-01T00:00:0${id}.000Z`
+  }));
+  const started = [];
+  const insideAdmission = new Set();
+  let leasesWaiting = 0;
+  let releaseLeaseBarrier;
+  const leaseBarrier = new Promise(resolve => { releaseLeaseBarrier = resolve; });
+
+  const scheduler = createRuntimeScheduler({
+    readRuns: () => runs,
+    readLogs: () => [],
+    appendRunLog: () => {},
+    appendEvent: async event => {
+      if (event.runId && ['run.lease_acquired', 'scheduler.run_selected'].includes(event.type)) {
+        assert(insideAdmission.has(event.runId), `${event.type} escaped its selection admission`);
+      }
+    },
+    canStartRunNow: () => true,
+    acquireRunAdmission: run => ({ runId: run.id }),
+    releaseRunAdmission: () => {},
+    runWithAdmission: async (token, operation) => {
+      insideAdmission.add(token.runId);
+      try {
+        return await operation();
+      } finally {
+        insideAdmission.delete(token.runId);
+      }
+    },
+    acquireRunLease: async runId => {
+      leasesWaiting += 1;
+      if (leasesWaiting === runs.length) releaseLeaseBarrier();
+      await leaseBarrier;
+      await Promise.resolve();
+      return runs.find(run => run.id === runId);
+    },
+    expireStaleRunLeases: async () => {},
+    isRunStarting: () => false,
+    isRunActiveInMemory: () => false,
+    runner: { startRun: run => { started.push(run.id); return true; } }
+  });
+
+  await Promise.race([
+    scheduler.tick(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('selection remained serial')), 1000))
+  ]);
+  assert(leasesWaiting === 3, 'scheduler did not place all bounded selections in flight');
+  assert(started.length === 3, 'scheduler did not dispatch every selected run');
+}
+
+async function testProcessCapacityBoundsSelectionBatch() {
+  const runs = [1, 2, 3].map(id => ({ id, ticketId: id, agentId: 1, status: 'pending', createdAt: String(id) }));
+  const events = [];
+  const leased = [];
+  const started = [];
+  let reserved = 0;
+  const scheduler = createRuntimeScheduler({
+    readRuns: () => runs,
+    readLogs: () => [],
+    appendRunLog: () => {},
+    appendEvent: async event => { events.push(event); },
+    canStartRunNow: () => reserved < 2,
+    getRunStartBlockReason: () => reserved >= 2 ? 'process_concurrency_limit' : null,
+    tryReserveRunStart: run => {
+      if (reserved >= 2) return null;
+      reserved += 1;
+      return { runId: run.id };
+    },
+    releaseRunStartReservation: () => { reserved -= 1; },
+    acquireRunAdmission: run => ({ runId: run.id }),
+    releaseRunAdmission: () => {},
+    runWithAdmission: (_token, operation) => operation(),
+    acquireRunLease: async runId => {
+      leased.push(runId);
+      return runs.find(run => run.id === runId);
+    },
+    expireStaleRunLeases: async () => {},
+    isRunStarting: () => false,
+    isRunActiveInMemory: () => false,
+    runner: { startRun: run => { started.push(run.id); return true; } }
+  });
+
+  await scheduler.tick();
+  assert(leased.length === 2 && started.length === 2, 'process capacity did not bound selected work');
+  const blocked = events.find(event => event.type === 'scheduler.capacity_blocked');
+  assert(blocked && blocked.runId === 3, 'first non-admitted run did not retain capacity evidence');
+}
+
 async function main() {
   await testRuntimeSchedulerPausesAndResumes();
   await testRuntimeSchedulerReservesBeforeLease();
+  await testRuntimeSchedulerBatchesBoundedSelections();
+  await testProcessCapacityBoundsSelectionBatch();
   await testTemplateSchedulerPausesAndResumes();
-  console.log('PASS: runtime and template schedulers pause during journal pressure and resume automatically');
+  console.log('PASS: schedulers recover from pressure and runtime selection is bounded and batched');
 }
 
 main().catch(error => {

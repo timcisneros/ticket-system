@@ -10,6 +10,9 @@ substrate.
 - Documents explicitly marked historical, including versioned release notes and release audits, are
   snapshots. Do not revise their claims or verification counts after the fact; make only a
   stable-link repair when necessary.
+- Point-in-time reviews whose names once looked like living guidance belong under `docs/archive/`.
+  Classify them from this index and update living references; do not add retrospective banners to
+  the snapshot itself.
 - Put current conclusions in `SYSTEM_STATUS.md` or the relevant living contract/guide. Git history
   retains superseded states, so living documents do not need an accumulating remediation ledger.
 
@@ -55,3 +58,7 @@ substrate.
 
 - [`RELEASE_CANDIDATE_AUDIT.md`](RELEASE_CANDIDATE_AUDIT.md) — frozen r1.32 release-candidate verdict.
 - [`RELEASE_NOTES_r1.33.md`](RELEASE_NOTES_r1.33.md) — frozen r1.33 release-candidate notes.
+
+## Archived implementation reviews
+
+- [`archive/EVIDENCE_PRESERVATION_REVIEW.md`](archive/EVIDENCE_PRESERVATION_REVIEW.md) — point-in-time review formerly named as a living principle; its review body is retained as historical evidence.

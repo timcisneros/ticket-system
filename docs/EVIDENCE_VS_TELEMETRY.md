@@ -111,7 +111,7 @@ The substrate has three distinct output classes with different durability, consu
 1. **Design documentation** — `docs/OPERATIONAL_TELEMETRY.md` states Principle 1 is **"Evidence-only: Every metric is computed from persisted ledger files. No hidden mutable counters."**
 2. **Projection rebuilder contracts** — `scripts/rebuild-runs-projection.js` header declares it "reconstruct runs.json from events.jsonl (source of truth)." A source of truth for state reconstruction must be evidence.
 3. **Replay reconstructor contract** — `scripts/replay-reconstructor.js` states "Events are source of truth." It does not require `scheduler.tick` to function.
-4. **Evidence preservation principle** — `docs/EVIDENCE_PRESERVATION_PRINCIPLE.md` treats `appendEvent` as an evidence preservation surface, with the only noted loss being `sanitizeSnapshotValue` redaction, not event removal.
+4. **Historical evidence-preservation review** — `docs/archive/EVIDENCE_PRESERVATION_REVIEW.md` records the point-in-time implementation review that informed this distinction. It is not a current source-of-truth description of `appendEvent`.
 5. **AGENTS.md description** — "`data/events.jsonl` is append-only operational history." The phrase "operational history" implies a record of operations (evidence), not a stream of observations (telemetry).
 
 ### Why the actual file is Option B (Evidence + Telemetry)

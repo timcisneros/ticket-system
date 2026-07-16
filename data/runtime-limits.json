@@ -3,6 +3,7 @@
   "maxModelRequestsPerRun": null,
   "maxWorkspaceOperationsPerRun": null,
   "maxRuntimeDurationMs": null,
+  "maxActiveRuns": null,
   "localModelConcurrency": null,
   "updatedBy": null,
   "updatedAt": null

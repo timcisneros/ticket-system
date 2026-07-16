@@ -7,9 +7,11 @@ a **run** under explicit **authority**, all external effects flow through a **ta
 everything produces **evidence/receipts**. On top of that substrate sit grouping, visibility,
 handoff, observation, and routing layers — all bounded and read-only or proposal-only.
 
-This is an in-development implementation, not a final `v1.0` tag or production-hardened deployment.
-It currently runs as a single-process Fastify server backed by JSON files. See
-`docs/SYSTEM_STATUS.md` for the current guarantees, product direction, and known work.
+This is a **release candidate for the bounded substrate**, not a final `v1.0` tag or a
+production-hardened deployment. The current implementation is a single-process Fastify server
+backed by JSON files; those are present deployment choices, not the product's scale ceiling. See
+`docs/SYSTEM_STATUS.md` for current guarantees, product direction, and known work. Historical
+release audits remain snapshots rather than current verification authority.
 
 ## 2. What this system is
 
@@ -37,7 +39,7 @@ Process Template · Schedule · Work Context · Handoff · Watcher · Model Rout
 Operational Summary. See **`docs/PRIMITIVE_GLOSSARY.md`** for precise definitions and commonly
 confused terms.
 
-## 5. Current implementation scope
+## 5. Current release-candidate scope
 
 Ticket creation/assignment; runs with lease/claim, attempts, evaluation; workspace/target operations
 through the bounded target-provider contract; authority & permissions; append-only evidence &
@@ -53,9 +55,8 @@ validation; and a hardened release checkpoint. The current status and remaining 
 ## 6. Quick start
 
 ```sh
-corepack enable
-pnpm install --frozen-lockfile
-pnpm run dev       # serves on http://localhost:3099 against ignored .local-data / .local-workspace
+npm install
+npm run dev        # serves on http://localhost:3099 against ignored .local-data / .local-workspace
 ```
 
 Login with the bootstrap admin (created only when missing): `admin` / `admin123` (override with
@@ -115,8 +116,10 @@ external connector**, and it refuses writes. Tracked seed agents carry **no prov
 ### Event log lifecycle
 
 `events.jsonl` is append-only and has no automatic size cap, rotation, compaction, or retention
-policy. Process-local append admission is bounded and observable, but that does not bound file
-growth. Inspect or deliberately archive a local/development log with
+policy. Process-local append and run admission are bounded and observable, but those controls do
+not bound file growth. Startup validates the journal as a stream; scoped historical queries remain
+bounded-memory, synchronous O(file bytes) scans until an indexed shared store replaces JSONL.
+Inspect or deliberately archive a local/development log with
 `node scripts/archive-local-events.js`; use `--archive --reset` only when an archived copy should be
 followed by a fresh empty log. Horizontal deployment will require shared durable storage and an
 explicit retention/archival design.

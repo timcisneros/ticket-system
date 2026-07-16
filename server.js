@@ -14,6 +14,7 @@ const { runBoundedWorkerPool } = require('./runtime/bounded-worker-pool');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
+const { scanCurrentEventJournal } = require('./runtime/event-journal-scan');
 const { createDurableAppendJournal, resolveDurableAppendJournalOptions } = require('./runtime/durable-append');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -218,6 +219,7 @@ function seedOperationalDataDir() {
     maxModelRequestsPerRun: null,
     maxWorkspaceOperationsPerRun: null,
     maxRuntimeDurationMs: null,
+    maxActiveRuns: null,
     localModelConcurrency: null,
     updatedBy: null,
     updatedAt: null
@@ -381,14 +383,19 @@ const RUNTIME_LIMIT_MINIMUMS = Object.freeze({
   maxRuntimeDurationMs: 5000
 });
 const RUNTIME_SYSTEM_CONFIG_KEYS = Object.freeze([
+  'maxActiveRuns',
   'localModelConcurrency'
 ]);
 const RUNTIME_SYSTEM_DISPLAY = Object.freeze({
+  maxActiveRuns: { label: 'Max active runs in this process', help: 'Process-wide admission bound across every provider. Pending runs resume as active slots are released.' },
   localModelConcurrency: { label: 'Max concurrent local model runs', help: 'Max concurrent runs using local model providers (Ollama, etc.). 1 = serial, 2 = two parallel.' }
 });
 const RUNTIME_SYSTEM_MINIMUMS = Object.freeze({
+  maxActiveRuns: 1,
   localModelConcurrency: 1
 });
+const DEFAULT_MAX_ACTIVE_RUNS = 32;
+const DEFAULT_MAX_ACTIVE_RUNS_CAP = 4096;
 const DEFAULT_LOCAL_MODEL_CONCURRENCY = 1;
 // Absolute ceiling the admin UI/CLI may raise localModelConcurrency to. Distinct from
 // DEFAULT_LOCAL_MODEL_CONCURRENCY (the inherited value when unconfigured): the UI is meant to
@@ -629,6 +636,63 @@ function workspacePathsOverlap(a, b) {
   if (!a || !b) return false;
   if (a === b) return true;
   return a.startsWith(b + '/') || b.startsWith(a + '/');
+}
+
+// Process-local path coordination closes the check-then-mutate race between
+// concurrent runs without globally serializing unrelated workspace paths. The
+// process-wide active-run bound also bounds the number of lock waiters.
+const activeWorkspaceMutationLocks = new Set();
+let workspaceMutationLockVersion = 0;
+let workspaceMutationLockChangePromise = null;
+let resolveWorkspaceMutationLockChange = null;
+
+function workspaceMutationPaths(operation, args = {}) {
+  const values = operation === 'renamePath'
+    ? [args.path, args.nextPath]
+    : [args.path];
+  return [...new Set(values.map(normalizeArtifactOwnershipPath).filter(Boolean))];
+}
+
+function workspaceMutationLocksOverlap(paths, lock) {
+  return paths.some(candidate => lock.paths.some(active => workspacePathsOverlap(candidate, active)));
+}
+
+function notifyWorkspaceMutationLockChange() {
+  workspaceMutationLockVersion += 1;
+  if (!resolveWorkspaceMutationLockChange) return;
+  const resolve = resolveWorkspaceMutationLockChange;
+  resolveWorkspaceMutationLockChange = null;
+  workspaceMutationLockChangePromise = null;
+  resolve(workspaceMutationLockVersion);
+}
+
+function waitForWorkspaceMutationLockChange(observedVersion) {
+  if (observedVersion !== workspaceMutationLockVersion) return Promise.resolve(workspaceMutationLockVersion);
+  if (!workspaceMutationLockChangePromise) {
+    workspaceMutationLockChangePromise = new Promise(resolve => {
+      resolveWorkspaceMutationLockChange = resolve;
+    });
+  }
+  return workspaceMutationLockChangePromise;
+}
+
+async function acquireWorkspaceMutationLock(run, operation, args) {
+  const paths = workspaceMutationPaths(operation, args);
+  if (paths.length === 0) return () => {};
+
+  while (true) {
+    const observedVersion = workspaceMutationLockVersion;
+    const blocked = [...activeWorkspaceMutationLocks].some(lock => workspaceMutationLocksOverlap(paths, lock));
+    if (!blocked) {
+      const lock = { runId: run && run.id ? run.id : null, operation, paths };
+      activeWorkspaceMutationLocks.add(lock);
+      return () => {
+        if (!activeWorkspaceMutationLocks.delete(lock)) return;
+        notifyWorkspaceMutationLockChange();
+      };
+    }
+    await waitForWorkspaceMutationLockChange(observedVersion);
+  }
 }
 
 // Like findPriorSuccessfulArtifactOwner, but matches when another ticket's
@@ -1486,6 +1550,8 @@ const eventClients = new Set();
 const runningRunKeys = new Set();
 const startingRunIds = new Set();
 const startingLocalModelRunIds = new Set();
+const admittedRunIds = new Set();
+const admittedLocalModelRunIds = new Set();
 const RUN_LEASE_OWNER = `${process.pid}:${crypto.randomUUID()}`;
 const DEFAULT_RUN_LEASE_DURATION_MS = 180000;
 let lastLogTimestampNs = 0n;
@@ -5083,83 +5149,27 @@ function isEventJournalAdmissionBackpressured() {
 
 // Per-run event chain state for forensic sequence numbers and hash chaining
 const runEventChains = new Map(); // runId -> { seq: number, prevHash: string | null }
-const persistedEventIds = new Set();
 const reservedRunEventChains = new Map();
 const reservedEventIds = new Set();
 
-function normalizeEventId(value) {
-  return typeof value === 'string' && value.trim() ? value.trim() : crypto.randomUUID();
+function normalizeEventId() {
+  return crypto.randomUUID();
 }
 
-function readPersistedEventsForChainRecovery() {
-  if (!fs.existsSync(EVENTS_FILE)) return [];
-  const raw = fs.readFileSync(EVENTS_FILE, 'utf8');
-  if (!raw.trim()) return [];
-  return raw.split('\n').reduce((events, line, index) => {
-    if (!line.trim()) return events;
-    let event;
-    try {
-      event = JSON.parse(line);
-    } catch (error) {
-      throw dataIntegrityError('events.jsonl', `line ${index + 1} is not valid JSON`);
-    }
-    if (!event || typeof event !== 'object' || Array.isArray(event)) {
-      throw dataIntegrityError('events.jsonl', `line ${index + 1} must contain an event object`);
-    }
-    events.push(event);
-    return events;
-  }, []);
-}
-
-// Rebuild the in-memory chain tips before startup recovery can append events.
-// There is one current run-event schema and one continuous chain per run.
-function validatePersistedEventStore(events) {
-  const states = new Map();
-  const eventIds = new Set();
-
-  events.forEach((event, index) => {
-    const envelopeErrors = validateCurrentEventEnvelope(event);
-    if (envelopeErrors.length > 0) {
-      throw dataIntegrityError('events.jsonl', `line ${index + 1}: ${envelopeErrors[0].message}`);
-    }
-    if (eventIds.has(event.id)) throw dataIntegrityError('events.jsonl', `line ${index + 1} has duplicate event id ${event.id}`);
-    eventIds.add(event.id);
-    if (event.runId === null) return;
-    const runId = event.runId;
-
-    if (!Number.isInteger(event.seq) || event.seq < 0) {
-      throw dataIntegrityError('events.jsonl', `line ${index + 1} has an invalid run-event sequence`);
-    }
-    const computedHash = computeRunEventHash(event);
-    if (typeof event.hash !== 'string' || event.hash !== computedHash) {
-      throw dataIntegrityError('events.jsonl', `line ${index + 1} has an invalid event hash`);
-    }
-
-    const state = states.get(runId) || {
-      nextSeq: 0,
-      previousHash: null
-    };
-    if (event.seq !== state.nextSeq) {
-      throw dataIntegrityError('events.jsonl', `line ${index + 1} breaks run ${runId} sequence continuity`);
-    }
-    if (event.prevHash !== state.previousHash) {
-      throw dataIntegrityError('events.jsonl', `line ${index + 1} breaks run ${runId} hash linkage`);
-    }
-
-    state.nextSeq += 1;
-    state.previousHash = event.hash;
-    states.set(runId, state);
-  });
-
-  return { states, eventIds };
-}
-
-function restoreRunEventChainsFromDisk() {
+// Rebuild chain tips before startup recovery can append events. The journal is
+// streamed, so startup memory does not grow with total historical event count.
+async function restoreRunEventChainsFromDisk() {
   runEventChains.clear();
-  persistedEventIds.clear();
   reservedRunEventChains.clear();
   reservedEventIds.clear();
-  const { states, eventIds } = validatePersistedEventStore(readPersistedEventsForChainRecovery());
+  let states;
+  try {
+    ({ states } = await scanCurrentEventJournal(EVENTS_FILE, {
+      maxLineBytes: eventJournal.maxRecordBytes
+    }));
+  } catch (error) {
+    throw dataIntegrityError('events.jsonl', error.message);
+  }
 
   states.forEach((state, runId) => {
     runEventChains.set(runId, {
@@ -5167,7 +5177,6 @@ function restoreRunEventChainsFromDisk() {
       prevHash: state.previousHash
     });
   });
-  eventIds.forEach(eventId => persistedEventIds.add(eventId));
 }
 
 function normalizeNullableInteger(value) {
@@ -5209,7 +5218,9 @@ async function appendEvent(event = {}) {
   }
   let normalized = {
     schemaVersion: RUN_EVENT_SCHEMA_VERSION,
-    id: normalizeEventId(event.id),
+    // Event identity is owned by the writer. Accepting caller-provided IDs
+    // would require a history-sized uniqueness index or an external database.
+    id: normalizeEventId(),
     ts: typeof event.ts === 'string' && event.ts.trim() ? event.ts : createLogTimestamp(),
     type: typeof event.type === 'string' && event.type.trim() ? event.type.trim() : 'event',
     ticketId,
@@ -5221,7 +5232,7 @@ async function appendEvent(event = {}) {
   if (envelopeErrors.length > 0) {
     throw dataIntegrityError('events.jsonl', `cannot append event ${normalized.type}: ${envelopeErrors[0].message}`);
   }
-  if (persistedEventIds.has(normalized.id) || reservedEventIds.has(normalized.id)) {
+  if (reservedEventIds.has(normalized.id)) {
     throw dataIntegrityError('events.jsonl', `cannot append duplicate event id ${normalized.id}`);
   }
 
@@ -5239,7 +5250,7 @@ async function appendEvent(event = {}) {
     // A standalone event may have yielded while waiting for capacity. Recheck
     // identity, then reserve its chain position synchronously so the position is
     // based on the latest committed/reserved tip.
-    if (persistedEventIds.has(normalized.id) || reservedEventIds.has(normalized.id)) {
+    if (reservedEventIds.has(normalized.id)) {
       throw dataIntegrityError('events.jsonl', `cannot append duplicate event id ${normalized.id}`);
     }
 
@@ -5344,22 +5355,11 @@ async function appendEvent(event = {}) {
       }
     }
     reservedEventIds.delete(normalized.id);
-    persistedEventIds.add(normalized.id);
 
     if (recordRejection) throw recordRejection;
     return normalized;
   } finally {
     if (ownsAdmission) eventJournal.releaseAdmission(admissionToken);
-  }
-}
-
-function readEvents() {
-  try {
-    const events = readPersistedEventsForChainRecovery();
-    validatePersistedEventStore(events);
-    return events;
-  } catch (error) {
-    return failClosedEventRead(error);
   }
 }
 
@@ -5398,7 +5398,12 @@ function validateProjectedEvents(events) {
 
 function readBufferedAndMatchingEvents({ needles, predicate }) {
   try {
-    return validateProjectedEvents(readMatchingEvents(EVENTS_FILE, { needles, predicate, strict: true }));
+    return validateProjectedEvents(readMatchingEvents(EVENTS_FILE, {
+      needles,
+      predicate,
+      strict: true,
+      maxLineBytes: eventJournal.maxRecordBytes
+    }));
   } catch (error) {
     return failClosedEventRead(error);
   }
@@ -5919,7 +5924,6 @@ async function resetDebugEventState() {
   writeFileAtomic(EVENTS_FILE, '');
   eventJournal = createDurableAppendJournal(EVENTS_FILE, EVENT_JOURNAL_OPTIONS);
   runEventChains.clear();
-  persistedEventIds.clear();
   reservedRunEventChains.clear();
   reservedEventIds.clear();
   eventAppendFailure = null;
@@ -7245,6 +7249,9 @@ function getRuntimeStatusSnapshot() {
     },
     leaseOwner: RUN_LEASE_OWNER,
     concurrencyLimits: {
+      process: getMaxActiveRunsLimit(),
+      admittedRuns: admittedRunIds.size,
+      activeProcessRuns: activeRunIdSet().size,
       localModel: getLocalModelConcurrencyLimit(),
       activeLocalModelRuns: runningRuns.filter(run => localAgentIds.has(run.agentId)).length,
       startingLocalModelRuns: startingLocalModelRunIds.size
@@ -9750,6 +9757,7 @@ function emptyRuntimeLimitsConfig() {
     maxModelRequestsPerRun: null,
     maxWorkspaceOperationsPerRun: null,
     maxRuntimeDurationMs: null,
+    maxActiveRuns: null,
     localModelConcurrency: null,
     updatedBy: null,
     updatedAt: null
@@ -9789,6 +9797,7 @@ function getDeploymentRuntimeLimits() {
     maxWorkspaceOperationsPerRun: getPositiveIntegerEnv('AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxWorkspaceOperationsPerRun),
     maxModelRequestsPerRun: getPositiveIntegerEnv('AGENT_MAX_MODEL_REQUESTS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxModelRequestsPerRun),
     maxRuntimeDurationMs: getPositiveIntegerEnv('AGENT_MAX_RUNTIME_DURATION_MS', DEFAULT_AGENT_RUNTIME_LIMITS.maxRuntimeDurationMs),
+    maxActiveRuns: getPositiveIntegerEnv('MAX_ACTIVE_RUNS', DEFAULT_MAX_ACTIVE_RUNS),
     localModelConcurrency: getPositiveIntegerEnv('LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY)
   };
 }
@@ -9797,6 +9806,7 @@ function getDeploymentRuntimeLimits() {
 // ceiling is independent of its inherited default value, so the UI can raise it above that default.
 function getRuntimeSystemMaximums() {
   return {
+    maxActiveRuns: getPositiveIntegerEnv('MAX_ACTIVE_RUNS_CAP', DEFAULT_MAX_ACTIVE_RUNS_CAP),
     localModelConcurrency: getPositiveIntegerEnv('MAX_LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY_CAP)
   };
 }
@@ -9943,8 +9953,8 @@ async function persistRuntimeLimitsUpdate(parsedValue, request) {
   const auditPayload = {
     actor,
     timestamp,
-    oldValues: pickRuntimeLimitValues(previous),
-    newValues: pickRuntimeLimitValues(next)
+    oldValues: { ...pickRuntimeLimitValues(previous), ...pickRuntimeSystemValues(previous) },
+    newValues: { ...pickRuntimeLimitValues(next), ...pickRuntimeSystemValues(next) }
   };
   await appendEvent({ type: 'runtime_limits.updated', payload: auditPayload });
   appendSystemLog('runtime_limits.updated', `Runtime limits updated by ${actor}`, null, auditPayload);
@@ -10908,20 +10918,44 @@ function getLocalModelConcurrencyLimit() {
   return getPositiveIntegerEnv('LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY);
 }
 
+function getMaxActiveRunsLimit() {
+  const configured = readRuntimeLimitsConfig().maxActiveRuns;
+  if (Number.isInteger(configured) && configured >= 1) return configured;
+  return getPositiveIntegerEnv('MAX_ACTIVE_RUNS', DEFAULT_MAX_ACTIVE_RUNS);
+}
+
+function activeRunIdSet() {
+  const ids = new Set(
+    readRuns()
+      .filter(run => run.status === 'running')
+      .map(run => run.id)
+  );
+  admittedRunIds.forEach(runId => ids.add(runId));
+  startingRunIds.forEach(runId => ids.add(runId));
+  return ids;
+}
+
 function countActiveLocalModelRuns() {
   const localAgentIds = new Set(readAgents().filter(isLocalModelAgent).map(agent => agent.id));
-  const persistedRunningCount = readRuns().filter(run =>
-    run.status === 'running' &&
-    localAgentIds.has(run.agentId)
-  ).length;
+  const ids = new Set(readRuns().filter(run =>
+    run.status === 'running' && localAgentIds.has(run.agentId)
+  ).map(run => run.id));
+  admittedLocalModelRunIds.forEach(runId => ids.add(runId));
+  startingLocalModelRunIds.forEach(runId => ids.add(runId));
+  return ids.size;
+}
 
-  return persistedRunningCount + startingLocalModelRunIds.size;
+function getRunStartBlockReason(run) {
+  if (activeRunIdSet().size >= getMaxActiveRunsLimit()) return 'process_concurrency_limit';
+  const agent = readAgents().find(item => item.id === run.agentId);
+  if (isLocalModelAgent(agent) && countActiveLocalModelRuns() >= getLocalModelConcurrencyLimit()) {
+    return 'local_model_concurrency_limit';
+  }
+  return null;
 }
 
 function canStartRunNow(run) {
-  const agent = readAgents().find(item => item.id === run.agentId);
-  if (!isLocalModelAgent(agent)) return true;
-  return countActiveLocalModelRuns() < getLocalModelConcurrencyLimit();
+  return getRunStartBlockReason(run) === null;
 }
 
 function isRunInterrupted(runId) {
@@ -15239,6 +15273,25 @@ function sanitizeOperationArgs(operation, args) {
 }
 
 async function executeWorkspaceOperation(run, action, step = 0) {
+  const parsed = parseWorkspaceOperation(action);
+  if (!AGENT_MUTATING_OPERATIONS.includes(parsed.operation)) {
+    return executeWorkspaceOperationUnlocked(run, action, step);
+  }
+  const sanitized = sanitizeOperationArgs(parsed.operation, parsed.args).args;
+  const releaseMutationLock = await acquireWorkspaceMutationLock(run, parsed.operation, sanitized);
+  try {
+    if (run && isRunInterrupted(run.id)) {
+      const error = new Error('Run interrupted');
+      error.code = 'RUN_INTERRUPTED';
+      throw error;
+    }
+    return await executeWorkspaceOperationUnlocked(run, action, step);
+  } finally {
+    releaseMutationLock();
+  }
+}
+
+async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
   const { operation, args: rawArgs } = parseWorkspaceOperation(action);
   const { args, strippedKeys } = sanitizeOperationArgs(operation, rawArgs);
   const runWorkspaceProvider = getRunWorkspaceProvider(run);
@@ -18676,6 +18729,8 @@ async function resetDebugData(changedBy = 'system') {
   runningRunKeys.clear();
   startingRunIds.clear();
   startingLocalModelRunIds.clear();
+  admittedRunIds.clear();
+  admittedLocalModelRunIds.clear();
 
   appendSystemLog('system:reset', `Debug data reset completed by ${changedBy}`, null, {
     changedBy,
@@ -23475,6 +23530,24 @@ function markRunStarting(run) {
   if (isLocalModelAgent(agent)) startingLocalModelRunIds.add(run.id);
 }
 
+function tryReserveRunStart(run) {
+  if (!run || !run.id || getRunStartBlockReason(run)) return null;
+  admittedRunIds.add(run.id);
+  const agent = readAgents().find(item => item.id === run.agentId);
+  if (isLocalModelAgent(agent)) admittedLocalModelRunIds.add(run.id);
+  markRunStarting(run);
+  return { runId: run.id };
+}
+
+function releaseRunStartReservation(reservation) {
+  const runId = reservation && (reservation.runId || reservation.id);
+  if (!runId) return;
+  admittedRunIds.delete(runId);
+  admittedLocalModelRunIds.delete(runId);
+  startingRunIds.delete(runId);
+  startingLocalModelRunIds.delete(runId);
+}
+
 function isRunStarting(run) {
   return Boolean(run && (startingRunIds.has(run.id) || startingLocalModelRunIds.has(run.id)));
 }
@@ -23489,6 +23562,7 @@ function startRuntimeScheduler() {
   const runner = createRuntimeRunner({
     runAgentTicket: runId => eventAdmissionContext.run({ token: null }, () => runAgentTicket(runId)),
     markRunStarting,
+    markRunSettled: releaseRunStartReservation,
     onError: (run, error) => {
       console.error(`Run ${run && run.id ? run.id : 'unknown'} failed outside its execution boundary: ${error && error.message ? error.message : error}`);
     }
@@ -23501,6 +23575,9 @@ function startRuntimeScheduler() {
     appendRunLog,
     appendEvent,
     canStartRunNow,
+    getRunStartBlockReason,
+    tryReserveRunStart,
+    releaseRunStartReservation,
     acquireRunLease,
     expireStaleRunLeases,
     isRunStarting,
@@ -23832,7 +23909,7 @@ async function start() {
     startDataDirWriterLockHeartbeat();
 
     await createDefaultData();
-    restoreRunEventChainsFromDisk();
+    await restoreRunEventChainsFromDisk();
     if (!TEST_SKIP_STARTUP_RUN_RECOVERY) await interruptStaleRunsOnStartup();
     // Converge any root/version-store mismatch left by an activation that crashed between
     // its two atomic writes — before the template scheduler can trigger against a stale root.
@@ -23859,10 +23936,10 @@ let shutdownPromise = null;
 
 async function waitForActiveRunTasksToSettle(timeoutMs = SHUTDOWN_RUN_DRAIN_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
-  while ((startingRunIds.size > 0 || runningRunKeys.size > 0) && Date.now() < deadline) {
+  while ((admittedRunIds.size > 0 || startingRunIds.size > 0 || runningRunKeys.size > 0) && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
-  return startingRunIds.size === 0 && runningRunKeys.size === 0;
+  return admittedRunIds.size === 0 && startingRunIds.size === 0 && runningRunKeys.size === 0;
 }
 
 function shutdown(signal) {

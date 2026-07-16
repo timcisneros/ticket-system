@@ -12,9 +12,8 @@ substrate bounded.
 ## 2. First run
 
 ```sh
-corepack enable
-pnpm install --frozen-lockfile
-pnpm run dev       # http://localhost:3099, ignored .local-data / .local-workspace
+npm install
+npm run dev        # http://localhost:3099, ignored .local-data / .local-workspace
 ```
 
 For local demo/development, log in as the bootstrap admin (`admin` / `admin123`, or

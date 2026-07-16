@@ -5,16 +5,16 @@ verify from code/UI rather than assume.
 
 ## 1. Prerequisites
 
-- Node.js 24 and pnpm 11.8.0 through Corepack. The app is a single-process Fastify server
-  backed by JSON files.
+- A supported Node.js release. CI currently verifies Node.js 24; that pin is a reproducible test
+  baseline, not an architectural product boundary. The app currently runs as a single-process
+  Fastify server backed by JSON files.
 - No external services are required for the demo path. Running **live agents** additionally needs a
   configured provider (OpenAI API key, or a local Ollama).
 
 ## 2. Install dependencies
 
 ```sh
-corepack enable
-pnpm install --frozen-lockfile
+npm install
 ```
 
 ## 3. Environment variables
@@ -37,6 +37,11 @@ variables (see README → Configuration for the full list):
   pressure, weighted record/byte reservations, worst-case mutation-scope capacity, high-water
   marks, rejection counts, and the effective configuration are visible at `/ops` and
   `GET /api/runtime/status`. These settings do not cap or rotate the total `events.jsonl` file.
+- Run admission (optional): `MAX_ACTIVE_RUNS` bounds active work across every provider in this
+  process (default `32`), while `LOCAL_MODEL_CONCURRENCY` can impose a lower limit for local-model
+  runs (default `1`). Admin-configured values are capped by `MAX_ACTIVE_RUNS_CAP` (default `4096`)
+  and `MAX_LOCAL_MODEL_CONCURRENCY` (default `32`). Effective and active counts are visible through
+  `GET /api/runtime/status`.
 - Graceful shutdown (optional): `SHUTDOWN_RUN_DRAIN_TIMEOUT_MS` controls how long the process waits
   for already-dispatched run tasks before the forced-stop boundary (default `120000`). The effective
   value is exposed by `GET /api/runtime/status`; a timeout is written to stderr with remaining task
