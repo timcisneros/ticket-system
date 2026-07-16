@@ -24,9 +24,10 @@ existing stores or in-process runtime state.
 - **modelRoutingPolicies** — `active / archived / total`.
 - **processTemplates** — `total / enabled / disabled / scheduled / pausedSchedule`.
 - **schedules** — `enabled / disabled` (derived from template schedule state).
-- **eventJournal** — effective batch, record, and outstanding-work capacity; current queued/active/
-  outstanding work; utilization and high-water marks; durable commit totals/timing; and rejection
-  counts. These are process-local operational metrics, not a new evidence ledger.
+- **eventJournal** — effective process-local batch, record, and outstanding-admission capacity;
+  current queued/active/outstanding work; utilization and high-water marks; durable commit
+  totals/timing; and rejection counts. These metrics do not cap or report total `events.jsonl`
+  growth and are not a new evidence ledger.
 - **recent\*** lists — bounded (≤10), deterministically ordered (id desc).
 
 ## What the warning flags mean
@@ -41,8 +42,8 @@ existing stores or in-process runtime state.
   mismatch for manual review.
 - `eventJournalPressureExists` — the journal failed, rejected an append under backpressure, or is
   currently at least 80% utilized. Backpressure remains fail-closed so evidence is never silently
-  dropped; tune capacity from measurements and advance the storage architecture before one process
-  becomes the deployment bottleneck.
+  dropped; tune process-local admission from measurements and advance to shared durable storage
+  before one process becomes the deployment bottleneck.
 
 ## No remediation
 

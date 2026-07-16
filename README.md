@@ -97,8 +97,9 @@ external connector**, and it refuses writes. Tracked seed agents carry **no prov
 - No real external connector yet (only the `local_mock` contract).
 - Current run records must retain their immutable run-start evidence. Startup rejects missing or
   invalid run-limit snapshots before recovery can begin. Reset or regenerate development run data
-  after a run-schema change; do not add compatibility branches until retained user data creates a
-  concrete migration requirement.
+  after a run-schema change when that specific compatibility path has no product value. Other record
+  types retain compatibility behavior where current code and tests require it; future hosted-data
+  migrations should be decided from retained user data and storage architecture.
 - Activation writes the version store then the root in two atomic writes; a crash between them is
   reconciled at startup (`docs/PROCESS_TEMPLATE_ACTIVATION_DURABILITY.md`) but is not fully
   transactional.
@@ -110,6 +111,15 @@ external connector**, and it refuses writes. Tracked seed agents carry **no prov
   mutation graphs remain unvalidated for truncation.
 - Naming care: *Model Provider* (who reasons) ≠ *Target Provider* (where mutations happen); see the
   glossary.
+
+### Event log lifecycle
+
+`events.jsonl` is append-only and has no automatic size cap, rotation, compaction, or retention
+policy. Process-local append admission is bounded and observable, but that does not bound file
+growth. Inspect or deliberately archive a local/development log with
+`node scripts/archive-local-events.js`; use `--archive --reset` only when an archived copy should be
+followed by a fresh empty log. Horizontal deployment will require shared durable storage and an
+explicit retention/archival design.
 
 ## 10. Documentation map
 

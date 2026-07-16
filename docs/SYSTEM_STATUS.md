@@ -19,32 +19,40 @@ the intended deployment ceiling.
   before recovery. Invalid current-format data fails closed instead of being treated as empty.
 - Event append uses a persistent asynchronous group-commit journal. A caller resumes only after its
   exact batch has been written and `FileHandle.sync()` has completed.
-- Journal record, batch, and outstanding-work capacities are independently configurable. Current
-  utilization, high-water marks, commit timing, and rejections are visible through the runtime and
-  operational status surfaces.
+- Process-local event append admission has configurable record, batch, and outstanding-work bounds.
+  Current admission utilization, high-water marks, commit timing, and rejections are visible through
+  the runtime and operational status surfaces. These controls do not bound the total size of
+  `events.jsonl`, which has no automatic rotation, compaction, or retention policy.
 - Run events use one current schema and one continuous per-run hash chain. Runtime evidence is not
   silently reinterpreted with current configuration.
 - Assignment, workflow administration, protected event streams, and target mutations enforce their
   respective authority boundaries.
+- Different-ticket runs can execute concurrently, subject to provider-specific concurrency limits.
+  They are not unconditionally independent: overlapping cross-ticket workspace writes can be
+  refused, while per-ticket lifecycle transitions are coordinated for consistency.
 - Workflow verification uses the immutable run-start verification contract. Fixture-verifier
   metadata is identified as metadata and is not represented as an executed runtime verifier.
 - The build parses active CommonJS sources, and CI runs the deterministic release checkpoint.
 
-## Development-data policy
+## Compatibility and development data
 
-The product is still in development. Compatibility branches for old run formats would add runtime
-and test complexity without retained user data to justify them. The current policy is therefore:
+Compatibility is format-specific, not a system-wide no-legacy policy:
 
-- keep explicit schema versions and reject unsupported evidence;
-- do not migrate, reinterpret, or silently normalize old run streams or missing immutable run
-  snapshots;
-- reset or regenerate development data after an incompatible schema change;
-- add a migration only when retained user data creates a concrete requirement.
+- Current run evidence requires the current event envelope and an immutable run-limit snapshot;
+  startup rejects missing or unsupported evidence at that boundary.
+- Other older records remain supported where current code and tests require it. Examples include
+  rendering unversioned process-template provenance and normalizing absent newer ticket fields.
+- Disposable development data may be reset or rejected after an incompatible format change when
+  compatibility has no product value.
+- A strict development-data boundary does not commit a future hosted system to avoiding migrations.
+  Retained user data and the target storage architecture should determine production migration
+  policy.
 
 ## Known work
 
 1. Advance shared-session, transactional-storage, concurrency, and tenant-isolation architecture
    before measured capacity or reliability requirements exceed the single-writer implementation.
+   Process-local append admission is not a substitute for shared durable infrastructure.
 2. Add bounded deterministic postconditions where prose acceptance criteria do not prove outcomes;
    keep real-model benchmarks observational.
 3. Complete validation of the model contract compiler and prefix truncation before enabling them by

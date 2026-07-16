@@ -1897,7 +1897,7 @@ async function cmdRuntimeStatus(args) {
     const config = journal.config || {};
     const totals = journal.totals || {};
     const utilization = Number.isFinite(current.utilization) ? `${(current.utilization * 100).toFixed(1)}%` : 'unavailable';
-    console.log(`  ${dim('event journal')} ${journal.status || 'unknown'}  outstanding: ${current.outstandingEntries || 0}/${config.maxOutstandingEntries || '?'}  pressure: ${utilization}  backpressure rejects: ${totals.backpressureRejections || 0}`);
+    console.log(`  ${dim('event append')} ${journal.status || 'unknown'}  outstanding: ${current.outstandingEntries || 0}/${config.maxOutstandingEntries || '?'}  pressure: ${utilization}  backpressure rejects: ${totals.backpressureRejections || 0}`);
   }
   if (data.runtimeLimits) {
     const rl = data.runtimeLimits;
