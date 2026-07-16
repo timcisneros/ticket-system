@@ -97,8 +97,6 @@ class DurableAppendJournal {
 
     this.pending = [];
     this.pendingBytes = 0;
-    this.admissionWaiters = [];
-    this.admissionWaitingBytes = 0;
     this.outstandingEntries = 0;
     this.outstandingBytes = 0;
     this.activeBatchEntries = 0;
@@ -111,22 +109,28 @@ class DurableAppendJournal {
     this.failure = null;
     this.closing = false;
     this.closed = false;
+    this.maxAdmittedProducers = Math.min(
+      this.maxOutstandingEntries,
+      Math.floor(this.maxOutstandingBytes / this.maxRecordBytes)
+    );
+    this.admissionTokens = new Set();
+    this.nextAdmissionTokenId = 1;
     this.totals = {
       acceptedEntries: 0,
       committedEntries: 0,
       committedBytes: 0,
       commitBatches: 0,
       backpressureRejections: 0,
-      backpressureWaits: 0,
-      admittedAfterWait: 0,
+      admissionAcquired: 0,
+      admissionReleased: 0,
+      admissionRejected: 0,
       oversizedRejections: 0,
       failedEntries: 0
     };
     this.highWatermarks = {
       outstandingEntries: 0,
       outstandingBytes: 0,
-      admissionWaitingEntries: 0,
-      admissionWaitingBytes: 0
+      admittedProducers: 0
     };
     this.lastCommitAt = null;
     this.lastCommitDurationMs = null;
@@ -141,7 +145,7 @@ class DurableAppendJournal {
 
     const buffer = this._prepareBuffer(value);
     if (buffer instanceof Error) return Promise.reject(buffer);
-    if (this.admissionWaiters.length > 0 || !this._hasCapacityFor(buffer)) {
+    if (!this._hasUnreservedCapacityFor(buffer)) {
       this.totals.backpressureRejections += 1;
       return Promise.reject(journalError(
         'EVENT_JOURNAL_BACKPRESSURE',
@@ -149,41 +153,74 @@ class DurableAppendJournal {
       ));
     }
 
-    return this._enqueue(buffer);
+    return this._enqueue(buffer, null);
   }
 
-  // Used by already-admitted mutation work. Capacity pressure pauses the caller
-  // in FIFO order and automatically resumes it after earlier records commit;
-  // write/sync failures still reject every accepted and waiting producer.
-  appendWhenAvailable(value) {
+  tryAcquireAdmission(metadata = {}) {
+    const unreservedAppendInFlight = this.admissionTokens.size === 0 && this.outstandingEntries > 0;
+    if (
+      this.failure ||
+      this.closing ||
+      this.closed ||
+      unreservedAppendInFlight ||
+      this.admissionTokens.size >= this.maxAdmittedProducers
+    ) {
+      this.totals.admissionRejected += 1;
+      return null;
+    }
+
+    const token = {
+      id: this.nextAdmissionTokenId++,
+      metadata: metadata && typeof metadata === 'object' ? { ...metadata } : {},
+      inFlight: false,
+      releaseRequested: false
+    };
+    this.admissionTokens.add(token);
+    this.totals.admissionAcquired += 1;
+    this.highWatermarks.admittedProducers = Math.max(
+      this.highWatermarks.admittedProducers,
+      this.admissionTokens.size
+    );
+    return token;
+  }
+
+  releaseAdmission(token) {
+    if (!token || !this.admissionTokens.has(token)) return false;
+    if (token.inFlight) {
+      token.releaseRequested = true;
+      return false;
+    }
+    this.admissionTokens.delete(token);
+    this.totals.admissionReleased += 1;
+    return true;
+  }
+
+  appendWithAdmission(value, token) {
     if (this.failure) return Promise.reject(this.failure);
     if (this.closing || this.closed) {
       return Promise.reject(journalError('EVENT_JOURNAL_CLOSED', 'Event journal is closed'));
     }
+    if (!token || !this.admissionTokens.has(token)) {
+      return Promise.reject(journalError(
+        'EVENT_JOURNAL_ADMISSION_INVALID',
+        'Event append requires an active journal admission token'
+      ));
+    }
+    if (token.inFlight) {
+      return Promise.reject(journalError(
+        'EVENT_JOURNAL_ADMISSION_CONCURRENT_APPEND',
+        'An admitted producer may have only one unacknowledged event append'
+      ));
+    }
 
     const buffer = this._prepareBuffer(value);
     if (buffer instanceof Error) return Promise.reject(buffer);
-    if (this.admissionWaiters.length === 0 && this._hasCapacityFor(buffer)) {
-      return this._enqueue(buffer);
-    }
-
-    this.totals.backpressureWaits += 1;
-    return new Promise((resolve, reject) => {
-      this.admissionWaiters.push({ buffer, resolve, reject });
-      this.admissionWaitingBytes += buffer.length;
-      this.highWatermarks.admissionWaitingEntries = Math.max(
-        this.highWatermarks.admissionWaitingEntries,
-        this.admissionWaiters.length
-      );
-      this.highWatermarks.admissionWaitingBytes = Math.max(
-        this.highWatermarks.admissionWaitingBytes,
-        this.admissionWaitingBytes
-      );
-    });
+    token.inFlight = true;
+    return this._enqueue(buffer, token);
   }
 
   isBackpressured() {
-    return this.admissionWaiters.length > 0 ||
+    return this.admissionTokens.size >= this.maxAdmittedProducers ||
       this.outstandingEntries >= this.maxOutstandingEntries ||
       this.outstandingBytes >= this.maxOutstandingBytes;
   }
@@ -194,7 +231,7 @@ class DurableAppendJournal {
 
   flush() {
     if (this.failure) return Promise.reject(this.failure);
-    if (this.pending.length === 0 && this.admissionWaiters.length === 0 && !this.drainPromise && !this.drainScheduled) {
+    if (this.pending.length === 0 && !this.drainPromise && !this.drainScheduled) {
       return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
@@ -249,15 +286,16 @@ class DurableAppendJournal {
         maxBatchEntries: this.maxBatchEntries,
         maxBatchBytes: this.maxBatchBytes,
         maxOutstandingEntries: this.maxOutstandingEntries,
-        maxOutstandingBytes: this.maxOutstandingBytes
+        maxOutstandingBytes: this.maxOutstandingBytes,
+        maxAdmittedProducers: this.maxAdmittedProducers
       },
       current: {
         queuedEntries: this.pending.length,
         queuedBytes: this.pendingBytes,
         activeBatchEntries: this.activeBatchEntries,
         activeBatchBytes: this.activeBatchBytes,
-        admissionWaitingEntries: this.admissionWaiters.length,
-        admissionWaitingBytes: this.admissionWaitingBytes,
+        admittedProducers: this.admissionTokens.size,
+        availableProducerSlots: Math.max(0, this.maxAdmittedProducers - this.admissionTokens.size),
         outstandingEntries: this.outstandingEntries,
         outstandingBytes: this.outstandingBytes,
         entryUtilization,
@@ -286,21 +324,20 @@ class DurableAppendJournal {
     );
   }
 
-  _hasCapacityFor(buffer) {
+  _hasUnreservedCapacityFor(buffer) {
+    if (this.admissionTokens.size > 0) return false;
     return this.outstandingEntries < this.maxOutstandingEntries &&
       this.outstandingBytes + buffer.length <= this.maxOutstandingBytes;
   }
 
-  _enqueue(buffer, deferred = null) {
+  _enqueue(buffer, admissionToken) {
     let resolveEntry;
     let rejectEntry;
-    const promise = deferred
-      ? null
-      : new Promise((resolve, reject) => {
-        resolveEntry = resolve;
-        rejectEntry = reject;
-      });
-    const entry = deferred || { buffer, resolve: resolveEntry, reject: rejectEntry };
+    const promise = new Promise((resolve, reject) => {
+      resolveEntry = resolve;
+      rejectEntry = reject;
+    });
+    const entry = { buffer, resolve: resolveEntry, reject: rejectEntry, admissionToken };
     this.pending.push(entry);
     this.pendingBytes += buffer.length;
     this.outstandingEntries += 1;
@@ -310,17 +347,6 @@ class DurableAppendJournal {
     this.highWatermarks.outstandingBytes = Math.max(this.highWatermarks.outstandingBytes, this.outstandingBytes);
     this._scheduleDrain();
     return promise;
-  }
-
-  _admitWaiting() {
-    while (this.admissionWaiters.length > 0) {
-      const entry = this.admissionWaiters[0];
-      if (!this._hasCapacityFor(entry.buffer)) break;
-      this.admissionWaiters.shift();
-      this.admissionWaitingBytes -= entry.buffer.length;
-      this.totals.admittedAfterWait += 1;
-      this._enqueue(entry.buffer, entry);
-    }
   }
 
   _scheduleDrain() {
@@ -402,8 +428,13 @@ class DurableAppendJournal {
         this.lastCommitAt = new Date().toISOString();
         this.lastCommitDurationMs = commitDurationMs;
         this.maxCommitDurationMs = Math.max(this.maxCommitDurationMs, commitDurationMs);
-        this._admitWaiting();
-        batch.forEach(entry => entry.resolve());
+        batch.forEach(entry => {
+          if (entry.admissionToken) {
+            entry.admissionToken.inFlight = false;
+            if (entry.admissionToken.releaseRequested) this.releaseAdmission(entry.admissionToken);
+          }
+          entry.resolve();
+        });
         activeBatch = [];
       }
     } catch (error) {
@@ -420,22 +451,26 @@ class DurableAppendJournal {
         error
       );
     }
-    const pending = [...activeBatch, ...this.pending.splice(0), ...this.admissionWaiters.splice(0)];
+    const pending = [...activeBatch, ...this.pending.splice(0)];
     this.pendingBytes = 0;
-    this.admissionWaitingBytes = 0;
     this.activeBatchEntries = 0;
     this.activeBatchBytes = 0;
     this.outstandingEntries = 0;
     this.outstandingBytes = 0;
     this.totals.failedEntries += pending.length;
-    pending.forEach(entry => entry.reject(this.failure));
+    pending.forEach(entry => {
+      if (entry.admissionToken) {
+        entry.admissionToken.inFlight = false;
+        if (entry.admissionToken.releaseRequested) this.releaseAdmission(entry.admissionToken);
+      }
+      entry.reject(this.failure);
+    });
     this._settleFlushWaiters();
   }
 
   _settleFlushWaiters() {
     if (!this.failure && (
       this.pending.length > 0 ||
-      this.admissionWaiters.length > 0 ||
       this.drainPromise ||
       this.drainScheduled
     )) return;

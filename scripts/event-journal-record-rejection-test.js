@@ -125,6 +125,8 @@ async function main() {
     assert(tickets.length === 1 && tickets[0].status === 'failed', 'record-rejected ticket was left executable');
     assert(runs.length === 1 && runs[0].status === 'failed', 'record-rejected run was left pending or executable');
     assert(/journal record limit/.test(runs[0].error || ''), 'failed run omitted the record-limit reason');
+    assert(runs[0].runEvaluation && runs[0].runEvaluation.effectiveness.status === 'failed', 'failed run omitted terminal evaluation evidence');
+    assert(runs[0].runConsequence && Array.isArray(runs[0].runConsequence.mutations), 'failed run omitted terminal consequence evidence');
 
     const events = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8')
       .split('\n')
@@ -134,6 +136,15 @@ async function main() {
     assert(rejection, 'oversized run event did not leave compact durable rejection evidence');
     assert(rejection.payload.requestedType === 'run.created', 'rejection evidence omitted the requested event type');
     assert(rejection.payload.requestedRecordBytes > rejection.payload.maxRecordBytes, 'rejection evidence omitted the enforced size boundary');
+    assert(rejection.payload.outcome === 'rejected', 'rejection evidence did not describe the event outcome');
+    assert(events.some(event => event.type === 'run.terminalized' && event.runId === runs[0].id), 'failed run omitted terminal lifecycle evidence');
+    const evaluationEvent = events.find(event => event.type === 'run.evaluation_completed' && event.runId === runs[0].id);
+    const consequenceEvent = events.find(event => event.type === 'run.consequence_recorded' && event.runId === runs[0].id);
+    assert(evaluationEvent && JSON.stringify(evaluationEvent.payload.evaluation) === JSON.stringify(runs[0].runEvaluation), 'failed run evaluation event did not preserve the persisted evaluation');
+    assert(consequenceEvent && JSON.stringify(consequenceEvent.payload.consequence) === JSON.stringify(runs[0].runConsequence), 'failed run consequence event did not preserve the persisted consequence');
+    const runEventTypes = events.filter(event => event.runId === runs[0].id).map(event => event.type);
+    assert(runEventTypes.indexOf('run.evaluation_completed') < runEventTypes.indexOf('run.consequence_recorded'), 'rejected run consequence preceded evaluation');
+    assert(runEventTypes.indexOf('run.consequence_recorded') < runEventTypes.indexOf('run.terminalized'), 'rejected run terminalized before reconciliation evidence');
     assert(verifyCurrentRunEventChain(events.filter(event => event.runId === runs[0].id)).chainValid, 'compact rejection broke the run event chain');
 
     const rejectedAgain = await request('POST', '/tickets', {

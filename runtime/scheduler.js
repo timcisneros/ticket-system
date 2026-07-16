@@ -10,6 +10,11 @@ function createRuntimeScheduler({
   isRunStarting,
   isRunActiveInMemory,
   isAdmissionPaused = () => false,
+  // Callers that do not supply journal admission keep the scheduler's prior
+  // behavior. The server supplies the bounded admission implementation.
+  acquireRunAdmission = () => ({}),
+  releaseRunAdmission = () => {},
+  runWithAdmission = (_admission, operation) => operation(),
   runner,
   onError
 }) {
@@ -90,8 +95,23 @@ function createRuntimeScheduler({
           continue;
         }
 
-        const leasedRun = typeof acquireRunLease === 'function' ? await acquireRunLease(run.id) : run;
+        const runAdmission = acquireRunAdmission(run);
+        if (!runAdmission) {
+          // Another producer acquired the final bounded slot after this tick's
+          // initial pressure check. Leave this and later pending runs untouched;
+          // the next tick retries after a producer releases capacity.
+          break;
+        }
+
+        let leasedRun;
+        try {
+          leasedRun = typeof acquireRunLease === 'function' ? await acquireRunLease(run.id) : run;
+        } catch (error) {
+          releaseRunAdmission(runAdmission);
+          throw error;
+        }
         if (!leasedRun) {
+          releaseRunAdmission(runAdmission);
           await appendEvent({
             type: 'scheduler.run_skipped',
             ticketId: run.ticketId,
@@ -101,16 +121,23 @@ function createRuntimeScheduler({
           continue;
         }
 
-        await appendEvent({
-          type: 'scheduler.run_selected',
-          ticketId: leasedRun.ticketId,
-          runId: leasedRun.id,
-          payload: {
-            status: leasedRun.status,
-            agentId: leasedRun.agentId
-          }
-        });
-        runner.startRun(leasedRun);
+        try {
+          await runWithAdmission(runAdmission, async () => {
+            await appendEvent({
+              type: 'scheduler.run_selected',
+              ticketId: leasedRun.ticketId,
+              runId: leasedRun.id,
+              payload: {
+                status: leasedRun.status,
+                agentId: leasedRun.agentId
+              }
+            });
+          });
+          if (!runner.startRun(leasedRun, runAdmission)) releaseRunAdmission(runAdmission);
+        } catch (error) {
+          releaseRunAdmission(runAdmission);
+          throw error;
+        }
       }
     } finally {
       ticking = false;

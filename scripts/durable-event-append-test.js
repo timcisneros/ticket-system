@@ -141,13 +141,15 @@ async function testFlushFailureFailsClosed() {
   const fake = createFakeFs({ syncImpl: async () => { throw flushError; } });
   const journal = createDurableAppendJournal('/events.jsonl', {
     fsPromises: fake.api,
-    maxOutstandingEntries: 1
+    maxOutstandingEntries: 2
   });
-  const first = journal.appendWhenAvailable('one\n');
-  const second = journal.appendWhenAvailable('two\n');
+  const firstAdmission = journal.tryAcquireAdmission({ source: 'test-1' });
+  const secondAdmission = journal.tryAcquireAdmission({ source: 'test-2' });
+  const first = journal.appendWithAdmission('one\n', firstAdmission);
+  const second = journal.appendWithAdmission('two\n', secondAdmission);
 
   const settled = await Promise.allSettled([first, second]);
-  assert(settled.every(result => result.status === 'rejected'), 'flush failure did not reject active and capacity-waiting appends');
+  assert(settled.every(result => result.status === 'rejected'), 'flush failure did not reject every admitted append');
   const later = await journal.append('three\n').then(() => null, error => error);
   assert(later && later.code === 'EVENT_JOURNAL_FAILED', 'journal accepted an append after a flush failure');
   await journal.close().catch(() => {});
@@ -159,10 +161,11 @@ async function testWriteFailureFailsClosed() {
     writeImpl: async () => { throw new Error('write failed'); }
   });
   const journal = createDurableAppendJournal('/events.jsonl', { fsPromises: fake.api });
-  const failed = await journal.appendWhenAvailable('one\n').then(() => null, error => error);
+  const admission = journal.tryAcquireAdmission({ source: 'write-failure-test' });
+  const failed = await journal.appendWithAdmission('one\n', admission).then(() => null, error => error);
   assert(failed && failed.code === 'EVENT_JOURNAL_FAILED', 'write failure was not classified as fatal for the journal');
   assert(journal.getMetrics().status === 'failed', 'write failure did not latch the journal failure state');
-  const later = await journal.appendWhenAvailable('two\n').then(() => null, error => error);
+  const later = await journal.appendWithAdmission('two\n', admission).then(() => null, error => error);
   assert(later && later.code === 'EVENT_JOURNAL_FAILED', 'journal accepted an append after a write failure');
   await journal.close().catch(() => {});
 }
@@ -188,36 +191,53 @@ async function testBoundedBackpressure() {
   await journal.close();
 }
 
-async function testRecoverableBackpressureWaitsAndResumesInOrder() {
+async function testBoundedProducerAdmissionAndRecovery() {
   const scheduled = [];
   const fake = createFakeFs();
   const journal = createDurableAppendJournal('/events.jsonl', {
     fsPromises: fake.api,
     schedule: callback => scheduled.push(callback),
-    maxOutstandingEntries: 1
+    maxRecordBytes: 4,
+    maxBatchBytes: 8,
+    maxOutstandingEntries: 2,
+    maxOutstandingBytes: 8
   });
 
-  const first = journal.appendWhenAvailable('one\n');
-  const second = journal.appendWhenAvailable('two\n');
+  const firstAdmission = journal.tryAcquireAdmission({ source: 'first' });
+  const secondAdmission = journal.tryAcquireAdmission({ source: 'second' });
+  const refusedAdmission = journal.tryAcquireAdmission({ source: 'refused' });
+  assert(firstAdmission && secondAdmission && refusedAdmission === null, 'producer admission was not atomically bounded');
   const pressured = journal.getMetrics();
   assert(pressured.status === 'backpressured' && pressured.current.backpressured === true, 'recoverable pressure state was not exposed');
-  assert(pressured.current.outstandingEntries === 1, 'capacity waiting incorrectly expanded the bounded outstanding set');
-  assert(pressured.current.admissionWaitingEntries === 1, 'capacity-waiting append was not observable');
+  assert(pressured.current.admittedProducers === 2 && pressured.current.outstandingEntries === 0, 'producer capacity was not reserved before append side effects');
+  assert(pressured.totals.admissionRejected === 1, 'refused producer admission was not counted');
+
+  const unreserved = await journal.append('x\n').then(() => null, error => error);
+  assert(unreserved && unreserved.code === 'EVENT_JOURNAL_BACKPRESSURE', 'unreserved append bypassed producer reservations');
+
+  const first = journal.appendWithAdmission('one\n', firstAdmission);
+  const duplicate = await journal.appendWithAdmission('x\n', firstAdmission).then(() => null, error => error);
+  assert(duplicate && duplicate.code === 'EVENT_JOURNAL_ADMISSION_CONCURRENT_APPEND', 'one producer created concurrent unbounded appends');
+  const second = journal.appendWithAdmission('two\n', secondAdmission);
 
   scheduled.shift()();
   await Promise.all([first, second]);
-  assert(Buffer.from(fake.bytes).toString('utf8') === 'one\ntwo\n', 'capacity waiting changed append order or dropped evidence');
+  assert(Buffer.from(fake.bytes).toString('utf8') === 'one\ntwo\n', 'bounded admitted appends changed order or dropped evidence');
 
-  await new Promise(resolve => setImmediate(resolve));
+  journal.releaseAdmission(firstAdmission);
+  journal.releaseAdmission(secondAdmission);
   const recovered = journal.getMetrics();
-  assert(recovered.status === 'idle' && recovered.current.backpressured === false, 'journal did not recover after pressure drained');
-  assert(recovered.current.outstandingEntries === 0 && recovered.current.admissionWaitingEntries === 0, 'drained work remained outstanding');
-  assert(recovered.totals.backpressureWaits === 1 && recovered.totals.admittedAfterWait === 1, 'wait and resume totals were not recorded');
+  assert(recovered.current.backpressured === false && recovered.current.admittedProducers === 0, 'producer admission did not recover after release');
+  assert(recovered.totals.admissionAcquired === 2 && recovered.totals.admissionReleased === 2, 'producer admission lifecycle totals were not recorded');
 
-  const third = journal.appendWhenAvailable('three\n');
+  const thirdAdmission = journal.tryAcquireAdmission({ source: 'third' });
+  const third = journal.appendWithAdmission('tri\n', thirdAdmission);
+  await new Promise(resolve => setImmediate(resolve));
+  assert(typeof scheduled[0] === 'function', 'recovered append was not scheduled for commit');
   scheduled.shift()();
   await third;
-  assert(Buffer.from(fake.bytes).toString('utf8') === 'one\ntwo\nthree\n', 'journal did not accept new evidence after recovery');
+  journal.releaseAdmission(thirdAdmission);
+  assert(Buffer.from(fake.bytes).toString('utf8') === 'one\ntwo\ntri\n', 'journal did not accept new evidence after admission recovery');
   await journal.close();
 }
 
@@ -255,7 +275,7 @@ async function main() {
   await testFlushFailureFailsClosed();
   await testWriteFailureFailsClosed();
   await testBoundedBackpressure();
-  await testRecoverableBackpressureWaitsAndResumesInOrder();
+  await testBoundedProducerAdmissionAndRecovery();
   await testRecordLimitIsIndependentFromBatchCapacity();
   await testRealFileAppend();
   console.log('PASS: event journal preserves order, recovers from capacity pressure, and fails closed on sync failure');

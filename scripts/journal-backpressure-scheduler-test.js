@@ -66,8 +66,40 @@ async function testTemplateSchedulerPausesAndResumes() {
   assert(triggers === 1 && resumedResults[0].action === 'created', 'template scheduler did not resume after pressure cleared');
 }
 
+async function testRuntimeSchedulerReservesBeforeLease() {
+  const run = { id: 2, ticketId: 2, agentId: 1, status: 'pending', createdAt: '2026-01-01T00:00:00.000Z' };
+  let admission = null;
+  let leaseAcquisitions = 0;
+  let starts = 0;
+  let releases = 0;
+  const scheduler = createRuntimeScheduler({
+    readRuns: () => [run],
+    readLogs: () => [],
+    appendRunLog: () => {},
+    appendEvent: async () => {},
+    canStartRunNow: () => true,
+    acquireRunAdmission: () => admission,
+    releaseRunAdmission: () => { releases += 1; },
+    runWithAdmission: (_token, operation) => operation(),
+    acquireRunLease: async () => { leaseAcquisitions += 1; return run; },
+    expireStaleRunLeases: async () => {},
+    isRunStarting: () => false,
+    isRunActiveInMemory: () => false,
+    runner: { startRun: (_run, token) => { assert(token === admission, 'runner did not receive the reserved admission'); starts += 1; return true; } }
+  });
+
+  await scheduler.tick();
+  assert(leaseAcquisitions === 0 && starts === 0, 'scheduler leased or dispatched work without journal producer capacity');
+
+  admission = { id: 'admitted' };
+  await scheduler.tick();
+  assert(leaseAcquisitions === 1 && starts === 1, 'scheduler did not resume after producer capacity became available');
+  assert(releases === 0, 'scheduler released admission before the dispatched run settled');
+}
+
 async function main() {
   await testRuntimeSchedulerPausesAndResumes();
+  await testRuntimeSchedulerReservesBeforeLease();
   await testTemplateSchedulerPausesAndResumes();
   console.log('PASS: runtime and template schedulers pause during journal pressure and resume automatically');
 }

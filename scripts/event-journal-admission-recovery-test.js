@@ -110,10 +110,29 @@ async function main() {
     const cookie = cookieFrom(login);
 
     fs.writeFileSync(CONTROL_FILE, 'hold');
-    const acceptedDuringPressure = request('POST', '/tickets', {
-      cookie,
-      form: ticketForm('accepted before journal pressure')
-    });
+    const competing = [
+      {
+        objective: 'concurrent admission candidate one',
+        promise: request('POST', '/tickets', {
+          cookie,
+          form: ticketForm('concurrent admission candidate one')
+        })
+      },
+      {
+        objective: 'concurrent admission candidate two',
+        promise: request('POST', '/tickets', {
+          cookie,
+          form: ticketForm('concurrent admission candidate two')
+        })
+      }
+    ];
+    const firstCompleted = await Promise.race(competing.map((candidate, index) => {
+      return candidate.promise.then(response => ({ index, response }));
+    }));
+    assert(firstCompleted.response.status === 503, 'simultaneous mutation admission was not refused before side effects');
+    assert(firstCompleted.response.json && firstCompleted.response.json.code === 'EVENT_ADMISSION_BACKPRESSURED', 'simultaneous refusal lacked admission code');
+    const refusedObjective = competing[firstCompleted.index].objective;
+    const acceptedCandidate = competing[firstCompleted.index === 0 ? 1 : 0];
 
     const pressuredHealth = await waitForHealth(
       response => response.status === 503 && response.json && response.json.status === 'backpressured',
@@ -127,6 +146,14 @@ async function main() {
       diagnostics.json && diagnostics.json.eventJournal && diagnostics.json.eventJournal.current.backpressured === true,
       'runtime diagnostics did not expose recoverable pressure'
     );
+    assert(
+      diagnostics.json.eventJournal.current.admittedProducers === 1 &&
+      diagnostics.json.eventJournal.config.maxAdmittedProducers === 1,
+      'diagnostics did not expose the bounded producer reservation'
+    );
+
+    const loginDuringPressure = await request('POST', '/login', { form: { username: 'admin', password: 'admin123' } });
+    assert(loginDuringPressure.status === 302, 'session login was incorrectly classified as journal-dependent mutation work');
 
     const refused = await request('POST', '/tickets', {
       cookie,
@@ -137,7 +164,7 @@ async function main() {
     assert(refused.headers['retry-after'] === '1', 'pressure refusal omitted Retry-After');
 
     fs.unlinkSync(CONTROL_FILE);
-    const acceptedResponse = await acceptedDuringPressure;
+    const acceptedResponse = await acceptedCandidate.promise;
     assert(acceptedResponse.status === 302, `already accepted ticket returned HTTP ${acceptedResponse.status} after drain`);
     await waitForHealth(response => response.status === 200 && response.json && response.json.ready, 'automatic admission recovery');
 
@@ -148,8 +175,9 @@ async function main() {
     assert(afterRecovery.status === 302, `mutation admission did not resume after drain (HTTP ${afterRecovery.status})`);
 
     const tickets = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8'));
-    assert(tickets.some(ticket => ticket.objective === 'accepted before journal pressure'), 'accepted pressured work was lost');
+    assert(tickets.some(ticket => ticket.objective === acceptedCandidate.objective), 'accepted concurrent work was lost');
     assert(tickets.some(ticket => ticket.objective === 'accepted after journal recovery'), 'post-recovery work was not persisted');
+    assert(!tickets.some(ticket => ticket.objective === refusedObjective), 'simultaneously refused mutation changed ticket state');
     assert(!tickets.some(ticket => ticket.objective === 'must be refused while backpressured'), 'refused mutation changed ticket state');
     const events = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8')
       .split('\n')
@@ -157,7 +185,7 @@ async function main() {
       .map(line => JSON.parse(line));
     const createdTicketIds = new Set(events.filter(event => event.type === 'ticket.created').map(event => event.ticketId));
     const expectedTicketIds = tickets
-      .filter(ticket => ticket.objective.startsWith('accepted '))
+      .filter(ticket => ticket.objective === acceptedCandidate.objective || ticket.objective === 'accepted after journal recovery')
       .map(ticket => ticket.id);
     assert(expectedTicketIds.every(id => createdTicketIds.has(id)), 'accepted ticket evidence was dropped during backpressure');
 
@@ -182,6 +210,8 @@ async function main() {
     const fatalDiagnostics = await request('GET', '/api/runtime/status', { cookie });
     assert(fatalDiagnostics.status === 200, 'fatal failure disabled read-only diagnostics');
     assert(fatalDiagnostics.json.eventJournal.status === 'failed', 'fatal journal state was not exposed to diagnostics');
+    const loginAfterFatal = await request('POST', '/login', { form: { username: 'admin', password: 'admin123' } });
+    assert(loginAfterFatal.status === 302, 'fatal journal failure incorrectly disabled session login');
 
     console.log('PASS: journal pressure rejects new mutations, preserves evidence, auto-recovers, and sync failure remains fail-closed');
   } catch (error) {

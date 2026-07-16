@@ -1,12 +1,13 @@
-function createRuntimeRunner({ runAgentTicket, markRunStarting, onError = () => {} }) {
+function createRuntimeRunner({ runAgentTicket, markRunStarting, onError = () => {}, onSettled = () => {} }) {
   return {
-    startRun(run) {
+    startRun(run, admission = null) {
       if (!run || !run.id) return false;
       if (typeof markRunStarting === 'function') markRunStarting(run);
       setImmediate(() => {
         void Promise.resolve()
-          .then(() => runAgentTicket(run.id))
-          .catch(error => onError(run, error));
+          .then(() => runAgentTicket(run.id, admission))
+          .catch(error => onError(run, error))
+          .finally(() => onSettled(run, admission));
       });
       return true;
     }

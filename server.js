@@ -6,6 +6,7 @@ const fastify = require('fastify')({
 });
 const path = require('path');
 const fs = require('fs');
+const { AsyncLocalStorage } = require('async_hooks');
 const argon2 = require('argon2');
 const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
@@ -1539,25 +1540,50 @@ fastify.register(require('@fastify/formbody'));
 
 fastify.addHook('onRequest', async (request, reply) => {
   request.routeStartedAtNs = process.hrtime.bigint();
-  if (UNSAFE_HTTP_METHODS.has(request.method) && eventAppendFailure) {
+  const requiresEventAdmission = requestRequiresEventJournalAdmission(request);
+  if (requiresEventAdmission && eventAppendFailure) {
     reply.code(503);
     return reply.send({
       error: 'Event persistence is unavailable; mutations are disabled',
       code: 'EVENT_PERSISTENCE_UNAVAILABLE'
     });
   }
-  if (UNSAFE_HTTP_METHODS.has(request.method) && isEventJournalAdmissionBackpressured()) {
-    reply.header('Retry-After', '1');
-    reply.code(503);
-    return reply.send({
-      error: 'Event journal capacity is temporarily backpressured; retry after accepted evidence drains',
-      code: 'EVENT_ADMISSION_BACKPRESSURED'
-    });
-  }
   if (UNSAFE_HTTP_METHODS.has(request.method) && !requestOriginAllowed(request)) {
     reply.code(403);
     return reply.send({ error: 'Request origin is not allowed' });
   }
+  if (requiresEventAdmission) {
+    const token = eventJournal.tryAcquireAdmission({
+      source: 'http',
+      method: request.method,
+      route: request.routeOptions && request.routeOptions.url ? request.routeOptions.url : request.url
+    });
+    if (!token) {
+      reply.header('Retry-After', '1');
+      reply.code(503);
+      return reply.send({
+        error: 'Event journal mutation admission is temporarily full; retry after an admitted producer finishes',
+        code: 'EVENT_ADMISSION_BACKPRESSURED'
+      });
+    }
+    request.eventJournalAdmission = token;
+    eventAdmissionContext.enterWith({ token });
+  }
+});
+
+function releaseRequestEventJournalAdmission(request) {
+  if (request.eventJournalAdmission) {
+    eventJournal.releaseAdmission(request.eventJournalAdmission);
+    request.eventJournalAdmission = null;
+  }
+}
+
+fastify.addHook('onResponse', async request => {
+  releaseRequestEventJournalAdmission(request);
+});
+
+fastify.addHook('onRequestAbort', async request => {
+  releaseRequestEventJournalAdmission(request);
 });
 
 fastify.get('/styles.css', async (request, reply) => {
@@ -4958,6 +4984,40 @@ function createLogTimestamp() {
 
 let eventAppendFailure = null;
 let eventJournal = createDurableAppendJournal(EVENTS_FILE, EVENT_JOURNAL_OPTIONS);
+const eventAdmissionContext = new AsyncLocalStorage();
+
+function requestRequiresEventJournalAdmission(request) {
+  if (!request || !UNSAFE_HTTP_METHODS.has(request.method)) return false;
+  const config = request.routeOptions && request.routeOptions.config;
+  return !config || config.eventJournalAdmission !== false;
+}
+
+function currentEventJournalAdmission() {
+  const store = eventAdmissionContext.getStore();
+  return store && store.token ? store.token : null;
+}
+
+async function runWithEventJournalAdmission(token, operation) {
+  if (!token) return operation();
+  return eventAdmissionContext.run({ token }, operation);
+}
+
+async function runWithNewEventJournalAdmission(metadata, operation) {
+  const existing = currentEventJournalAdmission();
+  if (existing) return operation();
+  const token = eventJournal.tryAcquireAdmission(metadata);
+  if (!token) {
+    const error = new Error('Event journal mutation admission is temporarily full');
+    error.code = 'EVENT_ADMISSION_BACKPRESSURED';
+    error.statusCode = 503;
+    throw error;
+  }
+  try {
+    return await runWithEventJournalAdmission(token, operation);
+  } finally {
+    eventJournal.releaseAdmission(token);
+  }
+}
 
 function isEventJournalAdmissionBackpressured() {
   return !eventAppendFailure && eventJournal.isBackpressured();
@@ -5120,6 +5180,7 @@ async function appendEvent(event = {}) {
       stepId: normalized.stepId,
       payload: {
         reasonCode: 'event_record_too_large',
+        outcome: 'rejected',
         requestedType,
         requestedRecordBytes,
         maxRecordBytes: eventJournal.maxRecordBytes
@@ -5148,13 +5209,48 @@ async function appendEvent(event = {}) {
     throw error;
   }
 
+  let admissionToken = currentEventJournalAdmission();
+  let ownsAdmission = false;
+  if (!admissionToken) {
+    admissionToken = eventJournal.tryAcquireAdmission({ source: 'internal_event', eventType: normalized.type });
+    if (!admissionToken) {
+      const error = new Error(`Event ${normalized.type} was not admitted because journal producer capacity is full`);
+      error.code = 'EVENT_ADMISSION_BACKPRESSURED';
+      error.statusCode = 503;
+      throw error;
+    }
+    ownsAdmission = true;
+  }
+
   const nextChain = chain ? { seq: chain.seq + 1, prevHash: normalized.hash } : null;
   if (nextChain) reservedRunEventChains.set(normalized.runId, nextChain);
   reservedEventIds.add(normalized.id);
 
+  function releaseEventReservation() {
+    reservedEventIds.delete(normalized.id);
+    if (!nextChain || reservedRunEventChains.get(normalized.runId) !== nextChain) return;
+    const committed = runEventChains.get(normalized.runId) || { seq: 0, prevHash: null };
+    if (chain.seq === committed.seq && chain.prevHash === committed.prevHash) {
+      reservedRunEventChains.delete(normalized.runId);
+    } else {
+      reservedRunEventChains.set(normalized.runId, chain);
+    }
+  }
+
   try {
-    await eventJournal.appendWhenAvailable(line);
+    await eventJournal.appendWithAdmission(line, admissionToken);
   } catch (error) {
+    if (error && (
+      error.code === 'EVENT_JOURNAL_ADMISSION_INVALID' ||
+      error.code === 'EVENT_JOURNAL_ADMISSION_CONCURRENT_APPEND'
+    )) {
+      const admissionError = new Error(`Failed to admit event ${normalized.type}: ${error.message}`);
+      admissionError.code = error.code;
+      admissionError.statusCode = 503;
+      admissionError.cause = error;
+      releaseEventReservation();
+      throw admissionError;
+    }
     if (!eventAppendFailure) eventAppendFailure = error;
     serverReady = false;
     if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
@@ -5163,6 +5259,8 @@ async function appendEvent(event = {}) {
     persistenceError.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
     persistenceError.cause = error;
     throw persistenceError;
+  } finally {
+    if (ownsAdmission) eventJournal.releaseAdmission(admissionToken);
   }
   if (nextChain) {
     const committed = runEventChains.get(normalized.runId) || { seq: 0, prevHash: null };
@@ -12938,6 +13036,63 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
         requestedRecordBytes: error.requestedRecordBytes,
         maxRecordBytes: error.maxRecordBytes
       });
+      run.runEvaluation = {
+        effectiveness: {
+          status: 'failed',
+          postconditionsPassed: 0,
+          postconditionsFailed: 0,
+          errors: [error.message]
+        },
+        efficiency: {
+          durationMs: 0,
+          workflowSteps: 0,
+          providerRequests: 0,
+          modelResponses: 0,
+          workspaceOperations: 0,
+          mutationCount: 0,
+          retryCount: countRunRetryAttempts(run)
+        },
+        violations: { status: 'unknown', items: [] },
+        effectiveRuntimeConfig: null,
+        browserEvidence: { status: 'not_applicable', detail: null }
+      };
+      run.runConsequence = {
+        mutations: [],
+        created: [],
+        updated: [],
+        deleted: [],
+        renamed: [],
+        notifications: [],
+        externalEffects: [],
+        verification: { postconditionsStatus: 'failed', violationsStatus: 'unknown' }
+      };
+      writeRuns(runs);
+      await appendEvent({
+        type: 'run.evaluation_completed',
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: {
+          evaluation: run.runEvaluation
+        }
+      });
+      await appendEvent({
+        type: 'run.consequence_recorded',
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: {
+          consequence: run.runConsequence
+        }
+      });
+      await appendEvent({
+        type: 'run.terminalized',
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: {
+          status: 'failed',
+          reasonCode: 'event_record_too_large',
+          rejectedEventType: error.requestedType
+        }
+      });
       broadcastTicketChange();
     }
     throw error;
@@ -12994,14 +13149,42 @@ async function createRunsForTicket(ticket, delegated = null) {
 
     const allocationPlan = createAllocationPlan(ticket, agentsToRun);
 
-    const createdRuns = await Promise.all(agentsToRun
-      .map(agent => createAgentRun(
+    const createdRuns = [];
+    const sequentialAgents = [];
+    const parallelCreations = [];
+    for (const agent of agentsToRun) {
+      const admission = eventJournal.tryAcquireAdmission({
+        source: 'group_run_creation',
+        ticketId: ticket.id,
+        agentId: agent.id
+      });
+      if (!admission) {
+        sequentialAgents.push(agent);
+        continue;
+      }
+      parallelCreations.push(
+        runWithEventJournalAdmission(admission, () => createAgentRun(
+          ticket,
+          agent,
+          allocationPlan.items.find(item => item.assignedAgentId === agent.id),
+          allocationPlan.id,
+          delegated
+        )).finally(() => eventJournal.releaseAdmission(admission))
+      );
+    }
+    createdRuns.push(...await Promise.all(parallelCreations));
+    // The parent producer handles overflow sequentially once all bounded child
+    // slots are occupied. Fan-out remains concurrent up to journal admission
+    // capacity without creating an unbounded append queue.
+    for (const agent of sequentialAgents) {
+      createdRuns.push(await createAgentRun(
         ticket,
         agent,
         allocationPlan.items.find(item => item.assignedAgentId === agent.id),
         allocationPlan.id,
         delegated
-      )));
+      ));
+    }
     return createdRuns.filter(Boolean);
   }
 
@@ -18480,7 +18663,7 @@ fastify.get('/login', async (request, reply) => {
   return reply.view('login.ejs', viewData({ error: null, user: null }));
 });
 
-fastify.post('/login', async (request, reply) => {
+fastify.post('/login', { config: { eventJournalAdmission: false } }, async (request, reply) => {
   const username = String(request.body.username || '').trim();
   const password = String(request.body.password || '');
 
@@ -18515,7 +18698,7 @@ fastify.post('/login', async (request, reply) => {
   return reply.redirect('/');
 });
 
-fastify.post('/logout', async (request, reply) => {
+fastify.post('/logout', { config: { eventJournalAdmission: false } }, async (request, reply) => {
   request.session.destroy();
   return reply.redirect('/login');
 });
@@ -18749,6 +18932,15 @@ async function createTicketFromInput(input, actor, options = {}) {
         requestedType: error.requestedType,
         requestedRecordBytes: error.requestedRecordBytes,
         maxRecordBytes: error.maxRecordBytes
+      });
+      await appendEvent({
+        type: 'ticket.failed',
+        ticketId: newTicket.id,
+        payload: {
+          status: 'failed',
+          reasonCode: 'event_record_too_large',
+          rejectedEventType: error.requestedType
+        }
       });
       broadcastTicketChange();
     }
@@ -19254,7 +19446,10 @@ fastify.get('/api/connectors/:id', { preHandler: fastify.requireAuth }, async (r
 
 // Read a bounded object through the local connector. Returns bounded content in the API response;
 // the persisted receipt stores only metadata + hash (never full content).
-fastify.post('/api/connectors/:id/read', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/connectors/:id/read', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: false }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'connector:read')) { reply.code(403); return { error: 'connector:read required' }; }
   const connector = getConnectorById(request.params.id);
   if (!connector) { reply.code(404); return { error: 'Connector not found' }; }
@@ -19285,7 +19480,10 @@ fastify.post('/api/connectors/:id/read', { preHandler: fastify.requireAuth }, as
 });
 
 // Write is REFUSED in r1.30 — connector availability is not write authority.
-fastify.post('/api/connectors/:id/write', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/connectors/:id/write', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: false }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'connector:write')) { reply.code(403); return { error: 'connector:write required' }; }
   const connector = getConnectorById(request.params.id);
   if (!connector) { reply.code(404); return { error: 'Connector not found' }; }
@@ -20422,7 +20620,10 @@ fastify.post('/api/tickets/:id/handoff', { preHandler: fastify.requireAuth }, as
   return { ok: true, createdTicketId: result.ticket.id, handoffReceipt: { ...handoffReceipt, createdTicketId: result.ticket.id } };
 });
 
-fastify.post('/api/tickets/shape-objective', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/tickets/shape-objective', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: false }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -20715,7 +20916,10 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
 // returns just the clarification gate verdict. Model-plan mode
 // (includeModelPlan=true) requires ticket:update and calls the model for a
 // simulated action proposal without executing anything.
-fastify.post('/api/tickets/:id/simulate-plan', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/tickets/:id/simulate-plan', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: false }
+}, async (request, reply) => {
   const includeModelPlan = request.body && request.body.includeModelPlan === true;
   const requiredPermission = includeModelPlan ? 'ticket:update' : 'ticket:read';
   if (!hasPermission(request.session.userId, requiredPermission)) {
@@ -22328,7 +22532,10 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
   }, request.session.userId));
 });
 
-fastify.post('/admin/debug-reset', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/admin/debug-reset', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: false }
+}, async (request, reply) => {
   if (process.env.NODE_ENV === 'production') {
     reply.code(403);
     return 'Debug reset is disabled in production';
@@ -23120,11 +23327,15 @@ function startRuntimeScheduler() {
   if (runtimeScheduler && runtimeScheduler.isRunning()) return runtimeScheduler;
 
   const runner = createRuntimeRunner({
-    runAgentTicket,
+    runAgentTicket: (runId, admission) => runWithEventJournalAdmission(
+      admission,
+      () => runAgentTicket(runId)
+    ),
     markRunStarting,
     onError: (run, error) => {
       console.error(`Run ${run && run.id ? run.id : 'unknown'} failed outside its execution boundary: ${error && error.message ? error.message : error}`);
-    }
+    },
+    onSettled: (_run, admission) => eventJournal.releaseAdmission(admission)
   });
 
   runtimeScheduler = createRuntimeScheduler({
@@ -23139,6 +23350,13 @@ function startRuntimeScheduler() {
     isRunStarting,
     isRunActiveInMemory,
     isAdmissionPaused: isEventJournalAdmissionBackpressured,
+    acquireRunAdmission: run => eventJournal.tryAcquireAdmission({
+      source: 'runtime_run',
+      runId: run.id,
+      ticketId: run.ticketId
+    }),
+    releaseRunAdmission: admission => eventJournal.releaseAdmission(admission),
+    runWithAdmission: runWithEventJournalAdmission,
     runner
   });
   runtimeScheduler.start();
@@ -23151,11 +23369,15 @@ function startRuntimeScheduler() {
 // createTicketFromInput → createRunsForTicket only.
 function triggerDueScheduledTemplate(template, scheduledForIso) {
   const triggerToken = `schedule:${template.id}:${scheduledForIso}`;
-  return triggerProcessTemplate(template, { userId: null, username: 'system' }, {
+  return runWithNewEventJournalAdmission({
+    source: 'scheduled_template',
+    templateId: template.id,
+    scheduledFor: scheduledForIso
+  }, () => triggerProcessTemplate(template, { userId: null, username: 'system' }, {
     triggerType: 'schedule',
     triggerToken,
     scheduledFor: scheduledForIso
-  });
+  }));
 }
 
 function startTemplateScheduler() {
