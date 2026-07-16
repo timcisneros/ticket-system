@@ -54,6 +54,6 @@ no auto-refresh.
 
 ## How this supports release readiness
 
-Before release-candidate work, an operator can answer "what exists, what is active, what is blocked,
+Before a release decision, an operator can answer "what exists, what is active, what is blocked,
 what is unresolved, and does any source-of-truth boundary look unhealthy?" from one read-only place —
 without touching runtime behavior. It is a **lens**, not a control surface.

@@ -23,8 +23,8 @@ Shared library modules (required by other scripts; **not** entrypoints — do no
 - `op-session.js` — interactive operator session helper
 - `batch-tickets.js` — create tickets in bulk
 - `ticket-lint.js` — lint ticket objectives before submission
-- `codex-bootstrap.js` / `codex-trace.js` / `codex-verify.js` — orientation, single-run trace, deterministic health suite (`npm run codex:bootstrap|codex:trace|codex:verify`)
-- `demo-legal-workflow.js` — end-to-end demo (`npm run demo:legal-workflow`)
+- `codex-bootstrap.js` / `codex-trace.js` / `codex-verify.js` — orientation, single-run trace, deterministic health suite (`pnpm run codex:bootstrap|codex:trace|codex:verify`)
+- `demo-legal-workflow.js` — end-to-end demo (`pnpm run demo:legal-workflow`)
 
 ## Maintenance / forensics utilities
 
@@ -34,7 +34,7 @@ Shared library modules (required by other scripts; **not** entrypoints — do no
 - `recovery-verifier.js`, `resume-analyzer.js`, `event-chain-verify.js` — recovery and event-chain forensics
 - `create-snapshot.js`, `verify-snapshot.js` — workspace snapshot tooling
 - `auto-classify-failures.js` — failure classification per `docs/FAILURE_CLASSIFICATION_WORKFLOW.md`
-- `harvest-benchmark-cases.js` — harvest failed runs into repair-benchmark fixtures (`npm run harvest:benchmark-cases`)
+- `harvest-benchmark-cases.js` — harvest failed runs into repair-benchmark fixtures (`pnpm run harvest:benchmark-cases`)
 - `workload-validation-report.js` — workload validation reporting
 
 ## Fixture tooling
@@ -42,7 +42,7 @@ Shared library modules (required by other scripts; **not** entrypoints — do no
 - `fixture-generator.js`, `fixture-verifier.js`, `fixture-evaluation.js`, `replay-fixture-generator.js`
 - `expand-{vendor,support,legal-intake,shared-drive,shared-drive-v2}-fixture.js` — fixture corpus expanders (2026-06 evidence corpus)
 
-## Verification (npm-wired)
+## Verification (pnpm-wired)
 
 `agent-regression-test`, `allocated-regression-test`, `allocated-live-openai-test`, `live-openai-test`, `recovery-regression-test`, `runtime-budget-test`, `postcondition-completion-test`, `workflow-composition-test`, `prefix-truncation-regression-test`, `tm3-replay-validation` (see `package.json` for the `test:*`/`validate:*` mappings). `codex-verify.js` additionally runs `catalog-consistency-test.js` and `page-render-regression-test.js`.
 
@@ -51,7 +51,7 @@ All other `*-test.js` files are targeted regression suites, run manually when th
 ## v0.1.0 Internal Demo Release Checkpoint
 
 Run the whole checkpoint with the single runner (`release-checkpoint.js` /
-`npm run checkpoint:release`); it prints each command, runs them in order, and
+`pnpm run checkpoint:release`); it prints each command, runs them in order, and
 stops on the first failure:
 
 ```sh
@@ -62,7 +62,7 @@ The runner executes this concise targeted set rather than every historical
 investigation harness:
 
 ```sh
-npm run build
+pnpm run build
 
 NODE_PATH=./node_modules node scripts/catalog-consistency-test.js
 NODE_PATH=./node_modules node scripts/page-render-regression-test.js

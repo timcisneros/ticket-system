@@ -88,7 +88,7 @@ function runCheckpoint() {
   const childEnv = { ...process.env, NODE_PATH: process.env.NODE_PATH || path.join(ROOT, 'node_modules') };
 
   const checks = [
-    { label: 'npm run build (project-wide JavaScript syntax)', args: [path.join('scripts', 'check-js-syntax.js')] },
+    { label: 'pnpm run build (project-wide JavaScript syntax)', args: [path.join('scripts', 'check-js-syntax.js')] },
     ...CHECKPOINT_TEST_SCRIPTS.map(name => ({ label: `NODE_PATH=./node_modules node scripts/${name}`, args: [path.join('scripts', name)] }))
   ];
 

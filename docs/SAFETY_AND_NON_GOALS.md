@@ -9,7 +9,12 @@ model routing, connector, operational summary) are **grouping, visibility, propo
 dispatch-record** surfaces — none of them is a new way to execute, mutate, or bypass authority. Human
 judgment stop points (triage) catch ambiguity and denial instead of guessing.
 
-## 2. Explicit non-goals
+## 2. Current implementation boundaries
+
+These are boundaries of the current internal development/demo baseline, not permanent prohibitions
+on the product roadmap. Scalable hosted deployment remains the direction described in
+`SYSTEM_STATUS.md`; any new capability still requires its own design, authority, evidence, and
+verification work.
 
 - No real external connectors; no OAuth/API-key integrations.
 - No Slack/Discord/Gmail/Google Drive integration; no notification integration.
@@ -40,7 +45,7 @@ not write authority; watcher proposals do not execute.
 ## 6. No connector credential storage
 
 Connectors hold a `credentialRef` only — never a plaintext secret. Any `credential`/`secret`/`apiKey`
-/`token`/`password` field is rejected. Connector writes are refused entirely in this release.
+/`token`/`password` field is rejected. Connector writes are refused in the current baseline.
 
 ## 7. No real external connectors yet
 
@@ -74,9 +79,10 @@ checkpoint is not a production-readiness or semantic-correctness claim. Current 
 product direction, and known work live in `docs/SYSTEM_STATUS.md`; historical results remain in Git
 history or explicitly historical release documents.
 
-## 12. What a v1.0 tag will mean
+## 12. Release labels and future version decisions
 
-A future `v1.0` tag will mean the release documentation is complete and the maintainers have made
-an explicit decision that the bounded substrate, its safety boundaries, its scale path, and its
-known limitations are accurately documented and acceptable for the intended use. It will **not** by
-itself imply capabilities that have not been separately designed, implemented, and audited.
+Version and release-readiness criteria are maintainer decisions based on the intended users,
+capabilities, operating environment, and evidence available at that time. This document does not
+predefine a documentation-only `v1.0`, and it does not turn current implementation boundaries into
+permanent product limits. Any readiness claim must identify the tested baseline and the capabilities
+that were actually designed, implemented, and verified.

@@ -5,16 +5,19 @@ verify from code/UI rather than assume.
 
 ## 1. Prerequisites
 
-- A supported Node.js release. CI currently verifies Node.js 24; that pin is a reproducible test
-  baseline, not an architectural product boundary. The app currently runs as a single-process
+- Node.js 24 or newer. Node 24.17.0 is the CI-verified baseline; the package declares a minimum
+  rather than an artificial upper-version ceiling. The app currently runs as a single-process
   Fastify server backed by JSON files.
+- pnpm 11.8.0 through Corepack. `pnpm-lock.yaml` and CI make pnpm the canonical dependency-install
+  path; npm dependency resolution is not currently locked or verified.
 - No external services are required for the demo path. Running **live agents** additionally needs a
   configured provider (OpenAI API key, or a local Ollama).
 
 ## 2. Install dependencies
 
 ```sh
-npm install
+corepack enable
+pnpm install --frozen-lockfile
 ```
 
 ## 3. Environment variables
@@ -22,7 +25,7 @@ npm install
 The server reads `.env` via `dotenv` (`.env`, `.env.local`, `.env.test.local` are Git-ignored). Core
 variables (see README → Configuration for the full list):
 
-- `PORT` (default `3099`), `NODE_ENV` (`development` via `npm run dev`).
+- `PORT` (default `3099`), `NODE_ENV` (`development` via `pnpm run dev`).
 - `DATA_DIR` (JSON store; demo/dev uses ignored `.local-data`), `WORKSPACE_ROOT` (mutation target;
   demo/dev uses ignored `.local-workspace`).
 - `ADMIN_BOOTSTRAP_PASSWORD` (bootstrap admin password), `SESSION_SECRET` (random for the current
@@ -52,11 +55,11 @@ There is no `.env.example`; set variables in your shell or an ignored `.env`.
 ## 4. Start the app
 
 ```sh
-npm run dev     # development; serves http://localhost:3099 against .local-data / .local-workspace
+pnpm run dev    # development; serves http://localhost:3099 against .local-data / .local-workspace
 ```
 
 The app prints the selected `DATA_DIR`, `WORKSPACE_ROOT`, and URL at startup. (For a no-provider-key
-tour: `npm run demo:seed` then `npm run demo:dev`.)
+tour: `pnpm run demo:seed` then `pnpm run demo:dev`.)
 
 ## 5. Login / seed assumptions
 
@@ -117,7 +120,7 @@ and links. Read-only.
 ## 15. Run release checkpoint
 
 ```sh
-npm run checkpoint:release
+pnpm run checkpoint:release
 ```
 
 Provider-free, network-free, and deterministic; it reports the executed and passing check count.

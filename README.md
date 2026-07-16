@@ -7,11 +7,12 @@ a **run** under explicit **authority**, all external effects flow through a **ta
 everything produces **evidence/receipts**. On top of that substrate sit grouping, visibility,
 handoff, observation, and routing layers — all bounded and read-only or proposal-only.
 
-This is a **release candidate for the bounded substrate**, not a final `v1.0` tag or a
-production-hardened deployment. The current implementation is a single-process Fastify server
-backed by JSON files; those are present deployment choices, not the product's scale ceiling. See
-`docs/SYSTEM_STATUS.md` for current guarantees, product direction, and known work. Historical
-release audits remain snapshots rather than current verification authority.
+The current repository baseline is an **internal development/demo implementation**. It is not a
+production-readiness claim. The product direction is scalable hosted deployment of the bounded
+ticket/run substrate; today's single-process Fastify server and JSON files are an engineering stage,
+not the product's scale ceiling. See `docs/SYSTEM_STATUS.md` for current guarantees, product
+direction, and known work. Historical release audits remain snapshots rather than current
+verification authority.
 
 ## 2. What this system is
 
@@ -22,7 +23,7 @@ release audits remain snapshots rather than current verification authority.
   Contexts, a handoff queue protocol, a bounded watcher, model/provider routing, a local/mock
   connector contract, and operational transparency.
 
-## 3. What this system is not
+## 3. What the current baseline is not
 
 - **Not a fully autonomous agent platform.** Every unit of work is a visible ticket; nothing
   executes off-ledger.
@@ -39,7 +40,7 @@ Process Template · Schedule · Work Context · Handoff · Watcher · Model Rout
 Operational Summary. See **`docs/PRIMITIVE_GLOSSARY.md`** for precise definitions and commonly
 confused terms.
 
-## 5. Current release-candidate scope
+## 5. Current implementation scope
 
 Ticket creation/assignment; runs with lease/claim, attempts, evaluation; workspace/target operations
 through the bounded target-provider contract; authority & permissions; append-only evidence &
@@ -55,8 +56,9 @@ validation; and a hardened release checkpoint. The current status and remaining 
 ## 6. Quick start
 
 ```sh
-npm install
-npm run dev        # serves on http://localhost:3099 against ignored .local-data / .local-workspace
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run dev       # serves on http://localhost:3099 against ignored .local-data / .local-workspace
 ```
 
 Login with the bootstrap admin (created only when missing): `admin` / `admin123` (override with
@@ -65,8 +67,8 @@ Login with the bootstrap admin (created only when missing): `admin` / `admin123`
 Guided, **no-provider-key** demo of the full loop:
 
 ```sh
-npm run demo:seed   # writes git-ignored .local-demo-data / .local-demo-workspace
-npm run demo:dev    # serves the app against the demo fixture
+pnpm run demo:seed  # writes git-ignored .local-demo-data / .local-demo-workspace
+pnpm run demo:dev   # serves the app against the demo fixture
 ```
 
 See **`docs/SETUP_AND_FIRST_RUN.md`** for a full first-run walkthrough and `docs/DEMO_WALKTHROUGH.md`
@@ -78,7 +80,7 @@ The release checkpoint is the **release gate** — provider-free, network-free, 
 temp-`DATA_DIR`/`WORKSPACE_ROOT` safe:
 
 ```sh
-npm run checkpoint:release
+pnpm run checkpoint:release
 ```
 
 It runs a project-wide JavaScript syntax build plus the ordered `CHECKPOINT_TEST_SCRIPTS`, fails

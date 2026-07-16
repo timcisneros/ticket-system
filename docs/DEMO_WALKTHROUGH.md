@@ -14,7 +14,7 @@ behavior.
 ## 1. Seed the demo data
 
 ```sh
-npm run demo:seed
+pnpm run demo:seed
 ```
 
 This writes an isolated fixture to `.local-demo-data/` (workspace `.local-demo-workspace/`),
@@ -29,10 +29,10 @@ or the repo root.
 ## 2. Run the app against the demo data
 
 ```sh
-npm run demo:dev
+pnpm run demo:dev
 ```
 
-(equivalently `DATA_DIR=.local-demo-data WORKSPACE_ROOT=.local-demo-workspace npm run dev`)
+(equivalently `DATA_DIR=.local-demo-data WORKSPACE_ROOT=.local-demo-workspace pnpm run dev`)
 
 Open the printed URL (default `http://localhost:3099`).
 
@@ -163,5 +163,5 @@ lives.
 
 ## Resetting
 
-Re-run `npm run demo:seed` to restore the fixture. To experiment with a fresh copy without
+Re-run `pnpm run demo:seed` to restore the fixture. To experiment with a fresh copy without
 disturbing the demo, point the app at a different `DATA_DIR`.

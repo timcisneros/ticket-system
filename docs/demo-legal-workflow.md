@@ -112,7 +112,7 @@ deletePath urgent-case-summary.md
 With the app already running:
 
 ```bash
-npm run demo:legal-workflow
+pnpm run demo:legal-workflow
 ```
 
 The script logs in, saves the workflow JSON through the admin route, creates a Mike workflow ticket, waits for the run, and prints:
@@ -128,7 +128,7 @@ The script logs in, saves the workflow JSON through the admin route, creates a M
 Environment overrides:
 
 ```bash
-BASE_URL=http://localhost:3000 ADMIN_USERNAME=admin ADMIN_PASSWORD=admin123 npm run demo:legal-workflow
+BASE_URL=http://localhost:3000 ADMIN_USERNAME=admin ADMIN_PASSWORD=admin123 pnpm run demo:legal-workflow
 ```
 
 The demo intentionally uses the real local model path. If Mike/Ollama returns malformed JSON or is unavailable, the run should fail with replay and failure summary evidence rather than silently succeeding.

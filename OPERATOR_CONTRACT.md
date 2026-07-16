@@ -32,7 +32,7 @@ unmodeled.
 
 - `node scripts/oquery.js create-ticket "..."` — create a ticket
 - Inspection commands: `node scripts/oquery.js list-tickets`, `oquery.js get-run`, etc.
-- Tests: `node --test`, `npm test`
+- Tests: `node --test`, `pnpm test`
 - Reading files (inspection only)
 
 ## Forbidden

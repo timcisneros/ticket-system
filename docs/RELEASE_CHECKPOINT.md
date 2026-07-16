@@ -1,6 +1,6 @@
 # Release Checkpoint
 
-The release checkpoint (`scripts/release-checkpoint.js`, run via `npm run checkpoint:release`) is
+The release checkpoint (`scripts/release-checkpoint.js`, run via `pnpm run checkpoint:release`) is
 the single command that proves the build is releasable. It runs the documented checks sequentially,
 prints each command, and stops on the **first** failure with a nonzero exit — failures are never
 swallowed.
@@ -45,7 +45,7 @@ additional critical tests run in the verification suite but kept out of the chec
 ## How to run
 
 ```sh
-npm run checkpoint:release
+pnpm run checkpoint:release
 ```
 
 A **pass** means: the build loads, every listed test passed, and the checkpoint list is internally
@@ -61,8 +61,8 @@ For each release milestone:
 2. **Expected branch** — `git branch --show-current` is the milestone branch.
 3. **Expected files** — `git show --stat --name-only HEAD` lists only the intended files;
    `git diff --check HEAD^ HEAD` is clean.
-4. **Build** — `npm run build`.
-5. **Checkpoint** — `npm run checkpoint:release` passes.
+4. **Build** — `pnpm run build`.
+5. **Checkpoint** — `pnpm run checkpoint:release` passes.
 6. **Fast-forward merge only** — `git checkout master && git pull --ff-only && git merge --ff-only <branch>`.
 7. **Push** — `git push origin master`.
 8. **Annotated tag** — `git tag -a <milestone> -m "..." && git push origin refs/tags/<milestone>`.

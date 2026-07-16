@@ -12,13 +12,14 @@ substrate bounded.
 ## 2. First run
 
 ```sh
-npm install
-npm run dev        # http://localhost:3099, ignored .local-data / .local-workspace
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run dev       # http://localhost:3099, ignored .local-data / .local-workspace
 ```
 
 For local demo/development, log in as the bootstrap admin (`admin` / `admin123`, or
 `ADMIN_BOOTSTRAP_PASSWORD`). For a no-provider-key tour of the full loop, use
-`npm run demo:seed && npm run demo:dev`.
+`pnpm run demo:seed && pnpm run demo:dev`.
 
 ## 3. Accounts and permissions
 
@@ -111,7 +112,7 @@ surfaces writes nothing and creates no summary ledger. See `docs/OPERATIONAL_TRA
 
 ## 16. Release checkpoint
 
-`npm run checkpoint:release` is the release gate and reports its executed and passing check count.
+`pnpm run checkpoint:release` is the release gate and reports its executed and passing check count.
 See `docs/RELEASE_CHECKPOINT.md` for the full hygiene flow (clean tree → expected branch/files →
 build → checkpoint → ff-merge → annotated tag).
 

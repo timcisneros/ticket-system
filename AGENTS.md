@@ -22,29 +22,29 @@ This repo is a server-rendered ticketing system for bounded agent work. A ticket
 
 ## Commands
 
-- Start app: `npm run dev`
-- Start app against tracked `data/`/`workspace-root` defaults: `npm start`
-- Syntax check: `npm run build`
-- Fast Codex orientation: `npm run codex:bootstrap`
-- Trace one run: `npm run codex:trace -- --run <id>`
-- Deterministic health suite: `npm run codex:verify`
-- Workflow verification: `npm run test:workflow`
-- Postcondition verification: `npm run test:postcondition`
-- Endurance verification: `npm run benchmark:operational-endurance`
-- Mocked draft benchmark: `npm run benchmark:workflow-drafts`
-- Mocked repair benchmark: `npm run benchmark:workflow-repair`
-- Mocked ambiguous benchmark: `npm run benchmark:ambiguous-operational`
-- Real draft benchmark: `REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-drafts`
-- Real repair benchmark: `REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-repair`
-- Real ambiguous benchmark: `REAL_MODEL_BENCHMARK=1 npm run benchmark:ambiguous-operational`
-- Schema teaching experiment: `npm run experiment:workflow-schema-teaching`
-- Prefix truncation regression: `npm run test:truncation`
-- TM-3 counterfactual replay: `npm run validate:truncation`
+- Start app: `pnpm run dev`
+- Start app against tracked `data/`/`workspace-root` defaults: `pnpm start`
+- Syntax check: `pnpm run build`
+- Fast Codex orientation: `pnpm run codex:bootstrap`
+- Trace one run: `pnpm run codex:trace -- --run <id>`
+- Deterministic health suite: `pnpm run codex:verify`
+- Workflow verification: `pnpm run test:workflow`
+- Postcondition verification: `pnpm run test:postcondition`
+- Endurance verification: `pnpm run benchmark:operational-endurance`
+- Mocked draft benchmark: `pnpm run benchmark:workflow-drafts`
+- Mocked repair benchmark: `pnpm run benchmark:workflow-repair`
+- Mocked ambiguous benchmark: `pnpm run benchmark:ambiguous-operational`
+- Real draft benchmark: `REAL_MODEL_BENCHMARK=1 pnpm run benchmark:workflow-drafts`
+- Real repair benchmark: `REAL_MODEL_BENCHMARK=1 pnpm run benchmark:workflow-repair`
+- Real ambiguous benchmark: `REAL_MODEL_BENCHMARK=1 pnpm run benchmark:ambiguous-operational`
+- Schema teaching experiment: `pnpm run experiment:workflow-schema-teaching`
+- Prefix truncation regression: `pnpm run test:truncation`
+- TM-3 counterfactual replay: `pnpm run validate:truncation`
 
 ## Internal Demo Release Baseline
 
 - Proposed tag: `v0.1.0-internal-demo` after release docs are merged and a final checkpoint passes.
-- Use `npm run dev` for local demo/dev runs. It sets `DATA_DIR=.local-data` and `WORKSPACE_ROOT=.local-workspace`, both ignored by Git.
+- Use `pnpm run dev` for local demo/dev runs. It sets `DATA_DIR=.local-data` and `WORKSPACE_ROOT=.local-workspace`, both ignored by Git.
 - `data/*.json` files are tracked baseline/demo seed data. Runtime evidence includes events, logs, operation history, and replay snapshots.
 - Provider configuration is environment-driven: `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, and `OLLAMA_BASE_URL`. Keep secrets in ignored env files or the shell environment.
 - Admin debug reset is a destructive local demo/dev reset, disabled in production. It is not production recovery.
@@ -57,17 +57,17 @@ Use the project CLI for real ticket runs before reaching for ad hoc `curl` or di
 ```bash
 node scripts/oquery.js login --url http://127.0.0.1:3000
 node scripts/oquery.js create-ticket --url http://127.0.0.1:3000 --agent Mike --wait --json "<objective>"
-npm run codex:trace -- --run <runId>
+pnpm run codex:trace -- --run <runId>
 ```
 
 Use `--agent <id|name>` for Agent 1, Mike, or another configured agent. Use `--json` so the returned `runId` can feed directly into `codex:trace`.
 
 ## Verification Workflow
 
-1. Run `npm run build`.
-2. Run `npm run test:workflow`.
-3. Run `npm run test:postcondition`.
-4. Run `npm run benchmark:operational-endurance`.
+1. Run `pnpm run build`.
+2. Run `pnpm run test:workflow`.
+3. Run `pnpm run test:postcondition`.
+4. Run `pnpm run benchmark:operational-endurance`.
 5. For UI/view changes, run `node scripts/page-render-regression-test.js`.
 6. For catalog/action changes, run `node scripts/catalog-consistency-test.js`.
 7. For broader runtime changes, add targeted existing regression scripts only when relevant.
@@ -87,7 +87,7 @@ Use `--agent <id|name>` for Agent 1, Mike, or another configured agent. Use `--j
 
 ## Failure Inspection Order
 
-1. `npm run codex:trace -- --run <id>`
+1. `pnpm run codex:trace -- --run <id>`
 2. Inspect `data/replay-snapshots/run-<id>.json`.
 3. Inspect run events with `/api/runs/:id/events` or `data/events.jsonl`.
 4. Inspect `runEvaluation`, `runConsequence`, authority evidence, postconditions, and violations.

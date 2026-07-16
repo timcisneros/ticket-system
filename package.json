@@ -33,7 +33,7 @@
     "test:simulation": "node scripts/agent-behavior-simulation-test.js",
     "validate:truncation": "node scripts/tm3-replay-validation.js",
     "checkpoint:release": "NODE_PATH=./node_modules node scripts/release-checkpoint.js",
-    "test": "npm run checkpoint:release"
+    "test": "pnpm run checkpoint:release"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
@@ -52,5 +52,9 @@
     "node"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.8.0"
 }

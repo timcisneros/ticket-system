@@ -86,9 +86,9 @@ Compatibility is format-specific, not a system-wide no-legacy policy:
 Verification claims should come from executable checks, not a copied result count in this document:
 
 ```sh
-npm run build
-npm run checkpoint:release
-npm run benchmark:operational-endurance
+pnpm run build
+pnpm run checkpoint:release
+pnpm run benchmark:operational-endurance
 ```
 
 The checkpoint is deterministic and provider-free. Real-provider benchmarks remain observational
