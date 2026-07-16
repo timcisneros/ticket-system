@@ -12,7 +12,7 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
-const { createDurableAppendJournal } = require('./runtime/durable-append');
+const { createDurableAppendJournal, resolveDurableAppendJournalOptions } = require('./runtime/durable-append');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
@@ -35,6 +35,7 @@ const MEMBERSHIPS_FILE = path.join(DATA_DIR, 'memberships.json');
 const RUNS_FILE = path.join(DATA_DIR, 'runs.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
+const EVENT_JOURNAL_OPTIONS = Object.freeze(resolveDurableAppendJournalOptions(process.env));
 const RUNTIME_LIMITS_FILE = path.join(DATA_DIR, 'runtime-limits.json');
 const DATA_DIR_WRITER_LOCK_FILE = path.join(DATA_DIR, 'writer-lock.json');
 const ALLOCATION_PLANS_FILE = path.join(DATA_DIR, 'allocation-plans.json');
@@ -4941,7 +4942,7 @@ function createLogTimestamp() {
 }
 
 let eventAppendFailure = null;
-let eventJournal = createDurableAppendJournal(EVENTS_FILE);
+let eventJournal = createDurableAppendJournal(EVENTS_FILE, EVENT_JOURNAL_OPTIONS);
 
 // Per-run event chain state for forensic sequence numbers and hash chaining
 const runEventChains = new Map(); // runId -> { seq: number, prevHash: string | null }
@@ -5677,7 +5678,7 @@ async function resetDebugEventState() {
     // close() still releases the persistent descriptor before replacement.
   }
   writeFileAtomic(EVENTS_FILE, '');
-  eventJournal = createDurableAppendJournal(EVENTS_FILE);
+  eventJournal = createDurableAppendJournal(EVENTS_FILE, EVENT_JOURNAL_OPTIONS);
   runEventChains.clear();
   persistedEventIds.clear();
   reservedRunEventChains.clear();
@@ -7019,6 +7020,7 @@ function getRuntimeStatusSnapshot() {
       running: runningRuns.length,
       expiredLeases: expiredLeases.length
     },
+    eventJournal: eventJournal.getMetrics(),
     runtimeLimits: getAgentRuntimeLimits()
   };
 }
@@ -12635,6 +12637,7 @@ function buildOperationalSummary(options = {}) {
   const policies = readModelRoutingPolicies();
   const templates = readProcessTemplates();
   const logs = readLogs();
+  const eventJournalMetrics = eventJournal.getMetrics();
 
   const countBy = (list, pred) => list.filter(pred).length;
   const byIdDesc = (a, b) => (b.id || 0) - (a.id || 0);
@@ -12712,6 +12715,7 @@ function buildOperationalSummary(options = {}) {
     modelRoutingPolicies: { ...routingCounts, total: policies.length },
     processTemplates: templateCounts,
     schedules: scheduleCounts,
+    eventJournal: eventJournalMetrics,
     recentFailedRuns: runs.filter(r => r.status === 'failed').slice().sort(byIdDesc).slice(0, limit).map(r => ({ runId: r.id, ticketId: r.ticketId })),
     recentConnectorReceipts: receipts.slice().sort(byIdDesc).slice(0, limit).map(r => ({ id: r.id, connectorId: r.connectorId, operation: r.operation, status: r.result ? r.result.status : null })),
     recentAuthorityDenials,
@@ -12724,6 +12728,9 @@ function buildOperationalSummary(options = {}) {
       noActiveWorkContexts: countBy(workContexts, c => c.status === 'active') === 0,
       noRoutingPolicies: policies.length === 0,
       noConnectors: connectors.length === 0,
+      eventJournalPressureExists: eventJournalMetrics.status === 'failed' ||
+        eventJournalMetrics.totals.backpressureRejections > 0 ||
+        eventJournalMetrics.current.utilization >= 0.8,
       versionConsistencyUnresolved
     }
   };

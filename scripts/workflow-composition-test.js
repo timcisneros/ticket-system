@@ -454,6 +454,8 @@ async function main() {
     assert(Array.isArray(runtimeStatus.pendingRuns), 'runtime status should include pending runs');
     assert(Array.isArray(runtimeStatus.expiredLeases), 'runtime status should include expired leases');
     assert(runtimeStatus.concurrencyLimits && typeof runtimeStatus.concurrencyLimits.localModel === 'number', 'runtime status should include concurrency limits');
+    assert(runtimeStatus.eventJournal && typeof runtimeStatus.eventJournal.current.utilization === 'number', 'runtime status should expose event journal pressure');
+    assert(runtimeStatus.eventJournal.config && runtimeStatus.eventJournal.config.maxOutstandingEntries > 0, 'runtime status should expose event journal capacity');
 
     const runStateResponse = await request('GET', `/api/runs/${run.id}/state`, { cookie });
     assert(runStateResponse.statusCode === 200, `run state API returned HTTP ${runStateResponse.statusCode}`);

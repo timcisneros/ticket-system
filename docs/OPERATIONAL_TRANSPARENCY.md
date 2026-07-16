@@ -2,12 +2,12 @@
 
 r1.31 adds a **read-only operational surface** so an operator can see the health and boundaries of
 the substrate before release-candidate hardening. It adds **no new execution behavior** and **no new
-source of truth** — every value is derived live from the existing stores.
+source of truth** — every value is derived live from existing stores or in-process runtime state.
 
 ## What it is
 
 - A read-only summary at `GET /api/ops/summary` (gated by `ops:read`) and a page at `/ops`.
-- The summary is computed on each read from `tickets.json`, `runs.json`, `work-contexts.json`,
+- The summary is computed on each read from live runtime state plus `tickets.json`, `runs.json`, `work-contexts.json`,
   `watchers.json`, `watcher-observations.json`, `connectors.json`, `connector-receipts.json`,
   `model-routing-policies.json`, `process-templates.json`, and `logs.json`.
 - It writes **nothing** — no ticket/run/log/event/receipt mutation, no workspace change, and **no
@@ -24,6 +24,9 @@ source of truth** — every value is derived live from the existing stores.
 - **modelRoutingPolicies** — `active / archived / total`.
 - **processTemplates** — `total / enabled / disabled / scheduled / pausedSchedule`.
 - **schedules** — `enabled / disabled` (derived from template schedule state).
+- **eventJournal** — effective batch, record, and outstanding-work capacity; current queued/active/
+  outstanding work; utilization and high-water marks; durable commit totals/timing; and rejection
+  counts. These are process-local operational metrics, not a new evidence ledger.
 - **recent\*** lists — bounded (≤10), deterministically ordered (id desc).
 
 ## What the warning flags mean
@@ -36,6 +39,10 @@ source of truth** — every value is derived live from the existing stores.
 - `noActiveWorkContexts`, `noRoutingPolicies`, `noConnectors` — configuration gaps.
 - `versionConsistencyUnresolved` — the r1.12.2 reconciler logged an unresolved root/version-store
   mismatch for manual review.
+- `eventJournalPressureExists` — the journal failed, rejected an append under backpressure, or is
+  currently at least 80% utilized. Backpressure remains fail-closed so evidence is never silently
+  dropped; tune capacity from measurements and advance the storage architecture before one process
+  becomes the deployment bottleneck.
 
 ## No remediation
 

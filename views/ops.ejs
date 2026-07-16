@@ -1,8 +1,8 @@
 <h1>Operational Transparency</h1>
 <p class="text-muted">
   A <strong>read-only</strong> snapshot of what exists, what is active, what is blocked, and what is
-  unresolved across the substrate. It is derived live from existing stores — it creates no new
-  source of truth, writes nothing, and offers no remediation/rerun/mutation controls. Generated
+  unresolved across the substrate. It is derived live from existing stores and runtime state — it
+  creates no new source of truth, writes nothing, and offers no remediation/rerun/mutation controls. Generated
   <%= summary.generatedAt %>.
 </p>
 
@@ -21,9 +21,27 @@
       <% if (w.noActiveWorkContexts) { %><li>No active Work Contexts — <a href="/work-contexts">/work-contexts</a></li><% } %>
       <% if (w.noRoutingPolicies) { %><li>No model routing policies — <a href="/model-routing-policies">/model-routing-policies</a></li><% } %>
       <% if (w.noConnectors) { %><li>No connectors configured</li><% } %>
+      <% if (w.eventJournalPressureExists) { %><li>Event journal pressure or backpressure rejection detected — inspect Event journal capacity below</li><% } %>
       <% if (w.versionConsistencyUnresolved) { %><li>Process-template version consistency unresolved — see <a href="/logs">/logs</a></li><% } %>
     </ul>
   <% } %>
+</section>
+
+<section class="admin-block">
+  <h2>Event journal capacity</h2>
+  <% var journal = summary.eventJournal; %>
+  <p class="text-muted">Live, process-local pressure metrics. Durable acknowledgement still occurs only after the committed batch is synced.</p>
+  <table class="tickets-table">
+    <tbody>
+      <tr><th>Status</th><td><%= journal.status %></td></tr>
+      <tr><th>Outstanding</th><td><%= journal.current.outstandingEntries %> / <%= journal.config.maxOutstandingEntries %> entries · <%= journal.current.outstandingBytes %> / <%= journal.config.maxOutstandingBytes %> bytes · <%= Math.round(journal.current.utilization * 1000) / 10 %>% utilized</td></tr>
+      <tr><th>High-water mark</th><td><%= journal.highWatermarks.outstandingEntries %> entries · <%= journal.highWatermarks.outstandingBytes %> bytes</td></tr>
+      <tr><th>Committed</th><td><%= journal.totals.committedEntries %> entries · <%= journal.totals.committedBytes %> bytes · <%= journal.totals.commitBatches %> batches</td></tr>
+      <tr><th>Rejected</th><td><%= journal.totals.backpressureRejections %> for backpressure · <%= journal.totals.oversizedRejections %> oversized</td></tr>
+      <tr><th>Commit latency</th><td>last <%= journal.commitTiming.lastCommitDurationMs === null ? 'unavailable' : journal.commitTiming.lastCommitDurationMs.toFixed(2) + ' ms' %> · max <%= journal.commitTiming.maxCommitDurationMs.toFixed(2) %> ms</td></tr>
+      <tr><th>Batch configuration</th><td>up to <%= journal.config.maxBatchEntries %> entries / <%= journal.config.maxBatchBytes %> bytes · record maximum <%= journal.config.maxRecordBytes %> bytes</td></tr>
+    </tbody>
+  </table>
 </section>
 
 <section class="admin-block">

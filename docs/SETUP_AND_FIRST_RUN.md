@@ -29,6 +29,13 @@ variables (see README → Configuration for the full list):
   process if omitted), and optional `PUBLIC_BASE_URL` for exact-origin request checks.
 - Provider (optional, only for live agents): `OPENAI_API_KEY` / `OPENAI_MODEL`, or `OLLAMA_MODEL` /
   `OLLAMA_BASE_URL`.
+- Event-journal capacity (optional): `EVENT_JOURNAL_MAX_RECORD_BYTES`,
+  `EVENT_JOURNAL_MAX_BATCH_ENTRIES`, `EVENT_JOURNAL_MAX_BATCH_BYTES`,
+  `EVENT_JOURNAL_MAX_OUTSTANDING_ENTRIES`, and `EVENT_JOURNAL_MAX_OUTSTANDING_BYTES`. Values must
+  be positive integers; record capacity cannot exceed batch or outstanding-byte capacity. Invalid
+  values fail startup instead of silently falling back. Current pressure, high-water marks,
+  rejection counts, and the effective configuration are visible at `/ops` and
+  `GET /api/runtime/status`.
 
 There is no `.env.example`; set variables in your shell or an ignored `.env`.
 

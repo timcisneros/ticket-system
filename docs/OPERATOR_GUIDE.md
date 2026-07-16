@@ -105,8 +105,10 @@ value. See `docs/LOCAL_CONNECTOR_CONTRACT.md`.
 ## 15. Operational transparency
 
 `/ops` and `GET /api/ops/summary` (need `ops:read`) show a **read-only** health snapshot: counts,
-warning flags, recent failures/refusals, and links to the relevant pages. Reading it writes nothing
-and creates no summary ledger. See `docs/OPERATIONAL_TRANSPARENCY.md`.
+warning flags, recent failures/refusals, event-journal capacity/pressure, and links to the relevant
+pages. `GET /api/runtime/status` and `oquery runtime-status` expose the same live journal pressure
+for runtime diagnostics. Reading these surfaces writes nothing and creates no summary ledger. See
+`docs/OPERATIONAL_TRANSPARENCY.md`.
 
 ## 16. Release checkpoint
 

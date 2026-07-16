@@ -1891,6 +1891,14 @@ async function cmdRuntimeStatus(args) {
   console.log(`  ${dim('lease owner')} ${data.leaseOwner || 'none'}`);
   console.log(`  ${dim('active runs')} ${counts.active || 0}  ${dim('pending')} ${counts.pending || 0}  ${dim('running')} ${counts.running || 0}`);
   if (counts.expiredLeases) console.log(`  ${yellow('expired leases')} ${counts.expiredLeases}`);
+  if (data.eventJournal) {
+    const journal = data.eventJournal;
+    const current = journal.current || {};
+    const config = journal.config || {};
+    const totals = journal.totals || {};
+    const utilization = Number.isFinite(current.utilization) ? `${(current.utilization * 100).toFixed(1)}%` : 'unavailable';
+    console.log(`  ${dim('event journal')} ${journal.status || 'unknown'}  outstanding: ${current.outstandingEntries || 0}/${config.maxOutstandingEntries || '?'}  pressure: ${utilization}  backpressure rejects: ${totals.backpressureRejections || 0}`);
+  }
   if (data.runtimeLimits) {
     const rl = data.runtimeLimits;
     console.log(`  ${dim('limits')} steps: ${rl.maxExecutionSteps || 'unlim'}  reqs: ${rl.maxModelRequestsPerRun || 'unlim'}  ops: ${rl.maxWorkspaceOperationsPerRun || 'unlim'}`);

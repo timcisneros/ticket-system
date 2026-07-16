@@ -97,7 +97,20 @@ async function main() {
   seed();
   server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'test', PORT, DATA_DIR, WORKSPACE_ROOT, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000', PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000' },
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      PORT,
+      DATA_DIR,
+      WORKSPACE_ROOT,
+      RUNTIME_SCHEDULER_INTERVAL_MS: '3600000',
+      PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000',
+      EVENT_JOURNAL_MAX_RECORD_BYTES: '2048',
+      EVENT_JOURNAL_MAX_BATCH_ENTRIES: '16',
+      EVENT_JOURNAL_MAX_BATCH_BYTES: '4096',
+      EVENT_JOURNAL_MAX_OUTSTANDING_ENTRIES: '64',
+      EVENT_JOURNAL_MAX_OUTSTANDING_BYTES: '8192'
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let out = ''; server.stdout.on('data', c => { out += String(c); }); server.stderr.on('data', c => { out += String(c); });
@@ -128,11 +141,15 @@ async function main() {
     assert(s.modelRoutingPolicies.active === 1, 'routing policy count correct');
     assert(s.processTemplates.total === 3 && s.processTemplates.enabled === 2 && s.processTemplates.disabled === 1 && s.processTemplates.scheduled === 1, 'process-template counts correct');
     assert(s.schedules.enabled === 1, 'schedule counts correct');
+    assert(s.eventJournal && s.eventJournal.config.maxRecordBytes === 2048, 'journal record capacity override surfaced');
+    assert(s.eventJournal.config.maxOutstandingEntries === 64 && s.eventJournal.config.maxOutstandingBytes === 8192, 'journal outstanding capacity overrides surfaced');
+    assert(Number.isFinite(s.eventJournal.current.utilization) && s.eventJournal.totals.backpressureRejections === 0, 'journal pressure metrics surfaced');
 
     // ---- 3: warning flags reflect state. ----
     assert(s.warnings.unresolvedTriageExists === true && s.warnings.blockedTicketsExist === true && s.warnings.failedRunsExist === true, 'state warnings set');
     assert(s.warnings.connectorReadRefusalsExist === true && s.warnings.watcherFailedOrRefusedExist === true, 'refusal warnings set');
     assert(s.warnings.noActiveWorkContexts === false && s.warnings.noRoutingPolicies === false && s.warnings.noConnectors === false, 'presence warnings false when present');
+    assert(s.warnings.eventJournalPressureExists === false, 'healthy journal should not raise a pressure warning');
 
     // ---- 4: recent lists are bounded + deterministic. ----
     assert(Array.isArray(s.recentFailedRuns) && s.recentFailedRuns.length <= 10 && s.recentAuthorityDenials.some(d => d.type === 'ticket:no_model_route'), 'recent lists bounded; authority/refusal signal surfaced');
@@ -150,6 +167,7 @@ async function main() {
     assert(dataFiles() === filesBefore, 'no new ops summary file created');
     const page = await request('GET', '/ops', { cookie: admin });
     assert(page.statusCode === 200 && /Operational Transparency/.test(page.body) && page.body.includes('/triage') && page.body.includes('/connectors'), '/ops page renders with links');
+    assert(page.body.includes('Event journal capacity') && page.body.includes('2048'), '/ops page renders journal capacity');
 
     console.log('PASS: operational transparency — read-only derived summary; correct counts/warnings, bounded deterministic lists, no writes, no new ledger');
   } catch (error) {
