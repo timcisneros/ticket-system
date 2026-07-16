@@ -599,6 +599,67 @@ function buildTargetOperationKey(run, operation, args, slot) {
   return `run:${runId}:slot:${slotHash}:input:${inputHash}`;
 }
 
+function buildRunEvidenceKey(run, category, slot) {
+  const runId = run && Number.isSafeInteger(run.id) ? run.id : null;
+  if (!runId) throw new TypeError('A persisted run is required for an evidence key');
+  const normalizedCategory = String(category || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+  const normalizedSlot = String(slot || '').trim();
+  if (!normalizedCategory) throw new TypeError('An evidence category is required');
+  if (!normalizedSlot) throw new TypeError('A stable evidence slot is required');
+  const attempt = getRunExecutionEvidenceAttempt(run);
+  const slotHash = crypto.createHash('sha256')
+    .update(`attempt:${attempt}:${normalizedSlot}`)
+    .digest('hex');
+  return `${normalizedCategory}:run:${runId}:slot:${slotHash}`;
+}
+
+function getRunExecutionEvidenceAttempt(run) {
+  const runId = run && Number.isSafeInteger(run.id) ? run.id : null;
+  if (!runId) throw new TypeError('A persisted run is required for an execution evidence attempt');
+  const cached = runExecutionEvidenceAttempts.get(runId);
+  if (cached) return cached;
+  const attempt = Math.max(1, getRunEvents(runId).filter(event => event && event.type === 'run.started').length);
+  runExecutionEvidenceAttempts.set(runId, attempt);
+  return attempt;
+}
+
+async function recordNonTerminalRunEvidence(run, {
+  category,
+  slot,
+  replayKey,
+  replayItem,
+  eventType,
+  eventPayload = {},
+  stepId = null,
+  capturedAt = null
+}) {
+  const evidenceKey = buildRunEvidenceKey(run, category, slot);
+  const timestamp = capturedAt || new Date().toISOString();
+  const item = {
+    ...sanitizeSnapshotValue(replayItem || {}),
+    capturedAt: replayItem && replayItem.capturedAt ? replayItem.capturedAt : timestamp
+  };
+  let recorded;
+  try {
+    recorded = await getNonTerminalEvidenceRepository().appendRunEvidence({
+      runId: run.id,
+      ticketId: run.ticketId,
+      evidenceKey,
+      replayKey,
+      replayItem: item,
+      event: {
+        type: eventType,
+        ...(stepId === null || stepId === undefined ? {} : { stepId: String(stepId) }),
+        payload: sanitizeSnapshotValue(eventPayload || {})
+      }
+    });
+  } catch (error) {
+    error.nonTerminalEvidencePersistenceFailure = true;
+    throw error;
+  }
+  return { ...recorded, evidenceKey };
+}
+
 function computeMutationFingerprint(operation, args) {
   if (operation === 'writeFile') return `writeFile:${args.path}`;
   if (operation === 'createFolder') return `createFolder:${args.path}`;
@@ -1585,6 +1646,7 @@ function isWorkflowUsableAction(action) {
 const eventClients = new Set();
 const runningRunKeys = new Set();
 const startingRunIds = new Set();
+const runExecutionEvidenceAttempts = new Map();
 const startingLocalModelRunIds = new Set();
 const admittedRunIds = new Set();
 const admittedLocalModelRunIds = new Set();
@@ -10275,6 +10337,156 @@ async function callModelProviderWithRunTimeout(run, agent, input, startedAtMs, l
   }
 }
 
+async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, limits, options = {}) {
+  const slot = String(options.slot || '').trim();
+  if (!slot) throw new TypeError('A stable provider evidence slot is required');
+  const requestStartedAt = Date.now();
+  const startedAt = new Date(requestStartedAt).toISOString();
+  const metadata = sanitizeSnapshotValue(options.metadata || {});
+  const sanitizeRequest = typeof options.sanitizeRequest === 'function'
+    ? options.sanitizeRequest
+    : value => value;
+  const sanitizeResponsePayload = typeof options.sanitizeResponsePayload === 'function'
+    ? options.sanitizeResponsePayload
+    : value => value;
+  const sanitizeResponseText = typeof options.sanitizeResponseText === 'function'
+    ? options.sanitizeResponseText
+    : value => value;
+  let requestPersisted = false;
+
+  const persistRequest = async requestPayload => {
+    if (requestPersisted) return;
+    const safeRequest = sanitizeSnapshotValue(sanitizeRequest(requestPayload));
+    try {
+      await recordNonTerminalRunEvidence(run, {
+        category: 'provider-request',
+        slot,
+        replayKey: 'providerRequests',
+        replayItem: {
+          ...safeRequest,
+          ...metadata,
+          startedAt,
+          durationMs: Date.now() - requestStartedAt
+        },
+        eventType: 'provider.request.persisted',
+        eventPayload: {
+          ...metadata,
+          provider: agent && agent.provider ? agent.provider : 'openai',
+          model: safeRequest && safeRequest.body ? safeRequest.body.model || null : null,
+          url: safeRequest ? safeRequest.url || null : null,
+          method: safeRequest ? safeRequest.method || null : null,
+          requestHash: crypto.createHash('sha256').update(canonicalOperationJson(safeRequest || {})).digest('hex'),
+          startedAt
+        },
+        capturedAt: startedAt
+      });
+    } catch (error) {
+      error.providerEvidencePersistenceFailure = true;
+      throw error;
+    }
+    requestPersisted = true;
+  };
+
+  let response;
+  try {
+    response = await callModelProviderWithRunTimeout(run, agent, input, startedAtMs, limits, {
+      onRequest: persistRequest
+    });
+  } catch (error) {
+    if (error.providerRequestPayload && !requestPersisted) {
+      await persistRequest(error.providerRequestPayload);
+    }
+    if (error.providerResponsePayload) {
+      const completedAtMs = Date.now();
+      const completedAt = new Date(completedAtMs).toISOString();
+      const safePayload = sanitizeSnapshotValue(sanitizeResponsePayload(error.providerResponsePayload));
+      try {
+        await recordNonTerminalRunEvidence(run, {
+        category: 'provider-response',
+        slot,
+        replayKey: 'modelResponses',
+        replayItem: {
+          error: error.message || String(error),
+          provider: error.provider || (agent && agent.provider) || 'openai',
+          model: agent && agent.model ? agent.model : null,
+          providerResponsePayload: safePayload,
+          ...metadata,
+          startedAt,
+          completedAt,
+          durationMs: completedAtMs - requestStartedAt
+        },
+        eventType: 'provider.response.persisted',
+        eventPayload: {
+          ...metadata,
+          outcome: 'failed',
+          provider: error.provider || (agent && agent.provider) || 'openai',
+          model: agent && agent.model ? agent.model : null,
+          code: error.code || null,
+          status: safePayload ? safePayload.status || null : null,
+          requestId: safePayload ? safePayload.requestId || null : null,
+          durationMs: completedAtMs - requestStartedAt,
+          requestEvidenceKey: buildRunEvidenceKey(run, 'provider-request', slot)
+        },
+          capturedAt: completedAt
+        });
+      } catch (persistenceError) {
+        persistenceError.providerEvidencePersistenceFailure = true;
+        throw persistenceError;
+      }
+    }
+    error.providerEvidencePersisted = true;
+    throw error;
+  }
+
+  if (!requestPersisted && response.requestPayload) await persistRequest(response.requestPayload);
+  const completedAtMs = Date.now();
+  const completedAt = new Date(completedAtMs).toISOString();
+  const safePayload = sanitizeSnapshotValue(sanitizeResponsePayload(response.responsePayload));
+  const safeText = sanitizeResponseText(response.text);
+  let responseEvidence;
+  try {
+    responseEvidence = await recordNonTerminalRunEvidence(run, {
+    category: 'provider-response',
+    slot,
+    replayKey: 'modelResponses',
+    replayItem: {
+      text: safeText,
+      usage: response.usage || null,
+      provider: response.provider || (agent && agent.provider) || 'openai',
+      model: response.model || (agent && agent.model) || null,
+      providerResponsePayload: safePayload,
+      ...metadata,
+      startedAt,
+      completedAt,
+      durationMs: completedAtMs - requestStartedAt
+    },
+    eventType: 'provider.response.persisted',
+    eventPayload: {
+      ...metadata,
+      outcome: 'succeeded',
+      provider: response.provider || (agent && agent.provider) || 'openai',
+      model: response.model || (agent && agent.model) || null,
+      status: safePayload ? safePayload.status || null : null,
+      requestId: safePayload ? safePayload.requestId || null : null,
+      usage: response.usage || null,
+      durationMs: completedAtMs - requestStartedAt,
+      requestEvidenceKey: buildRunEvidenceKey(run, 'provider-request', slot)
+    },
+      capturedAt: completedAt
+    });
+  } catch (error) {
+    error.providerEvidencePersistenceFailure = true;
+    throw error;
+  }
+  return {
+    response,
+    requestStartedAt,
+    responseCompletedAt: completedAtMs,
+    requestEvidenceKey: buildRunEvidenceKey(run, 'provider-request', slot),
+    responseEvidenceKey: responseEvidence.evidenceKey
+  };
+}
+
 function assertRunModelRequestAllowed(run, currentCount, limits) {
   if (currentCount >= limits.maxModelRequestsPerRun) {
     throw createRunLimitError(run, 'model_request', `Agent run exceeded model request limit of ${limits.maxModelRequestsPerRun}`, {
@@ -10464,34 +10676,15 @@ async function compileObjectiveContract(run, ticket, agent, limits, modelRequest
 
   const input = buildObjectiveCompilerPrompt(ticket.objective);
   let response = null;
-  let providerRequestPersisted = false;
-  const requestStartedAt = Date.now();
   modelRequestCountRef.count += 1;
   try {
-    response = await callModelProviderWithRunTimeout(run, agent, input, runStartedAtMs, limits, {
-      onRequest: requestPayload => {
-        appendRunReplaySnapshotItem(run.id, 'providerRequests', {
-          ...requestPayload,
-          phase: 'contract_compile',
-          startedAt: new Date(requestStartedAt).toISOString()
-        });
-        providerRequestPersisted = true;
-      }
+    const providerCall = await callModelProviderWithRunEvidence(run, agent, input, runStartedAtMs, limits, {
+      slot: 'contract-compile:0',
+      metadata: { phase: 'contract_compile' }
     });
+    response = providerCall.response;
   } catch (error) {
-    if (error.providerRequestPayload && !providerRequestPersisted) {
-      appendRunReplaySnapshotItem(run.id, 'providerRequests', {
-        ...error.providerRequestPayload,
-        phase: 'contract_compile',
-        startedAt: new Date(requestStartedAt).toISOString()
-      });
-    }
-    appendRunReplaySnapshotItem(run.id, 'modelResponses', {
-      error: error.message,
-      provider: error.provider || null,
-      phase: 'contract_compile',
-      durationMs: Date.now() - requestStartedAt
-    });
+    if (error.providerEvidencePersistenceFailure || error.nonTerminalEvidencePersistenceFailure) throw error;
     appendRunLog(run, 'run:contract_compile_failed', `Objective contract compilation failed: ${error.message}`, null, {
       source: 'model',
       reason: 'provider_error',
@@ -10500,22 +10693,6 @@ async function compileObjectiveContract(run, ticket, agent, limits, modelRequest
     return { contract: null, fallback: true, modelRequestsUsed: 1 };
   }
 
-  if (!providerRequestPersisted && response.requestPayload) {
-    appendRunReplaySnapshotItem(run.id, 'providerRequests', {
-      ...response.requestPayload,
-      phase: 'contract_compile',
-      startedAt: new Date(requestStartedAt).toISOString()
-    });
-  }
-  appendRunReplaySnapshotItem(run.id, 'modelResponses', {
-    text: response.text || '',
-    usage: response.usage || null,
-    provider: response.provider || null,
-    model: response.model || null,
-    providerResponsePayload: response.responsePayload || null,
-    phase: 'contract_compile',
-    durationMs: Date.now() - requestStartedAt
-  });
   appendRunLog(run, 'model:request', `Objective contract compilation request (${response.provider}/${response.model})`, null, {
     phase: 'contract_compile',
     usage: response.usage || null
@@ -14122,7 +14299,7 @@ async function callOpenAI(agent, input, options = {}) {
   };
 
   if (typeof options.onRequest === 'function') {
-    options.onRequest(requestSnapshot);
+    await options.onRequest(requestSnapshot);
   }
 
   let response = null;
@@ -14275,7 +14452,7 @@ async function callOllama(agent, input, options = {}) {
   };
 
   if (typeof options.onRequest === 'function') {
-    options.onRequest(requestSnapshot);
+    await options.onRequest(requestSnapshot);
   }
 
   let response = null;
@@ -15375,7 +15552,7 @@ function compileWorkflowDraftIntent(intentInput) {
   };
 }
 
-async function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
+async function createWorkflowDraftFromAgent(run, workflowInput, step = 0, options = {}) {
   const submittedWorkflow = workflowInput && typeof workflowInput === 'object' && !Array.isArray(workflowInput)
     ? workflowInput
     : null;
@@ -15416,19 +15593,22 @@ async function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
   const workflows = readWorkflows();
   workflows.push(draft);
   writeWorkflows(workflows);
-  appendRunReplaySnapshotItem(run.id, 'workflowDrafts', {
+  const draftEvidence = {
     workflowId: draft.id,
     name: draft.name,
     enabled: false,
     createdByAgentId: run.agentId,
     createdByRunId: run.id,
     step
-  });
-  await appendEvent({
-    type: 'workflow.draft_created',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
+  };
+  await recordNonTerminalRunEvidence(run, {
+    category: 'workflow-draft',
+    slot: `${options.slot || `agent:${step}`}:workflow-draft:${draft.id}`,
+    replayKey: 'workflowDrafts',
+    replayItem: draftEvidence,
+    eventType: 'workflow.draft_created',
+    stepId: String(step),
+    eventPayload: {
       workflowId: draft.id,
       name: draft.name,
       enabled: false,
@@ -15436,7 +15616,8 @@ async function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
       createdByAgentId: run.agentId,
       createdByRunId: run.id,
       createdAt: now
-    }
+    },
+    capturedAt: now
   });
   appendRunLog(run, 'workflow:draft_created', `Workflow draft created: ${draft.name}`, null, {
     workflowId: draft.id,
@@ -15446,14 +15627,26 @@ async function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
   return { workflowId: draft.id, enabled: false, status: 'draft_created' };
 }
 
-function createWorkflowDraftFromIntent(run, intentInput, step = 0) {
+async function createWorkflowDraftFromIntent(run, intentInput, step = 0, options = {}) {
   const compiled = compileWorkflowDraftIntent(intentInput);
-  appendRunReplaySnapshotItem(run.id, 'workflowDraftIntents', {
+  const intentEvidence = {
     intent: compiled.intent,
     compiledWorkflowId: compiled.workflow.id,
     step
+  };
+  await recordNonTerminalRunEvidence(run, {
+    category: 'workflow-draft-intent',
+    slot: `${options.slot || `agent:${step}`}:workflow-draft-intent`,
+    replayKey: 'workflowDraftIntents',
+    replayItem: intentEvidence,
+    eventType: 'workflow.draft_intent.compiled',
+    stepId: String(step),
+    eventPayload: {
+      compiledWorkflowId: compiled.workflow.id,
+      writeCount: Array.isArray(compiled.intent.writes) ? compiled.intent.writes.length : 0
+    }
   });
-  return createWorkflowDraftFromAgent(run, compiled.workflow, step);
+  return createWorkflowDraftFromAgent(run, compiled.workflow, step, options);
 }
 
 function createHandoffTaskError(message, code = 'HANDOFF_TASK_INVALID') {
@@ -15521,7 +15714,7 @@ function validateHandoffTaskInput(input) {
   };
 }
 
-async function executeHandoffTask(run, handoffInput, step = 0) {
+async function executeHandoffTask(run, handoffInput, step = 0, options = {}) {
   const validated = validateHandoffTaskInput(handoffInput);
   const planner = readAgents().find(agent => agent.id === run.agentId) || null;
   const executorRun = {
@@ -15543,21 +15736,23 @@ async function executeHandoffTask(run, handoffInput, step = 0) {
     step
   };
 
-  appendRunReplaySnapshotItem(run.id, 'handoffTasks', {
+  const validatedEvidence = {
     ...evidenceBase,
     status: 'validated'
-  });
-  await appendEvent({
-    type: 'handoff.task_validated',
-    ticketId: run.ticketId,
-    runId: run.id,
+  };
+  await recordNonTerminalRunEvidence(run, {
+    category: 'handoff-task',
+    slot: `${options.slot || `agent:${step}`}:validated`,
+    replayKey: 'handoffTasks',
+    replayItem: validatedEvidence,
+    eventType: 'handoff.task_validated',
     stepId: String(step),
-    payload: evidenceBase
+    eventPayload: evidenceBase
   });
 
   const operationStartedAt = Date.now();
   const result = await executeWorkspaceOperation(executorRun, workspaceAction, step, {
-    slot: `handoff:${step}`,
+    slot: `${options.slot || `handoff:${step}`}:workspace-operation`,
     startedAt: operationStartedAt,
     operationDescriptor: workspaceAction,
     replayMetadata: {
@@ -15582,13 +15777,14 @@ async function executeHandoffTask(run, handoffInput, step = 0) {
     status: 'executed',
     result: sanitizeSnapshotValue(result)
   };
-  appendRunReplaySnapshotItem(run.id, 'handoffTasks', executionEvidence);
-  await appendEvent({
-    type: 'handoff.task_executed',
-    ticketId: run.ticketId,
-    runId: run.id,
+  await recordNonTerminalRunEvidence(run, {
+    category: 'handoff-task',
+    slot: `${options.slot || `agent:${step}`}:executed`,
+    replayKey: 'handoffTasks',
+    replayItem: executionEvidence,
+    eventType: 'handoff.task_executed',
     stepId: String(step),
-    payload: executionEvidence
+    eventPayload: executionEvidence
   });
 
   return markOperationEvidenceRecorded({
@@ -15861,10 +16057,87 @@ function sanitizeOperationArgs(operation, args) {
   return { args: sanitized, strippedKeys };
 }
 
+async function completeWorkspaceReadEvidence(run, step, operation, args, result, error, operationContext) {
+  const startedAt = operationContext.startedAt || Date.now();
+  const operationKey = operationContext.operationKey;
+  const targetEvidence = buildWorkspaceOperationTargetEvidence(run, operation, args, result, error);
+  const blocked = Boolean(error && (
+    error.failureKind === 'protected_path' ||
+    ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code)
+  ));
+  const operationDescriptor = operationContext.operationDescriptor || { operation, args };
+  const replayItem = {
+    operation: sanitizeSnapshotValue(operationDescriptor),
+    ...(error
+      ? { error: error.message || String(error), blocked, reason: error.reason || null }
+      : { result: sanitizeSnapshotValue(result) }),
+    startedAt: new Date(startedAt).toISOString(),
+    durationMs: Date.now() - startedAt,
+    historyId: null,
+    workspaceRoot: getRunWorkspaceProvider(run).root,
+    executionWorkspaceType: run.executionWorkspaceType || 'main',
+    allocationPlanId: run.allocationPlanId || null,
+    allocationItemId: run.allocationItemId || null,
+    ownedOutputPaths: getRunOwnedOutputPaths(run),
+    operationKey,
+    ...(operationContext.replayMetadata || {}),
+    ...targetEvidence
+  };
+  const recorded = await recordNonTerminalRunEvidence(run, {
+    category: 'workspace-read',
+    slot: operationKey,
+    replayKey: 'workspaceOperations',
+    replayItem,
+    eventType: 'workspace.operation',
+    stepId: String(step),
+    eventPayload: {
+      operation,
+      path: args.path || null,
+      nextPath: null,
+      mutating: false,
+      input: sanitizeSnapshotValue(args),
+      ...(error
+        ? { error: error.message || String(error), blocked, reason: error.reason || null }
+        : { result: sanitizeSnapshotValue(result) }),
+      operationKey,
+      ...(operationContext.eventMetadata || {}),
+      ...targetEvidence
+    },
+    capturedAt: replayItem.startedAt
+  });
+  if (!error && recorded.inserted) await maybeTestInterrupt(run, 'after_first_workspace.operation');
+}
+
 async function executeWorkspaceOperation(run, action, step = 0, options = {}) {
   const parsed = parseWorkspaceOperation(action);
   if (!AGENT_MUTATING_OPERATIONS.includes(parsed.operation)) {
-    return executeWorkspaceOperationUnlocked(run, action, step, options);
+    const sanitized = sanitizeOperationArgs(parsed.operation, parsed.args).args;
+    const operationContext = {
+      ...options,
+      startedAt: options.startedAt || Date.now()
+    };
+    operationContext.operationKey = options.operationKey || buildTargetOperationKey(
+      run,
+      parsed.operation,
+      sanitized,
+      options.slot || `step:${step}`
+    );
+    try {
+      const result = await executeWorkspaceOperationUnlocked(run, action, step, operationContext);
+      try {
+        await completeWorkspaceReadEvidence(run, step, parsed.operation, sanitized, result, null, operationContext);
+      } catch (persistenceError) {
+        markOperationEvidenceRecorded(persistenceError);
+        throw persistenceError;
+      }
+      return markOperationEvidenceRecorded(result);
+    } catch (error) {
+      if (!error._operationEvidenceRecorded) {
+        await completeWorkspaceReadEvidence(run, step, parsed.operation, sanitized, null, error, operationContext);
+        markOperationEvidenceRecorded(error);
+      }
+      throw error;
+    }
   }
   const sanitized = sanitizeOperationArgs(parsed.operation, parsed.args).args;
   const operationContext = {
@@ -16319,15 +16592,13 @@ function browserTargetMetadata(run, resourceUrl = null) {
   };
 }
 
-function persistBrowserOperationHistory(run, step, operation, safeArgs, receipt, error = null) {
-  const histories = readOperationHistory();
-  const record = {
-    id: nextId(histories),
-    timestamp: createLogTimestamp(),
-    ticketId: run.ticketId,
+async function recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, durationMs, operationContext) {
+  const safeArgs = operation === 'navigate'
+    ? { url: redactBrowserUrl(args.url) }
+    : sanitizeSnapshotValue(args);
+  const historyRecord = {
     allocationPlanId: run.allocationPlanId || null,
     allocationItemId: run.allocationItemId || null,
-    runId: run.id,
     step,
     operation,
     args: sanitizeSnapshotValue(safeArgs),
@@ -16342,16 +16613,6 @@ function persistBrowserOperationHistory(run, step, operation, safeArgs, receipt,
     readReceipt: sanitizeSnapshotValue(receipt),
     mutationReceipt: null
   };
-  histories.push(record);
-  writeOperationHistory(histories);
-  return record;
-}
-
-async function recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, durationMs) {
-  const safeArgs = operation === 'navigate'
-    ? { url: redactBrowserUrl(args.url) }
-    : sanitizeSnapshotValue(args);
-  const history = persistBrowserOperationHistory(run, step, operation, safeArgs, receipt, error);
   const evidence = {
     operation: { operation, args: safeArgs },
     receipt,
@@ -16360,19 +16621,33 @@ async function recordBrowserOperationEvidence(run, step, operation, args, receip
     errorCode: error ? error.code || null : null,
     startedAt: new Date(startedAt).toISOString(),
     durationMs,
-    historyId: history.id,
     ...browserTargetMetadata(run, receipt && receipt.resourceUrl)
   };
   appendRunLog(run, `browser:${operation}`, error ? evidence.error : `Ran browser ${operation}`, null, evidence);
-  await appendEvent({
-    type: 'browser.operation',
-    ticketId: run.ticketId,
-    runId: run.id,
-    stepId: String(step),
-    payload: sanitizeSnapshotValue(evidence)
-  });
-  appendRunReplaySnapshotItem(run.id, 'browserOperations', evidence);
-  return history;
+  let completed;
+  try {
+    completed = await getNonTerminalEvidenceRepository().completeActionReceipt({
+      runId: run.id,
+      ticketId: run.ticketId,
+      operationKey: operationContext.operationKey,
+      stepId: String(step),
+      operation,
+      outcome: error ? 'refused' : 'succeeded',
+      historyRecord,
+      receipt: sanitizeSnapshotValue(receipt),
+      replayKey: 'browserOperations',
+      replayItem: evidence,
+      event: {
+        type: 'browser.operation',
+        stepId: String(step),
+        payload: sanitizeSnapshotValue(evidence)
+      }
+    });
+  } catch (persistenceError) {
+    persistenceError.nonTerminalEvidencePersistenceFailure = true;
+    throw persistenceError;
+  }
+  return completed.record;
 }
 
 async function getOrCreateBrowserSession(run) {
@@ -16422,11 +16697,21 @@ async function captureBrowserCurrentState(run) {
   }
 }
 
-async function executeBrowserOperation(run, action, step = 0) {
+async function executeBrowserOperation(run, action, step = 0, options = {}) {
   const operation = action.operation;
   const args = action.args || {};
   const target = run.browserTargetSnapshot;
   const startedAt = Date.now();
+  const operationContext = {
+    ...options,
+    startedAt,
+    operationKey: options.operationKey || buildTargetOperationKey(
+      run,
+      operation,
+      args,
+      `attempt:${getRunExecutionEvidenceAttempt(run)}:${options.slot || `browser:${step}`}`
+    )
+  };
   let entry = browserSessions.get(run.id) || null;
   let receipt = {
     operation,
@@ -16544,9 +16829,10 @@ async function executeBrowserOperation(run, action, step = 0) {
       throw createBrowserOperationError('AGENT_ACTION_UNSUPPORTED', `Unsupported browser operation: ${operation}`);
     }
 
-    await recordBrowserOperationEvidence(run, step, operation, args, receipt, null, startedAt, Date.now() - startedAt);
+    await recordBrowserOperationEvidence(run, step, operation, args, receipt, null, startedAt, Date.now() - startedAt, operationContext);
     return { ...result, receipt };
   } catch (cause) {
+    if (cause && cause.nonTerminalEvidencePersistenceFailure) throw cause;
     const error = cause && cause.code
       ? cause
       : createBrowserOperationError('BROWSER_SESSION_LOST', cause && cause.message ? cause.message : String(cause));
@@ -16564,7 +16850,7 @@ async function executeBrowserOperation(run, action, step = 0) {
         configuredLimit: error.detail.configuredLimit
       } : {})
     };
-    await recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, Date.now() - startedAt);
+    await recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, Date.now() - startedAt, operationContext);
     throw error;
   }
 }
@@ -16711,9 +16997,8 @@ function evaluateConditionAction(input, step) {
   };
 }
 
-async function executeAgentStructuredOutputAction(run, agent, input, counters, startedAtMs, limits) {
+async function executeAgentStructuredOutputAction(run, agent, input, counters, startedAtMs, limits, evidenceSlot) {
   assertRunModelRequestAllowed(run, counters.modelRequests, limits);
-  const requestStartedAt = Date.now();
   const messages = [
     {
       role: 'system',
@@ -16733,17 +17018,11 @@ async function executeAgentStructuredOutputAction(run, agent, input, counters, s
   ];
 
   counters.modelRequests += 1;
-  const modelResponse = await callModelProviderWithRunTimeout(run, agent, messages, startedAtMs, limits, {
-    onRequest: requestPayload => {
-      appendRunReplaySnapshotItem(run.id, 'providerRequests', {
-        ...requestPayload,
-        startedAt: new Date(requestStartedAt).toISOString(),
-        durationMs: Date.now() - requestStartedAt,
-        workflowAction: 'agentStructuredOutput'
-      });
-    }
+  const providerCall = await callModelProviderWithRunEvidence(run, agent, messages, startedAtMs, limits, {
+    slot: evidenceSlot,
+    metadata: { workflowAction: 'agentStructuredOutput' }
   });
-  const completedAt = Date.now();
+  const modelResponse = providerCall.response;
   let output;
 
   try {
@@ -16763,18 +17042,6 @@ async function executeAgentStructuredOutputAction(run, agent, input, counters, s
     schemaError.details = { schemaErrors };
     throw schemaError;
   }
-
-  appendRunReplaySnapshotItem(run.id, 'modelResponses', {
-    text: modelResponse.text,
-    usage: modelResponse.usage || null,
-    provider: modelResponse.provider || null,
-    model: modelResponse.model || null,
-    providerResponsePayload: modelResponse.responsePayload,
-    startedAt: new Date(requestStartedAt).toISOString(),
-    completedAt: new Date(completedAt).toISOString(),
-    durationMs: completedAt - requestStartedAt,
-    workflowAction: 'agentStructuredOutput'
-  });
 
   return {
     output,
@@ -16874,14 +17141,14 @@ function validateActionPlanInput(input, limits, counters) {
   return { proposedActions, acceptedActions, rejectedActions };
 }
 
-async function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, startedAt, counters) {
+async function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, startedAt, counters, transitionIndex) {
   if (result && result._operationEvidenceRecorded) {
     counters.workspaceOperations += 1;
     counters.mutations += 1;
     return;
   }
   const targetEvidence = buildWorkspaceOperationTargetEvidence(run, action.operation, action.args, result);
-  appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+  const replayItem = {
     operation: { operation: action.operation, args: action.args, reason: action.reason || null },
     result,
     startedAt: new Date(startedAt).toISOString(),
@@ -16896,13 +17163,15 @@ async function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, 
     workflowStepId: step.id,
     actionPlanIndex: action.index,
     ...targetEvidence
-  });
-  await appendEvent({
-    type: 'workspace.operation',
-    ticketId: run.ticketId,
-    runId: run.id,
+  };
+  await recordNonTerminalRunEvidence(run, {
+    category: 'workspace-operation',
+    slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}:plan:${action.index}`,
+    replayKey: 'workspaceOperations',
+    replayItem,
+    eventType: 'workspace.operation',
     stepId: step.id,
-    payload: {
+    eventPayload: {
       workflowId: workflow.id,
       operation: action.operation,
       path: action.args && action.args.path ? action.args.path : null,
@@ -16918,7 +17187,7 @@ async function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, 
   counters.mutations += 1;
 }
 
-async function executeActionPlanWorkflowAction(run, workflow, step, input, counters, limits) {
+async function executeActionPlanWorkflowAction(run, workflow, step, input, counters, limits, transitionIndex) {
   const startedAt = Date.now();
   const validation = validateActionPlanInput(input, limits, counters);
   const executedActions = [];
@@ -16931,7 +17200,7 @@ async function executeActionPlanWorkflowAction(run, workflow, step, input, count
       { operation: action.operation, args: action.args },
       counters.transitions,
       {
-        slot: `workflow:${workflow.id}:${step.id}:plan:${action.index}`,
+        slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}:plan:${action.index}`,
         startedAt: actionStartedAt,
         operationDescriptor: { operation: action.operation, args: action.args, reason: action.reason || null },
         replayMetadata: {
@@ -16946,7 +17215,7 @@ async function executeActionPlanWorkflowAction(run, workflow, step, input, count
         }
       }
     );
-    await appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, actionStartedAt, counters);
+    await appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, actionStartedAt, counters, transitionIndex);
     executedActions.push({
       index: action.index,
       operation: action.operation,
@@ -16964,7 +17233,7 @@ async function executeActionPlanWorkflowAction(run, workflow, step, input, count
     status: validation.rejectedActions.length > 0 ? 'partial' : 'executed'
   };
 
-  appendRunReplaySnapshotItem(run.id, 'workflowActionPlans', {
+  const planEvidence = {
     workflowId: workflow.id,
     stepId: step.id,
     proposedActions: sanitizeSnapshotValue(validation.proposedActions),
@@ -16973,6 +17242,22 @@ async function executeActionPlanWorkflowAction(run, workflow, step, input, count
     executedActions: sanitizeSnapshotValue(executedActions),
     startedAt: new Date(startedAt).toISOString(),
     durationMs: Date.now() - startedAt
+  };
+  await recordNonTerminalRunEvidence(run, {
+    category: 'workflow-action-plan',
+    slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}:action-plan`,
+    replayKey: 'workflowActionPlans',
+    replayItem: planEvidence,
+    eventType: 'workflow.action_plan.recorded',
+    stepId: step.id,
+    eventPayload: {
+      workflowId: workflow.id,
+      proposedCount: validation.proposedActions.length,
+      acceptedCount: validation.acceptedActions.length,
+      rejectedCount: validation.rejectedActions.length,
+      executedCount: executedActions.length
+    },
+    capturedAt: planEvidence.startedAt
   });
 
   return result;
@@ -17143,9 +17428,9 @@ async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket
   return created.ticket;
 }
 
-async function executeTicketPlanWorkflowAction(run, workflow, step, input) {
+async function executeTicketPlanWorkflowAction(run, workflow, step, input, transitionIndex) {
   const startedAt = Date.now();
-  const spawnPlanId = [run.id, workflow.id, step.id, startedAt].join(':');
+  const spawnPlanId = [run.id, workflow.id, step.id, 'transition', transitionIndex].join(':');
   const validation = validateTicketPlanInput(run, input);
   const createdTickets = [];
 
@@ -17169,7 +17454,7 @@ async function executeTicketPlanWorkflowAction(run, workflow, step, input) {
     status: validation.rejectedTickets.length > 0 ? 'partial' : 'created'
   };
 
-  appendRunReplaySnapshotItem(run.id, 'workflowTicketPlans', {
+  const planEvidence = {
     workflowId: workflow.id,
     stepId: step.id,
     spawnPlanId,
@@ -17181,31 +17466,34 @@ async function executeTicketPlanWorkflowAction(run, workflow, step, input) {
     validationReasons: sanitizeSnapshotValue(validation.rejectedTickets.flatMap(ticket => ticket.validationReasons || [])),
     startedAt: new Date(startedAt).toISOString(),
     durationMs: Date.now() - startedAt
-  });
+  };
 
-  await appendEvent({
-    type: 'workflow.ticket_plan.executed',
-    ticketId: run.ticketId,
-    runId: run.id,
+  await recordNonTerminalRunEvidence(run, {
+    category: 'workflow-ticket-plan',
+    slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}`,
+    replayKey: 'workflowTicketPlans',
+    replayItem: planEvidence,
+    eventType: 'workflow.ticket_plan.executed',
     stepId: step.id,
-    payload: {
+    eventPayload: {
       workflowId: workflow.id,
       spawnPlanId,
       proposedCount: validation.proposedTickets.length,
       acceptedCount: validation.acceptedTickets.length,
       rejectedCount: validation.rejectedTickets.length,
       createdTicketIds: createdTickets.map(ticket => ticket.ticketId)
-    }
+    },
+    capturedAt: planEvidence.startedAt
   });
 
   return result;
 }
 
-async function executeWorkflowAction(run, workflow, step, input, context, counters, startedAtMs, limits, agent) {
+async function executeWorkflowAction(run, workflow, step, input, context, counters, startedAtMs, limits, agent, transitionIndex) {
   const contract = getActionContract(step.action);
   if (!contract) throw new Error(`Unknown workflow action: ${step.action}`);
   const operation = () => executeWorkflowActionWithinAdmission(
-    run, workflow, step, input, context, counters, startedAtMs, limits, agent, contract
+    run, workflow, step, input, context, counters, startedAtMs, limits, agent, contract, transitionIndex
   );
   const requiresMutationAdmission = contract.mutating === true ||
     step.action === 'executeActionPlan' ||
@@ -17221,7 +17509,7 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
   }, operation);
 }
 
-async function executeWorkflowActionWithinAdmission(run, workflow, step, input, context, counters, startedAtMs, limits, agent, contract) {
+async function executeWorkflowActionWithinAdmission(run, workflow, step, input, context, counters, startedAtMs, limits, agent, contract, transitionIndex) {
   const startedAt = Date.now();
   let result;
   await appendEvent({
@@ -17253,7 +17541,7 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
         { operation: step.action, args: input },
         counters.transitions,
         {
-          slot: `workflow:${workflow.id}:${step.id}`,
+          slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}`,
           startedAt,
           replayMetadata: { workflowId: workflow.id, workflowStepId: step.id },
           eventMetadata: { workflowId: workflow.id }
@@ -17263,43 +17551,54 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
       if (contract.mutating) counters.mutations += 1;
       if (!result._operationEvidenceRecorded) {
         const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, result);
-        appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
-        operation: { operation: step.action, args: input },
-        result,
-        startedAt: new Date(startedAt).toISOString(),
-        durationMs: Date.now() - startedAt,
-        historyId: result && result.historyId ? result.historyId : null,
-        workspaceRoot: getRunWorkspaceProvider(run).root,
-        executionWorkspaceType: run.executionWorkspaceType || 'main',
-        allocationPlanId: run.allocationPlanId || null,
-        allocationItemId: run.allocationItemId || null,
-        ownedOutputPaths: getRunOwnedOutputPaths(run),
-        workflowId: workflow.id,
-        workflowStepId: step.id,
-        ...targetEvidence
-        });
-        await appendEvent({
-        type: 'workspace.operation',
-        ticketId: run.ticketId,
-        runId: run.id,
-        stepId: step.id,
-        payload: {
+        const workspaceEvidence = {
+          operation: { operation: step.action, args: input },
+          result,
+          startedAt: new Date(startedAt).toISOString(),
+          durationMs: Date.now() - startedAt,
+          historyId: result && result.historyId ? result.historyId : null,
+          workspaceRoot: getRunWorkspaceProvider(run).root,
+          executionWorkspaceType: run.executionWorkspaceType || 'main',
+          allocationPlanId: run.allocationPlanId || null,
+          allocationItemId: run.allocationItemId || null,
+          ownedOutputPaths: getRunOwnedOutputPaths(run),
           workflowId: workflow.id,
-          operation: step.action,
-          path: input.path || null,
-          mutating: contract.mutating === true,
-          input: sanitizeSnapshotValue(input),
-          result: sanitizeSnapshotValue(result),
+          workflowStepId: step.id,
           ...targetEvidence
-        }
+        };
+        await recordNonTerminalRunEvidence(run, {
+          category: 'workspace-operation',
+          slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}:fallback`,
+          replayKey: 'workspaceOperations',
+          replayItem: workspaceEvidence,
+          eventType: 'workspace.operation',
+          stepId: step.id,
+          eventPayload: {
+            workflowId: workflow.id,
+            operation: step.action,
+            path: input.path || null,
+            mutating: contract.mutating === true,
+            input: sanitizeSnapshotValue(input),
+            result: sanitizeSnapshotValue(result),
+            ...targetEvidence
+          },
+          capturedAt: workspaceEvidence.startedAt
         });
       }
     } else if (step.action === 'executeActionPlan') {
-      result = await executeActionPlanWorkflowAction(run, workflow, step, input, counters, limits);
+      result = await executeActionPlanWorkflowAction(run, workflow, step, input, counters, limits, transitionIndex);
     } else if (step.action === 'executeTicketPlan') {
-      result = await executeTicketPlanWorkflowAction(run, workflow, step, input);
+      result = await executeTicketPlanWorkflowAction(run, workflow, step, input, transitionIndex);
     } else if (step.action === 'agentStructuredOutput') {
-      result = await executeAgentStructuredOutputAction(run, agent, input, counters, startedAtMs, limits);
+      result = await executeAgentStructuredOutputAction(
+        run,
+        agent,
+        input,
+        counters,
+        startedAtMs,
+        limits,
+        `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}:provider`
+      );
     } else if (step.action === 'condition') {
       result = evaluateConditionAction(input, step);
     } else if (step.action === 'stop') {
@@ -17320,7 +17619,7 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
       throw error;
     }
 
-    appendRunReplaySnapshotItem(run.id, 'workflowActions', {
+    const workflowActionEvidence = {
       workflowId: workflow.id,
       stepId: step.id,
       action: step.action,
@@ -17328,25 +17627,29 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
       result: sanitizeSnapshotValue(result),
       startedAt: new Date(startedAt).toISOString(),
       durationMs: Date.now() - startedAt
-    });
-    await appendEvent({
-      type: 'workflow.step.completed',
-      ticketId: run.ticketId,
-      runId: run.id,
+    };
+    await recordNonTerminalRunEvidence(run, {
+      category: 'workflow-step-result',
+      slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}`,
+      replayKey: 'workflowActions',
+      replayItem: workflowActionEvidence,
+      eventType: 'workflow.step.completed',
       stepId: step.id,
-      payload: {
+      eventPayload: {
         workflowId: workflow.id,
         action: step.action,
         durationMs: Date.now() - startedAt,
         result: sanitizeSnapshotValue(result)
-      }
+      },
+      capturedAt: workflowActionEvidence.startedAt
     });
 
     return result;
   } catch (error) {
+    if (error.nonTerminalEvidencePersistenceFailure || error.providerEvidencePersistenceFailure) throw error;
     if (contract && contract.type === 'workspaceAction' && !error._operationEvidenceRecorded) {
       const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, null, error);
-      appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+      const workspaceErrorEvidence = {
         operation: error.workspaceAction || { operation: step.action, args: input },
         error: error.message,
         blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
@@ -17361,27 +17664,30 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
         workflowId: workflow.id,
         workflowStepId: step.id,
         ...targetEvidence
+      };
+      await recordNonTerminalRunEvidence(run, {
+        category: 'workspace-operation',
+        slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}:fallback`,
+        replayKey: 'workspaceOperations',
+        replayItem: workspaceErrorEvidence,
+        eventType: 'workspace.operation',
+        stepId: step.id,
+        eventPayload: {
+          workflowId: workflow.id,
+          operation: step.action,
+          path: input && input.path ? input.path : null,
+          mutating: contract.mutating === true,
+          input: sanitizeSnapshotValue(input),
+          blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
+          reason: error.reason || null,
+          error: error.message,
+          ...targetEvidence
+        },
+        capturedAt: new Date(startedAt).toISOString()
       });
-  await appendEvent({
-    type: 'workspace.operation',
-    ticketId: run.ticketId,
-    runId: run.id,
-    stepId: step.id,
-    payload: {
-      workflowId: workflow.id,
-      operation: step.action,
-      path: input && input.path ? input.path : null,
-      mutating: contract.mutating === true,
-      input: sanitizeSnapshotValue(input),
-      blocked: error.failureKind === 'protected_path' || ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code),
-      reason: error.reason || null,
-      error: error.message,
-      ...targetEvidence
-    }
-  });
     }
 
-    appendRunReplaySnapshotItem(run.id, 'workflowActions', {
+    const failedWorkflowActionEvidence = {
       workflowId: workflow.id,
       stepId: step.id,
       action: step.action,
@@ -17389,19 +17695,22 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
       error: error.message,
       startedAt: new Date(startedAt).toISOString(),
       durationMs: Date.now() - startedAt
-    });
-    await appendEvent({
-      type: 'workflow.step.failed',
-      ticketId: run.ticketId,
-      runId: run.id,
+    };
+    await recordNonTerminalRunEvidence(run, {
+      category: 'workflow-step-result',
+      slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}`,
+      replayKey: 'workflowActions',
+      replayItem: failedWorkflowActionEvidence,
+      eventType: 'workflow.step.failed',
       stepId: step.id,
-      payload: {
+      eventPayload: {
         workflowId: workflow.id,
         action: step.action,
         error: error.message,
         code: error.code || null,
         durationMs: Date.now() - startedAt
-      }
+      },
+      capturedAt: failedWorkflowActionEvidence.startedAt
     });
     throw error;
   }
@@ -17448,11 +17757,23 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
   let currentStep = workflow.actions[0];
   const startedAtMs = Date.now();
 
-  appendRunReplaySnapshotItem(run.id, 'workflowInvocation', {
+  const workflowInvocationEvidence = {
     workflowId: workflow.id,
     workflowName: workflow.name,
     ...buildWorkflowContractEvidence(workflow),
     input: sanitizeSnapshotValue(workflowInput || {})
+  };
+  await recordNonTerminalRunEvidence(run, {
+    category: 'workflow-invocation',
+    slot: `workflow:${workflow.id}:invocation`,
+    replayKey: 'workflowInvocation',
+    replayItem: workflowInvocationEvidence,
+    eventType: 'workflow.invoked',
+    eventPayload: {
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      version: workflowInvocationEvidence.version || null
+    }
   });
 
   while (currentStep) {
@@ -17492,7 +17813,18 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
       currentWorkflowAction: currentStep.action
     });
     const input = resolveWorkflowInputTemplates(currentStep.input || {}, context);
-    const result = await executeWorkflowAction(run, workflow, currentStep, input, context, counters, startedAtMs, limits, agent);
+    const result = await executeWorkflowAction(
+      run,
+      workflow,
+      currentStep,
+      input,
+      context,
+      counters,
+      startedAtMs,
+      limits,
+      agent,
+      counters.transitions
+    );
     counters.transitions += 1;
     await persistRunWorkflowStep(run.id, currentStep, 'completed');
     await heartbeatRunLease(run.id, {
@@ -17897,7 +18229,6 @@ async function runAgentTicket(runId) {
   });
   if (!run || run.status !== 'running') return;
   await maybeTestInterrupt(run, 'after_run.started');
-  let currentProviderRequestPersisted = false;
   let providerConfig = null;
 
   try {
@@ -17939,11 +18270,24 @@ async function runAgentTicket(runId) {
         name: workflow.name,
         input: sanitizeSnapshotValue(workflowInput)
       };
-      appendRunReplaySnapshotItem(run.id, 'capabilitySelection', {
+      const capabilitySelectionEvidence = {
         selectedBy: 'agent',
         capability,
         bounded: true,
         deterministic: true
+      };
+      await recordNonTerminalRunEvidence(run, {
+        category: 'capability-selection',
+        slot: `workflow:${workflow.id}:capability-selection`,
+        replayKey: 'capabilitySelection',
+        replayItem: capabilitySelectionEvidence,
+        eventType: 'capability.selected',
+        eventPayload: {
+          capabilityType: capability.type,
+          capabilityId: capability.id,
+          bounded: true,
+          deterministic: true
+        }
       });
       appendRunLog(run, 'run:capability_started', `Capability started: ${workflow.name}`, null, {
         capabilityType: capability.type,
@@ -17955,11 +18299,23 @@ async function runAgentTicket(runId) {
           ? runtimeLimitsSnapshot.source.workflowLimits
           : getWorkflowSpecificLimits()
       });
-      appendRunReplaySnapshotItem(run.id, 'capabilityOutputs', {
+      const capabilityOutputEvidence = {
         capabilityType: capability.type,
         capabilityId: capability.id,
         output: sanitizeSnapshotValue(workflowResult.result || {}),
         counters: workflowResult.counters || null
+      };
+      await recordNonTerminalRunEvidence(run, {
+        category: 'capability-output',
+        slot: `workflow:${workflow.id}:capability-output`,
+        replayKey: 'capabilityOutputs',
+        replayItem: capabilityOutputEvidence,
+        eventType: 'capability.completed',
+        eventPayload: {
+          capabilityType: capability.type,
+          capabilityId: capability.id,
+          counters: workflowResult.counters || null
+        }
       });
       appendRunLog(run, 'run:capability_completed', `Capability completed: ${workflow.name}`, null, {
         capabilityType: capability.type,
@@ -17988,9 +18344,23 @@ async function runAgentTicket(runId) {
     const initialWorkspaceSnapshot = isBrowserRun(run)
       ? { targetKind: 'browser', target: run.browserTargetSnapshot, capturedAt: new Date().toISOString() }
       : captureRunWorkspaceRootSnapshot(run);
-    appendRunReplaySnapshotItem(run.id, 'targetSnapshots', {
+    const targetSnapshotEvidence = {
       phase: 'run_start',
       snapshot: initialWorkspaceSnapshot
+    };
+    await recordNonTerminalRunEvidence(run, {
+      category: 'target-snapshot',
+      slot: 'run-start',
+      replayKey: 'targetSnapshots',
+      replayItem: targetSnapshotEvidence,
+      eventType: 'target.snapshot.captured',
+      eventPayload: {
+        phase: 'run_start',
+        targetId: initialWorkspaceSnapshot.targetId || null,
+        targetKind: initialWorkspaceSnapshot.targetKind || null,
+        capturedAt: initialWorkspaceSnapshot.capturedAt || null
+      },
+      capturedAt: initialWorkspaceSnapshot.capturedAt || null
     });
     const mutationsByThisRun = [];
 
@@ -18120,19 +18490,21 @@ async function runAgentTicket(runId) {
       const input = buildAgentPrompt(promptTicket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
       appendRunLog(run, 'model:request', `${providerConfig.provider} request sent with model ${providerConfig.model}`);
       modelRequestCount += 1;
-      currentProviderRequestPersisted = false;
-      const modelRequestStartedAt = Date.now();
-      const modelResponse = await callModelProviderWithRunTimeout(run, agent, input, runStartedAtMs, limits, {
-        onRequest: requestPayload => {
-          appendRunReplaySnapshotItem(run.id, 'providerRequests', {
-            ...(isBrowserRun(run) ? sanitizeBrowserProviderRequestEvidence(requestPayload) : requestPayload),
-            startedAt: new Date(modelRequestStartedAt).toISOString(),
-            durationMs: Date.now() - modelRequestStartedAt
-          });
-          currentProviderRequestPersisted = true;
-        }
+      const providerCall = await callModelProviderWithRunEvidence(run, agent, input, runStartedAtMs, limits, {
+        slot: `agent:${step}:provider`,
+        sanitizeRequest: requestPayload => isBrowserRun(run)
+          ? sanitizeBrowserProviderRequestEvidence(requestPayload)
+          : requestPayload,
+        sanitizeResponsePayload: responsePayload => isBrowserRun(run)
+          ? sanitizeBrowserProviderResponseEvidence(responsePayload)
+          : responsePayload,
+        sanitizeResponseText: text => isBrowserRun(run)
+          ? '[redacted browser model response]'
+          : text
       });
-      const modelResponseCompletedAt = Date.now();
+      const modelResponse = providerCall.response;
+      const modelResponseCompletedAt = providerCall.responseCompletedAt;
+      const modelRequestStartedAt = providerCall.requestStartedAt;
       const modelCallDurationMs = modelResponseCompletedAt - modelRequestStartedAt;
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       const modelText = modelResponse.text;
@@ -18146,18 +18518,6 @@ async function runAgentTicket(runId) {
           requestId: modelResponse.responsePayload ? modelResponse.responsePayload.requestId || null : null
         }
       );
-      appendRunReplaySnapshotItem(run.id, 'modelResponses', {
-        text: isBrowserRun(run) ? '[redacted browser model response]' : modelText,
-        usage: modelResponse.usage || null,
-        provider: modelResponse.provider || providerConfig.provider,
-        model: modelResponse.model || providerConfig.model,
-        providerResponsePayload: isBrowserRun(run)
-          ? sanitizeBrowserProviderResponseEvidence(modelResponse.responsePayload)
-          : modelResponse.responsePayload,
-        startedAt: new Date(modelRequestStartedAt).toISOString(),
-        completedAt: new Date(modelResponseCompletedAt).toISOString(),
-        durationMs: modelCallDurationMs
-      });
       // Preserve the response to the already-issued request, then fence all
       // parsing-derived execution and target side effects on renewed ownership.
       await heartbeatRunLease(run.id, { phase: 'provider_response_received', step });
@@ -18176,13 +18536,30 @@ async function runAgentTicket(runId) {
         throw error;
       }
 
-      appendRunReplaySnapshotItem(run.id, 'parsedModelPlans', {
+      const parsedPlanEvidence = {
         ...(isBrowserRun(run) ? sanitizeBrowserPlanEvidence(modelPlan) : {
           message: modelPlan.message,
           actions: modelPlan.actions,
           complete: modelPlan.complete
         }),
         step
+      };
+      await recordNonTerminalRunEvidence(run, {
+        category: 'parsed-model-plan',
+        slot: `agent:${step}:plan`,
+        replayKey: 'parsedModelPlans',
+        replayItem: parsedPlanEvidence,
+        eventType: 'model.plan.parsed',
+        stepId: String(step),
+        eventPayload: {
+          complete: modelPlan.complete === true,
+          actionCount: Array.isArray(modelPlan.actions) ? modelPlan.actions.length : 0,
+          operations: Array.isArray(modelPlan.actions)
+            ? modelPlan.actions.map(action => action && action.operation).filter(Boolean)
+            : [],
+          providerResponseEvidenceKey: providerCall.responseEvidenceKey
+        },
+        capturedAt: new Date(modelResponseCompletedAt).toISOString()
       });
 
       // Capture the terminal browser model message for the user-facing browser
@@ -18623,13 +19000,21 @@ async function runAgentTicket(runId) {
 
           let result;
           if (isBrowserRun(run)) {
-            result = await executeBrowserOperation(run, operation, step);
+            result = await executeBrowserOperation(run, operation, step, {
+              slot: `agent:${step}:${actionIndex}`
+            });
           } else if (operation.operation === 'createWorkflowDraft') {
-            result = await createWorkflowDraftFromAgent(run, operation.args.workflow, step);
+            result = await createWorkflowDraftFromAgent(run, operation.args.workflow, step, {
+              slot: `agent:${step}:${actionIndex}`
+            });
           } else if (operation.operation === 'createWorkflowDraftIntent') {
-            result = await createWorkflowDraftFromIntent(run, operation.args, step);
+            result = await createWorkflowDraftFromIntent(run, operation.args, step, {
+              slot: `agent:${step}:${actionIndex}`
+            });
           } else if (operation.operation === 'createHandoffTask') {
-            result = await executeHandoffTask(run, operation.args, step);
+            result = await executeHandoffTask(run, operation.args, step, {
+              slot: `agent:${step}:${actionIndex}`
+            });
           } else {
             result = await executeWorkspaceOperation(run, action, step, {
               slot: `agent:${step}:${actionIndex}`,
@@ -18671,7 +19056,7 @@ async function runAgentTicket(runId) {
               operation.args || {},
               result
             );
-            appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+            const workspaceEvidence = {
               operation,
               result,
               startedAt: new Date(actionStartedAt).toISOString(),
@@ -18683,13 +19068,15 @@ async function runAgentTicket(runId) {
               allocationItemId: run.allocationItemId || null,
               ownedOutputPaths: getRunOwnedOutputPaths(run),
               ...targetEvidence
-            });
-            await appendEvent({
-              type: 'workspace.operation',
-              ticketId: run.ticketId,
-              runId: run.id,
+            };
+            await recordNonTerminalRunEvidence(run, {
+              category: 'workspace-operation',
+              slot: `agent:${step}:${actionIndex}:fallback`,
+              replayKey: 'workspaceOperations',
+              replayItem: workspaceEvidence,
+              eventType: 'workspace.operation',
               stepId: String(step),
-              payload: {
+              eventPayload: {
                 operation: operation.operation,
                 path: operation.args ? operation.args.path || null : null,
                 nextPath: operation.args ? operation.args.nextPath || null : null,
@@ -18697,7 +19084,8 @@ async function runAgentTicket(runId) {
                 input: sanitizeSnapshotValue(operation.args || {}),
                 result: sanitizeSnapshotValue(result),
                 ...targetEvidence
-              }
+              },
+              capturedAt: workspaceEvidence.startedAt
             });
             await maybeTestInterrupt(run, 'after_first_workspace.operation');
           }
@@ -18713,7 +19101,7 @@ async function runAgentTicket(runId) {
               result.args || {},
               result.result
             );
-            appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+            const handoffWorkspaceEvidence = {
               operation: executedOperation,
               result: result.result,
               startedAt: new Date(actionStartedAt).toISOString(),
@@ -18731,13 +19119,15 @@ async function runAgentTicket(runId) {
               allocationItemId: run.allocationItemId || null,
               ownedOutputPaths: getRunOwnedOutputPaths(run),
               ...targetEvidence
-            });
-            await appendEvent({
-              type: 'workspace.operation',
-              ticketId: run.ticketId,
-              runId: run.id,
+            };
+            await recordNonTerminalRunEvidence(run, {
+              category: 'workspace-operation',
+              slot: `agent:${step}:${actionIndex}:handoff-fallback`,
+              replayKey: 'workspaceOperations',
+              replayItem: handoffWorkspaceEvidence,
+              eventType: 'workspace.operation',
               stepId: String(step),
-              payload: {
+              eventPayload: {
                 operation: result.operation,
                 path: result.args ? result.args.path || null : null,
                 nextPath: null,
@@ -18751,7 +19141,8 @@ async function runAgentTicket(runId) {
                   executorAgentName: result.executorAgentName
                 },
                 ...targetEvidence
-              }
+              },
+              capturedAt: handoffWorkspaceEvidence.startedAt
             });
           }
 
@@ -18808,7 +19199,7 @@ async function runAgentTicket(runId) {
               ...(error.workspaceAction.conflictingHistoryId != null ? { conflictingHistoryId: error.workspaceAction.conflictingHistoryId } : {}),
               ...(error.workspaceAction.conflictingPath != null ? { conflictingPath: error.workspaceAction.conflictingPath } : {})
             } : {};
-            appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+            const workspaceErrorEvidence = {
               operation: error.workspaceAction || operation,
               error: error.message,
               blocked,
@@ -18822,25 +19213,28 @@ async function runAgentTicket(runId) {
               allocationPlanId: run.allocationPlanId || null,
               allocationItemId: run.allocationItemId || null,
               ...targetEvidence
-            });
-            await appendEvent({
-              type: 'workspace.operation',
-              ticketId: run.ticketId,
-              runId: run.id,
+            };
+            await recordNonTerminalRunEvidence(run, {
+              category: 'workspace-operation',
+              slot: `agent:${step}:${actionIndex}:fallback`,
+              replayKey: 'workspaceOperations',
+              replayItem: workspaceErrorEvidence,
+              eventType: 'workspace.operation',
               stepId: String(step),
-            payload: {
-              operation: eventOperation ? eventOperation.operation : null,
-              path: eventOperation && eventOperation.args ? eventOperation.args.path || null : eventOperation && eventOperation.path ? eventOperation.path : null,
-              nextPath: eventOperation && eventOperation.args ? eventOperation.args.nextPath || null : null,
-              mutating: eventOperation ? AGENT_MUTATING_OPERATIONS.includes(eventOperation.operation) : false,
-              input: sanitizeSnapshotValue(eventOperation && eventOperation.args ? eventOperation.args : {}),
-              blocked,
-              reason: blockedReason,
-              error: error.message,
-              ...conflictEvidence,
-              ...targetEvidence
-            }
-          });
+              eventPayload: {
+                operation: eventOperation ? eventOperation.operation : null,
+                path: eventOperation && eventOperation.args ? eventOperation.args.path || null : eventOperation && eventOperation.path ? eventOperation.path : null,
+                nextPath: eventOperation && eventOperation.args ? eventOperation.args.nextPath || null : null,
+                mutating: eventOperation ? AGENT_MUTATING_OPERATIONS.includes(eventOperation.operation) : false,
+                input: sanitizeSnapshotValue(eventOperation && eventOperation.args ? eventOperation.args : {}),
+                blocked,
+                reason: blockedReason,
+                error: error.message,
+                ...conflictEvidence,
+                ...targetEvidence
+              },
+              capturedAt: new Date(actionStartedAt).toISOString()
+            });
           }
           if (!isBrowserRun(run)) error.workspaceAction = error.workspaceAction || action;
           if (canRetryPriorOwnerConflict) {
@@ -18977,23 +19371,6 @@ async function runAgentTicket(runId) {
 
     run = await completeAgentRun(run);
   } catch (error) {
-    if (error.providerRequestPayload && !currentProviderRequestPersisted) {
-      appendRunReplaySnapshotItem(run.id, 'providerRequests', isBrowserRun(run)
-        ? sanitizeBrowserProviderRequestEvidence(error.providerRequestPayload)
-        : error.providerRequestPayload);
-    }
-
-    if (error.providerResponsePayload) {
-      appendRunReplaySnapshotItem(run.id, 'modelResponses', {
-        error: error.message,
-        provider: providerConfig ? providerConfig.provider : null,
-        model: providerConfig ? providerConfig.model : null,
-        providerResponsePayload: isBrowserRun(run)
-          ? sanitizeBrowserProviderResponseEvidence(error.providerResponsePayload)
-          : error.providerResponsePayload
-      });
-    }
-
     if (error && error.code === 'RUN_LEASE_LOST') {
       const currentRun = await getRunLeaseRepository().getRun(runId);
       await appendEvent({
@@ -19012,6 +19389,7 @@ async function runAgentTicket(runId) {
     }
   } finally {
     await closeBrowserSession(run);
+    runExecutionEvidenceAttempts.delete(runId);
     startingRunIds.delete(runId);
     startingLocalModelRunIds.delete(runId);
     runningRunKeys.delete(runExecutionKey(run));

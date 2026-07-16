@@ -292,6 +292,28 @@ async function main() {
     assert(readReceipt && readReceipt.metadata.contentHash, 'readFile receipt missing content hash');
     assert(readReceipt.metadata.size === Buffer.byteLength('seed content'), 'readFile receipt size mismatch');
 
+    const runEvents = readEvents().filter(event => event.runId === run.id);
+    const eventsByEvidenceKey = new Map(runEvents
+      .filter(event => event.payload && event.payload.evidenceKey)
+      .map(event => [event.payload.evidenceKey, event]));
+    for (const [collection, eventType] of [
+      ['providerRequests', 'provider.request.persisted'],
+      ['modelResponses', 'provider.response.persisted'],
+      ['parsedModelPlans', 'model.plan.parsed'],
+      ['targetSnapshots', 'target.snapshot.captured'],
+      ['workspaceOperations', 'workspace.operation']
+    ]) {
+      const items = Array.isArray(snapshot[collection]) ? snapshot[collection] : [];
+      assert(items.length > 0, `${collection} evidence is missing`);
+      for (const item of items) {
+        assert(typeof item.evidenceKey === 'string' && item.evidenceKey.length > 0,
+          `${collection} item is missing a stable evidence key`);
+        const pairedEvent = eventsByEvidenceKey.get(item.evidenceKey);
+        assert(pairedEvent && pairedEvent.type === eventType,
+          `${collection} item is not paired with ${eventType}`);
+      }
+    }
+
     const history = readJson('operation-history.json').filter(item => item.runId === run.id);
     assert(history.length === 4, `Expected four mutation history entries, found ${history.length}`);
     for (const record of history) {

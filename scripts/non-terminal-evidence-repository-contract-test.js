@@ -13,7 +13,7 @@ const {
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 
 let history = [];
-let snapshot = { version: 1, authorityChecks: [], workspaceOperations: [] };
+let snapshot = { version: 1, authorityChecks: [], workspaceOperations: [], browserOperations: [] };
 const events = [];
 let failNextEvent = false;
 
@@ -86,6 +86,7 @@ function completion(operationKey = 'run:1:agent:0:0:abc') {
 async function main() {
   assert.deepEqual(REQUIRED_NON_TERMINAL_EVIDENCE_REPOSITORY_METHODS, [
     'appendRunEvidence',
+    'completeActionReceipt',
     'prepareTargetOperation',
     'completeTargetOperation',
     'getTargetOperation',
@@ -110,6 +111,42 @@ async function main() {
   assert.equal(authority.inserted, true);
   assert.equal(snapshot.authorityChecks.length, 1);
   assert.equal(events.filter(event => event.type === 'authority.allowed').length, 1);
+
+  const browserReceiptInput = {
+    runId: 1,
+    ticketId: 10,
+    operationKey: 'run:1:browser:0:observe',
+    stepId: '0',
+    operation: 'observe',
+    outcome: 'succeeded',
+    historyRecord: {
+      step: 0,
+      operation: 'observe',
+      args: {},
+      result: { elementCount: 2 },
+      error: null,
+      targetId: 'browser:test',
+      targetKind: 'browser'
+    },
+    receipt: {
+      operation: 'observe',
+      targetId: 'browser:test',
+      targetKind: 'browser',
+      metadata: { elementCount: 2 }
+    },
+    replayKey: 'browserOperations',
+    replayItem: { operation: { operation: 'observe', args: {} }, status: 'ok' },
+    event: { type: 'browser.operation', stepId: '0', payload: { operation: 'observe', status: 'ok' } }
+  };
+  failNextEvent = true;
+  await assert.rejects(repository.completeActionReceipt(browserReceiptInput), /simulated journal interruption/);
+  assert.equal(history.length, 1, 'action receipt survives interruption before its event');
+  assert.equal(snapshot.browserOperations.length, 1, 'action replay item survives interruption before its event');
+  const repairedBrowserReceipt = await repository.completeActionReceipt(browserReceiptInput);
+  assert.equal(repairedBrowserReceipt.inserted, false);
+  assert.equal(history.length, 1, 'action receipt retry is idempotent');
+  assert.equal(snapshot.browserOperations.length, 1, 'action replay retry is idempotent');
+  assert.equal(events.filter(event => event.type === 'browser.operation').length, 1, 'action retry repairs its event');
 
   const operationKey = 'run:1:agent:0:0:abc';
   const intent = {
@@ -138,26 +175,47 @@ async function main() {
 
   failNextEvent = true;
   await assert.rejects(repository.completeTargetOperation(completion(operationKey)), /simulated journal interruption/);
-  assert.equal(history.length, 1, 'target receipt must survive an interruption after the target effect');
+  assert.equal(history.length, 2, 'target receipt must survive an interruption after the target effect');
   assert.equal(snapshot.workspaceOperations.length, 1, 'replay progress is repairable by stable evidence key');
   assert.equal(events.filter(event => event.type === 'workspace.operation').length, 0);
 
   const repaired = await repository.completeTargetOperation(completion(operationKey));
   assert.equal(repaired.inserted, false);
-  assert.equal(history.length, 1, 'retry must not duplicate the operation receipt');
+  assert.equal(history.length, 2, 'retry must not duplicate the operation receipt');
   assert.equal(snapshot.workspaceOperations.length, 1, 'retry must not duplicate replay evidence');
   assert.equal(events.filter(event => event.type === 'workspace.operation').length, 1, 'retry must repair the missing event');
-  assert.equal(history[0].operationKey, operationKey);
-  assert.equal(history[0].mutationReceipt.operationKey, operationKey);
-  assert.equal(snapshot.workspaceOperations[0].historyId, history[0].id);
+  const mutationHistory = history.find(record => record.operationKey === operationKey);
+  assert.equal(mutationHistory.operationKey, operationKey);
+  assert.equal(mutationHistory.mutationReceipt.operationKey, operationKey);
+  assert.equal(snapshot.workspaceOperations[0].historyId, mutationHistory.id);
 
   const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.ok(serverSource.includes('getNonTerminalEvidenceRepository().prepareTargetOperation({'));
   assert.ok(serverSource.includes('getNonTerminalEvidenceRepository().completeTargetOperation({'));
+  assert.ok(serverSource.includes('getNonTerminalEvidenceRepository().completeActionReceipt({'));
   assert.ok(serverSource.includes("error.code = 'TARGET_OPERATION_RECONCILIATION_REQUIRED'"));
   assert.ok(serverSource.includes('buildTargetOperationKey('));
+  assert.equal(
+    (serverSource.match(/await options\.onRequest\(requestSnapshot\);/g) || []).length,
+    2,
+    'both provider transports must await durable request evidence before fetch'
+  );
+  assert.equal(
+    (serverSource.match(/appendRunReplaySnapshotItem\(/g) || []).length,
+    3,
+    'direct replay appends must remain confined to the helper and diagnostic replay events'
+  );
+  for (const evidenceType of [
+    'provider.request.persisted',
+    'provider.response.persisted',
+    'model.plan.parsed',
+    'workflow.step.completed',
+    'workflow.step.failed'
+  ]) {
+    assert.ok(serverSource.includes(evidenceType), `server must route ${evidenceType} through non-terminal evidence`);
+  }
 
-  console.log('PASS: non-terminal evidence boundary pairs authority evidence and reconciles stable target operation receipts');
+  console.log('PASS: non-terminal evidence boundary pairs provider, plan, workflow, read/action, authority, and target-operation evidence');
 }
 
 main().catch(error => {

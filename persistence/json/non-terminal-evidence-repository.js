@@ -2,6 +2,7 @@
 
 const REQUIRED_NON_TERMINAL_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
   'appendRunEvidence',
+  'completeActionReceipt',
   'prepareTargetOperation',
   'completeTargetOperation',
   'getTargetOperation',
@@ -161,6 +162,80 @@ class JsonNonTerminalEvidenceRepository {
       receipt,
       preparedEvent
     };
+  }
+
+  async completeActionReceipt({
+    runId,
+    ticketId,
+    operationKey,
+    stepId = null,
+    operation,
+    outcome,
+    historyRecord,
+    receipt,
+    replayKey,
+    replayItem,
+    event
+  }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
+    const key = requiredString(operationKey, 'operationKey');
+    const operationName = requiredString(operation, 'operation');
+    const normalizedOutcome = requiredString(outcome, 'outcome');
+    if (!['succeeded', 'failed', 'refused'].includes(normalizedOutcome)) {
+      throw new TypeError(`Unsupported action receipt outcome: ${normalizedOutcome}`);
+    }
+    const histories = this.readOperationHistory();
+    let record = histories.find(candidate => candidate && candidate.runId === id && candidate.operationKey === key) || null;
+    const inserted = record === null;
+    const proposedHistory = this._object(historyRecord, 'historyRecord');
+    const receiptDocument = this._object(receipt, 'receipt');
+    if (!record) {
+      record = {
+        ...proposedHistory,
+        id: this._nextId(histories),
+        timestamp: this.now().toISOString(),
+        runId: id,
+        ticketId: ownerTicketId,
+        step: proposedHistory.step === undefined ? stepId : proposedHistory.step,
+        operation: operationName,
+        operationKey: key,
+        outcome: normalizedOutcome,
+        readReceipt: receiptDocument
+      };
+      histories.push(record);
+      this.writeOperationHistory(histories);
+    } else {
+      const conflicts = Object.keys(proposedHistory)
+        .some(field => canonicalJson(record[field]) !== canonicalJson(proposedHistory[field]));
+      if (record.ticketId !== ownerTicketId || record.operation !== operationName ||
+          record.outcome !== normalizedOutcome || conflicts ||
+          canonicalJson(record.readReceipt) !== canonicalJson(receiptDocument)) {
+        throw new TargetOperationConflictError(id, key);
+      }
+    }
+
+    const eventDocument = this._object(event, 'event');
+    const evidence = await this.appendRunEvidence({
+      runId: id,
+      ticketId: ownerTicketId,
+      evidenceKey: `action-receipt:${key}:completed`,
+      replayKey,
+      replayItem: {
+        ...this._object(replayItem, 'replayItem'),
+        historyId: record.id,
+        operationKey: key
+      },
+      event: {
+        ...eventDocument,
+        payload: {
+          ...this._object(eventDocument.payload || {}, 'event.payload'),
+          historyId: record.id,
+          operationKey: key
+        }
+      }
+    });
+    return { record, evidence, inserted };
   }
 
   async prepareTargetOperation({ runId, ticketId, operationKey, stepId = null, intent }) {

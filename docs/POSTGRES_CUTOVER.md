@@ -6,7 +6,7 @@ not a claim that the server already runs on PostgreSQL.
 
 ## Current status
 
-The PostgreSQL foundation and the first four server authority seams are implemented:
+The PostgreSQL foundation and the first five server authority seams are implemented:
 
 - `persistence/postgres/migrations/001_runtime_core.sql` defines the ticket, run, append-only event,
   and per-run event-chain-tip schema.
@@ -83,6 +83,15 @@ The PostgreSQL foundation and the first four server authority seams are implemen
   external effect, and completion transaction; it is released automatically if the worker
   connection dies. This does not make the filesystem effect part of a database transaction; the
   prepared-intent reconciliation protocol is the cross-system boundary.
+- The remaining bounded execution stream now uses stable, run-attempt-scoped evidence keys through
+  the same non-terminal repository. Provider requests are committed before transport admission;
+  returned and structured-error responses are committed before parsing or action execution. Parsed
+  plans, workflow invocation/step/action-plan evidence, target snapshots, non-mutating workspace
+  reads, browser receipts, workflow-draft evidence, handoff evidence, and capability selection/output
+  pair replay items with compact events through one repository call. Browser receipts also use the
+  append-only idempotent operation-receipt store. Observational keys include the persisted execution
+  attempt so a legitimate same-run recovery does not conflict with earlier observations; mutation
+  keys remain attempt-independent so target reconciliation still prevents duplicate effects.
 
 The Fastify server currently instantiates the JSON implementations of those repositories, and all
 remaining runtime domains still use JSON files as their authority. JSON state mutation and event
@@ -133,17 +142,16 @@ The server backend must not be enabled until all of these hold:
 
 ## Remaining implementation order
 
-1. Move the remaining non-terminal execution stream behind the selected authority. Provider
-   requests/responses, parsed plans, workflow progress, non-mutating action/read receipts, and
-   their replay/events still use direct JSON helpers; the target-mutation and mutation-authority
-   slice is complete.
+1. Move replay initialization, remaining scalar/diagnostic replay projections, and bounded replay
+   reads to the selected shared authority. These paths still call JSON helpers directly even though
+   the bounded execution records listed above use the repository seam.
 2. Continue replacing the server's remaining synchronous JSON call sites with asynchronous
    repositories, one complete authority slice at a time. The scheduler lease, run terminalization,
-   ticket/run lifecycle, and target-mutation evidence slices are complete; startup/operator reads,
-   other non-terminal replay/evidence updates, and mutable control records are not. Do not publish
-   the mixed implementation as horizontally scalable.
-3. Make startup, recovery, replay reads, and operator reads use the selected shared authority, with
-   bounded indexed queries and no JSON fallback in PostgreSQL mode.
+   ticket/run lifecycle, target-mutation evidence, and bounded non-terminal execution-evidence
+   slices are complete. Do not publish the mixed implementation as horizontally scalable.
+3. Make every startup, recovery, and operator read consume the same selected authority used by
+   schedulers and workers; use bounded indexed queries and remove JSON fallback/scans from the
+   PostgreSQL path.
 4. Move workflows, templates, schedules, Work Contexts, routing, connectors, permissions, and other
    mutable control records to shared storage with their current validation and provenance rules.
 5. Replace in-memory sessions and process-local scheduler ownership where multi-process deployment

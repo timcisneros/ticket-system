@@ -88,7 +88,7 @@ recovered without granting their former owner continued authority. State and its
 roll back together. Its deterministic contract test runs in the release checkpoint, and CI runs the
 schema, rollback, idempotency, and concurrency suite against PostgreSQL 17.
 
-Four server-facing seams now have active JSON and tested PostgreSQL implementations. The scheduler
+Five server-facing seams now have active JSON and tested PostgreSQL implementations. The scheduler
 lease contract covers discovery, claim, renewal, workflow progress, release, and expired-run
 recovery. The run-terminalization contract covers terminal status/lease clear, final replay,
 violation evidence, evaluation, consequence, and ordered terminal events. The ticket/run lifecycle
@@ -99,6 +99,12 @@ receipts, mutation replay, and completion events. Applied prepared effects are r
 worker loss; uncertain effects are left untouched and require intervention. These are integration
 boundaries, not a backend switch: the JSON adapter's state, snapshot, and event writes remain
 separate operations and are repaired by stable evidence keys where the contract permits it.
+The bounded non-terminal execution-evidence seam now covers provider requests/responses, parsed
+plans, workflow/capability progress, target snapshots, workspace reads, browser/action receipts,
+workflow-draft evidence, and handoff evidence. Provider request evidence is awaited before the
+transport starts, and returned response evidence is stored before parsing or target actions.
+Observational keys include a persisted run-attempt ordinal; mutation keys intentionally do not, so
+same-run recovery can record fresh observations without duplicating reconciled target effects.
 
 This foundation is not yet the Fastify server's active authority. The server remains on JSON and
 explicitly refuses `PERSISTENCE_BACKEND=postgres` until the complete runtime cutover is assembled.
@@ -122,13 +128,12 @@ Compatibility is format-specific, not a system-wide no-legacy policy:
 ## Known work
 
 1. Complete the PostgreSQL runtime cutover before horizontal deployment. Core primitives plus the
-   scheduler lease, atomic run-terminalization, ticket/run lifecycle, and target-mutation evidence
-   slices are implemented. The next boundary is the remaining non-terminal execution stream:
-   provider requests/responses, parsed plans, workflow progress, non-mutating action/read receipts,
-   and their replay/events must use the same selected authority. Then move startup/recovery and
-   operator reads to that authority, migrate the remaining whole authority slices without
-   dual-writing, and remove the JSON runtime path. Shared storage still needs explicit retention
-   and tenant-isolation policy.
+   scheduler lease, atomic run-terminalization, ticket/run lifecycle, target-mutation evidence, and
+   bounded non-terminal execution-evidence slices are implemented. The next boundary is replay
+   initialization, remaining scalar/diagnostic replay projections, and bounded replay reads; then
+   move startup/recovery and operator reads to the same authority, migrate the remaining whole
+   authority slices without dual-writing, and remove the JSON runtime path. Shared storage still
+   needs explicit retention and tenant-isolation policy.
 2. Add bounded deterministic postconditions where prose acceptance criteria do not prove outcomes;
    keep real-model benchmarks observational.
 3. Complete validation of the model contract compiler and prefix truncation before enabling them by

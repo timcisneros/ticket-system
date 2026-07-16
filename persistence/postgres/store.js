@@ -1917,6 +1917,68 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+  async completeActionReceipt({
+    runId,
+    ticketId,
+    operationKey,
+    stepId = null,
+    operation,
+    outcome,
+    historyRecord,
+    receipt,
+    replayKey,
+    replayItem,
+    event
+  }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
+    const key = requiredString(operationKey, 'operationKey', 512);
+    const operationName = requiredString(operation, 'operation');
+    const normalizedOutcome = requiredString(outcome, 'outcome');
+    const history = this.assertJsonRecord(historyRecord, 'historyRecord');
+    const receiptDocument = this.assertJsonRecord(receipt, 'receipt');
+    const replayDocument = this.assertJsonRecord(replayItem, 'replayItem');
+    const eventDocument = this.assertJsonRecord(event, 'event');
+
+    return this.withTransaction(async client => {
+      const recorded = await this.recordOperationReceipt({
+        runId: id,
+        idempotencyKey: key,
+        stepId,
+        operation: operationName,
+        outcome: normalizedOutcome,
+        receipt: {
+          ...history,
+          readReceipt: receiptDocument
+        },
+        eventType: null
+      }, { client });
+      if (recorded.record.ticketId !== ownerTicketId) {
+        throw new TypeError(`Run ${id} does not belong to ticket ${ownerTicketId}`);
+      }
+      const evidence = await this.appendRunEvidence({
+        runId: id,
+        ticketId: ownerTicketId,
+        evidenceKey: `action-receipt:${key}:completed`,
+        replayKey,
+        replayItem: {
+          ...replayDocument,
+          historyId: recorded.record.id,
+          operationKey: key
+        },
+        event: {
+          ...eventDocument,
+          payload: {
+            ...this.assertJsonRecord(eventDocument.payload || {}, 'event.payload'),
+            historyId: recorded.record.id,
+            operationKey: key
+          }
+        }
+      }, { client });
+      return { record: recorded.record, evidence, inserted: recorded.inserted };
+    });
+  }
+
   async getTargetOperation(runId, operationKey, { client = null, forUpdate = false } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const key = requiredString(operationKey, 'operationKey', 512);

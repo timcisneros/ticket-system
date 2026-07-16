@@ -154,6 +154,7 @@ for (const requiredPrimitive of [
   'POSTGRES_REPLAY_INTEGRITY_FAILURE',
   'async recordOperationReceipt',
   'async appendRunEvidence',
+  'async completeActionReceipt',
   'async prepareTargetOperation',
   'async completeTargetOperation',
   'async getTargetOperation',

@@ -15,10 +15,22 @@ executable replay format.
 | Provider requests/responses, parsed plans, read evidence, and per-run execution context | `data/replay-snapshots/run-<id>.json` | Events and logs |
 | Human-readable operator narrative | `data/logs.json` | Stronger structured sources above when available |
 
-Read receipts are embedded in workspace-operation event and replay evidence; there is no separate
-read-receipt ledger. Triage is authoritative on the current ticket or run record. Logs may supply
-historical context for operator annotations, but they do not override structured state, receipts,
-or event evidence.
+Local-workspace read receipts are embedded in workspace-operation event and replay evidence; there
+is no separate local-read ledger. Browser operations retain their operation-history/action receipt
+as well as paired replay/event evidence. Triage is authoritative on the current ticket or run
+record. Logs may supply historical context for operator annotations, but they do not override
+structured state, receipts, or event evidence.
+
+Bounded execution records use stable evidence keys to correlate their replay item with a compact
+event through the non-terminal evidence repository. This includes provider requests/responses,
+parsed plans, target snapshots, workflow and capability progress, local reads, browser/action
+receipts, workflow-draft evidence, and handoff evidence. Provider request persistence is awaited
+before transport admission; returned or structured-error responses are persisted before parsing or
+action execution. Observational keys include the run execution-attempt ordinal so recovery can make
+new observations, while mutation operation keys remain stable across attempts for reconciliation.
+The active JSON adapter cannot make its replay file, operation history, and journal one filesystem
+transaction; PostgreSQL implements the same calls transactionally, but is not yet the active server
+backend.
 
 ## Event journal contract
 

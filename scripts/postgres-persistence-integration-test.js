@@ -162,7 +162,7 @@ async function main() {
     });
     await store.writeReplaySnapshot({
       runId: nonTerminalEvidenceRun.id,
-      snapshot: { version: 1, authorityChecks: [], workspaceOperations: [] }
+      snapshot: { version: 1, authorityChecks: [], workspaceOperations: [], browserOperations: [] }
     });
     const operationKey = `run:${nonTerminalEvidenceRun.id}:agent:0:0:integration`;
     const operationIntent = {
@@ -240,13 +240,45 @@ async function main() {
     assert.deepEqual(targetState.receipt.args, operationIntent.args);
     assert.equal(targetState.receipt.result.path, 'integration/report.txt');
     assert.equal(targetState.receipt.mutationReceipt.targetPath, 'integration/report.txt');
-    assert.equal((await store.listOperationReceipts(nonTerminalEvidenceRun.id)).length, 1);
+    const actionReceiptInput = {
+      runId: nonTerminalEvidenceRun.id,
+      ticketId: nonTerminalEvidenceTicket.id,
+      operationKey: `run:${nonTerminalEvidenceRun.id}:browser:0:observe`,
+      stepId: '0',
+      operation: 'observe',
+      outcome: 'succeeded',
+      historyRecord: {
+        operation: 'observe',
+        args: {},
+        result: { elementCount: 2 },
+        targetId: 'browser:integration',
+        targetKind: 'browser'
+      },
+      receipt: {
+        operation: 'observe',
+        targetId: 'browser:integration',
+        targetKind: 'browser',
+        metadata: { elementCount: 2 }
+      },
+      replayKey: 'browserOperations',
+      replayItem: { operation: { operation: 'observe', args: {} }, status: 'ok' },
+      event: { type: 'browser.operation', stepId: '0', payload: { operation: 'observe', status: 'ok' } }
+    };
+    const actionReceiptRace = await Promise.all([
+      store.completeActionReceipt(actionReceiptInput),
+      peer.completeActionReceipt(actionReceiptInput)
+    ]);
+    assert.equal(actionReceiptRace.filter(result => result.inserted).length, 1,
+      'concurrent action receipt completion must create one receipt/evidence bundle');
+    assert.equal((await store.listOperationReceipts(nonTerminalEvidenceRun.id)).length, 2);
     const targetReplay = await store.getReplaySnapshot(nonTerminalEvidenceRun.id);
     assert.equal(targetReplay.snapshot.authorityChecks.length, 1);
     assert.equal(targetReplay.snapshot.workspaceOperations.length, 1);
+    assert.equal(targetReplay.snapshot.browserOperations.length, 1);
     const targetEvents = await store.listRunEvents(nonTerminalEvidenceRun.id);
     assert.ok(targetEvents.some(event => event.type === 'workspace.operation_prepared'));
     assert.ok(targetEvents.some(event => event.type === 'workspace.operation'));
+    assert.equal(targetEvents.filter(event => event.type === 'browser.operation').length, 1);
     assert.equal(verifyCurrentRunEventChain(targetEvents).chainValid, true);
     await singleConnectionStore.withTargetOperationLock({
       targetId: 'local-workspace',

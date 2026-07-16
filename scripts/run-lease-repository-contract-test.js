@@ -262,11 +262,15 @@ async function main() {
   assert.deepEqual(pagedStarts, [21], 'bounded page rotation must not starve work behind a blocked prefix');
 
   const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const responseEvidenceIndex = serverSource.indexOf("appendRunReplaySnapshotItem(run.id, 'modelResponses'");
   const providerFenceIndex = serverSource.indexOf("phase: 'provider_response_received'");
+  const responseEvidenceIndex = serverSource.lastIndexOf(
+    'const providerCall = await callModelProviderWithRunEvidence',
+    providerFenceIndex
+  );
   const parseIndex = serverSource.indexOf('const modelPlan = parseModelActions(modelText)', providerFenceIndex);
   const actionFenceIndex = serverSource.indexOf('await assertLiveRunLease(run.id)', parseIndex);
-  assert.ok(responseEvidenceIndex >= 0 && responseEvidenceIndex < providerFenceIndex);
+  assert.ok(responseEvidenceIndex >= 0 && responseEvidenceIndex < providerFenceIndex,
+    'provider response evidence must commit before the lease fence and plan parsing');
   assert.ok(providerFenceIndex < parseIndex, 'provider response must renew ownership before plan execution');
   assert.ok(actionFenceIndex > parseIndex, 'each parsed action must revalidate ownership before target execution');
   assert.ok(serverSource.includes("error.code === 'RUN_LEASE_LOST'"));
