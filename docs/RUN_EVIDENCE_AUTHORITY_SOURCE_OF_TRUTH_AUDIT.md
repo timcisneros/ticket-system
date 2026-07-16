@@ -73,7 +73,7 @@ r1.18 should build a read-only ticket timeline projection from these existing so
 
 ## 4. Current event ledger role
 
-`appendEvent` sanitizes an event, assigns an id and high-resolution timestamp, and appends one JSON line to `events.jsonl`. Run-scoped events receive a zero-based `seq` and `prevHash`; the next link is derived from a SHA-256 hash of canonical type/ticket/run/step/payload content. Concurrent producers reserve chain positions before yielding. A persistent asynchronous journal serializes bounded batches, and each caller resumes only after the batch sync succeeds; committed chain state advances at that same acknowledgement boundary.
+`appendEvent` sanitizes an event, assigns an id and high-resolution timestamp, and appends one JSON line to `events.jsonl`. Run-scoped events receive a zero-based `seq` and `prevHash`; the next link is derived from a SHA-256 hash of canonical type/ticket/run/step/payload content. The append path serializes asynchronous writes and keeps an in-memory pending buffer visible to readers until flush.
 
 The ledger is append-only during normal operation. Debug reset is an explicit destructive development operation and is not production recovery. The event file is read by runtime recovery/reconciliation helpers and by replay, projection, telemetry, and integrity scripts.
 

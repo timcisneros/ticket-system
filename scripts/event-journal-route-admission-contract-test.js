@@ -64,4 +64,48 @@ assert(
 );
 assert(!/eventJournalAdmission:\s*false/.test(source), 'obsolete route-level admission opt-outs remain');
 
-console.log('PASS: event journal admission is explicit and limited to journal-dependent HTTP routes');
+assert(
+  /const BROWSER_OPERATIONS_REQUIRING_EVENT_ADMISSION = new Set\(\['navigate', 'screenshot'\]\);/.test(source),
+  'browser admission scope is not limited to session-changing or artifact-producing operations'
+);
+assert(
+  /isBrowserRun\(run\) && BROWSER_OPERATIONS_REQUIRING_EVENT_ADMISSION\.has\(proposedOperation\)/.test(source),
+  'browser actions do not use the bounded side-effect admission set'
+);
+assert(
+  !/requiresMutationAdmission = isBrowserRun\(run\) \|\|/.test(source),
+  'all browser inspection actions still reserve worst-case journal capacity'
+);
+
+const appendEventStart = source.indexOf('async function appendEvent(event = {})');
+const readEventsStart = source.indexOf('\nfunction readEvents()', appendEventStart);
+assert(appendEventStart >= 0 && readEventsStart > appendEventStart, 'appendEvent source boundary was not found');
+const appendEventSource = source.slice(appendEventStart, readEventsStart);
+assert(
+  /await acquireRequiredEventJournalAdmission\(/.test(appendEventSource),
+  'standalone events fail instead of waiting recoverably for journal capacity'
+);
+assert(
+  !/eventJournal\.tryAcquireAdmission\(/.test(appendEventSource),
+  'standalone appendEvent still performs one-shot admission'
+);
+assert(
+  appendEventSource.indexOf('await acquireRequiredEventJournalAdmission(') <
+    appendEventSource.indexOf('reservedRunEventChains.get(runId)'),
+  'run-chain position is reserved before a pressure wait can complete'
+);
+
+assert(
+  /const SHUTDOWN_RUN_DRAIN_TIMEOUT_MS = getPositiveIntegerEnv\('SHUTDOWN_RUN_DRAIN_TIMEOUT_MS', 120000\);/.test(source),
+  'shutdown active-run grace period is not configurable'
+);
+assert(
+  /activeRunDrainTimeoutMs: SHUTDOWN_RUN_DRAIN_TIMEOUT_MS/.test(source),
+  'effective shutdown active-run grace period is not observable in runtime status'
+);
+assert(
+  /Shutdown run-drain timeout after \$\{SHUTDOWN_RUN_DRAIN_TIMEOUT_MS\}ms/.test(source),
+  'forced shutdown boundary is not reported with its configured timeout'
+);
+
+console.log('PASS: event journal admission is explicit, recoverable, and scoped to journal-dependent side effects');

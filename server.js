@@ -38,6 +38,7 @@ const RUNS_FILE = path.join(DATA_DIR, 'runs.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
 const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
 const EVENT_JOURNAL_OPTIONS = Object.freeze(resolveDurableAppendJournalOptions(process.env));
+const SHUTDOWN_RUN_DRAIN_TIMEOUT_MS = getPositiveIntegerEnv('SHUTDOWN_RUN_DRAIN_TIMEOUT_MS', 120000);
 const RUNTIME_LIMITS_FILE = path.join(DATA_DIR, 'runtime-limits.json');
 const DATA_DIR_WRITER_LOCK_FILE = path.join(DATA_DIR, 'writer-lock.json');
 const ALLOCATION_PLANS_FILE = path.join(DATA_DIR, 'allocation-plans.json');
@@ -326,6 +327,10 @@ function refreshDataDirWriterLockForDebugReset() {
 
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_BROWSER_OPERATIONS = ['navigate', 'observe', 'readPageText', 'screenshot', 'wait'];
+// Navigation changes browser-session state and screenshots create artifacts. Pure
+// observation and bounded waits do not need to reserve worst-case event capacity
+// for the duration of the operation; their evidence append waits on record-sized capacity.
+const BROWSER_OPERATIONS_REQUIRING_EVENT_ADMISSION = new Set(['navigate', 'screenshot']);
 const BROWSER_OPERATION_ARGS = Object.freeze({
   navigate: ['url'],
   observe: [],
@@ -5173,6 +5178,21 @@ function normalizeNullableInteger(value) {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+function eventAdmissionReservationBytes(event) {
+  const reservationEnvelope = event.runId === null
+    ? event
+    : {
+        ...event,
+        seq: Number.MAX_SAFE_INTEGER,
+        prevHash: '0'.repeat(64),
+        hash: '0'.repeat(64)
+      };
+  return Math.min(
+    eventJournal.maxRecordBytes,
+    Buffer.byteLength(`${JSON.stringify(reservationEnvelope)}\n`)
+  );
+}
+
 async function appendEvent(event = {}) {
   if (eventAppendFailure) {
     const error = new Error(`Event persistence is unavailable: ${eventAppendFailure.message}`);
@@ -5205,132 +5225,132 @@ async function appendEvent(event = {}) {
     throw dataIntegrityError('events.jsonl', `cannot append duplicate event id ${normalized.id}`);
   }
 
-  let chain = null;
-  // Reserve sequence/hash positions before yielding so concurrent producers
-  // cannot claim the same position. The committed tip advances only after the
-  // exact serialized event receives durable journal acknowledgement.
-  if (normalized.runId !== null) {
-    const runId = normalized.runId;
-    chain = reservedRunEventChains.get(runId) || runEventChains.get(runId) || { seq: 0, prevHash: null };
-    normalized.seq = chain.seq;
-    normalized.prevHash = chain.prevHash;
-    normalized.hash = computeRunEventHash(normalized);
+  let admissionToken = currentEventJournalAdmission();
+  let ownsAdmission = false;
+  if (!admissionToken) {
+    admissionToken = await acquireRequiredEventJournalAdmission(
+      { source: 'internal_event', eventType: normalized.type },
+      eventAdmissionReservationBytes(normalized)
+    );
+    ownsAdmission = true;
   }
 
-  let line = `${JSON.stringify(normalized)}\n`;
-  const requestedRecordBytes = Buffer.byteLength(line);
-  let recordRejection = null;
-  if (requestedRecordBytes > eventJournal.maxRecordBytes) {
-    eventJournal.noteOversizedRejection();
-    const requestedType = normalized.type;
-    normalized = {
-      schemaVersion: normalized.schemaVersion,
-      id: normalized.id,
-      ts: normalized.ts,
-      type: 'event.record_rejected',
-      ticketId: normalized.ticketId,
-      runId: normalized.runId,
-      stepId: normalized.stepId,
-      payload: {
-        reasonCode: 'event_record_too_large',
-        outcome: 'rejected',
-        requestedType,
-        requestedRecordBytes,
-        maxRecordBytes: eventJournal.maxRecordBytes
-      }
-    };
-    if (chain) {
+  try {
+    // A standalone event may have yielded while waiting for capacity. Recheck
+    // identity, then reserve its chain position synchronously so the position is
+    // based on the latest committed/reserved tip.
+    if (persistedEventIds.has(normalized.id) || reservedEventIds.has(normalized.id)) {
+      throw dataIntegrityError('events.jsonl', `cannot append duplicate event id ${normalized.id}`);
+    }
+
+    let chain = null;
+    if (normalized.runId !== null) {
+      const runId = normalized.runId;
+      chain = reservedRunEventChains.get(runId) || runEventChains.get(runId) || { seq: 0, prevHash: null };
       normalized.seq = chain.seq;
       normalized.prevHash = chain.prevHash;
       normalized.hash = computeRunEventHash(normalized);
     }
-    line = `${JSON.stringify(normalized)}\n`;
-    recordRejection = new Error(
-      `Event ${requestedType} is ${requestedRecordBytes} bytes; journal record limit is ${eventJournal.maxRecordBytes}`
-    );
-    recordRejection.code = 'EVENT_RECORD_TOO_LARGE';
-    recordRejection.statusCode = 413;
-    recordRejection.requestedType = requestedType;
-    recordRejection.requestedRecordBytes = requestedRecordBytes;
-    recordRejection.maxRecordBytes = eventJournal.maxRecordBytes;
-  }
 
-  if (Buffer.byteLength(line) > eventJournal.maxRecordBytes) {
-    const error = recordRejection || new Error(`Event ${normalized.type} exceeds the journal record limit`);
-    error.code = 'EVENT_RECORD_TOO_LARGE';
-    error.statusCode = 413;
-    throw error;
-  }
+    let line = `${JSON.stringify(normalized)}\n`;
+    const requestedRecordBytes = Buffer.byteLength(line);
+    let recordRejection = null;
+    if (requestedRecordBytes > eventJournal.maxRecordBytes) {
+      eventJournal.noteOversizedRejection();
+      const requestedType = normalized.type;
+      normalized = {
+        schemaVersion: normalized.schemaVersion,
+        id: normalized.id,
+        ts: normalized.ts,
+        type: 'event.record_rejected',
+        ticketId: normalized.ticketId,
+        runId: normalized.runId,
+        stepId: normalized.stepId,
+        payload: {
+          reasonCode: 'event_record_too_large',
+          outcome: 'rejected',
+          requestedType,
+          requestedRecordBytes,
+          maxRecordBytes: eventJournal.maxRecordBytes
+        }
+      };
+      if (chain) {
+        normalized.seq = chain.seq;
+        normalized.prevHash = chain.prevHash;
+        normalized.hash = computeRunEventHash(normalized);
+      }
+      line = `${JSON.stringify(normalized)}\n`;
+      recordRejection = new Error(
+        `Event ${requestedType} is ${requestedRecordBytes} bytes; journal record limit is ${eventJournal.maxRecordBytes}`
+      );
+      recordRejection.code = 'EVENT_RECORD_TOO_LARGE';
+      recordRejection.statusCode = 413;
+      recordRejection.requestedType = requestedType;
+      recordRejection.requestedRecordBytes = requestedRecordBytes;
+      recordRejection.maxRecordBytes = eventJournal.maxRecordBytes;
+    }
 
-  let admissionToken = currentEventJournalAdmission();
-  let ownsAdmission = false;
-  if (!admissionToken) {
-    admissionToken = eventJournal.tryAcquireAdmission(
-      { source: 'internal_event', eventType: normalized.type },
-      Buffer.byteLength(line)
-    );
-    if (!admissionToken) {
-      const error = new Error(`Event ${normalized.type} was not admitted because journal producer capacity is full`);
-      error.code = 'EVENT_ADMISSION_BACKPRESSURED';
-      error.statusCode = 503;
+    if (Buffer.byteLength(line) > eventJournal.maxRecordBytes) {
+      const error = recordRejection || new Error(`Event ${normalized.type} exceeds the journal record limit`);
+      error.code = 'EVENT_RECORD_TOO_LARGE';
+      error.statusCode = 413;
       throw error;
     }
-    ownsAdmission = true;
-  }
 
-  const nextChain = chain ? { seq: chain.seq + 1, prevHash: normalized.hash } : null;
-  if (nextChain) reservedRunEventChains.set(normalized.runId, nextChain);
-  reservedEventIds.add(normalized.id);
+    const nextChain = chain ? { seq: chain.seq + 1, prevHash: normalized.hash } : null;
+    if (nextChain) reservedRunEventChains.set(normalized.runId, nextChain);
+    reservedEventIds.add(normalized.id);
 
-  function releaseEventReservation() {
+    function releaseEventReservation() {
+      reservedEventIds.delete(normalized.id);
+      if (!nextChain || reservedRunEventChains.get(normalized.runId) !== nextChain) return;
+      const committed = runEventChains.get(normalized.runId) || { seq: 0, prevHash: null };
+      if (chain.seq === committed.seq && chain.prevHash === committed.prevHash) {
+        reservedRunEventChains.delete(normalized.runId);
+      } else {
+        reservedRunEventChains.set(normalized.runId, chain);
+      }
+    }
+
+    try {
+      await eventJournal.appendWithAdmission(line, admissionToken);
+    } catch (error) {
+      if (error && (
+        error.code === 'EVENT_JOURNAL_ADMISSION_INVALID' ||
+        error.code === 'EVENT_JOURNAL_ADMISSION_CONCURRENT_APPEND' ||
+        error.code === 'EVENT_JOURNAL_ADMISSION_RESERVATION_EXCEEDED'
+      )) {
+        const admissionError = new Error(`Failed to admit event ${normalized.type}: ${error.message}`);
+        admissionError.code = error.code;
+        admissionError.statusCode = 503;
+        admissionError.cause = error;
+        releaseEventReservation();
+        throw admissionError;
+      }
+      if (!eventAppendFailure) eventAppendFailure = error;
+      serverReady = false;
+      if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
+      if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
+      const persistenceError = new Error(`Failed to append event ${normalized.type}: ${error.message}`);
+      persistenceError.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
+      persistenceError.cause = error;
+      throw persistenceError;
+    }
+    if (nextChain) {
+      const committed = runEventChains.get(normalized.runId) || { seq: 0, prevHash: null };
+      if (nextChain.seq > committed.seq) runEventChains.set(normalized.runId, nextChain);
+      if (reservedRunEventChains.get(normalized.runId) === nextChain) {
+        reservedRunEventChains.delete(normalized.runId);
+      }
+    }
     reservedEventIds.delete(normalized.id);
-    if (!nextChain || reservedRunEventChains.get(normalized.runId) !== nextChain) return;
-    const committed = runEventChains.get(normalized.runId) || { seq: 0, prevHash: null };
-    if (chain.seq === committed.seq && chain.prevHash === committed.prevHash) {
-      reservedRunEventChains.delete(normalized.runId);
-    } else {
-      reservedRunEventChains.set(normalized.runId, chain);
-    }
-  }
+    persistedEventIds.add(normalized.id);
 
-  try {
-    await eventJournal.appendWithAdmission(line, admissionToken);
-  } catch (error) {
-    if (error && (
-      error.code === 'EVENT_JOURNAL_ADMISSION_INVALID' ||
-      error.code === 'EVENT_JOURNAL_ADMISSION_CONCURRENT_APPEND' ||
-      error.code === 'EVENT_JOURNAL_ADMISSION_RESERVATION_EXCEEDED'
-    )) {
-      const admissionError = new Error(`Failed to admit event ${normalized.type}: ${error.message}`);
-      admissionError.code = error.code;
-      admissionError.statusCode = 503;
-      admissionError.cause = error;
-      releaseEventReservation();
-      throw admissionError;
-    }
-    if (!eventAppendFailure) eventAppendFailure = error;
-    serverReady = false;
-    if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
-    if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
-    const persistenceError = new Error(`Failed to append event ${normalized.type}: ${error.message}`);
-    persistenceError.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
-    persistenceError.cause = error;
-    throw persistenceError;
+    if (recordRejection) throw recordRejection;
+    return normalized;
   } finally {
     if (ownsAdmission) eventJournal.releaseAdmission(admissionToken);
   }
-  if (nextChain) {
-    const committed = runEventChains.get(normalized.runId) || { seq: 0, prevHash: null };
-    if (nextChain.seq > committed.seq) runEventChains.set(normalized.runId, nextChain);
-    if (reservedRunEventChains.get(normalized.runId) === nextChain) {
-      reservedRunEventChains.delete(normalized.runId);
-    }
-  }
-  reservedEventIds.delete(normalized.id);
-  persistedEventIds.add(normalized.id);
-
-  if (recordRejection) throw recordRejection;
-  return normalized;
 }
 
 function readEvents() {
@@ -7238,6 +7258,9 @@ function getRuntimeStatusSnapshot() {
       pending: pendingRuns.length,
       running: runningRuns.length,
       expiredLeases: expiredLeases.length
+    },
+    shutdown: {
+      activeRunDrainTimeoutMs: SHUTDOWN_RUN_DRAIN_TIMEOUT_MS
     },
     eventJournal: eventJournal.getMetrics(),
     runtimeLimits: getAgentRuntimeLimits()
@@ -17861,7 +17884,7 @@ async function runAgentTicket(runId) {
         let operation = null;
         const actionStartedAt = Date.now();
         const proposedOperation = action && typeof action.operation === 'string' ? action.operation : null;
-        const requiresMutationAdmission = isBrowserRun(run) ||
+        const requiresMutationAdmission = (isBrowserRun(run) && BROWSER_OPERATIONS_REQUIRING_EVENT_ADMISSION.has(proposedOperation)) ||
           AGENT_MUTATING_OPERATIONS.includes(proposedOperation) ||
           ['createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask'].includes(proposedOperation);
         const leaveActionAdmission = requiresMutationAdmission
@@ -23834,11 +23857,12 @@ async function start() {
 
 let shutdownPromise = null;
 
-async function waitForActiveRunTasksToSettle(timeoutMs = 5000) {
+async function waitForActiveRunTasksToSettle(timeoutMs = SHUTDOWN_RUN_DRAIN_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   while ((startingRunIds.size > 0 || runningRunKeys.size > 0) && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
+  return startingRunIds.size === 0 && runningRunKeys.size === 0;
 }
 
 function shutdown(signal) {
@@ -23866,7 +23890,16 @@ function shutdown(signal) {
 
     // Let already-dispatched work reach a stable boundary, then drain and close
     // the persistent event journal before releasing single-writer ownership.
-    await waitForActiveRunTasksToSettle();
+    // The grace period is configurable and exposed in runtime status. Until
+    // provider-wide cancellation exists, a timeout is an explicit forced-stop
+    // boundary rather than a claim that the active work settled cleanly.
+    const activeRunsSettled = await waitForActiveRunTasksToSettle();
+    if (!activeRunsSettled) {
+      console.error(
+        `Shutdown run-drain timeout after ${SHUTDOWN_RUN_DRAIN_TIMEOUT_MS}ms; ` +
+        `${startingRunIds.size} starting and ${runningRunKeys.size} running task(s) remain`
+      );
+    }
     try {
       await eventJournal.close();
     } catch (error) {

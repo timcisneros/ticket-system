@@ -13,7 +13,7 @@ Both surfaces require the existing `ticket:read` permission.
 
 ## Sources And Precedence
 
-The projection follows the source-of-truth model in `RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH_AUDIT.md`:
+The projection follows the source-of-truth model in `RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`:
 
 1. `tickets.json` and `runs.json` provide current live state.
 2. `operation-history.json` provides committed mutation records and mutation receipts.

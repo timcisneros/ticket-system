@@ -46,7 +46,7 @@ contract — the single mutation boundary. The workspace target is `WORKSPACE_RO
 
 Every mutation requires authority and produces a **receipt** in `operation-history.json` plus
 events. Authority decisions (allowed/denied) are recorded as evidence. Receipts derive from durable
-evidence, **not** agent self-report. See `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH_AUDIT.md`.
+evidence, **not** agent self-report. See `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`.
 
 ## 7. Verification and triage
 

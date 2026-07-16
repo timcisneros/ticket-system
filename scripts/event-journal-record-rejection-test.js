@@ -92,6 +92,7 @@ async function main() {
       DATA_DIR,
       WORKSPACE_ROOT,
       EVENT_JOURNAL_MAX_RECORD_BYTES: '1024',
+      SHUTDOWN_RUN_DRAIN_TIMEOUT_MS: '2500',
       RUNTIME_SCHEDULER_INTERVAL_MS: '3600000',
       PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000'
     },
@@ -118,6 +119,10 @@ async function main() {
     assert(health.status === 200 && health.json && health.json.ready === true, 'oversized record disabled the process');
     const runtimeStatus = await request('GET', '/api/runtime/status', { cookie });
     assert(runtimeStatus.status === 200, 'oversized record disabled runtime diagnostics');
+    assert(
+      runtimeStatus.json.shutdown && runtimeStatus.json.shutdown.activeRunDrainTimeoutMs === 2500,
+      'runtime diagnostics omitted the effective shutdown run-drain grace period'
+    );
     assert(runtimeStatus.json.eventJournal.totals.oversizedRejections === 1, 'oversized rejection was omitted from journal metrics');
 
     const tickets = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tickets.json'), 'utf8'));

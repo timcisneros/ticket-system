@@ -37,6 +37,10 @@ variables (see README → Configuration for the full list):
   pressure, weighted record/byte reservations, worst-case mutation-scope capacity, high-water
   marks, rejection counts, and the effective configuration are visible at `/ops` and
   `GET /api/runtime/status`. These settings do not cap or rotate the total `events.jsonl` file.
+- Graceful shutdown (optional): `SHUTDOWN_RUN_DRAIN_TIMEOUT_MS` controls how long the process waits
+  for already-dispatched run tasks before the forced-stop boundary (default `120000`). The effective
+  value is exposed by `GET /api/runtime/status`; a timeout is written to stderr with remaining task
+  counts. It is not a substitute for process-wide provider cancellation.
 
 There is no `.env.example`; set variables in your shell or an ignored `.env`.
 

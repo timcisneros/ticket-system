@@ -67,6 +67,8 @@ Compatibility is format-specific, not a system-wide no-legacy policy:
 3. Complete validation of the model contract compiler and prefix truncation before enabling them by
    default, including dependent mutation graphs.
 4. Add process-wide cancellation for active provider calls during shutdown.
+   The current process exposes a configurable active-run drain grace period in runtime status and
+   reports any forced-stop boundary; cancellation is still required to make that boundary clean.
 5. Remove the browser's dependency on CSP `unsafe-inline` through extracted assets or nonces.
 
 ## Verification authority
