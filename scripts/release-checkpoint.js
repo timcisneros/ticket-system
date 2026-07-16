@@ -48,6 +48,8 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'event-chain-verify-test.js',
   'event-chain-restart-test.js',
   'durable-event-append-test.js',
+  'bounded-worker-pool-test.js',
+  'event-journal-route-admission-contract-test.js',
   'event-journal-admission-recovery-test.js',
   'event-journal-record-rejection-test.js',
   'journal-backpressure-scheduler-test.js',

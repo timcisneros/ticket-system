@@ -20,15 +20,18 @@ the intended deployment ceiling.
 - Event append uses a persistent asynchronous group-commit journal. A caller resumes only after its
   exact batch has been written and `FileHandle.sync()` has completed.
 - Process-local event append admission has configurable record, batch, and outstanding-work bounds.
-  Journal-dependent HTTP mutations and executing runs acquire bounded producer capacity before
-  side effects. Capacity is reserved at the configured worst-case record size, so admitted producer
-  count is derived from both outstanding-entry and outstanding-byte limits. Excess producers are
-  refused before mutation and admission reopens automatically when a producer finishes; there is no
-  overflow append queue. Current admission, utilization, high-water marks, commit timing, and
-  rejections are visible through runtime and operational status surfaces. Oversized records are
-  request-scoped rejections; write or sync failure remains a fatal-for-the-current-process mutation
-  shutdown. These controls do not bound the total size of `events.jsonl`, which has no automatic
-  rotation, compaction, or retention policy.
+  Explicitly journal-dependent HTTP routes reserve maximum-record capacity for the request. Runtime
+  execution reserves capacity only around scheduler selection, lifecycle transitions, and mutating
+  action/evidence boundaries; active runs hold no admission while waiting on a provider or between
+  actions. Standalone serialized events reserve their actual byte size. Admission is therefore
+  bounded independently by record slots and reserved bytes rather than by a fixed run count.
+  Excess HTTP producers are refused before mutation; accepted runtime work waits before its next
+  mutation, and admission reopens automatically when a scope finishes. There is no overflow event
+  queue. Current admission, utilization, high-water marks, commit timing, and rejections are visible
+  through runtime and operational status surfaces. Oversized records are request-scoped rejections;
+  write or sync failure remains a fatal-for-the-current-process shutdown for journal-dependent
+  mutation admission. These controls do not bound the total size of `events.jsonl`, which has no
+  automatic rotation, compaction, or retention policy.
 - Run events use one current schema and one continuous per-run hash chain. Runtime evidence is not
   silently reinterpreted with current configuration.
 - Assignment, workflow administration, protected event streams, and target mutations enforce their

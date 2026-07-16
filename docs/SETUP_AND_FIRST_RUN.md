@@ -34,8 +34,8 @@ variables (see README → Configuration for the full list):
   `EVENT_JOURNAL_MAX_OUTSTANDING_ENTRIES`, and `EVENT_JOURNAL_MAX_OUTSTANDING_BYTES`. Values must
   be positive integers; record capacity must be at least 1024 bytes and cannot exceed batch or
   outstanding-byte capacity. Invalid values fail startup instead of silently falling back. Current
-  pressure, bounded producer admission, high-water marks, rejection counts, and the effective
-  configuration are visible at `/ops` and
+  pressure, weighted record/byte reservations, worst-case mutation-scope capacity, high-water
+  marks, rejection counts, and the effective configuration are visible at `/ops` and
   `GET /api/runtime/status`. These settings do not cap or rotate the total `events.jsonl` file.
 
 There is no `.env.example`; set variables in your shell or an ignored `.env`.

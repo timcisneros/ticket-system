@@ -148,12 +148,22 @@ async function main() {
     );
     assert(
       diagnostics.json.eventJournal.current.admittedProducers === 1 &&
-      diagnostics.json.eventJournal.config.maxAdmittedProducers === 1,
+      diagnostics.json.eventJournal.config.maxWorstCaseProducers === 1,
       'diagnostics did not expose the bounded producer reservation'
     );
 
     const loginDuringPressure = await request('POST', '/login', { form: { username: 'admin', password: 'admin123' } });
     assert(loginDuringPressure.status === 302, 'session login was incorrectly classified as journal-dependent mutation work');
+
+    const independentMutation = await request('POST', '/api/workspace/folder', {
+      cookie,
+      form: { path: 'independent-during-journal-pressure' }
+    });
+    assert(independentMutation.status === 200, `journal-independent workspace mutation returned HTTP ${independentMutation.status} during pressure`);
+    assert(
+      fs.existsSync(path.join(WORKSPACE_ROOT, 'independent-during-journal-pressure')),
+      'journal-independent workspace mutation was blocked or lost during pressure'
+    );
 
     const refused = await request('POST', '/tickets', {
       cookie,

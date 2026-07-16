@@ -71,6 +71,8 @@ if (Array.isArray(list)) {
     'event-chain-verify-test.js',
     'event-chain-restart-test.js',
     'durable-event-append-test.js',
+    'bounded-worker-pool-test.js',
+    'event-journal-route-admission-contract-test.js',
     'event-append-await-contract-test.js',
     'event-reader-bounds-test.js',
     'internal-demo-security-test.js',

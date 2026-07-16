@@ -241,6 +241,68 @@ async function testBoundedProducerAdmissionAndRecovery() {
   await journal.close();
 }
 
+async function testWeightedProducerAdmissionUsesConfiguredDepth() {
+  const scheduled = [];
+  const fake = createFakeFs();
+  const journal = createDurableAppendJournal('/events.jsonl', {
+    fsPromises: fake.api,
+    schedule: callback => scheduled.push(callback),
+    maxRecordBytes: 8,
+    maxBatchBytes: 32,
+    maxOutstandingEntries: 4,
+    maxOutstandingBytes: 16
+  });
+
+  const admissions = Array.from({ length: 4 }, (_, index) =>
+    journal.tryAcquireAdmission({ source: `weighted-${index}` }, 4)
+  );
+  assert(admissions.every(Boolean), 'small records inherited the worst-case producer ceiling');
+  const saturated = journal.getMetrics();
+  assert(saturated.config.maxWorstCaseProducers === 2, 'worst-case producer capacity was calculated incorrectly');
+  assert(
+    saturated.current.admittedProducers === 4 && saturated.current.admissionReservedBytes === 16,
+    'weighted admission did not expose producer and byte reservations'
+  );
+
+  const promises = admissions.map(token => journal.appendWithAdmission('one\n', token));
+  scheduled.shift()();
+  await Promise.all(promises);
+  admissions.forEach(token => journal.releaseAdmission(token));
+  assert(Buffer.from(fake.bytes).toString('utf8') === 'one\none\none\none\n', 'weighted admission changed append ordering');
+
+  const exactAdmission = journal.tryAcquireAdmission({ source: 'exact' }, 2);
+  const tooLarge = await journal.appendWithAdmission('abc', exactAdmission).then(() => null, error => error);
+  assert(
+    tooLarge && tooLarge.code === 'EVENT_JOURNAL_ADMISSION_RESERVATION_EXCEEDED',
+    'a producer was allowed to exceed its byte reservation'
+  );
+  assert(journal.getMetrics().status !== 'failed', 'reservation overflow incorrectly latched a fatal journal failure');
+  journal.releaseAdmission(exactAdmission);
+  await journal.close();
+}
+
+async function testAdmissionChangeSignalRecoversWithoutPolling() {
+  const fake = createFakeFs();
+  const journal = createDurableAppendJournal('/events.jsonl', {
+    fsPromises: fake.api,
+    maxRecordBytes: 4,
+    maxBatchBytes: 4,
+    maxOutstandingEntries: 1,
+    maxOutstandingBytes: 4
+  });
+  const admission = journal.tryAcquireAdmission({ source: 'signal-holder' });
+  const observedVersion = journal.admissionVersion;
+  let awakened = false;
+  const waiting = journal.waitForAdmissionChange(observedVersion).then(() => { awakened = true; });
+  await Promise.resolve();
+  assert(awakened === false, 'admission waiter woke without a capacity change');
+  journal.releaseAdmission(admission);
+  await waiting;
+  assert(awakened, 'admission waiter did not wake after capacity was released');
+  await journal.waitForAdmissionChange(observedVersion);
+  await journal.close();
+}
+
 async function testRecordLimitIsIndependentFromBatchCapacity() {
   const fake = createFakeFs();
   const journal = createDurableAppendJournal('/events.jsonl', {
@@ -276,6 +338,8 @@ async function main() {
   await testWriteFailureFailsClosed();
   await testBoundedBackpressure();
   await testBoundedProducerAdmissionAndRecovery();
+  await testWeightedProducerAdmissionUsesConfiguredDepth();
+  await testAdmissionChangeSignalRecoversWithoutPolling();
   await testRecordLimitIsIndependentFromBatchCapacity();
   await testRealFileAppend();
   console.log('PASS: event journal preserves order, recovers from capacity pressure, and fails closed on sync failure');

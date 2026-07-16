@@ -10,6 +10,7 @@ const { AsyncLocalStorage } = require('async_hooks');
 const argon2 = require('argon2');
 const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
+const { runBoundedWorkerPool } = require('./runtime/bounded-worker-pool');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
@@ -1544,7 +1545,7 @@ fastify.addHook('onRequest', async (request, reply) => {
   if (requiresEventAdmission && eventAppendFailure) {
     reply.code(503);
     return reply.send({
-      error: 'Event persistence is unavailable; mutations are disabled',
+      error: 'Event persistence is unavailable; journal-dependent mutations are disabled',
       code: 'EVENT_PERSISTENCE_UNAVAILABLE'
     });
   }
@@ -1573,7 +1574,10 @@ fastify.addHook('onRequest', async (request, reply) => {
 
 function releaseRequestEventJournalAdmission(request) {
   if (request.eventJournalAdmission) {
-    eventJournal.releaseAdmission(request.eventJournalAdmission);
+    const token = request.eventJournalAdmission;
+    const store = eventAdmissionContext.getStore();
+    if (store && store.token === token) store.token = null;
+    eventJournal.releaseAdmission(token);
     request.eventJournalAdmission = null;
   }
 }
@@ -4989,7 +4993,7 @@ const eventAdmissionContext = new AsyncLocalStorage();
 function requestRequiresEventJournalAdmission(request) {
   if (!request || !UNSAFE_HTTP_METHODS.has(request.method)) return false;
   const config = request.routeOptions && request.routeOptions.config;
-  return !config || config.eventJournalAdmission !== false;
+  return Boolean(config && config.eventJournalAdmission === true);
 }
 
 function currentEventJournalAdmission() {
@@ -5017,6 +5021,55 @@ async function runWithNewEventJournalAdmission(metadata, operation) {
   } finally {
     eventJournal.releaseAdmission(token);
   }
+}
+
+function eventPersistenceUnavailableError() {
+  const detail = eventAppendFailure && eventAppendFailure.message
+    ? `: ${eventAppendFailure.message}`
+    : '';
+  const error = new Error(`Event persistence is unavailable${detail}`);
+  error.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
+  error.statusCode = 503;
+  return error;
+}
+
+async function acquireRequiredEventJournalAdmission(metadata, reservationBytes = eventJournal.maxRecordBytes) {
+  while (true) {
+    if (eventAppendFailure || eventJournal.failure || eventJournal.closing || eventJournal.closed) {
+      throw eventPersistenceUnavailableError();
+    }
+    const admissionVersion = eventJournal.admissionVersion;
+    const token = eventJournal.tryAcquireAdmission(metadata, reservationBytes);
+    if (token) return token;
+    // Accepted runtime work waits before its next mutation. This is not an
+    // event buffer: all waiters share one capacity-change signal and no side
+    // effect or evidence record has been created yet.
+    await eventJournal.waitForAdmissionChange(admissionVersion);
+  }
+}
+
+async function runWithRequiredEventJournalAdmission(metadata, operation, reservationBytes = eventJournal.maxRecordBytes) {
+  if (currentEventJournalAdmission()) return operation();
+  const token = await acquireRequiredEventJournalAdmission(metadata, reservationBytes);
+  try {
+    return await runWithEventJournalAdmission(token, operation);
+  } finally {
+    eventJournal.releaseAdmission(token);
+  }
+}
+
+async function enterRequiredEventJournalAdmission(metadata, reservationBytes = eventJournal.maxRecordBytes) {
+  if (currentEventJournalAdmission()) return () => {};
+  const store = eventAdmissionContext.getStore();
+  if (!store) {
+    throw new Error('Runtime event admission scope requires an isolated execution context');
+  }
+  const token = await acquireRequiredEventJournalAdmission(metadata, reservationBytes);
+  store.token = token;
+  return () => {
+    if (store.token === token) store.token = null;
+    eventJournal.releaseAdmission(token);
+  };
 }
 
 function isEventJournalAdmissionBackpressured() {
@@ -5212,7 +5265,10 @@ async function appendEvent(event = {}) {
   let admissionToken = currentEventJournalAdmission();
   let ownsAdmission = false;
   if (!admissionToken) {
-    admissionToken = eventJournal.tryAcquireAdmission({ source: 'internal_event', eventType: normalized.type });
+    admissionToken = eventJournal.tryAcquireAdmission(
+      { source: 'internal_event', eventType: normalized.type },
+      Buffer.byteLength(line)
+    );
     if (!admissionToken) {
       const error = new Error(`Event ${normalized.type} was not admitted because journal producer capacity is full`);
       error.code = 'EVENT_ADMISSION_BACKPRESSURED';
@@ -5242,7 +5298,8 @@ async function appendEvent(event = {}) {
   } catch (error) {
     if (error && (
       error.code === 'EVENT_JOURNAL_ADMISSION_INVALID' ||
-      error.code === 'EVENT_JOURNAL_ADMISSION_CONCURRENT_APPEND'
+      error.code === 'EVENT_JOURNAL_ADMISSION_CONCURRENT_APPEND' ||
+      error.code === 'EVENT_JOURNAL_ADMISSION_RESERVATION_EXCEEDED'
     )) {
       const admissionError = new Error(`Failed to admit event ${normalized.type}: ${error.message}`);
       admissionError.code = error.code;
@@ -12421,7 +12478,12 @@ async function reconcileUnfinalizedTicketsOnStartup() {
 }
 
 async function failAgentRun(run, error, workspaceAction = null) {
-  return withTicketTransitionLock(run && run.ticketId, () => failAgentRunUnlocked(run, error, workspaceAction));
+  return runWithRequiredEventJournalAdmission({
+    source: 'run_terminalization',
+    outcome: 'failed',
+    runId: run && run.id ? run.id : null,
+    ticketId: run && run.ticketId ? run.ticketId : null
+  }, () => withTicketTransitionLock(run && run.ticketId, () => failAgentRunUnlocked(run, error, workspaceAction)));
 }
 
 async function failAgentRunUnlocked(run, error, workspaceAction = null) {
@@ -12496,7 +12558,12 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
 }
 
 async function completeAgentRun(run) {
-  return withTicketTransitionLock(run && run.ticketId, () => completeAgentRunUnlocked(run));
+  return runWithRequiredEventJournalAdmission({
+    source: 'run_terminalization',
+    outcome: 'completed',
+    runId: run && run.id ? run.id : null,
+    ticketId: run && run.ticketId ? run.ticketId : null
+  }, () => withTicketTransitionLock(run && run.ticketId, () => completeAgentRunUnlocked(run)));
 }
 
 async function completeAgentRunUnlocked(run) {
@@ -13107,6 +13174,13 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
 }
 
 async function createRunsForTicket(ticket, delegated = null) {
+  return runWithRequiredEventJournalAdmission({
+    source: 'ticket_run_creation',
+    ticketId: ticket && ticket.id ? ticket.id : null
+  }, () => createRunsForTicketAdmitted(ticket, delegated));
+}
+
+async function createRunsForTicketAdmitted(ticket, delegated = null) {
   if (!ticket || ticket.status !== 'open') return [];
   if (hasUnresolvedTicketTriage(ticket)) return [];
 
@@ -13149,41 +13223,36 @@ async function createRunsForTicket(ticket, delegated = null) {
 
     const allocationPlan = createAllocationPlan(ticket, agentsToRun);
 
-    const createdRuns = [];
-    const sequentialAgents = [];
-    const parallelCreations = [];
-    for (const agent of agentsToRun) {
+    const parentAdmission = currentEventJournalAdmission();
+    const workerAdmissions = [parentAdmission];
+    const childAdmissions = [];
+    while (workerAdmissions.length < agentsToRun.length) {
       const admission = eventJournal.tryAcquireAdmission({
         source: 'group_run_creation',
         ticketId: ticket.id,
-        agentId: agent.id
+        worker: workerAdmissions.length + 1
       });
-      if (!admission) {
-        sequentialAgents.push(agent);
-        continue;
-      }
-      parallelCreations.push(
+      if (!admission) break;
+      childAdmissions.push(admission);
+      workerAdmissions.push(admission);
+    }
+
+    let createdRuns;
+    try {
+      // A fixed bounded worker pool replenishes each worker with the next agent
+      // as soon as its prior run creation finishes. Overflow is therefore not
+      // serialized after the first concurrent wave.
+      createdRuns = await runBoundedWorkerPool(agentsToRun, workerAdmissions, (agent, admission) =>
         runWithEventJournalAdmission(admission, () => createAgentRun(
           ticket,
           agent,
           allocationPlan.items.find(item => item.assignedAgentId === agent.id),
           allocationPlan.id,
           delegated
-        )).finally(() => eventJournal.releaseAdmission(admission))
+        ))
       );
-    }
-    createdRuns.push(...await Promise.all(parallelCreations));
-    // The parent producer handles overflow sequentially once all bounded child
-    // slots are occupied. Fan-out remains concurrent up to journal admission
-    // capacity without creating an unbounded append queue.
-    for (const agent of sequentialAgents) {
-      createdRuns.push(await createAgentRun(
-        ticket,
-        agent,
-        allocationPlan.items.find(item => item.assignedAgentId === agent.id),
-        allocationPlan.id,
-        delegated
-      ));
+    } finally {
+      childAdmissions.forEach(admission => eventJournal.releaseAdmission(admission));
     }
     return createdRuns.filter(Boolean);
   }
@@ -16435,7 +16504,24 @@ async function executeTicketPlanWorkflowAction(run, workflow, step, input) {
 async function executeWorkflowAction(run, workflow, step, input, context, counters, startedAtMs, limits, agent) {
   const contract = getActionContract(step.action);
   if (!contract) throw new Error(`Unknown workflow action: ${step.action}`);
+  const operation = () => executeWorkflowActionWithinAdmission(
+    run, workflow, step, input, context, counters, startedAtMs, limits, agent, contract
+  );
+  const requiresMutationAdmission = contract.mutating === true ||
+    step.action === 'executeActionPlan' ||
+    step.action === 'executeTicketPlan';
+  if (!requiresMutationAdmission) return operation();
+  return runWithRequiredEventJournalAdmission({
+    source: 'workflow_action',
+    runId: run.id,
+    ticketId: run.ticketId,
+    workflowId: workflow.id,
+    stepId: step.id,
+    action: step.action
+  }, operation);
+}
 
+async function executeWorkflowActionWithinAdmission(run, workflow, step, input, context, counters, startedAtMs, limits, agent, contract) {
   const startedAt = Date.now();
   let result;
   await appendEvent({
@@ -17071,28 +17157,34 @@ async function runAgentTicket(runId) {
     return;
   }
 
-  let run = updateRunStatus(runId, 'running');
-  if (!run) return;
-  if (run.status !== 'running') return;
-  await heartbeatRunLease(run.id, { phase: 'run_started' });
-
-  runningRunKeys.add(runExecutionKey(run));
-  await appendEvent({
-    type: 'run.started',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
-      status: 'running',
-      agentId: run.agentId,
-      agentName: run.agentName,
-      startedAt: run.startedAt || run.updatedAt
-    }
+  let run = await runWithRequiredEventJournalAdmission({
+    source: 'run_start',
+    runId,
+    ticketId: leasedRun.ticketId
+  }, async () => {
+    const startedRun = updateRunStatus(runId, 'running');
+    if (!startedRun || startedRun.status !== 'running') return startedRun;
+    await heartbeatRunLease(startedRun.id, { phase: 'run_started' });
+    runningRunKeys.add(runExecutionKey(startedRun));
+    await appendEvent({
+      type: 'run.started',
+      ticketId: startedRun.ticketId,
+      runId: startedRun.id,
+      payload: {
+        status: 'running',
+        agentId: startedRun.agentId,
+        agentName: startedRun.agentName,
+        startedAt: startedRun.startedAt || startedRun.updatedAt
+      }
+    });
+    appendRunLog(startedRun, 'run:started', `Agent run started${allocationLogSuffix(startedRun)}`, null, {
+      allocationPlanId: startedRun.allocationPlanId || null,
+      allocationItemId: startedRun.allocationItemId || null
+    });
+    await updateTicketInProgressForRun(startedRun);
+    return startedRun;
   });
-  appendRunLog(run, 'run:started', `Agent run started${allocationLogSuffix(run)}`, null, {
-    allocationPlanId: run.allocationPlanId || null,
-    allocationItemId: run.allocationItemId || null
-  });
-  await updateTicketInProgressForRun(run);
+  if (!run || run.status !== 'running') return;
   await maybeTestInterrupt(run, 'after_run.started');
   let currentProviderRequestPersisted = false;
   let providerConfig = null;
@@ -17768,6 +17860,18 @@ async function runAgentTicket(runId) {
       for (const action of actions) {
         let operation = null;
         const actionStartedAt = Date.now();
+        const proposedOperation = action && typeof action.operation === 'string' ? action.operation : null;
+        const requiresMutationAdmission = isBrowserRun(run) ||
+          AGENT_MUTATING_OPERATIONS.includes(proposedOperation) ||
+          ['createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask'].includes(proposedOperation);
+        const leaveActionAdmission = requiresMutationAdmission
+          ? await enterRequiredEventJournalAdmission({
+              source: 'run_action',
+              runId: run.id,
+              ticketId: run.ticketId,
+              operation: proposedOperation
+            })
+          : () => {};
         try {
           if (isRunInterrupted(run.id)) {
             const error = new Error('Run interrupted');
@@ -18024,6 +18128,8 @@ async function runAgentTicket(runId) {
           if (error.failureKind !== 'workspace_error') {
             throw error;
           }
+        } finally {
+          leaveActionAdmission();
         }
       }
 
@@ -18663,7 +18769,7 @@ fastify.get('/login', async (request, reply) => {
   return reply.view('login.ejs', viewData({ error: null, user: null }));
 });
 
-fastify.post('/login', { config: { eventJournalAdmission: false } }, async (request, reply) => {
+fastify.post('/login', async (request, reply) => {
   const username = String(request.body.username || '').trim();
   const password = String(request.body.password || '');
 
@@ -18698,7 +18804,7 @@ fastify.post('/login', { config: { eventJournalAdmission: false } }, async (requ
   return reply.redirect('/');
 });
 
-fastify.post('/logout', { config: { eventJournalAdmission: false } }, async (request, reply) => {
+fastify.post('/logout', async (request, reply) => {
   request.session.destroy();
   return reply.redirect('/login');
 });
@@ -18952,7 +19058,10 @@ async function createTicketFromInput(input, actor, options = {}) {
   return { ok: true, ticket: newTicket, runs };
 }
 
-fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/tickets', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) {
     reply.code(403);
     return 'Permission denied';
@@ -19254,7 +19363,10 @@ fastify.post('/api/watchers/:id/proposals', { preHandler: fastify.requireAuth },
 });
 
 // Approve a proposal → create a NORMAL ticket through the authorized path (ticket:create).
-fastify.post('/api/watcher-proposals/:id/approve', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/watcher-proposals/:id/approve', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) { reply.code(403); return { error: 'Approving a proposal into a ticket requires ticket:create' }; }
   const list = readWatcherProposals();
   const proposal = list.find(p => p && p.id === parseInt(request.params.id, 10));
@@ -19447,8 +19559,7 @@ fastify.get('/api/connectors/:id', { preHandler: fastify.requireAuth }, async (r
 // Read a bounded object through the local connector. Returns bounded content in the API response;
 // the persisted receipt stores only metadata + hash (never full content).
 fastify.post('/api/connectors/:id/read', {
-  preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: false }
+  preHandler: fastify.requireAuth
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'connector:read')) { reply.code(403); return { error: 'connector:read required' }; }
   const connector = getConnectorById(request.params.id);
@@ -19481,8 +19592,7 @@ fastify.post('/api/connectors/:id/read', {
 
 // Write is REFUSED in r1.30 — connector availability is not write authority.
 fastify.post('/api/connectors/:id/write', {
-  preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: false }
+  preHandler: fastify.requireAuth
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'connector:write')) { reply.code(403); return { error: 'connector:write required' }; }
   const connector = getConnectorById(request.params.id);
@@ -19611,7 +19721,10 @@ fastify.post('/api/process-templates', { preHandler: fastify.requireAuth }, asyn
   return { ok: true, template };
 });
 
-fastify.post('/api/process-templates/:id/trigger', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/process-templates/:id/trigger', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -20051,7 +20164,10 @@ fastify.post('/api/process-templates/:id/versions/:versionId/activate', { preHan
 // runs (no catch-up, at most one trigger per due template). Gated by
 // processTemplate:manage; this is a "scan due schedules now" control, not a new
 // execution primitive — it only creates tickets through triggerProcessTemplate.
-fastify.post('/api/process-templates/scheduler/tick', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/process-templates/scheduler/tick', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -20435,7 +20551,10 @@ fastify.get('/api/runtime-limits', { preHandler: fastify.requireAuth }, async (r
   };
 });
 
-fastify.post('/api/runtime-limits', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/runtime-limits', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!runtimeLimitsManageGuard(request, reply)) return { error: 'Permission denied' };
   const previous = readRuntimeLimitsConfig();
   const parsed = validateRuntimeLimitsConfigInput(request.body || {}, previous);
@@ -20468,7 +20587,10 @@ fastify.get('/admin/runtime-limits', { preHandler: fastify.requireAuth }, async 
   return renderRuntimeLimitsAdminPage(request, reply, { saved: request.query && request.query.saved === '1' });
 });
 
-fastify.post('/admin/runtime-limits', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/admin/runtime-limits', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!runtimeLimitsManageGuard(request, reply)) {
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
@@ -20562,7 +20684,10 @@ fastify.get('/api/runs/:id/work-receipt', { preHandler: fastify.requireAuth }, a
 // the same run/triage/verification path as any ticket, and the recipient claims it normally. The
 // handoff never bypasses ticket permissions, Work Context scope, or Authority (all enforced by
 // createTicketFromInput), and never opens a private agent-to-agent channel.
-fastify.post('/api/tickets/:id/handoff', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/tickets/:id/handoff', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) { reply.code(403); return { error: 'Permission denied' }; }
   const fromTicket = readTickets().find(item => item && item.id === parseInt(request.params.id, 10));
   if (!fromTicket) { reply.code(404); return { error: 'Source ticket not found' }; }
@@ -20621,8 +20746,7 @@ fastify.post('/api/tickets/:id/handoff', { preHandler: fastify.requireAuth }, as
 });
 
 fastify.post('/api/tickets/shape-objective', {
-  preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: false }
+  preHandler: fastify.requireAuth
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) {
     reply.code(403);
@@ -20637,7 +20761,10 @@ fastify.post('/api/tickets/shape-objective', {
   }
 });
 
-fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.patch('/api/tickets/:id/assignment', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -20749,7 +20876,10 @@ fastify.get('/api/tickets/events', { preHandler: fastify.requireAuth }, async (r
   setupSSEConnection(reply, request);
 });
 
-fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.patch('/api/tickets/:id/status', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -20848,7 +20978,10 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
   return { ticket };
 });
 
-fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/tickets/:id/rerun', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -20917,8 +21050,7 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
 // (includeModelPlan=true) requires ticket:update and calls the model for a
 // simulated action proposal without executing anything.
 fastify.post('/api/tickets/:id/simulate-plan', {
-  preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: false }
+  preHandler: fastify.requireAuth
 }, async (request, reply) => {
   const includeModelPlan = request.body && request.body.includeModelPlan === true;
   const requiredPermission = includeModelPlan ? 'ticket:update' : 'ticket:read';
@@ -22195,7 +22327,10 @@ fastify.get('/api/runs/:id/operations', { preHandler: fastify.requireAuth }, asy
   return { operations: getOperationHistoryForRun(runId) };
 });
 
-fastify.post('/api/runs/:id/stop', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/runs/:id/stop', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -22222,7 +22357,10 @@ fastify.post('/api/runs/:id/stop', { preHandler: fastify.requireAuth }, async (r
   return { run: await interruptAgentRun(run, 'manually stopped') };
 });
 
-fastify.post('/api/runs/:id/retry', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/runs/:id/retry', {
+  preHandler: fastify.requireAuth,
+  config: { eventJournalAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -22533,8 +22671,7 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
 });
 
 fastify.post('/admin/debug-reset', {
-  preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: false }
+  preHandler: fastify.requireAuth
 }, async (request, reply) => {
   if (process.env.NODE_ENV === 'production') {
     reply.code(403);
@@ -23327,15 +23464,11 @@ function startRuntimeScheduler() {
   if (runtimeScheduler && runtimeScheduler.isRunning()) return runtimeScheduler;
 
   const runner = createRuntimeRunner({
-    runAgentTicket: (runId, admission) => runWithEventJournalAdmission(
-      admission,
-      () => runAgentTicket(runId)
-    ),
+    runAgentTicket: runId => eventAdmissionContext.run({ token: null }, () => runAgentTicket(runId)),
     markRunStarting,
     onError: (run, error) => {
       console.error(`Run ${run && run.id ? run.id : 'unknown'} failed outside its execution boundary: ${error && error.message ? error.message : error}`);
-    },
-    onSettled: (_run, admission) => eventJournal.releaseAdmission(admission)
+    }
   });
 
   runtimeScheduler = createRuntimeScheduler({

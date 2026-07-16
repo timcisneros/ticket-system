@@ -282,6 +282,29 @@ async function getRunEvents(cookie, runId) {
   return JSON.parse(response.body).events || [];
 }
 
+function runEvidenceIsTerminal(runState, events) {
+  return Boolean(
+    runState &&
+    runState.runEvaluation &&
+    runState.runConsequence &&
+    Array.isArray(events) &&
+    events.some(event => event.type === 'run.postconditions_checked') &&
+    events.some(event => event.type === 'run.violations_checked' || event.type === 'run.violation_detected') &&
+    events.some(event => event.type === 'run.terminalized')
+  );
+}
+
+async function waitForTerminalRunEvidence(cookie, runId) {
+  const started = Date.now();
+  while (Date.now() - started < RUN_WAIT_TIMEOUT_MS) {
+    const runState = await getRunState(cookie, runId);
+    const events = await getRunEvents(cookie, runId);
+    if (runEvidenceIsTerminal(runState, events)) return { runState, events };
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for terminal evidence for run ${runId}`);
+}
+
 function workflowForCycle(cycle) {
   const failing = cycle % 3 === 0;
   const filePath = `endurance-cycle-${cycle}-${STAMP}.txt`;
@@ -372,8 +395,7 @@ async function runCycle(cookie, agent, cycle, summary) {
   const enabled = await enableWorkflow(cookie, draft);
   const ticket = await createWorkflowTicket(cookie, agent, enabled, workflowInput, `endurance-cycle-${cycle}-${STAMP}`);
   const run = await waitForTerminalRun(ticket.id);
-  const runState = await getRunState(cookie, run.id);
-  const events = await getRunEvents(cookie, run.id);
+  const { runState, events } = await waitForTerminalRunEvidence(cookie, run.id);
   assertRunEvidence(summary, runState, events);
 
   const passed = run.status === 'completed' &&
@@ -396,8 +418,7 @@ async function runCycle(cookie, agent, cycle, summary) {
     `endurance-cycle-${cycle}-repaired-${STAMP}`
   );
   const repairedRun = await waitForTerminalRun(repairedTicket.id);
-  const repairedState = await getRunState(cookie, repairedRun.id);
-  const repairedEvents = await getRunEvents(cookie, repairedRun.id);
+  const { runState: repairedState, events: repairedEvents } = await waitForTerminalRunEvidence(cookie, repairedRun.id);
   assertRunEvidence(summary, repairedState, repairedEvents);
 
   const repairPassed = repairedRun.status === 'completed' &&

@@ -104,14 +104,17 @@ function createRuntimeScheduler({
         }
 
         let leasedRun;
+        let admissionHeld = true;
         try {
           leasedRun = typeof acquireRunLease === 'function' ? await acquireRunLease(run.id) : run;
         } catch (error) {
           releaseRunAdmission(runAdmission);
+          admissionHeld = false;
           throw error;
         }
         if (!leasedRun) {
           releaseRunAdmission(runAdmission);
+          admissionHeld = false;
           await appendEvent({
             type: 'scheduler.run_skipped',
             ticketId: run.ticketId,
@@ -133,9 +136,14 @@ function createRuntimeScheduler({
               }
             });
           });
-          if (!runner.startRun(leasedRun, runAdmission)) releaseRunAdmission(runAdmission);
-        } catch (error) {
+          // Admission protects only lease selection and its evidence. Active
+          // runs acquire their own short mutation scopes; they do not occupy a
+          // producer slot while waiting on providers or between actions.
           releaseRunAdmission(runAdmission);
+          admissionHeld = false;
+          runner.startRun(leasedRun);
+        } catch (error) {
+          if (admissionHeld) releaseRunAdmission(runAdmission);
           throw error;
         }
       }

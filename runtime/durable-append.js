@@ -109,12 +109,16 @@ class DurableAppendJournal {
     this.failure = null;
     this.closing = false;
     this.closed = false;
-    this.maxAdmittedProducers = Math.min(
+    this.maxWorstCaseProducers = Math.min(
       this.maxOutstandingEntries,
       Math.floor(this.maxOutstandingBytes / this.maxRecordBytes)
     );
     this.admissionTokens = new Set();
+    this.admissionReservedBytes = 0;
     this.nextAdmissionTokenId = 1;
+    this.admissionVersion = 0;
+    this.admissionChangePromise = null;
+    this.resolveAdmissionChange = null;
     this.totals = {
       acceptedEntries: 0,
       committedEntries: 0,
@@ -130,7 +134,8 @@ class DurableAppendJournal {
     this.highWatermarks = {
       outstandingEntries: 0,
       outstandingBytes: 0,
-      admittedProducers: 0
+      admittedProducers: 0,
+      admissionReservedBytes: 0
     };
     this.lastCommitAt = null;
     this.lastCommitDurationMs = null;
@@ -156,14 +161,19 @@ class DurableAppendJournal {
     return this._enqueue(buffer, null);
   }
 
-  tryAcquireAdmission(metadata = {}) {
+  tryAcquireAdmission(metadata = {}, reservationBytes = this.maxRecordBytes) {
+    positiveInteger(reservationBytes, 'reservationBytes');
+    if (reservationBytes > this.maxRecordBytes) {
+      throw new TypeError('reservationBytes cannot exceed maxRecordBytes');
+    }
     const unreservedAppendInFlight = this.admissionTokens.size === 0 && this.outstandingEntries > 0;
     if (
       this.failure ||
       this.closing ||
       this.closed ||
       unreservedAppendInFlight ||
-      this.admissionTokens.size >= this.maxAdmittedProducers
+      this.admissionTokens.size >= this.maxOutstandingEntries ||
+      this.admissionReservedBytes + reservationBytes > this.maxOutstandingBytes
     ) {
       this.totals.admissionRejected += 1;
       return null;
@@ -172,14 +182,20 @@ class DurableAppendJournal {
     const token = {
       id: this.nextAdmissionTokenId++,
       metadata: metadata && typeof metadata === 'object' ? { ...metadata } : {},
+      reservedBytes: reservationBytes,
       inFlight: false,
       releaseRequested: false
     };
     this.admissionTokens.add(token);
+    this.admissionReservedBytes += reservationBytes;
     this.totals.admissionAcquired += 1;
     this.highWatermarks.admittedProducers = Math.max(
       this.highWatermarks.admittedProducers,
       this.admissionTokens.size
+    );
+    this.highWatermarks.admissionReservedBytes = Math.max(
+      this.highWatermarks.admissionReservedBytes,
+      this.admissionReservedBytes
     );
     return token;
   }
@@ -191,8 +207,22 @@ class DurableAppendJournal {
       return false;
     }
     this.admissionTokens.delete(token);
+    this.admissionReservedBytes -= token.reservedBytes;
     this.totals.admissionReleased += 1;
+    this._notifyAdmissionChange();
     return true;
+  }
+
+  waitForAdmissionChange(observedVersion = this.admissionVersion) {
+    if (observedVersion !== this.admissionVersion || this.failure || this.closing || this.closed) {
+      return Promise.resolve(this.admissionVersion);
+    }
+    if (!this.admissionChangePromise) {
+      this.admissionChangePromise = new Promise(resolve => {
+        this.resolveAdmissionChange = resolve;
+      });
+    }
+    return this.admissionChangePromise;
   }
 
   appendWithAdmission(value, token) {
@@ -215,12 +245,19 @@ class DurableAppendJournal {
 
     const buffer = this._prepareBuffer(value);
     if (buffer instanceof Error) return Promise.reject(buffer);
+    if (buffer.length > token.reservedBytes) {
+      return Promise.reject(journalError(
+        'EVENT_JOURNAL_ADMISSION_RESERVATION_EXCEEDED',
+        `Event journal record is ${buffer.length} bytes; producer reserved ${token.reservedBytes} bytes`
+      ));
+    }
     token.inFlight = true;
     return this._enqueue(buffer, token);
   }
 
   isBackpressured() {
-    return this.admissionTokens.size >= this.maxAdmittedProducers ||
+    return this.admissionTokens.size >= this.maxOutstandingEntries ||
+      this.admissionReservedBytes >= this.maxOutstandingBytes ||
       this.outstandingEntries >= this.maxOutstandingEntries ||
       this.outstandingBytes >= this.maxOutstandingBytes;
   }
@@ -246,6 +283,7 @@ class DurableAppendJournal {
       return;
     }
     this.closing = true;
+    this._notifyAdmissionChange();
     let closeError = null;
     try {
       await this.flush();
@@ -270,6 +308,8 @@ class DurableAppendJournal {
   getMetrics() {
     const entryUtilization = this.outstandingEntries / this.maxOutstandingEntries;
     const byteUtilization = this.outstandingBytes / this.maxOutstandingBytes;
+    const admissionEntryUtilization = this.admissionTokens.size / this.maxOutstandingEntries;
+    const admissionByteUtilization = this.admissionReservedBytes / this.maxOutstandingBytes;
     const backpressured = this.isBackpressured();
     return {
       status: this.failure
@@ -287,7 +327,7 @@ class DurableAppendJournal {
         maxBatchBytes: this.maxBatchBytes,
         maxOutstandingEntries: this.maxOutstandingEntries,
         maxOutstandingBytes: this.maxOutstandingBytes,
-        maxAdmittedProducers: this.maxAdmittedProducers
+        maxWorstCaseProducers: this.maxWorstCaseProducers
       },
       current: {
         queuedEntries: this.pending.length,
@@ -295,12 +335,16 @@ class DurableAppendJournal {
         activeBatchEntries: this.activeBatchEntries,
         activeBatchBytes: this.activeBatchBytes,
         admittedProducers: this.admissionTokens.size,
-        availableProducerSlots: Math.max(0, this.maxAdmittedProducers - this.admissionTokens.size),
+        admissionReservedBytes: this.admissionReservedBytes,
+        availableProducerSlots: Math.max(0, this.maxOutstandingEntries - this.admissionTokens.size),
+        availableReservationBytes: Math.max(0, this.maxOutstandingBytes - this.admissionReservedBytes),
         outstandingEntries: this.outstandingEntries,
         outstandingBytes: this.outstandingBytes,
         entryUtilization,
         byteUtilization,
-        utilization: Math.max(entryUtilization, byteUtilization),
+        admissionEntryUtilization,
+        admissionByteUtilization,
+        utilization: Math.max(entryUtilization, byteUtilization, admissionEntryUtilization, admissionByteUtilization),
         backpressured
       },
       highWatermarks: { ...this.highWatermarks },
@@ -435,6 +479,7 @@ class DurableAppendJournal {
           }
           entry.resolve();
         });
+        this._notifyAdmissionChange();
         activeBatch = [];
       }
     } catch (error) {
@@ -465,7 +510,16 @@ class DurableAppendJournal {
       }
       entry.reject(this.failure);
     });
+    this._notifyAdmissionChange();
     this._settleFlushWaiters();
+  }
+
+  _notifyAdmissionChange() {
+    this.admissionVersion += 1;
+    const resolve = this.resolveAdmissionChange;
+    this.admissionChangePromise = null;
+    this.resolveAdmissionChange = null;
+    if (resolve) resolve(this.admissionVersion);
   }
 
   _settleFlushWaiters() {

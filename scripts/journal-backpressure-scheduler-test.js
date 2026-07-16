@@ -85,7 +85,14 @@ async function testRuntimeSchedulerReservesBeforeLease() {
     expireStaleRunLeases: async () => {},
     isRunStarting: () => false,
     isRunActiveInMemory: () => false,
-    runner: { startRun: (_run, token) => { assert(token === admission, 'runner did not receive the reserved admission'); starts += 1; return true; } }
+    runner: {
+      startRun: (_run, token) => {
+        assert(token === undefined, 'scheduler leaked its selection admission into run execution');
+        assert(releases === 1, 'scheduler dispatched the run before releasing selection admission');
+        starts += 1;
+        return true;
+      }
+    }
   });
 
   await scheduler.tick();
@@ -94,7 +101,7 @@ async function testRuntimeSchedulerReservesBeforeLease() {
   admission = { id: 'admitted' };
   await scheduler.tick();
   assert(leaseAcquisitions === 1 && starts === 1, 'scheduler did not resume after producer capacity became available');
-  assert(releases === 0, 'scheduler released admission before the dispatched run settled');
+  assert(releases === 1, 'scheduler did not release admission after recording run selection');
 }
 
 async function main() {

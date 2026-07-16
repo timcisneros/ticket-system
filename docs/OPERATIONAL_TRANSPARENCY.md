@@ -24,8 +24,8 @@ existing stores or in-process runtime state.
 - **modelRoutingPolicies** — `active / archived / total`.
 - **processTemplates** — `total / enabled / disabled / scheduled / pausedSchedule`.
 - **schedules** — `enabled / disabled` (derived from template schedule state).
-- **eventJournal** — effective process-local batch, record, and outstanding-admission capacity;
-  current queued/active/outstanding work; utilization and high-water marks; durable commit
+- **eventJournal** — effective process-local batch, record, and weighted record/byte admission
+  capacity; current queued/active/outstanding work; utilization and high-water marks; durable commit
   totals/timing; and rejection counts. These metrics do not cap or report total `events.jsonl`
   growth and are not a new evidence ledger.
 - **recent\*** lists — bounded (≤10), deterministically ordered (id desc).
