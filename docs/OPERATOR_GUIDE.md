@@ -112,9 +112,9 @@ for runtime diagnostics. Reading these surfaces writes nothing and creates no su
 
 ## 16. Release checkpoint
 
-`npm run checkpoint:release` is the release gate (currently 54/54). See `docs/RELEASE_CHECKPOINT.md`
-for the full hygiene flow (clean tree → expected branch/files → build → checkpoint → ff-merge →
-annotated tag).
+`npm run checkpoint:release` is the release gate and reports its executed and passing check count.
+See `docs/RELEASE_CHECKPOINT.md` for the full hygiene flow (clean tree → expected branch/files →
+build → checkpoint → ff-merge → annotated tag).
 
 ## 17. Troubleshooting
 

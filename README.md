@@ -7,9 +7,9 @@ a **run** under explicit **authority**, all external effects flow through a **ta
 everything produces **evidence/receipts**. On top of that substrate sit grouping, visibility,
 handoff, observation, and routing layers — all bounded and read-only or proposal-only.
 
-This is a **release candidate** (see `docs/RELEASE_CANDIDATE_AUDIT.md`), not a final `v1.0` tag and
-not production-hardened. It runs as a single-process Fastify server backed by JSON files. See
-`docs/SYSTEM_AUDIT_2026-07-15.md` for the latest internal-demo audit.
+This is an in-development implementation, not a final `v1.0` tag or production-hardened deployment.
+It currently runs as a single-process Fastify server backed by JSON files. See
+`docs/SYSTEM_STATUS.md` for the current guarantees, product direction, and known work.
 
 ## 2. What this system is
 
@@ -37,7 +37,7 @@ Process Template · Schedule · Work Context · Handoff · Watcher · Model Rout
 Operational Summary. See **`docs/PRIMITIVE_GLOSSARY.md`** for precise definitions and commonly
 confused terms.
 
-## 5. Current release-candidate scope
+## 5. Current implementation scope
 
 Ticket creation/assignment; runs with lease/claim, attempts, evaluation; workspace/target operations
 through the bounded target-provider contract; authority & permissions; append-only evidence &
@@ -47,8 +47,8 @@ handoff queue protocol (claim/work/handoff receipts) with a deterministic smoke 
 manual watcher (observer/proposer); model/provider routing (dispatch policy + immutable per-run
 snapshot); a local/mock connector contract (bounded read with receipt, write refused); a read-only
 operational transparency surface; restart-safe event integrity checks; fail-closed startup data
-validation; and a hardened release checkpoint. The current audit and remaining work are in
-`docs/SYSTEM_AUDIT_2026-07-15.md`.
+validation; and a hardened release checkpoint. The current status and remaining work are in
+`docs/SYSTEM_STATUS.md`.
 
 ## 6. Quick start
 
@@ -80,10 +80,10 @@ temp-`DATA_DIR`/`WORKSPACE_ROOT` safe:
 npm run checkpoint:release
 ```
 
-It runs a project-wide JavaScript syntax build plus the ordered `CHECKPOINT_TEST_SCRIPTS`, fails loudly if any
-referenced script is missing, and ends with `RELEASE CHECKPOINT PASSED: N/N checks`. The current
-count is **54/54**. See **`docs/RELEASE_CHECKPOINT.md`** for what a pass does and does not mean and
-the full release-hygiene flow.
+It runs a project-wide JavaScript syntax build plus the ordered `CHECKPOINT_TEST_SCRIPTS`, fails
+loudly if any referenced script is missing, and reports the executed and passing check count. See
+**`docs/RELEASE_CHECKPOINT.md`** for what a pass does and does not mean and the full release-hygiene
+flow.
 
 ## 8. Demo fixtures note
 
@@ -116,9 +116,10 @@ external connector**, and it refuses writes. Tracked seed agents carry **no prov
 **Start here:** this README → `docs/SETUP_AND_FIRST_RUN.md` → `docs/OPERATOR_GUIDE.md` →
 `docs/PRIMITIVE_GLOSSARY.md`.
 
-- **Release / safety:** `docs/SYSTEM_AUDIT_2026-07-15.md`, `docs/RELEASE_CANDIDATE_AUDIT.md`,
-  `docs/RELEASE_CHECKPOINT.md`,
-  `docs/SAFETY_AND_NON_GOALS.md`, `docs/RELEASE_NOTES_r1.33.md`, `docs/INDEX.md`.
+- **Status / safety:** `docs/SYSTEM_STATUS.md`, `docs/RELEASE_CHECKPOINT.md`,
+  `docs/SAFETY_AND_NON_GOALS.md`, `docs/INDEX.md`.
+- **Historical release records:** `docs/RELEASE_CANDIDATE_AUDIT.md`,
+  `docs/RELEASE_NOTES_r1.33.md`.
 - **Primitive docs:** `docs/TARGET_PROVIDER_CONTRACT.md`,
   `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH_AUDIT.md`,
   `docs/TICKET_TIMELINE_AND_AUTHORITY_VISIBILITY.md`,

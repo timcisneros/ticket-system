@@ -110,8 +110,8 @@ and links. Read-only.
 npm run checkpoint:release
 ```
 
-Provider-free, network-free, deterministic; ends with `RELEASE CHECKPOINT PASSED: 54/54 checks`. See
-`docs/RELEASE_CHECKPOINT.md`.
+Provider-free, network-free, and deterministic; it reports the executed and passing check count.
+See `docs/RELEASE_CHECKPOINT.md`.
 
 ## 16. Common local issues
 

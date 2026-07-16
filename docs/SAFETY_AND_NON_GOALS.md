@@ -67,11 +67,12 @@ refusal; watcher refusal/failure; verification failure; ambiguous objective; and
 process-template version consistency. Each records evidence and waits for a human where judgment is
 needed.
 
-## 11. What the current audit means
+## 11. What the verified baseline means
 
-The substrate is internally coherent, bounded, and test-covered (release checkpoint 54/54). The
-audit applies to the internal-demo boundary; it is not a production-readiness or semantic
-correctness claim. See `docs/SYSTEM_AUDIT_2026-07-15.md`.
+The deterministic release checkpoint tests the current bounded runtime baseline. A passing
+checkpoint is not a production-readiness or semantic-correctness claim. Current guarantees,
+product direction, and known work live in `docs/SYSTEM_STATUS.md`; historical results remain in Git
+history or explicitly historical release documents.
 
 ## 12. What a version tag does not mean
 

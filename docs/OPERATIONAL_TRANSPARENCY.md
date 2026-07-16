@@ -1,8 +1,8 @@
 # Operational Transparency
 
-r1.31 adds a **read-only operational surface** so an operator can see the health and boundaries of
-the substrate before release-candidate hardening. It adds **no new execution behavior** and **no new
-source of truth** — every value is derived live from existing stores or in-process runtime state.
+The operational transparency surface is a **read-only** view of runtime health and boundaries. It
+adds **no execution behavior** and **no new source of truth** — every value is derived live from
+existing stores or in-process runtime state.
 
 ## What it is
 
