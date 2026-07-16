@@ -6,7 +6,7 @@ not a claim that the server already runs on PostgreSQL.
 
 ## Current status
 
-The PostgreSQL foundation and the first server authority seam are implemented:
+The PostgreSQL foundation and the first two server authority seams are implemented:
 
 - `persistence/postgres/migrations/001_runtime_core.sql` defines the ticket, run, append-only event,
   and per-run event-chain-tip schema.
@@ -25,8 +25,9 @@ The PostgreSQL foundation and the first server authority seam are implemented:
   idempotent persistence.
 - Ticket and run transition APIs require an expected revision and allowed source status. Their state
   change and lifecycle event commit or roll back together. Starting a run requires its live lease;
-  every worker transition from `running` requires the matching live lease, and an expired run may
-  only return to `pending` for recovery. A terminal transition clears the lease. Terminal runs
+  every normal worker transition from `running` requires the matching live lease. An expired run
+  may return to `pending` for recovery or be terminalized as failed/interrupted by recovery; it
+  cannot complete without a live owner. A terminal transition clears the lease. Terminal runs
   cannot be reopened; retry creates a new run so final evaluation and consequence evidence remains
   immutable.
 - Evaluation, consequence, and operation-receipt inserts are atomic with their run event. Identical
@@ -49,8 +50,19 @@ The PostgreSQL foundation and the first server authority seam are implemented:
   terminalizing the run through the stale worker. This point-in-time check does not make the target
   side effect atomic with the lease; stable operation keys and target idempotency or reconciliation
   remain required for failure-spanning retries.
+- Run terminalization now has one repository boundary for terminal status and lease clear, final
+  replay, violation evidence, evaluation, consequence, and ordered terminal events. PostgreSQL
+  commits or rolls back that bundle in one transaction, including immutable evidence inserts and
+  per-run event-chain updates. The active JSON adapter uses the same runtime call but cannot make
+  its snapshot file, run projection, and journal one filesystem transaction; it preserves
+  prerequisite evidence, prevents concurrent different-ticket projections from overwriting one
+  another, and relies on current-format startup reconciliation after a crash.
+- Automatic retry eligibility is decided before terminalization, but retry creation happens only
+  after the failed predecessor is terminal. Its process-local execution key remains a scheduling
+  barrier until the predecessor runner exits. Ticket reopening plus retry creation is not yet part
+  of the PostgreSQL terminalization transaction and belongs to the next lifecycle slice.
 
-The Fastify server currently instantiates the JSON implementation of that repository, and all
+The Fastify server currently instantiates the JSON implementations of those repositories, and all
 remaining runtime domains still use JSON files as their authority. JSON state mutation and event
 append do not gain a database transaction merely by passing through the asynchronous contract.
 Setting
@@ -99,14 +111,16 @@ The server backend must not be enabled until all of these hold:
 
 ## Remaining implementation order
 
-1. Move terminal run handling behind the next complete repository boundary: the terminal run
-   transition and lease clear, final replay state, evaluation, consequence, and required terminal
-   events must commit or roll back under one authority. Do not approximate that transaction by
-   sequencing independent JSON and PostgreSQL writes.
+1. Move ticket lifecycle and run creation behind the next complete repository boundary. Ticket
+   open/in-progress/final transitions, initial run creation, and the failed-run-to-retry transition
+   must use database identity and commit their required events together. An eligible automatic
+   retry should atomically leave one terminal predecessor and one new pending run rather than
+   relying on the current ordered JSON lifecycle steps.
 2. Continue replacing the server's remaining synchronous JSON call sites with asynchronous
-   repositories, one complete authority slice at a time. The scheduler lease slice is complete;
-   startup, ticket creation/lifecycle, replay/evidence projections, and mutable control records are
-   not. Do not publish the mixed implementation as horizontally scalable.
+   repositories, one complete authority slice at a time. The scheduler lease and run
+   terminalization slices are complete; startup, ticket lifecycle/run creation, non-terminal
+   replay/evidence updates, and mutable control records are not. Do not publish the mixed
+   implementation as horizontally scalable.
 3. Integrate stable operation keys and target-side idempotency/reconciliation with the PostgreSQL
    receipt authority before external side effects can be retried across process failure.
 4. Move workflows, templates, schedules, Work Contexts, routing, connectors, permissions, and other

@@ -24,6 +24,10 @@ const {
   RunLeaseLostError,
   assertRunLeaseRepository
 } = require('./persistence/json/run-lease-repository');
+const {
+  JsonRunTerminalizationRepository,
+  assertRunTerminalizationRepository
+} = require('./persistence/json/run-terminalization-repository');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 
@@ -1567,6 +1571,7 @@ let serverReady = false;
 let dataDirWriterLock = null;
 let dataDirWriterLockHeartbeatTimer = null;
 let runLeaseRepository = null;
+let runTerminalizationRepository = null;
 let dataVersion = 0;
 const pageRenderCache = new Map();
 const pageRenderInFlight = new Map();
@@ -6030,8 +6035,24 @@ function getRunLeaseRepository() {
   return runLeaseRepository;
 }
 
+function getRunTerminalizationRepository() {
+  if (runTerminalizationRepository) return runTerminalizationRepository;
+  runTerminalizationRepository = assertRunTerminalizationRepository(new JsonRunTerminalizationRepository({
+    readRuns,
+    writeRuns,
+    writeReplaySnapshotFile,
+    attachReplayMetadata,
+    appendEvent,
+    sanitizePayload: sanitizeSnapshotValue
+  }));
+  return runTerminalizationRepository;
+}
+
 function isRunLeaseExpired(run, nowMs = Date.now()) {
-  if (!run || !run.leaseExpiresAt) return false;
+  if (!run) return false;
+  // A running run without complete lease authority is already orphaned and may
+  // be failed/interrupted by recovery; it must never be treated as live.
+  if (!run.leaseOwner || !run.leaseExpiresAt) return run.status === 'running';
   const expiresAtMs = Date.parse(run.leaseExpiresAt);
   return !Number.isNaN(expiresAtMs) && expiresAtMs <= nowMs;
 }
@@ -6097,12 +6118,14 @@ function countRunRetryAttempts(run) {
   }).length;
 }
 
-function buildRunEvaluation(run) {
+function buildRunEvaluation(run, { snapshot: suppliedSnapshot = null, events: suppliedEvents = null } = {}) {
   if (!run) return null;
 
-  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
-  const replaySummary = run.replaySummary || extractReplaySummary(snapshot) || {};
-  const events = getRunEvents(run.id);
+  const snapshot = suppliedSnapshot || readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const replaySummary = suppliedSnapshot
+    ? extractReplaySummary(snapshot) || {}
+    : run.replaySummary || extractReplaySummary(snapshot) || {};
+  const events = suppliedEvents || getRunEvents(run.id);
   const runLogs = readLogs().filter(log => log.runId === run.id);
   const workflowActions = Array.isArray(snapshot.workflowActions) ? snapshot.workflowActions : [];
   const providerRequests = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests : [];
@@ -6627,12 +6650,16 @@ function createWorkspaceViolationItem(run, evidence, source) {
   return null;
 }
 
-function collectFormalWorkspaceViolations(run) {
+function collectFormalWorkspaceViolations(run, {
+  snapshot: suppliedSnapshot = null,
+  events: suppliedEvents = null
+} = {}) {
   if (!run) return [];
 
-  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const snapshot = suppliedSnapshot || readRunReplaySnapshot(run) || run.replaySnapshot || {};
   const workspaceOperations = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
-  const workspaceOperationEvents = getRunEvents(run.id).filter(event => event.type === 'workspace.operation');
+  const workspaceOperationEvents = (suppliedEvents || getRunEvents(run.id))
+    .filter(event => event.type === 'workspace.operation');
   const violations = [];
   const seen = new Set();
 
@@ -6944,7 +6971,7 @@ function buildMutationConsequenceFromHistory(record) {
   return { category: 'mutations', item: base };
 }
 
-function collectAttemptedMutationConsequences(run, snapshot) {
+function collectAttemptedMutationConsequences(run, snapshot, suppliedEvents = null) {
   const attempts = [];
   const seen = new Set();
 
@@ -6973,7 +7000,7 @@ function collectAttemptedMutationConsequences(run, snapshot) {
     });
   });
 
-  getRunEvents(run.id).filter(event => event.type === 'workspace.operation').forEach(event => {
+  (suppliedEvents || getRunEvents(run.id)).filter(event => event.type === 'workspace.operation').forEach(event => {
     const payload = event.payload || {};
     const operation = getWorkspaceOperationNameFromEvidence(payload);
     if (!operation || !AGENT_MUTATING_OPERATIONS.includes(operation)) return;
@@ -6991,8 +7018,8 @@ function collectAttemptedMutationConsequences(run, snapshot) {
   return attempts;
 }
 
-function collectExplicitExternalEffects(run) {
-  return getRunEvents(run.id)
+function collectExplicitExternalEffects(run, suppliedEvents = null) {
+  return (suppliedEvents || getRunEvents(run.id))
     .filter(event => event.type === 'external.effect')
     .map(event => ({
       id: event.id || null,
@@ -7001,8 +7028,8 @@ function collectExplicitExternalEffects(run) {
     }));
 }
 
-function collectExplicitNotifications(run) {
-  return getRunEvents(run.id)
+function collectExplicitNotifications(run, suppliedEvents = null) {
+  return (suppliedEvents || getRunEvents(run.id))
     .filter(event => event.type === 'notification.sent')
     .map(event => ({
       id: event.id || null,
@@ -7011,19 +7038,26 @@ function collectExplicitNotifications(run) {
     }));
 }
 
-function buildRunConsequence(run) {
+function buildRunConsequence(run, {
+  snapshot: suppliedSnapshot = null,
+  evaluation: suppliedEvaluation = null,
+  events: suppliedEvents = null
+} = {}) {
   if (!run) return null;
 
-  const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
-  const evaluation = run.runEvaluation || buildRunEvaluation(run) || {};
+  const snapshot = suppliedSnapshot || readRunReplaySnapshot(run) || run.replaySnapshot || {};
+  const evaluation = suppliedEvaluation || run.runEvaluation || buildRunEvaluation(run, {
+    snapshot,
+    events: suppliedEvents
+  }) || {};
   const consequence = {
     mutations: [],
     created: [],
     updated: [],
     deleted: [],
     renamed: [],
-    notifications: collectExplicitNotifications(run),
-    externalEffects: collectExplicitExternalEffects(run),
+    notifications: collectExplicitNotifications(run, suppliedEvents),
+    externalEffects: collectExplicitExternalEffects(run, suppliedEvents),
     verification: {
       postconditionsStatus: evaluation.effectiveness ? evaluation.effectiveness.status || 'unknown' : 'unknown',
       violationsStatus: evaluation.violations ? evaluation.violations.status || 'unknown' : 'unknown'
@@ -7037,7 +7071,7 @@ function buildRunConsequence(run) {
     consequence[mutation.category].push(mutation.item);
   });
 
-  collectAttemptedMutationConsequences(run, snapshot).forEach(attempt => {
+  collectAttemptedMutationConsequences(run, snapshot, suppliedEvents).forEach(attempt => {
     consequence.mutations.push({
       ...attempt,
       attempted: true
@@ -10790,15 +10824,13 @@ async function persistRunTriage(runId, triage) {
   return normalized;
 }
 
-// mutationCount parameter is reserved but never passed by callers; count is always derived.
-async function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
-  await maybeTestInterrupt(run, 'before_run.snapshot_finalized');
+function buildFinalizedRunReplayState(run, status, failureReason = null, mutationCount = null, failure = null, finalizedAt = null) {
   const effectiveMutationCount = mutationCount !== null ? mutationCount : countRunMutatingOperations(run.id);
-  const finalizedAt = new Date().toISOString();
+  const effectiveFinalizedAt = finalizedAt || new Date().toISOString();
   const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
   const browserEvidence = classifyBrowserEvidence(run, snapshot);
   const browserReport = extractBrowserReport(run, snapshot);
-  updateRunReplaySnapshot(run.id, snapshot => snapshot ? {
+  const finalizedSnapshot = {
     ...snapshot,
     terminalStatus: status,
     failureReason: failureReason ? sanitizeLogMessage(failureReason) : null,
@@ -10808,12 +10840,27 @@ async function finalizeRunReplaySnapshot(run, status, failureReason = null, muta
     browserEvidenceStatus: browserEvidence.status,
     browserEvidenceDetail: browserEvidence.detail,
     browserReport,
-    finalizedAt
-  } : snapshot);
+    finalizedAt: effectiveFinalizedAt
+  };
+  return {
+    snapshot: sanitizeSnapshotValue(finalizedSnapshot),
+    browserReport,
+    mutationCount: effectiveMutationCount,
+    finalizedAt: effectiveFinalizedAt
+  };
+}
+
+// Current JSON crash-reconciliation path. Normal run completion uses the
+// terminalization repository below so the PostgreSQL implementation can commit
+// this state with evaluation, consequence, and terminal events in one transaction.
+async function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
+  await maybeTestInterrupt(run, 'before_run.snapshot_finalized');
+  const finalized = buildFinalizedRunReplayState(run, status, failureReason, mutationCount, failure);
+  writeRunReplaySnapshot(run.id, finalized.snapshot);
 
   // Persist browserReport on the run record for direct query access.
   // The snapshot already carries it for replay/diagnostic evidence.
-  persistBrowserReportOnRun(run.id, browserReport);
+  persistBrowserReportOnRun(run.id, finalized.browserReport);
 
   await appendEvent({
     type: 'run.snapshot_finalized',
@@ -10822,8 +10869,8 @@ async function finalizeRunReplaySnapshot(run, status, failureReason = null, muta
     payload: {
       status,
       failureReason: failureReason ? sanitizeLogMessage(failureReason) : null,
-      mutationCount: effectiveMutationCount,
-      finalizedAt
+      mutationCount: finalized.mutationCount,
+      finalizedAt: finalized.finalizedAt
     }
   });
   await maybeTestInterrupt(run, 'after_run.snapshot_finalized');
@@ -10835,6 +10882,169 @@ function persistBrowserReportOnRun(runId, browserReport) {
   if (!run) return;
   run.browserReport = browserReport;
   writeRuns(runs);
+}
+
+function buildTerminalViolationEvents(run, snapshot, existingEvents) {
+  if (existingEvents.some(event =>
+    event.type === 'run.violation_detected' || event.type === 'run.violations_checked'
+  )) return [];
+
+  const violations = collectFormalWorkspaceViolations(run, { snapshot, events: existingEvents });
+  if (violations.length > 0) {
+    return violations.map(violation => ({
+      type: 'run.violation_detected',
+      payload: sanitizeSnapshotValue(violation)
+    }));
+  }
+  return [{
+    type: 'run.violations_checked',
+    payload: { status: 'none', checked: 'workspace_mutations' }
+  }];
+}
+
+async function commitRunTerminalization(run, {
+  status,
+  error = null,
+  failure = null,
+  triage = null,
+  mutationCount = null,
+  beforeReplayEvents = [],
+  allowExpiredLease = false
+} = {}) {
+  // Execution objects can predate later replay-metadata and heartbeat writes.
+  // Reload through the selected authority before preparing the terminal bundle.
+  run = await getRunLeaseRepository().getRun(run.id) || run;
+  const completedAt = new Date().toISOString();
+  const finalized = buildFinalizedRunReplayState(
+    run,
+    status,
+    error,
+    mutationCount,
+    failure,
+    completedAt
+  );
+  if (triage) finalized.snapshot.triage = sanitizeSnapshotValue(triage);
+
+  const existingEvents = getRunEvents(run.id);
+  const violationEvents = buildTerminalViolationEvents(run, finalized.snapshot, existingEvents);
+  const terminalPayload = {
+    status,
+    ...(error ? { error: sanitizeLogMessage(error) } : {})
+  };
+  const executionPayload = {
+    status,
+    ...(error ? { error: sanitizeLogMessage(error) } : {}),
+    ...(failure ? { failure: sanitizeSnapshotValue(failure) } : {}),
+    mutationCount: finalized.mutationCount,
+    completedAt
+  };
+  const projectedEvent = event => ({
+    type: event.type,
+    ticketId: run.ticketId,
+    runId: run.id,
+    ...(event.stepId === undefined ? {} : { stepId: event.stepId }),
+    payload: event.payload || {}
+  });
+  const terminalEvent = { type: 'run.terminalized', payload: terminalPayload };
+  const terminalPatch = {
+    currentPhase: 'terminalization',
+    triage: triage || null,
+    browserReport: finalized.browserReport,
+    ...(error ? { error: sanitizeLogMessage(error) } : {})
+  };
+
+  // The old interruption points now sit before the repository boundary. They
+  // can abort before the bundle, but cannot create a partially committed
+  // PostgreSQL terminal state between its constituent records.
+  await maybeTestInterrupt(run, 'before_run.snapshot_finalized');
+  await maybeTestInterrupt(run, 'before_run.consequence_recorded');
+
+  const result = await getRunTerminalizationRepository().terminalizeRun({
+    runId: run.id,
+    fromStatuses: [run.status],
+    status,
+    leaseOwner: run.leaseOwner === RUN_LEASE_OWNER ? RUN_LEASE_OWNER : null,
+    allowExpiredLease,
+    completedAt,
+    patch: terminalPatch,
+    replaySnapshot: finalized.snapshot,
+    evaluation: context => {
+      const projectedRun = {
+        ...run,
+        ...context.run,
+        ...terminalPatch,
+        status,
+        completedAt,
+        updatedAt: completedAt,
+        replaySnapshot: finalized.snapshot,
+        replaySummary: extractReplaySummary(finalized.snapshot)
+      };
+      const projectedEvents = [
+        ...existingEvents,
+        ...context.events,
+        projectedEvent(terminalEvent)
+      ];
+      return buildRunEvaluation(projectedRun, {
+        snapshot: finalized.snapshot,
+        events: projectedEvents
+      });
+    },
+    consequence: context => {
+      const projectedRun = {
+        ...run,
+        ...context.run,
+        ...terminalPatch,
+        status,
+        completedAt,
+        updatedAt: completedAt,
+        replaySnapshot: finalized.snapshot,
+        replaySummary: extractReplaySummary(finalized.snapshot),
+        runEvaluation: context.evaluation
+      };
+      const projectedEvents = [
+        ...existingEvents,
+        ...context.events,
+        projectedEvent(terminalEvent)
+      ];
+      return buildRunConsequence(projectedRun, {
+        snapshot: finalized.snapshot,
+        evaluation: context.evaluation,
+        events: projectedEvents
+      });
+    },
+    executionEvent: {
+      type: 'run.execution_completed',
+      payload: executionPayload
+    },
+    beforeReplayEvents: beforeReplayEvents.map(projectedEvent),
+    replayEvent: {
+      type: 'run.snapshot_finalized',
+      payload: {
+        status,
+        failureReason: error ? sanitizeLogMessage(error) : null,
+        mutationCount: finalized.mutationCount,
+        finalizedAt: finalized.finalizedAt
+      }
+    },
+    beforeEvaluationEvents: violationEvents.map(projectedEvent),
+    terminalEvent
+  });
+
+  if (!result) throw new RunLeaseLostError(run.id, RUN_LEASE_OWNER);
+  const terminalRun = {
+    ...result.run,
+    runEvaluation: result.evaluation,
+    runConsequence: result.consequence
+  };
+  updateAllocationItemStatus(terminalRun, status);
+  broadcastEvent('run:status-changed', {
+    runId: terminalRun.id,
+    ticketId: terminalRun.ticketId,
+    status,
+    error: error || null
+  });
+  await maybeTestInterrupt(terminalRun, 'after_run.snapshot_finalized');
+  return terminalRun;
 }
 
 function classifyInterruptionPhase(run) {
@@ -12144,7 +12354,7 @@ async function interruptAgentRunUnlocked(run, reason) {
   advanceRunPhase(run, 'terminalization');
   const phase = classifyInterruptionPhase(run);
   ensureInterruptedRunReplaySnapshot(run, reason, phase);
-  const interruptedRun = updateRunStatus(run.id, 'interrupted', reason) || {
+  const projectedInterruptedRun = {
     ...run,
     status: 'interrupted',
     updatedAt: new Date().toISOString(),
@@ -12153,31 +12363,21 @@ async function interruptAgentRunUnlocked(run, reason) {
   };
 
   const failure = buildFailureMetadata(null, 'interrupted', reason, { phase });
-  await appendEvent({
-    type: 'run.execution_completed',
-    ticketId: interruptedRun.ticketId,
-    runId: interruptedRun.id,
-    payload: {
-      status: 'interrupted',
-      error: reason,
-      failure,
-      completedAt: interruptedRun.completedAt || interruptedRun.updatedAt
-    }
-  });
-  interruptedRun.triage = await persistRunTriage(interruptedRun.id, buildRunTriage(interruptedRun, {
+  const triage = buildRunTriage(projectedInterruptedRun, {
     failure,
     status: 'interrupted',
     summary: reason
-  }));
-  await finalizeRunReplaySnapshot(interruptedRun, 'interrupted', reason, null, failure);
-  await completeRunViolationCheck(interruptedRun.id);
-  await persistRunEvaluation(interruptedRun.id);
-  await persistRunConsequence(interruptedRun.id);
-  await appendEvent({
-    type: 'run.terminalized',
-    ticketId: interruptedRun.ticketId,
-    runId: interruptedRun.id,
-    payload: { status: 'interrupted', error: reason }
+  });
+  const interruptedRun = await commitRunTerminalization(run, {
+    status: 'interrupted',
+    error: reason,
+    failure,
+    triage,
+    allowExpiredLease: isRunLeaseExpired(run),
+    beforeReplayEvents: triage ? [{
+      type: 'run.triage_created',
+      payload: { triage }
+    }] : []
   });
   appendRunLog(interruptedRun, 'run:interrupted', `${reason}${allocationLogSuffix(interruptedRun)}`, null, {
     allocationPlanId: interruptedRun.allocationPlanId || null,
@@ -12281,72 +12481,73 @@ function isAutoRetryableReason(prospectiveReasonCode, mutationCount) {
   return prospectiveReasonCode === 'runtime_failed';
 }
 
-// Bounded automatic retry (v1). Called ONLY from failAgentRun, before run triage is
-// persisted. Evaluates the auto-retry policy and, if allowed, opens the ticket and
-// creates at most one new pending run. Requires the ticket policy to explicitly opt
-// in, a finite maxAttempts ceiling with room, a runtime allowlist failure with no
-// mutations, and no blocking ticket triage. It never resolves triage, changes
-// verification, mutates the workspace, or finalizes completion. On exhaustion or any
-// non-retryable failure it returns { retried: false } so the caller falls through to
-// today's triage behavior.
-async function runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCount) {
-  if (!failedRun) return { retried: false, reason: 'no_run' };
+// Decide retry eligibility without mutating ticket/run state. The failed run is
+// terminalized before retry creation so a new run can never precede its durable
+// predecessor state.
+function assessAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCount) {
+  if (!failedRun) return { eligible: false, reason: 'no_run' };
   const ticket = readTickets().find(item => item.id === failedRun.ticketId);
-  if (!ticket) return { retried: false, reason: 'ticket_missing' };
+  if (!ticket) return { eligible: false, reason: 'ticket_missing' };
 
   const policy = ticket.executionPolicy || {};
-  if (policy.autoRetry !== true) return { retried: false, reason: 'auto_retry_disabled' };
+  if (policy.autoRetry !== true) return { eligible: false, reason: 'auto_retry_disabled' };
   const maxAttempts = Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0 ? policy.maxAttempts : null;
-  if (maxAttempts === null) return { retried: false, reason: 'no_finite_max_attempts' };
-  if (ticket.triage && ticket.triage.required === true) return { retried: false, reason: 'ticket_triage_required' };
+  if (maxAttempts === null) return { eligible: false, reason: 'no_finite_max_attempts' };
+  if (ticket.triage && ticket.triage.required === true) return { eligible: false, reason: 'ticket_triage_required' };
   // v1 supports only single-run individual-agent tickets (one new pending run).
   if (usesOwnedScopeAllocation(ticket) || ticket.assignmentTargetType !== 'agent') {
-    return { retried: false, reason: 'unsupported_ticket_shape' };
+    return { eligible: false, reason: 'unsupported_ticket_shape' };
   }
 
   // Classify exactly as triage would; only runtime_failed (no mutations) is retryable.
   const prospectiveTriage = buildRunTriage(failedRun, { failure, status: 'failed', summary: failedRun.error || 'Run failed' });
   const prospectiveReasonCode = prospectiveTriage ? prospectiveTriage.reasonCode : 'unknown';
   if (!isAutoRetryableReason(prospectiveReasonCode, mutationCount)) {
-    return { retried: false, reason: `non_retryable:${prospectiveReasonCode}` };
+    return { eligible: false, reason: `non_retryable:${prospectiveReasonCode}` };
   }
 
   // The just-failed run is already counted; require room under the ceiling.
   const attemptCount = readRuns().filter(run => run.ticketId === ticket.id).length;
-  if (attemptCount >= maxAttempts) return { retried: false, reason: 'max_attempts_exhausted' };
+  if (attemptCount >= maxAttempts) return { eligible: false, reason: 'max_attempts_exhausted' };
+  return { eligible: true, ticketId: ticket.id, attemptCount, maxAttempts, reasonCode: prospectiveReasonCode };
+}
 
+// Create one retry only after the predecessor is terminal. The predecessor's
+// in-memory execution key remains held, so the new pending run cannot start until
+// the old runner's finally block releases that key.
+async function runAutoRetryAfterFailureIfPolicyAllows(failedRun, assessment) {
+  if (!failedRun || !assessment || assessment.eligible !== true) {
+    return { retried: false, reason: assessment ? assessment.reason : 'not_eligible' };
+  }
   let newRun = null;
   try {
-    // The just-failed run still holds its in-memory execution lock (cleared by the
-    // runAgentTicket finally only after failAgentRun returns). Release it now so the
-    // new pending run can be created; the finally's deletes are idempotent.
-    runningRunKeys.delete(runExecutionKey(failedRun));
-    startingRunIds.delete(failedRun.id);
-    startingLocalModelRunIds.delete(failedRun.id);
-
-    const reopened = await forceTicketOpenForRerun(ticket.id, 'auto_retry');
+    const reopened = await forceTicketOpenForRerun(assessment.ticketId, 'auto_retry');
     if (!reopened) return { retried: false, reason: 'reopen_failed' };
-    const created = await createRunsForTicket(reopened, { userId: null, username: 'system', source: 'auto_retry' });
+    const created = await createRunsForTicket(
+      reopened,
+      { userId: null, username: 'system', source: 'auto_retry' },
+      { afterTerminalRunId: failedRun.id }
+    );
     newRun = (Array.isArray(created) && created[0]) || null;
   } catch (error) {
     return { retried: false, reason: 'retry_creation_failed' };
   }
-  if (!newRun) return { retried: false, reason: 'no_run_created' };
+  if (!newRun || newRun.id === failedRun.id) return { retried: false, reason: 'no_run_created' };
 
   appendSystemLog('ticket:auto_retry',
-    `Ticket #${ticket.id} automatically retried after run #${failedRun.id} failed (attempt ${attemptCount} of ${maxAttempts})`,
+    `Ticket #${assessment.ticketId} automatically retried after run #${failedRun.id} failed (attempt ${assessment.attemptCount} of ${assessment.maxAttempts})`,
     null, {
-      contextTicketId: ticket.id,
+      contextTicketId: assessment.ticketId,
       contextRunId: newRun.id,
       fromRunId: failedRun.id,
       toRunId: newRun.id,
-      attemptCount,
-      maxAttempts,
-      reasonCode: prospectiveReasonCode,
+      attemptCount: assessment.attemptCount,
+      maxAttempts: assessment.maxAttempts,
+      reasonCode: assessment.reasonCode,
       source: 'auto_retry'
     });
 
-  return { retried: true, newRun, attemptCount, maxAttempts, reasonCode: prospectiveReasonCode };
+  return { retried: true, newRun, ...assessment };
 }
 
 async function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retry', delegated = null) {
@@ -12549,7 +12750,7 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
     }
   }
 
-  const failedRun = updateRunStatus(run.id, 'failed', message) || {
+  const projectedFailedRun = {
     ...run,
     status: 'failed',
     updatedAt: new Date().toISOString(),
@@ -12557,48 +12758,49 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
     error: sanitizeLogMessage(message)
   };
 
-  if (failedRun.status === 'interrupted') return failedRun;
-  ensureFailedRunReplaySnapshot(failedRun, message);
-  await appendEvent({
-    type: 'run.execution_completed',
-    ticketId: failedRun.ticketId,
-    runId: failedRun.id,
-    payload: {
-      status: 'failed',
-      error: message,
-      failure,
-      mutationCount: countRunMutatingOperations(failedRun.id),
-      completedAt: failedRun.completedAt || failedRun.updatedAt
-    }
-  });
-  // Bounded automatic retry (v1): decide BEFORE persisting run triage. The failed run
-  // keeps all of its evidence below; only triage-creation and ticket-failure
-  // finalization are skipped when an eligible immediate retry is created.
-  const autoRetry = await runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, countRunMutatingOperations(failedRun.id));
-  failedRun.triage = autoRetry.retried
+  if (run.status === 'interrupted') return run;
+  ensureFailedRunReplaySnapshot(projectedFailedRun, message);
+  await completeRunPostconditionCheck(run.id);
+  const mutationCount = countRunMutatingOperations(run.id);
+  // Decide retry eligibility before the terminal bundle, but create a retry only
+  // after this run is terminal. That ordering keeps one authoritative predecessor
+  // and prevents run creation from returning the still-running predecessor.
+  const autoRetryAssessment = assessAutoRetryAfterFailureIfPolicyAllows(projectedFailedRun, failure, mutationCount);
+  let triage = autoRetryAssessment.eligible
     ? null
-    : await persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
+    : buildRunTriage(projectedFailedRun, {
         error,
         failure,
         status: 'failed',
         summary: message
-      }));
-  await finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
+      });
+  let failedRun = await commitRunTerminalization(run, {
+    status: 'failed',
+    error: message,
+    failure,
+    triage,
+    mutationCount,
+    beforeReplayEvents: triage ? [{
+      type: 'run.triage_created',
+      payload: { triage }
+    }] : []
+  });
+  const autoRetry = await runAutoRetryAfterFailureIfPolicyAllows(failedRun, autoRetryAssessment);
+  if (autoRetryAssessment.eligible && !autoRetry.retried) {
+    triage = buildRunTriage(failedRun, {
+      error,
+      failure,
+      status: 'failed',
+      summary: message
+    });
+    const persistedTriage = await persistRunTriage(failedRun.id, triage);
+    failedRun = { ...failedRun, triage: persistedTriage };
+  }
   appendRunLog(failedRun, autoRetry.retried ? 'run:failed_auto_retried' : 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
     allocationPlanId: failedRun.allocationPlanId || null,
     allocationItemId: failedRun.allocationItemId || null,
     failure,
     ...(autoRetry.retried ? { autoRetryRunId: autoRetry.newRun.id } : {})
-  });
-  await completeRunPostconditionCheck(failedRun.id);
-  await completeRunViolationCheck(failedRun.id);
-  await persistRunEvaluation(failedRun.id);
-  await persistRunConsequence(failedRun.id);
-  await appendEvent({
-    type: 'run.terminalized',
-    ticketId: failedRun.ticketId,
-    runId: failedRun.id,
-    payload: { status: 'failed', error: message }
   });
   // When auto-retry created a new pending run it already reopened the ticket; do not
   // finalize the ticket as failed in that case.
@@ -12619,82 +12821,66 @@ async function completeAgentRun(run) {
 
 async function completeAgentRunUnlocked(run) {
   advanceRunPhase(run, 'terminalization');
-  await appendEvent({
-    type: 'run.execution_completed',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
-      status: 'completed',
-      mutationCount: countRunMutatingOperations(run.id),
-      completedAt: new Date().toISOString()
-    }
-  });
-  await maybeTestInterrupt(run, 'after_run.execution_completed');
-
   const failedPostconditions = await completeRunPostconditionCheck(run.id);
   if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
     const message = buildVerificationFailureReason(failedPostconditions);
     const failure = buildVerificationFailure(failedPostconditions);
-    const failedRun = updateRunStatus(run.id, 'failed', message);
-    if (failedRun.status === 'interrupted') return failedRun;
-    await appendEvent({
-      type: 'run.verification_failed',
-      ticketId: failedRun.ticketId,
-      runId: failedRun.id,
-      payload: {
-        status: 'failed',
-        error: message,
-        failure
-      }
-    });
-    failedRun.triage = await persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
+    if (run.status === 'interrupted') return run;
+    const projectedFailedRun = {
+      ...run,
+      status: 'failed',
+      error: sanitizeLogMessage(message),
+      completedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const triage = buildRunTriage(projectedFailedRun, {
       failure,
       status: 'failed',
       summary: message,
       reasonCode: 'verification_failed'
-    }));
-    await finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
+    });
+    const failedRun = await commitRunTerminalization(run, {
+      status: 'failed',
+      error: message,
+      failure,
+      triage,
+      beforeReplayEvents: [{
+        type: 'run.verification_failed',
+        payload: {
+          status: 'failed',
+          error: message,
+          failure
+        }
+      }, {
+        type: 'run.triage_created',
+        payload: { triage }
+      }]
+    });
     appendRunLog(failedRun, 'run:verification_failed', `${message}${allocationLogSuffix(failedRun)}`, null, {
       allocationPlanId: failedRun.allocationPlanId || null,
       allocationItemId: failedRun.allocationItemId || null,
       failure
     });
-    await completeRunViolationCheck(failedRun.id);
-    await persistRunEvaluation(failedRun.id);
-    await persistRunConsequence(failedRun.id);
-    await appendEvent({
-      type: 'run.terminalized',
-      ticketId: failedRun.ticketId,
-      runId: failedRun.id,
-      payload: { status: 'failed', error: message }
-    });
     await finalizeTicketForRun(failedRun, 'failed');
     return failedRun;
   }
 
-  const completedRun = updateRunStatus(run.id, 'completed');
-  if (completedRun.status === 'interrupted') return completedRun;
-  if (isRunVerificationRequired(completedRun)) {
-    await appendEvent({
+  if (run.status === 'interrupted') return run;
+  const verificationEvents = [];
+  if (isRunVerificationRequired(run)) {
+    verificationEvents.push({
       type: 'run.verification_passed',
-      ticketId: completedRun.ticketId,
-      runId: completedRun.id,
       payload: { status: 'passed' }
     });
   }
-  await finalizeRunReplaySnapshot(completedRun, 'completed');
+  const completedRun = await commitRunTerminalization(run, {
+    status: 'completed',
+    mutationCount: countRunMutatingOperations(run.id),
+    beforeReplayEvents: verificationEvents
+  });
   appendRunLog(completedRun, 'run:completed', `Agent run completed${allocationLogSuffix(completedRun)}`, null, {
     allocationPlanId: completedRun.allocationPlanId || null,
     allocationItemId: completedRun.allocationItemId || null
-  });
-  await completeRunViolationCheck(completedRun.id);
-  await persistRunEvaluation(completedRun.id);
-  await persistRunConsequence(completedRun.id);
-  await appendEvent({
-    type: 'run.terminalized',
-    ticketId: completedRun.ticketId,
-    runId: completedRun.id,
-    payload: { status: 'completed' }
   });
   await finalizeTicketForRun(completedRun, 'completed');
   return completedRun;
@@ -13016,7 +13202,7 @@ function buildOperationalSummary(options = {}) {
   };
 }
 
-async function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null) {
+async function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null, options = {}) {
   const runs = readRuns();
   const activeRun = runs.find(run =>
     run.ticketId === ticket.id &&
@@ -13024,8 +13210,16 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
     ['pending', 'running'].includes(run.status)
   );
   const pendingRunKey = `${ticket.id}:${agent.id}`;
+  const terminalPredecessor = options.afterTerminalRunId == null
+    ? null
+    : runs.find(run =>
+        run.id === options.afterTerminalRunId &&
+        run.ticketId === ticket.id &&
+        run.agentId === agent.id &&
+        ['completed', 'failed', 'interrupted'].includes(run.status)
+      ) || null;
 
-  if (activeRun || runningRunKeys.has(pendingRunKey)) return activeRun || null;
+  if (activeRun || (runningRunKeys.has(pendingRunKey) && !terminalPredecessor)) return activeRun || null;
   if (usesOwnedScopeAllocation(ticket) && (!allocationPlanId || !allocationItem)) {
     throw new Error('Owned-scope run creation requires an allocation plan item');
   }
@@ -13224,14 +13418,14 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
   return run;
 }
 
-async function createRunsForTicket(ticket, delegated = null) {
+async function createRunsForTicket(ticket, delegated = null, options = {}) {
   return runWithRequiredEventJournalAdmission({
     source: 'ticket_run_creation',
     ticketId: ticket && ticket.id ? ticket.id : null
-  }, () => createRunsForTicketAdmitted(ticket, delegated));
+  }, () => createRunsForTicketAdmitted(ticket, delegated, options));
 }
 
-async function createRunsForTicketAdmitted(ticket, delegated = null) {
+async function createRunsForTicketAdmitted(ticket, delegated = null, options = {}) {
   if (!ticket || ticket.status !== 'open') return [];
   if (hasUnresolvedTicketTriage(ticket)) return [];
 
@@ -13247,7 +13441,7 @@ async function createRunsForTicketAdmitted(ticket, delegated = null) {
   if (ticket.assignmentTargetType === 'agent') {
     const agent = readAgents().find(item => item.id === ticket.assignmentTargetId);
     if (!agent) return [];
-    const run = await createAgentRun(ticket, agent, null, null, delegated);
+    const run = await createAgentRun(ticket, agent, null, null, delegated, options);
     return run ? [run] : [];
   }
 

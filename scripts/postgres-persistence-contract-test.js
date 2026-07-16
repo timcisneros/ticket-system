@@ -153,6 +153,7 @@ for (const requiredPrimitive of [
   'async recordOperationReceipt',
   'async persistRunWorkflowStep',
   'async recoverExpiredRun',
+  'async terminalizeRun',
   "eventType = 'operation.receipt_recorded'",
   'ON CONFLICT (run_id, idempotency_key) DO NOTHING',
   'POSTGRES_RECORD_TOO_LARGE'

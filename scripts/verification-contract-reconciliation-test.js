@@ -172,7 +172,9 @@ async function runScenario({ name, port, originalPostconditions, mutateWorkflow,
     };
     writeJson(dataDir, 'workflows.json', [...readJson(dataDir, 'workflows.json'), workflow]);
 
-    interruptedServer = startServer(dataDir, workspaceRoot, port, 'after_run.execution_completed');
+    // Crash immediately before the terminalization repository boundary. The
+    // boundary no longer exposes a test-only gap after execution evidence.
+    interruptedServer = startServer(dataDir, workspaceRoot, port, 'before_run.snapshot_finalized');
     await waitForReady(baseUrl, interruptedServer);
     const login = await request(baseUrl, 'POST', '/login', {
       form: { username: 'admin', password: 'admin123' }
@@ -194,7 +196,7 @@ async function runScenario({ name, port, originalPostconditions, mutateWorkflow,
         }
       });
     } catch (_) {
-      // Expected: the deterministic interruption kills the server after execution and before verification.
+      // Expected: deterministic interruption kills the server before the terminal bundle.
     }
     await waitForExit(interruptedServer);
     interruptedServer = null;
@@ -203,7 +205,7 @@ async function runScenario({ name, port, originalPostconditions, mutateWorkflow,
     assert(ticket, 'Interrupted ticket was not persisted');
     const createdRun = readJson(dataDir, 'runs.json').find(item => item.ticketId === ticket.id);
     assert(createdRun && createdRun.verificationContractSnapshot, 'Run did not persist verificationContractSnapshot before interruption');
-    assert(createdRun.status === 'running', `Interrupted run status ${createdRun.status}, expected running before terminal reconciliation`);
+    assert(createdRun.status === 'running', `Interrupted run status ${createdRun.status}, expected running before restart recovery`);
     assert(JSON.stringify(createdRun.verificationContractSnapshot.postconditions) === JSON.stringify(workflow.postconditions), 'Run verification snapshot differs from original workflow contract');
 
     const workflows = readJson(dataDir, 'workflows.json');
@@ -219,11 +221,11 @@ async function runScenario({ name, port, originalPostconditions, mutateWorkflow,
 
     const events = await waitForVerificationEvents(dataDir, terminalRun.id, expectedStatus);
     const checked = events.find(event => event.type === 'run.postconditions_checked');
-    assert(checked && checked.payload.contractSource === 'run_snapshot', `${name} reconciliation did not verify from run snapshot`);
+    assert(checked && checked.payload.contractSource === 'run_snapshot', `${name} restart recovery did not verify from run snapshot`);
     if (expectedStatus === 'completed') {
-      assert(events.some(event => event.type === 'run.verification_passed'), 'Passing reconciliation did not emit run.verification_passed');
+      assert(events.some(event => event.type === 'run.verification_passed'), 'Passing restart recovery did not emit run.verification_passed');
     } else {
-      assert(events.some(event => event.type === 'run.verification_failed'), 'Failing reconciliation did not emit run.verification_failed');
+      assert(events.some(event => event.type === 'run.verification_failed'), 'Failing restart recovery did not emit run.verification_failed');
     }
 
     const replay = JSON.parse(fs.readFileSync(path.join(dataDir, terminalRun.replaySnapshotPath), 'utf8'));
@@ -263,7 +265,7 @@ async function main() {
     expectedStatus: 'completed'
   });
 
-  console.log('PASS: startup reconciliation uses immutable run verification contracts');
+  console.log('PASS: startup recovery uses immutable run verification contracts across the terminalization boundary');
 }
 
 main().catch(error => {

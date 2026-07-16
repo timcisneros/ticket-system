@@ -10,6 +10,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { sealCurrentRunEventChains } = require('./current-event-fixture');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
@@ -65,6 +66,15 @@ const blockingTicketTriage = () => ({
   requiredDecision: 'change_scope', evidenceRefs: ['ticket:feasibility'], allowedActions: ['review', 'edit_ticket'],
   prohibitedActions: ['start_run_without_scope_change'], createdAt: T0, resolvedAt: null, resolvedBy: null, resolution: null
 });
+const verificationSnapshot = (workflowId, workflowName = workflowId, postconditions = []) => ({
+  workflowId,
+  workflowName,
+  workflowVersion: '1',
+  postconditions,
+  verifierContract: null,
+  verifierContractExecution: 'not_declared',
+  capturedAt: T0
+});
 
 function seed() {
   fs.mkdirSync(path.join(DATA_DIR, 'replay-snapshots'), { recursive: true });
@@ -114,6 +124,8 @@ function seed() {
       id: 700, ticketId: 7, agentId: 1, agentName: 'WF Agent', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
       allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [], executionMode: 'workflow', workflowId: 'bad-wf', capabilityType: 'workflow', capabilityId: 'bad-wf', workflowInput: {},
       executionPolicySnapshot: { autoRetry: true, maxAttempts: 2, requireVerification: 'when_declared' },
+      runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
+      verificationContractSnapshot: verificationSnapshot('bad-wf', 'Bad'),
       currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null, currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
       status: 'failed', error: 'Workflow definition invalid', createdAt: T0, updatedAt: T0, startedAt: T0, completedAt: T0, replaySnapshotPath: 'replay-snapshots/run-700.json',
       triage: { required: true, reasonCode: 'runtime_failed', summary: 'Workflow definition invalid', requiredDecision: 'review_failure', evidenceRefs: [], allowedActions: ['review', 'rerun_from_start'], prohibitedActions: ['automatic_retry'], createdAt: T0, resolvedAt: null, resolvedBy: null, resolution: null }
@@ -122,6 +134,8 @@ function seed() {
       id: 800, ticketId: 8, agentId: 1, agentName: 'WF Agent', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
       allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [], executionMode: 'workflow', workflowId: 'bad-wf', capabilityType: 'workflow', capabilityId: 'bad-wf', workflowInput: {},
       executionPolicySnapshot: { autoRetry: true, maxAttempts: 2, requireVerification: 'when_declared' },
+      runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
+      verificationContractSnapshot: verificationSnapshot('bad-wf', 'Bad'),
       currentPhase: 'initialization', leaseOwner: null, leaseExpiresAt: null, currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
       status: 'pending', createdAt: T0, updatedAt: T0, replaySnapshotPath: 'replay-snapshots/run-800.json'
     }
@@ -188,7 +202,8 @@ async function main() {
 
     // 1: default autoRetry false → exactly one failed run, triage, no retry.
     const t1 = runsFor(1);
-    assert(t1.length === 1 && t1[0].status === 'failed', `T1 should have 1 failed run, got ${t1.length}`);
+    assert(t1.length === 1 && t1[0].status === 'failed',
+      `T1 should have 1 failed run, got ${t1.length} (${t1.map(run => run.status).join(', ')})`);
     assert(t1[0].triage && t1[0].triage.required === true, 'T1 failed run should be triaged');
 
     // 2: autoRetry true + maxAttempts null → no retry.
@@ -248,6 +263,26 @@ async function main() {
     console.log('PASS: auto-retry exclusions — ticket-level triage, authority/protected-path');
   } catch (error) {
     if (out) process.stderr.write(out);
+    try {
+      const health = await request('GET', '/api/health');
+      process.stderr.write(`\nAuto-retry diagnostic health:\n${health.body}\n`);
+      process.stderr.write(`\nAuto-retry diagnostic runs:\n${JSON.stringify(readRunsJson().map(run => ({
+        id: run.id,
+        ticketId: run.ticketId,
+        status: run.status,
+        leaseOwner: run.leaseOwner || null,
+        error: run.error || null,
+        triageReason: run.triage ? run.triage.reasonCode : null
+      })), null, 2)}\n`);
+      const diagnosticEvents = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8').trim().split('\n')
+        .filter(Boolean)
+        .map(line => JSON.parse(line));
+      process.stderr.write(`Auto-retry diagnostic ticket 1/2 events:\n${JSON.stringify(diagnosticEvents.filter(event => [1, 2].includes(event.ticketId)), null, 2)}\n`);
+      process.stderr.write(`Auto-retry diagnostic logs:\n${JSON.stringify(readLogsJson().filter(log => [1, 2].includes(log.contextTicketId) || [801, 802].includes(log.runId)), null, 2)}\n`);
+      process.stderr.write(`Auto-retry diagnostic events tail:\n${diagnosticEvents.slice(-40).map(event => JSON.stringify(event)).join('\n')}\n`);
+    } catch (_) {
+      // Preserve the original assertion/startup error when diagnostics are unavailable.
+    }
     throw error;
   } finally {
     if (server) { server.kill('SIGTERM'); await sleep(500); if (server.exitCode === null) server.kill('SIGKILL'); }
@@ -289,6 +324,7 @@ async function interruptPhase() {
     allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [], executionMode: 'agent',
     capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
     executionPolicySnapshot: { autoRetry: true, maxAttempts: 2, requireVerification: 'when_declared' },
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     currentPhase: 'initialization', leaseOwner: null, leaseExpiresAt: null, currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
     status: 'pending', createdAt: T0, updatedAt: T0, replaySnapshotPath: 'replay-snapshots/run-1000.json'
   }]);

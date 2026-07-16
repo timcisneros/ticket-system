@@ -719,6 +719,7 @@ class PostgresRuntimeStore {
     fromStatuses,
     toStatus,
     leaseOwner = null,
+    allowExpiredLease = false,
     patch = {},
     eventType = 'run.status_changed',
     eventPayload = {}
@@ -734,8 +735,10 @@ class PostgresRuntimeStore {
       }
     }
     const owner = optionalString(leaseOwner);
+    const permitExpiredLease = allowExpiredLease === true;
     if (target === 'running' && !owner) throw new TypeError('leaseOwner is required to start a run');
-    if (sources.includes('running') && target !== 'pending' && !owner) {
+    const expiredTerminalRecovery = permitExpiredLease && ['failed', 'interrupted'].includes(target);
+    if (sources.includes('running') && target !== 'pending' && !owner && !expiredTerminalRecovery) {
       throw new TypeError('leaseOwner is required to transition a running run');
     }
     const bodyPatch = this.assertJsonRecord(patch, 'run patch');
@@ -766,16 +769,20 @@ class PostgresRuntimeStore {
                    ))
                  )
                ) OR (
-                 status = 'running' AND
-                 (
-                   ($4::text = 'pending' AND $6::text IS NULL AND (
-                     lease_owner IS NULL OR lease_expires_at <= clock_timestamp()
-                   )) OR (
-                     $6::text IS NOT NULL AND
-                     lease_owner = $6 AND
-                     lease_expires_at > clock_timestamp()
-                   )
-                 )
+               status = 'running' AND
+               (
+                  ($4::text = 'pending' AND $6::text IS NULL AND (
+                    lease_owner IS NULL OR lease_expires_at <= clock_timestamp()
+                  )) OR (
+                    $6::text IS NOT NULL AND
+                    lease_owner = $6 AND
+                    lease_expires_at > clock_timestamp()
+                  ) OR (
+                    $7::boolean = TRUE AND
+                    $4::text = ANY(ARRAY['failed', 'interrupted']) AND
+                    (lease_owner IS NULL OR lease_expires_at <= clock_timestamp())
+                  )
+                )
                )
              )
            FOR UPDATE
@@ -801,14 +808,17 @@ class PostgresRuntimeStore {
                  WHEN $4 = 'pending' OR $4 = ANY(ARRAY['completed', 'failed', 'interrupted']) THEN NULL
                  ELSE run.lease_expires_at
                END,
-               last_heartbeat_at = CASE WHEN $4 = 'pending' THEN NULL ELSE run.last_heartbeat_at END,
+               last_heartbeat_at = CASE
+                 WHEN $4 = 'pending' OR $4 = ANY(ARRAY['completed', 'failed', 'interrupted']) THEN NULL
+                 ELSE run.last_heartbeat_at
+               END,
                updated_at = clock_timestamp()
            FROM candidate
            WHERE run.id = candidate.id
            RETURNING run.*, candidate.status AS previous_status
          )
          SELECT * FROM updated`,
-        [id, revision, sources, target, bodyPatch, owner]
+        [id, revision, sources, target, bodyPatch, owner, permitExpiredLease]
       );
       if (result.rowCount === 0) {
         return this._throwTransitionConflict(connection, {
@@ -1027,12 +1037,16 @@ class PostgresRuntimeStore {
     expectedRevision = null,
     snapshot,
     finalize = false,
+    eventType = null,
     eventPayload = {}
   }, { client = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const document = this.assertJsonRecord(snapshot, 'replay snapshot');
     const snapshotHash = sha256Json(document);
     const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+    const explicitEventType = eventType === null || eventType === undefined
+      ? null
+      : requiredString(eventType, 'eventType');
     const isCreate = expectedRevision === null || expectedRevision === undefined;
     const revision = isCreate ? null : positiveSafeInteger(expectedRevision, 'expectedRevision');
 
@@ -1087,13 +1101,13 @@ class PostgresRuntimeStore {
       }
 
       const record = replaySnapshotFromRow(result.rows[0]);
-      const eventType = record.finalizedAt
+      const resolvedEventType = explicitEventType || (record.finalizedAt
         ? 'replay.snapshot.finalized'
         : record.revision === 1
           ? 'replay.snapshot.created'
-          : 'replay.snapshot.updated';
+          : 'replay.snapshot.updated');
       const event = await this._appendEvent(connection, {
-        type: eventType,
+        type: resolvedEventType,
         ticketId,
         runId: id,
         payload: {
@@ -1107,6 +1121,159 @@ class PostgresRuntimeStore {
       return { record, event, created: isCreate };
     };
     return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async terminalizeRun({
+    runId,
+    expectedRevision,
+    expectedReplayRevision = null,
+    fromStatuses,
+    status,
+    leaseOwner = null,
+    allowExpiredLease = false,
+    patch = {},
+    replaySnapshot,
+    evaluation,
+    consequence,
+    executionEvent,
+    beforeReplayEvents = [],
+    replayEvent,
+    beforeEvaluationEvents = [],
+    terminalEvent
+  }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const requestedRevision = expectedRevision === null || expectedRevision === undefined
+      ? null
+      : positiveSafeInteger(expectedRevision, 'expectedRevision');
+    const requestedReplayRevision = expectedReplayRevision === null || expectedReplayRevision === undefined
+      ? null
+      : positiveSafeInteger(expectedReplayRevision, 'expectedReplayRevision');
+    if (!Array.isArray(beforeReplayEvents) || !Array.isArray(beforeEvaluationEvents)) {
+      throw new TypeError('terminalization event groups must be arrays');
+    }
+    const normalizeTerminalEvent = (event, label) => {
+      const source = this.assertJsonRecord(event, label);
+      return {
+        type: requiredString(source.type, `${label}.type`),
+        ...(source.stepId === undefined || source.stepId === null ? {} : { stepId: String(source.stepId) }),
+        payload: this.assertJsonRecord(source.payload || {}, `${label}.payload`)
+      };
+    };
+    const execution = normalizeTerminalEvent(executionEvent, 'executionEvent');
+    const preReplay = beforeReplayEvents.map((event, index) => normalizeTerminalEvent(event, `beforeReplayEvents[${index}]`));
+    const replay = normalizeTerminalEvent(replayEvent, 'replayEvent');
+    const preEvaluation = beforeEvaluationEvents.map((event, index) => normalizeTerminalEvent(event, `beforeEvaluationEvents[${index}]`));
+    const terminal = normalizeTerminalEvent(terminalEvent, 'terminalEvent');
+
+    return this.withTransaction(async client => {
+      const storedEvents = [];
+      const currentRun = await client.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (currentRun.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const revision = positiveSafeInteger(currentRun.rows[0].revision, 'run.revision');
+      if (requestedRevision !== null && requestedRevision !== revision) {
+        throw new OptimisticConcurrencyError('run', id, requestedRevision, runFromRow(currentRun.rows[0]));
+      }
+      const currentReplay = await client.query(
+        `SELECT * FROM ${this.table('replay_snapshots')} WHERE run_id = $1 FOR UPDATE`,
+        [id]
+      );
+      const replayRevision = currentReplay.rowCount === 0
+        ? null
+        : positiveSafeInteger(currentReplay.rows[0].revision, 'replaySnapshot.revision');
+      if (requestedReplayRevision !== null && requestedReplayRevision !== replayRevision) {
+        throw new OptimisticConcurrencyError(
+          'replay snapshot',
+          id,
+          requestedReplayRevision,
+          currentReplay.rowCount === 0 ? null : replaySnapshotFromRow(currentReplay.rows[0])
+        );
+      }
+      const transitioned = await this.transitionRun({
+        runId: id,
+        expectedRevision: revision,
+        fromStatuses,
+        toStatus: status,
+        leaseOwner,
+        allowExpiredLease,
+        patch,
+        eventType: execution.type,
+        eventPayload: execution.payload
+      }, { client });
+      storedEvents.push(transitioned.event);
+
+      for (const event of preReplay) {
+        storedEvents.push(await this._appendEvent(client, {
+          ...event,
+          ticketId: transitioned.run.ticketId,
+          runId: id
+        }));
+      }
+
+      const replayResult = await this.writeReplaySnapshot({
+        runId: id,
+        expectedRevision: replayRevision,
+        snapshot: replaySnapshot,
+        finalize: true,
+        eventType: replay.type,
+        eventPayload: replay.payload
+      }, { client });
+      storedEvents.push(replayResult.event);
+
+      for (const event of preEvaluation) {
+        storedEvents.push(await this._appendEvent(client, {
+          ...event,
+          ticketId: transitioned.run.ticketId,
+          runId: id
+        }));
+      }
+
+      const evaluationDocument = typeof evaluation === 'function'
+        ? await evaluation({
+            run: transitioned.run,
+            replaySnapshot,
+            events: storedEvents.slice()
+          })
+        : evaluation;
+      const evaluationResult = await this.recordRunEvaluation({
+        runId: id,
+        evaluation: evaluationDocument
+      }, { client });
+      storedEvents.push(evaluationResult.event);
+      const consequenceDocument = typeof consequence === 'function'
+        ? await consequence({
+            run: transitioned.run,
+            replaySnapshot,
+            events: storedEvents.slice(),
+            evaluation: evaluationDocument
+          })
+        : consequence;
+      const consequenceResult = await this.recordRunConsequence({
+        runId: id,
+        consequence: consequenceDocument
+      }, { client });
+      storedEvents.push(consequenceResult.event);
+      const terminalizedEvent = await this._appendEvent(client, {
+        ...terminal,
+        ticketId: transitioned.run.ticketId,
+        runId: id
+      });
+      storedEvents.push(terminalizedEvent);
+
+      return {
+        run: transitioned.run,
+        replaySnapshot: replayResult.record,
+        evaluation: evaluationDocument,
+        consequence: consequenceDocument,
+        events: storedEvents.filter(Boolean)
+      };
+    });
   }
 
   async getReplaySnapshot(runId) {

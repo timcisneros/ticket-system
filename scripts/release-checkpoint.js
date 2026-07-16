@@ -57,6 +57,7 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'event-append-await-contract-test.js',
   'event-reader-bounds-test.js',
   'run-lease-repository-contract-test.js',
+  'run-terminalization-repository-contract-test.js',
   'postgres-persistence-contract-test.js',
   'invalid-action-preflight-recovery-test.js',
   'exact-delete-target-absent-guard-test.js',

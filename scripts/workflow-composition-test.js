@@ -378,9 +378,9 @@ async function main() {
     const run = await waitForCompletedRun(ticket.id);
     assert(run.status === 'completed', `workflow run should complete, got ${run.status}: ${run.error || ''}`);
     assert((await waitForTicketStatus(ticket.id, 'completed')).status === 'completed', 'ticket should complete after required workflow verification passes');
-    assert(typeof run.leaseOwner === 'string' && run.leaseOwner.length > 0, 'workflow run should persist lease owner');
-    assert(typeof run.leaseExpiresAt === 'string' && run.leaseExpiresAt.length > 0, 'workflow run should persist lease expiration');
-    assert(typeof run.lastHeartbeatAt === 'string' && run.lastHeartbeatAt.length > 0, 'workflow run should persist heartbeat time');
+    assert(run.leaseOwner === null, 'terminal workflow run should clear lease owner');
+    assert(run.leaseExpiresAt === null, 'terminal workflow run should clear lease expiration');
+    assert(run.lastHeartbeatAt === null, 'terminal workflow run should clear heartbeat time');
     assert(run.currentStepId === 'done', 'workflow run should persist last completed workflow step id');
     assert(run.currentWorkflowAction === 'stop', 'workflow run should persist last completed workflow action');
     assert(JSON.stringify(run.executionPolicySnapshot) === JSON.stringify(suppliedExecutionPolicy), 'run should copy the ticket execution policy at creation');
@@ -1490,7 +1490,8 @@ async function main() {
     assert(staleRunState.status === 'interrupted', 'stale run state should report interrupted status');
     assert(staleRunState.currentStepId === 'write', 'stale run state should retain current step id');
     assert(staleRunState.currentWorkflowAction === 'writeFile', 'stale run state should retain current workflow action');
-    assert(staleRunState.lease.expired === true, 'stale run state should report expired lease');
+    assert(staleRunState.lease.leaseOwner === null && staleRunState.lease.expired === false,
+      'interrupted stale run should retain lease-expiry evidence while clearing terminal lease authority');
 
     console.log(JSON.stringify({
       workflowValidation: true,

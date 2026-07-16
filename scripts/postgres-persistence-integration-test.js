@@ -71,6 +71,9 @@ async function main() {
     const composedRollbackTicket = await store.createTicket({ status: 'open', title: 'Composed rollback transaction' });
     const fencedTicket = await store.createTicket({ status: 'open', title: 'Lease fencing transaction' });
     const leaseRepositoryTicket = await store.createTicket({ status: 'open', title: 'Lease repository boundary' });
+    const terminalBoundaryTicket = await store.createTicket({ status: 'open', title: 'Terminalization boundary' });
+    const terminalRollbackTicket = await store.createTicket({ status: 'open', title: 'Terminalization rollback' });
+    const terminalExpiredTicket = await store.createTicket({ status: 'open', title: 'Expired terminal recovery' });
     assert.notEqual(ticketOne.id, ticketTwo.id);
     assert.equal(ticketOne.revision, 1);
 
@@ -87,6 +90,15 @@ async function main() {
     const fencedRun = await store.createRun({ ticketId: fencedTicket.id, agentId: 7, status: 'pending' });
     const leaseRepositoryRun = await store.createRun({
       ticketId: leaseRepositoryTicket.id, agentId: 8, status: 'pending'
+    });
+    const terminalBoundaryRun = await store.createRun({
+      ticketId: terminalBoundaryTicket.id, agentId: 9, status: 'pending'
+    });
+    const terminalRollbackRun = await store.createRun({
+      ticketId: terminalRollbackTicket.id, agentId: 10, status: 'pending'
+    });
+    const terminalExpiredRun = await store.createRun({
+      ticketId: terminalExpiredTicket.id, agentId: 11, status: 'pending'
     });
 
     const ticketInProgress = await store.transitionTicket({
@@ -355,6 +367,164 @@ async function main() {
     assert.equal((await store.listOperationReceipts(composedRun.id)).length, 1);
     assert.equal(verifyCurrentRunEventChain(await store.listRunEvents(composedRun.id)).chainValid, true);
 
+    const terminalClaim = await store.claimPendingRun({
+      leaseOwner: 'terminal-worker',
+      leaseDurationMs: 30_000,
+      eligibleRunIds: [terminalBoundaryRun.id]
+    });
+    const terminalStarted = await store.transitionRun({
+      runId: terminalBoundaryRun.id,
+      expectedRevision: terminalClaim.run.revision,
+      fromStatuses: ['pending'],
+      toStatus: 'running',
+      leaseOwner: 'terminal-worker',
+      eventType: 'run.started'
+    });
+    await store.writeReplaySnapshot({
+      runId: terminalBoundaryRun.id,
+      snapshot: { version: 1, steps: ['started'] }
+    });
+    const terminalBundle = await store.terminalizeRun({
+      runId: terminalBoundaryRun.id,
+      fromStatuses: ['running'],
+      status: 'completed',
+      leaseOwner: 'terminal-worker',
+      patch: { currentPhase: 'terminalization', browserReport: null },
+      replaySnapshot: {
+        version: 1,
+        steps: ['started', 'completed'],
+        terminalStatus: 'completed',
+        finalizedAt: '2026-07-16T12:00:00.000Z'
+      },
+      executionEvent: { type: 'run.execution_completed', payload: { status: 'completed' } },
+      beforeReplayEvents: [{ type: 'run.verification_passed', payload: { status: 'passed' } }],
+      replayEvent: { type: 'run.snapshot_finalized', payload: { status: 'completed' } },
+      beforeEvaluationEvents: [{ type: 'run.violations_checked', payload: { status: 'none' } }],
+      evaluation: context => {
+        assert.deepEqual(context.events.map(event => event.type), [
+          'run.execution_completed',
+          'run.verification_passed',
+          'run.snapshot_finalized',
+          'run.violations_checked'
+        ]);
+        assert.ok(context.events.every(event => event.id && Number.isInteger(event.seq)));
+        return { effectiveness: { status: 'passed' }, violations: { status: 'none' } };
+      },
+      consequence: context => ({
+        mutations: [],
+        verification: { status: context.evaluation.effectiveness.status }
+      }),
+      terminalEvent: { type: 'run.terminalized', payload: { status: 'completed' } }
+    });
+    assert.equal(terminalBundle.run.status, 'completed');
+    assert.equal(terminalBundle.run.leaseOwner, null);
+    assert.equal(terminalBundle.run.lastHeartbeatAt, null);
+    assert.equal(terminalBundle.evaluation.effectiveness.status, 'passed');
+    assert.equal(terminalBundle.consequence.verification.status, 'passed');
+    assert.ok((await store.getReplaySnapshot(terminalBoundaryRun.id)).finalizedAt);
+    assert.equal((await store.getRunEvaluation(terminalBoundaryRun.id)).evaluation.effectiveness.status, 'passed');
+    assert.equal((await store.getRunConsequence(terminalBoundaryRun.id)).consequence.verification.status, 'passed');
+    assert.deepEqual(
+      (await store.listRunEvents(terminalBoundaryRun.id)).slice(-7).map(event => event.type),
+      [
+        'run.execution_completed',
+        'run.verification_passed',
+        'run.snapshot_finalized',
+        'run.violations_checked',
+        'run.evaluation_completed',
+        'run.consequence_recorded',
+        'run.terminalized'
+      ]
+    );
+    assert.equal(verifyCurrentRunEventChain(await store.listRunEvents(terminalBoundaryRun.id)).chainValid, true);
+
+    const rollbackClaim = await smallRecordStore.claimPendingRun({
+      leaseOwner: 'terminal-rollback-worker',
+      leaseDurationMs: 30_000,
+      eligibleRunIds: [terminalRollbackRun.id]
+    });
+    await smallRecordStore.transitionRun({
+      runId: terminalRollbackRun.id,
+      expectedRevision: rollbackClaim.run.revision,
+      fromStatuses: ['pending'],
+      toStatus: 'running',
+      leaseOwner: 'terminal-rollback-worker',
+      eventType: 'run.started'
+    });
+    const rollbackReplay = await smallRecordStore.writeReplaySnapshot({
+      runId: terminalRollbackRun.id,
+      snapshot: { version: 1, steps: ['started'] }
+    });
+    const rollbackEventsBefore = await store.listRunEvents(terminalRollbackRun.id);
+    await assert.rejects(
+      smallRecordStore.terminalizeRun({
+        runId: terminalRollbackRun.id,
+        fromStatuses: ['running'],
+        status: 'failed',
+        leaseOwner: 'terminal-rollback-worker',
+        patch: { error: 'rollback' },
+        replaySnapshot: { version: 1, terminalStatus: 'failed', finalizedAt: '2026-07-16T12:00:00.000Z' },
+        executionEvent: { type: 'run.execution_completed', payload: { status: 'failed' } },
+        replayEvent: { type: 'run.snapshot_finalized', payload: { status: 'failed' } },
+        evaluation: { effectiveness: { status: 'failed' }, padding: 'x'.repeat(300) },
+        consequence: { mutations: [] },
+        terminalEvent: { type: 'run.terminalized', payload: { status: 'failed' } }
+      }),
+      error => error && error.code === 'POSTGRES_RECORD_TOO_LARGE'
+    );
+    const rollbackRunAfter = await store.getRun(terminalRollbackRun.id);
+    assert.equal(rollbackRunAfter.status, 'running');
+    assert.equal(rollbackRunAfter.leaseOwner, 'terminal-rollback-worker');
+    const rollbackReplayAfter = await store.getReplaySnapshot(terminalRollbackRun.id);
+    assert.equal(rollbackReplayAfter.revision, rollbackReplay.record.revision);
+    assert.equal(rollbackReplayAfter.finalizedAt, null);
+    assert.equal(await store.getRunEvaluation(terminalRollbackRun.id), null);
+    assert.equal(await store.getRunConsequence(terminalRollbackRun.id), null);
+    assert.deepEqual(await store.listRunEvents(terminalRollbackRun.id), rollbackEventsBefore);
+
+    const expiredClaim = await store.claimPendingRun({
+      leaseOwner: 'expired-terminal-worker',
+      leaseDurationMs: 30_000,
+      eligibleRunIds: [terminalExpiredRun.id]
+    });
+    await store.transitionRun({
+      runId: terminalExpiredRun.id,
+      expectedRevision: expiredClaim.run.revision,
+      fromStatuses: ['pending'],
+      toStatus: 'running',
+      leaseOwner: 'expired-terminal-worker',
+      eventType: 'run.started'
+    });
+    await store.writeReplaySnapshot({
+      runId: terminalExpiredRun.id,
+      snapshot: { version: 1, steps: ['started'] }
+    });
+    await store.pool.query(
+      `UPDATE ${store.table('runs')}
+       SET lease_expires_at = clock_timestamp() - interval '1 second',
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [terminalExpiredRun.id]
+    );
+    const expiredTerminal = await store.terminalizeRun({
+      runId: terminalExpiredRun.id,
+      fromStatuses: ['running'],
+      status: 'interrupted',
+      leaseOwner: null,
+      allowExpiredLease: true,
+      patch: { error: 'lease expired' },
+      replaySnapshot: { version: 1, terminalStatus: 'interrupted', finalizedAt: '2026-07-16T12:00:00.000Z' },
+      executionEvent: { type: 'run.execution_completed', payload: { status: 'interrupted' } },
+      replayEvent: { type: 'run.snapshot_finalized', payload: { status: 'interrupted' } },
+      evaluation: { effectiveness: { status: 'unknown' }, violations: { status: 'none' } },
+      consequence: { mutations: [], verification: { status: 'unknown' } },
+      terminalEvent: { type: 'run.terminalized', payload: { status: 'interrupted' } }
+    });
+    assert.equal(expiredTerminal.run.status, 'interrupted');
+    assert.equal(expiredTerminal.run.leaseOwner, null);
+    assert.equal(expiredTerminal.run.lastHeartbeatAt, null);
+
     await assert.rejects(
       smallRecordStore.withTransaction(async client => {
         await smallRecordStore.transitionRun({
@@ -546,14 +716,14 @@ async function main() {
       /finalized replay snapshots are immutable/
     );
 
-    const terminalRollbackRun = await store.transitionRun({
+    const rollbackTerminalTransition = await store.transitionRun({
       runId: rollbackRun.id,
       expectedRevision: rollbackRun.revision,
       fromStatuses: ['pending'],
       toStatus: 'failed',
       eventType: 'run.terminalized'
     });
-    assert.equal(terminalRollbackRun.run.status, 'failed');
+    assert.equal(rollbackTerminalTransition.run.status, 'failed');
     await assert.rejects(
       smallRecordStore.recordRunEvaluation({
         runId: rollbackRun.id,
