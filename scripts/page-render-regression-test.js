@@ -94,7 +94,9 @@ function cookieFrom(response) {
 
 function waitForExit(child) {
   return new Promise(resolve => {
-    if (child.exitCode !== null || child.killed) return resolve();
+    // child.killed only means a signal was sent; shutdown may still be draining
+    // the event journal and releasing the writer lock.
+    if (child.exitCode !== null || child.signalCode !== null) return resolve();
     child.once('exit', () => resolve());
   });
 }

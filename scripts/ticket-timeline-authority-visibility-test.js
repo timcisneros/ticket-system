@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { sealCurrentRunEventChains } = require('./current-event-fixture');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-timeline-data-'));
@@ -142,6 +143,7 @@ function seed() {
     allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [], allocationSubtask: null,
     executionMode: 'agent', workflowId: null, workflowInput: null, capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
     executionPolicySnapshot: { requireVerification: 'when_declared', workspaceScope: 'main' },
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     verificationContractSnapshot: { workflowId: 'status', workflowName: 'Status', workflowVersion: '1', postconditions: [{ id: 'report', type: 'fileExists', path: 'outputs/report.md' }], capturedAt: T0 },
     currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null, currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
     status: 'completed', error: null, runEvaluation, runConsequence,

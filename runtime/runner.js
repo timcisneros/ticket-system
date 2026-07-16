@@ -1,9 +1,13 @@
-function createRuntimeRunner({ runAgentTicket, markRunStarting }) {
+function createRuntimeRunner({ runAgentTicket, markRunStarting, onError = () => {} }) {
   return {
     startRun(run) {
       if (!run || !run.id) return false;
       if (typeof markRunStarting === 'function') markRunStarting(run);
-      setImmediate(() => runAgentTicket(run.id));
+      setImmediate(() => {
+        void Promise.resolve()
+          .then(() => runAgentTicket(run.id))
+          .catch(error => onError(run, error));
+      });
       return true;
     }
   };

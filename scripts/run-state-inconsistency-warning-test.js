@@ -5,6 +5,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { sealCurrentRunEventChains } = require('./current-event-fixture');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'run-state-warning-data-'));
@@ -175,6 +176,7 @@ function seedData() {
     capabilityType: 'directAction',
     capabilityId: 'agent-selected-actions',
     capabilityInput: null,
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     currentPhase: run.status === 'completed' ? 'terminalization' : 'planning',
     leaseOwner: null,
     leaseExpiresAt: null,

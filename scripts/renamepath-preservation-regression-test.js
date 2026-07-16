@@ -32,7 +32,7 @@ function loadServerCode() {
 }
 
 function extractFunction(code, name) {
-  const declPattern = new RegExp(`function ${name}\\b`);
+  const declPattern = new RegExp(`(?:async\\s+)?function ${name}\\b`);
   const declMatch = code.match(declPattern);
   if (!declMatch) return null;
 
@@ -63,7 +63,7 @@ function hashContent(content) {
   return crypto.createHash('sha256').update(String(content || '')).digest('hex');
 }
 
-function main() {
+async function main() {
   console.log('RenamePath Preservation Behavioral Regression Test');
   console.log('');
 
@@ -120,6 +120,7 @@ function main() {
   const emittedRunEvents = [];
 
   const sandbox = {
+    eventAppendFailure: null,
     crypto,
     console,
     Buffer,
@@ -310,8 +311,8 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'renamePath', args: { path: 'src1.txt', nextPath: 'dst1.txt' } };
-    const result = sandbox.executeWorkspaceOperation(run, action, 1);
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const result = await sandbox.executeWorkspaceOperation(run, action, 1);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
 
     assert(passed, 'valid rename should pass verifyBatchOperation');
     assertEqual(emittedEvents.length, 0, 'valid rename should emit zero events');
@@ -327,7 +328,7 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'renamePath', args: { path: 'src2.txt', nextPath: 'dst2.txt' } };
-    sandbox.executeWorkspaceOperation(run, action, 2);
+    await sandbox.executeWorkspaceOperation(run, action, 2);
 
     // Replace destination file with a directory of the same name
     fs.rmSync(path.join(workspaceDir, 'dst2.txt'), { force: true });
@@ -337,7 +338,7 @@ function main() {
     const histories = sandbox.readOperationHistory();
     const record = histories[histories.length - 1];
     const result = { historyId: record.id };
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
 
     assert(!passed, 'wrong destination type should fail verifyBatchOperation');
     assertEqual(emittedEvents.length, 1, 'wrong destination type should emit exactly one event');
@@ -367,7 +368,7 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'renamePath', args: { path: 'src3.txt', nextPath: 'dst3.txt' } };
-    sandbox.executeWorkspaceOperation(run, action, 3);
+    await sandbox.executeWorkspaceOperation(run, action, 3);
 
     // Overwrite destination with different content
     fs.writeFileSync(path.join(workspaceDir, 'dst3.txt'), 'WRONG-CONTENT');
@@ -375,7 +376,7 @@ function main() {
     const histories = sandbox.readOperationHistory();
     const record = histories[histories.length - 1];
     const result = { historyId: record.id };
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
 
     assert(!passed, 'wrong destination content should fail verifyBatchOperation');
     assertEqual(emittedEvents.length, 1, 'wrong destination content should emit exactly one event');
@@ -402,7 +403,7 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'renamePath', args: { path: 'src4.txt', nextPath: 'dst4.txt' } };
-    sandbox.executeWorkspaceOperation(run, action, 4);
+    await sandbox.executeWorkspaceOperation(run, action, 4);
 
     // Replace with directory (type mismatch) AND different implied content
     fs.rmSync(path.join(workspaceDir, 'dst4.txt'), { force: true });
@@ -412,7 +413,7 @@ function main() {
     const histories = sandbox.readOperationHistory();
     const record = histories[histories.length - 1];
     const result = { historyId: record.id };
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
 
     assert(!passed, 'both mismatches should fail verifyBatchOperation');
     const emittedChecks = emittedEvents[0].payload.checks;
@@ -430,4 +431,4 @@ function main() {
   console.log('All renamePath preservation behavioral regression tests passed.');
 }
 
-main();
+main().catch(error => { console.error(error); process.exit(1); });

@@ -1,6 +1,6 @@
 # Release Candidate Audit
 
-> Historical snapshot: this document records the r1.32/43-check audit. For the current 50-check
+> Historical snapshot: this document records the r1.32/43-check audit. For the current 54-check
 > internal-demo state, see `SYSTEM_AUDIT_2026-07-15.md`.
 
 ## 1. Executive summary

@@ -52,7 +52,7 @@ Precise definitions for the bounded ticket/run substrate. See `docs/OPERATOR_GUI
 - **Operational Summary** — a read-only health snapshot derived live from existing stores (`/ops`,
   `/api/ops/summary`). Writes nothing; no store.
 - **Release Checkpoint** — the release gate: `npm run checkpoint:release` runs `node --check` plus
-  the ordered test list (currently 50/50), provider-free and network-free. See
+  the ordered test list (currently 54/54), provider-free and network-free. See
   `docs/RELEASE_CHECKPOINT.md`.
 
 ## Commonly confused terms

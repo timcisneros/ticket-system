@@ -9,6 +9,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const REAL_DATA = path.join(ROOT, 'data');
@@ -37,6 +38,7 @@ writeJ('tickets.json', [...readJ('tickets.json'), {
 writeJ('runs.json', [...readJ('runs.json'), {
   id: RID, ticketId: TID, agentId: agent.id, agentName: agent.name, status: 'failed',
   workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
+  runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
   ticketOpenedAt: now, createdAt: now, updatedAt: now, startedAt: now, completedAt: now, error: 'seeded failure',
   replaySnapshot: { version: 1, runId: RID, ticketId: TID, assignedAgentId: agent.id, provider: 'openai',
     model: agent.model || 'gpt-4.1-mini', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT,

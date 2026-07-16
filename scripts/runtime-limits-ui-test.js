@@ -53,8 +53,7 @@ function seedData() {
     { id: 2, principalType: 'user', principalId: 2, groupId: 2 }
   ]);
   writeJson('tickets.json', [
-    { id: 1, objective: 'Create applied.txt', status: 'failed', assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', executionMode: 'agent', executionPolicy: {}, createdBy: 'admin', createdAt: T0, updatedAt: T1 },
-    { id: 2, objective: 'Create legacy.txt', status: 'completed', assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', executionMode: 'agent', executionPolicy: {}, createdBy: 'admin', createdAt: T0, updatedAt: T1 }
+    { id: 1, objective: 'Create applied.txt', status: 'failed', assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', executionMode: 'agent', executionPolicy: {}, createdBy: 'admin', createdAt: T0, updatedAt: T1 }
   ]);
   const appliedLimits = {
     maxExecutionSteps: 3,
@@ -78,13 +77,6 @@ function seedData() {
         parsedModelPlans: [{ step: 0, message: 'continue', actions: [], complete: false }, { step: 1, message: 'continue', actions: [], complete: false }],
         workspaceOperations: [{ operation: { operation: 'readFile', args: { path: 'a.txt' } }, result: {} }, { operation: { operation: 'readFile', args: { path: 'b.txt' } }, result: {} }, { operation: { operation: 'readFile', args: { path: 'c.txt' } }, result: {} }]
       })
-    },
-    {
-      id: 2, ticketId: 2, agentId: 1, agentName: 'Agent 1', status: 'completed', executionMode: 'agent',
-      capabilityType: 'directAction', capabilityId: 'agent-selected-actions', executionPolicySnapshot: {},
-      createdAt: T0, startedAt: T0, completedAt: T1, updatedAt: T1,
-      runEvaluation: { effectiveness: { status: 'unknown' }, efficiency: { durationMs: 4000, providerRequests: 1, modelResponses: 1, workspaceOperations: 0, mutationCount: 0, workflowSteps: 0, retryCount: 0 }, violations: { status: 'none', items: [] }, effectiveRuntimeConfig: null },
-      replaySnapshot: replay(2, { providerRequests: [{}], modelResponses: [{}], parsedModelPlans: [{ step: 0, message: 'done', actions: [], complete: true }] })
     }
   ]);
   for (const file of ['logs.json', 'operation-history.json', 'allocation-plans.json']) writeJson(file, []);
@@ -188,12 +180,7 @@ async function main() {
     assert(applied.body.includes('Limit source: Applied run-start limits'), 'diagnostics applied-limit source missing');
     assert(applied.body.includes('Execution turns: 2 / 3'), 'diagnostics usage/limit pair missing');
 
-    const unsupported = await request('GET', '/runs/2', { cookie: admin });
-    assert(unsupported.statusCode === 200 && unsupported.body.includes('Unavailable: unsupported run record is missing its immutable run-start limits snapshot'), 'unsupported run-record label missing');
-    assert(unsupported.body.includes('Limit source: Unavailable: unsupported run record is missing its immutable run-start limits snapshot'), 'diagnostics unsupported-record source missing');
-    assert(!unsupported.body.includes('showing current fallback defaults'), 'unsupported run record was reinterpreted with current defaults');
-
-    console.log('PASS: runtime limits admin UI, immutable run snapshots, unsupported-record labeling, and diagnostics render correctly');
+    console.log('PASS: runtime limits admin UI, immutable current-format run snapshots, and diagnostics render correctly');
   } finally {
     server.kill('SIGTERM');
     if (server.exitCode === null) {

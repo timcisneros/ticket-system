@@ -69,7 +69,7 @@ needed.
 
 ## 11. What the current audit means
 
-The substrate is internally coherent, bounded, and test-covered (release checkpoint 50/50). The
+The substrate is internally coherent, bounded, and test-covered (release checkpoint 54/54). The
 audit applies to the internal-demo boundary; it is not a production-readiness or semantic
 correctness claim. See `docs/SYSTEM_AUDIT_2026-07-15.md`.
 

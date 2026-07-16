@@ -271,14 +271,11 @@ async function main() {
     assert(capture.prompts.length >= 2, 'Expected at least two model calls');
     assert(capture.prompts[1].combined.includes('complete:true was not honored because 1 proposed action(s) were not applied'), 'Second prompt did not include deferred complete:true truncation warning');
 
-    // Post-terminal evidence lands through several sinks. operation-history is
-    // persisted synchronously, but events.jsonl is appended asynchronously
-    // (appendEvent), and the replay snapshot is finalized around the same
-    // time. Under back-to-back load the run can read terminal in runs.json before
-    // the final workspace.operation / run.terminalized events have flushed, so
-    // poll until all the evidence is present rather than reading once. This is a
-    // test-timing fix only; it changes no runtime behavior and still fails if the
-    // evidence never appears (waitFor times out → evidence is null).
+    // Post-terminal evidence lands through several independently persisted
+    // sinks. Awaited event appends are durably acknowledged before execution
+    // advances, while the external test can still observe those sinks across
+    // adjacent HTTP/scheduler turns. Poll until the complete terminal bundle is
+    // visible rather than assuming one cross-file read is an atomic snapshot.
     const evidence = await waitFor(() => {
       const logs = readJson('logs.json').filter(log => log.runId === run.id);
       const hasDeferredLog = logs.some(log => log.type === 'run:completion_deferred_truncation');

@@ -30,7 +30,7 @@ function loadServerCode() {
 function extractFunction(code, name) {
   // Find the function declaration, then scan to the body opening brace
   // (skipping past parameter defaults that may contain braces).
-  const declPattern = new RegExp(`function ${name}\\b`);
+  const declPattern = new RegExp(`(?:async\\s+)?function ${name}\\b`);
   const declMatch = code.match(declPattern);
   if (!declMatch) return null;
 
@@ -57,7 +57,7 @@ function extractFunction(code, name) {
   return code.slice(declMatch.index, j);
 }
 
-function main() {
+async function main() {
   console.log('Observed Post-State V1 Behavioral Regression Test');
   console.log('');
 
@@ -100,6 +100,10 @@ function main() {
     'workspacePathsOverlap',
     'findOverlappingSuccessfulArtifactOwner',
     'assertNoCrossTicketOverlap',
+    'buildTargetEvidenceMetadata',
+    'buildTargetActorContext',
+    'buildMutationResourceChanges',
+    'buildTargetMutationReceipt',
     'executeWorkspaceOperation'
   ];
 
@@ -113,6 +117,7 @@ function main() {
 
   // ── 3. Build sandbox with mocked runtime ───────────────────────
   const sandbox = {
+    eventAppendFailure: null,
     crypto,
     console,
     Buffer,
@@ -293,7 +298,7 @@ function main() {
   // ── 5. Behavioral proof: writeFile ───────────────────────────
   {
     const action = { operation: 'writeFile', args: { path: 'test.txt', content: 'REQUESTED_CONTENT' } };
-    const result = sandbox.executeWorkspaceOperation(run, action, 1);
+    const result = await sandbox.executeWorkspaceOperation(run, action, 1);
 
     const histories = sandbox.readOperationHistory();
     assert(histories.length === 1, 'writeFile should persist exactly one history record');
@@ -323,7 +328,7 @@ function main() {
     sandbox.writeOperationHistory([]);
 
     const action = { operation: 'deletePath', args: { path: 'delete-me.txt' } };
-    const result = sandbox.executeWorkspaceOperation(run, action, 2);
+    const result = await sandbox.executeWorkspaceOperation(run, action, 2);
 
     const histories = sandbox.readOperationHistory();
     assert(histories.length === 1, 'deletePath should persist exactly one history record');
@@ -349,4 +354,4 @@ function main() {
   console.log('All behavioral post-state provenance tests passed.');
 }
 
-main();
+main().catch(error => { console.error(error); process.exit(1); });

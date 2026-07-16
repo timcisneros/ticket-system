@@ -9,16 +9,18 @@ function createRuntimeScheduler({
   expireStaleRunLeases,
   isRunStarting,
   isRunActiveInMemory,
-  runner
+  runner,
+  onError
 }) {
   let timer = null;
   let ticking = false;
+  let idleWaiters = [];
 
-  function logQueuedOnce(run) {
+  async function logQueuedOnce(run) {
     const alreadyLogged = readLogs().some(log => log.runId === run.id && log.type === 'run:queued');
     if (alreadyLogged) return;
 
-    appendEvent({
+    await appendEvent({
       type: 'run.queued',
       ticketId: run.ticketId,
       runId: run.id,
@@ -29,12 +31,12 @@ function createRuntimeScheduler({
     appendRunLog(run, 'run:queued', 'Queued for local model capacity');
   }
 
-  function tick() {
+  async function tick() {
     if (ticking) return;
     ticking = true;
 
     try {
-      if (typeof expireStaleRunLeases === 'function') expireStaleRunLeases();
+      if (typeof expireStaleRunLeases === 'function') await expireStaleRunLeases();
 
       const pendingRuns = readRuns()
         .filter(run => run.status === 'pending')
@@ -44,7 +46,7 @@ function createRuntimeScheduler({
       // Idle ticks (pendingRuns === 0) are no-op heartbeat telemetry and are
       // not written to the append-only evidence log.
       if (pendingRuns.length > 0) {
-        appendEvent({
+        await appendEvent({
           type: 'scheduler.tick',
           payload: {
             pendingRuns: pendingRuns.length
@@ -54,7 +56,7 @@ function createRuntimeScheduler({
 
       for (const run of pendingRuns) {
         if (isRunStarting(run)) {
-          appendEvent({
+          await appendEvent({
             type: 'scheduler.run_skipped',
             ticketId: run.ticketId,
             runId: run.id,
@@ -64,7 +66,7 @@ function createRuntimeScheduler({
         }
 
         if (isRunActiveInMemory(run)) {
-          appendEvent({
+          await appendEvent({
             type: 'scheduler.run_skipped',
             ticketId: run.ticketId,
             runId: run.id,
@@ -74,19 +76,19 @@ function createRuntimeScheduler({
         }
 
         if (!canStartRunNow(run)) {
-          appendEvent({
+          await appendEvent({
             type: 'scheduler.capacity_blocked',
             ticketId: run.ticketId,
             runId: run.id,
             payload: { reason: 'concurrency_limit' }
           });
-          logQueuedOnce(run);
+          await logQueuedOnce(run);
           continue;
         }
 
-        const leasedRun = typeof acquireRunLease === 'function' ? acquireRunLease(run.id) : run;
+        const leasedRun = typeof acquireRunLease === 'function' ? await acquireRunLease(run.id) : run;
         if (!leasedRun) {
-          appendEvent({
+          await appendEvent({
             type: 'scheduler.run_skipped',
             ticketId: run.ticketId,
             runId: run.id,
@@ -95,7 +97,7 @@ function createRuntimeScheduler({
           continue;
         }
 
-        appendEvent({
+        await appendEvent({
           type: 'scheduler.run_selected',
           ticketId: leasedRun.ticketId,
           runId: leasedRun.id,
@@ -108,13 +110,25 @@ function createRuntimeScheduler({
       }
     } finally {
       ticking = false;
+      const waiters = idleWaiters;
+      idleWaiters = [];
+      waiters.forEach(resolve => resolve());
     }
+  }
+
+  function reportTickFailure(error) {
+    if (typeof onError === 'function') onError(error);
+    else console.error(`Runtime scheduler tick failed: ${error && error.message ? error.message : error}`);
+  }
+
+  function scheduleTick() {
+    void tick().catch(reportTickFailure);
   }
 
   function start() {
     if (timer) return { tick, stop, isRunning: true };
-    tick();
-    timer = setInterval(tick, intervalMs);
+    scheduleTick();
+    timer = setInterval(scheduleTick, intervalMs);
     return { tick, stop, isRunning: true };
   }
 
@@ -123,10 +137,16 @@ function createRuntimeScheduler({
     timer = null;
   }
 
+  function whenIdle() {
+    if (!ticking) return Promise.resolve();
+    return new Promise(resolve => idleWaiters.push(resolve));
+  }
+
   return {
     start,
     stop,
     tick,
+    whenIdle,
     isRunning: () => Boolean(timer)
   };
 }

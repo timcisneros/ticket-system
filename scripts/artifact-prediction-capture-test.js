@@ -4,6 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const STAMP = Date.now();
@@ -390,6 +391,7 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts, options = {})
     executionMode: 'agent',
     capabilityType: 'directAction',
     capabilityId: 'agent-selected-actions',
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     status,
     ticketOpenedAt: now,
     createdAt: now,

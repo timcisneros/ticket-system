@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { sealCurrentRunEventChains } = require('./current-event-fixture');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 const http = require('http');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -40,7 +41,7 @@ function snap(runId, ticketId, extra) {
   return Object.assign({ version: 1, runId, ticketId, assignedAgentId: agent.id, agentNameSnapshot: agent.name, provider: 'openai', model: agent.model || 'gpt-4.1-mini', runtimeEnvelope: {}, ticketObjectiveSnapshot: 'obj', systemInstructionSnapshot: 'sys', primitiveContract: {}, workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main', providerRequests: [{ r: 1 }], modelResponses: [{ r: 1 }], parsedModelPlans: [{ message: 'Created the requested folders.', actions: [], complete: true, step: 1 }], workspaceOperations: [], events: [], terminalStatus: 'completed', mutationCount: 4, createdAt: now, finalizedAt: now }, extra);
 }
 function mkRun(id, ticketId, status, extra) {
-  return Object.assign({ id, ticketId, agentId: agent.id, agentName: agent.name, status, workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main', ticketOpenedAt: now, createdAt: now, updatedAt: now, startedAt: now, completedAt: status === 'completed' ? now : null, replaySnapshot: snap(id, ticketId, { terminalStatus: status }) }, extra);
+  return Object.assign({ id, ticketId, agentId: agent.id, agentName: agent.name, status, workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main', runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(), ticketOpenedAt: now, createdAt: now, updatedAt: now, startedAt: now, completedAt: status === 'completed' ? now : null, replaySnapshot: snap(id, ticketId, { terminalStatus: status }) }, extra);
 }
 
 const tickets = readJ('tickets.json');
@@ -111,7 +112,7 @@ writeJ('runs.json', [
   {
     id: C.postcond.rid, ticketId: C.postcond.tid, agentId: agent.id, agentName: agent.name,
     status: 'completed', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT,
-    executionWorkspaceType: 'main', createdAt: now, updatedAt: now, startedAt: now, completedAt: now,
+    executionWorkspaceType: 'main', runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(), createdAt: now, updatedAt: now, startedAt: now, completedAt: now,
     mutationCount: 2,
     replaySummary: { hasPostconditionCompleted: true, hasCompletedNoop: false, hasBlockedOrRejected: false, mutationCount: 2, mutationOutcome: 'all_intended', terminalStatus: 'completed' }
   },

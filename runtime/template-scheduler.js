@@ -11,8 +11,8 @@
 // advances schedule.nextRunAt forward from "now" after a trigger (or a deduped
 // re-entry), so a long downtime produces a single current-slot ticket, never a storm.
 //
-// tick() is synchronous and drivable directly (tests call it via a host endpoint with
-// a controlled schedule state — no wall-clock sleeps).
+// tick() is asynchronous and drivable directly (tests call it via a host endpoint
+// with a controlled schedule state — no wall-clock sleeps).
 function createTemplateScheduler({
   intervalMs = 60000,
   readProcessTemplates,
@@ -22,6 +22,7 @@ function createTemplateScheduler({
 }) {
   let timer = null;
   let ticking = false;
+  let idleWaiters = [];
 
   function isDue(template, currentMs) {
     if (!template || template.enabled !== true) return false;
@@ -34,7 +35,7 @@ function createTemplateScheduler({
     return nextMs <= currentMs;
   }
 
-  function tick() {
+  async function tick() {
     if (ticking) return [];
     ticking = true;
     const results = [];
@@ -56,7 +57,7 @@ function createTemplateScheduler({
         // builds the deterministic token schedule:<id>:<scheduledForIso> from this.
         const scheduledForIso = template.schedule.nextRunAt;
         try {
-          const result = triggerDueTemplate(template, scheduledForIso);
+          const result = await triggerDueTemplate(template, scheduledForIso);
           results.push({
             templateId: template.id,
             action: result && result.deduped ? 'deduped' : (result && result.ok ? 'created' : 'error'),
@@ -69,15 +70,22 @@ function createTemplateScheduler({
       }
     } finally {
       ticking = false;
+      const waiters = idleWaiters;
+      idleWaiters = [];
+      waiters.forEach(resolve => resolve());
     }
     return results;
+  }
+
+  function scheduleTick() {
+    void tick().catch(error => onError(null, error));
   }
 
   function start() {
     if (timer) return { tick, stop, isRunning: true };
     // First scan happens one interval after boot (no immediate startup scan), so
     // startup never replays missed slots beyond the single current due slot.
-    timer = setInterval(tick, intervalMs);
+    timer = setInterval(scheduleTick, intervalMs);
     if (timer.unref) timer.unref();
     return { tick, stop, isRunning: true };
   }
@@ -87,10 +95,16 @@ function createTemplateScheduler({
     timer = null;
   }
 
+  function whenIdle() {
+    if (!ticking) return Promise.resolve();
+    return new Promise(resolve => idleWaiters.push(resolve));
+  }
+
   return {
     start,
     stop,
     tick,
+    whenIdle,
     isRunning: () => Boolean(timer)
   };
 }

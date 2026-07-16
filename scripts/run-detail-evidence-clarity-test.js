@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const REAL_DATA = path.join(ROOT, 'data');
@@ -33,7 +34,7 @@ function snapBase(runId, ticketId, extra) {
   }, extra);
 }
 function mkRun(id, ticketId, snapshot) {
-  return { id, ticketId, agentId: agent.id, agentName: agent.name, status: 'completed', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main', ticketOpenedAt: now, createdAt: now, updatedAt: now, startedAt: now, completedAt: now, replaySnapshot: snapshot };
+  return { id, ticketId, agentId: agent.id, agentName: agent.name, status: 'completed', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main', runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(), ticketOpenedAt: now, createdAt: now, updatedAt: now, startedAt: now, completedAt: now, replaySnapshot: snapshot };
 }
 
 const evidence = {

@@ -15,6 +15,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const STAMP = Date.now();
@@ -312,6 +313,7 @@ async function main() {
       status: 'failed', error: 'Run hit the step limit (run:step_limit) after repeated complete:false responses with no workspace actions.',
       delegatedUserId: adminId, delegatedUsername: 'admin', delegatedPermissionSource: 'created_from_ticket',
       currentPhase: 'planning', executionMode: 'agent', capabilityType: 'directAction', capabilityId: 'agent-selected-actions',
+      runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
       ownedOutputPaths: [], workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
       createdAt: now, updatedAt: now, startedAt: now, completedAt: now,
       replaySnapshot: {

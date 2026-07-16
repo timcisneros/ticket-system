@@ -110,7 +110,7 @@ and creates no summary ledger. See `docs/OPERATIONAL_TRANSPARENCY.md`.
 
 ## 16. Release checkpoint
 
-`npm run checkpoint:release` is the release gate (currently 50/50). See `docs/RELEASE_CHECKPOINT.md`
+`npm run checkpoint:release` is the release gate (currently 54/54). See `docs/RELEASE_CHECKPOINT.md`
 for the full hygiene flow (clean tree → expected branch/files → build → checkpoint → ff-merge →
 annotated tag).
 

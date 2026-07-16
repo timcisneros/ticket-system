@@ -28,7 +28,7 @@ function loadServerCode() {
 }
 
 function extractFunction(code, name) {
-  const declPattern = new RegExp(`function ${name}\\b`);
+  const declPattern = new RegExp(`(?:async\\s+)?function ${name}\\b`);
   const declMatch = code.match(declPattern);
   if (!declMatch) return null;
 
@@ -59,7 +59,7 @@ function hashContent(content) {
   return crypto.createHash('sha256').update(String(content || '')).digest('hex');
 }
 
-function main() {
+async function main() {
   console.log('Verify Batch Operation Behavioral Regression Test');
   console.log('');
 
@@ -100,6 +100,10 @@ function main() {
     'workspacePathsOverlap',
     'findOverlappingSuccessfulArtifactOwner',
     'assertNoCrossTicketOverlap',
+    'buildTargetEvidenceMetadata',
+    'buildTargetActorContext',
+    'buildMutationResourceChanges',
+    'buildTargetMutationReceipt',
     'executeWorkspaceOperation',
     'verifyBatchOperation'
   ];
@@ -113,6 +117,7 @@ function main() {
   const emittedRunEvents = [];
 
   const sandbox = {
+    eventAppendFailure: null,
     crypto,
     console,
     Buffer,
@@ -300,12 +305,12 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'renamePath', args: { path: 'src_warn.txt', nextPath: 'dst_warn.txt' } };
-    const result = sandbox.executeWorkspaceOperation(run, action, 1);
+    const result = await sandbox.executeWorkspaceOperation(run, action, 1);
 
     // Recreate source after rename to induce the warning
     fs.writeFileSync(path.join(workspaceDir, 'src_warn.txt'), 'back');
 
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
     assert(!passed, 'source_still_exists should fail verifyBatchOperation');
     assertEqual(emittedEvents.length, 1, 'source_still_exists should emit exactly one event');
     assertEqual(emittedEvents[0].type, 'batch.verification_failed', 'event type should be batch.verification_failed');
@@ -327,12 +332,12 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'renamePath', args: { path: 'src_miss.txt', nextPath: 'dst_miss.txt' } };
-    const result = sandbox.executeWorkspaceOperation(run, action, 2);
+    const result = await sandbox.executeWorkspaceOperation(run, action, 2);
 
     // Delete destination after rename
     fs.rmSync(path.join(workspaceDir, 'dst_miss.txt'), { force: true });
 
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
     assert(!passed, 'destination_missing should fail verifyBatchOperation');
     assertEqual(emittedEvents.length, 1, 'destination_missing should emit exactly one event');
 
@@ -352,12 +357,12 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'createFolder', args: { path: 'folder1' } };
-    const result = sandbox.executeWorkspaceOperation(run, action, 3);
+    const result = await sandbox.executeWorkspaceOperation(run, action, 3);
 
     // Delete created folder
     fs.rmdirSync(path.join(workspaceDir, 'folder1'));
 
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
     assert(!passed, 'folder_missing should fail verifyBatchOperation');
     assertEqual(emittedEvents.length, 1, 'folder_missing should emit exactly one event');
 
@@ -377,12 +382,12 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'writeFile', args: { path: 'file1.txt', content: 'hello' } };
-    const result = sandbox.executeWorkspaceOperation(run, action, 4);
+    const result = await sandbox.executeWorkspaceOperation(run, action, 4);
 
     // Delete written file
     fs.rmSync(path.join(workspaceDir, 'file1.txt'), { force: true });
 
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
     assert(!passed, 'file_missing should fail verifyBatchOperation');
     assertEqual(emittedEvents.length, 1, 'file_missing should emit exactly one event');
 
@@ -402,12 +407,12 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'writeFile', args: { path: 'file2.txt', content: 'hello' } };
-    const result = sandbox.executeWorkspaceOperation(run, action, 5);
+    const result = await sandbox.executeWorkspaceOperation(run, action, 5);
 
     // Overwrite with different content
     fs.writeFileSync(path.join(workspaceDir, 'file2.txt'), 'world');
 
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
     assert(!passed, 'content_mismatch should fail verifyBatchOperation');
     assertEqual(emittedEvents.length, 1, 'content_mismatch should emit exactly one event');
 
@@ -428,12 +433,12 @@ function main() {
     emittedRunEvents.length = 0;
 
     const action = { operation: 'deletePath', args: { path: 'del1.txt' } };
-    const result = sandbox.executeWorkspaceOperation(run, action, 6);
+    const result = await sandbox.executeWorkspaceOperation(run, action, 6);
 
     // Recreate deleted path
     fs.writeFileSync(path.join(workspaceDir, 'del1.txt'), 'back');
 
-    const passed = sandbox.verifyBatchOperation(run, action, result);
+    const passed = await sandbox.verifyBatchOperation(run, action, result);
     assert(!passed, 'path_still_exists should fail verifyBatchOperation');
     assertEqual(emittedEvents.length, 1, 'path_still_exists should emit exactly one event');
 
@@ -463,8 +468,8 @@ function main() {
       emittedEvents.length = 0;
       emittedRunEvents.length = 0;
 
-      const result = sandbox.executeWorkspaceOperation(run, action, 99);
-      const passed = sandbox.verifyBatchOperation(run, action, result);
+      const result = await sandbox.executeWorkspaceOperation(run, action, 99);
+      const passed = await sandbox.verifyBatchOperation(run, action, result);
       assert(passed, `valid ${action.operation} should pass verifyBatchOperation`);
       assertEqual(emittedEvents.length, 0, `valid ${action.operation} should emit zero events`);
     }
@@ -478,4 +483,4 @@ function main() {
   console.log('All verify-batch-operation behavioral regression tests passed.');
 }
 
-main();
+main().catch(error => { console.error(error); process.exit(1); });

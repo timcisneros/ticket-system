@@ -1,7 +1,7 @@
 # Release Notes — r1.33 (Release Candidate)
 
 > Historical release notes. The current audit/remediation state is documented in
-> `SYSTEM_AUDIT_2026-07-15.md`; the current release gate is 50/50.
+> `SYSTEM_AUDIT_2026-07-15.md`; the current release gate is 54/54.
 
 These notes summarize the release-candidate state captured by `docs/RELEASE_CANDIDATE_AUDIT.md` at
 master `f46d2b0` (tag `r1.33-release-candidate-audit`). This is a **release candidate**, not a final

@@ -82,13 +82,15 @@ None. The replay snapshot surface is fully append-only and complete.
 
 ### Evidence preserved?
 
-**Yes.** `appendEvent` writes each normalized event to `data/events.jsonl` synchronously before advancing the in-memory run-chain tip:
+**Yes.** `appendEvent` reserves each normalized event's run-chain position, then awaits a bounded asynchronous group commit to `data/events.jsonl`. The caller and committed in-memory chain tip advance only after the journal's `FileHandle.sync()` succeeds:
 
 ```javascript
 const line = `${JSON.stringify(normalized)}\n`;
-fs.appendFileSync(EVENTS_FILE, line, 'utf8');
-if (nextChain) runEventChains.set(normalized.runId, nextChain);
+await eventJournal.append(line);
+if (nextChain.seq > committed.seq) runEventChains.set(normalized.runId, nextChain);
 ```
+
+The journal keeps one descriptor open, batches concurrent same-turn appends within explicit entry/byte bounds, performs writes and sync through asynchronous filesystem APIs, and fails closed on any append or sync error. This preserves the durability barrier without blocking Node's event loop for every event.
 
 ### Evidence lost?
 

@@ -70,8 +70,12 @@ if (Array.isArray(list)) {
     'rbac-and-inline-data-security-test.js',
     'event-chain-verify-test.js',
     'event-chain-restart-test.js',
+    'durable-event-append-test.js',
+    'event-append-await-contract-test.js',
+    'event-reader-bounds-test.js',
     'internal-demo-security-test.js',
     'objective-contract-compiler-test.js',
+    'postcondition-completion-test.js',
     'release-checkpoint-coverage-test.js'
   ];
   for (const name of REQUIRED_IN_CHECKPOINT) {

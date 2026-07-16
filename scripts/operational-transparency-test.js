@@ -10,6 +10,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
@@ -51,7 +52,7 @@ const TRIAGE = { required: true, reasonCode: 'authority_blocked', summary: 'need
 function ticket(id, status, extra) {
   return { id, objective: 'obj ' + id, assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', ownedOutputPaths: null, executionMode: 'agent', workflowId: null, capabilityType: 'directAction', capabilityId: 'agent-selected-actions', executionPolicy: { maxAttempts: null }, status, createdBy: 'admin', changedBy: 'admin', changedAt: ISO, createdAt: ISO, updatedAt: ISO, ...extra };
 }
-function run(id, ticketId, status) { return { id, ticketId, agentId: 1, agentName: 'A', status, createdAt: ISO, updatedAt: ISO }; }
+function run(id, ticketId, status) { return { id, ticketId, agentId: 1, agentName: 'A', status, runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(), createdAt: ISO, updatedAt: ISO }; }
 function ctx(id, status) { return { id, name: 'C' + id, purpose: 'p', status, allowedTargetIds: [], allowedCapabilities: [], allowedProcessTemplateIds: [], memoryPolicy: { mode: 'none' }, visibilityPolicy: { mode: 'participants' }, participants: [], ticketQueueFilter: {}, triageQueueFilter: {}, scheduleFilter: {}, createdAt: ISO, updatedAt: ISO }; }
 
 function seed() {

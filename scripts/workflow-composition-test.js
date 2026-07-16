@@ -4,6 +4,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const REAL_DATA_DIR = path.join(ROOT, 'data');
@@ -1462,6 +1463,7 @@ async function main() {
         capabilityType: 'workflow',
         capabilityId: workflowDefinition.id,
         capabilityInput: workflowInput,
+        runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
         status: 'running',
         ticketOpenedAt: ticket.updatedAt,
         createdAt: staleAt,

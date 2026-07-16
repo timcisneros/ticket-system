@@ -12,6 +12,7 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents } = require('./runtime/event-reader');
+const { createDurableAppendJournal } = require('./runtime/durable-append');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
@@ -500,7 +501,7 @@ const TEST_SKIP_STARTUP_RUN_RECOVERY = process.env.NODE_ENV === 'test' && proces
 const testInterruptFirstAuthority = new Set();
 const testInterruptFirstWorkspaceOp = new Set();
 
-function maybeTestInterrupt(run, point) {
+async function maybeTestInterrupt(run, point) {
   if (!TEST_INTERRUPTION_POINT || TEST_INTERRUPTION_POINT !== point) return;
   if (!run || !run.id) return;
 
@@ -514,12 +515,9 @@ function maybeTestInterrupt(run, point) {
     testInterruptFirstWorkspaceOp.add(run.id);
   }
 
-  // All normal events are already durable because appendEvent is synchronous.
-  // Write the interruption event itself before simulating the crash.
+  // Normal events are durably flushed before this hook runs. Await the
+  // interruption event's own durable acknowledgement before simulating the crash.
   const event = {
-    schemaVersion: RUN_EVENT_SCHEMA_VERSION,
-    id: normalizeEventId(),
-    ts: createLogTimestamp(),
     type: 'interruption.test_hook',
     ticketId: run.ticketId,
     runId: run.id,
@@ -527,18 +525,8 @@ function maybeTestInterrupt(run, point) {
     payload: { point, reason: 'Deterministic test interruption triggered' }
   };
 
-  // Add seq/prevHash for run events
-  if (event.runId !== null) {
-    const runId = event.runId;
-    const chain = runEventChains.get(runId) || { seq: 0, prevHash: null };
-    event.seq = chain.seq;
-    event.prevHash = chain.prevHash;
-    event.hash = computeRunEventHash(event);
-  }
-
   try {
-    fs.appendFileSync(EVENTS_FILE, `${JSON.stringify(event)}\n`, 'utf8');
-    runEventChains.set(event.runId, { seq: event.seq + 1, prevHash: event.hash });
+    await appendEvent(event);
   } catch (e) {
     fs.writeSync(process.stderr.fd, `Failed to write interruption event: ${e.message}\n`);
     process.exit(1);
@@ -725,7 +713,7 @@ function actorFromRequest(request) {
 // Record audit evidence for a permissioned cross-ticket artifact delete using the
 // existing event + run-log mechanisms (no event-log mechanics changed). The actor
 // is the run's delegated initiator, not whoever last edited the ticket.
-function recordPermissionedCrossTicketDelete(run, operation, args, candidatePath, owner) {
+async function recordPermissionedCrossTicketDelete(run, operation, args, candidatePath, owner) {
   const audit = {
     operation,
     path: candidatePath,
@@ -741,7 +729,7 @@ function recordPermissionedCrossTicketDelete(run, operation, args, candidatePath
     permissionUsed: CROSS_TICKET_DELETE_PERMISSION,
     source: 'permissioned_cross_ticket_artifact_delete'
   };
-  appendEvent({ type: 'workspace.cross_ticket_delete_authorized', ticketId: run.ticketId, runId: run.id, payload: audit });
+  await appendEvent({ type: 'workspace.cross_ticket_delete_authorized', ticketId: run.ticketId, runId: run.id, payload: audit });
   appendRunLog(
     run,
     'workspace:cross_ticket_delete_authorized',
@@ -782,7 +770,7 @@ function ticketHasOwnedContentInDirectory(provider, ticketId, dirPath) {
 // case the delete is allowed and recorded as a permissioned, audited action.
 // Permission is evaluated live against that fixed initiator identity. Throws
 // before any fs mutation or history persist; same-ticket never reaches here.
-function assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, args, candidatePath) {
+async function assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, args, candidatePath) {
   const owner = findOverlappingSuccessfulArtifactOwner(readOperationHistory(), run, candidatePath);
   if (!owner) return;
   const ownerPath = getSuccessfulArtifactOwnershipPath(owner);
@@ -819,7 +807,7 @@ function assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, args, 
     }
   }
   if (operation === 'deletePath' && run && run.delegatedUserId != null && hasPermission(run.delegatedUserId, CROSS_TICKET_DELETE_PERMISSION)) {
-    recordPermissionedCrossTicketDelete(run, operation, args, candidatePath, owner);
+    await recordPermissionedCrossTicketDelete(run, operation, args, candidatePath, owner);
     return;
   }
   throw buildCrossTicketConflictError(operation, args, candidatePath, owner);
@@ -3056,15 +3044,10 @@ function normalizeTriage(triage) {
 }
 
 function normalizeTickets(tickets) {
-  const seenTicketIds = new Set();
-
-  return tickets.filter(ticket => {
+  return tickets.map(ticket => {
     const ticketId = parseInt(ticket.id, 10);
     const assignmentTargetId = parseInt(ticket.assignmentTargetId, 10);
 
-    if (Number.isNaN(ticketId) || seenTicketIds.has(ticketId)) return false;
-
-    seenTicketIds.add(ticketId);
     ticket.id = ticketId;
 
     if (!['agent', 'group'].includes(ticket.assignmentTargetType)) {
@@ -3095,11 +3078,12 @@ function normalizeTickets(tickets) {
     ticket.workTypeId = ticket.workTypeSnapshot ? ticket.workTypeSnapshot.id : null;
     ticket.triage = normalizeTriage(ticket.triage);
 
-    return true;
+    return ticket;
   });
 }
 
 function writeTickets(tickets) {
+  validateUniqueIntegerIds('tickets.json', tickets);
   writeFileAtomic(DATA_FILE, JSON.stringify(normalizeTickets(tickets), null, 2));
 }
 
@@ -3581,7 +3565,7 @@ function advanceScheduleCursorForward(templateId, fromIso) {
 //
 // triggerContext: { triggerType: 'manual'|'schedule', triggerToken, scheduledFor? }
 //   actor: { userId, username }  (a manual live user, or { userId: null, username: 'system' })
-function triggerProcessTemplate(template, actor, triggerContext) {
+async function triggerProcessTemplate(template, actor, triggerContext) {
   const triggerToken = triggerContext.triggerToken;
   const triggerType = triggerContext.triggerType;
   const isScheduled = triggerType === 'schedule';
@@ -3625,7 +3609,7 @@ function triggerProcessTemplate(template, actor, triggerContext) {
   };
   if (triggerContext.scheduledFor) source.scheduledFor = triggerContext.scheduledFor;
 
-  const result = createTicketFromInput({
+  const result = await createTicketFromInput({
     objective: tt.objective,
     assignmentTargetType: tt.assignmentTargetType,
     assignmentTargetId: tt.assignmentTargetId,
@@ -4763,8 +4747,7 @@ function buildRunAuthorityContext(run, ticket, agent, snapshot) {
   const allocationPlanId = run.allocationPlanId || s.allocationPlanId || null;
   const allocationItemId = run.allocationItemId || s.allocationItemId || null;
   const ownedOutputPaths = getRunOwnedOutputPaths(run);
-  const limits = normalizeRuntimeLimitsSnapshot(run && run.runtimeLimitsSnapshot) ||
-    normalizeRuntimeLimitsSnapshot(s.runtimeLimitsSnapshot);
+  const limits = getRunRuntimeLimitsSnapshot(run);
   const groups = readGroups();
   const agentGroupNames = agent
     ? getPrincipalGroupIds('agent', agent.id).map(groupId => (groups.find(group => group.id === groupId) || {}).name).filter(Boolean)
@@ -4788,10 +4771,10 @@ function buildRunAuthorityContext(run, ticket, agent, snapshot) {
       mutatingOperations: (s.primitiveContract && s.primitiveContract.mutatingOperations) || AGENT_MUTATING_OPERATIONS,
       maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
       maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
-      maxSteps: limits ? limits.maxExecutionSteps : null,
-      maxWorkspaceOperations: limits ? limits.maxWorkspaceOperationsPerRun : null,
-      maxModelRequests: limits ? limits.maxModelRequestsPerRun : null,
-      maxRuntimeDurationMs: limits ? limits.maxRuntimeDurationMs : null,
+      maxSteps: limits.maxExecutionSteps,
+      maxWorkspaceOperations: limits.maxWorkspaceOperationsPerRun,
+      maxModelRequests: limits.maxModelRequestsPerRun,
+      maxRuntimeDurationMs: limits.maxRuntimeDurationMs,
       provider: s.provider || (agent ? agent.provider : null) || '-',
       model: s.model || (agent ? agent.model : null) || '-',
       executionWorkspaceType,
@@ -4802,9 +4785,7 @@ function buildRunAuthorityContext(run, ticket, agent, snapshot) {
         ? `Granted via ticket assignment group "${assignmentGroup.name}"`
         : 'Granted via direct ticket assignment',
       groups: agentGroupNames.length > 0 ? agentGroupNames.join(', ') : 'No agent group grant recorded',
-      runtimePolicy: limits
-        ? 'Immutable run-start bounded workspace runtime policy'
-        : 'Unavailable: unsupported run record is missing its runtime-limits snapshot',
+      runtimePolicy: 'Immutable run-start bounded workspace runtime policy',
       scope: allocationPlanId ? 'Owned-scope allocation plan' : 'Direct assignment workspace scope'
     },
     controls: {
@@ -4960,10 +4941,13 @@ function createLogTimestamp() {
 }
 
 let eventAppendFailure = null;
+let eventJournal = createDurableAppendJournal(EVENTS_FILE);
 
 // Per-run event chain state for forensic sequence numbers and hash chaining
 const runEventChains = new Map(); // runId -> { seq: number, prevHash: string | null }
 const persistedEventIds = new Set();
+const reservedRunEventChains = new Map();
+const reservedEventIds = new Set();
 
 function normalizeEventId(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : crypto.randomUUID();
@@ -5035,6 +5019,8 @@ function validatePersistedEventStore(events) {
 function restoreRunEventChainsFromDisk() {
   runEventChains.clear();
   persistedEventIds.clear();
+  reservedRunEventChains.clear();
+  reservedEventIds.clear();
   const { states, eventIds } = validatePersistedEventStore(readPersistedEventsForChainRecovery());
 
   states.forEach((state, runId) => {
@@ -5054,7 +5040,7 @@ function normalizeNullableInteger(value) {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function appendEvent(event = {}) {
+async function appendEvent(event = {}) {
   if (eventAppendFailure) {
     const error = new Error(`Event persistence is unavailable: ${eventAppendFailure.message}`);
     error.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
@@ -5082,25 +5068,28 @@ function appendEvent(event = {}) {
   if (envelopeErrors.length > 0) {
     throw dataIntegrityError('events.jsonl', `cannot append event ${normalized.type}: ${envelopeErrors[0].message}`);
   }
-  if (persistedEventIds.has(normalized.id)) {
+  if (persistedEventIds.has(normalized.id) || reservedEventIds.has(normalized.id)) {
     throw dataIntegrityError('events.jsonl', `cannot append duplicate event id ${normalized.id}`);
   }
 
   let nextChain = null;
-  // Add forensic sequence number and hash chain for run events. The in-memory
-  // tip advances only after the exact serialized event is synchronously appended.
+  // Reserve sequence/hash positions before yielding so concurrent producers
+  // cannot claim the same position. The committed tip advances only after the
+  // exact serialized event receives durable journal acknowledgement.
   if (normalized.runId !== null) {
     const runId = normalized.runId;
-    const chain = runEventChains.get(runId) || { seq: 0, prevHash: null };
+    const chain = reservedRunEventChains.get(runId) || runEventChains.get(runId) || { seq: 0, prevHash: null };
     normalized.seq = chain.seq;
     normalized.prevHash = chain.prevHash;
     normalized.hash = computeRunEventHash(normalized);
     nextChain = { seq: chain.seq + 1, prevHash: normalized.hash };
+    reservedRunEventChains.set(runId, nextChain);
   }
+  reservedEventIds.add(normalized.id);
 
   const line = `${JSON.stringify(normalized)}\n`;
   try {
-    fs.appendFileSync(EVENTS_FILE, line, 'utf8');
+    await eventJournal.append(line);
   } catch (error) {
     if (!eventAppendFailure) eventAppendFailure = error;
     serverReady = false;
@@ -5111,7 +5100,14 @@ function appendEvent(event = {}) {
     persistenceError.cause = error;
     throw persistenceError;
   }
-  if (nextChain) runEventChains.set(normalized.runId, nextChain);
+  if (nextChain) {
+    const committed = runEventChains.get(normalized.runId) || { seq: 0, prevHash: null };
+    if (nextChain.seq > committed.seq) runEventChains.set(normalized.runId, nextChain);
+    if (reservedRunEventChains.get(normalized.runId) === nextChain) {
+      reservedRunEventChains.delete(normalized.runId);
+    }
+  }
+  reservedEventIds.delete(normalized.id);
   persistedEventIds.add(normalized.id);
 
   return normalized;
@@ -5317,7 +5313,7 @@ function appendSystemLog(type, message, workspaceAction = null, extraFields = {}
   return log;
 }
 
-function updateTicketStatusById(ticketId, status) {
+async function updateTicketStatusById(ticketId, status) {
   const tickets = readTickets();
   const ticket = tickets.find(item => item.id === ticketId);
 
@@ -5330,7 +5326,7 @@ function updateTicketStatusById(ticketId, status) {
     delete ticket.rerunMode;
   }
   writeTickets(tickets);
-  appendEvent({
+  await appendEvent({
     type: 'ticket.updated',
     ticketId: ticket.id,
     payload: {
@@ -5674,24 +5670,27 @@ function clearReplaySnapshotFiles() {
 }
 
 async function resetDebugEventState() {
+  try {
+    await eventJournal.close();
+  } catch (_) {
+    // Debug reset is the explicit local recovery surface for a failed journal;
+    // close() still releases the persistent descriptor before replacement.
+  }
+  writeFileAtomic(EVENTS_FILE, '');
+  eventJournal = createDurableAppendJournal(EVENTS_FILE);
   runEventChains.clear();
   persistedEventIds.clear();
+  reservedRunEventChains.clear();
+  reservedEventIds.clear();
   eventAppendFailure = null;
-  writeFileAtomic(EVENTS_FILE, '');
 }
 
 function normalizeRuns(runs) {
-  const seenRunIds = new Set();
-
-  return runs.filter(run => {
+  return runs.map(run => {
     const runId = parseInt(run.id, 10);
     const ticketId = parseInt(run.ticketId, 10);
     const agentId = parseInt(run.agentId, 10);
 
-    if (Number.isNaN(runId) || Number.isNaN(ticketId) || Number.isNaN(agentId)) return false;
-    if (seenRunIds.has(runId)) return false;
-
-    seenRunIds.add(runId);
     run.id = runId;
     run.ticketId = ticketId;
     run.agentId = agentId;
@@ -5740,11 +5739,18 @@ function normalizeRuns(runs) {
       run.replaySnapshotPath = typeof run.replaySnapshotPath === 'string' ? run.replaySnapshotPath : null;
       run.replaySummary = run.replaySummary && typeof run.replaySummary === 'object' ? run.replaySummary : null;
     }
-    return true;
+    return run;
   });
 }
 
 function writeRuns(runs) {
+  validateUniqueIntegerIds('runs.json', runs);
+  runs.forEach(run => {
+    if (!Number.isSafeInteger(run.ticketId) || run.ticketId <= 0 || !Number.isSafeInteger(run.agentId) || run.agentId <= 0) {
+      throw dataIntegrityError('runs.json', `run ${run.id} has an invalid ticketId or agentId`);
+    }
+    getRunRuntimeLimitsSnapshot(run);
+  });
   writeFileAtomic(RUNS_FILE, JSON.stringify(normalizeRuns(runs), null, 2));
 }
 
@@ -5772,7 +5778,7 @@ function isRunLeaseHeldByCurrentProcess(run) {
   return Boolean(run && run.leaseOwner === RUN_LEASE_OWNER && !isRunLeaseExpired(run));
 }
 
-function acquireRunLease(runId) {
+async function acquireRunLease(runId) {
   const runs = readRuns();
   const run = runs.find(item => item.id === runId);
   if (!run || run.status !== 'pending') return null;
@@ -5783,7 +5789,7 @@ function acquireRunLease(runId) {
   // The lease acquisition IS the claim. Record a normalized Claim Receipt on this existing event
   // (additive evidence only — no execution/scheduler behavior change, no target/workspace write).
   const claimTicket = readTickets().find(item => item && item.id === run.ticketId) || null;
-  appendEvent({
+  await appendEvent({
     type: 'run.lease_acquired',
     ticketId: run.ticketId,
     runId: run.id,
@@ -5797,14 +5803,14 @@ function acquireRunLease(runId) {
   return run;
 }
 
-function heartbeatRunLease(runId, payload = {}) {
+async function heartbeatRunLease(runId, payload = {}) {
   const runs = readRuns();
   const run = runs.find(item => item.id === runId);
   if (!run || run.leaseOwner !== RUN_LEASE_OWNER) return null;
 
   Object.assign(run, buildRunLease());
   writeRuns(runs);
-  appendEvent({
+  await appendEvent({
     type: 'run.heartbeat',
     ticketId: run.ticketId,
     runId: run.id,
@@ -6142,9 +6148,7 @@ function buildRunAttemptUsage(run, ticketRuns = null) {
 }
 
 function buildRunRuntimeLimitsDisplay(run, snapshot, attemptUsage) {
-  const persisted = normalizeRuntimeLimitsSnapshot(run && run.runtimeLimitsSnapshot) ||
-    normalizeRuntimeLimitsSnapshot(snapshot && snapshot.runtimeLimitsSnapshot);
-  const available = Boolean(persisted);
+  const persisted = getRunRuntimeLimitsSnapshot(run);
   const parsedPlans = snapshot && Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
   const providerRequests = snapshot && Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests.length : null;
   const modelResponses = snapshot && Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses.length : null;
@@ -6162,11 +6166,8 @@ function buildRunRuntimeLimitsDisplay(run, snapshot, attemptUsage) {
   };
   const timeoutFromRun = run && /runtime duration limit/i.test(run.error || '');
   return {
-    available,
-    sourceLabel: available
-      ? 'Applied run-start limits'
-      : 'Unavailable: unsupported run record is missing its immutable run-start limits snapshot',
-    limits: available ? pickRuntimeLimitValues(persisted) : null,
+    sourceLabel: 'Applied run-start limits',
+    limits: pickRuntimeLimitValues(persisted),
     usage: {
       executionTurns: snapshot ? parsedPlans.length : null,
       runtimeMs: attemptUsage && attemptUsage.durationMs !== null ? attemptUsage.durationMs : null,
@@ -6410,7 +6411,7 @@ function collectFormalWorkspaceViolations(run) {
   return violations;
 }
 
-function completeRunViolationCheck(runId) {
+async function completeRunViolationCheck(runId) {
   const run = readRuns().find(item => item.id === runId);
   if (!run) return [];
 
@@ -6421,18 +6422,18 @@ function completeRunViolationCheck(runId) {
 
   const violations = collectFormalWorkspaceViolations(run);
   if (violations.length > 0) {
-    violations.forEach(violation => {
-      appendEvent({
+    for (const violation of violations) {
+      await appendEvent({
         type: 'run.violation_detected',
         ticketId: run.ticketId,
         runId: run.id,
         payload: sanitizeSnapshotValue(violation)
       });
-    });
+    }
     return violations;
   }
 
-  appendEvent({
+  await appendEvent({
     type: 'run.violations_checked',
     ticketId: run.ticketId,
     runId: run.id,
@@ -6547,7 +6548,7 @@ function evaluateWorkflowPostcondition(run, workflow, postcondition, output) {
   };
 }
 
-function completeRunPostconditionCheck(runId) {
+async function completeRunPostconditionCheck(runId) {
   const run = readRuns().find(item => item.id === runId);
   if (!run || run.executionMode !== 'workflow' || !run.workflowId) return null;
 
@@ -6578,8 +6579,8 @@ function completeRunPostconditionCheck(runId) {
   const results = postconditions.map(postcondition => evaluateWorkflowPostcondition(run, workflow, postcondition, output));
   const failedResults = results.filter(result => !result.passed);
 
-  failedResults.forEach(result => {
-    appendEvent({
+  for (const result of failedResults) {
+    await appendEvent({
       type: 'run.postcondition_failed',
       ticketId: run.ticketId,
       runId: run.id,
@@ -6589,8 +6590,8 @@ function completeRunPostconditionCheck(runId) {
         postcondition: result
       })
     });
-  });
-  appendEvent({
+  }
+  await appendEvent({
     type: 'run.postconditions_checked',
     ticketId: run.ticketId,
     runId: run.id,
@@ -6628,7 +6629,7 @@ function buildVerificationFailure(failedResults) {
   };
 }
 
-function persistRunEvaluation(runId) {
+async function persistRunEvaluation(runId) {
   const runs = readRuns();
   const run = runs.find(item => item.id === runId);
   if (!run) return null;
@@ -6638,7 +6639,7 @@ function persistRunEvaluation(runId) {
 
   run.runEvaluation = runEvaluation;
   writeRuns(runs);
-  appendEvent({
+  await appendEvent({
     type: 'run.evaluation_completed',
     ticketId: run.ticketId,
     runId: run.id,
@@ -6788,19 +6789,19 @@ function buildRunConsequence(run) {
   return consequence;
 }
 
-function persistRunConsequence(runId) {
+async function persistRunConsequence(runId) {
   const runs = readRuns();
   const run = runs.find(item => item.id === runId);
   if (!run) return null;
 
-  maybeTestInterrupt(run, 'before_run.consequence_recorded');
+  await maybeTestInterrupt(run, 'before_run.consequence_recorded');
 
   const runConsequence = buildRunConsequence(run);
   if (!runConsequence) return null;
 
   run.runConsequence = runConsequence;
   writeRuns(runs);
-  appendEvent({
+  await appendEvent({
     type: 'run.consequence_recorded',
     ticketId: run.ticketId,
     runId: run.id,
@@ -6811,10 +6812,10 @@ function persistRunConsequence(runId) {
   return runConsequence;
 }
 
-function expireStaleRunLeases() {
+async function expireStaleRunLeases() {
   const expiredRuns = readRuns().filter(run => run.status === 'running' && isRunLeaseExpired(run));
 
-  expiredRuns.forEach(run => {
+  for (const run of expiredRuns) {
     // Check if run is safe to resume before interrupting
     const resumeState = reconstructResumableState(run);
     if (resumeState && resumeState.safeToResumeExecution) {
@@ -6827,7 +6828,7 @@ function expireStaleRunLeases() {
         r.leaseExpiresAt = null;
         delete r.startedAt;
         writeRuns(runs);
-        appendEvent({
+        await appendEvent({
           type: 'run.resumed',
           ticketId: run.ticketId,
           runId: run.id,
@@ -6839,16 +6840,16 @@ function expireStaleRunLeases() {
         });
         appendRunLog(run, 'run:resumed', `Stale lease expired; run is safe to resume (${resumeState.priorEvents} prior events, next phase: ${resumeState.expectedNextPhase})`);
       }
-      return;
+      continue;
     }
 
     // Terminal state reached — reconcile (evaluate, finalize, cleanup)
     if (resumeState && resumeState.safeToReconcileTerminalState) {
-      reconcileTerminalRun(run);
-      return;
+      await reconcileTerminalRun(run);
+      continue;
     }
 
-    appendEvent({
+    await appendEvent({
       type: 'run.lease_expired',
       ticketId: run.ticketId,
       runId: run.id,
@@ -6860,13 +6861,13 @@ function expireStaleRunLeases() {
         lastHeartbeatAt: run.lastHeartbeatAt || null
       }
     });
-    interruptAgentRun(run, `Run lease expired for owner ${run.leaseOwner || 'unknown'}`);
-  });
+    await interruptAgentRun(run, `Run lease expired for owner ${run.leaseOwner || 'unknown'}`);
+  }
 
   return expiredRuns;
 }
 
-function persistRunWorkflowStep(runId, step, status = 'started') {
+async function persistRunWorkflowStep(runId, step, status = 'started') {
   const runs = readRuns();
   const run = runs.find(item => item.id === runId);
   if (!run || run.leaseOwner !== RUN_LEASE_OWNER) return null;
@@ -6875,7 +6876,7 @@ function persistRunWorkflowStep(runId, step, status = 'started') {
   run.currentWorkflowAction = step && step.action ? step.action : null;
   Object.assign(run, buildRunLease());
   writeRuns(runs);
-  appendEvent({
+  await appendEvent({
     type: 'workflow.step.persisted',
     ticketId: run.ticketId,
     runId: run.id,
@@ -9690,7 +9691,7 @@ function pickRuntimeSystemValues(source) {
   return Object.fromEntries(RUNTIME_SYSTEM_CONFIG_KEYS.map(key => [key, source[key]]));
 }
 
-function persistRuntimeLimitsUpdate(parsedValue, request) {
+async function persistRuntimeLimitsUpdate(parsedValue, request) {
   const previous = readRuntimeLimitsConfig();
   const actor = request.user ? request.user.username : String(request.session.userId);
   const next = writeRuntimeLimitsConfig(parsedValue, actor);
@@ -9701,7 +9702,7 @@ function persistRuntimeLimitsUpdate(parsedValue, request) {
     oldValues: pickRuntimeLimitValues(previous),
     newValues: pickRuntimeLimitValues(next)
   };
-  appendEvent({ type: 'runtime_limits.updated', payload: auditPayload });
+  await appendEvent({ type: 'runtime_limits.updated', payload: auditPayload });
   appendSystemLog('runtime_limits.updated', `Runtime limits updated by ${actor}`, null, auditPayload);
   return next;
 }
@@ -9849,11 +9850,11 @@ function assertRunStepAllowed(run, currentStep, limits) {
   }
 }
 
-function assertRunWorkspaceOperationAllowed(run, currentCount, incomingCount, limits) {
+async function assertRunWorkspaceOperationAllowed(run, currentCount, incomingCount, limits) {
   const nextCount = currentCount + incomingCount;
 
   if (nextCount > limits.maxWorkspaceOperationsPerRun) {
-    appendEvent({
+    await appendEvent({
       type: 'action.rejected',
       ticketId: run.ticketId,
       runId: run.id,
@@ -10521,7 +10522,7 @@ function buildRunTriage(run, {
   });
 }
 
-function persistRunTriage(runId, triage) {
+async function persistRunTriage(runId, triage) {
   const runs = readRuns();
   const run = runs.find(item => item.id === runId);
   if (!run) return null;
@@ -10532,7 +10533,7 @@ function persistRunTriage(runId, triage) {
   run.triage = normalized;
   writeRuns(runs);
   updateRunReplaySnapshot(runId, snapshot => snapshot ? { ...snapshot, triage: normalized } : snapshot);
-  appendEvent({
+  await appendEvent({
     type: 'run.triage_created',
     ticketId: run.ticketId,
     runId: run.id,
@@ -10542,8 +10543,8 @@ function persistRunTriage(runId, triage) {
 }
 
 // mutationCount parameter is reserved but never passed by callers; count is always derived.
-function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
-  maybeTestInterrupt(run, 'before_run.snapshot_finalized');
+async function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
+  await maybeTestInterrupt(run, 'before_run.snapshot_finalized');
   const effectiveMutationCount = mutationCount !== null ? mutationCount : countRunMutatingOperations(run.id);
   const finalizedAt = new Date().toISOString();
   const snapshot = readRunReplaySnapshot(run) || run.replaySnapshot || {};
@@ -10566,7 +10567,7 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
   // The snapshot already carries it for replay/diagnostic evidence.
   persistBrowserReportOnRun(run.id, browserReport);
 
-  appendEvent({
+  await appendEvent({
     type: 'run.snapshot_finalized',
     ticketId: run.ticketId,
     runId: run.id,
@@ -10577,7 +10578,7 @@ function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCo
       finalizedAt
     }
   });
-  maybeTestInterrupt(run, 'after_run.snapshot_finalized');
+  await maybeTestInterrupt(run, 'after_run.snapshot_finalized');
 }
 
 function persistBrowserReportOnRun(runId, browserReport) {
@@ -10974,17 +10975,17 @@ function buildAuthorityEvidence(run, operation, pathValue, status, rule, reason)
   };
 }
 
-function recordAuthorityEvidence(run, evidence) {
+async function recordAuthorityEvidence(run, evidence) {
   const normalized = sanitizeSnapshotValue(evidence);
   appendRunReplaySnapshotItem(run.id, 'authorityChecks', normalized);
-  appendEvent({
+  await appendEvent({
     type: evidence.status === 'denied' ? 'authority.denied' : 'authority.allowed',
     ticketId: run.ticketId,
     runId: run.id,
     payload: normalized
   });
   if (evidence.status !== 'denied') {
-    maybeTestInterrupt(run, 'after_first_authority.allowed');
+    await maybeTestInterrupt(run, 'after_first_authority.allowed');
   }
   return normalized;
 }
@@ -11027,7 +11028,7 @@ function createAuthorityDeniedError(evidence, operation, args) {
   return error;
 }
 
-function checkWorkspaceMutationAuthority(run, operation, args) {
+async function checkWorkspaceMutationAuthority(run, operation, args) {
   if (!AGENT_MUTATING_OPERATIONS.includes(operation)) return null;
 
   const paths = [];
@@ -11037,7 +11038,7 @@ function checkWorkspaceMutationAuthority(run, operation, args) {
 
   if (!isRunLeaseHeldByCurrentProcess(run)) {
     const evidence = buildAuthorityEvidence(run, operation, primaryPath, 'denied', 'lease_owner', 'Current process does not hold the run lease');
-    recordAuthorityEvidence(run, evidence);
+    await recordAuthorityEvidence(run, evidence);
     throw createAuthorityDeniedError(evidence, operation, args);
   }
 
@@ -11045,7 +11046,7 @@ function checkWorkspaceMutationAuthority(run, operation, args) {
     const matchedProtectedPattern = getProtectedWorkspacePathMatch(pathItem.path);
     if (matchedProtectedPattern) {
       const evidence = buildAuthorityEvidence(run, operation, pathItem.path, 'denied', 'protected_path', matchedProtectedPattern);
-      recordAuthorityEvidence(run, evidence);
+      await recordAuthorityEvidence(run, evidence);
       throw createAuthorityDeniedError(evidence, operation, args);
     }
   }
@@ -11058,12 +11059,12 @@ function checkWorkspaceMutationAuthority(run, operation, args) {
         ...buildAuthorityEvidence(run, operation, outsideOwnedPath.path, 'denied', 'owned_output_path', 'Mutation path is outside owned output paths'),
         ownedOutputPaths
       };
-      recordAuthorityEvidence(run, evidence);
+      await recordAuthorityEvidence(run, evidence);
       throw createAuthorityDeniedError(evidence, operation, args);
     }
   }
 
-  return recordAuthorityEvidence(
+  return await recordAuthorityEvidence(
     run,
     buildAuthorityEvidence(run, operation, primaryPath, 'allowed', 'workspace_mutation', 'Runtime authority checks passed')
   );
@@ -11122,7 +11123,7 @@ function buildEffectiveRuntimeConfigSnapshot(agent, runtimeLimitsSnapshot = null
   };
 }
 
-function assertAgentOperationAllowed(run, agent, operation, step) {
+async function assertAgentOperationAllowed(run, agent, operation, step) {
   const configKeyByOperation = {
     createWorkflowDraft: 'allowCanonicalWorkflowDraft',
     createWorkflowDraftIntent: 'allowWorkflowDraftIntent',
@@ -11150,7 +11151,7 @@ function assertAgentOperationAllowed(run, agent, operation, step) {
   evidence.configKey = configKey;
   evidence.configKeyEffectiveValue = false;
   evidence.agentId = agent ? agent.id : null;
-  recordAuthorityEvidence(run, evidence);
+  await recordAuthorityEvidence(run, evidence);
 
   const error = new Error(`Operation '${operation}' is disabled for this agent by runtimeConfig`);
   error.code = 'AGENT_OPERATION_DISABLED';
@@ -11272,7 +11273,7 @@ function buildTicketFeasibilityTriage(error, createdAt = new Date().toISOString(
   });
 }
 
-function blockTicketForFeasibility(ticket, error, context = {}) {
+async function blockTicketForFeasibility(ticket, error, context = {}) {
   const tickets = readTickets();
   const persistedTicket = tickets.find(item => item.id === ticket.id);
   if (!persistedTicket) return null;
@@ -11295,7 +11296,7 @@ function blockTicketForFeasibility(ticket, error, context = {}) {
   if (context.changedBy) persistedTicket.changedBy = context.changedBy;
   writeTickets(tickets);
 
-  appendEvent({
+  await appendEvent({
     type: 'ticket.blocked',
     ticketId: persistedTicket.id,
     payload: {
@@ -11319,7 +11320,7 @@ function blockTicketForFeasibility(ticket, error, context = {}) {
   return persistedTicket;
 }
 
-function blockTicketForObjectiveAmbiguity(ticket, gateResult, context = {}) {
+async function blockTicketForObjectiveAmbiguity(ticket, gateResult, context = {}) {
   const tickets = readTickets();
   const persistedTicket = tickets.find(item => item.id === ticket.id);
   if (!persistedTicket) return null;
@@ -11345,7 +11346,7 @@ function blockTicketForObjectiveAmbiguity(ticket, gateResult, context = {}) {
   if (context.changedBy) persistedTicket.changedBy = context.changedBy;
   writeTickets(tickets);
 
-  appendEvent({
+  await appendEvent({
     type: 'ticket.blocked',
     ticketId: persistedTicket.id,
     payload: {
@@ -11602,14 +11603,14 @@ function updateAllocationItemStatus(run, status) {
   return allocationItem;
 }
 
-function updateTicketInProgressForRun(run) {
+async function updateTicketInProgressForRun(run) {
   const ticket = readTickets().find(item => item.id === run.ticketId);
 
   if (!ticket || ticket.status !== 'open') return ticket || null;
   return updateTicketStatusById(run.ticketId, 'in_progress');
 }
 
-function finalizeTicketForRun(run, terminalStatus) {
+async function finalizeTicketForRun(run, terminalStatus) {
   const ticket = readTickets().find(item => item.id === run.ticketId);
 
   if (!ticket) return null;
@@ -11671,7 +11672,33 @@ function validateManualTicketCompletion(ticket) {
   return { allowed: true, latestRun, objectiveSuccess };
 }
 
-function reconcileTerminalRun(run) {
+// Serialize lifecycle transitions per ticket while allowing unrelated tickets
+// to progress concurrently. Async event durability introduces real yield points;
+// without a keyed transition boundary, rerun/stop/finalization can interleave
+// after a run status changes but before its ticket and terminal evidence settle.
+const ticketTransitionTails = new Map();
+
+async function withTicketTransitionLock(ticketId, operation) {
+  const key = normalizeNullableInteger(ticketId);
+  if (key === null) return operation();
+  const prior = ticketTransitionTails.get(key) || Promise.resolve();
+  let release;
+  const tail = new Promise(resolve => { release = resolve; });
+  ticketTransitionTails.set(key, tail);
+  await prior;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (ticketTransitionTails.get(key) === tail) ticketTransitionTails.delete(key);
+  }
+}
+
+async function reconcileTerminalRun(run) {
+  return withTicketTransitionLock(run && run.ticketId, () => reconcileTerminalRunUnlocked(run));
+}
+
+async function reconcileTerminalRunUnlocked(run) {
   // Idempotent reconciliation for current runs that have run.execution_completed
   // but not yet run.terminalized.
   // Call only when safeToReconcileTerminalState is true.
@@ -11700,13 +11727,13 @@ function reconcileTerminalRun(run) {
 
   // 1. Required verification gates completion.
   if (targetStatus === 'completed' && run.executionMode === 'workflow' && run.workflowId) {
-    const failedPostconditions = completeRunPostconditionCheck(runId);
+    const failedPostconditions = await completeRunPostconditionCheck(runId);
     if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
       targetStatus = 'failed';
       verificationFailureReason = buildVerificationFailureReason(failedPostconditions);
       verificationFailure = buildVerificationFailure(failedPostconditions);
       if (!existingTypes.has('run.verification_failed')) {
-        appendEvent({
+        await appendEvent({
           type: 'run.verification_failed',
           ticketId: run.ticketId,
           runId: run.id,
@@ -11718,7 +11745,7 @@ function reconcileTerminalRun(run) {
         });
       }
     } else if (isRunVerificationRequired(run) && !existingTypes.has('run.verification_passed')) {
-      appendEvent({
+      await appendEvent({
         type: 'run.verification_passed',
         ticketId: run.ticketId,
         runId: run.id,
@@ -11733,7 +11760,7 @@ function reconcileTerminalRun(run) {
   if ((targetStatus === 'failed' || targetStatus === 'interrupted') && !run.triage) {
     const triageSummary = verificationFailureReason || terminalPayload.error || run.error || `Run reconciled to ${targetStatus}`;
     if (targetStatus === 'failed') ensureFailedRunReplaySnapshot(run, triageSummary);
-    run.triage = persistRunTriage(runId, buildRunTriage(run, {
+    run.triage = await persistRunTriage(runId, buildRunTriage(run, {
       failure: verificationFailure || terminalPayload.failure || null,
       status: targetStatus,
       summary: triageSummary,
@@ -11745,30 +11772,30 @@ function reconcileTerminalRun(run) {
   let didFinalize = false;
   const snapshotDone = existingTypes.has('replay.snapshot.finalized') || existingTypes.has('run.snapshot_finalized');
   if (!snapshotDone || verificationFailure) {
-    maybeTestInterrupt(run, 'before_run.snapshot_finalized');
+    await maybeTestInterrupt(run, 'before_run.snapshot_finalized');
     let failure = verificationFailure;
     if (!failure && (targetStatus === 'failed' || targetStatus === 'interrupted')) {
       failure = buildFailureMetadata(null, targetStatus, run.error || 'Run reconciled to terminal state');
     }
-    finalizeRunReplaySnapshot(run, targetStatus, verificationFailureReason || run.error || null, null, failure);
+    await finalizeRunReplaySnapshot(run, targetStatus, verificationFailureReason || run.error || null, null, failure);
     didFinalize = true;
-    maybeTestInterrupt(run, 'after_run.snapshot_finalized');
+    await maybeTestInterrupt(run, 'after_run.snapshot_finalized');
   }
 
   // 3. Violation check (idempotent internally)
-  completeRunViolationCheck(runId);
+  await completeRunViolationCheck(runId);
 
   // 4. Evaluation (guard against double-emission)
   let didEvaluate = false;
   if (!existingTypes.has('run.evaluation_completed')) {
-    persistRunEvaluation(runId);
+    await persistRunEvaluation(runId);
     didEvaluate = true;
   }
 
   // 5. Consequence (guard against double-emission)
   let didConsequence = false;
   if (!existingTypes.has('run.consequence_recorded')) {
-    persistRunConsequence(runId);
+    await persistRunConsequence(runId);
     didConsequence = true;
   }
 
@@ -11793,7 +11820,7 @@ function reconcileTerminalRun(run) {
 
   // 8. Emit the current terminal lifecycle event.
   if (!existingTypes.has('run.terminalized')) {
-    appendEvent({
+    await appendEvent({
       type: 'run.terminalized',
       ticketId: run.ticketId,
       runId: run.id,
@@ -11802,7 +11829,7 @@ function reconcileTerminalRun(run) {
   }
 
   // 9. Finalize ticket
-  finalizeTicketForRun(run, targetStatus);
+  await finalizeTicketForRun(run, targetStatus);
 
   // 10. Running-run cleanup
   runningRunKeys.delete(runExecutionKey(run));
@@ -11817,7 +11844,7 @@ function reconcileTerminalRun(run) {
   });
 }
 
-function updateTicketAfterRunInterrupted(run) {
+async function updateTicketAfterRunInterrupted(run) {
   const ticket = readTickets().find(item => item.id === run.ticketId);
 
   if (!ticket || ticket.status !== 'in_progress') return ticket || null;
@@ -11837,7 +11864,11 @@ function allocationLogSuffix(run) {
   return ` (allocation plan ${run.allocationPlanId}, item ${run.allocationItemId})`;
 }
 
-function interruptAgentRun(run, reason) {
+async function interruptAgentRun(run, reason) {
+  return withTicketTransitionLock(run && run.ticketId, () => interruptAgentRunUnlocked(run, reason));
+}
+
+async function interruptAgentRunUnlocked(run, reason) {
   advanceRunPhase(run, 'terminalization');
   const phase = classifyInterruptionPhase(run);
   ensureInterruptedRunReplaySnapshot(run, reason, phase);
@@ -11850,7 +11881,7 @@ function interruptAgentRun(run, reason) {
   };
 
   const failure = buildFailureMetadata(null, 'interrupted', reason, { phase });
-  appendEvent({
+  await appendEvent({
     type: 'run.execution_completed',
     ticketId: interruptedRun.ticketId,
     runId: interruptedRun.id,
@@ -11861,16 +11892,16 @@ function interruptAgentRun(run, reason) {
       completedAt: interruptedRun.completedAt || interruptedRun.updatedAt
     }
   });
-  interruptedRun.triage = persistRunTriage(interruptedRun.id, buildRunTriage(interruptedRun, {
+  interruptedRun.triage = await persistRunTriage(interruptedRun.id, buildRunTriage(interruptedRun, {
     failure,
     status: 'interrupted',
     summary: reason
   }));
-  finalizeRunReplaySnapshot(interruptedRun, 'interrupted', reason, null, failure);
-  completeRunViolationCheck(interruptedRun.id);
-  persistRunEvaluation(interruptedRun.id);
-  persistRunConsequence(interruptedRun.id);
-  appendEvent({
+  await finalizeRunReplaySnapshot(interruptedRun, 'interrupted', reason, null, failure);
+  await completeRunViolationCheck(interruptedRun.id);
+  await persistRunEvaluation(interruptedRun.id);
+  await persistRunConsequence(interruptedRun.id);
+  await appendEvent({
     type: 'run.terminalized',
     ticketId: interruptedRun.ticketId,
     runId: interruptedRun.id,
@@ -11885,7 +11916,7 @@ function interruptAgentRun(run, reason) {
   runningRunKeys.delete(runExecutionKey(interruptedRun));
   startingRunIds.delete(interruptedRun.id);
   startingLocalModelRunIds.delete(interruptedRun.id);
-  updateTicketAfterRunInterrupted(interruptedRun);
+  await updateTicketAfterRunInterrupted(interruptedRun);
   return interruptedRun;
 }
 
@@ -11898,7 +11929,7 @@ function hasUnresolvedTicketTriage(ticket) {
 // policy: validateManualRerun for operator-triggered reruns/retries, or
 // runAutoRetryAfterFailureIfPolicyAllows for automatic retries.
 // This primitive performs only a defensive unresolved-triage check.
-function forceTicketOpenForRerun(ticketId, rerunMode = null) {
+async function forceTicketOpenForRerun(ticketId, rerunMode = null) {
   const tickets = readTickets();
   const ticket = tickets.find(item => item.id === ticketId);
 
@@ -11916,7 +11947,7 @@ function forceTicketOpenForRerun(ticketId, rerunMode = null) {
     delete ticket.rerunMode;
   }
   writeTickets(tickets);
-  appendEvent({
+  await appendEvent({
     type: 'ticket.updated',
     ticketId: ticket.id,
     payload: {
@@ -11986,7 +12017,7 @@ function isAutoRetryableReason(prospectiveReasonCode, mutationCount) {
 // verification, mutates the workspace, or finalizes completion. On exhaustion or any
 // non-retryable failure it returns { retried: false } so the caller falls through to
 // today's triage behavior.
-function runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCount) {
+async function runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCount) {
   if (!failedRun) return { retried: false, reason: 'no_run' };
   const ticket = readTickets().find(item => item.id === failedRun.ticketId);
   if (!ticket) return { retried: false, reason: 'ticket_missing' };
@@ -12021,9 +12052,9 @@ function runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCoun
     startingRunIds.delete(failedRun.id);
     startingLocalModelRunIds.delete(failedRun.id);
 
-    const reopened = forceTicketOpenForRerun(ticket.id, 'auto_retry');
+    const reopened = await forceTicketOpenForRerun(ticket.id, 'auto_retry');
     if (!reopened) return { retried: false, reason: 'reopen_failed' };
-    const created = createRunsForTicket(reopened, { userId: null, username: 'system', source: 'auto_retry' });
+    const created = await createRunsForTicket(reopened, { userId: null, username: 'system', source: 'auto_retry' });
     newRun = (Array.isArray(created) && created[0]) || null;
   } catch (error) {
     return { retried: false, reason: 'retry_creation_failed' };
@@ -12046,7 +12077,11 @@ function runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCoun
   return { retried: true, newRun, attemptCount, maxAttempts, reasonCode: prospectiveReasonCode };
 }
 
-function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retry', delegated = null) {
+async function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retry', delegated = null) {
+  return withTicketTransitionLock(ticketId, () => rerunTicketFromBeginningUnlocked(ticketId, changedBy, mode, delegated));
+}
+
+async function rerunTicketFromBeginningUnlocked(ticketId, changedBy = 'operator', mode = 'retry', delegated = null) {
   const ticket = readTickets().find(item => item.id === ticketId);
 
   if (!ticket) return null;
@@ -12059,18 +12094,20 @@ function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode = 'retr
     }, getAgentsInGroup(ticket.assignmentTargetId));
   }
 
-  readRuns()
-    .filter(run => run.ticketId === ticketId && ['pending', 'running'].includes(run.status))
-    .forEach(run => interruptAgentRun(run, `${changedBy} rerun requested`));
+  const activeRuns = readRuns()
+    .filter(run => run.ticketId === ticketId && ['pending', 'running'].includes(run.status));
+  for (const run of activeRuns) {
+    await interruptAgentRunUnlocked(run, `${changedBy} rerun requested`);
+  }
 
-  const reopenedTicket = forceTicketOpenForRerun(ticketId, mode);
+  const reopenedTicket = await forceTicketOpenForRerun(ticketId, mode);
   appendSystemLog('ticket:rerun', `Ticket #${ticketId} rerun requested by ${changedBy} (mode: ${mode})`, null, {
     ticketId,
     changedBy,
     mode,
     changedAt: new Date().toISOString()
   });
-  createRunsForTicket(reopenedTicket, delegated);
+  await createRunsForTicket(reopenedTicket, delegated);
   return reopenedTicket;
 }
 
@@ -12084,7 +12121,7 @@ function hasIncompleteTerminalEvidence(run) {
   return !hasSnapshotFinalized || !hasTerminalized;
 }
 
-function interruptStaleRunsOnStartup() {
+async function interruptStaleRunsOnStartup() {
   const allRuns = readRuns();
   const staleRuns = allRuns.filter(run => ['pending', 'running'].includes(run.status));
   const terminalRunsNeedingReconciliation = allRuns.filter(hasIncompleteTerminalEvidence);
@@ -12095,15 +12132,15 @@ function interruptStaleRunsOnStartup() {
   if (staleRuns.length > 0) {
   }
 
-  terminalRunsNeedingReconciliation.forEach(run => {
+  for (const run of terminalRunsNeedingReconciliation) {
     const resumeState = reconstructResumableState(run);
     if (resumeState && resumeState.safeToReconcileTerminalState) {
-      reconcileTerminalRun(run);
+      await reconcileTerminalRun(run);
       reconciledCount++;
     }
-  });
+  }
 
-  staleRuns.forEach(run => {
+  for (const run of staleRuns) {
     const runEvents = readRunScopedEvents(run.id);
     const resumeState = reconstructResumableState(run);
     if (resumeState && resumeState.safeToResumeExecution) {
@@ -12116,7 +12153,7 @@ function interruptStaleRunsOnStartup() {
         r.leaseExpiresAt = null;
         delete r.startedAt;
         writeRuns(runs);
-        appendEvent({
+        await appendEvent({
           type: 'run.resumed',
           ticketId: run.ticketId,
           runId: run.id,
@@ -12129,14 +12166,14 @@ function interruptStaleRunsOnStartup() {
         appendRunLog(run, 'run:resumed', `Startup resumption: ${resumeState.priorEvents} prior events, next phase ${resumeState.expectedNextPhase}`);
         resumedCount++;
       }
-      return;
+      continue;
     }
 
     // Terminal state reached — reconcile (evaluate, finalize, cleanup)
     if (resumeState && resumeState.safeToReconcileTerminalState) {
-      reconcileTerminalRun(run);
+      await reconcileTerminalRun(run);
       reconciledCount++;
-      return;
+      continue;
     }
 
     // Already terminalized — just fix the status to match the events
@@ -12153,12 +12190,12 @@ function interruptStaleRunsOnStartup() {
         writeRuns(runs);
         appendRunLog(run, 'run:terminalized', `Startup: terminal run ${run.id} had stale status '${run.status}', fixed to '${status}'`);
       }
-      return;
+      continue;
     }
 
-    interruptAgentRun(run, 'process restarted before run completed');
+    await interruptAgentRun(run, 'process restarted before run completed');
     interruptedCount++;
-  });
+  }
 
   if (interruptedCount > 0) {
     console.log(`Marked ${interruptedCount} stale agent run(s) interrupted`);
@@ -12170,7 +12207,7 @@ function interruptStaleRunsOnStartup() {
     console.log(`Reconciled ${reconciledCount} terminal agent run(s) on startup`);
   }
 
-  reconcileUnfinalizedTicketsOnStartup();
+  await reconcileUnfinalizedTicketsOnStartup();
 }
 
 // Heals the terminalized-run / unfinalized-ticket disagreement: a run can be
@@ -12179,32 +12216,32 @@ function interruptStaleRunsOnStartup() {
 // a non-terminal status. Such a run is invisible to the stale-run and
 // incomplete-terminal-evidence reconcilers, so converge the ticket here. Runs
 // after those reconcilers so resumed/reconciled runs are settled first.
-function reconcileUnfinalizedTicketsOnStartup() {
+async function reconcileUnfinalizedTicketsOnStartup() {
   const tickets = readTickets();
   const runs = readRuns();
   let finalizedCount = 0;
 
-  tickets.forEach(ticket => {
-    if (ticket.status !== 'in_progress') return;
+  for (const ticket of tickets) {
+    if (ticket.status !== 'in_progress') continue;
     const ticketRuns = runs.filter(run => run.ticketId === ticket.id);
-    if (ticketRuns.length === 0) return;
+    if (ticketRuns.length === 0) continue;
     // Never finalize while execution could still be in flight.
-    if (ticketRuns.some(run => ['pending', 'running'].includes(run.status))) return;
+    if (ticketRuns.some(run => ['pending', 'running'].includes(run.status))) continue;
 
     const latestRun = ticketRuns.slice().sort(compareRunsNewestFirst)[0];
-    if (!latestRun) return;
+    if (!latestRun) continue;
     // Only heal genuinely terminalized runs — run.terminalized is emitted after
     // verification has already passed/failed, so latestRun.status is trustworthy.
     const events = getRunEvents(latestRun.id);
-    if (!events.some(event => event.type === 'run.terminalized')) return;
+    if (!events.some(event => event.type === 'run.terminalized')) continue;
 
     let updated = null;
     if (latestRun.status === 'completed' || latestRun.status === 'failed') {
-      updated = finalizeTicketForRun(latestRun, latestRun.status);
+      updated = await finalizeTicketForRun(latestRun, latestRun.status);
     } else if (latestRun.status === 'interrupted') {
-      updated = updateTicketAfterRunInterrupted(latestRun);
+      updated = await updateTicketAfterRunInterrupted(latestRun);
     } else {
-      return;
+      continue;
     }
 
     if (updated && updated.status !== 'in_progress') {
@@ -12212,14 +12249,18 @@ function reconcileUnfinalizedTicketsOnStartup() {
       appendRunLog(latestRun, 'run:ticket_finalized',
         `Startup: finalized stuck ticket #${ticket.id} from 'in_progress' to '${updated.status}' from terminal run ${latestRun.id}`);
     }
-  });
+  }
 
   if (finalizedCount > 0) {
     console.log(`Finalized ${finalizedCount} unfinalized ticket(s) on startup`);
   }
 }
 
-function failAgentRun(run, error, workspaceAction = null) {
+async function failAgentRun(run, error, workspaceAction = null) {
+  return withTicketTransitionLock(run && run.ticketId, () => failAgentRunUnlocked(run, error, workspaceAction));
+}
+
+async function failAgentRunUnlocked(run, error, workspaceAction = null) {
   advanceRunPhase(run, 'terminalization');
   let message = error && error.message ? error.message : String(error || 'Agent run failed');
   const failure = buildFailureMetadata(error, 'failed', message);
@@ -12241,7 +12282,7 @@ function failAgentRun(run, error, workspaceAction = null) {
 
   if (failedRun.status === 'interrupted') return failedRun;
   ensureFailedRunReplaySnapshot(failedRun, message);
-  appendEvent({
+  await appendEvent({
     type: 'run.execution_completed',
     ticketId: failedRun.ticketId,
     runId: failedRun.id,
@@ -12256,27 +12297,27 @@ function failAgentRun(run, error, workspaceAction = null) {
   // Bounded automatic retry (v1): decide BEFORE persisting run triage. The failed run
   // keeps all of its evidence below; only triage-creation and ticket-failure
   // finalization are skipped when an eligible immediate retry is created.
-  const autoRetry = runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, countRunMutatingOperations(failedRun.id));
+  const autoRetry = await runAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, countRunMutatingOperations(failedRun.id));
   failedRun.triage = autoRetry.retried
     ? null
-    : persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
+    : await persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
         error,
         failure,
         status: 'failed',
         summary: message
       }));
-  finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
+  await finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
   appendRunLog(failedRun, autoRetry.retried ? 'run:failed_auto_retried' : 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
     allocationPlanId: failedRun.allocationPlanId || null,
     allocationItemId: failedRun.allocationItemId || null,
     failure,
     ...(autoRetry.retried ? { autoRetryRunId: autoRetry.newRun.id } : {})
   });
-  completeRunPostconditionCheck(failedRun.id);
-  completeRunViolationCheck(failedRun.id);
-  persistRunEvaluation(failedRun.id);
-  persistRunConsequence(failedRun.id);
-  appendEvent({
+  await completeRunPostconditionCheck(failedRun.id);
+  await completeRunViolationCheck(failedRun.id);
+  await persistRunEvaluation(failedRun.id);
+  await persistRunConsequence(failedRun.id);
+  await appendEvent({
     type: 'run.terminalized',
     ticketId: failedRun.ticketId,
     runId: failedRun.id,
@@ -12285,14 +12326,18 @@ function failAgentRun(run, error, workspaceAction = null) {
   // When auto-retry created a new pending run it already reopened the ticket; do not
   // finalize the ticket as failed in that case.
   if (!autoRetry.retried) {
-    finalizeTicketForRun(failedRun, 'failed');
+    await finalizeTicketForRun(failedRun, 'failed');
   }
   return failedRun;
 }
 
-function completeAgentRun(run) {
+async function completeAgentRun(run) {
+  return withTicketTransitionLock(run && run.ticketId, () => completeAgentRunUnlocked(run));
+}
+
+async function completeAgentRunUnlocked(run) {
   advanceRunPhase(run, 'terminalization');
-  appendEvent({
+  await appendEvent({
     type: 'run.execution_completed',
     ticketId: run.ticketId,
     runId: run.id,
@@ -12302,15 +12347,15 @@ function completeAgentRun(run) {
       completedAt: new Date().toISOString()
     }
   });
-  maybeTestInterrupt(run, 'after_run.execution_completed');
+  await maybeTestInterrupt(run, 'after_run.execution_completed');
 
-  const failedPostconditions = completeRunPostconditionCheck(run.id);
+  const failedPostconditions = await completeRunPostconditionCheck(run.id);
   if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
     const message = buildVerificationFailureReason(failedPostconditions);
     const failure = buildVerificationFailure(failedPostconditions);
     const failedRun = updateRunStatus(run.id, 'failed', message);
     if (failedRun.status === 'interrupted') return failedRun;
-    appendEvent({
+    await appendEvent({
       type: 'run.verification_failed',
       ticketId: failedRun.ticketId,
       runId: failedRun.id,
@@ -12320,56 +12365,56 @@ function completeAgentRun(run) {
         failure
       }
     });
-    failedRun.triage = persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
+    failedRun.triage = await persistRunTriage(failedRun.id, buildRunTriage(failedRun, {
       failure,
       status: 'failed',
       summary: message,
       reasonCode: 'verification_failed'
     }));
-    finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
+    await finalizeRunReplaySnapshot(failedRun, 'failed', message, null, failure);
     appendRunLog(failedRun, 'run:verification_failed', `${message}${allocationLogSuffix(failedRun)}`, null, {
       allocationPlanId: failedRun.allocationPlanId || null,
       allocationItemId: failedRun.allocationItemId || null,
       failure
     });
-    completeRunViolationCheck(failedRun.id);
-    persistRunEvaluation(failedRun.id);
-    persistRunConsequence(failedRun.id);
-    appendEvent({
+    await completeRunViolationCheck(failedRun.id);
+    await persistRunEvaluation(failedRun.id);
+    await persistRunConsequence(failedRun.id);
+    await appendEvent({
       type: 'run.terminalized',
       ticketId: failedRun.ticketId,
       runId: failedRun.id,
       payload: { status: 'failed', error: message }
     });
-    finalizeTicketForRun(failedRun, 'failed');
+    await finalizeTicketForRun(failedRun, 'failed');
     return failedRun;
   }
 
   const completedRun = updateRunStatus(run.id, 'completed');
   if (completedRun.status === 'interrupted') return completedRun;
   if (isRunVerificationRequired(completedRun)) {
-    appendEvent({
+    await appendEvent({
       type: 'run.verification_passed',
       ticketId: completedRun.ticketId,
       runId: completedRun.id,
       payload: { status: 'passed' }
     });
   }
-  finalizeRunReplaySnapshot(completedRun, 'completed');
+  await finalizeRunReplaySnapshot(completedRun, 'completed');
   appendRunLog(completedRun, 'run:completed', `Agent run completed${allocationLogSuffix(completedRun)}`, null, {
     allocationPlanId: completedRun.allocationPlanId || null,
     allocationItemId: completedRun.allocationItemId || null
   });
-  completeRunViolationCheck(completedRun.id);
-  persistRunEvaluation(completedRun.id);
-  persistRunConsequence(completedRun.id);
-  appendEvent({
+  await completeRunViolationCheck(completedRun.id);
+  await persistRunEvaluation(completedRun.id);
+  await persistRunConsequence(completedRun.id);
+  await appendEvent({
     type: 'run.terminalized',
     ticketId: completedRun.ticketId,
     runId: completedRun.id,
     payload: { status: 'completed' }
   });
-  finalizeTicketForRun(completedRun, 'completed');
+  await finalizeTicketForRun(completedRun, 'completed');
   return completedRun;
 }
 
@@ -12464,7 +12509,7 @@ function resolveModelRouteForRun({ ticket, agent, capabilityId, workContextId, e
 }
 
 // Block a ticket when routing finds no permitted provider — reuses the existing triage mechanism.
-function blockTicketForNoModelRoute(ticket, decision) {
+async function blockTicketForNoModelRoute(ticket, decision) {
   const tickets = readTickets();
   const persisted = tickets.find(item => item.id === ticket.id);
   if (!persisted) return null;
@@ -12483,7 +12528,7 @@ function blockTicketForNoModelRoute(ticket, decision) {
   });
   persisted.updatedAt = now; persisted.changedAt = now;
   writeTickets(tickets);
-  appendEvent({ type: 'ticket.blocked', ticketId: persisted.id, payload: { status: 'blocked', reason: summary, reasonCode: 'no_model_route', triage: persisted.triage } });
+  await appendEvent({ type: 'ticket.blocked', ticketId: persisted.id, payload: { status: 'blocked', reason: summary, reasonCode: 'no_model_route', triage: persisted.triage } });
   appendSystemLog('ticket:no_model_route', summary, null, { ticketId: persisted.id, policyId: decision.policyId || null, rejectedProviders: decision.rejectedProviders || [] });
   broadcastTicketChange();
   return persisted;
@@ -12684,7 +12729,7 @@ function buildOperationalSummary(options = {}) {
   };
 }
 
-function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null) {
+async function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null) {
   const runs = readRuns();
   const activeRun = runs.find(run =>
     run.ticketId === ticket.id &&
@@ -12720,7 +12765,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     workContextId: ticket.workContextId != null ? ticket.workContextId : null,
     explicitPolicyId: ticket.routingPolicyId != null ? ticket.routingPolicyId : null
   });
-  if (!routeDecision.ok) { blockTicketForNoModelRoute(ticket, routeDecision); return null; }
+  if (!routeDecision.ok) { await blockTicketForNoModelRoute(ticket, routeDecision); return null; }
   const run = {
     id: nextRunId,
     ticketId: ticket.id,
@@ -12773,7 +12818,7 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
 
   runs.push(run);
   writeRuns(runs);
-  appendEvent({
+  await appendEvent({
     type: 'run.created',
     ticketId: run.ticketId,
     runId: run.id,
@@ -12799,12 +12844,12 @@ function createAgentRun(ticket, agent, allocationItem = null, allocationPlanId =
     allocationPlanId: run.allocationPlanId,
     allocationItemId: run.allocationItemId
   });
-  updateTicketInProgressForRun(run);
-  maybeTestInterrupt(run, 'after_run.created');
+  await updateTicketInProgressForRun(run);
+  await maybeTestInterrupt(run, 'after_run.created');
   return run;
 }
 
-function createRunsForTicket(ticket, delegated = null) {
+async function createRunsForTicket(ticket, delegated = null) {
   if (!ticket || ticket.status !== 'open') return [];
   if (hasUnresolvedTicketTriage(ticket)) return [];
 
@@ -12812,14 +12857,16 @@ function createRunsForTicket(ticket, delegated = null) {
   if (ticket.executionMode !== 'workflow') {
     const gateResult = runObjectiveClarificationGate(ticket.objective, ticket);
     if (gateResult.verdict === 'ambiguous') {
-      blockTicketForObjectiveAmbiguity(ticket, gateResult);
+      await blockTicketForObjectiveAmbiguity(ticket, gateResult);
       return [];
     }
   }
 
   if (ticket.assignmentTargetType === 'agent') {
     const agent = readAgents().find(item => item.id === ticket.assignmentTargetId);
-    return agent ? [createAgentRun(ticket, agent, null, null, delegated)].filter(Boolean) : [];
+    if (!agent) return [];
+    const run = await createAgentRun(ticket, agent, null, null, delegated);
+    return run ? [run] : [];
   }
 
   if (usesOwnedScopeAllocation(ticket)) {
@@ -12827,7 +12874,7 @@ function createRunsForTicket(ticket, delegated = null) {
     try {
       assertTicketObjectiveWithinGrantedWritableRoots(ticket, agents);
     } catch (error) {
-      blockTicketForFeasibility(ticket, error);
+      await blockTicketForFeasibility(ticket, error);
       return [];
     }
 
@@ -12845,15 +12892,15 @@ function createRunsForTicket(ticket, delegated = null) {
 
     const allocationPlan = createAllocationPlan(ticket, agentsToRun);
 
-    return agentsToRun
+    const createdRuns = await Promise.all(agentsToRun
       .map(agent => createAgentRun(
         ticket,
         agent,
         allocationPlan.items.find(item => item.assignedAgentId === agent.id),
         allocationPlan.id,
         delegated
-      ))
-      .filter(Boolean);
+      )));
+    return createdRuns.filter(Boolean);
   }
 
   return [];
@@ -14349,7 +14396,7 @@ function compileWorkflowDraftIntent(intentInput) {
   };
 }
 
-function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
+async function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
   const submittedWorkflow = workflowInput && typeof workflowInput === 'object' && !Array.isArray(workflowInput)
     ? workflowInput
     : null;
@@ -14398,7 +14445,7 @@ function createWorkflowDraftFromAgent(run, workflowInput, step = 0) {
     createdByRunId: run.id,
     step
   });
-  appendEvent({
+  await appendEvent({
     type: 'workflow.draft_created',
     ticketId: run.ticketId,
     runId: run.id,
@@ -14495,7 +14542,7 @@ function validateHandoffTaskInput(input) {
   };
 }
 
-function executeHandoffTask(run, handoffInput, step = 0) {
+async function executeHandoffTask(run, handoffInput, step = 0) {
   const validated = validateHandoffTaskInput(handoffInput);
   const planner = readAgents().find(agent => agent.id === run.agentId) || null;
   const executorRun = {
@@ -14521,7 +14568,7 @@ function executeHandoffTask(run, handoffInput, step = 0) {
     ...evidenceBase,
     status: 'validated'
   });
-  appendEvent({
+  await appendEvent({
     type: 'handoff.task_validated',
     ticketId: run.ticketId,
     runId: run.id,
@@ -14529,14 +14576,14 @@ function executeHandoffTask(run, handoffInput, step = 0) {
     payload: evidenceBase
   });
 
-  const result = executeWorkspaceOperation(executorRun, workspaceAction, step);
+  const result = await executeWorkspaceOperation(executorRun, workspaceAction, step);
   const executionEvidence = {
     ...evidenceBase,
     status: 'executed',
     result: sanitizeSnapshotValue(result)
   };
   appendRunReplaySnapshotItem(run.id, 'handoffTasks', executionEvidence);
-  appendEvent({
+  await appendEvent({
     type: 'handoff.task_executed',
     ticketId: run.ticketId,
     runId: run.id,
@@ -14814,7 +14861,7 @@ function sanitizeOperationArgs(operation, args) {
   return { args: sanitized, strippedKeys };
 }
 
-function executeWorkspaceOperation(run, action, step = 0) {
+async function executeWorkspaceOperation(run, action, step = 0) {
   const { operation, args: rawArgs } = parseWorkspaceOperation(action);
   const { args, strippedKeys } = sanitizeOperationArgs(operation, rawArgs);
   const runWorkspaceProvider = getRunWorkspaceProvider(run);
@@ -14889,7 +14936,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   if (operation === 'createFolder') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.createFolder, 'createFolder args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
-    const authorityDecision = checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
+    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
 
@@ -14936,7 +14983,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
         throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue }, pathValue, priorOwner);
       }
     }
-    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
+    await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
@@ -14967,7 +15014,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.writeFile, 'writeFile args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const content = requireStringArg(args, 'content');
-    const authorityDecision = checkWorkspaceMutationAuthority(run, operation, { path: pathValue, content });
+    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue, content });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     if (runWorkspaceProvider.exists(pathValue, { allowHidden: true })) {
       blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
@@ -15016,7 +15063,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
         throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue, content }, pathValue, priorOwner);
       }
     }
-    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
+    await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
@@ -15042,7 +15089,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.renamePath, 'renamePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const nextPath = requireStringArg(args, 'nextPath', { nonEmpty: true });
-    const authorityDecision = checkWorkspaceMutationAuthority(run, operation, { path: pathValue, nextPath });
+    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue, nextPath });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue, nextPath }, pathValue, runWorkspaceProvider);
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue, nextPath }, nextPath, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue, nextPath }, pathValue, runWorkspaceProvider);
@@ -15073,8 +15120,8 @@ function executeWorkspaceOperation(run, action, step = 0) {
     // Reject if either the source (or anything below it) or the destination
     // overlaps an artifact another ticket produced — a rename must not move away
     // or clobber another ticket's output.
-    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue, nextPath }, pathValue);
-    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue, nextPath }, nextPath);
+    await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue, nextPath }, pathValue);
+    await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue, nextPath }, nextPath);
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
@@ -15099,7 +15146,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
   if (operation === 'deletePath') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.deletePath, 'deletePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
-    const authorityDecision = checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
+    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
@@ -15126,7 +15173,7 @@ function executeWorkspaceOperation(run, action, step = 0) {
 
     // Reject if the path (or anything below it) holds an artifact another ticket
     // produced — a destructive delete must not remove another ticket's output.
-    assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
+    await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
     const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
     let historyRecord = null;
@@ -15263,7 +15310,7 @@ function persistBrowserOperationHistory(run, step, operation, safeArgs, receipt,
   return record;
 }
 
-function recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, durationMs) {
+async function recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, durationMs) {
   const safeArgs = operation === 'navigate'
     ? { url: redactBrowserUrl(args.url) }
     : sanitizeSnapshotValue(args);
@@ -15280,7 +15327,7 @@ function recordBrowserOperationEvidence(run, step, operation, args, receipt, err
     ...browserTargetMetadata(run, receipt && receipt.resourceUrl)
   };
   appendRunLog(run, `browser:${operation}`, error ? evidence.error : `Ran browser ${operation}`, null, evidence);
-  appendEvent({
+  await appendEvent({
     type: 'browser.operation',
     ticketId: run.ticketId,
     runId: run.id,
@@ -15312,7 +15359,7 @@ async function closeBrowserSession(run, reason = 'run_finished') {
   if (!entry) return;
   browserSessions.delete(run.id);
   await entry.session.close().catch(() => {});
-  appendEvent({
+  await appendEvent({
     type: 'browser.session_closed',
     ticketId: run.ticketId,
     runId: run.id,
@@ -15460,7 +15507,7 @@ async function executeBrowserOperation(run, action, step = 0) {
       throw createBrowserOperationError('AGENT_ACTION_UNSUPPORTED', `Unsupported browser operation: ${operation}`);
     }
 
-    recordBrowserOperationEvidence(run, step, operation, args, receipt, null, startedAt, Date.now() - startedAt);
+    await recordBrowserOperationEvidence(run, step, operation, args, receipt, null, startedAt, Date.now() - startedAt);
     return { ...result, receipt };
   } catch (cause) {
     const error = cause && cause.code
@@ -15480,7 +15527,7 @@ async function executeBrowserOperation(run, action, step = 0) {
         configuredLimit: error.detail.configuredLimit
       } : {})
     };
-    recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, Date.now() - startedAt);
+    await recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, Date.now() - startedAt);
     throw error;
   }
 }
@@ -15490,7 +15537,7 @@ async function executeBrowserOperation(run, action, step = 0) {
 // properties without re-entering the model. Only semantic ambiguity requires
 // model re-entry.
 
-function verifyBatchOperation(run, action, result) {
+async function verifyBatchOperation(run, action, result) {
   const runWorkspaceProvider = getRunWorkspaceProvider(run);
   const operation = action && action.operation;
   const args = action && action.args ? action.args : {};
@@ -15553,7 +15600,7 @@ function verifyBatchOperation(run, action, result) {
   }
 
   if (checks.length > 0) {
-    appendEvent({
+    await appendEvent({
       type: 'batch.verification_failed',
       ticketId: run.ticketId,
       runId: run.id,
@@ -15790,7 +15837,7 @@ function validateActionPlanInput(input, limits, counters) {
   return { proposedActions, acceptedActions, rejectedActions };
 }
 
-function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, startedAt, counters) {
+async function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, startedAt, counters) {
   const targetEvidence = buildWorkspaceOperationTargetEvidence(run, action.operation, action.args, result);
   appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
     operation: { operation: action.operation, args: action.args, reason: action.reason || null },
@@ -15808,7 +15855,7 @@ function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result
     actionPlanIndex: action.index,
     ...targetEvidence
   });
-  appendEvent({
+  await appendEvent({
     type: 'workspace.operation',
     ticketId: run.ticketId,
     runId: run.id,
@@ -15835,10 +15882,10 @@ async function executeActionPlanWorkflowAction(run, workflow, step, input, count
   const executedActions = [];
 
   for (const action of validation.acceptedActions) {
-    assertRunWorkspaceOperationAllowed(run, counters.workspaceOperations, 1, limits);
+    await assertRunWorkspaceOperationAllowed(run, counters.workspaceOperations, 1, limits);
     const actionStartedAt = Date.now();
-    const result = executeWorkspaceOperation(run, { operation: action.operation, args: action.args }, counters.transitions);
-    appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, actionStartedAt, counters);
+    const result = await executeWorkspaceOperation(run, { operation: action.operation, args: action.args }, counters.transitions);
+    await appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, actionStartedAt, counters);
     executedActions.push({
       index: action.index,
       operation: action.operation,
@@ -15981,7 +16028,7 @@ function validateTicketPlanInput(run, input) {
   return { proposedTickets, acceptedTickets, rejectedTickets };
 }
 
-function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket, spawnPlanId) {
+async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket, spawnPlanId) {
   const tickets = readTickets();
   const existing = tickets.find(ticket => ticket && ticket.spawnIdempotencyKey === planTicket.idempotencyKey);
   if (existing) return existing;
@@ -16016,7 +16063,7 @@ function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket, spaw
 
   tickets.push(childTicket);
   writeTickets(tickets);
-  appendEvent({
+  await appendEvent({
     type: 'ticket.created',
     ticketId: childTicket.id,
     runId: run.id,
@@ -16049,7 +16096,7 @@ async function executeTicketPlanWorkflowAction(run, workflow, step, input) {
   const createdTickets = [];
 
   for (const ticket of validation.acceptedTickets) {
-    const childTicket = createChildWorkflowTicketFromPlan(run, workflow, step, ticket, spawnPlanId);
+    const childTicket = await createChildWorkflowTicketFromPlan(run, workflow, step, ticket, spawnPlanId);
     createdTickets.push({
       index: ticket.index,
       ticketId: childTicket.id,
@@ -16082,7 +16129,7 @@ async function executeTicketPlanWorkflowAction(run, workflow, step, input) {
     durationMs: Date.now() - startedAt
   });
 
-  appendEvent({
+  await appendEvent({
     type: 'workflow.ticket_plan.executed',
     ticketId: run.ticketId,
     runId: run.id,
@@ -16106,7 +16153,7 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
 
   const startedAt = Date.now();
   let result;
-  appendEvent({
+  await appendEvent({
     type: 'workflow.step.started',
     ticketId: run.ticketId,
     runId: run.id,
@@ -16129,8 +16176,8 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
     }
 
     if (contract.type === 'workspaceAction') {
-      assertRunWorkspaceOperationAllowed(run, counters.workspaceOperations, 1, limits);
-      result = executeWorkspaceOperation(run, { operation: step.action, args: input }, counters.transitions);
+      await assertRunWorkspaceOperationAllowed(run, counters.workspaceOperations, 1, limits);
+      result = await executeWorkspaceOperation(run, { operation: step.action, args: input }, counters.transitions);
       counters.workspaceOperations += 1;
       if (contract.mutating) counters.mutations += 1;
       const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, result);
@@ -16149,7 +16196,7 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
         workflowStepId: step.id,
         ...targetEvidence
       });
-      appendEvent({
+      await appendEvent({
         type: 'workspace.operation',
         ticketId: run.ticketId,
         runId: run.id,
@@ -16199,7 +16246,7 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
       startedAt: new Date(startedAt).toISOString(),
       durationMs: Date.now() - startedAt
     });
-    appendEvent({
+    await appendEvent({
       type: 'workflow.step.completed',
       ticketId: run.ticketId,
       runId: run.id,
@@ -16232,7 +16279,7 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
         workflowStepId: step.id,
         ...targetEvidence
       });
-  appendEvent({
+  await appendEvent({
     type: 'workspace.operation',
     ticketId: run.ticketId,
     runId: run.id,
@@ -16260,7 +16307,7 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
       startedAt: new Date(startedAt).toISOString(),
       durationMs: Date.now() - startedAt
     });
-    appendEvent({
+    await appendEvent({
       type: 'workflow.step.failed',
       ticketId: run.ticketId,
       runId: run.id,
@@ -16355,8 +16402,8 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
       });
     }
 
-    persistRunWorkflowStep(run.id, currentStep, 'started');
-    heartbeatRunLease(run.id, {
+    await persistRunWorkflowStep(run.id, currentStep, 'started');
+    await heartbeatRunLease(run.id, {
       phase: 'workflow_step_started',
       currentStepId: currentStep.id,
       currentWorkflowAction: currentStep.action
@@ -16364,8 +16411,8 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
     const input = resolveWorkflowInputTemplates(currentStep.input || {}, context);
     const result = await executeWorkflowAction(run, workflow, currentStep, input, context, counters, startedAtMs, limits, agent);
     counters.transitions += 1;
-    persistRunWorkflowStep(run.id, currentStep, 'completed');
-    heartbeatRunLease(run.id, {
+    await persistRunWorkflowStep(run.id, currentStep, 'completed');
+    await heartbeatRunLease(run.id, {
       phase: 'workflow_step_completed',
       currentStepId: currentStep.id,
       currentWorkflowAction: currentStep.action
@@ -16726,7 +16773,7 @@ async function runAgentTicket(runId) {
 
   const leasedRun = readRuns().find(item => item.id === runId);
   if (!isRunLeaseHeldByCurrentProcess(leasedRun)) {
-    appendEvent({
+    await appendEvent({
       type: 'scheduler.run_skipped',
       ticketId: leasedRun ? leasedRun.ticketId : null,
       runId,
@@ -16742,10 +16789,10 @@ async function runAgentTicket(runId) {
   let run = updateRunStatus(runId, 'running');
   if (!run) return;
   if (run.status !== 'running') return;
-  heartbeatRunLease(run.id, { phase: 'run_started' });
+  await heartbeatRunLease(run.id, { phase: 'run_started' });
 
   runningRunKeys.add(runExecutionKey(run));
-  appendEvent({
+  await appendEvent({
     type: 'run.started',
     ticketId: run.ticketId,
     runId: run.id,
@@ -16760,8 +16807,8 @@ async function runAgentTicket(runId) {
     allocationPlanId: run.allocationPlanId || null,
     allocationItemId: run.allocationItemId || null
   });
-  updateTicketInProgressForRun(run);
-  maybeTestInterrupt(run, 'after_run.started');
+  await updateTicketInProgressForRun(run);
+  await maybeTestInterrupt(run, 'after_run.started');
   let currentProviderRequestPersisted = false;
   let providerConfig = null;
 
@@ -16831,7 +16878,7 @@ async function runAgentTicket(runId) {
         capabilityId: capability.id,
         counters: workflowResult.counters || null
       });
-      completeAgentRun(run);
+      await completeAgentRun(run);
       return;
     }
 
@@ -16875,7 +16922,7 @@ async function runAgentTicket(runId) {
       }
       if (resumeState.safeToReconcileTerminalState) {
         appendRunLog(run, 'run:resume_reconcile', `Resuming into terminal state reconciliation: ${resumeState.expectedNextPhase}`);
-        reconcileTerminalRun(run);
+        await reconcileTerminalRun(run);
         return;
       }
       if (resumeState.isTerminal) {
@@ -16934,7 +16981,7 @@ async function runAgentTicket(runId) {
     assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract);
 
     for (let step = 0; !completed; step += 1) {
-      heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
+      await heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       assertRunStepAllowed(run, step, limits);
       assertRunModelRequestAllowed(run, modelRequestCount, limits);
@@ -16956,7 +17003,7 @@ async function runAgentTicket(runId) {
             source: 'pre_model'
           });
           if (obviousPostcondition.absentDelete) {
-            appendEvent({
+            await appendEvent({
               type: 'workspace.delete_target_already_absent',
               ticketId: run.ticketId,
               runId: run.id,
@@ -17152,7 +17199,7 @@ async function runAgentTicket(runId) {
             step
           });
 
-          appendEvent({
+          await appendEvent({
             type: 'action.truncated',
             ticketId: run.ticketId,
             runId: run.id,
@@ -17201,7 +17248,7 @@ async function runAgentTicket(runId) {
             step
           });
 
-          appendEvent({
+          await appendEvent({
             type: 'action.suppressed',
             ticketId: run.ticketId,
             runId: run.id,
@@ -17254,7 +17301,7 @@ async function runAgentTicket(runId) {
           violationType: phaseCheck.violationType,
           actions: actions.map(a => ({ operation: a.operation, path: a.args && a.args.path }))
         });
-        appendEvent({
+        await appendEvent({
           type: 'execution.phase_violation',
           ticketId: run.ticketId,
           runId: run.id,
@@ -17276,7 +17323,7 @@ async function runAgentTicket(runId) {
       // Advance phase if transitioned
       if (phaseCheck.inferredPhase && phaseCheck.inferredPhase !== run.currentPhase) {
         advanceRunPhase(run, phaseCheck.inferredPhase);
-        appendEvent({
+        await appendEvent({
           type: 'execution.phase_transition',
           ticketId: run.ticketId,
           runId: run.id,
@@ -17340,7 +17387,7 @@ async function runAgentTicket(runId) {
           capturedAt: new Date().toISOString()
         };
         recordRunEvent(run, 'workspace.invalid_action_args', `Action batch rejected before execution: ${first.operation} ${first.validationErrors.join('; ')}`, detail);
-        appendEvent({
+        await appendEvent({
           type: 'workspace.invalid_action_args',
           ticketId: run.ticketId,
           runId: run.id,
@@ -17371,7 +17418,7 @@ async function runAgentTicket(runId) {
           executed: false
         };
         recordRunEvent(run, 'workspace.contract_mutation_mismatch_rejected', 'Model proposed a mutation outside the compiled objective contract', detail);
-        appendEvent({
+        await appendEvent({
           type: 'workspace.contract_mutation_mismatch_rejected',
           ticketId: run.ticketId,
           runId: run.id,
@@ -17408,7 +17455,7 @@ async function runAgentTicket(runId) {
             capturedAt: new Date().toISOString()
           };
           recordRunEvent(run, 'workspace.delete_target_mismatch_rejected', `deletePath ${first.proposed} does not match the objective's exact delete target (${targetList})`, detail);
-          appendEvent({
+          await appendEvent({
             type: 'workspace.delete_target_mismatch_rejected',
             ticketId: run.ticketId,
             runId: run.id,
@@ -17431,7 +17478,7 @@ async function runAgentTicket(runId) {
       const repeatedListPaths = [];
       const listPathsThisStep = new Set();
 
-      assertRunWorkspaceOperationAllowed(run, workspaceOperationCount, actions.length, limits);
+      await assertRunWorkspaceOperationAllowed(run, workspaceOperationCount, actions.length, limits);
 
       for (const action of actions) {
         let operation = null;
@@ -17445,7 +17492,7 @@ async function runAgentTicket(runId) {
 
           assertRunNotTimedOut(run, runStartedAtMs, limits);
           operation = isBrowserRun(run) ? parseBrowserDirectAction(run, action) : parseAgentDirectAction(action);
-          if (!isBrowserRun(run)) assertAgentOperationAllowed(run, agent, operation.operation, step);
+          if (!isBrowserRun(run)) await assertAgentOperationAllowed(run, agent, operation.operation, step);
 
           // Report budget limits: listDirectory and readFile
           if (operation.operation === 'listDirectory' && limits.maxListDirectoryPerRun != null) {
@@ -17471,16 +17518,16 @@ async function runAgentTicket(runId) {
           if (isBrowserRun(run)) {
             result = await executeBrowserOperation(run, operation, step);
           } else if (operation.operation === 'createWorkflowDraft') {
-            result = createWorkflowDraftFromAgent(run, operation.args.workflow, step);
+            result = await createWorkflowDraftFromAgent(run, operation.args.workflow, step);
           } else if (operation.operation === 'createWorkflowDraftIntent') {
-            result = createWorkflowDraftFromIntent(run, operation.args, step);
+            result = await createWorkflowDraftFromIntent(run, operation.args, step);
           } else if (operation.operation === 'createHandoffTask') {
-            result = executeHandoffTask(run, operation.args, step);
+            result = await executeHandoffTask(run, operation.args, step);
           } else {
-            result = executeWorkspaceOperation(run, action, step);
+            result = await executeWorkspaceOperation(run, action, step);
             // Deterministic runtime verification for bounded operation batches
             if (AGENT_MUTATING_OPERATIONS.includes(operation.operation)) {
-              verifyBatchOperation(run, action, result);
+              await verifyBatchOperation(run, action, result);
             }
           }
           const opDurationMs = Date.now() - actionStartedAt;
@@ -17526,7 +17573,7 @@ async function runAgentTicket(runId) {
               ownedOutputPaths: getRunOwnedOutputPaths(run),
               ...targetEvidence
             });
-            appendEvent({
+            await appendEvent({
               type: 'workspace.operation',
               ticketId: run.ticketId,
               runId: run.id,
@@ -17541,7 +17588,7 @@ async function runAgentTicket(runId) {
                 ...targetEvidence
               }
             });
-            maybeTestInterrupt(run, 'after_first_workspace.operation');
+            await maybeTestInterrupt(run, 'after_first_workspace.operation');
           }
 
           if (operation.operation === 'createHandoffTask') {
@@ -17574,7 +17621,7 @@ async function runAgentTicket(runId) {
               ownedOutputPaths: getRunOwnedOutputPaths(run),
               ...targetEvidence
             });
-            appendEvent({
+            await appendEvent({
               type: 'workspace.operation',
               ticketId: run.ticketId,
               runId: run.id,
@@ -17665,7 +17712,7 @@ async function runAgentTicket(runId) {
               allocationItemId: run.allocationItemId || null,
               ...targetEvidence
             });
-            appendEvent({
+            await appendEvent({
               type: 'workspace.operation',
               ticketId: run.ticketId,
               runId: run.id,
@@ -17793,7 +17840,7 @@ async function runAgentTicket(runId) {
           .map(({ type, path }) => ({ type, path }));
         const detail = { step, pendingPostconditions };
         recordRunEvent(run, 'run:contract_completion_deferred', 'complete:true not honored: compiled objective postconditions remain unsatisfied', detail);
-        appendEvent({
+        await appendEvent({
           type: 'run.contract_completion_deferred',
           ticketId: run.ticketId,
           runId: run.id,
@@ -17815,7 +17862,7 @@ async function runAgentTicket(runId) {
       }
     }
 
-    run = completeAgentRun(run);
+    run = await completeAgentRun(run);
   } catch (error) {
     if (error.providerRequestPayload && !currentProviderRequestPersisted) {
       appendRunReplaySnapshotItem(run.id, 'providerRequests', isBrowserRun(run)
@@ -17834,7 +17881,7 @@ async function runAgentTicket(runId) {
       });
     }
 
-    run = failAgentRun(run, error, error.workspaceAction || null);
+    run = await failAgentRun(run, error, error.workspaceAction || null);
   } finally {
     await closeBrowserSession(run);
     startingRunIds.delete(runId);
@@ -18398,7 +18445,7 @@ fastify.get('/', { preHandler: fastify.requireAuth }, async (request, reply) => 
 // runs directly. `input` carries already-parsed values (objects, not form strings);
 // transport-level JSON parsing stays in the HTTP layer. Returns { ok, ticket, runs }
 // or { ok: false, error } so each caller can shape its own response.
-function createTicketFromInput(input, actor, options = {}) {
+async function createTicketFromInput(input, actor, options = {}) {
   const objective = typeof input.objective === 'string' ? input.objective.trim() : '';
   const assignmentTargetType = input.assignmentTargetType;
 
@@ -18565,7 +18612,7 @@ function createTicketFromInput(input, actor, options = {}) {
 
   tickets.push(newTicket);
   writeTickets(tickets);
-  appendEvent({
+  await appendEvent({
     type: 'ticket.created',
     ticketId: newTicket.id,
     payload: {
@@ -18586,7 +18633,7 @@ function createTicketFromInput(input, actor, options = {}) {
     }
   });
   broadcastTicketChange();
-  const runs = createRunsForTicket(newTicket, options.delegated || null);
+  const runs = await createRunsForTicket(newTicket, options.delegated || null);
 
   return { ok: true, ticket: newTicket, runs };
 }
@@ -18669,7 +18716,7 @@ fastify.post('/tickets', { preHandler: fastify.requireAuth }, async (request, re
     }
   }
 
-  const result = createTicketFromInput({
+  const result = await createTicketFromInput({
     objective,
     acceptanceCriteria,
     assignmentTargetType,
@@ -18913,7 +18960,7 @@ fastify.post('/api/watcher-proposals/:id/approve', { preHandler: fastify.require
     authorityLimits: proposal.authorityLimits, stopCondition: proposal.stopCondition, receiptExpectation: proposal.receiptExpectation,
     createdAt: now, createdBy: actorName, status: 'created'
   };
-  const result = createTicketFromInput({
+  const result = await createTicketFromInput({
     objective: proposal.objective, assignmentTargetType: toType, assignmentTargetId: toId,
     assignmentMode: toType === 'group' ? (body.assignmentMode || 'dynamic') : undefined,
     workContextId: proposal.workContextId
@@ -18924,7 +18971,7 @@ fastify.post('/api/watcher-proposals/:id/approve', { preHandler: fastify.require
   proposal.updatedBy = actorName;
   proposal.updatedAt = now;
   writeWatcherProposals(list);
-  appendEvent({ type: 'watcher.proposal_approved', ticketId: result.ticket.id, payload: { watcherId: proposal.watcherId, proposalId: proposal.id, createdTicketId: result.ticket.id, createdBy: actorName } });
+  await appendEvent({ type: 'watcher.proposal_approved', ticketId: result.ticket.id, payload: { watcherId: proposal.watcherId, proposalId: proposal.id, createdTicketId: result.ticket.id, createdBy: actorName } });
   appendSystemLog('watcher:proposal_approved', `Watcher proposal #${proposal.id} approved → ticket #${result.ticket.id}`, null, { proposalId: proposal.id, createdTicketId: result.ticket.id, changedBy: actorName });
   return { ok: true, createdTicketId: result.ticket.id, proposal };
 });
@@ -19265,9 +19312,9 @@ fastify.post('/api/process-templates/:id/trigger', { preHandler: fastify.require
     : crypto.randomUUID();
 
   // Manual trigger delegates to the shared helper (same logic the scheduler uses).
-  // The helper runs synchronously through the trigger-log append (no awaits), so
-  // sequential double-submits cannot interleave; a repeated token dedupes.
-  const result = triggerProcessTemplate(template, actorFromRequest(request), {
+  // Await the complete trigger-log append so sequential double-submits cannot
+  // interleave; a repeated token dedupes.
+  const result = await triggerProcessTemplate(template, actorFromRequest(request), {
     triggerType: 'manual',
     triggerToken
   });
@@ -19689,7 +19736,7 @@ fastify.post('/api/process-templates/scheduler/tick', { preHandler: fastify.requ
     reply.code(403);
     return { error: 'Permission denied' };
   }
-  const results = runtimeTemplateScheduler ? runtimeTemplateScheduler.tick() : [];
+  const results = runtimeTemplateScheduler ? await runtimeTemplateScheduler.tick() : [];
   return { ok: true, results };
 });
 
@@ -20067,7 +20114,7 @@ fastify.post('/api/runtime-limits', { preHandler: fastify.requireAuth }, async (
     reply.code(400);
     return { error: parsed.error };
   }
-  const next = persistRuntimeLimitsUpdate(parsed.value, request);
+  const next = await persistRuntimeLimitsUpdate(parsed.value, request);
   const effective = resolveAgentRuntimeLimits(null, { config: next });
   return {
     config: next,
@@ -20102,7 +20149,7 @@ fastify.post('/admin/runtime-limits', { preHandler: fastify.requireAuth }, async
     reply.code(400);
     return renderRuntimeLimitsAdminPage(request, reply, { error: parsed.error, formValues });
   }
-  persistRuntimeLimitsUpdate(parsed.value, request);
+  await persistRuntimeLimitsUpdate(parsed.value, request);
   return reply.redirect('/admin/runtime-limits?saved=1');
 });
 
@@ -20224,7 +20271,7 @@ fastify.post('/api/tickets/:id/handoff', { preHandler: fastify.requireAuth }, as
   };
 
   // Normal authorized ticket creation — enforces Authority and Work Context scope; never widens.
-  const result = createTicketFromInput({
+  const result = await createTicketFromInput({
     objective,
     assignmentTargetType: toType,
     assignmentTargetId: toId,
@@ -20233,7 +20280,7 @@ fastify.post('/api/tickets/:id/handoff', { preHandler: fastify.requireAuth }, as
   }, actor, { source: handoffReceipt, delegated: delegatedFromRequest(request, 'created_from_handoff') });
   if (!result.ok) { reply.code(400); return { error: result.error }; }
 
-  appendEvent({
+  await appendEvent({
     type: 'handoff.ticket_created',
     ticketId: result.ticket.id,
     payload: { fromTicketId: fromTicket.id, fromRunId: handoffReceipt.fromRunId, createdTicketId: result.ticket.id, createdBy: actorName, status: 'created' }
@@ -20315,7 +20362,7 @@ fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }
       assignmentMode: ticket.assignmentMode
     };
     assignmentAudit = { changedBy, changedAt };
-    appendEvent({
+    await appendEvent({
       type: 'ticket.updated',
       ticketId: ticket.id,
       payload: {
@@ -20338,7 +20385,7 @@ fastify.patch('/api/tickets/:id/assignment', { preHandler: fastify.requireAuth }
     broadcastTicketChange();
   }
 
-  createRunsForTicket(ticket, delegatedFromRequest(request, 'assignment_change_auto_run'));
+  await createRunsForTicket(ticket, delegatedFromRequest(request, 'assignment_change_auto_run'));
 
   if (assignmentAudit) {
     const updatedTickets = readTickets();
@@ -20438,9 +20485,11 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
   broadcastTicketChange();
 
   if (status === 'closed') {
-    readRuns()
-      .filter(run => run.ticketId === ticketId && ['pending', 'running'].includes(run.status))
-      .forEach(run => interruptAgentRun(run, `${changedBy} closed ticket #${ticketId}`));
+    const activeRuns = readRuns()
+      .filter(run => run.ticketId === ticketId && ['pending', 'running'].includes(run.status));
+    for (const run of activeRuns) {
+      await interruptAgentRun(run, `${changedBy} closed ticket #${ticketId}`);
+    }
   }
 
   appendSystemLog('ticket:status_change', `Ticket #${ticketId} status changed from ${previousStatus} to ${status} by ${changedBy}`, null, {
@@ -20453,7 +20502,7 @@ fastify.patch('/api/tickets/:id/status', { preHandler: fastify.requireAuth }, as
 
   if (status === 'open') {
     try {
-      createRunsForTicket(ticket, delegatedFromRequest(request, 'reopen_auto_run'));
+      await createRunsForTicket(ticket, delegatedFromRequest(request, 'reopen_auto_run'));
     } catch (error) {
       ticket.status = 'failed';
       ticket.updatedAt = changedAt;
@@ -20505,7 +20554,7 @@ fastify.post('/api/tickets/:id/rerun', { preHandler: fastify.requireAuth }, asyn
   }
 
   try {
-    ticket = rerunTicketFromBeginning(ticketId, changedBy, mode, delegatedFromRequest(request, 'manual_rerun'));
+    ticket = await rerunTicketFromBeginning(ticketId, changedBy, mode, delegatedFromRequest(request, 'manual_rerun'));
   } catch (error) {
     const statusCode = error.statusCode || 400;
     if (statusCode !== 409) {
@@ -21325,7 +21374,7 @@ function buildRunDiagnosticBundle(ctx) {
   const runtimePolicy = runtimeLimitsDisplay || null;
   out('### Runtime limits and usage');
   out('- Limit source: ' + dash(runtimePolicy && runtimePolicy.sourceLabel));
-  if (runtimePolicy && runtimePolicy.available) {
+  if (runtimePolicy) {
     out('- Execution turns: ' + dash(runtimePolicy.usage.executionTurns) + ' / ' + dash(runtimePolicy.limits.maxExecutionSteps));
     out('- Runtime: ' + dash(runtimePolicy.usage.runtimeMs) + 'ms / ' + dash(runtimePolicy.limits.maxRuntimeDurationMs) + 'ms');
     out('- Model requests: ' + dash(runtimePolicy.usage.modelRequests) + ' / ' + dash(runtimePolicy.limits.maxModelRequestsPerRun));
@@ -21835,7 +21884,7 @@ fastify.post('/api/runs/:id/stop', { preHandler: fastify.requireAuth }, async (r
     return { error: 'Only pending or running runs can be stopped' };
   }
 
-  return { run: interruptAgentRun(run, 'manually stopped') };
+  return { run: await interruptAgentRun(run, 'manually stopped') };
 });
 
 fastify.post('/api/runs/:id/retry', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -21875,7 +21924,7 @@ fastify.post('/api/runs/:id/retry', { preHandler: fastify.requireAuth }, async (
     }
   }
 
-  return { ticket: rerunTicketFromBeginning(run.ticketId, request.user ? request.user.username : 'operator', 'retry', delegatedFromRequest(request, 'manual_rerun')) };
+  return { ticket: await rerunTicketFromBeginning(run.ticketId, request.user ? request.user.username : 'operator', 'retry', delegatedFromRequest(request, 'manual_rerun')) };
 });
 
 // ==================== AGENT METRICS ROUTES ====================
@@ -22941,7 +22990,10 @@ function startRuntimeScheduler() {
 
   const runner = createRuntimeRunner({
     runAgentTicket,
-    markRunStarting
+    markRunStarting,
+    onError: (run, error) => {
+      console.error(`Run ${run && run.id ? run.id : 'unknown'} failed outside its execution boundary: ${error && error.message ? error.message : error}`);
+    }
   });
 
   runtimeScheduler = createRuntimeScheduler({
@@ -23078,11 +23130,15 @@ function validateDataIntegrity() {
   });
 
   runs.forEach((run, index) => {
-    const ticketId = parseInt(run.ticketId, 10);
-    const agentId = parseInt(run.agentId, 10);
+    const ticketId = run.ticketId;
+    const agentId = run.agentId;
+    if (!Number.isSafeInteger(ticketId) || ticketId <= 0 || !Number.isSafeInteger(agentId) || agentId <= 0) {
+      throw dataIntegrityError('runs.json', `record ${index} has an invalid ticketId or agentId`);
+    }
     if (!ticketIds.has(ticketId) || !agentIds.has(agentId)) {
       throw dataIntegrityError('runs.json', `record ${index} references a missing ticket or agent`);
     }
+    getRunRuntimeLimitsSnapshot(run);
   });
 
   logs.forEach((log, index) => {
@@ -23266,7 +23322,7 @@ async function start() {
 
     await createDefaultData();
     restoreRunEventChainsFromDisk();
-    if (!TEST_SKIP_STARTUP_RUN_RECOVERY) interruptStaleRunsOnStartup();
+    if (!TEST_SKIP_STARTUP_RUN_RECOVERY) await interruptStaleRunsOnStartup();
     // Converge any root/version-store mismatch left by an activation that crashed between
     // its two atomic writes — before the template scheduler can trigger against a stale root.
     reconcileProcessTemplateVersionConsistencyOnStartup();
@@ -23303,6 +23359,8 @@ function shutdown(signal) {
     serverReady = false;
     if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
     if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
+    if (runtimeScheduler && typeof runtimeScheduler.whenIdle === 'function') await runtimeScheduler.whenIdle();
+    if (runtimeTemplateScheduler && typeof runtimeTemplateScheduler.whenIdle === 'function') await runtimeTemplateScheduler.whenIdle();
 
     // SSE responses otherwise keep Fastify open indefinitely during close.
     eventClients.forEach(client => {
@@ -23318,9 +23376,14 @@ function shutdown(signal) {
       }
     }
 
-    // Let already-dispatched work reach a stable boundary. Event appends are
-    // synchronous, so there is no separate evidence queue to drain.
+    // Let already-dispatched work reach a stable boundary, then drain and close
+    // the persistent event journal before releasing single-writer ownership.
     await waitForActiveRunTasksToSettle();
+    try {
+      await eventJournal.close();
+    } catch (error) {
+      if (!eventAppendFailure) eventAppendFailure = error;
+    }
     if (eventAppendFailure) console.error(`Event persistence failed before ${signal}: ${eventAppendFailure.message}`);
     releaseDataDirWriterLock();
     process.exit(signal === 'SIGINT' ? 130 : 143);

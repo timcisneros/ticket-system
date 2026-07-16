@@ -53,9 +53,9 @@ function typesOf(events) {
 }
 
 // ── Test 1: Idle tick is suppressed ──────────────────────────────
-function testIdleTickSuppressed() {
+async function testIdleTickSuppressed() {
   const { scheduler, events } = makeHarness({ pendingRuns: [] });
-  scheduler.tick();
+  await scheduler.tick();
 
   const ticks = events.filter(e => e.type === 'scheduler.tick');
   assertEqual(ticks.length, 0, 'idle tick (pendingRuns === 0) must not append scheduler.tick');
@@ -65,11 +65,11 @@ function testIdleTickSuppressed() {
 }
 
 // ── Test 2: Non-idle tick still emits scheduler.tick ─────────────
-function testNonIdleTickEmitted() {
+async function testNonIdleTickEmitted() {
   // Pending run that cannot start yet (capacity blocked) so it stays observable.
   const run = { id: 7, ticketId: 70, status: 'pending', createdAt: '2026-01-01T00:00:00Z' };
   const { scheduler, events } = makeHarness({ pendingRuns: [run], canStart: false });
-  scheduler.tick();
+  await scheduler.tick();
 
   const ticks = events.filter(e => e.type === 'scheduler.tick');
   assertEqual(ticks.length, 1, 'non-idle tick must append exactly one scheduler.tick');
@@ -79,12 +79,12 @@ function testNonIdleTickEmitted() {
 }
 
 // ── Test 3: Meaningful scheduler/run events still append ─────────
-function testMeaningfulEventsPreserved() {
+async function testMeaningfulEventsPreserved() {
   // Capacity-blocked pending run: should still produce scheduler.tick,
   // scheduler.capacity_blocked, run.queued, and a queued run log.
   const run = { id: 9, ticketId: 90, status: 'pending', createdAt: '2026-01-01T00:00:00Z' };
   const { scheduler, events, logs } = makeHarness({ pendingRuns: [run], canStart: false });
-  scheduler.tick();
+  await scheduler.tick();
 
   const types = typesOf(events);
   assert(types.includes('scheduler.tick'), 'capacity-blocked tick should include scheduler.tick');
@@ -95,7 +95,7 @@ function testMeaningfulEventsPreserved() {
   // Selected run: should produce scheduler.tick + scheduler.run_selected and start.
   const ready = { id: 11, ticketId: 110, status: 'pending', agentId: 5, createdAt: '2026-01-01T00:00:00Z' };
   const sel = makeHarness({ pendingRuns: [ready], canStart: true, leaseAcquires: true });
-  sel.scheduler.tick();
+  await sel.scheduler.tick();
   const selTypes = typesOf(sel.events);
   assert(selTypes.includes('scheduler.tick'), 'selecting tick should include scheduler.tick');
   assert(selTypes.includes('scheduler.run_selected'), 'startable run should emit scheduler.run_selected');
@@ -105,7 +105,7 @@ function testMeaningfulEventsPreserved() {
 }
 
 // ── Test 4: Suppression is source-specific, not a generic boundary ─
-function testSuppressionIsSourceSpecific() {
+async function testSuppressionIsSourceSpecific() {
   // A pending run that is "already starting" produces a scheduler.run_skipped
   // event whose payload is a small reason object. A broad "drop events with
   // trivial payloads" filter would wrongly suppress it. The scheduler must
@@ -125,7 +125,7 @@ function testSuppressionIsSourceSpecific() {
     isRunActiveInMemory: () => false,
     runner: { startRun: () => { throw new Error('should not start a run that is already starting'); } }
   });
-  scheduler.tick();
+  await scheduler.tick();
 
   const types = typesOf(events);
   assert(types.includes('scheduler.tick'), 'observable run should still emit scheduler.tick');
@@ -137,7 +137,7 @@ function testSuppressionIsSourceSpecific() {
 }
 
 // ── Main ─────────────────────────────────────────────────────────
-function main() {
+async function main() {
   console.log('Scheduler Tick Suppression Test Suite');
   console.log('='.repeat(70));
 
@@ -153,7 +153,7 @@ function main() {
 
   for (const test of tests) {
     try {
-      test();
+      await test();
       passed++;
     } catch (err) {
       failed++;
@@ -168,4 +168,7 @@ function main() {
   }
 }
 
-main();
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});

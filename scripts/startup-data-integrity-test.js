@@ -73,6 +73,9 @@ async function main() {
     { id: 1, objective: 'one', assignmentTargetType: 'agent', assignmentTargetId: 1 },
     { id: 1, objective: 'two', assignmentTargetType: 'agent', assignmentTargetId: 1 }
   ], null, 2));
+  await runRefusalScenario('missing-run-limits-snapshot', 'runs.json', JSON.stringify([
+    { id: 1, ticketId: 1, agentId: 1, status: 'completed' }
+  ], null, 2));
   await runRefusalScenario('auxiliary-json', 'process-templates.json', '[{"broken":');
   await runRefusalScenario('runtime-limits-json', 'runtime-limits.json', '{"maxExecutionSteps":"many"}');
   await runRefusalScenario('legacy-run-event', 'events.jsonl', `${JSON.stringify({
@@ -83,7 +86,7 @@ async function main() {
     runId: 1,
     payload: {}
   })}\n`);
-  console.log('PASS: startup strictly refuses and preserves malformed, non-array, duplicate-identity, auxiliary, runtime-limit, and legacy run-event data');
+  console.log('PASS: startup strictly refuses and preserves malformed, non-array, duplicate-identity, missing run-snapshot, auxiliary, runtime-limit, and legacy run-event data');
 }
 
 main().catch(error => {

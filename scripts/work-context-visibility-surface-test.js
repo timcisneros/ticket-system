@@ -9,6 +9,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
@@ -58,6 +59,7 @@ function run(id, ticketId, status, extra) {
   return { id, ticketId, agentId: 1, agentName: 'A', workspaceRoot: WORKSPACE_ROOT, mainWorkspaceRoot: WORKSPACE_ROOT, executionWorkspaceType: 'main',
     allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [], executionMode: 'agent', workflowId: null, workflowInput: null,
     capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null, executionPolicySnapshot: { requireVerification: 'when_declared' },
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null, currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
     status, createdAt: ISO, updatedAt: ISO, startedAt: ISO, completedAt: ISO, replaySnapshotPath: `replay-snapshots/run-${id}.json`, ...extra };
 }

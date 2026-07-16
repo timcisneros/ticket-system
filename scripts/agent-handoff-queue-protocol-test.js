@@ -14,6 +14,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { sealCurrentRunEventChains } = require('./current-event-fixture');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
@@ -77,7 +78,7 @@ function claimedRun(id, ticketId, extra) {
       maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
       allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
     },
-    runtimeLimitsSnapshot: null, verificationContractSnapshot: null, workTypeSnapshot: null, workTypeId: null,
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(), verificationContractSnapshot: null, workTypeSnapshot: null, workTypeId: null,
     currentPhase: 'terminalization', leaseOwner: 'proc-test-owner', leaseExpiresAt: '2030-01-01T00:00:00.000Z', currentStepId: null, currentWorkflowAction: null,
     lastHeartbeatAt: ISO, status: 'completed', createdAt: ISO, updatedAt: ISO, startedAt: ISO, completedAt: ISO,
     replaySnapshotPath: `replay-snapshots/run-${id}.json`, replaySummary: null, runConsequence: null, triage: null,

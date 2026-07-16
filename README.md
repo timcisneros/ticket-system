@@ -82,7 +82,7 @@ npm run checkpoint:release
 
 It runs a project-wide JavaScript syntax build plus the ordered `CHECKPOINT_TEST_SCRIPTS`, fails loudly if any
 referenced script is missing, and ends with `RELEASE CHECKPOINT PASSED: N/N checks`. The current
-count is **50/50**. See **`docs/RELEASE_CHECKPOINT.md`** for what a pass does and does not mean and
+count is **54/54**. See **`docs/RELEASE_CHECKPOINT.md`** for what a pass does and does not mean and
 the full release-hygiene flow.
 
 ## 8. Demo fixtures note
@@ -95,10 +95,10 @@ external connector**, and it refuses writes. Tracked seed agents carry **no prov
 ## 9. Current limitations
 
 - No real external connector yet (only the `local_mock` contract).
-- Current run records must retain their immutable run-start evidence. Missing run-limit snapshots are
-  surfaced as unsupported records and are never reinterpreted using current configuration. Reset or
-  regenerate development run data after a run-schema change; do not add compatibility branches until
-  retained user data creates a concrete migration requirement.
+- Current run records must retain their immutable run-start evidence. Startup rejects missing or
+  invalid run-limit snapshots before recovery can begin. Reset or regenerate development run data
+  after a run-schema change; do not add compatibility branches until retained user data creates a
+  concrete migration requirement.
 - Activation writes the version store then the root in two atomic writes; a crash between them is
   reconciled at startup (`docs/PROCESS_TEMPLATE_ACTIVATION_DURABILITY.md`) but is not fully
   transactional.

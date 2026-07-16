@@ -4,6 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 const { sealCurrentRunEventChains } = require('./current-event-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -133,6 +134,7 @@ function seedData() {
     capabilityType: 'directAction',
     capabilityId: 'agent-selected-actions',
     capabilityInput: null,
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     currentPhase: 'terminalization',
     leaseOwner: 'stale-owner-' + STAMP,
     leaseExpiresAt: staleTs,

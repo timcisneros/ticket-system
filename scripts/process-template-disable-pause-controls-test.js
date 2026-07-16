@@ -12,6 +12,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN_HASH = '$argon2id$v=19$m=65536,t=3,p=4$az+Aa/Vt5AjalPiSGPNdXQ$i+hlbZS1OGPnBIw16HfGY/u0A4VUqXdFkd5Y+JtXh/g';
@@ -108,7 +109,7 @@ function seed() {
       maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
       allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
     },
-    runtimeLimitsSnapshot: null, verificationContractSnapshot: null, workTypeSnapshot: null, workTypeId: null,
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(), verificationContractSnapshot: null, workTypeSnapshot: null, workTypeId: null,
     currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null, currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
     runEvaluation: null, runConsequence: null, triage: null, replaySnapshotPath: null, replaySummary: null,
     status: 'completed', createdAt: ISO, updatedAt: ISO, startedAt: ISO, completedAt: ISO

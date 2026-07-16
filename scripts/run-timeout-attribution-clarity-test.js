@@ -4,6 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const REAL_DATA = path.join(ROOT, 'data');
@@ -77,6 +78,7 @@ function seedData() {
     workspaceRoot: WORKSPACE_ROOT,
     mainWorkspaceRoot: WORKSPACE_ROOT,
     executionWorkspaceType: 'main',
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot({ maxRuntimeDurationMs: 120000 }),
     status: 'failed',
     currentPhase: 'mutation',
     ticketOpenedAt: now,
