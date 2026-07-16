@@ -19,6 +19,11 @@ const { createDurableAppendJournal, resolveDurableAppendJournalOptions } = requi
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
 const { resolveRuntimePersistenceBackend } = require('./persistence/runtime-backend');
+const {
+  JsonRunLeaseRepository,
+  RunLeaseLostError,
+  assertRunLeaseRepository
+} = require('./persistence/json/run-lease-repository');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 
@@ -1561,6 +1566,7 @@ let lastLogTimestampNs = 0n;
 let serverReady = false;
 let dataDirWriterLock = null;
 let dataDirWriterLockHeartbeatTimer = null;
+let runLeaseRepository = null;
 let dataVersion = 0;
 const pageRenderCache = new Map();
 const pageRenderInFlight = new Map();
@@ -6006,13 +6012,22 @@ function getRunLeaseDurationMs() {
   return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_RUN_LEASE_DURATION_MS;
 }
 
-function buildRunLease(now = new Date()) {
-  const nowMs = now.getTime();
-  return {
-    leaseOwner: RUN_LEASE_OWNER,
-    leaseExpiresAt: new Date(nowMs + getRunLeaseDurationMs()).toISOString(),
-    lastHeartbeatAt: now.toISOString()
-  };
+function getRuntimeSchedulerCandidateLimit() {
+  return getPositiveIntegerEnv('RUNTIME_SCHEDULER_CANDIDATE_LIMIT', 1000);
+}
+
+function getRunLeaseRepository() {
+  if (runLeaseRepository) return runLeaseRepository;
+  const candidateLimit = getRuntimeSchedulerCandidateLimit();
+  runLeaseRepository = assertRunLeaseRepository(new JsonRunLeaseRepository({
+    readRuns,
+    writeRuns,
+    appendEvent,
+    sanitizePayload: sanitizeSnapshotValue,
+    maxQueryRows: candidateLimit,
+    maxEligibleRunIds: candidateLimit
+  }));
+  return runLeaseRepository;
 }
 
 function isRunLeaseExpired(run, nowMs = Date.now()) {
@@ -6026,51 +6041,47 @@ function isRunLeaseHeldByCurrentProcess(run) {
 }
 
 async function acquireRunLease(runId) {
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
-  if (!run || run.status !== 'pending') return null;
-  if (run.leaseOwner && run.leaseOwner !== RUN_LEASE_OWNER && !isRunLeaseExpired(run)) return null;
-
-  Object.assign(run, buildRunLease());
-  writeRuns(runs);
-  // The lease acquisition IS the claim. Record a normalized Claim Receipt on this existing event
-  // (additive evidence only — no execution/scheduler behavior change, no target/workspace write).
-  const claimTicket = readTickets().find(item => item && item.id === run.ticketId) || null;
-  await appendEvent({
-    type: 'run.lease_acquired',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
-      leaseOwner: run.leaseOwner,
-      leaseExpiresAt: run.leaseExpiresAt,
-      lastHeartbeatAt: run.lastHeartbeatAt,
-      claimReceipt: buildClaimReceipt(run, claimTicket)
-    }
+  const claim = await getRunLeaseRepository().claimPendingRun({
+    leaseOwner: RUN_LEASE_OWNER,
+    leaseDurationMs: getRunLeaseDurationMs(),
+    eligibleRunIds: [runId],
+    claimPayload: claimedRun => ({
+      claimReceipt: buildClaimReceipt(
+        claimedRun,
+        readTickets().find(item => item && item.id === claimedRun.ticketId) || null
+      )
+    })
   });
-  return run;
+  return claim ? claim.run : null;
 }
 
 async function heartbeatRunLease(runId, payload = {}) {
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
-  if (!run || run.leaseOwner !== RUN_LEASE_OWNER) return null;
-
-  Object.assign(run, buildRunLease());
-  writeRuns(runs);
-  await appendEvent({
-    type: 'run.heartbeat',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
-      leaseOwner: run.leaseOwner,
-      leaseExpiresAt: run.leaseExpiresAt,
-      lastHeartbeatAt: run.lastHeartbeatAt,
-      currentStepId: run.currentStepId || null,
-      currentWorkflowAction: run.currentWorkflowAction || null,
-      ...sanitizeSnapshotValue(payload)
-    }
+  const heartbeat = await getRunLeaseRepository().heartbeatRunLease({
+    runId,
+    leaseOwner: RUN_LEASE_OWNER,
+    leaseDurationMs: getRunLeaseDurationMs(),
+    payload
   });
+  if (!heartbeat) throw new RunLeaseLostError(runId, RUN_LEASE_OWNER);
+  return heartbeat.run;
+}
+
+async function assertLiveRunLease(runId) {
+  const run = await getRunLeaseRepository().verifyRunLease({
+    runId,
+    leaseOwner: RUN_LEASE_OWNER
+  });
+  if (!run) throw new RunLeaseLostError(runId, RUN_LEASE_OWNER);
   return run;
+}
+
+async function releaseRunLease(runId, payload = {}) {
+  const released = await getRunLeaseRepository().releaseRunLease({
+    runId,
+    leaseOwner: RUN_LEASE_OWNER,
+    payload
+  });
+  return released ? released.run : null;
 }
 
 function countRunRetryAttempts(run) {
@@ -7060,32 +7071,24 @@ async function persistRunConsequence(runId) {
 }
 
 async function expireStaleRunLeases() {
-  const expiredRuns = readRuns().filter(run => run.status === 'running' && isRunLeaseExpired(run));
+  const expiredRuns = await getRunLeaseRepository().listExpiredRunningRuns({
+    limit: getRuntimeSchedulerCandidateLimit()
+  });
 
   for (const run of expiredRuns) {
     // Check if run is safe to resume before interrupting
     const resumeState = reconstructResumableState(run);
     if (resumeState && resumeState.safeToResumeExecution) {
-      // Safe to resume: clear stale lease and return to pending so scheduler can restart it
-      const runs = readRuns();
-      const r = runs.find(item => item.id === run.id);
-      if (r) {
-        r.status = 'pending';
-        r.leaseOwner = null;
-        r.leaseExpiresAt = null;
-        delete r.startedAt;
-        writeRuns(runs);
-        await appendEvent({
-          type: 'run.resumed',
-          ticketId: run.ticketId,
-          runId: run.id,
-          payload: {
-            reason: 'stale lease, safe to resume',
-            priorEvents: resumeState.priorEvents,
-            expectedNextPhase: resumeState.expectedNextPhase
-          }
-        });
-        appendRunLog(run, 'run:resumed', `Stale lease expired; run is safe to resume (${resumeState.priorEvents} prior events, next phase: ${resumeState.expectedNextPhase})`);
+      const recovered = await getRunLeaseRepository().recoverExpiredRun({
+        runId: run.id,
+        eventPayload: {
+          reason: 'stale lease, safe to resume',
+          priorEvents: resumeState.priorEvents,
+          expectedNextPhase: resumeState.expectedNextPhase
+        }
+      });
+      if (recovered) {
+        appendRunLog(recovered.run, 'run:resumed', `Stale lease expired; run is safe to resume (${resumeState.priorEvents} prior events, next phase: ${resumeState.expectedNextPhase})`);
       }
       continue;
     }
@@ -7115,28 +7118,16 @@ async function expireStaleRunLeases() {
 }
 
 async function persistRunWorkflowStep(runId, step, status = 'started') {
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
-  if (!run || run.leaseOwner !== RUN_LEASE_OWNER) return null;
-
-  run.currentStepId = step && step.id ? step.id : null;
-  run.currentWorkflowAction = step && step.action ? step.action : null;
-  Object.assign(run, buildRunLease());
-  writeRuns(runs);
-  await appendEvent({
-    type: 'workflow.step.persisted',
-    ticketId: run.ticketId,
-    runId: run.id,
-    stepId: run.currentStepId,
-    payload: {
-      status,
-      action: run.currentWorkflowAction,
-      leaseOwner: run.leaseOwner,
-      leaseExpiresAt: run.leaseExpiresAt,
-      lastHeartbeatAt: run.lastHeartbeatAt
-    }
+  const persisted = await getRunLeaseRepository().persistRunWorkflowStep({
+    runId,
+    leaseOwner: RUN_LEASE_OWNER,
+    leaseDurationMs: getRunLeaseDurationMs(),
+    stepId: step && step.id ? step.id : null,
+    action: step && step.action ? step.action : null,
+    status
   });
-  return run;
+  if (!persisted) throw new RunLeaseLostError(runId, RUN_LEASE_OWNER);
+  return persisted.run;
 }
 
 function serializeRunLease(run) {
@@ -17221,7 +17212,7 @@ async function runAgentTicket(runId) {
   startingRunIds.delete(runId);
   startingLocalModelRunIds.delete(runId);
 
-  const leasedRun = readRuns().find(item => item.id === runId);
+  const leasedRun = await getRunLeaseRepository().getRun(runId);
   if (!isRunLeaseHeldByCurrentProcess(leasedRun)) {
     await appendEvent({
       type: 'scheduler.run_skipped',
@@ -17526,6 +17517,9 @@ async function runAgentTicket(runId) {
         completedAt: new Date(modelResponseCompletedAt).toISOString(),
         durationMs: modelCallDurationMs
       });
+      // Preserve the response to the already-issued request, then fence all
+      // parsing-derived execution and target side effects on renewed ownership.
+      await heartbeatRunLease(run.id, { phase: 'provider_response_received', step });
 
       const modelPlan = parseModelActions(modelText);
       if (modelPlan.parseError) {
@@ -17958,6 +17952,10 @@ async function runAgentTicket(runId) {
             throw error;
           }
 
+          // Admission can wait while the journal drains. Revalidate ownership
+          // immediately before parsing and executing each proposed action so a
+          // stale worker cannot begin another target operation.
+          await assertLiveRunLease(run.id);
           assertRunNotTimedOut(run, runStartedAtMs, limits);
           operation = isBrowserRun(run) ? parseBrowserDirectAction(run, action) : parseAgentDirectAction(action);
           if (!isBrowserRun(run)) await assertAgentOperationAllowed(run, agent, operation.operation, step);
@@ -18351,7 +18349,22 @@ async function runAgentTicket(runId) {
       });
     }
 
-    run = await failAgentRun(run, error, error.workspaceAction || null);
+    if (error && error.code === 'RUN_LEASE_LOST') {
+      const currentRun = await getRunLeaseRepository().getRun(runId);
+      await appendEvent({
+        type: 'run.lease_lost',
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: {
+          priorLeaseOwner: RUN_LEASE_OWNER,
+          currentLeaseOwner: currentRun ? currentRun.leaseOwner || null : null,
+          currentLeaseExpiresAt: currentRun ? currentRun.leaseExpiresAt || null : null,
+          outcome: 'execution_stopped_for_recovery'
+        }
+      });
+    } else {
+      run = await failAgentRun(run, error, error.workspaceAction || null);
+    }
   } finally {
     await closeBrowserSession(run);
     startingRunIds.delete(runId);
@@ -23574,6 +23587,11 @@ function startRuntimeScheduler() {
   runtimeScheduler = createRuntimeScheduler({
     intervalMs: getPositiveIntegerEnv('RUNTIME_SCHEDULER_INTERVAL_MS', 500),
     readRuns,
+    listPendingRuns: ({ cursor = null, scanEndCursor = null } = {}) => getRunLeaseRepository().listPendingRuns({
+      limit: getRuntimeSchedulerCandidateLimit(),
+      cursor,
+      scanEndCursor
+    }),
     readLogs,
     appendRunLog,
     appendEvent,
@@ -23582,6 +23600,7 @@ function startRuntimeScheduler() {
     tryReserveRunStart,
     releaseRunStartReservation,
     acquireRunLease,
+    releaseRunLease,
     expireStaleRunLeases,
     isRunStarting,
     isRunActiveInMemory,

@@ -6,7 +6,7 @@ not a claim that the server already runs on PostgreSQL.
 
 ## Current status
 
-The first two PostgreSQL foundation phases are implemented:
+The PostgreSQL foundation and the first server authority seam are implemented:
 
 - `persistence/postgres/migrations/001_runtime_core.sql` defines the ticket, run, append-only event,
   and per-run event-chain-tip schema.
@@ -36,8 +36,24 @@ The first two PostgreSQL foundation phases are implemented:
   use order-preserving `JSON`, while queryable state/evidence documents use `JSONB`. The forward
   migration refuses non-empty disposable foundation event data rather than silently invalidating
   its stored hashes.
+- Scheduler-owned run lease authority now has one asynchronous repository contract with JSON and
+  PostgreSQL implementations. It covers bounded cursor-paged pending discovery, claim,
+  ownership verification, heartbeat, workflow-step progress, release, expired-run discovery, and
+  recovery. The scheduler rotates through continuation pages, so the configured page size bounds a
+  query rather than capping deployment queue depth or permanently starving work behind a blocked
+  prefix.
+- Expired or wrong-owner leases cannot renew, persist another workflow step, release authority, or
+  pass the action ownership check. The runtime preserves an already-returned provider response,
+  then renews its lease before parsing; it also revalidates the live lease before each action
+  without adding a journal sync per action. A failed check stops execution for recovery instead of
+  terminalizing the run through the stale worker. This point-in-time check does not make the target
+  side effect atomic with the lease; stable operation keys and target idempotency or reconciliation
+  remain required for failure-spanning retries.
 
-The Fastify server still uses JSON files as its runtime authority. Setting
+The Fastify server currently instantiates the JSON implementation of that repository, and all
+remaining runtime domains still use JSON files as their authority. JSON state mutation and event
+append do not gain a database transaction merely by passing through the asynchronous contract.
+Setting
 `PERSISTENCE_BACKEND=postgres` currently fails startup so an operator cannot accidentally run a
 partial JSON/PostgreSQL authority. `DATABASE_URL` is used only by the migration and integration
 tools until the cutover is complete.
@@ -83,19 +99,25 @@ The server backend must not be enabled until all of these hold:
 
 ## Remaining implementation order
 
-1. Refactor the server's synchronous JSON call sites to asynchronous repository calls. Migrate a
-   complete authority slice at a time; do not publish a mixed backend as horizontally scalable.
-2. Integrate stable operation keys and target-side idempotency/reconciliation with the PostgreSQL
+1. Move terminal run handling behind the next complete repository boundary: the terminal run
+   transition and lease clear, final replay state, evaluation, consequence, and required terminal
+   events must commit or roll back under one authority. Do not approximate that transaction by
+   sequencing independent JSON and PostgreSQL writes.
+2. Continue replacing the server's remaining synchronous JSON call sites with asynchronous
+   repositories, one complete authority slice at a time. The scheduler lease slice is complete;
+   startup, ticket creation/lifecycle, replay/evidence projections, and mutable control records are
+   not. Do not publish the mixed implementation as horizontally scalable.
+3. Integrate stable operation keys and target-side idempotency/reconciliation with the PostgreSQL
    receipt authority before external side effects can be retried across process failure.
-3. Move workflows, templates, schedules, Work Contexts, routing, connectors, permissions, and other
+4. Move workflows, templates, schedules, Work Contexts, routing, connectors, permissions, and other
    mutable control records to shared storage with their current validation and provenance rules.
-4. Replace in-memory sessions and process-local scheduler ownership where multi-process deployment
+5. Replace in-memory sessions and process-local scheduler ownership where multi-process deployment
    requires shared coordination. Keep provider and run admission bounded per deployment policy.
-5. Add indexed event retention/archive operations and tenant/isolation boundaries. PostgreSQL alone
+6. Add indexed event retention/archive operations and tenant/isolation boundaries. PostgreSQL alone
    does not supply those product policies.
-6. Run behavioral parity, restart/recovery, multi-process claim, overlapping-path, rollback, and
+7. Run behavioral parity, restart/recovery, multi-process claim, overlapping-path, rollback, and
    pressure tests against the assembled backend.
-7. Reset disposable development data, enable `PERSISTENCE_BACKEND=postgres`, and remove the JSON
+8. Reset disposable development data, enable `PERSISTENCE_BACKEND=postgres`, and remove the JSON
    runtime path rather than carrying it as a permanent compatibility backend.
 
 ## Commands

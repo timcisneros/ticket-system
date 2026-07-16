@@ -52,8 +52,9 @@ snapshot); a local/mock connector contract (bounded read with receipt, write ref
 operational transparency surface; restart-safe event integrity checks; fail-closed startup data
 validation; and a hardened release checkpoint. The current status and remaining work are in
 `docs/SYSTEM_STATUS.md`. A tested PostgreSQL persistence/coordination foundation now covers core
-lifecycle and evidence authorities, but the server has not yet crossed that authority boundary;
-see `docs/POSTGRES_CUTOVER.md`.
+lifecycle and evidence authorities. Scheduler-owned lease operations now use one asynchronous
+repository contract with active JSON and tested PostgreSQL implementations, but the server has not
+switched its runtime authority; see `docs/POSTGRES_CUTOVER.md`.
 
 ## 6. Quick start
 

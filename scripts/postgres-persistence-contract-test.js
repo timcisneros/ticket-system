@@ -138,6 +138,9 @@ for (const requiredPrimitive of [
   'eligibleRunIds exceeds the configured limit',
   'async transitionTicket',
   'async transitionRun',
+  'async verifyRunLease',
+  'async listPendingRuns',
+  'async listExpiredRunningRuns',
   'Unsupported run status transition',
   'leaseOwner is required to transition a running run',
   'LEASE_AUTHORITY_CONFLICT',
@@ -148,6 +151,8 @@ for (const requiredPrimitive of [
   'async writeReplaySnapshot',
   'POSTGRES_REPLAY_INTEGRITY_FAILURE',
   'async recordOperationReceipt',
+  'async persistRunWorkflowStep',
+  'async recoverExpiredRun',
   "eventType = 'operation.receipt_recorded'",
   'ON CONFLICT (run_id, idempotency_key) DO NOTHING',
   'POSTGRES_RECORD_TOO_LARGE'

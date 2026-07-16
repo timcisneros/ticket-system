@@ -559,6 +559,94 @@ class PostgresRuntimeStore {
     return result.rowCount === 0 ? null : runFromRow(result.rows[0]);
   }
 
+  async verifyRunLease({ runId, leaseOwner }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const owner = requiredString(leaseOwner, 'leaseOwner');
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('runs')}
+       WHERE id = $1
+         AND status = ANY($2::text[])
+         AND lease_owner = $3
+         AND lease_expires_at > clock_timestamp()`,
+      [id, ['pending', 'running'], owner]
+    );
+    return result.rowCount === 0 ? null : runFromRow(result.rows[0]);
+  }
+
+  async listPendingRuns({ limit = 100, cursor = null, scanEndCursor = null } = {}) {
+    const boundedLimit = positiveSafeInteger(limit, 'limit');
+    if (boundedLimit > this.maxQueryRows) {
+      throw new RangeError(`limit exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    const after = cursor === null || cursor === undefined ? null : jsonObject(cursor, 'cursor');
+    const afterCreatedAt = after ? requiredString(after.createdAt, 'cursor.createdAt') : null;
+    if (afterCreatedAt !== null && Number.isNaN(Date.parse(afterCreatedAt))) {
+      throw new TypeError('cursor.createdAt must be a valid timestamp');
+    }
+    const afterId = after ? positiveSafeInteger(after.id, 'cursor.id') : null;
+    const requestedScanEnd = scanEndCursor === null || scanEndCursor === undefined
+      ? null
+      : jsonObject(scanEndCursor, 'scanEndCursor');
+    let scanEndCreatedAt = requestedScanEnd
+      ? requiredString(requestedScanEnd.createdAt, 'scanEndCursor.createdAt')
+      : null;
+    if (scanEndCreatedAt !== null && Number.isNaN(Date.parse(scanEndCreatedAt))) {
+      throw new TypeError('scanEndCursor.createdAt must be a valid timestamp');
+    }
+    let scanEndId = requestedScanEnd
+      ? positiveSafeInteger(requestedScanEnd.id, 'scanEndCursor.id')
+      : null;
+    if (!requestedScanEnd) {
+      const horizon = await this.pool.query(
+        `SELECT id, created_at::text AS cursor_created_at
+         FROM ${this.table('runs')}
+         WHERE status = 'pending'
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`
+      );
+      if (horizon.rowCount > 0) {
+        scanEndCreatedAt = horizon.rows[0].cursor_created_at;
+        scanEndId = positiveSafeInteger(horizon.rows[0].id, 'scanEndCursor.id');
+      }
+    }
+    const result = await this.pool.query(
+      `SELECT run.*, run.created_at::text AS cursor_created_at
+       FROM ${this.table('runs')} AS run
+       WHERE run.status = 'pending'
+         AND ($2::timestamptz IS NULL OR (run.created_at, run.id) > ($2::timestamptz, $3::bigint))
+         AND ($4::timestamptz IS NULL OR (run.created_at, run.id) <= ($4::timestamptz, $5::bigint))
+       ORDER BY run.created_at, run.id
+       LIMIT $1`,
+      [boundedLimit + 1, afterCreatedAt, afterId, scanEndCreatedAt, scanEndId]
+    );
+    const page = result.rows.slice(0, boundedLimit).map(runFromRow);
+    const last = page[page.length - 1] || null;
+    return {
+      runs: page,
+      nextCursor: result.rows.length > boundedLimit && last
+        ? { createdAt: result.rows[boundedLimit - 1].cursor_created_at, id: last.id }
+        : null,
+      scanEndCursor: result.rows.length > boundedLimit
+        ? { createdAt: scanEndCreatedAt, id: scanEndId }
+        : null
+    };
+  }
+
+  async listExpiredRunningRuns({ limit = 100 } = {}) {
+    const boundedLimit = positiveSafeInteger(limit, 'limit');
+    if (boundedLimit > this.maxQueryRows) {
+      throw new RangeError(`limit exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('runs')}
+       WHERE status = 'running' AND lease_expires_at <= clock_timestamp()
+       ORDER BY lease_expires_at, id
+       LIMIT $1`,
+      [boundedLimit]
+    );
+    return result.rows.map(runFromRow);
+  }
+
   async transitionTicket({
     ticketId,
     expectedRevision,
@@ -1184,12 +1272,15 @@ class PostgresRuntimeStore {
       );
       if (result.rowCount === 0) return null;
       const run = runFromRow(result.rows[0]);
+      const callerPayload = typeof claimPayload === 'function'
+        ? this.assertJsonRecord(claimPayload(run), 'claimPayload')
+        : this.assertJsonRecord(claimPayload, 'claimPayload');
       const event = await this._appendEvent(client, {
         type: 'run.lease_acquired',
         ticketId: run.ticketId,
         runId: run.id,
         payload: {
-          ...jsonObject(claimPayload, 'claimPayload'),
+          ...callerPayload,
           leaseOwner: run.leaseOwner,
           leaseExpiresAt: run.leaseExpiresAt,
           lastHeartbeatAt: run.lastHeartbeatAt
@@ -1212,9 +1303,12 @@ class PostgresRuntimeStore {
              last_heartbeat_at = clock_timestamp(),
              revision = revision + 1,
              updated_at = clock_timestamp()
-         WHERE id = $1 AND lease_owner = $2 AND lease_expires_at > clock_timestamp()
+         WHERE id = $1
+           AND status = ANY($4::text[])
+           AND lease_owner = $2
+           AND lease_expires_at > clock_timestamp()
          RETURNING *`,
-        [id, owner, duration]
+        [id, owner, duration, ['pending', 'running']]
       );
       if (result.rowCount === 0) return null;
       const run = runFromRow(result.rows[0]);
@@ -1242,9 +1336,10 @@ class PostgresRuntimeStore {
         `UPDATE ${this.table('runs')}
          SET lease_owner = NULL,
              lease_expires_at = NULL,
+             last_heartbeat_at = NULL,
              revision = revision + 1,
              updated_at = clock_timestamp()
-         WHERE id = $1 AND lease_owner = $2
+         WHERE id = $1 AND lease_owner = $2 AND lease_expires_at > clock_timestamp()
          RETURNING *`,
         [id, owner]
       );
@@ -1261,6 +1356,116 @@ class PostgresRuntimeStore {
         }
       });
       return { run, event };
+    });
+  }
+
+  async persistRunWorkflowStep({
+    runId,
+    leaseOwner,
+    leaseDurationMs,
+    stepId = null,
+    action = null,
+    status = 'started',
+    payload = {}
+  }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const owner = requiredString(leaseOwner, 'leaseOwner');
+    const duration = positiveSafeInteger(leaseDurationMs, 'leaseDurationMs');
+    const normalizedStepId = optionalString(stepId);
+    const normalizedAction = optionalString(action);
+    const normalizedStatus = requiredString(status, 'status');
+    const callerPayload = this.assertJsonRecord(payload, 'workflow step payload');
+
+    return this.withTransaction(async client => {
+      const result = await client.query(
+        `UPDATE ${this.table('runs')}
+         SET body = body || $4::jsonb,
+             lease_expires_at = clock_timestamp() + ($3::bigint * interval '1 millisecond'),
+             last_heartbeat_at = clock_timestamp(),
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1
+           AND status = 'running'
+           AND lease_owner = $2
+           AND lease_expires_at > clock_timestamp()
+         RETURNING *`,
+        [id, owner, duration, {
+          currentStepId: normalizedStepId,
+          currentWorkflowAction: normalizedAction
+        }]
+      );
+      if (result.rowCount === 0) return null;
+      const run = runFromRow(result.rows[0]);
+      const event = await this._appendEvent(client, {
+        type: 'workflow.step.persisted',
+        ticketId: run.ticketId,
+        runId: run.id,
+        stepId: normalizedStepId,
+        payload: {
+          ...callerPayload,
+          status: normalizedStatus,
+          action: normalizedAction,
+          leaseOwner: run.leaseOwner,
+          leaseExpiresAt: run.leaseExpiresAt,
+          lastHeartbeatAt: run.lastHeartbeatAt
+        }
+      });
+      return { run, event };
+    });
+  }
+
+  async recoverExpiredRun({ runId, eventType = 'run.resumed', eventPayload = {} }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const type = requiredString(eventType, 'eventType');
+    const callerPayload = this.assertJsonRecord(eventPayload, 'recovery event payload');
+
+    return this.withTransaction(async client => {
+      const result = await client.query(
+        `WITH candidate AS (
+           SELECT id, lease_owner, lease_expires_at, last_heartbeat_at
+           FROM ${this.table('runs')}
+           WHERE id = $1
+             AND status = 'running'
+             AND lease_expires_at <= clock_timestamp()
+           FOR UPDATE
+         ), updated AS (
+           UPDATE ${this.table('runs')} AS run
+           SET status = 'pending',
+               started_at = NULL,
+               completed_at = NULL,
+               lease_owner = NULL,
+               lease_expires_at = NULL,
+               last_heartbeat_at = NULL,
+               revision = run.revision + 1,
+               updated_at = clock_timestamp()
+           FROM candidate
+           WHERE run.id = candidate.id
+           RETURNING run.*, candidate.lease_owner AS previous_lease_owner,
+             candidate.lease_expires_at AS previous_lease_expires_at,
+             candidate.last_heartbeat_at AS previous_last_heartbeat_at
+         )
+         SELECT * FROM updated`,
+        [id]
+      );
+      if (result.rowCount === 0) return null;
+      const run = runFromRow(result.rows[0]);
+      const previousLease = {
+        leaseOwner: result.rows[0].previous_lease_owner,
+        leaseExpiresAt: rowTimestamp(result.rows[0].previous_lease_expires_at),
+        lastHeartbeatAt: rowTimestamp(result.rows[0].previous_last_heartbeat_at)
+      };
+      const event = await this._appendEvent(client, {
+        type,
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: {
+          ...callerPayload,
+          previousLease,
+          recoveredAt: run.updatedAt,
+          status: run.status
+        }
+      });
+      return { run, event, previousLease };
     });
   }
 

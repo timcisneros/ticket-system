@@ -1,6 +1,7 @@
 function createRuntimeScheduler({
   intervalMs = 500,
   readRuns,
+  listPendingRuns = null,
   readLogs,
   appendRunLog,
   appendEvent,
@@ -9,6 +10,7 @@ function createRuntimeScheduler({
   tryReserveRunStart = run => ({ runId: run.id }),
   releaseRunStartReservation = () => {},
   acquireRunLease,
+  releaseRunLease = null,
   expireStaleRunLeases,
   isRunStarting,
   isRunActiveInMemory,
@@ -24,6 +26,34 @@ function createRuntimeScheduler({
   let timer = null;
   let ticking = false;
   let idleWaiters = [];
+  let pendingCursor = null;
+  let pendingScanEndCursor = null;
+
+  async function readPendingPage() {
+    if (typeof listPendingRuns !== 'function') {
+      const listed = await readRuns();
+      return {
+        runs: Array.isArray(listed) ? listed : [],
+        nextCursor: null
+      };
+    }
+
+    const priorCursor = pendingCursor;
+    let listed = await listPendingRuns({ cursor: priorCursor, scanEndCursor: pendingScanEndCursor });
+    let page = Array.isArray(listed) ? { runs: listed, nextCursor: null } : listed;
+    if (!page || !Array.isArray(page.runs)) page = { runs: [], nextCursor: null };
+
+    // A page can empty between ticks as other workers claim its rows. Wrap once
+    // immediately so work before the old cursor does not wait for another tick.
+    if (page.runs.length === 0 && priorCursor !== null) {
+      listed = await listPendingRuns({ cursor: null });
+      page = Array.isArray(listed) ? { runs: listed, nextCursor: null } : listed;
+      if (!page || !Array.isArray(page.runs)) page = { runs: [], nextCursor: null };
+    }
+    pendingCursor = page.nextCursor || null;
+    pendingScanEndCursor = pendingCursor === null ? null : page.scanEndCursor || pendingScanEndCursor;
+    return page;
+  }
 
   async function logQueuedOnce(run, reason) {
     const alreadyLogged = readLogs().some(log => log.runId === run.id && log.type === 'run:queued');
@@ -49,8 +79,15 @@ function createRuntimeScheduler({
   async function selectAndDispatchRun(run, runAdmission, startReservation) {
     let admissionHeld = true;
     let reservationHeld = true;
+    let leasedRun = null;
+    let leaseReleaseAttempted = false;
+    const releaseClaimedRun = async reason => {
+      if (!leasedRun || leaseReleaseAttempted || typeof releaseRunLease !== 'function') return;
+      leaseReleaseAttempted = true;
+      await releaseRunLease(leasedRun.id, { reason });
+    };
     try {
-      const leasedRun = await runWithAdmission(runAdmission, async () => {
+      leasedRun = await runWithAdmission(runAdmission, async () => {
         const selected = typeof acquireRunLease === 'function' ? await acquireRunLease(run.id) : run;
         if (!selected) {
           await appendEvent({
@@ -61,6 +98,8 @@ function createRuntimeScheduler({
           });
           return null;
         }
+        // Retain the claim for cleanup even if selection evidence fails below.
+        leasedRun = selected;
         await appendEvent({
           type: 'scheduler.run_selected',
           ticketId: selected.ticketId,
@@ -84,11 +123,13 @@ function createRuntimeScheduler({
 
       const started = runner.startRun(leasedRun);
       if (started === false) {
+        await releaseClaimedRun('runner_start_refused');
         releaseRunStartReservation(startReservation);
         reservationHeld = false;
       }
     } catch (error) {
       if (admissionHeld) releaseRunAdmission(runAdmission);
+      await releaseClaimedRun('runner_start_failed');
       if (reservationHeld) releaseRunStartReservation(startReservation);
       throw error;
     }
@@ -104,7 +145,8 @@ function createRuntimeScheduler({
       if (isAdmissionPaused()) return;
       if (typeof expireStaleRunLeases === 'function') await expireStaleRunLeases();
 
-      const pendingRuns = readRuns()
+      const pendingPage = await readPendingPage();
+      const pendingRuns = pendingPage.runs
         .filter(run => run.status === 'pending')
         .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
 
@@ -115,7 +157,8 @@ function createRuntimeScheduler({
         await appendEvent({
           type: 'scheduler.tick',
           payload: {
-            pendingRuns: pendingRuns.length
+            pendingRuns: pendingRuns.length,
+            selectionTruncated: pendingPage.nextCursor !== null
           }
         });
       }

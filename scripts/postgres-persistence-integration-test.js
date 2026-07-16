@@ -70,6 +70,7 @@ async function main() {
     const composedTicket = await store.createTicket({ status: 'open', title: 'Composed evidence transaction' });
     const composedRollbackTicket = await store.createTicket({ status: 'open', title: 'Composed rollback transaction' });
     const fencedTicket = await store.createTicket({ status: 'open', title: 'Lease fencing transaction' });
+    const leaseRepositoryTicket = await store.createTicket({ status: 'open', title: 'Lease repository boundary' });
     assert.notEqual(ticketOne.id, ticketTwo.id);
     assert.equal(ticketOne.revision, 1);
 
@@ -84,6 +85,9 @@ async function main() {
       ticketId: composedRollbackTicket.id, agentId: 6, status: 'pending'
     });
     const fencedRun = await store.createRun({ ticketId: fencedTicket.id, agentId: 7, status: 'pending' });
+    const leaseRepositoryRun = await store.createRun({
+      ticketId: leaseRepositoryTicket.id, agentId: 8, status: 'pending'
+    });
 
     const ticketInProgress = await store.transitionTicket({
       ticketId: ticketRaceTicket.id,
@@ -374,6 +378,90 @@ async function main() {
     assert.equal(await store.getRunEvaluation(composedRollbackRun.id), null);
     assert.deepEqual(await store.listRunEvents(composedRollbackRun.id), []);
 
+    const firstPendingPage = await store.listPendingRuns({ limit: 1 });
+    assert.equal(firstPendingPage.runs.length, 1);
+    assert.ok(firstPendingPage.nextCursor, 'bounded pending discovery must expose a continuation cursor');
+    const secondPendingPage = await store.listPendingRuns({
+      limit: 1,
+      cursor: firstPendingPage.nextCursor,
+      scanEndCursor: firstPendingPage.scanEndCursor
+    });
+    assert.equal(secondPendingPage.runs.length, 1);
+    assert.notEqual(secondPendingPage.runs[0].id, firstPendingPage.runs[0].id);
+    assert.ok((await store.listPendingRuns({ limit: 100 })).runs.some(run => run.id === leaseRepositoryRun.id));
+    const repositoryClaim = await store.claimPendingRun({
+      leaseOwner: 'repository-worker',
+      leaseDurationMs: 30_000,
+      eligibleRunIds: [leaseRepositoryRun.id],
+      claimPayload: run => ({ repositoryBoundary: true, claimedRevision: run.revision })
+    });
+    assert.equal(repositoryClaim.event.payload.repositoryBoundary, true);
+    assert.equal(repositoryClaim.event.payload.claimedRevision, repositoryClaim.run.revision);
+    assert.equal((await store.verifyRunLease({
+      runId: leaseRepositoryRun.id,
+      leaseOwner: 'repository-worker'
+    })).id, leaseRepositoryRun.id);
+    assert.equal(await store.verifyRunLease({
+      runId: leaseRepositoryRun.id,
+      leaseOwner: 'wrong-worker'
+    }), null);
+    const repositoryStarted = await store.transitionRun({
+      runId: leaseRepositoryRun.id,
+      expectedRevision: repositoryClaim.run.revision,
+      fromStatuses: ['pending'],
+      toStatus: 'running',
+      leaseOwner: 'repository-worker',
+      eventType: 'run.started'
+    });
+    assert.equal(await store.persistRunWorkflowStep({
+      runId: leaseRepositoryRun.id,
+      leaseOwner: 'wrong-worker',
+      leaseDurationMs: 30_000,
+      stepId: 'wrong',
+      action: 'writeFile'
+    }), null);
+    const repositoryStep = await store.persistRunWorkflowStep({
+      runId: leaseRepositoryRun.id,
+      leaseOwner: 'repository-worker',
+      leaseDurationMs: 30_000,
+      stepId: 'verify',
+      action: 'condition',
+      status: 'completed',
+      payload: { status: 'forged' }
+    });
+    assert.equal(repositoryStep.run.currentStepId, 'verify');
+    assert.equal(repositoryStep.run.currentWorkflowAction, 'condition');
+    assert.equal(repositoryStep.event.payload.status, 'completed');
+    assert.equal(repositoryStep.run.revision, repositoryStarted.run.revision + 1);
+    await store.pool.query(
+      `UPDATE ${store.table('runs')}
+       SET lease_expires_at = clock_timestamp() - interval '1 second',
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [leaseRepositoryRun.id]
+    );
+    assert.equal(await store.heartbeatRunLease({
+      runId: leaseRepositoryRun.id,
+      leaseOwner: 'repository-worker',
+      leaseDurationMs: 30_000
+    }), null, 'an expired PostgreSQL lease must not be renewable');
+    assert.equal(await store.verifyRunLease({
+      runId: leaseRepositoryRun.id,
+      leaseOwner: 'repository-worker'
+    }), null, 'an expired PostgreSQL lease must not authorize another action');
+    assert.ok((await store.listExpiredRunningRuns({ limit: 100 })).some(run => run.id === leaseRepositoryRun.id));
+    const repositoryRecovered = await store.recoverExpiredRun({
+      runId: leaseRepositoryRun.id,
+      eventPayload: { reason: 'safe repository recovery', status: 'forged' }
+    });
+    assert.equal(repositoryRecovered.run.status, 'pending');
+    assert.equal(repositoryRecovered.run.leaseOwner, null);
+    assert.equal(repositoryRecovered.run.lastHeartbeatAt, null);
+    assert.equal(repositoryRecovered.event.payload.status, 'pending');
+    assert.equal(repositoryRecovered.previousLease.leaseOwner, 'repository-worker');
+    assert.equal(verifyCurrentRunEventChain(await store.listRunEvents(leaseRepositoryRun.id)).chainValid, true);
+
     const fencedClaim = await store.claimPendingRun({
       leaseOwner: 'fenced-worker-old', leaseDurationMs: 30_000, eligibleRunIds: [fencedRun.id]
     });
@@ -540,6 +628,7 @@ async function main() {
       runId: workerAClaim.run.id, leaseOwner: 'worker-a', payload: { source: 'integration' }
     });
     assert.equal(released.run.leaseOwner, null);
+    assert.equal(released.run.lastHeartbeatAt, null);
     assert.equal(released.event.type, 'run.lease_released');
     assert.equal(released.run.revision, 4);
     assert.equal(verifyCurrentRunEventChain(await store.listRunEvents(workerAClaim.run.id)).chainValid, true);
@@ -620,7 +709,7 @@ async function main() {
     );
     assert.equal(refusedMigration.rowCount, 0);
 
-    console.log('PASS: PostgreSQL integration — optimistic lifecycle, lease fencing, immutable evidence, replay revisions, idempotent receipts, rollback, claims, and path concurrency');
+    console.log('PASS: PostgreSQL integration — optimistic lifecycle, paged lease authority, immutable evidence, replay revisions, idempotent receipts, rollback, claims, and path concurrency');
   } finally {
     try { await store.pool.query(`DROP SCHEMA IF EXISTS ${store.schemaSql} CASCADE`); } catch (_) {}
     try { await store.pool.query(`DROP SCHEMA IF EXISTS ${nonemptyFoundationStore.schemaSql} CASCADE`); } catch (_) {}

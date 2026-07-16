@@ -47,6 +47,14 @@ the intended deployment ceiling.
   unconditionally independent: overlapping cross-ticket workspace writes can be refused, while
   process-local path coordination closes concurrent check/mutate races without globally serializing
   unrelated paths, and per-ticket lifecycle transitions are coordinated for consistency.
+- Scheduler lease work uses an asynchronous repository boundary. Pending discovery is bounded per
+  indexed page and rotates through continuation cursors; the page bound is not a total queue or
+  deployment-capacity limit. Claim, heartbeat, workflow-step persistence, release, expiry
+  discovery, and recovery require current lease authority. The runtime renews after preserving a
+  provider response and revalidates ownership before each action; a failed check stops the worker
+  for recovery. This is a point-in-time authority check, not a transaction around the target side
+  effect. The active JSON adapter does not make these state/event pairs transactional or
+  multi-process safe.
 - Workflow verification uses the immutable run-start verification contract. Fixture-verifier
   metadata is identified as metadata and is not represented as an executed runtime verifier.
 - The build parses active CommonJS sources, and CI runs the deterministic release checkpoint.
@@ -62,6 +70,12 @@ Worker transitions from a running state are fenced by the matching live lease; e
 recovered without granting their former owner continued authority. State and its lifecycle event
 roll back together. Its deterministic contract test runs in the release checkpoint, and CI runs the
 schema, rollback, idempotency, and concurrency suite against PostgreSQL 17.
+
+The first server-facing seam now exposes scheduler-owned lease operations through one asynchronous
+contract implemented by both the active JSON adapter and the PostgreSQL store. This removes direct
+synchronous run-file access from scheduler discovery, claim, renewal, workflow progress, release,
+and expired-run recovery. It is an integration boundary, not a backend switch: the JSON adapter's
+state write and event append remain separate operations.
 
 This foundation is not yet the Fastify server's active authority. The server remains on JSON and
 explicitly refuses `PERSISTENCE_BACKEND=postgres` until the complete runtime cutover is assembled.
@@ -85,10 +99,13 @@ Compatibility is format-specific, not a system-wide no-legacy policy:
 ## Known work
 
 1. Complete the PostgreSQL runtime cutover before horizontal deployment. Core state, lifecycle,
-   evidence, replay, receipt, and concurrency primitives are implemented, but current server call
-   sites still synchronously use JSON/JSONL. Migrate whole authority slices without dual-writing,
-   integrate target-side idempotency/reconciliation for uncertain external effects, then remove the
-   JSON runtime path. Shared storage still needs explicit retention and tenant-isolation policy.
+   evidence, replay, receipt, and concurrency primitives are implemented, and the scheduler lease
+   slice now uses the asynchronous repository contract. The next boundary is atomic terminalization:
+   terminal status and lease clear, final replay state, evaluation, consequence, and terminal events
+   must share one authority transaction. Then migrate the remaining whole authority slices without
+   dual-writing, integrate target-side idempotency/reconciliation for uncertain external effects,
+   and remove the JSON runtime path. Shared storage still needs explicit retention and
+   tenant-isolation policy.
 2. Add bounded deterministic postconditions where prose acceptance criteria do not prove outcomes;
    keep real-model benchmarks observational.
 3. Complete validation of the model contract compiler and prefix truncation before enabling them by
