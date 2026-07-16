@@ -4,6 +4,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
 const OQUERY = `node ${path.join(ROOT, 'scripts', 'oquery.js')}`;
@@ -206,6 +207,7 @@ function seedStaleRunningRun(agent) {
     mainWorkspaceRoot: WORKSPACE_ROOT,
     executionWorkspaceType: 'main',
     status: 'running',
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     ticketOpenedAt: now,
     createdAt: now,
     updatedAt: now,
@@ -242,6 +244,7 @@ function seedStaleProviderCallRun(agent) {
     mainWorkspaceRoot: WORKSPACE_ROOT,
     executionWorkspaceType: 'main',
     status: 'running',
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     ticketOpenedAt: now,
     createdAt: now,
     updatedAt: now,
@@ -312,6 +315,7 @@ function seedManualStopRun(agent) {
     mainWorkspaceRoot: WORKSPACE_ROOT,
     executionWorkspaceType: 'main',
     status: 'pending',
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     ticketOpenedAt: now,
     createdAt: now,
     updatedAt: now
@@ -1175,6 +1179,7 @@ async function verifyDuplicateActiveBlocking(cookie, agent) {
       mainWorkspaceRoot: WORKSPACE_ROOT,
       executionWorkspaceType: 'main',
       status: 'pending',
+      runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
       ticketOpenedAt: openedAt,
       createdAt: openedAt,
       updatedAt: openedAt

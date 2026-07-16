@@ -26,9 +26,11 @@ const STORE_PATH = path.join(ROOT, 'persistence', 'postgres', 'store.js');
 const MIGRATIONS_DIR = path.join(ROOT, 'persistence', 'postgres', 'migrations');
 const CORE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '001_runtime_core.sql');
 const EVIDENCE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '002_runtime_evidence.sql');
+const NON_TERMINAL_EVIDENCE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '004_non_terminal_evidence.sql');
 const storeSource = fs.readFileSync(STORE_PATH, 'utf8');
 const coreMigration = fs.readFileSync(CORE_MIGRATION_PATH, 'utf8');
 const evidenceMigration = fs.readFileSync(EVIDENCE_MIGRATION_PATH, 'utf8');
+const nonTerminalEvidenceMigration = fs.readFileSync(NON_TERMINAL_EVIDENCE_MIGRATION_PATH, 'utf8');
 
 assert.equal(quoteIdentifier('ticket_system'), '"ticket_system"');
 assert.throws(() => quoteIdentifier('public; DROP SCHEMA public'), /Invalid PostgreSQL identifier/);
@@ -151,6 +153,14 @@ for (const requiredPrimitive of [
   'async writeReplaySnapshot',
   'POSTGRES_REPLAY_INTEGRITY_FAILURE',
   'async recordOperationReceipt',
+  'async appendRunEvidence',
+  'async prepareTargetOperation',
+  'async completeTargetOperation',
+  'async getTargetOperation',
+  'async withTargetOperationLock',
+  'pg_advisory_lock_shared',
+  'pg_advisory_unlock_shared',
+  'targetOperationClientStorage.run',
   'async persistRunWorkflowStep',
   'async recoverExpiredRun',
   'async terminalizeRun',
@@ -159,6 +169,14 @@ for (const requiredPrimitive of [
   'POSTGRES_RECORD_TOO_LARGE'
 ]) {
   assert.ok(storeSource.includes(requiredPrimitive), `store must include: ${requiredPrimitive}`);
+}
+
+for (const requiredSql of [
+  'CREATE TABLE target_operation_intents',
+  'CONSTRAINT target_operation_intents_operation_key_unique UNIQUE (run_id, operation_key)',
+  'CREATE TRIGGER target_operation_intents_append_only'
+]) {
+  assert.ok(nonTerminalEvidenceMigration.includes(requiredSql), `non-terminal evidence migration must include: ${requiredSql}`);
 }
 
 assert.ok(!/appendFileSync|writeFileSync/.test(storeSource), 'PostgreSQL authority must not write JSON files');

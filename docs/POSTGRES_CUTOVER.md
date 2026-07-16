@@ -6,7 +6,7 @@ not a claim that the server already runs on PostgreSQL.
 
 ## Current status
 
-The PostgreSQL foundation and the first three server authority seams are implemented:
+The PostgreSQL foundation and the first four server authority seams are implemented:
 
 - `persistence/postgres/migrations/001_runtime_core.sql` defines the ticket, run, append-only event,
   and per-run event-chain-tip schema.
@@ -71,6 +71,18 @@ The PostgreSQL foundation and the first three server authority seams are impleme
   non-transactional across its projection files and journal. Group run records are persisted as one
   ticket batch, while their later scheduling and execution remain concurrent. Same-ticket lifecycle
   coordination does not serialize unrelated tickets.
+- Non-terminal workspace mutations now prepare an append-only target intent before the local
+  filesystem effect. A stable key derives from the run, deterministic action slot, operation, and
+  canonical input. Completion owns the operation receipt, mutation replay item, and
+  `workspace.operation` event through one repository call. Startup and expired-lease recovery
+  confirm already-applied effects from target state; a state matching neither the prepared
+  pre-state nor intended effect is not retried and emits reconciliation-required evidence.
+- PostgreSQL migration `004_non_terminal_evidence.sql` stores immutable prepared intents. Its
+  completion transaction inserts the idempotent receipt, advances mutable replay, and appends the
+  completion event together. A session-scoped hierarchical target lock spans the committed intent,
+  external effect, and completion transaction; it is released automatically if the worker
+  connection dies. This does not make the filesystem effect part of a database transaction; the
+  prepared-intent reconciliation protocol is the cross-system boundary.
 
 The Fastify server currently instantiates the JSON implementations of those repositories, and all
 remaining runtime domains still use JSON files as their authority. JSON state mutation and event
@@ -121,16 +133,15 @@ The server backend must not be enabled until all of these hold:
 
 ## Remaining implementation order
 
-1. Move non-terminal execution evidence and mutation receipts behind the next complete authority
-   boundary. Replay progress, action and authority evidence, operation history, and their events
-   must use the selected store rather than mixing PostgreSQL lifecycle state with JSON evidence.
-   Integrate stable operation keys and target-side idempotency or explicit reconciliation before
-   external side effects can be retried across process failure.
+1. Move the remaining non-terminal execution stream behind the selected authority. Provider
+   requests/responses, parsed plans, workflow progress, non-mutating action/read receipts, and
+   their replay/events still use direct JSON helpers; the target-mutation and mutation-authority
+   slice is complete.
 2. Continue replacing the server's remaining synchronous JSON call sites with asynchronous
    repositories, one complete authority slice at a time. The scheduler lease, run terminalization,
-   and ticket/run lifecycle slices are complete; startup reads, non-terminal replay/evidence
-   updates, and mutable control records are not. Do not publish the mixed implementation as
-   horizontally scalable.
+   ticket/run lifecycle, and target-mutation evidence slices are complete; startup/operator reads,
+   other non-terminal replay/evidence updates, and mutable control records are not. Do not publish
+   the mixed implementation as horizontally scalable.
 3. Make startup, recovery, replay reads, and operator reads use the selected shared authority, with
    bounded indexed queries and no JSON fallback in PostgreSQL mode.
 4. Move workflows, templates, schedules, Work Contexts, routing, connectors, permissions, and other

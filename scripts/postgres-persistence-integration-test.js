@@ -48,6 +48,12 @@ async function main() {
     lockTimeoutMs: 3_000,
     maxJsonRecordBytes: 256
   });
+  const singleConnectionStore = new PostgresRuntimeStore({
+    connectionString,
+    schema,
+    lockTimeoutMs: 3_000,
+    maxConnections: 1
+  });
   const nonemptyFoundationStore = new PostgresRuntimeStore({
     connectionString,
     schema: nonemptyFoundationSchema,
@@ -59,6 +65,7 @@ async function main() {
     assert.equal(migrationResults.flat().filter(name => name === '001_runtime_core.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name => name === '002_runtime_evidence.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name => name === '003_ticket_run_lifecycle.sql').length, 1);
+    assert.equal(migrationResults.flat().filter(name => name === '004_non_terminal_evidence.sql').length, 1);
     assert.deepEqual(await store.migrate(), []);
     assert.equal(await store.health(), true);
 
@@ -75,6 +82,7 @@ async function main() {
     const terminalBoundaryTicket = await store.createTicket({ status: 'open', title: 'Terminalization boundary' });
     const terminalRollbackTicket = await store.createTicket({ status: 'open', title: 'Terminalization rollback' });
     const terminalExpiredTicket = await store.createTicket({ status: 'open', title: 'Expired terminal recovery' });
+    const nonTerminalEvidenceTicket = await store.createTicket({ status: 'open', title: 'Non-terminal evidence boundary' });
     const lifecycleBoundaryTicket = await store.createTicketWithEvent({
       ticket: {
         status: 'open',
@@ -137,6 +145,141 @@ async function main() {
     const terminalExpiredRun = await store.createRun({
       ticketId: terminalExpiredTicket.id, agentId: 11, status: 'pending'
     });
+    const nonTerminalEvidenceRun = await store.createRun({
+      ticketId: nonTerminalEvidenceTicket.id, agentId: 12, status: 'pending'
+    });
+
+    const nonTerminalClaim = await store.claimPendingRun({
+      leaseOwner: 'evidence-worker', leaseDurationMs: 30_000, eligibleRunIds: [nonTerminalEvidenceRun.id]
+    });
+    await store.transitionRun({
+      runId: nonTerminalEvidenceRun.id,
+      expectedRevision: nonTerminalClaim.run.revision,
+      fromStatuses: ['pending'],
+      toStatus: 'running',
+      leaseOwner: 'evidence-worker',
+      eventType: 'run.started'
+    });
+    await store.writeReplaySnapshot({
+      runId: nonTerminalEvidenceRun.id,
+      snapshot: { version: 1, authorityChecks: [], workspaceOperations: [] }
+    });
+    const operationKey = `run:${nonTerminalEvidenceRun.id}:agent:0:0:integration`;
+    const operationIntent = {
+      operation: 'writeFile',
+      args: { path: 'integration/report.txt', content: 'ready' },
+      preState: { existed: false },
+      authorityDecision: { status: 'allowed' },
+      target: {
+        targetId: 'local-workspace',
+        targetKind: 'localWorkspace',
+        targetPath: 'integration/report.txt',
+        targetResourceId: 'integration/report.txt'
+      }
+    };
+    assert.equal((await store.prepareTargetOperation({
+      runId: nonTerminalEvidenceRun.id,
+      ticketId: nonTerminalEvidenceTicket.id,
+      operationKey,
+      stepId: '0',
+      leaseOwner: 'evidence-worker',
+      intent: operationIntent
+    })).inserted, true);
+    assert.equal((await peer.prepareTargetOperation({
+      runId: nonTerminalEvidenceRun.id,
+      ticketId: nonTerminalEvidenceTicket.id,
+      operationKey,
+      stepId: '0',
+      leaseOwner: 'evidence-worker',
+      intent: { ...operationIntent, args: { content: 'ready', path: 'integration/report.txt' } }
+    })).inserted, false);
+    await store.appendRunEvidence({
+      runId: nonTerminalEvidenceRun.id,
+      ticketId: nonTerminalEvidenceTicket.id,
+      evidenceKey: `authority:${operationKey}`,
+      replayKey: 'authorityChecks',
+      replayItem: { operation: 'writeFile', status: 'allowed' },
+      event: { type: 'authority.allowed', payload: { operation: 'writeFile', status: 'allowed' } }
+    });
+    const targetCompletion = {
+      runId: nonTerminalEvidenceRun.id,
+      ticketId: nonTerminalEvidenceTicket.id,
+      operationKey,
+      historyRecord: {
+        operation: 'writeFile',
+        args: operationIntent.args,
+        outcome: 'succeeded'
+      },
+      receipt: {
+        operation: 'writeFile',
+        targetId: 'local-workspace',
+        targetKind: 'localWorkspace',
+        targetPath: 'integration/report.txt',
+        targetResourceId: 'integration/report.txt',
+        providerResponse: { path: 'integration/report.txt', size: 5 }
+      },
+      replayItem: {
+        operation: { operation: 'writeFile', args: operationIntent.args },
+        result: { path: 'integration/report.txt', size: 5 }
+      },
+      event: {
+        type: 'workspace.operation',
+        stepId: '0',
+        payload: { operation: 'writeFile', path: 'integration/report.txt', mutating: true }
+      }
+    };
+    const completionRace = await Promise.all([
+      store.completeTargetOperation(targetCompletion),
+      peer.completeTargetOperation(targetCompletion)
+    ]);
+    assert.equal(completionRace.filter(result => result.inserted).length, 1,
+      'concurrent completion must create one receipt/evidence bundle');
+    const targetState = await store.getTargetOperation(nonTerminalEvidenceRun.id, operationKey);
+    assert.ok(targetState.intent);
+    assert.ok(targetState.receipt);
+    assert.deepEqual(targetState.receipt.args, operationIntent.args);
+    assert.equal(targetState.receipt.result.path, 'integration/report.txt');
+    assert.equal(targetState.receipt.mutationReceipt.targetPath, 'integration/report.txt');
+    assert.equal((await store.listOperationReceipts(nonTerminalEvidenceRun.id)).length, 1);
+    const targetReplay = await store.getReplaySnapshot(nonTerminalEvidenceRun.id);
+    assert.equal(targetReplay.snapshot.authorityChecks.length, 1);
+    assert.equal(targetReplay.snapshot.workspaceOperations.length, 1);
+    const targetEvents = await store.listRunEvents(nonTerminalEvidenceRun.id);
+    assert.ok(targetEvents.some(event => event.type === 'workspace.operation_prepared'));
+    assert.ok(targetEvents.some(event => event.type === 'workspace.operation'));
+    assert.equal(verifyCurrentRunEventChain(targetEvents).chainValid, true);
+    await singleConnectionStore.withTargetOperationLock({
+      targetId: 'local-workspace',
+      paths: ['integration/report.txt']
+    }, () => singleConnectionStore.appendRunEvidence({
+      runId: nonTerminalEvidenceRun.id,
+      ticketId: nonTerminalEvidenceTicket.id,
+      evidenceKey: `authority:${operationKey}`,
+      replayKey: 'authorityChecks',
+      replayItem: { operation: 'writeFile', status: 'allowed' },
+      event: { type: 'authority.allowed', payload: { operation: 'writeFile', status: 'allowed' } }
+    }));
+    const targetLockEntered = deferred();
+    const releaseTargetLock = deferred();
+    let competingTargetLockEntered = false;
+    const heldTargetLock = store.withTargetOperationLock({
+      targetId: 'local-workspace',
+      paths: ['integration/report.txt']
+    }, async () => {
+      targetLockEntered.resolve();
+      await releaseTargetLock.promise;
+    });
+    await targetLockEntered.promise;
+    const competingTargetLock = peer.withTargetOperationLock({
+      targetId: 'local-workspace',
+      paths: ['integration/report.txt']
+    }, async () => { competingTargetLockEntered = true; });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(competingTargetLockEntered, false,
+      'session target lock must span committed intent, external effect, and completion transactions');
+    releaseTargetLock.resolve();
+    await Promise.all([heldTargetLock, competingTargetLock]);
+    assert.equal(competingTargetLockEntered, true);
 
     const lifecycleBatch = await store.createRunsAndStartTicket({
       ticketId: lifecycleBoundaryTicket.ticket.id,
@@ -1005,7 +1148,13 @@ async function main() {
   } finally {
     try { await store.pool.query(`DROP SCHEMA IF EXISTS ${store.schemaSql} CASCADE`); } catch (_) {}
     try { await store.pool.query(`DROP SCHEMA IF EXISTS ${nonemptyFoundationStore.schemaSql} CASCADE`); } catch (_) {}
-    await Promise.allSettled([store.close(), peer.close(), smallRecordStore.close(), nonemptyFoundationStore.close()]);
+    await Promise.allSettled([
+      store.close(),
+      peer.close(),
+      smallRecordStore.close(),
+      singleConnectionStore.close(),
+      nonemptyFoundationStore.close()
+    ]);
   }
 }
 

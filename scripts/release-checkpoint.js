@@ -59,6 +59,8 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'run-lease-repository-contract-test.js',
   'run-terminalization-repository-contract-test.js',
   'ticket-run-lifecycle-repository-contract-test.js',
+  'non-terminal-evidence-repository-contract-test.js',
+  'target-operation-reconciliation-test.js',
   'postgres-persistence-contract-test.js',
   'invalid-action-preflight-recovery-test.js',
   'exact-delete-target-absent-guard-test.js',

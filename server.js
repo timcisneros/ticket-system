@@ -31,6 +31,10 @@ const {
   JsonTicketRunLifecycleRepository,
   assertTicketRunLifecycleRepository
 } = require('./persistence/json/ticket-run-lifecycle-repository');
+const {
+  JsonNonTerminalEvidenceRepository,
+  assertNonTerminalEvidenceRepository
+} = require('./persistence/json/non-terminal-evidence-repository');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 
@@ -530,6 +534,7 @@ const TEST_INTERRUPTION_POINT = process.env.TEST_INTERRUPTION_POINT || '';
 const TEST_SKIP_STARTUP_RUN_RECOVERY = process.env.NODE_ENV === 'test' && process.env.TEST_SKIP_STARTUP_RUN_RECOVERY === 'true';
 const testInterruptFirstAuthority = new Set();
 const testInterruptFirstWorkspaceOp = new Set();
+const testInterruptFirstWorkspaceTargetEffect = new Set();
 
 async function maybeTestInterrupt(run, point) {
   if (!TEST_INTERRUPTION_POINT || TEST_INTERRUPTION_POINT !== point) return;
@@ -543,6 +548,10 @@ async function maybeTestInterrupt(run, point) {
   if (point === 'after_first_workspace.operation') {
     if (testInterruptFirstWorkspaceOp.has(run.id)) return;
     testInterruptFirstWorkspaceOp.add(run.id);
+  }
+  if (point === 'after_first_workspace_target_effect') {
+    if (testInterruptFirstWorkspaceTargetEffect.has(run.id)) return;
+    testInterruptFirstWorkspaceTargetEffect.add(run.id);
   }
 
   // Normal events are durably flushed before this hook runs. Await the
@@ -567,6 +576,28 @@ async function maybeTestInterrupt(run, point) {
 }
 
 // ── Resumable execution helpers (minimal) ─────────────────────────
+
+function canonicalOperationJson(value) {
+  if (Array.isArray(value)) return `[${value.map(item => canonicalOperationJson(item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).filter(key => value[key] !== undefined).sort()
+      .map(key => `${JSON.stringify(key)}:${canonicalOperationJson(value[key])}`).join(',')}}`;
+  }
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? 'null' : encoded;
+}
+
+function buildTargetOperationKey(run, operation, args, slot) {
+  const runId = run && Number.isSafeInteger(run.id) ? run.id : null;
+  if (!runId) throw new TypeError('A persisted run is required for a target operation key');
+  const normalizedSlot = String(slot || '').trim();
+  if (!normalizedSlot) throw new TypeError('A stable action slot is required for a target operation key');
+  const slotHash = crypto.createHash('sha256').update(normalizedSlot).digest('hex');
+  const inputHash = crypto.createHash('sha256')
+    .update(canonicalOperationJson({ operation, args: sanitizeSnapshotValue(args || {}) }))
+    .digest('hex');
+  return `run:${runId}:slot:${slotHash}:input:${inputHash}`;
+}
 
 function computeMutationFingerprint(operation, args) {
   if (operation === 'writeFile') return `writeFile:${args.path}`;
@@ -598,21 +629,6 @@ function findConflictingMutation(runId, operation, args) {
     }
     return true;
   });
-}
-
-function findCommittedMutation(runId, operation, args) {
-  const histories = readOperationHistory();
-  const fingerprint = computeMutationFingerprint(operation, args);
-  if (!fingerprint) return null;
-  return histories.find(h =>
-    h.runId === runId &&
-    h.operation === operation &&
-    computeMutationFingerprint(h.operation, h.args) === fingerprint
-  );
-}
-
-function mutationAlreadyCommitted(runId, operation, args) {
-  return !!findCommittedMutation(runId, operation, args);
 }
 
 function normalizeArtifactOwnershipPath(value) {
@@ -1069,7 +1085,11 @@ function reconstructResumableState(run) {
   let hasDuplicateMutation = false;
   for (const m of mutatingOps) {
     const p = m.payload;
-    const key = `${p.operation}:${p.path}`;
+    // Stable operation keys distinguish intentional same-path actions in
+    // different slots while still detecting replayed completion evidence.
+    // Pre-intent refusal events have no key and did not commit a mutation.
+    const key = typeof p.operationKey === 'string' && p.operationKey ? p.operationKey : null;
+    if (!key) continue;
     if (seenMutations.has(key)) {
       hasDuplicateMutation = true;
       break;
@@ -1084,6 +1104,7 @@ function reconstructResumableState(run) {
     const p = m.payload;
     const hasAuth = authEvents.some(a => {
       const ap = a.payload || {};
+      if (p.operationKey) return ap.evidenceKey === `authority:${p.operationKey}`;
       return ap.operation === p.operation && ap.path === p.path;
     });
     if (!hasAuth) {
@@ -1576,6 +1597,7 @@ let dataDirWriterLockHeartbeatTimer = null;
 let runLeaseRepository = null;
 let runTerminalizationRepository = null;
 let ticketRunLifecycleRepository = null;
+let nonTerminalEvidenceRepository = null;
 let dataVersion = 0;
 const pageRenderCache = new Map();
 const pageRenderInFlight = new Map();
@@ -6040,6 +6062,24 @@ function getTicketRunLifecycleRepository() {
   return ticketRunLifecycleRepository;
 }
 
+function getNonTerminalEvidenceRepository() {
+  if (nonTerminalEvidenceRepository) return nonTerminalEvidenceRepository;
+  nonTerminalEvidenceRepository = assertNonTerminalEvidenceRepository(new JsonNonTerminalEvidenceRepository({
+    readOperationHistory,
+    writeOperationHistory,
+    readReplaySnapshot: runId => {
+      const run = readRuns().find(item => item.id === runId);
+      return run ? readRunReplaySnapshot(run) : null;
+    },
+    writeReplaySnapshot: writeRunReplaySnapshot,
+    getRunEvents,
+    appendEvent,
+    acquireTargetLock: ({ run, operation, args }) => acquireWorkspaceMutationLock(run, operation, args),
+    sanitizePayload: sanitizeSnapshotValue
+  }));
+  return nonTerminalEvidenceRepository;
+}
+
 function isRunLeaseExpired(run, nowMs = Date.now()) {
   if (!run) return false;
   // A running run without complete lease authority is already orphaned and may
@@ -7102,6 +7142,11 @@ async function expireStaleRunLeases() {
   });
 
   for (const run of expiredRuns) {
+    const targetReconciliation = await reconcilePreparedTargetOperations(run);
+    if (targetReconciliation.uncertain > 0) {
+      await interruptAgentRun(run, 'target operation effect requires explicit reconciliation');
+      continue;
+    }
     // Check if run is safe to resume before interrupting
     const resumeState = reconstructResumableState(run);
     if (resumeState && resumeState.safeToResumeExecution) {
@@ -7141,6 +7186,130 @@ async function expireStaleRunLeases() {
   }
 
   return expiredRuns;
+}
+
+async function reconcilePreparedTargetOperations(run) {
+  const preparedEvents = getRunEvents(run.id).filter(event =>
+    event && event.type === 'workspace.operation_prepared' && event.payload && event.payload.operationKey
+  );
+  let applied = 0;
+  let notApplied = 0;
+  let uncertain = 0;
+
+  for (const preparedEvent of preparedEvents) {
+    const preparedIntent = preparedEvent.payload.intent || {};
+    const args = preparedIntent.args || {};
+    const status = await getNonTerminalEvidenceRepository().withTargetOperationLock({
+      run,
+      targetId: preparedIntent.target && preparedIntent.target.targetId
+        ? preparedIntent.target.targetId
+        : getRunWorkspaceProvider(run).id,
+      paths: [args.path, args.nextPath].filter(value => typeof value === 'string'),
+      operation: preparedIntent.operation,
+      args
+    }, () => reconcilePreparedTargetOperation(run, preparedEvent));
+    if (status === 'applied') applied += 1;
+    if (status === 'not_applied') notApplied += 1;
+    if (status === 'uncertain') uncertain += 1;
+  }
+  return { applied, notApplied, uncertain };
+}
+
+async function reconcilePreparedTargetOperation(run, preparedEvent) {
+  const operationKey = preparedEvent.payload.operationKey;
+  const state = await getNonTerminalEvidenceRepository().getTargetOperation(run.id, operationKey);
+  if (state.receipt) {
+    await completeWorkspaceMutationEvidence({
+      run,
+      step: preparedEvent.stepId == null ? 0 : preparedEvent.stepId,
+      operation: state.receipt.operation,
+      args: state.receipt.args || {},
+      operationKey,
+      operationContext: {
+        startedAt: state.receipt.timestamp ? Date.parse(state.receipt.timestamp) : Date.now(),
+        receiptTimestamp: state.receipt.mutationReceipt && state.receipt.mutationReceipt.timestamp
+          ? state.receipt.mutationReceipt.timestamp
+          : state.receipt.timestamp,
+        operationDescriptor: { operation: state.receipt.operation, args: state.receipt.args || {} }
+      },
+      preState: state.receipt.preState,
+      postState: state.receipt.postState,
+      result: state.receipt.result,
+      error: state.receipt.error ? targetOperationErrorFromReceipt(state.receipt) : null,
+      authorityDecision: state.receipt.authorityDecision || null,
+      isRecovery: state.receipt.isRecovery === true
+    });
+    return 'evidence_repaired';
+  }
+  if (!state.intent) return 'none';
+  const intent = state.intent;
+  const target = intent.target || {};
+  if (target.targetId !== getRunWorkspaceProvider(run).id) {
+    await appendEvent({
+      type: 'workspace.operation_reconciliation_required',
+      ticketId: run.ticketId,
+      runId: run.id,
+      stepId: preparedEvent.stepId || null,
+      payload: {
+        operationKey,
+        operation: intent.operation || null,
+        reason: 'target provider does not match the active run target',
+        target: sanitizeSnapshotValue(target)
+      }
+    });
+    return 'uncertain';
+  }
+  const reconciliation = classifyPreparedWorkspaceMutation(getRunWorkspaceProvider(run), intent);
+  if (reconciliation.status === 'not_applied') return 'not_applied';
+  if (reconciliation.status === 'uncertain') {
+    await appendEvent({
+      type: 'workspace.operation_reconciliation_required',
+      ticketId: run.ticketId,
+      runId: run.id,
+      stepId: preparedEvent.stepId || null,
+      payload: {
+        operationKey,
+        operation: intent.operation || null,
+        reason: 'current target state matches neither the prepared pre-state nor the intended effect',
+        currentState: sanitizeSnapshotValue(reconciliation.current)
+      }
+    });
+    appendRunLog(run, 'workspace:reconciliation_required',
+      `Target operation ${operationKey} requires explicit reconciliation before retry`, {
+        operationKey,
+        operation: intent.operation || null,
+        currentState: sanitizeSnapshotValue(reconciliation.current)
+      });
+    return 'uncertain';
+  }
+
+  const result = buildReconciledWorkspaceResult(intent.operation, intent.args || {}, intent.preState);
+  const postState = captureWorkspacePostState(getRunWorkspaceProvider(run), intent.operation, intent.args || {});
+  const record = await completeWorkspaceMutationEvidence({
+    run,
+    step: preparedEvent.stepId == null ? 0 : preparedEvent.stepId,
+    operation: intent.operation,
+    args: intent.args || {},
+    operationKey,
+    operationContext: {
+      startedAt: preparedEvent.ts ? Date.parse(preparedEvent.ts) : Date.now(),
+      receiptTimestamp: intent.attemptStartedAt || preparedEvent.ts || null,
+      operationDescriptor: { operation: intent.operation, args: intent.args || {} }
+    },
+    preState: intent.preState,
+    postState,
+    result,
+    authorityDecision: intent.authorityDecision || null,
+    isRecovery: true
+  });
+  appendRunLog(run, 'workspace:reconciled',
+    `Confirmed target effect for prepared operation ${operationKey}`, {
+      operationKey,
+      historyId: record.id,
+      operation: intent.operation,
+      status: 'applied_effect_confirmed'
+    });
+  return 'applied';
 }
 
 async function persistRunWorkflowStep(runId, step, status = 'started') {
@@ -11449,16 +11618,20 @@ function buildAuthorityEvidence(run, operation, pathValue, status, rule, reason)
   };
 }
 
-async function recordAuthorityEvidence(run, evidence) {
+async function recordAuthorityEvidence(run, evidence, evidenceKey = null) {
   const normalized = sanitizeSnapshotValue(evidence);
-  appendRunReplaySnapshotItem(run.id, 'authorityChecks', normalized);
-  await appendEvent({
-    type: evidence.status === 'denied' ? 'authority.denied' : 'authority.allowed',
-    ticketId: run.ticketId,
+  const recorded = await getNonTerminalEvidenceRepository().appendRunEvidence({
     runId: run.id,
-    payload: normalized
+    ticketId: run.ticketId,
+    evidenceKey: evidenceKey || `authority:${run.id}:${crypto.randomUUID()}`,
+    replayKey: 'authorityChecks',
+    replayItem: normalized,
+    event: {
+      type: evidence.status === 'denied' ? 'authority.denied' : 'authority.allowed',
+      payload: normalized
+    }
   });
-  if (evidence.status !== 'denied') {
+  if (evidence.status !== 'denied' && recorded.inserted) {
     await maybeTestInterrupt(run, 'after_first_authority.allowed');
   }
   return normalized;
@@ -11502,8 +11675,9 @@ function createAuthorityDeniedError(evidence, operation, args) {
   return error;
 }
 
-async function checkWorkspaceMutationAuthority(run, operation, args) {
+async function checkWorkspaceMutationAuthority(run, operation, args, operationKey = null) {
   if (!AGENT_MUTATING_OPERATIONS.includes(operation)) return null;
+  const authorityEvidenceKey = operationKey ? `authority:${operationKey}` : null;
 
   const paths = [];
   if (args && args.path) paths.push({ role: 'path', path: args.path });
@@ -11512,7 +11686,7 @@ async function checkWorkspaceMutationAuthority(run, operation, args) {
 
   if (!isRunLeaseHeldByCurrentProcess(run)) {
     const evidence = buildAuthorityEvidence(run, operation, primaryPath, 'denied', 'lease_owner', 'Current process does not hold the run lease');
-    await recordAuthorityEvidence(run, evidence);
+    await recordAuthorityEvidence(run, evidence, authorityEvidenceKey);
     throw createAuthorityDeniedError(evidence, operation, args);
   }
 
@@ -11520,7 +11694,7 @@ async function checkWorkspaceMutationAuthority(run, operation, args) {
     const matchedProtectedPattern = getProtectedWorkspacePathMatch(pathItem.path);
     if (matchedProtectedPattern) {
       const evidence = buildAuthorityEvidence(run, operation, pathItem.path, 'denied', 'protected_path', matchedProtectedPattern);
-      await recordAuthorityEvidence(run, evidence);
+      await recordAuthorityEvidence(run, evidence, authorityEvidenceKey);
       throw createAuthorityDeniedError(evidence, operation, args);
     }
   }
@@ -11533,14 +11707,15 @@ async function checkWorkspaceMutationAuthority(run, operation, args) {
         ...buildAuthorityEvidence(run, operation, outsideOwnedPath.path, 'denied', 'owned_output_path', 'Mutation path is outside owned output paths'),
         ownedOutputPaths
       };
-      await recordAuthorityEvidence(run, evidence);
+      await recordAuthorityEvidence(run, evidence, authorityEvidenceKey);
       throw createAuthorityDeniedError(evidence, operation, args);
     }
   }
 
   return await recordAuthorityEvidence(
     run,
-    buildAuthorityEvidence(run, operation, primaryPath, 'allowed', 'workspace_mutation', 'Runtime authority checks passed')
+    buildAuthorityEvidence(run, operation, primaryPath, 'allowed', 'workspace_mutation', 'Runtime authority checks passed'),
+    authorityEvidenceKey
   );
 }
 
@@ -12297,11 +12472,11 @@ function allocationLogSuffix(run) {
   return ` (allocation plan ${run.allocationPlanId}, item ${run.allocationItemId})`;
 }
 
-async function interruptAgentRun(run, reason) {
-  return withTicketTransitionLock(run && run.ticketId, () => interruptAgentRunUnlocked(run, reason));
+async function interruptAgentRun(run, reason, options = {}) {
+  return withTicketTransitionLock(run && run.ticketId, () => interruptAgentRunUnlocked(run, reason, options));
 }
 
-async function interruptAgentRunUnlocked(run, reason) {
+async function interruptAgentRunUnlocked(run, reason, options = {}) {
   advanceRunPhase(run, 'terminalization');
   const phase = classifyInterruptionPhase(run);
   ensureInterruptedRunReplaySnapshot(run, reason, phase);
@@ -12324,7 +12499,7 @@ async function interruptAgentRunUnlocked(run, reason) {
     error: reason,
     failure,
     triage,
-    allowExpiredLease: isRunLeaseExpired(run),
+    allowExpiredLease: options.allowStaleLease === true || isRunLeaseExpired(run),
     beforeReplayEvents: triage ? [{
       type: 'run.triage_created',
       payload: { triage }
@@ -12574,6 +12749,26 @@ async function interruptStaleRunsOnStartup() {
   }
 
   for (const run of staleRuns) {
+    const targetReconciliation = await reconcilePreparedTargetOperations(run);
+    if (targetReconciliation.uncertain > 0) {
+      // The DATA_DIR writer lock proved the former process is gone. Revoke its
+      // unexpired process lease before terminalizing the uncertain run; this is
+      // startup recovery authority, not a competing worker stealing a live run.
+      const runs = readRuns();
+      const staleRun = runs.find(item => item.id === run.id);
+      if (staleRun) {
+        staleRun.leaseOwner = null;
+        staleRun.leaseExpiresAt = null;
+        staleRun.lastHeartbeatAt = null;
+        writeRuns(runs);
+        run.leaseOwner = null;
+        run.leaseExpiresAt = null;
+        run.lastHeartbeatAt = null;
+      }
+      await interruptAgentRun(run, 'target operation effect requires explicit reconciliation', { allowStaleLease: true });
+      interruptedCount++;
+      continue;
+    }
     const runEvents = readRunScopedEvents(run.id);
     const resumeState = reconstructResumableState(run);
     if (resumeState && resumeState.safeToResumeExecution) {
@@ -14440,13 +14635,100 @@ function captureWorkspacePostState(runWorkspaceProvider, operation, args) {
   return null;
 }
 
-function persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, error, authorityDecision = null) {
-  const histories = readOperationHistory();
-  const newId = nextId(histories);
+function markOperationEvidenceRecorded(value) {
+  if (value && (typeof value === 'object' || typeof value === 'function')) {
+    Object.defineProperty(value, '_operationEvidenceRecorded', {
+      value: true,
+      configurable: true,
+      enumerable: false
+    });
+  }
+  return value;
+}
+
+function targetOperationErrorFromReceipt(record) {
+  const error = new Error(record.error || 'Target operation previously failed');
+  error.code = record.errorCode || 'TARGET_OPERATION_PREVIOUSLY_FAILED';
+  error.failureKind = record.failureKind || 'workspace_error';
+  error.historyId = record.id;
+  return markOperationEvidenceRecorded(error);
+}
+
+function currentWorkspaceMutationState(provider, operation, args) {
+  return captureWorkspacePreState(provider, operation, args);
+}
+
+function buildReconciledWorkspaceResult(operation, args, preState) {
+  if (operation === 'createFolder') {
+    return { path: args.path, status: preState && preState.existed ? 'already_exists_noop' : 'created' };
+  }
+  if (operation === 'writeFile') return { path: args.path, size: Buffer.byteLength(String(args.content || ''), 'utf8') };
+  if (operation === 'renamePath') return { path: args.nextPath, status: 'renamed' };
+  if (operation === 'deletePath') {
+    return { path: args.path, status: preState && preState.existed ? 'deleted' : 'already_missing_noop' };
+  }
+  throw new TypeError(`Unsupported target reconciliation operation: ${operation}`);
+}
+
+function classifyPreparedWorkspaceMutation(provider, intent) {
+  const operation = intent.operation;
+  const args = intent.args || {};
+  const before = intent.preState || null;
+  const current = currentWorkspaceMutationState(provider, operation, args);
+  if (canonicalOperationJson(current) === canonicalOperationJson(before)) return { status: 'not_applied', current };
+
+  if (operation === 'createFolder') {
+    if (current && current.existed === true && current.type === 'directory') return { status: 'applied', current };
+  } else if (operation === 'writeFile') {
+    const expectedHash = crypto.createHash('sha256').update(String(args.content || '')).digest('hex');
+    if (current && current.existed === true && current.type === 'file' && current.contentHash === expectedHash) {
+      return { status: 'applied', current };
+    }
+  } else if (operation === 'renamePath') {
+    const source = current && current.source;
+    const destination = current && current.destination;
+    const expectedSource = before && before.source;
+    const destinationMatches = destination && destination.existed === true && (
+      !expectedSource || (
+        (!expectedSource.type || destination.type === expectedSource.type) &&
+        (!expectedSource.contentHash || destination.contentHash === expectedSource.contentHash)
+      )
+    );
+    if (source && source.existed === false && destinationMatches) return { status: 'applied', current };
+  } else if (operation === 'deletePath') {
+    if (current && current.existed === false) return { status: 'applied', current };
+  }
+  return { status: 'uncertain', current };
+}
+
+function createTargetReconciliationError(operationKey, intent, current) {
+  const error = new Error(`Target operation ${operationKey} has an uncertain external effect and requires explicit reconciliation`);
+  error.code = 'TARGET_OPERATION_RECONCILIATION_REQUIRED';
+  error.failureKind = 'runtime_failed';
+  error.operationKey = operationKey;
+  error.intent = sanitizeSnapshotValue(intent);
+  error.currentState = sanitizeSnapshotValue(current);
+  return error;
+}
+
+async function completeWorkspaceMutationEvidence({
+  run,
+  step,
+  operation,
+  args,
+  operationKey,
+  operationContext,
+  preState,
+  postState,
+  result,
+  error = null,
+  authorityDecision,
+  isRecovery = false
+}) {
   const target = buildTargetEvidenceMetadata(run, operation, args);
   const mutationReceipt = buildTargetMutationReceipt(
     run,
-    newId,
+    null,
     operation,
     args,
     preState,
@@ -14455,29 +14737,156 @@ function persistWorkspaceOperationHistory(run, step, operation, args, preState, 
     error,
     authorityDecision
   );
-  const record = {
-    id: newId,
-    timestamp: createLogTimestamp(),
-    ticketId: run.ticketId,
-    allocationPlanId: run.allocationPlanId || null,
-    allocationItemId: run.allocationItemId || null,
+  mutationReceipt.timestamp = operationContext.receiptTimestamp || new Date(operationContext.startedAt || Date.now()).toISOString();
+  mutationReceipt.operationKey = operationKey;
+  mutationReceipt.reconciliation = isRecovery ? 'applied_effect_confirmed' : null;
+  const startedAt = operationContext.startedAt || Date.now();
+  const blocked = Boolean(error && (
+    error.failureKind === 'protected_path' ||
+    ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code)
+  ));
+  const operationDescriptor = operationContext.operationDescriptor || { operation, args };
+  let completion;
+  try {
+    completion = await getNonTerminalEvidenceRepository().completeTargetOperation({
     runId: run.id,
-    step,
-    operation,
-    args: sanitizeSnapshotValue(args),
-    preState,
-    postState,
-    result: error ? null : sanitizeSnapshotValue(result),
-    error: error ? (error.message || String(error)) : null,
-    errorCode: error ? error.code || null : null,
-    failureKind: error ? error.failureKind || null : null,
-    ...target,
-    authorityDecision: authorityDecision ? sanitizeSnapshotValue(authorityDecision) : null,
-    mutationReceipt
-  };
-  histories.push(record);
-  writeOperationHistory(histories);
-  return record;
+    ticketId: run.ticketId,
+    operationKey,
+    historyRecord: {
+      allocationPlanId: run.allocationPlanId || null,
+      allocationItemId: run.allocationItemId || null,
+      step,
+      operation,
+      args: sanitizeSnapshotValue(args),
+      preState: sanitizeSnapshotValue(preState),
+      postState: sanitizeSnapshotValue(postState),
+      result: error ? null : sanitizeSnapshotValue(result),
+      error: error ? (error.message || String(error)) : null,
+      errorCode: error ? error.code || null : null,
+      failureKind: error ? error.failureKind || null : null,
+      outcome: error ? 'failed' : 'succeeded',
+      isRecovery,
+      ...target,
+      authorityDecision: authorityDecision ? sanitizeSnapshotValue(authorityDecision) : null
+    },
+    receipt: mutationReceipt,
+    replayItem: {
+      operation: sanitizeSnapshotValue(operationDescriptor),
+      ...(error ? { error: error.message || String(error), blocked, reason: error.reason || null } : { result: sanitizeSnapshotValue(result) }),
+      startedAt: new Date(startedAt).toISOString(),
+      durationMs: Date.now() - startedAt,
+      workspaceRoot: getRunWorkspaceProvider(run).root,
+      executionWorkspaceType: run.executionWorkspaceType || 'main',
+      allocationPlanId: run.allocationPlanId || null,
+      allocationItemId: run.allocationItemId || null,
+      ownedOutputPaths: getRunOwnedOutputPaths(run),
+      isRecovery,
+      ...(operationContext.replayMetadata || {}),
+      ...target
+    },
+    event: {
+      type: 'workspace.operation',
+      stepId: String(step),
+      payload: {
+        operation,
+        path: args.path || null,
+        nextPath: args.nextPath || null,
+        mutating: true,
+        input: sanitizeSnapshotValue(args),
+        ...(error ? { error: error.message || String(error), blocked, reason: error.reason || null } : { result: sanitizeSnapshotValue(result) }),
+        isRecovery,
+        ...(operationContext.eventMetadata || {}),
+        ...target
+      }
+    }
+    });
+  } catch (persistenceError) {
+    // The target may already have changed. The next attempt must reconcile or
+    // repair evidence; it must not classify repository failure as target failure.
+    markOperationEvidenceRecorded(persistenceError);
+    throw persistenceError;
+  }
+  if (!error && completion.inserted) await maybeTestInterrupt(run, 'after_first_workspace.operation');
+  return completion.record;
+}
+
+async function beginWorkspaceMutation(run, step, operation, args, authorityDecision, operationKey, operationContext, provider) {
+  const state = await getNonTerminalEvidenceRepository().getTargetOperation(run.id, operationKey);
+  if (state.receipt) {
+    operationContext.receiptTimestamp = state.receipt.mutationReceipt && state.receipt.mutationReceipt.timestamp
+      ? state.receipt.mutationReceipt.timestamp
+      : state.receipt.timestamp;
+    await completeWorkspaceMutationEvidence({
+      run,
+      step,
+      operation,
+      args,
+      operationKey,
+      operationContext,
+      preState: state.receipt.preState,
+      postState: state.receipt.postState,
+      result: state.receipt.result,
+      error: state.receipt.error ? targetOperationErrorFromReceipt(state.receipt) : null,
+      authorityDecision: state.receipt.authorityDecision,
+      isRecovery: state.receipt.isRecovery === true
+    });
+    if (state.receipt.error) throw targetOperationErrorFromReceipt(state.receipt);
+    const priorResult = { ...(state.receipt.result || {}), historyId: state.receipt.id, skipped: true };
+    return { completedResult: markOperationEvidenceRecorded(priorResult) };
+  }
+
+  let intent = state.intent;
+  if (intent) {
+    operationContext.receiptTimestamp = intent.attemptStartedAt || operationContext.receiptTimestamp;
+    const reconciliation = classifyPreparedWorkspaceMutation(provider, intent);
+    if (reconciliation.status === 'uncertain') {
+      throw createTargetReconciliationError(operationKey, intent, reconciliation.current);
+    }
+    if (reconciliation.status === 'applied') {
+      const reconciledResult = buildReconciledWorkspaceResult(operation, args, intent.preState);
+      const postState = captureWorkspacePostState(provider, operation, args);
+      const record = await completeWorkspaceMutationEvidence({
+        run,
+        step,
+        operation,
+        args,
+        operationKey,
+        operationContext,
+        preState: intent.preState,
+        postState,
+        result: reconciledResult,
+        authorityDecision: intent.authorityDecision || authorityDecision,
+        isRecovery: true
+      });
+      return {
+        completedResult: markOperationEvidenceRecorded({
+          ...reconciledResult,
+          historyId: record.id,
+          skipped: true,
+          reconciled: true
+        })
+      };
+    }
+    return { preState: intent.preState };
+  }
+
+  const preState = captureWorkspacePreState(provider, operation, args);
+  const prepared = await getNonTerminalEvidenceRepository().prepareTargetOperation({
+    runId: run.id,
+    ticketId: run.ticketId,
+    operationKey,
+    stepId: String(step),
+    leaseOwner: RUN_LEASE_OWNER,
+    intent: {
+      operation,
+      args: sanitizeSnapshotValue(args),
+      preState: sanitizeSnapshotValue(preState),
+      authorityDecision: authorityDecision ? sanitizeSnapshotValue(authorityDecision) : null,
+      attemptStartedAt: new Date(operationContext.startedAt || Date.now()).toISOString(),
+      target: buildTargetEvidenceMetadata(run, operation, args)
+    }
+  });
+  return { preState: prepared.intent.preState };
 }
 
 function parseWorkspaceOperation(action) {
@@ -15146,7 +15555,28 @@ async function executeHandoffTask(run, handoffInput, step = 0) {
     payload: evidenceBase
   });
 
-  const result = await executeWorkspaceOperation(executorRun, workspaceAction, step);
+  const operationStartedAt = Date.now();
+  const result = await executeWorkspaceOperation(executorRun, workspaceAction, step, {
+    slot: `handoff:${step}`,
+    startedAt: operationStartedAt,
+    operationDescriptor: workspaceAction,
+    replayMetadata: {
+      handoffTask: {
+        plannerAgentId: run.agentId,
+        plannerAgentName: run.agentName || (planner ? planner.name : null),
+        executorAgentId: validated.executor.id,
+        executorAgentName: validated.executor.name
+      }
+    },
+    eventMetadata: {
+      handoffTask: {
+        plannerAgentId: run.agentId,
+        plannerAgentName: run.agentName || (planner ? planner.name : null),
+        executorAgentId: validated.executor.id,
+        executorAgentName: validated.executor.name
+      }
+    }
+  });
   const executionEvidence = {
     ...evidenceBase,
     status: 'executed',
@@ -15161,7 +15591,7 @@ async function executeHandoffTask(run, handoffInput, step = 0) {
     payload: executionEvidence
   });
 
-  return {
+  return markOperationEvidenceRecorded({
     status: 'executed',
     executorAgentId: validated.executor.id,
     executorAgentName: validated.executor.name,
@@ -15169,7 +15599,7 @@ async function executeHandoffTask(run, handoffInput, step = 0) {
     args: validated.args,
     result,
     historyId: result && result.historyId ? result.historyId : null
-  };
+  });
 }
 
 function isWorkflowDraftObjective(objective) {
@@ -15431,29 +15861,43 @@ function sanitizeOperationArgs(operation, args) {
   return { args: sanitized, strippedKeys };
 }
 
-async function executeWorkspaceOperation(run, action, step = 0) {
+async function executeWorkspaceOperation(run, action, step = 0, options = {}) {
   const parsed = parseWorkspaceOperation(action);
   if (!AGENT_MUTATING_OPERATIONS.includes(parsed.operation)) {
-    return executeWorkspaceOperationUnlocked(run, action, step);
+    return executeWorkspaceOperationUnlocked(run, action, step, options);
   }
   const sanitized = sanitizeOperationArgs(parsed.operation, parsed.args).args;
-  const releaseMutationLock = await acquireWorkspaceMutationLock(run, parsed.operation, sanitized);
-  try {
+  const operationContext = {
+    ...options,
+    startedAt: options.startedAt || Date.now()
+  };
+  operationContext.operationKey = options.operationKey || buildTargetOperationKey(
+    run,
+    parsed.operation,
+    sanitized,
+    options.slot || `step:${step}`
+  );
+  return getNonTerminalEvidenceRepository().withTargetOperationLock({
+    run,
+    targetId: getRunWorkspaceProvider(run).id,
+    paths: [sanitized.path, sanitized.nextPath].filter(value => typeof value === 'string'),
+    operation: parsed.operation,
+    args: sanitized
+  }, async () => {
     if (run && isRunInterrupted(run.id)) {
       const error = new Error('Run interrupted');
       error.code = 'RUN_INTERRUPTED';
       throw error;
     }
-    return await executeWorkspaceOperationUnlocked(run, action, step);
-  } finally {
-    releaseMutationLock();
-  }
+    return await executeWorkspaceOperationUnlocked(run, action, step, operationContext);
+  });
 }
 
-async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
+async function executeWorkspaceOperationUnlocked(run, action, step = 0, operationContext = {}) {
   const { operation, args: rawArgs } = parseWorkspaceOperation(action);
   const { args, strippedKeys } = sanitizeOperationArgs(operation, rawArgs);
   const runWorkspaceProvider = getRunWorkspaceProvider(run);
+  const operationKey = operationContext.operationKey || null;
 
   if (AGENT_MUTATING_OPERATIONS.includes(operation) && eventAppendFailure) {
     const error = new Error(`Workspace mutations are disabled because event persistence failed: ${eventAppendFailure.message}`);
@@ -15525,22 +15969,9 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
   if (operation === 'createFolder') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.createFolder, 'createFolder args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
-    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
+    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue }, operationKey);
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
-
-    // Skip if already committed in this run's ledger
-    const committed = findCommittedMutation(run.id, operation, args);
-    if (committed && committed.result) {
-      appendRunLog(run, 'workspace:create', `Skipped createFolder on ${pathValue} (already committed in run ledger)`, {
-        operation,
-        args: { path: pathValue },
-        status: 'already_exists_noop',
-        kind: 'folder',
-        ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
-      });
-      return { path: pathValue, status: 'already_exists_noop', historyId: committed.id, skipped: true };
-    }
 
     // Reject if a different mutation already committed on the same path
     const conflict = findConflictingMutation(run.id, operation, args);
@@ -15574,16 +16005,28 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
     }
     await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
-    const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
+    const prepared = await beginWorkspaceMutation(
+      run, step, operation, args, authorityDecision, operationKey, operationContext, runWorkspaceProvider
+    );
+    if (prepared.completedResult) return prepared.completedResult;
+    const preState = prepared.preState;
     let historyRecord = null;
     try {
       result = runWorkspaceProvider.createFolder(pathValue);
+      await maybeTestInterrupt(run, 'after_first_workspace_target_effect');
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null, authorityDecision);
+      historyRecord = await completeWorkspaceMutationEvidence({
+        run, step, operation, args, operationKey, operationContext, preState, postState, result, authorityDecision
+      });
     } catch (error) {
-      const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error, authorityDecision);
-      if (historyRecord) error.historyId = historyRecord.id;
+      if (!error._operationEvidenceRecorded) {
+        const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
+        historyRecord = await completeWorkspaceMutationEvidence({
+          run, step, operation, args, operationKey, operationContext, preState, postState, result: null, error, authorityDecision
+        });
+        if (historyRecord) error.historyId = historyRecord.id;
+        markOperationEvidenceRecorded(error);
+      }
       throw error;
     }
     const message = result.status === 'already_exists_noop'
@@ -15596,31 +16039,19 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
       kind: 'folder',
       ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
     });
-    return { ...result, historyId: historyRecord ? historyRecord.id : null };
+    return markOperationEvidenceRecorded({ ...result, historyId: historyRecord ? historyRecord.id : null });
   }
 
   if (operation === 'writeFile') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.writeFile, 'writeFile args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const content = requireStringArg(args, 'content');
-    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue, content });
+    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue, content }, operationKey);
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     if (runWorkspaceProvider.exists(pathValue, { allowHidden: true })) {
       blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     }
     assertAgentWorkspacePathAllowed(pathValue);
-
-    // Skip if already committed in this run's ledger
-    const committed = findCommittedMutation(run.id, operation, args);
-    if (committed && committed.result) {
-      appendRunLog(run, 'workspace:write', `Skipped writeFile on ${pathValue} (already committed in run ledger)`, {
-        operation,
-        args: { path: pathValue },
-        status: 'skipped_already_committed',
-        ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
-      });
-      return { ...committed.result, size: committed.result.size || 0, historyId: committed.id, skipped: true };
-    }
 
     // Reject if a different mutation already committed on the same path
     const conflict = findConflictingMutation(run.id, operation, args);
@@ -15654,16 +16085,29 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
     }
     await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
-    const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
+    const prepared = await beginWorkspaceMutation(
+      run, step, operation, args, authorityDecision, operationKey, operationContext, runWorkspaceProvider
+    );
+    if (prepared.completedResult) return prepared.completedResult;
+    const preState = prepared.preState;
     let historyRecord = null;
     try {
       result = runWorkspaceProvider.writeFile(pathValue, content);
+      await maybeTestInterrupt(run, 'after_first_workspace_target_effect');
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null, authorityDecision);
+      const persistedResult = { ...result, size: Buffer.byteLength(content, 'utf8') };
+      historyRecord = await completeWorkspaceMutationEvidence({
+        run, step, operation, args, operationKey, operationContext, preState, postState, result: persistedResult, authorityDecision
+      });
     } catch (error) {
-      const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error, authorityDecision);
-      if (historyRecord) error.historyId = historyRecord.id;
+      if (!error._operationEvidenceRecorded) {
+        const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
+        historyRecord = await completeWorkspaceMutationEvidence({
+          run, step, operation, args, operationKey, operationContext, preState, postState, result: null, error, authorityDecision
+        });
+        if (historyRecord) error.historyId = historyRecord.id;
+        markOperationEvidenceRecorded(error);
+      }
       throw error;
     }
     appendRunLog(run, 'workspace:write', `Ran writeFile on ${result.path}`, {
@@ -15671,32 +16115,24 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
       args: { path: result.path },
       ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
     });
-    return { ...result, size: Buffer.byteLength(content, 'utf8'), historyId: historyRecord ? historyRecord.id : null };
+    return markOperationEvidenceRecorded({
+      ...result,
+      size: Buffer.byteLength(content, 'utf8'),
+      historyId: historyRecord ? historyRecord.id : null
+    });
   }
 
   if (operation === 'renamePath') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.renamePath, 'renamePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
     const nextPath = requireStringArg(args, 'nextPath', { nonEmpty: true });
-    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue, nextPath });
+    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue, nextPath }, operationKey);
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue, nextPath }, pathValue, runWorkspaceProvider);
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue, nextPath }, nextPath, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue, nextPath }, pathValue, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue, nextPath }, nextPath, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
     assertAgentWorkspacePathAllowed(nextPath);
-
-    // Skip if already committed in this run's ledger
-    const committed = findCommittedMutation(run.id, operation, args);
-    if (committed && committed.result) {
-      appendRunLog(run, 'workspace:rename', `Skipped renamePath from ${pathValue} to ${nextPath} (already committed in run ledger)`, {
-        operation,
-        args: { path: pathValue, nextPath },
-        status: 'already_committed_noop',
-        ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
-      });
-      return { ...committed.result, status: committed.result.status || 'renamed', historyId: committed.id, skipped: true };
-    }
 
     // Reject if a different mutation already committed on the same path
     const conflict = findConflictingMutation(run.id, operation, args);
@@ -15712,16 +16148,28 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
     await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue, nextPath }, pathValue);
     await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue, nextPath }, nextPath);
 
-    const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
+    const prepared = await beginWorkspaceMutation(
+      run, step, operation, args, authorityDecision, operationKey, operationContext, runWorkspaceProvider
+    );
+    if (prepared.completedResult) return prepared.completedResult;
+    const preState = prepared.preState;
     let historyRecord = null;
     try {
       result = { ...runWorkspaceProvider.rename(pathValue, nextPath), status: 'renamed' };
+      await maybeTestInterrupt(run, 'after_first_workspace_target_effect');
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null, authorityDecision);
+      historyRecord = await completeWorkspaceMutationEvidence({
+        run, step, operation, args, operationKey, operationContext, preState, postState, result, authorityDecision
+      });
     } catch (error) {
-      const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error, authorityDecision);
-      if (historyRecord) error.historyId = historyRecord.id;
+      if (!error._operationEvidenceRecorded) {
+        const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
+        historyRecord = await completeWorkspaceMutationEvidence({
+          run, step, operation, args, operationKey, operationContext, preState, postState, result: null, error, authorityDecision
+        });
+        if (historyRecord) error.historyId = historyRecord.id;
+        markOperationEvidenceRecorded(error);
+      }
       throw error;
     }
     appendRunLog(run, 'workspace:rename', `Ran renamePath from ${pathValue} to ${result.path}`, {
@@ -15729,28 +16177,16 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
       args: { path: pathValue, nextPath: result.path },
       ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
     });
-    return { ...result, historyId: historyRecord ? historyRecord.id : null };
+    return markOperationEvidenceRecorded({ ...result, historyId: historyRecord ? historyRecord.id : null });
   }
 
   if (operation === 'deletePath') {
     assertOnlyKeys(args, AGENT_OPERATION_ARGS.deletePath, 'deletePath args');
     const pathValue = requireStringArg(args, 'path', { nonEmpty: true });
-    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue });
+    const authorityDecision = await checkWorkspaceMutationAuthority(run, operation, { path: pathValue }, operationKey);
     assertAllocatedOwnershipAllowsMutation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     blockProtectedWorkspaceOperation(run, operation, { path: pathValue }, pathValue, runWorkspaceProvider);
     assertAgentWorkspacePathAllowed(pathValue);
-
-    // Skip if already committed in this run's ledger
-    const committed = findCommittedMutation(run.id, operation, args);
-    if (committed && committed.result) {
-      appendRunLog(run, 'workspace:delete', `Skipped deletePath on ${pathValue} (already committed in run ledger)`, {
-        operation,
-        args: { path: pathValue },
-        status: 'already_committed_noop',
-        ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
-      });
-      return { ...committed.result, historyId: committed.id, skipped: true };
-    }
 
     // Reject if a different mutation already committed on the same path
     const conflict = findConflictingMutation(run.id, operation, args);
@@ -15764,16 +16200,28 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
     // produced — a destructive delete must not remove another ticket's output.
     await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
-    const preState = captureWorkspacePreState(runWorkspaceProvider, operation, args);
+    const prepared = await beginWorkspaceMutation(
+      run, step, operation, args, authorityDecision, operationKey, operationContext, runWorkspaceProvider
+    );
+    if (prepared.completedResult) return prepared.completedResult;
+    const preState = prepared.preState;
     let historyRecord = null;
     try {
       result = runWorkspaceProvider.delete(pathValue);
+      await maybeTestInterrupt(run, 'after_first_workspace_target_effect');
       const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, result, null, authorityDecision);
+      historyRecord = await completeWorkspaceMutationEvidence({
+        run, step, operation, args, operationKey, operationContext, preState, postState, result, authorityDecision
+      });
     } catch (error) {
-      const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
-      historyRecord = persistWorkspaceOperationHistory(run, step, operation, args, preState, postState, null, error, authorityDecision);
-      if (historyRecord) error.historyId = historyRecord.id;
+      if (!error._operationEvidenceRecorded) {
+        const postState = captureWorkspacePostState(runWorkspaceProvider, operation, args);
+        historyRecord = await completeWorkspaceMutationEvidence({
+          run, step, operation, args, operationKey, operationContext, preState, postState, result: null, error, authorityDecision
+        });
+        if (historyRecord) error.historyId = historyRecord.id;
+        markOperationEvidenceRecorded(error);
+      }
       throw error;
     }
     const logMessage = result.status === 'already_missing_noop'
@@ -15785,7 +16233,7 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0) {
       status: result.status,
       ...buildWorkspaceActionMetadata(run, runWorkspaceProvider)
     });
-    return { ...result, historyId: historyRecord ? historyRecord.id : null };
+    return markOperationEvidenceRecorded({ ...result, historyId: historyRecord ? historyRecord.id : null });
   }
 
   throw new Error(`Unsupported workspace operation: ${operation}`);
@@ -16427,6 +16875,11 @@ function validateActionPlanInput(input, limits, counters) {
 }
 
 async function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, startedAt, counters) {
+  if (result && result._operationEvidenceRecorded) {
+    counters.workspaceOperations += 1;
+    counters.mutations += 1;
+    return;
+  }
   const targetEvidence = buildWorkspaceOperationTargetEvidence(run, action.operation, action.args, result);
   appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
     operation: { operation: action.operation, args: action.args, reason: action.reason || null },
@@ -16473,7 +16926,26 @@ async function executeActionPlanWorkflowAction(run, workflow, step, input, count
   for (const action of validation.acceptedActions) {
     await assertRunWorkspaceOperationAllowed(run, counters.workspaceOperations, 1, limits);
     const actionStartedAt = Date.now();
-    const result = await executeWorkspaceOperation(run, { operation: action.operation, args: action.args }, counters.transitions);
+    const result = await executeWorkspaceOperation(
+      run,
+      { operation: action.operation, args: action.args },
+      counters.transitions,
+      {
+        slot: `workflow:${workflow.id}:${step.id}:plan:${action.index}`,
+        startedAt: actionStartedAt,
+        operationDescriptor: { operation: action.operation, args: action.args, reason: action.reason || null },
+        replayMetadata: {
+          workflowId: workflow.id,
+          workflowStepId: step.id,
+          actionPlanIndex: action.index
+        },
+        eventMetadata: {
+          workflowId: workflow.id,
+          actionPlanIndex: action.index,
+          reason: action.reason || null
+        }
+      }
+    );
     await appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, result, actionStartedAt, counters);
     executedActions.push({
       index: action.index,
@@ -16776,11 +17248,22 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
 
     if (contract.type === 'workspaceAction') {
       await assertRunWorkspaceOperationAllowed(run, counters.workspaceOperations, 1, limits);
-      result = await executeWorkspaceOperation(run, { operation: step.action, args: input }, counters.transitions);
+      result = await executeWorkspaceOperation(
+        run,
+        { operation: step.action, args: input },
+        counters.transitions,
+        {
+          slot: `workflow:${workflow.id}:${step.id}`,
+          startedAt,
+          replayMetadata: { workflowId: workflow.id, workflowStepId: step.id },
+          eventMetadata: { workflowId: workflow.id }
+        }
+      );
       counters.workspaceOperations += 1;
       if (contract.mutating) counters.mutations += 1;
-      const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, result);
-      appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
+      if (!result._operationEvidenceRecorded) {
+        const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, result);
+        appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
         operation: { operation: step.action, args: input },
         result,
         startedAt: new Date(startedAt).toISOString(),
@@ -16794,8 +17277,8 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
         workflowId: workflow.id,
         workflowStepId: step.id,
         ...targetEvidence
-      });
-      await appendEvent({
+        });
+        await appendEvent({
         type: 'workspace.operation',
         ticketId: run.ticketId,
         runId: run.id,
@@ -16809,7 +17292,8 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
           result: sanitizeSnapshotValue(result),
           ...targetEvidence
         }
-      });
+        });
+      }
     } else if (step.action === 'executeActionPlan') {
       result = await executeActionPlanWorkflowAction(run, workflow, step, input, counters, limits);
     } else if (step.action === 'executeTicketPlan') {
@@ -16860,7 +17344,7 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
 
     return result;
   } catch (error) {
-    if (contract && contract.type === 'workspaceAction') {
+    if (contract && contract.type === 'workspaceAction' && !error._operationEvidenceRecorded) {
       const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, null, error);
       appendRunReplaySnapshotItem(run.id, 'workspaceOperations', {
         operation: error.workspaceAction || { operation: step.action, args: input },
@@ -18087,7 +18571,7 @@ async function runAgentTicket(runId) {
 
       await assertRunWorkspaceOperationAllowed(run, workspaceOperationCount, actions.length, limits);
 
-      for (const action of actions) {
+      for (const [actionIndex, action] of actions.entries()) {
         let operation = null;
         const actionStartedAt = Date.now();
         const proposedOperation = action && typeof action.operation === 'string' ? action.operation : null;
@@ -18147,7 +18631,11 @@ async function runAgentTicket(runId) {
           } else if (operation.operation === 'createHandoffTask') {
             result = await executeHandoffTask(run, operation.args, step);
           } else {
-            result = await executeWorkspaceOperation(run, action, step);
+            result = await executeWorkspaceOperation(run, action, step, {
+              slot: `agent:${step}:${actionIndex}`,
+              startedAt: actionStartedAt,
+              operationDescriptor: operation
+            });
             // Deterministic runtime verification for bounded operation batches
             if (AGENT_MUTATING_OPERATIONS.includes(operation.operation)) {
               await verifyBatchOperation(run, action, result);
@@ -18176,7 +18664,7 @@ async function runAgentTicket(runId) {
           // Downstream consumers (EJS template, test assertions) access
           // item.operation.operation and item.result — any shape change
           // here must be mirrored in the error entry and all consumers.
-          if (!isResumeSkipped && AGENT_ALLOWED_OPERATIONS.includes(operation.operation)) {
+          if (!isResumeSkipped && AGENT_ALLOWED_OPERATIONS.includes(operation.operation) && !result._operationEvidenceRecorded) {
             const targetEvidence = buildWorkspaceOperationTargetEvidence(
               run,
               operation.operation,
@@ -18214,7 +18702,7 @@ async function runAgentTicket(runId) {
             await maybeTestInterrupt(run, 'after_first_workspace.operation');
           }
 
-          if (operation.operation === 'createHandoffTask') {
+          if (operation.operation === 'createHandoffTask' && !result._operationEvidenceRecorded) {
             const executedOperation = {
               operation: result.operation,
               args: result.args
@@ -18292,7 +18780,7 @@ async function runAgentTicket(runId) {
           actionResults.push(canRetryPriorOwnerConflict
             ? { action, ...buildPriorArtifactOwnerRetryResult(error, ticket) }
             : { action, error: error.message });
-          if (error.workspaceAction || (operation && AGENT_ALLOWED_OPERATIONS.includes(operation.operation))) {
+          if (!error._operationEvidenceRecorded && (error.workspaceAction || (operation && AGENT_ALLOWED_OPERATIONS.includes(operation.operation)))) {
             // INVARIANT: Error replay entry shape must remain structurally
             // compatible with the success replay entry above (line ~2717).
             // operation may be either the parseWorkspaceOperation object

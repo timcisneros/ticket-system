@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { AsyncLocalStorage } = require('async_hooks');
 const { Pool } = require('pg');
 const {
   RUN_EVENT_SCHEMA_VERSION,
@@ -349,6 +350,54 @@ function operationReceiptFromRow(row) {
   };
 }
 
+function targetOperationIntentFromRow(row) {
+  return {
+    id: positiveSafeInteger(row.id, 'targetOperationIntent.id'),
+    runId: positiveSafeInteger(row.run_id, 'targetOperationIntent.runId'),
+    ticketId: positiveSafeInteger(row.ticket_id, 'targetOperationIntent.ticketId'),
+    operationKey: row.operation_key,
+    stepId: row.step_id,
+    operation: row.operation,
+    targetId: row.target_id,
+    targetKind: row.target_kind,
+    targetPath: row.target_path,
+    targetResourceId: row.target_resource_id,
+    intent: row.intent,
+    preparedAt: rowTimestamp(row.prepared_at)
+  };
+}
+
+function targetOperationReceiptProjection(envelope, intentRecord) {
+  if (!envelope) return null;
+  const document = envelope.receipt || {};
+  const intent = intentRecord && intentRecord.intent ? intentRecord.intent : {};
+  const error = document.error && typeof document.error === 'object' ? document.error : null;
+  return {
+    id: envelope.id,
+    timestamp: envelope.recordedAt,
+    runId: envelope.runId,
+    ticketId: envelope.ticketId,
+    step: envelope.stepId,
+    operation: envelope.operation,
+    operationKey: envelope.idempotencyKey,
+    args: intent.args || {},
+    preState: document.before || intent.preState || null,
+    postState: document.after || null,
+    result: envelope.outcome === 'succeeded' ? document.providerResponse || null : null,
+    error: error ? error.message || 'Target operation failed' : null,
+    errorCode: error ? error.code || null : null,
+    failureKind: error ? error.failureKind || null : null,
+    outcome: envelope.outcome,
+    isRecovery: document.reconciliation === 'applied_effect_confirmed',
+    authorityDecision: document.authorityDecision || intent.authorityDecision || null,
+    mutationReceipt: document,
+    targetId: envelope.targetId,
+    targetKind: envelope.targetKind,
+    targetPath: envelope.targetPath,
+    targetResourceId: envelope.targetResourceId
+  };
+}
+
 class PostgresRuntimeStore {
   constructor({
     connectionString,
@@ -368,6 +417,7 @@ class PostgresRuntimeStore {
     this.maxQueryRows = positiveSafeInteger(maxQueryRows, 'maxQueryRows');
     this.maxEligibleRunIds = positiveSafeInteger(maxEligibleRunIds, 'maxEligibleRunIds');
     this.maxJsonRecordBytes = positiveSafeInteger(maxJsonRecordBytes, 'maxJsonRecordBytes');
+    this.targetOperationClientStorage = new AsyncLocalStorage();
     this.ownsPool = !pool;
     if (!pool && (typeof connectionString !== 'string' || !connectionString.trim())) {
       throw new TypeError('connectionString is required when pool is not provided');
@@ -444,7 +494,17 @@ class PostgresRuntimeStore {
   }
 
   async withTransaction(operation) {
+    const scopedClient = this.targetOperationClientStorage.getStore();
+    if (scopedClient) return this._withClientTransaction(scopedClient, operation);
     const client = await this.pool.connect();
+    try {
+      return await this._withClientTransaction(client, operation);
+    } finally {
+      client.release();
+    }
+  }
+
+  async _withClientTransaction(client, operation) {
     try {
       await client.query('BEGIN');
       await client.query(`SET LOCAL search_path TO ${this.schemaSql}, public`);
@@ -454,8 +514,6 @@ class PostgresRuntimeStore {
     } catch (error) {
       try { await client.query('ROLLBACK'); } catch (_) {}
       throw error;
-    } finally {
-      client.release();
     }
   }
 
@@ -1657,7 +1715,7 @@ class PostgresRuntimeStore {
       throw new TypeError(`Unsupported operation receipt outcome: ${normalizedOutcome}`);
     }
     const document = this.assertJsonRecord(receipt, 'operation receipt');
-    const type = requiredString(eventType, 'eventType');
+    const type = eventType === null ? null : requiredString(eventType, 'eventType');
     const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
     const targetId = optionalString(document.targetId);
     const targetKind = optionalString(document.targetKind);
@@ -1719,7 +1777,7 @@ class PostgresRuntimeStore {
       }
 
       const record = operationReceiptFromRow(inserted.rows[0]);
-      const event = await this._appendEvent(connection, {
+      const event = type === null ? null : await this._appendEvent(connection, {
         type,
         ticketId,
         runId: id,
@@ -1754,6 +1812,293 @@ class PostgresRuntimeStore {
       [id, cursor, boundedLimit]
     );
     return result.rows.map(operationReceiptFromRow);
+  }
+
+  async appendRunEvidence({
+    runId,
+    ticketId,
+    evidenceKey,
+    replayKey,
+    replayItem,
+    event
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
+    const key = requiredString(evidenceKey, 'evidenceKey', 512);
+    const collection = requiredString(replayKey, 'replayKey');
+    const item = { ...this.assertJsonRecord(replayItem, 'replayItem'), evidenceKey: key };
+    const eventInput = this.assertJsonRecord(event, 'event');
+    const eventType = requiredString(eventInput.type, 'event.type');
+    const eventStepId = eventInput.stepId === undefined || eventInput.stepId === null
+      ? null
+      : String(eventInput.stepId);
+    const eventPayload = {
+      ...this.assertJsonRecord(eventInput.payload || {}, 'event.payload'),
+      evidenceKey: key
+    };
+
+    const execute = async connection => {
+      const runResult = await connection.query(
+        `SELECT ticket_id FROM ${this.table('runs')} WHERE id = $1`,
+        [id]
+      );
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      if (positiveSafeInteger(runResult.rows[0].ticket_id, 'run.ticketId') !== ownerTicketId) {
+        throw new TypeError(`Run ${id} does not belong to ticket ${ownerTicketId}`);
+      }
+      const replayResult = await connection.query(
+        `SELECT * FROM ${this.table('replay_snapshots')} WHERE run_id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (replayResult.rowCount === 0) throw new TypeError(`Run ${id} does not have a replay snapshot`);
+      const currentReplay = replaySnapshotFromRow(replayResult.rows[0]);
+      if (currentReplay.finalizedAt) throw new ImmutableEvidenceConflictError('finalized replay snapshot', id);
+      const snapshot = currentReplay.snapshot;
+      const items = Array.isArray(snapshot[collection]) ? snapshot[collection] : [];
+      const existingItem = items.find(candidate => candidate && candidate.evidenceKey === key) || null;
+      if (existingItem && canonicalJson(existingItem) !== canonicalJson(item)) {
+        throw new IdempotencyConflictError(id, key);
+      }
+      let storedReplay = currentReplay;
+      if (!existingItem) {
+        const document = this.assertJsonRecord(
+          { ...snapshot, [collection]: [...items, item] },
+          'replay snapshot'
+        );
+        const updated = await connection.query(
+          `UPDATE ${this.table('replay_snapshots')}
+           SET snapshot = $3::jsonb,
+               snapshot_hash = $4,
+               revision = revision + 1,
+               updated_at = clock_timestamp()
+           WHERE run_id = $1 AND revision = $2 AND finalized_at IS NULL
+           RETURNING *`,
+          [id, currentReplay.revision, document, sha256Json(document)]
+        );
+        if (updated.rowCount !== 1) {
+          throw new OptimisticConcurrencyError('replay snapshot', id, currentReplay.revision, currentReplay);
+        }
+        storedReplay = replaySnapshotFromRow(updated.rows[0]);
+      }
+
+      const existingEventResult = await connection.query(
+        `SELECT * FROM ${this.table('events')}
+         WHERE run_id = $1 AND payload->>'evidenceKey' = $2
+         ORDER BY position
+         LIMIT 1`,
+        [id, key]
+      );
+      let storedEvent = existingEventResult.rowCount === 0 ? null : eventFromRow(existingEventResult.rows[0]);
+      if (storedEvent) {
+        if (storedEvent.type !== eventType || storedEvent.stepId !== eventStepId ||
+            canonicalJson(storedEvent.payload) !== canonicalJson(eventPayload)) {
+          throw new IdempotencyConflictError(id, key);
+        }
+      } else {
+        storedEvent = await this._appendEvent(connection, {
+          type: eventType,
+          ticketId: ownerTicketId,
+          runId: id,
+          ...(eventStepId === null ? {} : { stepId: eventStepId }),
+          payload: eventPayload
+        });
+      }
+      return {
+        replayItem: existingItem || item,
+        replaySnapshot: storedReplay,
+        event: storedEvent,
+        inserted: !existingItem
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async getTargetOperation(runId, operationKey, { client = null, forUpdate = false } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const key = requiredString(operationKey, 'operationKey', 512);
+    const connection = client || this.pool;
+    const intentResult = await connection.query(
+      `SELECT * FROM ${this.table('target_operation_intents')}
+       WHERE run_id = $1 AND operation_key = $2${forUpdate ? ' FOR UPDATE' : ''}`,
+      [id, key]
+    );
+    const receiptResult = await connection.query(
+      `SELECT * FROM ${this.table('operation_receipts')}
+       WHERE run_id = $1 AND idempotency_key = $2${forUpdate ? ' FOR UPDATE' : ''}`,
+      [id, key]
+    );
+    const intent = intentResult.rowCount === 0 ? null : targetOperationIntentFromRow(intentResult.rows[0]);
+    const receiptEnvelope = receiptResult.rowCount === 0 ? null : operationReceiptFromRow(receiptResult.rows[0]);
+    return {
+      intent,
+      receipt: targetOperationReceiptProjection(receiptEnvelope, intent),
+      receiptEnvelope
+    };
+  }
+
+  async prepareTargetOperation({
+    runId,
+    ticketId,
+    operationKey,
+    stepId = null,
+    leaseOwner,
+    intent
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
+    const key = requiredString(operationKey, 'operationKey', 512);
+    const document = this.assertJsonRecord(intent, 'intent');
+    const operation = requiredString(document.operation, 'intent.operation');
+    const target = document.target && typeof document.target === 'object' && !Array.isArray(document.target)
+      ? document.target
+      : {};
+    const normalizedStepId = optionalString(stepId);
+    const owner = requiredString(leaseOwner, 'leaseOwner');
+
+    const execute = async connection => {
+      const runResult = await connection.query(
+        `SELECT *, lease_expires_at > clock_timestamp() AS lease_live
+         FROM ${this.table('runs')}
+         WHERE id = $1
+         FOR UPDATE`,
+        [id]
+      );
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const runRow = runResult.rows[0];
+      const liveLease = runRow.status === 'running' && runRow.lease_owner === owner && runRow.lease_live === true;
+      if (positiveSafeInteger(runRow.ticket_id, 'run.ticketId') !== ownerTicketId || !liveLease) {
+        throw new LeaseAuthorityError(id, owner, runFromRow(runRow));
+      }
+      const inserted = await connection.query(
+        `INSERT INTO ${this.table('target_operation_intents')}
+          (run_id, ticket_id, operation_key, step_id, operation,
+           target_id, target_kind, target_path, target_resource_id, intent)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+         ON CONFLICT (run_id, operation_key) DO NOTHING
+         RETURNING *`,
+        [
+          id,
+          ownerTicketId,
+          key,
+          normalizedStepId,
+          operation,
+          optionalString(target.targetId),
+          optionalString(target.targetKind),
+          optionalString(target.targetPath),
+          optionalString(target.targetResourceId),
+          document
+        ]
+      );
+      if (inserted.rowCount === 0) {
+        const current = await this.getTargetOperation(id, key, { client: connection, forUpdate: true });
+        if (current.intent && current.intent.ticketId === ownerTicketId &&
+            current.intent.stepId === normalizedStepId && current.intent.operation === operation &&
+            canonicalJson(current.intent.intent) === canonicalJson(document)) {
+          return { intent: current.intent, receipt: current.receipt, event: null, inserted: false };
+        }
+        throw new IdempotencyConflictError(id, key);
+      }
+      const record = targetOperationIntentFromRow(inserted.rows[0]);
+      const event = await this._appendEvent(connection, {
+        type: 'workspace.operation_prepared',
+        ticketId: ownerTicketId,
+        runId: id,
+        ...(normalizedStepId === null ? {} : { stepId: normalizedStepId }),
+        payload: { operationKey: key, intent: document }
+      });
+      return { intent: record, receipt: null, event, inserted: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async completeTargetOperation({
+    runId,
+    ticketId,
+    operationKey,
+    historyRecord,
+    receipt,
+    replayItem,
+    event
+  }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
+    const key = requiredString(operationKey, 'operationKey', 512);
+    const history = this.assertJsonRecord(historyRecord, 'historyRecord');
+    const receiptDocument = this.assertJsonRecord(receipt, 'receipt');
+    const proposedReplayItem = this.assertJsonRecord(replayItem, 'replayItem');
+    const proposedEvent = this.assertJsonRecord(event, 'event');
+
+    return this.withTransaction(async client => {
+      const current = await this.getTargetOperation(id, key, { client, forUpdate: true });
+      if (!current.intent) throw new TypeError(`Target operation ${key} was not prepared`);
+      if (current.intent.ticketId !== ownerTicketId) throw new IdempotencyConflictError(id, key);
+      const outcome = history.outcome === 'failed' || history.outcome === 'refused'
+        ? history.outcome
+        : 'succeeded';
+      const recorded = await this.recordOperationReceipt({
+        runId: id,
+        idempotencyKey: key,
+        stepId: current.intent.stepId,
+        operation: current.intent.operation,
+        outcome,
+        receipt: receiptDocument,
+        eventType: null
+      }, { client });
+      if (!recorded.inserted) return { record: recorded.record, evidence: null, inserted: false };
+      const evidence = await this.appendRunEvidence({
+        runId: id,
+        ticketId: ownerTicketId,
+        evidenceKey: `target-operation:${key}:completed`,
+        replayKey: 'workspaceOperations',
+        replayItem: {
+          ...proposedReplayItem,
+          historyId: recorded.record.id,
+          operationKey: key,
+          mutationReceipt: recorded.record.receipt
+        },
+        event: {
+          ...proposedEvent,
+          payload: {
+            ...this.assertJsonRecord(proposedEvent.payload || {}, 'event.payload'),
+            historyId: recorded.record.id,
+            operationKey: key,
+            mutationReceipt: recorded.record.receipt
+          }
+        }
+      }, { client });
+      return { record: recorded.record, evidence, inserted: recorded.inserted };
+    });
+  }
+
+  async withTargetOperationLock({ targetId, paths }, operation) {
+    if (typeof operation !== 'function') throw new TypeError('operation must be a function');
+    const requests = buildWorkspaceLockRequests(targetId, paths);
+    const client = await this.pool.connect();
+    const acquired = [];
+    try {
+      await client.query("SELECT set_config('lock_timeout', $1, false)", [`${this.lockTimeoutMs}ms`]);
+      for (const request of requests) {
+        const fn = request.mode === 'exclusive' ? 'pg_advisory_lock' : 'pg_advisory_lock_shared';
+        await client.query(`SELECT ${fn}(hashtextextended($1, 0))`, [request.resource]);
+        acquired.push(request);
+      }
+      return await this.targetOperationClientStorage.run(client, () => operation(requests));
+    } finally {
+      for (const request of acquired.reverse()) {
+        const fn = request.mode === 'exclusive' ? 'pg_advisory_unlock' : 'pg_advisory_unlock_shared';
+        try { await client.query(`SELECT ${fn}(hashtextextended($1, 0))`, [request.resource]); } catch (_) {}
+      }
+      try { await client.query("SELECT set_config('lock_timeout', '0', false)"); } catch (_) {}
+      client.release();
+    }
   }
 
   async claimPendingRun({ leaseOwner, leaseDurationMs, eligibleRunIds = null, claimPayload = {} }) {
