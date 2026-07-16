@@ -31,6 +31,9 @@
     "harvest:benchmark-cases": "node scripts/harvest-benchmark-cases.js",
     "test:truncation": "NODE_ENV=test node scripts/prefix-truncation-regression-test.js",
     "test:simulation": "node scripts/agent-behavior-simulation-test.js",
+    "test:persistence:contract": "node scripts/postgres-persistence-contract-test.js",
+    "test:persistence:postgres": "node scripts/postgres-persistence-integration-test.js",
+    "db:migrate": "node scripts/postgres-migrate.js",
     "validate:truncation": "node scripts/tm3-replay-validation.js",
     "checkpoint:release": "NODE_PATH=./node_modules node scripts/release-checkpoint.js",
     "test": "pnpm run checkpoint:release"
@@ -44,6 +47,7 @@
     "dotenv": "^17.4.2",
     "ejs": "^5.0.2",
     "fastify": "^5.8.5",
+    "pg": "^8.22.0",
     "playwright-core": "^1.61.1"
   },
   "keywords": [

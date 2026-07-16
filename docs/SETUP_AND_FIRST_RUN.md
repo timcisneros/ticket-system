@@ -12,6 +12,8 @@ verify from code/UI rather than assume.
   path; npm dependency resolution is not currently locked or verified.
 - No external services are required for the demo path. Running **live agents** additionally needs a
   configured provider (OpenAI API key, or a local Ollama).
+- PostgreSQL is required only for shared-storage migration/integration work at present. The app's
+  runtime backend remains JSON until the cutover contract in `POSTGRES_CUTOVER.md` is complete.
 
 ## 2. Install dependencies
 
@@ -28,6 +30,10 @@ variables (see README → Configuration for the full list):
 - `PORT` (default `3099`), `NODE_ENV` (`development` via `pnpm run dev`).
 - `DATA_DIR` (JSON store; demo/dev uses ignored `.local-data`), `WORKSPACE_ROOT` (mutation target;
   demo/dev uses ignored `.local-workspace`).
+- `PERSISTENCE_BACKEND` should remain unset for the current server. `postgres` is deliberately
+  refused until the full authority cutover is complete. Migration tooling uses `DATABASE_URL` and
+  optional `DATABASE_SCHEMA`; the real integration test uses `TEST_DATABASE_URL`. See
+  `POSTGRES_CUTOVER.md`.
 - `ADMIN_BOOTSTRAP_PASSWORD` (bootstrap admin password), `SESSION_SECRET` (random for the current
   process if omitted), and optional `PUBLIC_BASE_URL` for exact-origin request checks.
 - Provider (optional, only for live agents): `OPENAI_API_KEY` / `OPENAI_MODEL`, or `OLLAMA_MODEL` /

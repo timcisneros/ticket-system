@@ -51,6 +51,19 @@ the intended deployment ceiling.
   metadata is identified as metadata and is not represented as an executed runtime verifier.
 - The build parses active CommonJS sources, and CI runs the deterministic release checkpoint.
 
+## Shared-storage cutover status
+
+PostgreSQL is the selected persistence and coordination direction; SQLite is not an intermediate
+backend. The first tested foundation now exists for database-owned ticket/run identity and time,
+transactional append-only run-event chains, distributed run claims and leases, and hierarchical
+workspace coordination. Its deterministic contract test runs in the release checkpoint, and CI
+runs the schema and concurrency suite against PostgreSQL 17.
+
+This foundation is not yet the Fastify server's active authority. The server remains on JSON and
+explicitly refuses `PERSISTENCE_BACKEND=postgres` until the complete runtime cutover is assembled.
+There is no JSON/PostgreSQL dual-write mode and no development-data compatibility importer. See
+`POSTGRES_CUTOVER.md` for the cutover invariants and remaining authority slices.
+
 ## Compatibility and development data
 
 Compatibility is format-specific, not a system-wide no-legacy policy:
@@ -67,11 +80,10 @@ Compatibility is format-specific, not a system-wide no-legacy policy:
 
 ## Known work
 
-1. Move journal queries and coordination to indexed shared transactional storage before horizontal
-   deployment. Current scoped event reads are bounded-memory but still synchronously scan JSONL in
-   O(file bytes); startup is streamed, and recent-event reads stop after their requested window.
-   Process-local append/run admission is not a substitute for shared durable infrastructure or
-   tenant isolation.
+1. Complete the PostgreSQL runtime cutover before horizontal deployment. The core schema and
+   concurrency primitives are implemented, but current server call sites still synchronously use
+   JSON/JSONL. Migrate whole authority slices without dual-writing, then remove the JSON runtime
+   path. Shared storage still needs explicit retention and tenant-isolation policy.
 2. Add bounded deterministic postconditions where prose acceptance criteria do not prove outcomes;
    keep real-model benchmarks observational.
 3. Complete validation of the model contract compiler and prefix truncation before enabling them by
@@ -88,8 +100,10 @@ Verification claims should come from executable checks, not a copied result coun
 ```sh
 pnpm run build
 pnpm run checkpoint:release
+pnpm run test:persistence:contract
 pnpm run benchmark:operational-endurance
 ```
 
 The checkpoint is deterministic and provider-free. Real-provider benchmarks remain observational
-and must be reported separately when they are actually run.
+and must be reported separately when they are actually run. The real PostgreSQL integration suite
+runs in CI and can be run locally with `TEST_DATABASE_URL=... pnpm run test:persistence:postgres`.

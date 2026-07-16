@@ -56,6 +56,7 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'journal-backpressure-scheduler-test.js',
   'event-append-await-contract-test.js',
   'event-reader-bounds-test.js',
+  'postgres-persistence-contract-test.js',
   'invalid-action-preflight-recovery-test.js',
   'exact-delete-target-absent-guard-test.js',
   'objective-contract-parity-test.js',

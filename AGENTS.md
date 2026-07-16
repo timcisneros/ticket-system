@@ -10,6 +10,7 @@ This repo is a server-rendered ticketing system for bounded agent work. A ticket
 - Runtime flow: ticket creation -> run creation/queueing -> lease acquisition -> agent or workflow execution -> action authority checks -> replay/events/logs/history -> postcondition and violation checks -> runEvaluation -> runConsequence -> UI/API state.
 - Workflows are persisted JSON definitions in `data/workflows.json`. Workflow steps are an ordered `actions` array with deterministic branching through `next`, `trueNext`, and `falseNext`.
 - Execution is single-process. JSON files remain the store. `data/events.jsonl` is append-only operational history; legacy JSON files still exist and are rewritten by current persistence helpers.
+- PostgreSQL is the selected shared-storage target. Its core schema and concurrency primitives are implemented under `persistence/postgres/`, but the server runtime has not cut over and refuses a partial PostgreSQL mode. Follow `docs/POSTGRES_CUTOVER.md`; do not add JSON/PostgreSQL dual writes or a disposable-development-data importer.
 
 ## Core Principles
 
@@ -40,6 +41,9 @@ This repo is a server-rendered ticketing system for bounded agent work. A ticket
 - Schema teaching experiment: `pnpm run experiment:workflow-schema-teaching`
 - Prefix truncation regression: `pnpm run test:truncation`
 - TM-3 counterfactual replay: `pnpm run validate:truncation`
+- PostgreSQL contract: `pnpm run test:persistence:contract`
+- PostgreSQL integration: `TEST_DATABASE_URL=postgresql://... pnpm run test:persistence:postgres`
+- Apply PostgreSQL migrations: `DATABASE_URL=postgresql://... pnpm run db:migrate`
 
 ## Internal Demo Release Baseline
 
@@ -71,6 +75,7 @@ Use `--agent <id|name>` for Agent 1, Mike, or another configured agent. Use `--j
 5. For UI/view changes, run `node scripts/page-render-regression-test.js`.
 6. For catalog/action changes, run `node scripts/catalog-consistency-test.js`.
 7. For broader runtime changes, add targeted existing regression scripts only when relevant.
+8. For PostgreSQL persistence/coordination changes, run the contract test and the real integration test when a test database is available; CI always runs both the checkpoint contract and real PostgreSQL suite.
 
 ## Evidence Locations
 

@@ -23,6 +23,7 @@ substrate.
 - [`OPERATOR_GUIDE.md`](OPERATOR_GUIDE.md) — how to operate the system; safe operating rules.
 - [`PRIMITIVE_GLOSSARY.md`](PRIMITIVE_GLOSSARY.md) — precise definitions + commonly confused terms.
 - [`SYSTEM_STATUS.md`](SYSTEM_STATUS.md) — current guarantees, product direction, and known work.
+- [`POSTGRES_CUTOVER.md`](POSTGRES_CUTOVER.md) — living shared-storage cutover contract and status.
 
 ## Operator / primitive docs
 
@@ -52,6 +53,7 @@ substrate.
 - [`RELEASE_CHECKPOINT.md`](RELEASE_CHECKPOINT.md) — the release gate + hygiene flow.
 - [`SYSTEM_STATUS.md`](SYSTEM_STATUS.md) — living system status and verification authority.
 - [`SAFETY_AND_NON_GOALS.md`](SAFETY_AND_NON_GOALS.md) — safety model + explicit non-goals.
+- [`POSTGRES_CUTOVER.md`](POSTGRES_CUTOVER.md) — PostgreSQL authority boundary and remaining cutover.
 - [`DEMO_WALKTHROUGH.md`](DEMO_WALKTHROUGH.md) — deterministic, no-provider demo click path.
 
 ## Historical release snapshots

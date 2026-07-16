@@ -25,6 +25,7 @@ Shared library modules (required by other scripts; **not** entrypoints — do no
 - `ticket-lint.js` — lint ticket objectives before submission
 - `codex-bootstrap.js` / `codex-trace.js` / `codex-verify.js` — orientation, single-run trace, deterministic health suite (`pnpm run codex:bootstrap|codex:trace|codex:verify`)
 - `demo-legal-workflow.js` — end-to-end demo (`pnpm run demo:legal-workflow`)
+- `postgres-migrate.js` — apply ordered shared-storage migrations (`DATABASE_URL=... pnpm run db:migrate`)
 
 ## Maintenance / forensics utilities
 
@@ -45,6 +46,10 @@ Shared library modules (required by other scripts; **not** entrypoints — do no
 ## Verification (pnpm-wired)
 
 `agent-regression-test`, `allocated-regression-test`, `allocated-live-openai-test`, `live-openai-test`, `recovery-regression-test`, `runtime-budget-test`, `postcondition-completion-test`, `workflow-composition-test`, `prefix-truncation-regression-test`, `tm3-replay-validation` (see `package.json` for the `test:*`/`validate:*` mappings). `codex-verify.js` additionally runs `catalog-consistency-test.js` and `page-render-regression-test.js`.
+
+`postgres-persistence-contract-test.js` is provider-free and runs in the normal checkpoint.
+`postgres-persistence-integration-test.js` requires `TEST_DATABASE_URL`; it creates and drops a
+unique schema and is run against PostgreSQL by CI.
 
 All other `*-test.js` files are targeted regression suites, run manually when the touched surface is relevant (AGENTS.md "Verification Workflow", step 7).
 

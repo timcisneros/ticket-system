@@ -18,10 +18,12 @@ const { scanCurrentEventJournal } = require('./runtime/event-journal-scan');
 const { createDurableAppendJournal, resolveDurableAppendJournalOptions } = require('./runtime/durable-append');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
+const { resolveRuntimePersistenceBackend } = require('./persistence/runtime-backend');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 
 const PORT = process.env.PORT || 3099;
+const RUNTIME_PERSISTENCE_BACKEND = resolveRuntimePersistenceBackend(process.env);
 
 // Data file paths
 const REPO_DATA_DIR = path.join(__dirname, 'data');
@@ -156,6 +158,7 @@ function isRepoDataDir() {
 console.log(`DATA_DIR=${DATA_DIR}`);
 console.log(`WORKSPACE_ROOT=${WORKSPACE_ROOT}`);
 console.log(`repo-store=${isRepoDataDir()}`);
+console.log(`persistence-backend=${RUNTIME_PERSISTENCE_BACKEND}`);
 
 function writeMissingFile(fileName, content) {
   const targetPath = path.join(DATA_DIR, fileName);

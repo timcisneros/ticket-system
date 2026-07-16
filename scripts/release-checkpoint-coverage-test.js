@@ -75,6 +75,7 @@ if (Array.isArray(list)) {
     'event-journal-route-admission-contract-test.js',
     'event-append-await-contract-test.js',
     'event-reader-bounds-test.js',
+    'postgres-persistence-contract-test.js',
     'internal-demo-security-test.js',
     'objective-contract-compiler-test.js',
     'postcondition-completion-test.js',
