@@ -3,6 +3,7 @@
 const fs = require('fs');
 
 const DEFAULT_MAX_RECORD_BYTES = 1024 * 1024;
+const MIN_CONFIGURED_RECORD_BYTES = 1024;
 const DEFAULT_MAX_BATCH_ENTRIES = 256;
 const DEFAULT_MAX_BATCH_BYTES = 1024 * 1024;
 const DEFAULT_MAX_OUTSTANDING_ENTRIES = 4096;
@@ -56,6 +57,11 @@ function resolveDurableAppendJournalOptions(env = process.env) {
   if (resolved.maxRecordBytes > resolved.maxOutstandingBytes) {
     throw new TypeError(`${EVENT_JOURNAL_ENV.maxRecordBytes} cannot exceed ${EVENT_JOURNAL_ENV.maxOutstandingBytes}`);
   }
+  if (resolved.maxRecordBytes < MIN_CONFIGURED_RECORD_BYTES) {
+    throw new TypeError(
+      `${EVENT_JOURNAL_ENV.maxRecordBytes} must be at least ${MIN_CONFIGURED_RECORD_BYTES} bytes so rejection evidence can be recorded`
+    );
+  }
 
   return resolved;
 }
@@ -91,6 +97,8 @@ class DurableAppendJournal {
 
     this.pending = [];
     this.pendingBytes = 0;
+    this.admissionWaiters = [];
+    this.admissionWaitingBytes = 0;
     this.outstandingEntries = 0;
     this.outstandingBytes = 0;
     this.activeBatchEntries = 0;
@@ -109,10 +117,17 @@ class DurableAppendJournal {
       committedBytes: 0,
       commitBatches: 0,
       backpressureRejections: 0,
+      backpressureWaits: 0,
+      admittedAfterWait: 0,
       oversizedRejections: 0,
       failedEntries: 0
     };
-    this.highWatermarks = { outstandingEntries: 0, outstandingBytes: 0 };
+    this.highWatermarks = {
+      outstandingEntries: 0,
+      outstandingBytes: 0,
+      admissionWaitingEntries: 0,
+      admissionWaitingBytes: 0
+    };
     this.lastCommitAt = null;
     this.lastCommitDurationMs = null;
     this.maxCommitDurationMs = 0;
@@ -124,15 +139,9 @@ class DurableAppendJournal {
       return Promise.reject(journalError('EVENT_JOURNAL_CLOSED', 'Event journal is closed'));
     }
 
-    const buffer = Buffer.isBuffer(value) ? Buffer.from(value) : Buffer.from(String(value), 'utf8');
-    if (buffer.length > this.maxRecordBytes) {
-      this.totals.oversizedRejections += 1;
-      return Promise.reject(journalError(
-        'EVENT_JOURNAL_RECORD_TOO_LARGE',
-        `Event journal record is ${buffer.length} bytes; limit is ${this.maxRecordBytes}`
-      ));
-    }
-    if (this.outstandingEntries >= this.maxOutstandingEntries || this.outstandingBytes + buffer.length > this.maxOutstandingBytes) {
+    const buffer = this._prepareBuffer(value);
+    if (buffer instanceof Error) return Promise.reject(buffer);
+    if (this.admissionWaiters.length > 0 || !this._hasCapacityFor(buffer)) {
       this.totals.backpressureRejections += 1;
       return Promise.reject(journalError(
         'EVENT_JOURNAL_BACKPRESSURE',
@@ -140,22 +149,54 @@ class DurableAppendJournal {
       ));
     }
 
-    const promise = new Promise((resolve, reject) => {
-      this.pending.push({ buffer, resolve, reject });
-      this.pendingBytes += buffer.length;
-      this.outstandingEntries += 1;
-      this.outstandingBytes += buffer.length;
-      this.totals.acceptedEntries += 1;
-      this.highWatermarks.outstandingEntries = Math.max(this.highWatermarks.outstandingEntries, this.outstandingEntries);
-      this.highWatermarks.outstandingBytes = Math.max(this.highWatermarks.outstandingBytes, this.outstandingBytes);
+    return this._enqueue(buffer);
+  }
+
+  // Used by already-admitted mutation work. Capacity pressure pauses the caller
+  // in FIFO order and automatically resumes it after earlier records commit;
+  // write/sync failures still reject every accepted and waiting producer.
+  appendWhenAvailable(value) {
+    if (this.failure) return Promise.reject(this.failure);
+    if (this.closing || this.closed) {
+      return Promise.reject(journalError('EVENT_JOURNAL_CLOSED', 'Event journal is closed'));
+    }
+
+    const buffer = this._prepareBuffer(value);
+    if (buffer instanceof Error) return Promise.reject(buffer);
+    if (this.admissionWaiters.length === 0 && this._hasCapacityFor(buffer)) {
+      return this._enqueue(buffer);
+    }
+
+    this.totals.backpressureWaits += 1;
+    return new Promise((resolve, reject) => {
+      this.admissionWaiters.push({ buffer, resolve, reject });
+      this.admissionWaitingBytes += buffer.length;
+      this.highWatermarks.admissionWaitingEntries = Math.max(
+        this.highWatermarks.admissionWaitingEntries,
+        this.admissionWaiters.length
+      );
+      this.highWatermarks.admissionWaitingBytes = Math.max(
+        this.highWatermarks.admissionWaitingBytes,
+        this.admissionWaitingBytes
+      );
     });
-    this._scheduleDrain();
-    return promise;
+  }
+
+  isBackpressured() {
+    return this.admissionWaiters.length > 0 ||
+      this.outstandingEntries >= this.maxOutstandingEntries ||
+      this.outstandingBytes >= this.maxOutstandingBytes;
+  }
+
+  noteOversizedRejection() {
+    this.totals.oversizedRejections += 1;
   }
 
   flush() {
     if (this.failure) return Promise.reject(this.failure);
-    if (this.pending.length === 0 && !this.drainPromise && !this.drainScheduled) return Promise.resolve();
+    if (this.pending.length === 0 && this.admissionWaiters.length === 0 && !this.drainPromise && !this.drainScheduled) {
+      return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
       this.flushWaiters.push({ resolve, reject });
       this._scheduleDrain();
@@ -192,6 +233,7 @@ class DurableAppendJournal {
   getMetrics() {
     const entryUtilization = this.outstandingEntries / this.maxOutstandingEntries;
     const byteUtilization = this.outstandingBytes / this.maxOutstandingBytes;
+    const backpressured = this.isBackpressured();
     return {
       status: this.failure
         ? 'failed'
@@ -199,7 +241,9 @@ class DurableAppendJournal {
           ? 'closed'
           : this.closing
             ? 'closing'
-            : (this.drainScheduled || this.drainPromise || this.outstandingEntries > 0 ? 'committing' : 'idle'),
+            : backpressured
+              ? 'backpressured'
+              : (this.drainScheduled || this.drainPromise || this.outstandingEntries > 0 ? 'committing' : 'idle'),
       config: {
         maxRecordBytes: this.maxRecordBytes,
         maxBatchEntries: this.maxBatchEntries,
@@ -212,11 +256,14 @@ class DurableAppendJournal {
         queuedBytes: this.pendingBytes,
         activeBatchEntries: this.activeBatchEntries,
         activeBatchBytes: this.activeBatchBytes,
+        admissionWaitingEntries: this.admissionWaiters.length,
+        admissionWaitingBytes: this.admissionWaitingBytes,
         outstandingEntries: this.outstandingEntries,
         outstandingBytes: this.outstandingBytes,
         entryUtilization,
         byteUtilization,
-        utilization: Math.max(entryUtilization, byteUtilization)
+        utilization: Math.max(entryUtilization, byteUtilization),
+        backpressured
       },
       highWatermarks: { ...this.highWatermarks },
       totals: { ...this.totals },
@@ -227,6 +274,53 @@ class DurableAppendJournal {
       },
       failure: this.failure ? { code: this.failure.code, message: this.failure.message } : null
     };
+  }
+
+  _prepareBuffer(value) {
+    const buffer = Buffer.isBuffer(value) ? Buffer.from(value) : Buffer.from(String(value), 'utf8');
+    if (buffer.length <= this.maxRecordBytes) return buffer;
+    this.totals.oversizedRejections += 1;
+    return journalError(
+      'EVENT_JOURNAL_RECORD_TOO_LARGE',
+      `Event journal record is ${buffer.length} bytes; limit is ${this.maxRecordBytes}`
+    );
+  }
+
+  _hasCapacityFor(buffer) {
+    return this.outstandingEntries < this.maxOutstandingEntries &&
+      this.outstandingBytes + buffer.length <= this.maxOutstandingBytes;
+  }
+
+  _enqueue(buffer, deferred = null) {
+    let resolveEntry;
+    let rejectEntry;
+    const promise = deferred
+      ? null
+      : new Promise((resolve, reject) => {
+        resolveEntry = resolve;
+        rejectEntry = reject;
+      });
+    const entry = deferred || { buffer, resolve: resolveEntry, reject: rejectEntry };
+    this.pending.push(entry);
+    this.pendingBytes += buffer.length;
+    this.outstandingEntries += 1;
+    this.outstandingBytes += buffer.length;
+    this.totals.acceptedEntries += 1;
+    this.highWatermarks.outstandingEntries = Math.max(this.highWatermarks.outstandingEntries, this.outstandingEntries);
+    this.highWatermarks.outstandingBytes = Math.max(this.highWatermarks.outstandingBytes, this.outstandingBytes);
+    this._scheduleDrain();
+    return promise;
+  }
+
+  _admitWaiting() {
+    while (this.admissionWaiters.length > 0) {
+      const entry = this.admissionWaiters[0];
+      if (!this._hasCapacityFor(entry.buffer)) break;
+      this.admissionWaiters.shift();
+      this.admissionWaitingBytes -= entry.buffer.length;
+      this.totals.admittedAfterWait += 1;
+      this._enqueue(entry.buffer, entry);
+    }
   }
 
   _scheduleDrain() {
@@ -308,6 +402,7 @@ class DurableAppendJournal {
         this.lastCommitAt = new Date().toISOString();
         this.lastCommitDurationMs = commitDurationMs;
         this.maxCommitDurationMs = Math.max(this.maxCommitDurationMs, commitDurationMs);
+        this._admitWaiting();
         batch.forEach(entry => entry.resolve());
         activeBatch = [];
       }
@@ -325,8 +420,9 @@ class DurableAppendJournal {
         error
       );
     }
-    const pending = [...activeBatch, ...this.pending.splice(0)];
+    const pending = [...activeBatch, ...this.pending.splice(0), ...this.admissionWaiters.splice(0)];
     this.pendingBytes = 0;
+    this.admissionWaitingBytes = 0;
     this.activeBatchEntries = 0;
     this.activeBatchBytes = 0;
     this.outstandingEntries = 0;
@@ -337,7 +433,12 @@ class DurableAppendJournal {
   }
 
   _settleFlushWaiters() {
-    if (!this.failure && (this.pending.length > 0 || this.drainPromise || this.drainScheduled)) return;
+    if (!this.failure && (
+      this.pending.length > 0 ||
+      this.admissionWaiters.length > 0 ||
+      this.drainPromise ||
+      this.drainScheduled
+    )) return;
     const waiters = this.flushWaiters.splice(0);
     waiters.forEach(waiter => {
       if (this.failure) waiter.reject(this.failure);
@@ -356,6 +457,7 @@ module.exports = {
   resolveDurableAppendJournalOptions,
   EVENT_JOURNAL_ENV,
   DEFAULT_MAX_RECORD_BYTES,
+  MIN_CONFIGURED_RECORD_BYTES,
   DEFAULT_MAX_BATCH_ENTRIES,
   DEFAULT_MAX_BATCH_BYTES,
   DEFAULT_MAX_OUTSTANDING_ENTRIES,

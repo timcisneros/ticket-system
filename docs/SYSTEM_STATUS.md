@@ -20,8 +20,11 @@ the intended deployment ceiling.
 - Event append uses a persistent asynchronous group-commit journal. A caller resumes only after its
   exact batch has been written and `FileHandle.sync()` has completed.
 - Process-local event append admission has configurable record, batch, and outstanding-work bounds.
-  Current admission utilization, high-water marks, commit timing, and rejections are visible through
-  the runtime and operational status surfaces. These controls do not bound the total size of
+  Current admission utilization, capacity waits, high-water marks, commit timing, and rejections are
+  visible through the runtime and operational status surfaces. Capacity pressure pauses already
+  accepted event producers, rejects new mutation admission, and clears automatically after durable
+  appends drain. Oversized records are request-scoped rejections; write or sync failure remains a
+  fatal-for-the-current-process mutation shutdown. These controls do not bound the total size of
   `events.jsonl`, which has no automatic rotation, compaction, or retention policy.
 - Run events use one current schema and one continuous per-run hash chain. Runtime evidence is not
   silently reinterpreted with current configuration.

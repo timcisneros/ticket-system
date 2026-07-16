@@ -143,7 +143,8 @@ async function main() {
     assert(s.schedules.enabled === 1, 'schedule counts correct');
     assert(s.eventJournal && s.eventJournal.config.maxRecordBytes === 2048, 'journal record capacity override surfaced');
     assert(s.eventJournal.config.maxOutstandingEntries === 64 && s.eventJournal.config.maxOutstandingBytes === 8192, 'journal outstanding capacity overrides surfaced');
-    assert(Number.isFinite(s.eventJournal.current.utilization) && s.eventJournal.totals.backpressureRejections === 0, 'journal pressure metrics surfaced');
+    assert(Number.isFinite(s.eventJournal.current.utilization) && s.eventJournal.current.backpressured === false, 'journal pressure state surfaced');
+    assert(s.eventJournal.current.admissionWaitingEntries === 0 && s.eventJournal.totals.backpressureWaits === 0, 'journal capacity-wait metrics surfaced');
 
     // ---- 3: warning flags reflect state. ----
     assert(s.warnings.unresolvedTriageExists === true && s.warnings.blockedTicketsExist === true && s.warnings.failedRunsExist === true, 'state warnings set');

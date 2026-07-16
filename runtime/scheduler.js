@@ -9,6 +9,7 @@ function createRuntimeScheduler({
   expireStaleRunLeases,
   isRunStarting,
   isRunActiveInMemory,
+  isAdmissionPaused = () => false,
   runner,
   onError
 }) {
@@ -36,6 +37,9 @@ function createRuntimeScheduler({
     ticking = true;
 
     try {
+      // Journal capacity pressure is recoverable. Leave pending runs untouched
+      // and let the next tick resume automatically after durable appends drain.
+      if (isAdmissionPaused()) return;
       if (typeof expireStaleRunLeases === 'function') await expireStaleRunLeases();
 
       const pendingRuns = readRuns()

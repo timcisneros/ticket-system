@@ -44,13 +44,19 @@ function testValidatedConfiguration() {
     /cannot exceed/,
     'record capacity larger than batch capacity was not rejected'
   );
+  assertThrows(
+    () => resolveDurableAppendJournalOptions({ EVENT_JOURNAL_MAX_RECORD_BYTES: '512' }),
+    /at least 1024 bytes/,
+    'server configuration that cannot fit compact rejection evidence was not rejected'
+  );
 }
 
-function createFakeFs({ partialWriteSize = Infinity, syncImpl = async () => {} } = {}) {
+function createFakeFs({ partialWriteSize = Infinity, writeImpl = null, syncImpl = async () => {} } = {}) {
   const calls = [];
   const bytes = [];
   const handle = {
     async write(buffer, offset, length) {
+      if (writeImpl) return writeImpl(buffer, offset, length);
       const written = Math.min(partialWriteSize, length);
       calls.push(`write:${offset}:${written}`);
       bytes.push(...buffer.subarray(offset, offset + written));
@@ -111,7 +117,7 @@ async function testAcknowledgementWaitsForSyncWithoutBlockingTimers() {
   assert(syncStarted, 'journal did not begin the scheduled sync');
   assert(!acknowledged, 'append acknowledged before sync completed');
   const inFlight = journal.getMetrics();
-  assert(inFlight.status === 'committing', 'in-flight journal status was not observable');
+  assert(inFlight.status === 'backpressured', 'capacity pressure during an active sync was not observable');
   assert(inFlight.current.activeBatchEntries === 1 && inFlight.current.outstandingEntries === 1, 'active durable work was omitted from journal pressure');
   const activeOverflow = await journal.append('second\n').then(() => null, error => error);
   assert(activeOverflow && activeOverflow.code === 'EVENT_JOURNAL_BACKPRESSURE', 'active sync work was omitted from the outstanding-work capacity check');
@@ -133,16 +139,32 @@ async function testAcknowledgementWaitsForSyncWithoutBlockingTimers() {
 async function testFlushFailureFailsClosed() {
   const flushError = new Error('flush failed');
   const fake = createFakeFs({ syncImpl: async () => { throw flushError; } });
-  const journal = createDurableAppendJournal('/events.jsonl', { fsPromises: fake.api });
-  const first = journal.append('one\n');
-  const second = journal.append('two\n');
+  const journal = createDurableAppendJournal('/events.jsonl', {
+    fsPromises: fake.api,
+    maxOutstandingEntries: 1
+  });
+  const first = journal.appendWhenAvailable('one\n');
+  const second = journal.appendWhenAvailable('two\n');
 
   const settled = await Promise.allSettled([first, second]);
-  assert(settled.every(result => result.status === 'rejected'), 'flush failure did not reject the whole active batch');
+  assert(settled.every(result => result.status === 'rejected'), 'flush failure did not reject active and capacity-waiting appends');
   const later = await journal.append('three\n').then(() => null, error => error);
   assert(later && later.code === 'EVENT_JOURNAL_FAILED', 'journal accepted an append after a flush failure');
   await journal.close().catch(() => {});
   assert(fake.calls.at(-1) === 'close', 'persistent descriptor was not closed after a flush failure');
+}
+
+async function testWriteFailureFailsClosed() {
+  const fake = createFakeFs({
+    writeImpl: async () => { throw new Error('write failed'); }
+  });
+  const journal = createDurableAppendJournal('/events.jsonl', { fsPromises: fake.api });
+  const failed = await journal.appendWhenAvailable('one\n').then(() => null, error => error);
+  assert(failed && failed.code === 'EVENT_JOURNAL_FAILED', 'write failure was not classified as fatal for the journal');
+  assert(journal.getMetrics().status === 'failed', 'write failure did not latch the journal failure state');
+  const later = await journal.appendWhenAvailable('two\n').then(() => null, error => error);
+  assert(later && later.code === 'EVENT_JOURNAL_FAILED', 'journal accepted an append after a write failure');
+  await journal.close().catch(() => {});
 }
 
 async function testBoundedBackpressure() {
@@ -163,6 +185,39 @@ async function testBoundedBackpressure() {
   assert(saturated.totals.backpressureRejections === 1, 'backpressure rejection was not counted');
   scheduled.shift()();
   await Promise.all([first, second]);
+  await journal.close();
+}
+
+async function testRecoverableBackpressureWaitsAndResumesInOrder() {
+  const scheduled = [];
+  const fake = createFakeFs();
+  const journal = createDurableAppendJournal('/events.jsonl', {
+    fsPromises: fake.api,
+    schedule: callback => scheduled.push(callback),
+    maxOutstandingEntries: 1
+  });
+
+  const first = journal.appendWhenAvailable('one\n');
+  const second = journal.appendWhenAvailable('two\n');
+  const pressured = journal.getMetrics();
+  assert(pressured.status === 'backpressured' && pressured.current.backpressured === true, 'recoverable pressure state was not exposed');
+  assert(pressured.current.outstandingEntries === 1, 'capacity waiting incorrectly expanded the bounded outstanding set');
+  assert(pressured.current.admissionWaitingEntries === 1, 'capacity-waiting append was not observable');
+
+  scheduled.shift()();
+  await Promise.all([first, second]);
+  assert(Buffer.from(fake.bytes).toString('utf8') === 'one\ntwo\n', 'capacity waiting changed append order or dropped evidence');
+
+  await new Promise(resolve => setImmediate(resolve));
+  const recovered = journal.getMetrics();
+  assert(recovered.status === 'idle' && recovered.current.backpressured === false, 'journal did not recover after pressure drained');
+  assert(recovered.current.outstandingEntries === 0 && recovered.current.admissionWaitingEntries === 0, 'drained work remained outstanding');
+  assert(recovered.totals.backpressureWaits === 1 && recovered.totals.admittedAfterWait === 1, 'wait and resume totals were not recorded');
+
+  const third = journal.appendWhenAvailable('three\n');
+  scheduled.shift()();
+  await third;
+  assert(Buffer.from(fake.bytes).toString('utf8') === 'one\ntwo\nthree\n', 'journal did not accept new evidence after recovery');
   await journal.close();
 }
 
@@ -198,10 +253,12 @@ async function main() {
   await testGroupCommitAndPartialWrites();
   await testAcknowledgementWaitsForSyncWithoutBlockingTimers();
   await testFlushFailureFailsClosed();
+  await testWriteFailureFailsClosed();
   await testBoundedBackpressure();
+  await testRecoverableBackpressureWaitsAndResumesInOrder();
   await testRecordLimitIsIndependentFromBatchCapacity();
   await testRealFileAppend();
-  console.log('PASS: event journal batches appends, awaits async sync, preserves order, bounds backlog, and fails closed');
+  console.log('PASS: event journal preserves order, recovers from capacity pressure, and fails closed on sync failure');
 }
 
 main().catch(error => {

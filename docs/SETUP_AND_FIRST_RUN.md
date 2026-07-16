@@ -32,9 +32,10 @@ variables (see README → Configuration for the full list):
 - Process-local event append admission and batching (optional): `EVENT_JOURNAL_MAX_RECORD_BYTES`,
   `EVENT_JOURNAL_MAX_BATCH_ENTRIES`, `EVENT_JOURNAL_MAX_BATCH_BYTES`,
   `EVENT_JOURNAL_MAX_OUTSTANDING_ENTRIES`, and `EVENT_JOURNAL_MAX_OUTSTANDING_BYTES`. Values must
-  be positive integers; record capacity cannot exceed batch or outstanding-byte capacity. Invalid
-  values fail startup instead of silently falling back. Current pressure, high-water marks,
-  rejection counts, and the effective configuration are visible at `/ops` and
+  be positive integers; record capacity must be at least 1024 bytes and cannot exceed batch or
+  outstanding-byte capacity. Invalid values fail startup instead of silently falling back. Current
+  pressure, capacity waits, high-water marks, rejection counts, and the effective configuration are
+  visible at `/ops` and
   `GET /api/runtime/status`. These settings do not cap or rotate the total `events.jsonl` file.
 
 There is no `.env.example`; set variables in your shell or an ignored `.env`.

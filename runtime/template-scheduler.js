@@ -17,6 +17,7 @@ function createTemplateScheduler({
   intervalMs = 60000,
   readProcessTemplates,
   triggerDueTemplate,      // (template, scheduledForIso) => triggerResult  (host-provided)
+  isAdmissionPaused = () => false,
   now = () => new Date(),
   onError = () => {}
 }) {
@@ -40,6 +41,9 @@ function createTemplateScheduler({
     ticking = true;
     const results = [];
     try {
+      // Do not create new scheduled mutation work while the evidence journal is
+      // applying recoverable admission backpressure. A later tick resumes it.
+      if (isAdmissionPaused()) return results;
       const currentMs = now().getTime();
       const templates = readProcessTemplates() || [];
       for (const template of templates) {

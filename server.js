@@ -1541,7 +1541,18 @@ fastify.addHook('onRequest', async (request, reply) => {
   request.routeStartedAtNs = process.hrtime.bigint();
   if (UNSAFE_HTTP_METHODS.has(request.method) && eventAppendFailure) {
     reply.code(503);
-    return reply.send({ error: 'Event persistence is unavailable; mutations are disabled' });
+    return reply.send({
+      error: 'Event persistence is unavailable; mutations are disabled',
+      code: 'EVENT_PERSISTENCE_UNAVAILABLE'
+    });
+  }
+  if (UNSAFE_HTTP_METHODS.has(request.method) && isEventJournalAdmissionBackpressured()) {
+    reply.header('Retry-After', '1');
+    reply.code(503);
+    return reply.send({
+      error: 'Event journal capacity is temporarily backpressured; retry after accepted evidence drains',
+      code: 'EVENT_ADMISSION_BACKPRESSURED'
+    });
   }
   if (UNSAFE_HTTP_METHODS.has(request.method) && !requestOriginAllowed(request)) {
     reply.code(403);
@@ -1558,6 +1569,10 @@ fastify.get('/health', async (request, reply) => {
   if (!serverReady || eventAppendFailure) {
     reply.code(503);
     return { status: eventAppendFailure ? 'degraded' : 'starting', ready: false };
+  }
+  if (isEventJournalAdmissionBackpressured()) {
+    reply.code(503);
+    return { status: 'backpressured', ready: false, reason: 'event_journal_capacity' };
   }
   return { status: 'ok', ready: true };
 });
@@ -4944,6 +4959,10 @@ function createLogTimestamp() {
 let eventAppendFailure = null;
 let eventJournal = createDurableAppendJournal(EVENTS_FILE, EVENT_JOURNAL_OPTIONS);
 
+function isEventJournalAdmissionBackpressured() {
+  return !eventAppendFailure && eventJournal.isBackpressured();
+}
+
 // Per-run event chain state for forensic sequence numbers and hash chaining
 const runEventChains = new Map(); // runId -> { seq: number, prevHash: string | null }
 const persistedEventIds = new Set();
@@ -5055,7 +5074,7 @@ async function appendEvent(event = {}) {
   if (event.runId !== undefined && event.runId !== null && runId === null) {
     throw dataIntegrityError('events.jsonl', `cannot append event ${event.type || 'event'} with invalid runId`);
   }
-  const normalized = {
+  let normalized = {
     schemaVersion: RUN_EVENT_SCHEMA_VERSION,
     id: normalizeEventId(event.id),
     ts: typeof event.ts === 'string' && event.ts.trim() ? event.ts : createLogTimestamp(),
@@ -5073,24 +5092,68 @@ async function appendEvent(event = {}) {
     throw dataIntegrityError('events.jsonl', `cannot append duplicate event id ${normalized.id}`);
   }
 
-  let nextChain = null;
+  let chain = null;
   // Reserve sequence/hash positions before yielding so concurrent producers
   // cannot claim the same position. The committed tip advances only after the
   // exact serialized event receives durable journal acknowledgement.
   if (normalized.runId !== null) {
     const runId = normalized.runId;
-    const chain = reservedRunEventChains.get(runId) || runEventChains.get(runId) || { seq: 0, prevHash: null };
+    chain = reservedRunEventChains.get(runId) || runEventChains.get(runId) || { seq: 0, prevHash: null };
     normalized.seq = chain.seq;
     normalized.prevHash = chain.prevHash;
     normalized.hash = computeRunEventHash(normalized);
-    nextChain = { seq: chain.seq + 1, prevHash: normalized.hash };
-    reservedRunEventChains.set(runId, nextChain);
   }
+
+  let line = `${JSON.stringify(normalized)}\n`;
+  const requestedRecordBytes = Buffer.byteLength(line);
+  let recordRejection = null;
+  if (requestedRecordBytes > eventJournal.maxRecordBytes) {
+    eventJournal.noteOversizedRejection();
+    const requestedType = normalized.type;
+    normalized = {
+      schemaVersion: normalized.schemaVersion,
+      id: normalized.id,
+      ts: normalized.ts,
+      type: 'event.record_rejected',
+      ticketId: normalized.ticketId,
+      runId: normalized.runId,
+      stepId: normalized.stepId,
+      payload: {
+        reasonCode: 'event_record_too_large',
+        requestedType,
+        requestedRecordBytes,
+        maxRecordBytes: eventJournal.maxRecordBytes
+      }
+    };
+    if (chain) {
+      normalized.seq = chain.seq;
+      normalized.prevHash = chain.prevHash;
+      normalized.hash = computeRunEventHash(normalized);
+    }
+    line = `${JSON.stringify(normalized)}\n`;
+    recordRejection = new Error(
+      `Event ${requestedType} is ${requestedRecordBytes} bytes; journal record limit is ${eventJournal.maxRecordBytes}`
+    );
+    recordRejection.code = 'EVENT_RECORD_TOO_LARGE';
+    recordRejection.statusCode = 413;
+    recordRejection.requestedType = requestedType;
+    recordRejection.requestedRecordBytes = requestedRecordBytes;
+    recordRejection.maxRecordBytes = eventJournal.maxRecordBytes;
+  }
+
+  if (Buffer.byteLength(line) > eventJournal.maxRecordBytes) {
+    const error = recordRejection || new Error(`Event ${normalized.type} exceeds the journal record limit`);
+    error.code = 'EVENT_RECORD_TOO_LARGE';
+    error.statusCode = 413;
+    throw error;
+  }
+
+  const nextChain = chain ? { seq: chain.seq + 1, prevHash: normalized.hash } : null;
+  if (nextChain) reservedRunEventChains.set(normalized.runId, nextChain);
   reservedEventIds.add(normalized.id);
 
-  const line = `${JSON.stringify(normalized)}\n`;
   try {
-    await eventJournal.append(line);
+    await eventJournal.appendWhenAvailable(line);
   } catch (error) {
     if (!eventAppendFailure) eventAppendFailure = error;
     serverReady = false;
@@ -5111,6 +5174,7 @@ async function appendEvent(event = {}) {
   reservedEventIds.delete(normalized.id);
   persistedEventIds.add(normalized.id);
 
+  if (recordRejection) throw recordRejection;
   return normalized;
 }
 
@@ -12729,7 +12793,7 @@ function buildOperationalSummary(options = {}) {
       noRoutingPolicies: policies.length === 0,
       noConnectors: connectors.length === 0,
       eventJournalPressureExists: eventJournalMetrics.status === 'failed' ||
-        eventJournalMetrics.totals.backpressureRejections > 0 ||
+        eventJournalMetrics.current.backpressured ||
         eventJournalMetrics.current.utilization >= 0.8,
       versionConsistencyUnresolved
     }
@@ -12825,28 +12889,59 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
 
   runs.push(run);
   writeRuns(runs);
-  await appendEvent({
-    type: 'run.created',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
-      agentId: run.agentId,
-      agentName: run.agentName,
-      status: run.status,
-      executionMode: run.executionMode,
-      capabilityType: run.capabilityType,
-      capabilityId: run.capabilityId,
-      workflowId: run.workflowId,
-      executionPolicySnapshot: run.executionPolicySnapshot,
-      runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
-      verificationContractSnapshot: run.verificationContractSnapshot,
-      acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
-      workTypeId: run.workTypeId,
-      workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
-      workTypeSnapshotSource: run.workTypeSnapshot ? 'ticket_snapshot' : null,
-      createdAt: run.createdAt
+  try {
+    await appendEvent({
+      type: 'run.created',
+      ticketId: run.ticketId,
+      runId: run.id,
+      payload: {
+        agentId: run.agentId,
+        agentName: run.agentName,
+        status: run.status,
+        executionMode: run.executionMode,
+        capabilityType: run.capabilityType,
+        capabilityId: run.capabilityId,
+        workflowId: run.workflowId,
+        executionPolicySnapshot: run.executionPolicySnapshot,
+        runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
+        verificationContractSnapshot: run.verificationContractSnapshot,
+        acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
+        workTypeId: run.workTypeId,
+        workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
+        workTypeSnapshotSource: run.workTypeSnapshot ? 'ticket_snapshot' : null,
+        createdAt: run.createdAt
+      }
+    });
+  } catch (error) {
+    if (error && error.code === 'EVENT_RECORD_TOO_LARGE') {
+      const failedAt = new Date().toISOString();
+      run.status = 'failed';
+      run.error = error.message;
+      run.completedAt = failedAt;
+      run.updatedAt = failedAt;
+      run.leaseOwner = null;
+      run.leaseExpiresAt = null;
+      writeRuns(runs);
+
+      const tickets = readTickets();
+      const persistedTicket = tickets.find(item => item.id === run.ticketId);
+      if (persistedTicket && !['completed', 'closed'].includes(persistedTicket.status)) {
+        persistedTicket.status = 'failed';
+        persistedTicket.blockedReason = error.message;
+        persistedTicket.updatedAt = failedAt;
+        persistedTicket.changedAt = failedAt;
+        writeTickets(tickets);
+      }
+      appendRunLog(run, 'run:failed', error.message, null, {
+        code: error.code,
+        requestedType: error.requestedType,
+        requestedRecordBytes: error.requestedRecordBytes,
+        maxRecordBytes: error.maxRecordBytes
+      });
+      broadcastTicketChange();
     }
-  });
+    throw error;
+  }
   appendRunLog(run, 'run:created', `${isRerun ? 'Agent rerun created' : 'Agent run created'}${allocationLogSuffix(run)}`, null, {
     allocationPlanId: run.allocationPlanId,
     allocationItemId: run.allocationItemId
@@ -18619,26 +18714,46 @@ async function createTicketFromInput(input, actor, options = {}) {
 
   tickets.push(newTicket);
   writeTickets(tickets);
-  await appendEvent({
-    type: 'ticket.created',
-    ticketId: newTicket.id,
-    payload: {
-      status: newTicket.status,
-      assignmentTargetType: newTicket.assignmentTargetType,
-      assignmentTargetId: newTicket.assignmentTargetId,
-      assignmentMode: newTicket.assignmentMode,
-      executionMode: newTicket.executionMode,
-      capabilityType: newTicket.capabilityType,
-      capabilityId: newTicket.capabilityId,
-      workflowId: newTicket.workflowId,
-      workTypeId: newTicket.workTypeId,
-      workTypeSnapshot: copyWorkTypeSnapshot(newTicket.workTypeSnapshot),
-      workTypeSnapshotSource: newTicket.workTypeSnapshot ? 'catalog_at_ticket_creation' : null,
-      createdBy: newTicket.createdBy,
-      createdAt: newTicket.createdAt,
-      ...(newTicket.source ? { source: newTicket.source.type } : {})
+  try {
+    await appendEvent({
+      type: 'ticket.created',
+      ticketId: newTicket.id,
+      payload: {
+        status: newTicket.status,
+        assignmentTargetType: newTicket.assignmentTargetType,
+        assignmentTargetId: newTicket.assignmentTargetId,
+        assignmentMode: newTicket.assignmentMode,
+        executionMode: newTicket.executionMode,
+        capabilityType: newTicket.capabilityType,
+        capabilityId: newTicket.capabilityId,
+        workflowId: newTicket.workflowId,
+        workTypeId: newTicket.workTypeId,
+        workTypeSnapshot: copyWorkTypeSnapshot(newTicket.workTypeSnapshot),
+        workTypeSnapshotSource: newTicket.workTypeSnapshot ? 'catalog_at_ticket_creation' : null,
+        createdBy: newTicket.createdBy,
+        createdAt: newTicket.createdAt,
+        ...(newTicket.source ? { source: newTicket.source.type } : {})
+      }
+    });
+  } catch (error) {
+    if (error && error.code === 'EVENT_RECORD_TOO_LARGE') {
+      const failedAt = new Date().toISOString();
+      newTicket.status = 'failed';
+      newTicket.blockedReason = error.message;
+      newTicket.updatedAt = failedAt;
+      newTicket.changedAt = failedAt;
+      writeTickets(tickets);
+      appendSystemLog('ticket:event_record_rejected', error.message, null, {
+        ticketId: newTicket.id,
+        code: error.code,
+        requestedType: error.requestedType,
+        requestedRecordBytes: error.requestedRecordBytes,
+        maxRecordBytes: error.maxRecordBytes
+      });
+      broadcastTicketChange();
     }
-  });
+    throw error;
+  }
   broadcastTicketChange();
   const runs = await createRunsForTicket(newTicket, options.delegated || null);
 
@@ -19938,6 +20053,15 @@ fastify.get('/api/health', async (request, reply) => {
   if (!serverReady || eventAppendFailure) {
     reply.code(503);
     return { status: eventAppendFailure ? 'degraded' : 'starting', ready: false };
+  }
+  if (isEventJournalAdmissionBackpressured()) {
+    reply.code(503);
+    return {
+      status: 'backpressured',
+      ready: false,
+      reason: 'event_journal_capacity',
+      uptime: Math.floor(process.uptime())
+    };
   }
   return { status: 'ok', ready: true, uptime: Math.floor(process.uptime()) };
 });
@@ -23014,6 +23138,7 @@ function startRuntimeScheduler() {
     expireStaleRunLeases,
     isRunStarting,
     isRunActiveInMemory,
+    isAdmissionPaused: isEventJournalAdmissionBackpressured,
     runner
   });
   runtimeScheduler.start();
@@ -23039,6 +23164,7 @@ function startTemplateScheduler() {
     intervalMs: getPositiveIntegerEnv('PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS', 60000),
     readProcessTemplates,
     triggerDueTemplate: triggerDueScheduledTemplate,
+    isAdmissionPaused: isEventJournalAdmissionBackpressured,
     onError: (template, error) => {
       // Invalid schedule data is skipped and surfaced; it never triggers.
       appendSystemLog('process_template:schedule_skipped', `Process template schedule skipped: ${error && error.message ? error.message : 'invalid schedule'}`, null, {

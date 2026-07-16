@@ -35,9 +35,10 @@
     <tbody>
       <tr><th>Status</th><td><%= journal.status %></td></tr>
       <tr><th>Outstanding</th><td><%= journal.current.outstandingEntries %> / <%= journal.config.maxOutstandingEntries %> entries · <%= journal.current.outstandingBytes %> / <%= journal.config.maxOutstandingBytes %> bytes · <%= Math.round(journal.current.utilization * 1000) / 10 %>% utilized</td></tr>
-      <tr><th>High-water mark</th><td><%= journal.highWatermarks.outstandingEntries %> entries · <%= journal.highWatermarks.outstandingBytes %> bytes</td></tr>
+      <tr><th>Capacity waiting</th><td><%= journal.current.admissionWaitingEntries %> entries · <%= journal.current.admissionWaitingBytes %> bytes</td></tr>
+      <tr><th>High-water mark</th><td><%= journal.highWatermarks.outstandingEntries %> outstanding entries · <%= journal.highWatermarks.outstandingBytes %> outstanding bytes · <%= journal.highWatermarks.admissionWaitingEntries %> waiting entries</td></tr>
       <tr><th>Committed</th><td><%= journal.totals.committedEntries %> entries · <%= journal.totals.committedBytes %> bytes · <%= journal.totals.commitBatches %> batches</td></tr>
-      <tr><th>Rejected</th><td><%= journal.totals.backpressureRejections %> for backpressure · <%= journal.totals.oversizedRejections %> oversized</td></tr>
+      <tr><th>Admission outcomes</th><td><%= journal.totals.backpressureWaits %> capacity waits · <%= journal.totals.admittedAfterWait %> resumed · <%= journal.totals.backpressureRejections %> immediate backpressure rejections · <%= journal.totals.oversizedRejections %> oversized</td></tr>
       <tr><th>Commit latency</th><td>last <%= journal.commitTiming.lastCommitDurationMs === null ? 'unavailable' : journal.commitTiming.lastCommitDurationMs.toFixed(2) + ' ms' %> · max <%= journal.commitTiming.maxCommitDurationMs.toFixed(2) %> ms</td></tr>
       <tr><th>Batch configuration</th><td>up to <%= journal.config.maxBatchEntries %> entries / <%= journal.config.maxBatchBytes %> bytes · record maximum <%= journal.config.maxRecordBytes %> bytes</td></tr>
     </tbody>
