@@ -5,24 +5,45 @@ const assert = require('assert/strict');
 const fs = require('fs');
 const path = require('path');
 const {
+  IdempotencyConflictError,
+  ImmutableEvidenceConflictError,
+  LeaseAuthorityError,
+  OptimisticConcurrencyError,
   PostgresRuntimeStore,
+  StateTransitionConflictError,
   buildEventEnvelope,
   buildWorkspaceLockRequests,
+  canonicalJson,
   normalizeWorkspacePath,
-  quoteIdentifier
+  quoteIdentifier,
+  sha256Json
 } = require('../persistence/postgres/store');
 const { resolveRuntimePersistenceBackend } = require('../persistence/runtime-backend');
 const { verifyCurrentRunEventChain } = require('../runtime/event-integrity');
 
 const ROOT = path.resolve(__dirname, '..');
 const STORE_PATH = path.join(ROOT, 'persistence', 'postgres', 'store.js');
-const MIGRATION_PATH = path.join(ROOT, 'persistence', 'postgres', 'migrations', '001_runtime_core.sql');
+const MIGRATIONS_DIR = path.join(ROOT, 'persistence', 'postgres', 'migrations');
+const CORE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '001_runtime_core.sql');
+const EVIDENCE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '002_runtime_evidence.sql');
 const storeSource = fs.readFileSync(STORE_PATH, 'utf8');
-const migration = fs.readFileSync(MIGRATION_PATH, 'utf8');
+const coreMigration = fs.readFileSync(CORE_MIGRATION_PATH, 'utf8');
+const evidenceMigration = fs.readFileSync(EVIDENCE_MIGRATION_PATH, 'utf8');
 
 assert.equal(quoteIdentifier('ticket_system'), '"ticket_system"');
 assert.throws(() => quoteIdentifier('public; DROP SCHEMA public'), /Invalid PostgreSQL identifier/);
 assert.throws(() => new PostgresRuntimeStore(), /connectionString is required/);
+const boundedStore = new PostgresRuntimeStore({ pool: {}, maxJsonRecordBytes: 16 });
+assert.throws(() => boundedStore.assertJsonRecord({ value: 'this is too large' }, 'record'), error => {
+  return error && error.code === 'POSTGRES_RECORD_TOO_LARGE';
+});
+assert.equal(canonicalJson({ z: 1, nested: { b: 2, a: 1 } }), canonicalJson({ nested: { a: 1, b: 2 }, z: 1 }));
+assert.equal(sha256Json({ b: 2, a: 1 }), sha256Json({ a: 1, b: 2 }));
+assert.equal(new OptimisticConcurrencyError('run', 1, 2).code, 'OPTIMISTIC_CONCURRENCY_CONFLICT');
+assert.equal(new ImmutableEvidenceConflictError('evaluation', 1).code, 'IMMUTABLE_EVIDENCE_CONFLICT');
+assert.equal(new IdempotencyConflictError(1, 'step-1').code, 'IDEMPOTENCY_CONFLICT');
+assert.equal(new StateTransitionConflictError('run', 1, ['running'], { status: 'pending' }).code, 'STATE_TRANSITION_CONFLICT');
+assert.equal(new LeaseAuthorityError(1, 'worker', { status: 'running' }).code, 'LEASE_AUTHORITY_CONFLICT');
 assert.equal(resolveRuntimePersistenceBackend({}), 'json');
 assert.throws(
   () => resolveRuntimePersistenceBackend({ PERSISTENCE_BACKEND: 'postgres' }),
@@ -80,7 +101,28 @@ for (const requiredSql of [
   'CREATE INDEX runs_pending_claim_idx',
   'CREATE TABLE run_event_chain_tips'
 ]) {
-  assert.ok(migration.includes(requiredSql), `migration must include: ${requiredSql}`);
+  assert.ok(coreMigration.includes(requiredSql), `core migration must include: ${requiredSql}`);
+}
+
+for (const requiredSql of [
+  'ADD COLUMN started_at TIMESTAMPTZ',
+  'ALTER COLUMN payload TYPE JSON',
+  'requires an empty development event store',
+  'CREATE TRIGGER tickets_revision_guard',
+  'CREATE TRIGGER runs_revision_guard',
+  'terminal runs cannot be reopened',
+  'CREATE TABLE run_evaluations',
+  'CREATE TABLE run_consequences',
+  'CREATE TABLE replay_snapshots',
+  'CREATE TABLE operation_receipts',
+  'CONSTRAINT operation_receipts_idempotency_unique UNIQUE (run_id, idempotency_key)',
+  'CREATE TRIGGER run_evaluations_append_only',
+  'CREATE TRIGGER run_consequences_append_only',
+  'CREATE TRIGGER operation_receipts_append_only',
+  'CREATE TRIGGER replay_snapshots_mutation_guard',
+  'PERFORM assert_terminal_run(NEW.run_id)'
+]) {
+  assert.ok(evidenceMigration.includes(requiredSql), `evidence migration must include: ${requiredSql}`);
 }
 
 for (const requiredPrimitive of [
@@ -93,7 +135,22 @@ for (const requiredPrimitive of [
   'pg_advisory_xact_lock',
   'revision = run.revision + 1',
   'limit exceeds the configured maximum',
-  'eligibleRunIds exceeds the configured limit'
+  'eligibleRunIds exceeds the configured limit',
+  'async transitionTicket',
+  'async transitionRun',
+  'Unsupported run status transition',
+  'leaseOwner is required to transition a running run',
+  'LEASE_AUTHORITY_CONFLICT',
+  'STATE_TRANSITION_CONFLICT',
+  "lease_expires_at > clock_timestamp()",
+  'async recordRunEvaluation',
+  'async recordRunConsequence',
+  'async writeReplaySnapshot',
+  'POSTGRES_REPLAY_INTEGRITY_FAILURE',
+  'async recordOperationReceipt',
+  "eventType = 'operation.receipt_recorded'",
+  'ON CONFLICT (run_id, idempotency_key) DO NOTHING',
+  'POSTGRES_RECORD_TOO_LARGE'
 ]) {
   assert.ok(storeSource.includes(requiredPrimitive), `store must include: ${requiredPrimitive}`);
 }
@@ -101,4 +158,4 @@ for (const requiredPrimitive of [
 assert.ok(!/appendFileSync|writeFileSync/.test(storeSource), 'PostgreSQL authority must not write JSON files');
 assert.ok(!/upsertTicket|upsertRun|legacy/i.test(storeSource), 'cutover store must not carry development-data compatibility APIs');
 
-console.log('PASS: PostgreSQL persistence contract — DB-owned identity/time, atomic event chains and leases, bounded hierarchical locks, no JSON dual write');
+console.log('PASS: PostgreSQL persistence contract — optimistic lifecycle, lease fencing, immutable evidence, replay revisions, idempotent receipts, no JSON dual write');

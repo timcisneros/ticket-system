@@ -6,7 +6,7 @@ not a claim that the server already runs on PostgreSQL.
 
 ## Current status
 
-The first PostgreSQL foundation is implemented:
+The first two PostgreSQL foundation phases are implemented:
 
 - `persistence/postgres/migrations/001_runtime_core.sql` defines the ticket, run, append-only event,
   and per-run event-chain-tip schema.
@@ -19,6 +19,23 @@ The first PostgreSQL foundation is implemented:
   and indexed read pages are bounded and configurable per store instance.
 - A deterministic contract test is in the normal checkpoint. CI also starts PostgreSQL and runs the
   real migration/concurrency integration test.
+- `002_runtime_evidence.sql` adds database-enforced entity revisions, authoritative run lifecycle
+  timestamps, immutable final evaluation/consequence records, optimistically revised replay
+  snapshots that become immutable when finalized, and append-only operation receipts keyed for
+  idempotent persistence.
+- Ticket and run transition APIs require an expected revision and allowed source status. Their state
+  change and lifecycle event commit or roll back together. Starting a run requires its live lease;
+  every worker transition from `running` requires the matching live lease, and an expired run may
+  only return to `pending` for recovery. A terminal transition clears the lease. Terminal runs
+  cannot be reopened; retry creates a new run so final evaluation and consequence evidence remains
+  immutable.
+- Evaluation, consequence, and operation-receipt inserts are atomic with their run event. Identical
+  retries return the existing immutable record without another event; a different value under the
+  same authority key is an explicit conflict.
+- Complex run events retain the current hash contract after a PostgreSQL round trip. Event payloads
+  use order-preserving `JSON`, while queryable state/evidence documents use `JSONB`. The forward
+  migration refuses non-empty disposable foundation event data rather than silently invalidating
+  its stored hashes.
 
 The Fastify server still uses JSON files as its runtime authority. Setting
 `PERSISTENCE_BACKEND=postgres` currently fails startup so an operator cannot accidentally run a
@@ -40,6 +57,10 @@ tools until the cutover is complete.
 - Preserve the existing ticket/run/authority/evidence product model. Changing the storage engine
   does not grant new action authority, weaken verification, or turn the ticket system into a broad
   orchestration layer.
+- An idempotent database receipt prevents duplicate evidence records; it does not make a filesystem
+  or remote-provider side effect atomic with PostgreSQL. The runtime adapter still needs a stable
+  operation key plus target-side idempotency or explicit reconciliation before retrying uncertain
+  effects.
 
 ## Cutover invariants
 
@@ -62,10 +83,10 @@ The server backend must not be enabled until all of these hold:
 
 ## Remaining implementation order
 
-1. Add optimistic state-transition APIs for tickets and runs, including same-transaction lifecycle
-   events, evaluation, consequence, replay, and operation-receipt persistence.
-2. Refactor the server's synchronous JSON call sites to asynchronous repository calls. Migrate a
+1. Refactor the server's synchronous JSON call sites to asynchronous repository calls. Migrate a
    complete authority slice at a time; do not publish a mixed backend as horizontally scalable.
+2. Integrate stable operation keys and target-side idempotency/reconciliation with the PostgreSQL
+   receipt authority before external side effects can be retried across process failure.
 3. Move workflows, templates, schedules, Work Contexts, routing, connectors, permissions, and other
    mutable control records to shared storage with their current validation and provenance rules.
 4. Replace in-memory sessions and process-local scheduler ownership where multi-process deployment

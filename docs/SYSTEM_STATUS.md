@@ -54,10 +54,14 @@ the intended deployment ceiling.
 ## Shared-storage cutover status
 
 PostgreSQL is the selected persistence and coordination direction; SQLite is not an intermediate
-backend. The first tested foundation now exists for database-owned ticket/run identity and time,
-transactional append-only run-event chains, distributed run claims and leases, and hierarchical
-workspace coordination. Its deterministic contract test runs in the release checkpoint, and CI
-runs the schema and concurrency suite against PostgreSQL 17.
+backend. The tested foundation now covers database-owned ticket/run identity and time,
+transactional append-only run-event chains, distributed run claims and leases, hierarchical
+workspace coordination, optimistic lifecycle transitions, immutable evaluation/consequence
+evidence, revisioned/finalizable replay snapshots, and append-only idempotent operation receipts.
+Worker transitions from a running state are fenced by the matching live lease; expired runs can be
+recovered without granting their former owner continued authority. State and its lifecycle event
+roll back together. Its deterministic contract test runs in the release checkpoint, and CI runs the
+schema, rollback, idempotency, and concurrency suite against PostgreSQL 17.
 
 This foundation is not yet the Fastify server's active authority. The server remains on JSON and
 explicitly refuses `PERSISTENCE_BACKEND=postgres` until the complete runtime cutover is assembled.
@@ -80,10 +84,11 @@ Compatibility is format-specific, not a system-wide no-legacy policy:
 
 ## Known work
 
-1. Complete the PostgreSQL runtime cutover before horizontal deployment. The core schema and
-   concurrency primitives are implemented, but current server call sites still synchronously use
-   JSON/JSONL. Migrate whole authority slices without dual-writing, then remove the JSON runtime
-   path. Shared storage still needs explicit retention and tenant-isolation policy.
+1. Complete the PostgreSQL runtime cutover before horizontal deployment. Core state, lifecycle,
+   evidence, replay, receipt, and concurrency primitives are implemented, but current server call
+   sites still synchronously use JSON/JSONL. Migrate whole authority slices without dual-writing,
+   integrate target-side idempotency/reconciliation for uncertain external effects, then remove the
+   JSON runtime path. Shared storage still needs explicit retention and tenant-isolation policy.
 2. Add bounded deterministic postconditions where prose acceptance criteria do not prove outcomes;
    keep real-model benchmarks observational.
 3. Complete validation of the model contract compiler and prefix truncation before enabling them by

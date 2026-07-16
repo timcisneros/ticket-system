@@ -51,8 +51,9 @@ manual watcher (observer/proposer); model/provider routing (dispatch policy + im
 snapshot); a local/mock connector contract (bounded read with receipt, write refused); a read-only
 operational transparency surface; restart-safe event integrity checks; fail-closed startup data
 validation; and a hardened release checkpoint. The current status and remaining work are in
-`docs/SYSTEM_STATUS.md`. A tested PostgreSQL persistence/coordination foundation is present, but the
-server has not yet crossed that authority boundary; see `docs/POSTGRES_CUTOVER.md`.
+`docs/SYSTEM_STATUS.md`. A tested PostgreSQL persistence/coordination foundation now covers core
+lifecycle and evidence authorities, but the server has not yet crossed that authority boundary;
+see `docs/POSTGRES_CUTOVER.md`.
 
 ## 6. Quick start
 
@@ -108,9 +109,9 @@ external connector**, and it refuses writes. Tracked seed agents carry **no prov
   reconciled at startup (`docs/PROCESS_TEMPLATE_ACTIVATION_DURABILITY.md`) but is not fully
   transactional.
 - No production deployment baseline. Sessions are in memory, persistence is multi-file JSON, and
-  hosted/multi-tenant isolation is not implemented. PostgreSQL schema and concurrency primitives are
-  under test, but the server deliberately refuses a partial PostgreSQL mode until the complete
-  authority cutover is ready.
+  hosted/multi-tenant isolation is not implemented. PostgreSQL lifecycle, evidence, and concurrency
+  primitives are under test, but the server deliberately refuses a partial PostgreSQL mode until
+  the complete authority cutover is ready.
 - Arbitrary acceptance criteria are supplied to agents but are not automatically proven; fixture
   verifier contracts are offline benchmark metadata unless expressed as runtime postconditions.
 - The model contract compiler and prefix truncation are default-off experiments; dependent

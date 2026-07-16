@@ -12,6 +12,72 @@ const {
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/;
+const TICKET_STATUSES = new Set(['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed']);
+const RUN_STATUSES = new Set(['pending', 'running', 'completed', 'failed', 'interrupted']);
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'interrupted']);
+const OPERATION_OUTCOMES = new Set(['succeeded', 'failed', 'refused']);
+const RUN_STATUS_TRANSITIONS = new Map([
+  ['pending', new Set(['pending', 'running', 'failed', 'interrupted'])],
+  ['running', new Set(['running', 'pending', 'completed', 'failed', 'interrupted'])],
+  ['completed', new Set()],
+  ['failed', new Set()],
+  ['interrupted', new Set()]
+]);
+
+class OptimisticConcurrencyError extends Error {
+  constructor(entity, id, expectedRevision, current = null) {
+    super(`${entity} ${id} did not match expected revision ${expectedRevision}`);
+    this.name = 'OptimisticConcurrencyError';
+    this.code = 'OPTIMISTIC_CONCURRENCY_CONFLICT';
+    this.entity = entity;
+    this.entityId = id;
+    this.expectedRevision = expectedRevision;
+    this.current = current;
+  }
+}
+
+class ImmutableEvidenceConflictError extends Error {
+  constructor(kind, runId) {
+    super(`${kind} for run ${runId} already exists with different evidence`);
+    this.name = 'ImmutableEvidenceConflictError';
+    this.code = 'IMMUTABLE_EVIDENCE_CONFLICT';
+    this.kind = kind;
+    this.runId = runId;
+  }
+}
+
+class IdempotencyConflictError extends Error {
+  constructor(runId, idempotencyKey) {
+    super(`Operation receipt idempotency key conflicts for run ${runId}: ${idempotencyKey}`);
+    this.name = 'IdempotencyConflictError';
+    this.code = 'IDEMPOTENCY_CONFLICT';
+    this.runId = runId;
+    this.idempotencyKey = idempotencyKey;
+  }
+}
+
+class StateTransitionConflictError extends Error {
+  constructor(entity, id, expectedStatuses, current) {
+    super(`${entity} ${id} is ${current.status}; expected ${expectedStatuses.join(' or ')}`);
+    this.name = 'StateTransitionConflictError';
+    this.code = 'STATE_TRANSITION_CONFLICT';
+    this.entity = entity;
+    this.entityId = id;
+    this.expectedStatuses = expectedStatuses;
+    this.current = current;
+  }
+}
+
+class LeaseAuthorityError extends Error {
+  constructor(runId, leaseOwner, current) {
+    super(`Run ${runId} is not controlled by a live lease for ${leaseOwner || '(no owner)'}`);
+    this.name = 'LeaseAuthorityError';
+    this.code = 'LEASE_AUTHORITY_CONFLICT';
+    this.runId = runId;
+    this.leaseOwner = leaseOwner;
+    this.current = current;
+  }
+}
 
 function quoteIdentifier(value) {
   const normalized = String(value || '');
@@ -53,6 +119,49 @@ function jsonObject(value, label) {
     throw new TypeError(`${label} must be an object`);
   }
   return value;
+}
+
+function requiredString(value, label, maxLength = null) {
+  const normalized = String(value === undefined || value === null ? '' : value).trim();
+  if (!normalized) throw new TypeError(`${label} is required`);
+  if (maxLength !== null && normalized.length > maxLength) {
+    throw new RangeError(`${label} exceeds ${maxLength} characters`);
+  }
+  return normalized;
+}
+
+function optionalString(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
+function normalizeStatuses(value, allowed, label) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${label} must be a non-empty array`);
+  }
+  return [...new Set(value.map(item => requiredString(item, label)))].map(status => {
+    if (!allowed.has(status)) throw new TypeError(`Unsupported ${label}: ${status}`);
+    return status;
+  });
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(item => canonicalJson(item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    if (typeof value.toJSON === 'function') return canonicalJson(value.toJSON());
+    const entries = Object.keys(value)
+      .filter(key => value[key] !== undefined)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
+    return `{${entries.join(',')}}`;
+  }
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? 'null' : encoded;
+}
+
+function sha256Json(value) {
+  return crypto.createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
 function normalizeWorkspacePath(value) {
@@ -176,8 +285,67 @@ function runFromRow(row) {
     leaseExpiresAt: rowTimestamp(row.lease_expires_at),
     lastHeartbeatAt: rowTimestamp(row.last_heartbeat_at),
     revision: positiveSafeInteger(row.revision, 'run.revision'),
+    startedAt: rowTimestamp(row.started_at),
+    completedAt: rowTimestamp(row.completed_at),
     createdAt: rowTimestamp(row.created_at),
     updatedAt: rowTimestamp(row.updated_at)
+  };
+}
+
+function evaluationFromRow(row) {
+  return {
+    runId: positiveSafeInteger(row.run_id, 'evaluation.runId'),
+    ticketId: positiveSafeInteger(row.ticket_id, 'evaluation.ticketId'),
+    evaluation: row.evaluation,
+    recordedAt: rowTimestamp(row.recorded_at)
+  };
+}
+
+function consequenceFromRow(row) {
+  return {
+    runId: positiveSafeInteger(row.run_id, 'consequence.runId'),
+    ticketId: positiveSafeInteger(row.ticket_id, 'consequence.ticketId'),
+    consequence: row.consequence,
+    recordedAt: rowTimestamp(row.recorded_at)
+  };
+}
+
+function replaySnapshotFromRow(row) {
+  const computedHash = sha256Json(row.snapshot);
+  if (computedHash !== row.snapshot_hash) {
+    const error = new Error(`Replay snapshot integrity check failed for run ${row.run_id}`);
+    error.code = 'POSTGRES_REPLAY_INTEGRITY_FAILURE';
+    error.expectedHash = row.snapshot_hash;
+    error.computedHash = computedHash;
+    throw error;
+  }
+  return {
+    runId: positiveSafeInteger(row.run_id, 'replaySnapshot.runId'),
+    ticketId: positiveSafeInteger(row.ticket_id, 'replaySnapshot.ticketId'),
+    snapshot: row.snapshot,
+    snapshotHash: row.snapshot_hash,
+    revision: positiveSafeInteger(row.revision, 'replaySnapshot.revision'),
+    finalizedAt: rowTimestamp(row.finalized_at),
+    createdAt: rowTimestamp(row.created_at),
+    updatedAt: rowTimestamp(row.updated_at)
+  };
+}
+
+function operationReceiptFromRow(row) {
+  return {
+    id: positiveSafeInteger(row.id, 'operationReceipt.id'),
+    runId: positiveSafeInteger(row.run_id, 'operationReceipt.runId'),
+    ticketId: positiveSafeInteger(row.ticket_id, 'operationReceipt.ticketId'),
+    idempotencyKey: row.idempotency_key,
+    stepId: row.step_id,
+    operation: row.operation,
+    outcome: row.outcome,
+    targetId: row.target_id,
+    targetKind: row.target_kind,
+    targetPath: row.target_path,
+    targetResourceId: row.target_resource_id,
+    receipt: row.receipt,
+    recordedAt: rowTimestamp(row.recorded_at)
   };
 }
 
@@ -191,13 +359,15 @@ class PostgresRuntimeStore {
     statementTimeoutMs = 30_000,
     lockTimeoutMs = 5_000,
     maxQueryRows = 1_000,
-    maxEligibleRunIds = 1_000
+    maxEligibleRunIds = 1_000,
+    maxJsonRecordBytes = 2 * 1024 * 1024
   } = {}) {
-    this.schema = String(schema || 'public');
+    this.schema = String(schema || 'ticket_system');
     this.schemaSql = quoteIdentifier(this.schema);
     this.lockTimeoutMs = positiveSafeInteger(lockTimeoutMs, 'lockTimeoutMs');
     this.maxQueryRows = positiveSafeInteger(maxQueryRows, 'maxQueryRows');
     this.maxEligibleRunIds = positiveSafeInteger(maxEligibleRunIds, 'maxEligibleRunIds');
+    this.maxJsonRecordBytes = positiveSafeInteger(maxJsonRecordBytes, 'maxJsonRecordBytes');
     this.ownsPool = !pool;
     if (!pool && (typeof connectionString !== 'string' || !connectionString.trim())) {
       throw new TypeError('connectionString is required when pool is not provided');
@@ -212,6 +382,19 @@ class PostgresRuntimeStore {
 
   table(name) {
     return `${this.schemaSql}.${quoteIdentifier(name)}`;
+  }
+
+  assertJsonRecord(value, label) {
+    const record = jsonObject(value, label);
+    const bytes = Buffer.byteLength(canonicalJson(record), 'utf8');
+    if (bytes > this.maxJsonRecordBytes) {
+      const error = new RangeError(`${label} exceeds the configured maximum of ${this.maxJsonRecordBytes} bytes`);
+      error.code = 'POSTGRES_RECORD_TOO_LARGE';
+      error.recordBytes = bytes;
+      error.maxRecordBytes = this.maxJsonRecordBytes;
+      throw error;
+    }
+    return record;
   }
 
   async close() {
@@ -281,10 +464,42 @@ class PostgresRuntimeStore {
     return result.rows[0] && Number(result.rows[0].ok) === 1;
   }
 
+  async _throwTransitionConflict(client, {
+    entity,
+    tableName,
+    id,
+    expectedRevision,
+    expectedStatuses,
+    fromRow,
+    leaseOwner = null,
+    leaseConstrained = false
+  }) {
+    const currentResult = await client.query(
+      `SELECT * FROM ${this.table(tableName)} WHERE id = $1`,
+      [id]
+    );
+    if (currentResult.rowCount === 0) {
+      const error = new Error(`${entity} ${id} was not found`);
+      error.code = 'POSTGRES_RECORD_NOT_FOUND';
+      throw error;
+    }
+    const current = fromRow(currentResult.rows[0]);
+    if (current.revision !== expectedRevision) {
+      throw new OptimisticConcurrencyError(entity, id, expectedRevision, current);
+    }
+    if (!expectedStatuses.includes(current.status)) {
+      throw new StateTransitionConflictError(entity, id, expectedStatuses, current);
+    }
+    if (leaseConstrained) throw new LeaseAuthorityError(id, leaseOwner, current);
+    throw new StateTransitionConflictError(entity, id, expectedStatuses, current);
+  }
+
   async createTicket(record, { client = null } = {}) {
-    const ticket = jsonObject(record, 'ticket');
+    const ticket = this.assertJsonRecord(record, 'ticket');
+    const status = requiredString(ticket.status || 'open', 'ticket.status');
+    if (!TICKET_STATUSES.has(status)) throw new TypeError(`Unsupported ticket.status: ${status}`);
     const values = [
-      String(ticket.status || 'open'),
+      status,
       ticket.assignmentTargetType || null,
       nullablePositiveSafeInteger(ticket.assignmentTargetId, 'ticket.assignmentTargetId'),
       ticket
@@ -303,13 +518,15 @@ class PostgresRuntimeStore {
   }
 
   async createRun(record, { client = null } = {}) {
-    const run = jsonObject(record, 'run');
+    const run = this.assertJsonRecord(record, 'run');
+    const status = requiredString(run.status || 'pending', 'run.status');
+    if (status !== 'pending') throw new TypeError('New runs must start pending');
     const leaseOwner = typeof run.leaseOwner === 'string' && run.leaseOwner.trim() ? run.leaseOwner.trim() : null;
     const leaseExpiresAt = leaseOwner ? isoTimestamp(run.leaseExpiresAt, 'run.leaseExpiresAt') : null;
     const values = [
       positiveSafeInteger(run.ticketId, 'run.ticketId'),
       positiveSafeInteger(run.agentId, 'run.agentId'),
-      String(run.status || 'pending'),
+      status,
       run.executionMode === 'workflow' ? 'workflow' : 'agent',
       leaseOwner,
       leaseExpiresAt,
@@ -326,6 +543,214 @@ class PostgresRuntimeStore {
         values
       );
       return runFromRow(result.rows[0]);
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async getTicket(ticketId) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const result = await this.pool.query(`SELECT * FROM ${this.table('tickets')} WHERE id = $1`, [id]);
+    return result.rowCount === 0 ? null : ticketFromRow(result.rows[0]);
+  }
+
+  async getRun(runId) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const result = await this.pool.query(`SELECT * FROM ${this.table('runs')} WHERE id = $1`, [id]);
+    return result.rowCount === 0 ? null : runFromRow(result.rows[0]);
+  }
+
+  async transitionTicket({
+    ticketId,
+    expectedRevision,
+    fromStatuses,
+    toStatus,
+    patch = {},
+    eventType = 'ticket.updated',
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const revision = positiveSafeInteger(expectedRevision, 'expectedRevision');
+    const sources = normalizeStatuses(fromStatuses, TICKET_STATUSES, 'ticket source status');
+    const target = requiredString(toStatus, 'toStatus');
+    if (!TICKET_STATUSES.has(target)) throw new TypeError(`Unsupported ticket status: ${target}`);
+    const bodyPatch = this.assertJsonRecord(patch, 'ticket patch');
+    const type = requiredString(eventType, 'eventType');
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+
+    const execute = async connection => {
+      const result = await connection.query(
+        `WITH candidate AS (
+           SELECT id, status
+           FROM ${this.table('tickets')}
+           WHERE id = $1 AND revision = $2 AND status = ANY($3::text[])
+           FOR UPDATE
+         ), updated AS (
+           UPDATE ${this.table('tickets')} AS ticket
+           SET status = $4,
+               body = ticket.body || $5::jsonb,
+               revision = ticket.revision + 1,
+               updated_at = clock_timestamp()
+           FROM candidate
+           WHERE ticket.id = candidate.id
+           RETURNING ticket.*, candidate.status AS previous_status
+         )
+         SELECT * FROM updated`,
+        [id, revision, sources, target, bodyPatch]
+      );
+      if (result.rowCount === 0) {
+        return this._throwTransitionConflict(connection, {
+          entity: 'ticket',
+          tableName: 'tickets',
+          id,
+          expectedRevision: revision,
+          expectedStatuses: sources,
+          fromRow: ticketFromRow
+        });
+      }
+      const ticket = ticketFromRow(result.rows[0]);
+      const previousStatus = result.rows[0].previous_status;
+      const event = await this._appendEvent(connection, {
+        type,
+        ticketId: ticket.id,
+        payload: {
+          ...callerPayload,
+          previousStatus,
+          status: ticket.status,
+          revision: ticket.revision,
+          updatedAt: ticket.updatedAt
+        }
+      });
+      return { ticket, event, previousStatus };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async transitionRun({
+    runId,
+    expectedRevision,
+    fromStatuses,
+    toStatus,
+    leaseOwner = null,
+    patch = {},
+    eventType = 'run.status_changed',
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const revision = positiveSafeInteger(expectedRevision, 'expectedRevision');
+    const sources = normalizeStatuses(fromStatuses, RUN_STATUSES, 'run source status');
+    const target = requiredString(toStatus, 'toStatus');
+    if (!RUN_STATUSES.has(target)) throw new TypeError(`Unsupported run status: ${target}`);
+    for (const source of sources) {
+      if (!RUN_STATUS_TRANSITIONS.get(source).has(target)) {
+        throw new TypeError(`Unsupported run status transition: ${source} -> ${target}`);
+      }
+    }
+    const owner = optionalString(leaseOwner);
+    if (target === 'running' && !owner) throw new TypeError('leaseOwner is required to start a run');
+    if (sources.includes('running') && target !== 'pending' && !owner) {
+      throw new TypeError('leaseOwner is required to transition a running run');
+    }
+    const bodyPatch = this.assertJsonRecord(patch, 'run patch');
+    const type = requiredString(eventType, 'eventType');
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+
+    const execute = async connection => {
+      const result = await connection.query(
+        `WITH candidate AS (
+           SELECT id, status
+           FROM ${this.table('runs')}
+           WHERE id = $1
+             AND revision = $2
+             AND status = ANY($3::text[])
+             AND (
+               (
+                 status = 'pending' AND
+                 (
+                   ($4::text = 'running' AND $6::text IS NOT NULL AND
+                     lease_owner = $6 AND lease_expires_at > clock_timestamp()) OR
+                   ($4::text = 'pending' AND (
+                     ($6::text IS NULL AND (lease_owner IS NULL OR lease_expires_at <= clock_timestamp())) OR
+                     ($6::text IS NOT NULL AND lease_owner = $6 AND lease_expires_at > clock_timestamp())
+                   )) OR
+                   ($4::text = ANY(ARRAY['failed', 'interrupted']) AND (
+                     $6::text IS NULL OR
+                     (lease_owner = $6 AND lease_expires_at > clock_timestamp())
+                   ))
+                 )
+               ) OR (
+                 status = 'running' AND
+                 (
+                   ($4::text = 'pending' AND $6::text IS NULL AND (
+                     lease_owner IS NULL OR lease_expires_at <= clock_timestamp()
+                   )) OR (
+                     $6::text IS NOT NULL AND
+                     lease_owner = $6 AND
+                     lease_expires_at > clock_timestamp()
+                   )
+                 )
+               )
+             )
+           FOR UPDATE
+         ), updated AS (
+           UPDATE ${this.table('runs')} AS run
+           SET status = $4,
+               body = run.body || $5::jsonb,
+               revision = run.revision + 1,
+               started_at = CASE
+                 WHEN $4 = 'pending' THEN NULL
+                 WHEN $4 = 'running' THEN COALESCE(run.started_at, clock_timestamp())
+                 ELSE run.started_at
+               END,
+               completed_at = CASE
+                 WHEN $4 = ANY(ARRAY['completed', 'failed', 'interrupted']) THEN clock_timestamp()
+                 ELSE NULL
+               END,
+               lease_owner = CASE
+                 WHEN $4 = 'pending' OR $4 = ANY(ARRAY['completed', 'failed', 'interrupted']) THEN NULL
+                 ELSE run.lease_owner
+               END,
+               lease_expires_at = CASE
+                 WHEN $4 = 'pending' OR $4 = ANY(ARRAY['completed', 'failed', 'interrupted']) THEN NULL
+                 ELSE run.lease_expires_at
+               END,
+               last_heartbeat_at = CASE WHEN $4 = 'pending' THEN NULL ELSE run.last_heartbeat_at END,
+               updated_at = clock_timestamp()
+           FROM candidate
+           WHERE run.id = candidate.id
+           RETURNING run.*, candidate.status AS previous_status
+         )
+         SELECT * FROM updated`,
+        [id, revision, sources, target, bodyPatch, owner]
+      );
+      if (result.rowCount === 0) {
+        return this._throwTransitionConflict(connection, {
+          entity: 'run',
+          tableName: 'runs',
+          id,
+          expectedRevision: revision,
+          expectedStatuses: sources,
+          fromRow: runFromRow,
+          leaseOwner: owner,
+          leaseConstrained: true
+        });
+      }
+      const run = runFromRow(result.rows[0]);
+      const previousStatus = result.rows[0].previous_status;
+      const event = await this._appendEvent(connection, {
+        type,
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: {
+          ...callerPayload,
+          previousStatus,
+          status: run.status,
+          revision: run.revision,
+          startedAt: run.startedAt,
+          completedAt: run.completedAt,
+          updatedAt: run.updatedAt
+        }
+      });
+      return { run, event, previousStatus };
     };
     return client ? execute(client) : this.withTransaction(execute);
   }
@@ -363,10 +788,11 @@ class PostgresRuntimeStore {
       timestamp: clock.rows[0].ts,
       chain
     });
+    this.assertJsonRecord(normalized.payload, 'event.payload');
     const result = await client.query(
       `INSERT INTO ${this.table('events')}
         (id, schema_version, ts, type, ticket_id, run_id, step_id, seq, prev_hash, hash, payload)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::json)
        RETURNING *`,
       [
         normalized.id,
@@ -392,6 +818,334 @@ class PostgresRuntimeStore {
       );
     }
     return eventFromRow(result.rows[0]);
+  }
+
+  async _recordImmutableRunEvidence({
+    runId,
+    value,
+    valueLabel,
+    tableName,
+    columnName,
+    eventType,
+    eventPayloadKey,
+    eventPayload = {},
+    fromRow,
+    client = null
+  }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const document = this.assertJsonRecord(value, valueLabel);
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+
+    const execute = async connection => {
+      const runResult = await connection.query(
+        `SELECT ticket_id, status FROM ${this.table('runs')} WHERE id = $1`,
+        [id]
+      );
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticketId = positiveSafeInteger(runResult.rows[0].ticket_id, 'run.ticketId');
+      if (!TERMINAL_RUN_STATUSES.has(runResult.rows[0].status)) {
+        throw new TypeError(`${valueLabel} requires a terminal run`);
+      }
+      const inserted = await connection.query(
+        `INSERT INTO ${this.table(tableName)} (run_id, ticket_id, ${quoteIdentifier(columnName)})
+         VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (run_id) DO NOTHING
+         RETURNING *`,
+        [id, ticketId, document]
+      );
+      if (inserted.rowCount === 0) {
+        const existingResult = await connection.query(
+          `SELECT *, ${quoteIdentifier(columnName)} = $2::jsonb AS evidence_matches
+           FROM ${this.table(tableName)}
+           WHERE run_id = $1`,
+          [id, document]
+        );
+        if (existingResult.rowCount === 1 && existingResult.rows[0].evidence_matches === true) {
+          return { record: fromRow(existingResult.rows[0]), event: null, inserted: false };
+        }
+        throw new ImmutableEvidenceConflictError(valueLabel, id);
+      }
+
+      const record = fromRow(inserted.rows[0]);
+      const event = await this._appendEvent(connection, {
+        type: eventType,
+        ticketId,
+        runId: id,
+        payload: {
+          ...callerPayload,
+          [eventPayloadKey]: document,
+          recordedAt: record.recordedAt
+        }
+      });
+      return { record, event, inserted: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async recordRunEvaluation({ runId, evaluation, eventPayload = {} }, { client = null } = {}) {
+    return this._recordImmutableRunEvidence({
+      runId,
+      value: evaluation,
+      valueLabel: 'run evaluation',
+      tableName: 'run_evaluations',
+      columnName: 'evaluation',
+      eventType: 'run.evaluation_completed',
+      eventPayloadKey: 'evaluation',
+      eventPayload,
+      fromRow: evaluationFromRow,
+      client
+    });
+  }
+
+  async recordRunConsequence({ runId, consequence, eventPayload = {} }, { client = null } = {}) {
+    return this._recordImmutableRunEvidence({
+      runId,
+      value: consequence,
+      valueLabel: 'run consequence',
+      tableName: 'run_consequences',
+      columnName: 'consequence',
+      eventType: 'run.consequence_recorded',
+      eventPayloadKey: 'consequence',
+      eventPayload,
+      fromRow: consequenceFromRow,
+      client
+    });
+  }
+
+  async getRunEvaluation(runId) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('run_evaluations')} WHERE run_id = $1`,
+      [id]
+    );
+    return result.rowCount === 0 ? null : evaluationFromRow(result.rows[0]);
+  }
+
+  async getRunConsequence(runId) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('run_consequences')} WHERE run_id = $1`,
+      [id]
+    );
+    return result.rowCount === 0 ? null : consequenceFromRow(result.rows[0]);
+  }
+
+  async writeReplaySnapshot({
+    runId,
+    expectedRevision = null,
+    snapshot,
+    finalize = false,
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const document = this.assertJsonRecord(snapshot, 'replay snapshot');
+    const snapshotHash = sha256Json(document);
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+    const isCreate = expectedRevision === null || expectedRevision === undefined;
+    const revision = isCreate ? null : positiveSafeInteger(expectedRevision, 'expectedRevision');
+
+    const execute = async connection => {
+      const runResult = await connection.query(
+        `SELECT ticket_id, status FROM ${this.table('runs')} WHERE id = $1`,
+        [id]
+      );
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticketId = positiveSafeInteger(runResult.rows[0].ticket_id, 'run.ticketId');
+      if (finalize === true && !TERMINAL_RUN_STATUSES.has(runResult.rows[0].status)) {
+        throw new TypeError('Finalizing a replay snapshot requires a terminal run');
+      }
+      let result;
+      if (isCreate) {
+        result = await connection.query(
+          `INSERT INTO ${this.table('replay_snapshots')}
+            (run_id, ticket_id, snapshot, snapshot_hash, finalized_at)
+           VALUES ($1, $2, $3::jsonb, $4, CASE WHEN $5::boolean THEN clock_timestamp() ELSE NULL END)
+           ON CONFLICT (run_id) DO NOTHING
+           RETURNING *`,
+          [id, ticketId, document, snapshotHash, finalize === true]
+        );
+      } else {
+        result = await connection.query(
+          `UPDATE ${this.table('replay_snapshots')}
+           SET snapshot = $3::jsonb,
+               snapshot_hash = $4,
+               revision = revision + 1,
+               finalized_at = CASE WHEN $5::boolean THEN clock_timestamp() ELSE NULL END,
+               updated_at = clock_timestamp()
+           WHERE run_id = $1 AND revision = $2 AND finalized_at IS NULL
+           RETURNING *`,
+          [id, revision, document, snapshotHash, finalize === true]
+        );
+      }
+
+      if (result.rowCount === 0) {
+        const currentResult = await connection.query(
+          `SELECT * FROM ${this.table('replay_snapshots')} WHERE run_id = $1`,
+          [id]
+        );
+        if (currentResult.rowCount === 1 && currentResult.rows[0].finalized_at !== null) {
+          throw new ImmutableEvidenceConflictError('finalized replay snapshot', id);
+        }
+        const current = currentResult.rowCount === 0 ? null : replaySnapshotFromRow(currentResult.rows[0]);
+        throw new OptimisticConcurrencyError('replay snapshot', id, revision || 0, current);
+      }
+
+      const record = replaySnapshotFromRow(result.rows[0]);
+      const eventType = record.finalizedAt
+        ? 'replay.snapshot.finalized'
+        : record.revision === 1
+          ? 'replay.snapshot.created'
+          : 'replay.snapshot.updated';
+      const event = await this._appendEvent(connection, {
+        type: eventType,
+        ticketId,
+        runId: id,
+        payload: {
+          ...callerPayload,
+          snapshotHash: record.snapshotHash,
+          revision: record.revision,
+          finalizedAt: record.finalizedAt,
+          updatedAt: record.updatedAt
+        }
+      });
+      return { record, event, created: isCreate };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async getReplaySnapshot(runId) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('replay_snapshots')} WHERE run_id = $1`,
+      [id]
+    );
+    return result.rowCount === 0 ? null : replaySnapshotFromRow(result.rows[0]);
+  }
+
+  async recordOperationReceipt({
+    runId,
+    idempotencyKey,
+    stepId = null,
+    operation,
+    outcome,
+    receipt,
+    eventType = 'operation.receipt_recorded',
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const key = requiredString(idempotencyKey, 'idempotencyKey', 512);
+    const normalizedStepId = optionalString(stepId);
+    const operationName = requiredString(operation, 'operation');
+    const normalizedOutcome = requiredString(outcome, 'outcome');
+    if (!OPERATION_OUTCOMES.has(normalizedOutcome)) {
+      throw new TypeError(`Unsupported operation receipt outcome: ${normalizedOutcome}`);
+    }
+    const document = this.assertJsonRecord(receipt, 'operation receipt');
+    const type = requiredString(eventType, 'eventType');
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+    const targetId = optionalString(document.targetId);
+    const targetKind = optionalString(document.targetKind);
+    const targetPath = optionalString(document.targetPath);
+    const targetResourceId = optionalString(document.targetResourceId);
+
+    const execute = async connection => {
+      const runResult = await connection.query(
+        `SELECT ticket_id FROM ${this.table('runs')} WHERE id = $1`,
+        [id]
+      );
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticketId = positiveSafeInteger(runResult.rows[0].ticket_id, 'run.ticketId');
+      const inserted = await connection.query(
+        `INSERT INTO ${this.table('operation_receipts')}
+          (run_id, ticket_id, idempotency_key, step_id, operation, outcome,
+           target_id, target_kind, target_path, target_resource_id, receipt)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+         ON CONFLICT (run_id, idempotency_key) DO NOTHING
+         RETURNING *`,
+        [
+          id,
+          ticketId,
+          key,
+          normalizedStepId,
+          operationName,
+          normalizedOutcome,
+          targetId,
+          targetKind,
+          targetPath,
+          targetResourceId,
+          document
+        ]
+      );
+
+      if (inserted.rowCount === 0) {
+        const existingResult = await connection.query(
+          `SELECT * FROM ${this.table('operation_receipts')}
+           WHERE run_id = $1 AND idempotency_key = $2`,
+          [id, key]
+        );
+        const existing = existingResult.rowCount === 0 ? null : operationReceiptFromRow(existingResult.rows[0]);
+        const matches = existing &&
+          existing.ticketId === ticketId &&
+          existing.stepId === normalizedStepId &&
+          existing.operation === operationName &&
+          existing.outcome === normalizedOutcome &&
+          existing.targetId === targetId &&
+          existing.targetKind === targetKind &&
+          existing.targetPath === targetPath &&
+          existing.targetResourceId === targetResourceId &&
+          canonicalJson(existing.receipt) === canonicalJson(document);
+        if (matches) return { record: existing, event: null, inserted: false };
+        throw new IdempotencyConflictError(id, key);
+      }
+
+      const record = operationReceiptFromRow(inserted.rows[0]);
+      const event = await this._appendEvent(connection, {
+        type,
+        ticketId,
+        runId: id,
+        stepId: normalizedStepId,
+        payload: {
+          ...callerPayload,
+          receiptId: record.id,
+          idempotencyKey: record.idempotencyKey,
+          operation: record.operation,
+          outcome: record.outcome,
+          receipt: record.receipt,
+          recordedAt: record.recordedAt
+        }
+      });
+      return { record, event, inserted: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async listOperationReceipts(runId, { afterId = 0, limit = 100 } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const cursor = nonNegativeSafeInteger(afterId, 'afterId');
+    const boundedLimit = positiveSafeInteger(limit, 'limit');
+    if (boundedLimit > this.maxQueryRows) {
+      throw new RangeError(`limit exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('operation_receipts')}
+       WHERE run_id = $1 AND id > $2
+       ORDER BY id
+       LIMIT $3`,
+      [id, cursor, boundedLimit]
+    );
+    return result.rows.map(operationReceiptFromRow);
   }
 
   async claimPendingRun({ leaseOwner, leaseDurationMs, eligibleRunIds = null, claimPayload = {} }) {
@@ -559,9 +1313,16 @@ class PostgresRuntimeStore {
 }
 
 module.exports = {
+  IdempotencyConflictError,
+  ImmutableEvidenceConflictError,
+  LeaseAuthorityError,
+  OptimisticConcurrencyError,
   PostgresRuntimeStore,
+  StateTransitionConflictError,
   buildEventEnvelope,
   buildWorkspaceLockRequests,
+  canonicalJson,
   normalizeWorkspacePath,
-  quoteIdentifier
+  quoteIdentifier,
+  sha256Json
 };
