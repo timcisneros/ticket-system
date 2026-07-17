@@ -10,6 +10,9 @@
 //   - Nodes and edges derive only from recorded linkage (plan step numbers,
 //     historyId → operation-history step, chronological array order). No edge
 //     is drawn that the evidence does not assert.
+//   - A node label may truncate for layout ONLY if the full underlying value
+//     is carried untruncated in the node's `detail` — nothing recorded is
+//     reachable solely through a truncated string.
 //   - Proposed actions with no recorded execution are first-class nodes
 //     (dropped/blocked/unexecuted), never smoothed over.
 //   - This is a projection: it reads run/snapshot/events/history and writes
@@ -160,7 +163,13 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
       lane: 'target', step: null, kind: 'browser_operation',
       label: `${operationName}${item.operation && item.operation.args && item.operation.args.url ? ' ' + truncateLabel(item.operation.args.url, 50) : ''}`,
       status: item.status === 'ok' ? 'ok' : 'blocked',
-      detail: { errorCode: item.errorCode || null, durationMs: item.durationMs },
+      detail: {
+        operation: operationName,
+        url: item.operation && item.operation.args && item.operation.args.url ? item.operation.args.url : null,
+        error: item.error || null,
+        errorCode: item.errorCode || null,
+        durationMs: item.durationMs
+      },
       evidenceRef: `browserOperations[${index}]`
     });
   });
@@ -244,7 +253,13 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
       lane: 'outcome', step: null, kind: 'triage',
       label: run.triage.required ? `triage required: ${run.triage.reasonCode}` : `triage resolved: ${run.triage.reasonCode}`,
       status: run.triage.required ? 'required' : 'resolved',
-      detail: { reasonCode: run.triage.reasonCode, requiredDecision: run.triage.requiredDecision },
+      detail: {
+        reasonCode: run.triage.reasonCode,
+        requiredDecision: run.triage.requiredDecision,
+        summary: run.triage.summary || null,
+        resolvedBy: run.triage.resolvedBy || null,
+        resolution: run.triage.resolution || null
+      },
       evidenceRef: 'run.triage'
     });
     addEdge(terminalId, triageId, 'flow');
@@ -259,7 +274,7 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
       lane: 'authority', step: null, kind: 'runtime_event',
       label: event.type,
       status: 'annotation',
-      detail: {},
+      detail: { payload: event.payload !== undefined ? event.payload : null },
       evidenceRef: `events[${index}]`
     });
   });

@@ -1647,6 +1647,15 @@ label.checkbox-label input[type="radio"] {
   font-size: 0.88rem;
 }
 
+.map-detail-wide {
+  grid-column: 1 / -1;
+}
+
+.map-detail-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .map-canvas-wrap {
   overflow-x: auto;
   padding: 8px 0;

@@ -15,7 +15,8 @@ function assert(c, m) { if (!c) throw new Error(m); }
 const run = {
   id: 42, ticketId: 7, status: 'failed', error: 'Verification failed: 1 postcondition',
   triage: {
-    required: false, reasonCode: 'verification_failed', requiredDecision: 'review_failure',
+    required: false, reasonCode: 'verification_failed', summary: 'Verification failed: 1 postcondition',
+    requiredDecision: 'review_failure',
     createdAt: '2026-03-01T09:00:10.000Z', resolvedAt: '2026-03-01T10:00:00.000Z', resolvedBy: 'admin', resolution: 'Reviewed.'
   }
 };
@@ -90,8 +91,15 @@ assert(byId.get('terminal').status === 'failed' && byId.get('terminal').label.in
 assert(byId.get('triage').status === 'resolved', 'resolved triage must render resolved');
 assert(edgeSet.has('verification>terminal:flow') && edgeSet.has('terminal>triage:flow') && edgeSet.has('plan:1>verification:flow'), 'outcome chain must be edged');
 
-// Truncation annotation surfaces as a runtime event node.
-assert(graph.nodes.some(node => node.kind === 'runtime_event' && node.label === 'run:mutating_actions_truncated'), 'truncation event must annotate');
+// Truncation annotation surfaces as a runtime event node, payload untruncated.
+const annotation = graph.nodes.find(node => node.kind === 'runtime_event' && node.label === 'run:mutating_actions_truncated');
+assert(annotation, 'truncation event must annotate');
+assert(annotation.detail.payload && annotation.detail.payload.dropped === 1, 'annotation must carry its full recorded payload');
+
+// No-truncation contract: layout-truncated labels must carry full values in detail.
+assert(byId.get('triage').detail.summary === run.triage.summary && byId.get('triage').detail.resolution === 'Reviewed.', 'triage node must carry full summary and resolution');
+assert(byId.get('terminal').detail.failureReason === snapshot.failureReason, 'terminal node must carry the full failure reason');
+assert(byId.get('auth:op:2').detail.reason === 'Path is outside owned output paths', 'authority node must carry the full refusal reason');
 
 // Every node carries an evidence reference; every edge endpoint exists.
 for (const node of graph.nodes) assert(typeof node.evidenceRef === 'string' && node.evidenceRef.length > 0, `node ${node.id} must carry evidenceRef`);

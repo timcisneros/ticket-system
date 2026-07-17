@@ -16,8 +16,11 @@
 <p class="text-muted">
   A read-only projection of this run's recorded evidence as the truth hierarchy: what the model
   proposed (its messages verbatim), what the runtime guards decided, what actually executed against
-  the target, and how the run was verified. Dashed red nodes are proposals that never executed —
-  dropped by caps or blocked by guards. Nothing here is inferred; every node cites its evidence.
+  the target, and how the run was verified. <strong>Horizontal = execution steps</strong> (the
+  runtime's model turns, step 0 onward; the outcome chain sits in the final column), left to right
+  in recorded order. Dashed red nodes are proposals that never executed — dropped by caps or
+  blocked by guards. Hover a node for its full text; click for every recorded field. Nothing here
+  is inferred; every node cites its evidence.
 </p>
 
 <section class="admin-block">
@@ -48,7 +51,7 @@ const NODE_H = 64;
 const COL_W = 220;
 const ROW_GAP = 10;
 const LANE_GAP = 56;
-const LANE_TOP = 70;
+const LANE_TOP = 96;
 const MAX_SUBCOLS = 3;
 const STATUS_COLORS = {
   complete_claimed: '#4f46e5', continuing: '#6366f1', recorded: '#6b7280',
@@ -133,7 +136,14 @@ function layout(nodes) {
   }
   const maxX = Math.max(600, ...[...positions.values()].map(p => p.x + NODE_W + 40));
   const maxY = cursorY - LANE_GAP + NODE_H + 30;
-  return { positions, laneY, width: maxX, height: maxY };
+
+  // Horizontal axis: one labeled column per execution step (the recorded
+  // metric — model turns), plus a trailing column for outcome/unlinked nodes.
+  const columns = steps.map(step => ({ x: 140 + stepCol.get(step) * cellWidth, width: cellWidth, label: 'STEP ' + step }));
+  const hasStepless = nodes.some(n => n.step === null || n.step === undefined);
+  if (hasStepless) columns.push({ x: steplessBase, width: Math.max(NODE_W + 20, maxX - steplessBase), label: 'OUTCOME / UNLINKED' });
+
+  return { positions, laneY, width: maxX, height: maxY, columns };
 }
 
 function edgePath(a, b) {
@@ -149,24 +159,38 @@ function edgePath(a, b) {
 }
 
 function wrapText(text, max) {
-  const words = String(text).split(' ');
+  const full = String(text);
+  const words = full.split(' ');
   const lines = [];
   let line = '';
+  let consumed = 0;
   for (const word of words) {
-    if ((line + ' ' + word).trim().length > max) { if (line) lines.push(line); line = word; }
+    if ((line + ' ' + word).trim().length > max) { if (line) { lines.push(line); consumed += line.length + 1; } line = word; }
     else line = (line + ' ' + word).trim();
     if (lines.length === 2) break;
   }
-  if (line && lines.length < 3) lines.push(line);
+  if (line && lines.length < 3) { lines.push(line); consumed += line.length + 1; }
+  const cut = consumed < full.length;
+  if (cut && lines.length > 0) {
+    const last = lines[lines.length - 1];
+    lines[lines.length - 1] = (last.length > max - 2 ? last.slice(0, max - 2) : last) + ' …';
+  }
   return lines;
 }
 
 function render() {
   svg.replaceChildren();
-  const { positions, laneY, width, height } = layout(graph.nodes);
+  const { positions, laneY, width, height, columns } = layout(graph.nodes);
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.setAttribute('width', width);
   svg.setAttribute('height', height);
+
+  // Axis header: execution-step columns (the recorded progression metric).
+  el('text', { x: 140, y: 16, fill: '#6b7280', 'font-size': 11, 'font-weight': 600 }).textContent = 'execution steps (model turns) →';
+  for (const column of columns) {
+    el('line', { x1: column.x - 12, y1: 6, x2: column.x - 12, y2: height - 6, stroke: '#f3f4f6', 'stroke-width': 1 });
+    el('text', { x: column.x, y: 34, fill: '#9ca3af', 'font-size': 10, 'font-weight': 700, 'letter-spacing': '0.08em' }).textContent = column.label;
+  }
 
   for (const lane of LANES) {
     el('line', { x1: 0, y1: laneY[lane.id] - 18, x2: width, y2: laneY[lane.id] - 18, stroke: '#e5e7eb', 'stroke-width': 1 });
@@ -202,6 +226,10 @@ function render() {
     wrapText(node.label, 29).forEach((line, i) => {
       el('text', { x: pos.x + 10, y: pos.y + 32 + i * 13, fill: '#111827', 'font-size': 11 }, group).textContent = line;
     });
+    // Native hover tooltip carries the full label (and full message for plans);
+    // click opens the detail panel with every untruncated field.
+    const tooltip = node.detail && node.detail.message ? node.detail.message : node.label;
+    el('title', {}, group).textContent = tooltip + '\n(click for all recorded fields)';
     group.addEventListener('click', () => showDetail(node));
   }
 }
@@ -212,12 +240,24 @@ function showDetail(node) {
   document.getElementById('map-detail-title').textContent = node.kind.replace(/_/g, ' ') + ' — ' + node.status;
   const grid = document.getElementById('map-detail-grid');
   grid.replaceChildren();
-  const rows = { lane: node.lane, step: node.step, label: node.label, ...node.detail };
+  // Detail fields are untruncated by contract (run-decision-graph.js); skip the
+  // layout-truncated label whenever a full message field supersedes it.
+  const rows = { lane: node.lane, step: node.step, ...(node.detail && node.detail.message ? {} : { label: node.label }), ...node.detail };
   for (const [key, value] of Object.entries(rows)) {
     if (value === null || value === undefined || value === '') continue;
     const wrap = document.createElement('div');
+    if (typeof value === 'object' || String(value).length > 90) wrap.className = 'map-detail-wide';
     const dt = document.createElement('dt'); dt.textContent = key;
-    const dd = document.createElement('dd'); dd.textContent = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    const dd = document.createElement('dd');
+    if (typeof value === 'object') {
+      const pre = document.createElement('pre');
+      pre.className = 'code-block';
+      pre.textContent = JSON.stringify(value, null, 2);
+      dd.appendChild(pre);
+    } else {
+      dd.textContent = String(value);
+      dd.className = 'map-detail-text';
+    }
     wrap.appendChild(dt); wrap.appendChild(dd); grid.appendChild(wrap);
   }
   document.getElementById('map-detail-evidence').textContent = node.evidenceRef;
