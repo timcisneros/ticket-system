@@ -254,6 +254,31 @@
   </form>
 </section>
 
+<section class="admin-block">
+  <h2>Workspace Authority Boundaries</h2>
+  <p class="text-muted">Read-only view of the path rules that block agent workspace operations. Blocked attempts are recorded on the run page with error codes <code>WORKSPACE_PROTECTED_PATH</code> / <code>WORKSPACE_SENSITIVE_PATH</code>.</p>
+  <dl class="detail-grid">
+    <div>
+      <dt>Protected workspace paths (<%= protectedWorkspacePaths.length %>)</dt>
+      <dd>
+        <% protectedWorkspacePaths.forEach(pattern => { %><code class="owned-path"><%= pattern %></code> <% }) %>
+        <div class="text-muted">
+          Source: <%= protectedPathsFromConfig ? 'config/protected-paths.json' : 'built-in defaults (config/protected-paths.json missing or unreadable)' %>.
+          Edit the config file to change; there is no UI mutation.
+          Patterns match exactly or as a path prefix; a trailing <code>.*</code> also matches suffixed names (for example <code>.env.*</code> matches <code>.env.local</code>).
+        </div>
+      </dd>
+    </div>
+    <div>
+      <dt>Sensitive application paths (<%= sensitiveApplicationPaths.length %>)</dt>
+      <dd>
+        <% sensitiveApplicationPaths.forEach(sensitivePath => { %><code class="owned-path"><%= sensitivePath %></code> <% }) %>
+        <div class="text-muted">Hardcoded application-file guard (exact or prefix match); changing it is a code change, not configuration.</div>
+      </dd>
+    </div>
+  </dl>
+</section>
+
 <section class="admin-block admin-block--danger">
   <h2>Debug Reset</h2>
   <p class="text-muted">Destroys all local tickets, runs, logs, allocation plans, operation history, and workspace contents. Users, agents, groups, memberships, and permissions are preserved.</p>

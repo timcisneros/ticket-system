@@ -429,6 +429,17 @@ const DEFAULT_LOCAL_MODEL_CONCURRENCY = 1;
 // raise concurrency above the default, so the ceiling must not collapse onto that default.
 const DEFAULT_LOCAL_MODEL_CONCURRENCY_CAP = 32;
 const DEFAULT_PROTECTED_WORKSPACE_PATHS = ['.git', '.env', '.env.*', 'node_modules', 'package.json', 'pnpm-lock.yaml'];
+// Hardcoded application-file guard (WORKSPACE_SENSITIVE_PATH). Distinct from the
+// operator-editable protected-paths config; changing it is a code change.
+const SENSITIVE_APPLICATION_PATHS = Object.freeze([
+  'data',
+  'server.js',
+  'views/admin',
+  'views/login.ejs',
+  'views/layout.ejs',
+  'package.json',
+  'pnpm-lock.yaml'
+]);
 const WORKSPACE_FIXTURES = [
   { id: 'empty', name: 'Empty workspace' },
   { id: 'simple-files', name: 'Simple files' },
@@ -14293,17 +14304,7 @@ function assertAgentWorkspacePathAllowed(relativePath) {
 
   if (!cleanPath) return;
 
-  const sensitivePaths = [
-    'data',
-    'server.js',
-    'views/admin',
-    'views/login.ejs',
-    'views/layout.ejs',
-    'package.json',
-    'pnpm-lock.yaml'
-  ];
-
-  if (sensitivePaths.some(sensitivePath => cleanPath === sensitivePath || cleanPath.startsWith(`${sensitivePath}/`))) {
+  if (SENSITIVE_APPLICATION_PATHS.some(sensitivePath => cleanPath === sensitivePath || cleanPath.startsWith(`${sensitivePath}/`))) {
     throw createStructuredWorkspaceError('Agent action blocked for sensitive application path', 'WORKSPACE_SENSITIVE_PATH', 'protected_path', {
       path: cleanPath
     });
@@ -24722,6 +24723,9 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     hasOpenAIApiKeyFallback: Boolean(String(process.env.OPENAI_API_KEY || '').trim()),
     hasOpenAIModelFallback: Boolean(String(process.env.OPENAI_MODEL || '').trim()),
     hasOllamaModelFallback: Boolean(String(process.env.OLLAMA_MODEL || '').trim()),
+    protectedWorkspacePaths: readProtectedWorkspacePaths(),
+    protectedPathsFromConfig: (() => { try { return Array.isArray(JSON.parse(fs.readFileSync(PROTECTED_PATHS_FILE, 'utf8'))); } catch (_) { return false; } })(),
+    sensitiveApplicationPaths: SENSITIVE_APPLICATION_PATHS,
     user: request.user,
     resetError: request.query.resetError || null,
     resetSuccess: request.query.resetSuccess || null
