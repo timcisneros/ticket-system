@@ -83,6 +83,17 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'model-provider-routing-test.js',
   'local-connector-contract-test.js',
   'operational-transparency-test.js',
+  // 2026-07 transparency arc: inbox messaging, operator surfaces, and the
+  // login origin gate (docs/OPERATOR_INBOX.md, docs/OPERATIONAL_TRANSPARENCY.md,
+  // docs/BROWSER_ENVIRONMENT.md). browser-environment-test skips its live-engine
+  // checks when no Chromium executable is available.
+  'triage-resolution-test.js',
+  'triage-inbox-test.js',
+  'inbox-messaging-test.js',
+  'browser-environment-test.js',
+  'oquery-parity-test.js',
+  'operator-visibility-test.js',
+  'login-origin-test.js',
   // r1.32: the coverage guard verifies this very list stays honest.
   'release-checkpoint-coverage-test.js'
 ];
