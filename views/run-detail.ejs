@@ -26,6 +26,9 @@
       <div class="hero-actions">
         <a class="btn-secondary" href="/tickets/<%= run.ticketId %>">Back to Ticket</a>
         <a class="btn-secondary" href="/logs?runId=<%= run.id %>">Run Logs</a>
+        <% if (run.status === 'completed' || (run.triage && run.triage.createdAt)) { %>
+          <a class="btn-secondary" href="/inbox?ticket=<%= run.ticketId %>">Inbox Thread</a>
+        <% } %>
         <% if (canUpdateRuns && ['pending', 'running'].includes(run.status)) { %>
           <button type="button" class="btn-secondary btn-danger" data-stop-run-id="<%= run.id %>">Stop Run</button>
         <% } %>
@@ -51,6 +54,9 @@
         </dd>
       </div>
       <div><dt>Mutations</dt><dd><%= partialMutationCount || 0 %></dd></div>
+      <div><dt>Phase</dt><dd><code id="run-live-phase"><%= run.currentPhase || '-' %></code></dd></div>
+      <div><dt>Lease</dt><dd id="run-live-lease"><%= run.leaseOwner ? run.leaseOwner + (run.leaseExpiresAt ? ' until ' + run.leaseExpiresAt : '') : '-' %></dd></div>
+      <div><dt>Last Heartbeat</dt><dd id="run-live-heartbeat"><%= run.lastHeartbeatAt || '-' %></dd></div>
       <% if (typeof eventSummary !== 'undefined' && eventSummary) { %>
         <div><dt>Event Status</dt><dd id="run-live-event-status"><%= eventSummary.latestStatus ? eventSummary.latestStatus.status : '-' %></dd></div>
         <div>
@@ -303,6 +309,108 @@
     <%= completionSummary.evidence.operationHistory %> operation-history record(s),
     <%= completionSummary.evidence.replayEvents %> replay event(s).</p>
 </section>
+<% } %>
+
+<% if (run.runConsequence) { %>
+<% const consequence = run.runConsequence; %>
+<%
+  const consequenceCategories = [
+    ['created', 'Created'],
+    ['updated', 'Updated'],
+    ['renamed', 'Renamed'],
+    ['deleted', 'Deleted']
+  ].map(([key, label]) => [key, label, Array.isArray(consequence[key]) ? consequence[key] : []]);
+  const consequenceAttempted = (Array.isArray(consequence.mutations) ? consequence.mutations : []).filter(item => item && item.attempted);
+  const consequenceNotifications = Array.isArray(consequence.notifications) ? consequence.notifications : [];
+  const consequenceExternalEffects = Array.isArray(consequence.externalEffects) ? consequence.externalEffects : [];
+%>
+<section class="detail-section" id="run-consequence">
+  <h2>Recorded Consequence</h2>
+  <p class="text-muted">The authoritative record of what this run changed, derived from operation history at terminalization. Empty categories mean nothing of that kind was recorded.</p>
+  <dl class="detail-grid">
+    <% consequenceCategories.forEach(([key, label, items]) => { %>
+      <div>
+        <dt><%= label %> (<%= items.length %>)</dt>
+        <dd>
+          <% if (items.length === 0) { %>none<% } else { %>
+            <% items.forEach(item => { %>
+              <div><code class="owned-path"><%= item.path || '-' %></code><% if (item.nextPath) { %> &rarr; <code class="owned-path"><%= item.nextPath %></code><% } %><% if (item.operation) { %> <span class="text-muted">(<%= item.operation %><%= item.historyId != null ? ' · history #' + item.historyId : '' %>)</span><% } %></div>
+            <% }) %>
+          <% } %>
+        </dd>
+      </div>
+    <% }) %>
+    <% if (consequenceAttempted.length > 0) { %>
+      <div>
+        <dt>Attempted (not committed) (<%= consequenceAttempted.length %>)</dt>
+        <dd>
+          <% consequenceAttempted.forEach(item => { %>
+            <div><code class="owned-path"><%= item.path || '-' %></code><% if (item.operation) { %> <span class="text-muted">(<%= item.operation %>)</span><% } %></div>
+          <% }) %>
+        </dd>
+      </div>
+    <% } %>
+    <div>
+      <dt>Notifications (<%= consequenceNotifications.length %>)</dt>
+      <dd><% if (consequenceNotifications.length === 0) { %>none<% } else { %><% consequenceNotifications.forEach(item => { %><div><code><%= JSON.stringify(item) %></code></div><% }) %><% } %></dd>
+    </div>
+    <div>
+      <dt>External effects (<%= consequenceExternalEffects.length %>)</dt>
+      <dd><% if (consequenceExternalEffects.length === 0) { %>none<% } else { %><% consequenceExternalEffects.forEach(item => { %><div><code><%= JSON.stringify(item) %></code></div><% }) %><% } %></dd>
+    </div>
+    <% if (consequence.verification) { %>
+      <div>
+        <dt>Verification rollup</dt>
+        <dd>postconditions <code><%= consequence.verification.postconditionsStatus %></code> · violations <code><%= consequence.verification.violationsStatus %></code></dd>
+      </div>
+    <% } %>
+  </dl>
+  <details class="collapsible">
+    <summary>Raw consequence record</summary>
+    <pre class="code-block"><%= JSON.stringify(consequence, null, 2) %></pre>
+  </details>
+</section>
+<% } %>
+
+<% if (run.runEvaluation) { %>
+<% const evaluation = run.runEvaluation; %>
+<details class="disclosure">
+  <summary>Run Evaluation <span class="sub">effectiveness <%= evaluation.effectiveness ? evaluation.effectiveness.status || 'unknown' : 'unknown' %> · violations <%= evaluation.violations ? evaluation.violations.status || 'unknown' : 'unknown' %></span></summary>
+  <div class="body">
+    <p class="text-muted">The recorded evaluation of this run: effectiveness against declared postconditions, measured efficiency, and detected violations.</p>
+    <dl class="detail-grid">
+      <% if (evaluation.effectiveness) { %>
+        <div><dt>Effectiveness</dt><dd><code><%= evaluation.effectiveness.status || 'unknown' %></code></dd></div>
+        <div><dt>Postconditions</dt><dd><%= evaluation.effectiveness.postconditionsPassed != null ? evaluation.effectiveness.postconditionsPassed + ' passed · ' + (evaluation.effectiveness.postconditionsFailed || 0) + ' failed' : '-' %></dd></div>
+      <% } %>
+      <% if (evaluation.efficiency) { %>
+        <div><dt>Duration</dt><dd><%= evaluation.efficiency.durationMs != null ? (typeof formatDurationHuman === 'function' ? formatDurationHuman(evaluation.efficiency.durationMs) : evaluation.efficiency.durationMs + 'ms') : '-' %></dd></div>
+        <div><dt>Provider requests / responses</dt><dd><%= evaluation.efficiency.providerRequests != null ? evaluation.efficiency.providerRequests : '-' %> / <%= evaluation.efficiency.modelResponses != null ? evaluation.efficiency.modelResponses : '-' %></dd></div>
+        <div><dt>Workspace operations</dt><dd><%= evaluation.efficiency.workspaceOperations != null ? evaluation.efficiency.workspaceOperations : '-' %> (<%= evaluation.efficiency.mutationCount != null ? evaluation.efficiency.mutationCount : '-' %> mutating)</dd></div>
+        <div><dt>Retries</dt><dd><%= evaluation.efficiency.retryCount != null ? evaluation.efficiency.retryCount : '-' %></dd></div>
+      <% } %>
+      <% if (evaluation.violations) { %>
+        <div><dt>Violations</dt><dd><code><%= evaluation.violations.status || 'unknown' %></code><%= Array.isArray(evaluation.violations.items) && evaluation.violations.items.length > 0 ? ' · ' + evaluation.violations.items.length + ' item(s)' : '' %></dd></div>
+      <% } %>
+    </dl>
+    <% if (evaluation.effectiveness && Array.isArray(evaluation.effectiveness.errors) && evaluation.effectiveness.errors.length > 0) { %>
+      <p class="text-muted">Effectiveness errors:</p>
+      <ul class="text-muted">
+        <% evaluation.effectiveness.errors.forEach(error => { %><li><%= error %></li><% }) %>
+      </ul>
+    <% } %>
+    <% if (evaluation.violations && Array.isArray(evaluation.violations.items) && evaluation.violations.items.length > 0) { %>
+      <p class="text-muted">Violation items:</p>
+      <% evaluation.violations.items.forEach(item => { %>
+        <div><code><%= JSON.stringify(item) %></code></div>
+      <% }) %>
+    <% } %>
+    <details class="collapsible">
+      <summary>Raw evaluation record</summary>
+      <pre class="code-block"><%= JSON.stringify(evaluation, null, 2) %></pre>
+    </details>
+  </div>
+</details>
 <% } %>
 
 <section class="detail-section">
@@ -782,7 +890,9 @@
         <dd>
           <% const ownedPaths = (run.ownedOutputPaths && run.ownedOutputPaths.length ? run.ownedOutputPaths : (snapshot && snapshot.ownedOutputPaths) || []); %>
           <% if (ownedPaths.length > 0) { %>
-            <code class="owned-path"><%= ownedPaths.join(', ') %></code>
+            <% ownedPaths.forEach(ownedPath => { %>
+              <a class="owned-path-link" href="/workspace?path=<%= encodeURIComponent(String(ownedPath).replace(/^\/+/, '')) %>" title="Open in Workspace environment"><code class="owned-path"><%= ownedPath %></code></a>
+            <% }) %>
           <% } else { %>-<% } %>
         </dd>
       </div>
@@ -1326,6 +1436,8 @@
   const messageEl = document.getElementById('run-live-message');
   const eventStatusEl = document.getElementById('run-live-event-status');
   const eventErrorEl = document.getElementById('run-live-event-error');
+  const leaseEl = document.getElementById('run-live-lease');
+  const heartbeatEl = document.getElementById('run-live-heartbeat');
 
   function formatElapsed(ms) {
     const seconds = Math.max(0, Math.floor(ms / 1000));
@@ -1389,6 +1501,14 @@
     setText(messageEl, state.currentMessage);
     setText(eventStatusEl, state.eventSummary && state.eventSummary.latestStatus ? state.eventSummary.latestStatus.status : null);
     setText(eventErrorEl, state.eventSummary && state.eventSummary.latestError ? state.eventSummary.latestError.message : null);
+    if (state.lease) {
+      setText(leaseEl, state.lease.leaseOwner
+        ? state.lease.leaseOwner
+          + (state.lease.leaseExpiresAt ? ' until ' + state.lease.leaseExpiresAt : '')
+          + (state.lease.expired ? ' (expired)' : '')
+        : null);
+      setText(heartbeatEl, state.lease.lastHeartbeatAt);
+    }
     updateDuration(state.startedAt || state.createdAt, state.completedAt, state.status || currentStatus);
 
     if (terminalStatuses.has(state.status)) {

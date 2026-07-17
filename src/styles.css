@@ -1647,6 +1647,14 @@ label.checkbox-label input[type="radio"] {
   font-size: 0.88rem;
 }
 
+.owned-path-link {
+  text-decoration: none;
+}
+
+.owned-path-link:hover code {
+  text-decoration: underline;
+}
+
 .diagnostics-actions {
   margin-bottom: 10px;
   display: flex;
