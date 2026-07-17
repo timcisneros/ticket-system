@@ -294,12 +294,12 @@ async function phase2AmbiguousBlocksBeforeRun() {
     assert(ticketPage.body.includes('Ticket-Level Triage'), 'Ticket detail must show triage section');
     assert(ticketPage.body.includes('objective_ambiguous'), 'Ticket detail must show reason code');
 
-    // 6. /triage shows the item using generic rendering.
-    const triagePage = await request(baseUrl, 'GET', '/triage', { cookie });
-    assert(triagePage.statusCode === 200, `Triage page failed HTTP ${triagePage.statusCode}`);
-    assert(triagePage.body.includes('objective_ambiguous'), 'Triage page must show objective_ambiguous reasonCode');
-    assert(triagePage.body.includes('clarify_objective'), 'Triage page must show clarify_objective requiredDecision');
-    assert(triagePage.body.includes(`/tickets/${blockedTicket.id}`), 'Triage page must link to the blocked ticket');
+    // 6. /inbox surfaces the blocker thread.
+    const triagePage = await request(baseUrl, 'GET', '/inbox', { cookie });
+    assert(triagePage.statusCode === 200, `Inbox page failed HTTP ${triagePage.statusCode}`);
+    assert(triagePage.body.includes('objective_ambiguous'), 'Inbox must show objective_ambiguous reasonCode');
+    assert(triagePage.body.includes('clarify_objective'), 'Inbox must show clarify_objective requiredDecision');
+    assert(triagePage.body.includes(`"ticketId":${blockedTicket.id},`), 'Inbox must carry the blocked ticket thread');
 
     // 7. Blocked ticket cannot be manually completed.
     const completeAttempt = await request(baseUrl, 'PATCH', `/api/tickets/${blockedTicket.id}/status`, {
@@ -404,8 +404,8 @@ async function phase4ExistingTriageAndWorkflowUnchanged() {
     const cookie = await login(baseUrl);
 
     // Verify existing authority_blocked triage still renders correctly.
-    const triagePage = await request(baseUrl, 'GET', '/triage', { cookie });
-    assert(triagePage.statusCode === 200, `Triage page failed HTTP ${triagePage.statusCode}`);
+    const triagePage = await request(baseUrl, 'GET', '/inbox', { cookie });
+    assert(triagePage.statusCode === 200, `Inbox page failed HTTP ${triagePage.statusCode}`);
     assert(triagePage.body.includes('authority_blocked'),
       'Existing authority_blocked triage must still appear');
     assert(triagePage.body.includes('change_scope'),
@@ -492,11 +492,11 @@ async function phase5QuantifiedCategoryAmbiguousBlocksBeforeRun() {
     assert(ticketPage.statusCode === 200, `Ticket detail failed HTTP ${ticketPage.statusCode}`);
     assert(ticketPage.body.includes('Ticket-Level Triage'), 'Ticket detail must show triage section');
 
-    // 6. /triage shows the item.
-    const triagePage = await request(baseUrl, 'GET', '/triage', { cookie });
-    assert(triagePage.statusCode === 200, `Triage page failed HTTP ${triagePage.statusCode}`);
-    assert(triagePage.body.includes('objective_ambiguous'), 'Triage page must show objective_ambiguous');
-    assert(triagePage.body.includes(`/tickets/${blockedTicket.id}`), 'Triage page must link to the blocked ticket');
+    // 6. /inbox shows the item.
+    const triagePage = await request(baseUrl, 'GET', '/inbox', { cookie });
+    assert(triagePage.statusCode === 200, `Inbox page failed HTTP ${triagePage.statusCode}`);
+    assert(triagePage.body.includes('objective_ambiguous'), 'Inbox must show objective_ambiguous');
+    assert(triagePage.body.includes(`"ticketId":${blockedTicket.id},`), 'Inbox must carry the blocked ticket thread');
 
     console.log('PASS: phase 5 — quantified category ambiguous blocks before run');
   } finally {

@@ -110,6 +110,7 @@ function seed() {
       executionMode: 'agent', workflowId: null, workflowInput: null,
       capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
       executionPolicySnapshot: { requireVerification: 'when_declared' },
+      runtimeLimitsSnapshot: { maxExecutionSteps: 10, maxModelRequestsPerRun: 10, maxWorkspaceOperationsPerRun: 50, maxRuntimeDurationMs: 600000, source: null },
       currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null,
       currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
       status: 'failed', error: 'boom', triage: { ...RUN_TRIAGE },
@@ -122,6 +123,7 @@ function seed() {
       allocationPlanId: null, allocationItemId: null, ownedOutputPaths: [],
       executionMode: 'workflow', workflowId: 'wf-v', capabilityType: 'workflow', capabilityId: 'wf-v', workflowInput: {},
       executionPolicySnapshot: { requireVerification: 'when_declared' },
+      runtimeLimitsSnapshot: { maxExecutionSteps: 10, maxModelRequestsPerRun: 10, maxWorkspaceOperationsPerRun: 50, maxRuntimeDurationMs: 600000, source: null },
       verificationContractSnapshot: { workflowId: 'wf-v', workflowName: 'Verified workflow', workflowVersion: '1', postconditions: [{ id: 'pc', type: 'fileExists', path: 'out.txt' }], verifierContract: null, capturedAt: T0 },
       runEvaluation: { effectiveness: { status: 'unknown' }, efficiency: { durationMs: 100, providerRequests: 1, modelResponses: 1, workspaceOperations: 1, mutationCount: 0, retryCount: 0 }, violations: { status: 'unknown', items: [] }, effectiveRuntimeConfig: null },
       currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null,
@@ -173,10 +175,12 @@ async function main() {
     await waitForReady();
     const cookie = await loginAs('admin');
 
-    // 12 (unresolved UI): required triage renders with a resolve control, not resolved.
+    // 12 (unresolved UI): required triage renders read-only with a link to the
+    // Inbox (the only resolve surface); the page itself has no resolve input.
     const t1PageBefore = await request('GET', '/tickets/1', { cookie });
     assert(t1PageBefore.body.includes('Ticket-Level Triage'), 'unresolved ticket triage should render');
-    assert(t1PageBefore.body.includes('Resolve triage'), 'authorized user should see a resolve control');
+    assert(t1PageBefore.body.includes('Respond in Inbox'), 'authorized user should see the inbox link');
+    assert(!t1PageBefore.body.includes('triage-resolve'), 'ticket page must not embed a resolve control');
     assert(!t1PageBefore.body.includes('Ticket-Level Triage (resolved)'), 'unresolved triage must not show resolved state');
 
     // 5: blank resolution rejected without mutation.

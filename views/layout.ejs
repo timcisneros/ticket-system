@@ -22,11 +22,11 @@
             <ul class="dropdown-menu">
               <li><a href="/">New Ticket</a></li>
               <li><a href="/tickets">All Tickets</a></li>
-              <% if (userPermissions.includes('ticket:read')) { %>
-                <li><a href="/triage">Triage</a></li>
-              <% } %>
             </ul>
           </li>
+          <% if (userPermissions.includes('ticket:read')) { %>
+            <li><a href="/inbox">Inbox</a></li>
+          <% } %>
           <% if (userPermissions.includes('ticket:read') || userPermissions.includes('watcher:manage') || userPermissions.includes('ops:read')) { %>
           <li class="dropdown">
             <a class="dropdown-toggle">Monitoring</a>
@@ -81,8 +81,18 @@
             </ul>
           </li>
           <% } %>
-          <% if (userPermissions.includes('workspace:read')) { %>
-            <li><a href="/workspace">Workspace</a></li>
+          <% if (userPermissions.includes('workspace:read') || userPermissions.includes('browser:read')) { %>
+          <li class="dropdown">
+            <a class="dropdown-toggle">Environments</a>
+            <ul class="dropdown-menu">
+              <% if (userPermissions.includes('workspace:read')) { %>
+                <li><a href="/workspace">Workspace</a></li>
+              <% } %>
+              <% if (userPermissions.includes('browser:read')) { %>
+                <li><a href="/browser">Browser</a></li>
+              <% } %>
+            </ul>
+          </li>
           <% } %>
           <li>
             <form method="post" action="/logout" style="display:inline">

@@ -109,13 +109,12 @@ async function main() {
     assert(tickets.statusCode === 200, '/tickets HTTP ' + tickets.statusCode);
     assert(tickets.body.includes('completed + verified') && tickets.body.includes('manual rerun ceiling'), '/tickets should render demo tickets');
 
-    // 6: /triage contains unresolved ticket-level AND run-level triage, excludes resolved.
-    const triage = await request('GET', '/triage', { cookie });
-    assert(triage.statusCode === 200, '/triage HTTP ' + triage.statusCode);
-    assert(triage.body.includes('authority_blocked') && triage.body.includes('href="/tickets/3"'), '/triage should list authority_blocked triage (ticket 3)');
-    assert(triage.body.includes('objective_ambiguous') && triage.body.includes('href="/tickets/7"'), '/triage should list objective_ambiguous triage (ticket 7)');
-    assert(triage.body.includes('verification_failed') && triage.body.includes('href="/runs/102"'), '/triage should list run-level triage (run 102)');
-    assert(!triage.body.includes('No unresolved triage.'), '/triage should not be empty');
+    // 6: /inbox contains unresolved ticket-level AND run-level blocker threads, excludes resolved.
+    const triage = await request('GET', '/inbox', { cookie });
+    assert(triage.statusCode === 200, '/inbox HTTP ' + triage.statusCode);
+    assert(triage.body.includes('authority_blocked') && triage.body.includes('"ticketId":3,'), '/inbox should list authority_blocked blocker thread (ticket 3)');
+    assert(triage.body.includes('objective_ambiguous') && triage.body.includes('"ticketId":7,'), '/inbox should list objective_ambiguous blocker thread (ticket 7)');
+    assert(triage.body.includes('verification_failed') && triage.body.includes('"runId":102'), '/inbox should list run-level blocker thread (run 102)');
     // resolved run-106 triage excluded:
     assert(!triage.body.includes('href="/runs/106"'), '/triage must exclude resolved run triage (run 106)');
 
@@ -150,7 +149,7 @@ async function main() {
     const run104 = await request('GET', '/runs/104', { cookie });
     assert(run104.body.includes('Budget (advisory)') && run104.body.includes('exceeded (advisory)'), '/runs/104 should show budget advisory exceeded');
     const ticket4 = await request('GET', '/tickets/4', { cookie });
-    assert(ticket4.body.includes('Budget Advisory') && ticket4.body.includes('exceeded (advisory)'), 'ticket 4 detail should show budget rollup exceeded');
+    assert(ticket4.body.includes('Budget advisory') && ticket4.body.includes('exceeded (advisory)'), 'ticket 4 detail should show budget rollup exceeded');
 
     // 10: maxAttempts example renders the explicit ceiling.
     const ticket5 = await request('GET', '/tickets/5', { cookie });
@@ -356,7 +355,7 @@ async function main() {
     const verTemplates = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8'));
     assert(verTemplates.some(t => t.version === 1), 'demo includes at least one template with version 1');
     const verPage = await request('GET', '/process-templates', { cookie });
-    assert(/Weekly status report\s*<span class="text-muted">v1<\/span>/.test(verPage.body), '/process-templates renders the active version (v1)');
+    assert(/Weekly status report<\/a>\s*<span class="text-muted">v1<\/span>/.test(verPage.body), '/process-templates renders the active version (v1)');
 
     // Versioned generated ticket (#9) shows "Created from template <name> v1".
     const verTicketDetail = await request('GET', '/tickets/9', { cookie });
@@ -447,7 +446,7 @@ async function main() {
     const t1after = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'process-templates.json'), 'utf8')).find(t => t.id === 1);
     assert(t1after.currentVersion === 2 && t1after.version === 2, 'root template re-points to active v2');
     const verPageV2 = await request('GET', '/process-templates', { cookie });
-    assert(/Weekly status report\s*<span class="text-muted">v2<\/span>/.test(verPageV2.body), '/process-templates shows the active version (v2) after activation');
+    assert(/Weekly status report<\/a>\s*<span class="text-muted">v2<\/span>/.test(verPageV2.body), '/process-templates shows the active version (v2) after activation');
 
     // Old generated ticket #9 stays v1 — activation never rewrites past tickets/ledger.
     const t9after = JSON.parse(fs.readFileSync(ticketsPath, 'utf8')).find(t => t.id === 9);

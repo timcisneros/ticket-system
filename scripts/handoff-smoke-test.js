@@ -222,10 +222,10 @@ async function main() {
     assert(summary.statusCode === 200 && summaryIds.includes(10) && summaryIds.includes(newId) && summaryIds.includes(ambId), 'S4: Work Context summary includes source + handoff-created tickets');
     const ftk = await request('GET', '/tickets?workContextId=1', { cookie: admin });
     assert(ftk.body.includes('Prepare the legal packet from the report') && !ftk.body.includes('uncontexted blocked ticket'), 'S4: /tickets?workContextId filters to context');
-    const ftr = await request('GET', '/triage?workContextId=1', { cookie: admin });
-    assert(!ftr.body.includes('/tickets/11'), 'S4: /triage?workContextId excludes uncontexted ticket 11 when filtered');
-    const allTr = await request('GET', '/triage', { cookie: admin });
-    assert(allTr.body.includes('/tickets/11'), 'S4: uncontexted/critical triage is NOT hidden by default');
+    const ftr = await request('GET', '/inbox?workContextId=1', { cookie: admin });
+    assert(!ftr.body.includes('"ticketId":11,'), 'S4: /inbox?workContextId excludes uncontexted ticket 11 when filtered');
+    const allTr = await request('GET', '/inbox', { cookie: admin });
+    assert(allTr.body.includes('"ticketId":11,'), 'S4: uncontexted/critical triage is NOT hidden by default');
     assert((await request('GET', '/process-templates?workContextId=1', { cookie: admin })).statusCode === 200, 'S4: /process-templates?workContextId unaffected (no templates in fixture)');
 
     // ===== Scenario 5 — no hidden state / no new ledgers =====

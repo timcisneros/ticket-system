@@ -17,6 +17,8 @@
   "workspace:write",
   "workspace:reset",
   "workspace.delete.cross_ticket_artifact",
+  "browser:read",
+  "browser:operate",
   "processTemplate:manage",
   "workContext:manage",
   "watcher:manage",

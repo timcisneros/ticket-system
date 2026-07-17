@@ -1,0 +1,330 @@
+<script>document.querySelector('main.container')?.classList.add('container--wide');</script>
+
+<div class="page-header">
+  <div>
+    <h1>Inbox</h1>
+    <p class="text-muted">Messages from agents and the system: blockers that need an operator decision and deliverables ready for acknowledgement. Resolving a blocker here unblocks further work on its ticket.</p>
+  </div>
+</div>
+
+<div id="inbox-error" class="error-message" hidden></div>
+
+<div class="inbox-layout">
+  <aside class="inbox-list-pane">
+    <div class="inbox-tabs" id="inbox-tabs">
+      <button type="button" class="inbox-tab active" data-filter="open">Open</button>
+      <button type="button" class="inbox-tab" data-filter="closed">Resolved</button>
+      <button type="button" class="inbox-tab" data-filter="all">All</button>
+    </div>
+    <ul class="inbox-thread-list" id="inbox-thread-list"></ul>
+  </aside>
+
+  <section class="inbox-thread-pane" id="inbox-thread-pane">
+    <div class="inbox-empty text-muted" id="inbox-empty">No message selected.</div>
+
+    <div id="inbox-thread" hidden>
+      <div class="inbox-thread-header">
+        <div>
+          <h2 id="thread-subject"></h2>
+          <p class="text-muted inbox-thread-links">
+            <span id="thread-kind" class="status-badge"></span>
+            <span id="thread-status" class="status-badge"></span>
+            <a id="thread-ticket-link" href="#"></a>
+            <a id="thread-run-link" href="#" hidden></a>
+          </p>
+        </div>
+      </div>
+
+      <dl class="detail-grid inbox-thread-facts" id="thread-facts" hidden>
+        <div><dt>Reason</dt><dd><code id="fact-reason"></code></dd></div>
+        <div><dt>Required decision</dt><dd><code id="fact-decision"></code></dd></div>
+        <div><dt>Allowed next actions</dt><dd id="fact-allowed"></dd></div>
+        <div><dt>Prohibited actions</dt><dd id="fact-prohibited"></dd></div>
+        <div class="inbox-fact-wide"><dt>Evidence</dt><dd id="fact-evidence"></dd></div>
+      </dl>
+
+      <div class="inbox-messages" id="inbox-messages"></div>
+
+      <div class="inbox-composer" id="inbox-composer" hidden>
+        <textarea id="composer-body" rows="4" placeholder="Write a reply…"></textarea>
+        <div class="inbox-composer-actions">
+          <button type="button" class="btn-secondary" id="composer-reply">Send Reply</button>
+          <button type="button" class="btn-submit" id="composer-resolve"></button>
+          <span class="text-muted" id="composer-hint"></span>
+        </div>
+      </div>
+      <p class="text-muted" id="inbox-closed-note" hidden></p>
+    </div>
+  </section>
+</div>
+
+<script>
+let threads = <%- serializeForInlineScript(inboxThreads) %>;
+const canRespond = <%- serializeForInlineScript(canRespond) %>;
+const preselectedThreadId = <%- serializeForInlineScript(selectedThreadId) %>;
+const preselectedTicketId = <%- serializeForInlineScript(selectedTicketId) %>;
+
+let activeFilter = 'open';
+let selectedId = null;
+
+const errorBox = document.getElementById('inbox-error');
+const listEl = document.getElementById('inbox-thread-list');
+const emptyEl = document.getElementById('inbox-empty');
+const threadEl = document.getElementById('inbox-thread');
+const messagesEl = document.getElementById('inbox-messages');
+const composerEl = document.getElementById('inbox-composer');
+const composerBody = document.getElementById('composer-body');
+const composerResolve = document.getElementById('composer-resolve');
+const composerHint = document.getElementById('composer-hint');
+const closedNote = document.getElementById('inbox-closed-note');
+
+function showError(message) {
+  errorBox.textContent = message;
+  errorBox.hidden = !message;
+}
+
+function formatTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const now = new Date();
+  return date.toDateString() === now.toDateString()
+    ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function threadById(id) {
+  return threads.find(thread => thread.id === id) || null;
+}
+
+function visibleThreads() {
+  if (activeFilter === 'all') return threads;
+  return threads.filter(thread => thread.status === activeFilter);
+}
+
+function lastMessage(thread) {
+  return thread.messages.length > 0 ? thread.messages[thread.messages.length - 1] : null;
+}
+
+function renderList() {
+  listEl.replaceChildren();
+  const items = visibleThreads();
+  if (items.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'inbox-thread-item inbox-thread-item--empty text-muted';
+    empty.textContent = activeFilter === 'open' ? 'No open messages.' : 'No messages.';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  items.forEach(thread => {
+    const item = document.createElement('li');
+    item.className = 'inbox-thread-item' + (thread.id === selectedId ? ' selected' : '') + (thread.status === 'open' ? ' unread' : '');
+    item.dataset.threadId = thread.id;
+
+    const topRow = document.createElement('div');
+    topRow.className = 'inbox-item-top';
+    const from = document.createElement('span');
+    from.className = 'inbox-item-from';
+    const firstMessage = thread.messages[0];
+    from.textContent = firstMessage ? firstMessage.authorName : 'System';
+    const time = document.createElement('span');
+    time.className = 'inbox-item-time';
+    time.textContent = formatTime(thread.updatedAt);
+    topRow.appendChild(from);
+    topRow.appendChild(time);
+
+    const subject = document.createElement('div');
+    subject.className = 'inbox-item-subject';
+    const kind = document.createElement('span');
+    kind.className = 'inbox-kind-dot inbox-kind-' + thread.kind;
+    kind.title = thread.kind;
+    subject.appendChild(kind);
+    subject.appendChild(document.createTextNode(thread.subject));
+
+    const snippet = document.createElement('div');
+    snippet.className = 'inbox-item-snippet text-muted';
+    const last = lastMessage(thread);
+    snippet.textContent = last ? last.body.replace(/\s+/g, ' ').slice(0, 110) : '';
+
+    item.appendChild(topRow);
+    item.appendChild(subject);
+    item.appendChild(snippet);
+    listEl.appendChild(item);
+  });
+}
+
+function renderThread() {
+  const thread = threadById(selectedId);
+  emptyEl.hidden = Boolean(thread);
+  threadEl.hidden = !thread;
+  if (!thread) return;
+
+  document.getElementById('thread-subject').textContent = thread.subject;
+
+  const kindBadge = document.getElementById('thread-kind');
+  kindBadge.textContent = thread.kind === 'blocker' ? 'needs decision' : 'deliverable';
+  kindBadge.className = 'status-badge ' + (thread.kind === 'blocker' ? 'status-failed' : 'status-completed');
+
+  const statusBadge = document.getElementById('thread-status');
+  statusBadge.textContent = thread.status === 'open' ? 'open' : 'resolved';
+  statusBadge.className = 'status-badge ' + (thread.status === 'open' ? 'status-active' : 'status-inactive');
+
+  const ticketLink = document.getElementById('thread-ticket-link');
+  ticketLink.textContent = 'Ticket #' + thread.ticketId;
+  ticketLink.href = '/tickets/' + thread.ticketId;
+
+  const runLink = document.getElementById('thread-run-link');
+  runLink.hidden = !thread.runId;
+  if (thread.runId) {
+    runLink.textContent = 'Run #' + thread.runId;
+    runLink.href = '/runs/' + thread.runId;
+  }
+
+  const facts = document.getElementById('thread-facts');
+  facts.hidden = thread.kind !== 'blocker';
+  if (thread.kind === 'blocker') {
+    document.getElementById('fact-reason').textContent = thread.reasonCode || '-';
+    document.getElementById('fact-decision').textContent = thread.requiredDecision || '-';
+    document.getElementById('fact-allowed').textContent = (thread.allowedActions || []).join(', ') || 'none';
+    document.getElementById('fact-prohibited').textContent = (thread.prohibitedActions || []).join(', ') || 'none';
+    const evidence = document.getElementById('fact-evidence');
+    evidence.replaceChildren();
+    (thread.evidenceRefs || []).forEach(ref => {
+      const code = document.createElement('code');
+      code.className = 'owned-path';
+      code.textContent = ref;
+      evidence.appendChild(code);
+      evidence.appendChild(document.createTextNode(' '));
+    });
+    if ((thread.evidenceRefs || []).length === 0) evidence.textContent = '-';
+  }
+
+  messagesEl.replaceChildren();
+  thread.messages.forEach(message => {
+    const card = document.createElement('article');
+    card.className = 'inbox-message inbox-message--' + message.author;
+
+    const head = document.createElement('header');
+    head.className = 'inbox-message-head';
+    const who = document.createElement('strong');
+    who.textContent = message.authorName;
+    const label = document.createElement('span');
+    label.className = 'inbox-message-label text-muted';
+    label.textContent = message.author === 'operator'
+      ? (message.kind === 'resolution' ? 'resolution' : message.kind === 'acknowledgement' ? 'acknowledgement' : 'reply')
+      : message.author;
+    const when = document.createElement('span');
+    when.className = 'inbox-message-time text-muted';
+    when.textContent = formatTime(message.createdAt);
+    head.appendChild(who);
+    head.appendChild(label);
+    head.appendChild(when);
+
+    const body = document.createElement('div');
+    body.className = 'inbox-message-body';
+    body.textContent = message.body;
+
+    card.appendChild(head);
+    card.appendChild(body);
+    messagesEl.appendChild(card);
+  });
+
+  const open = thread.status === 'open';
+  composerEl.hidden = !(open && canRespond);
+  closedNote.hidden = open;
+  if (!open) {
+    closedNote.textContent = 'Thread resolved by ' + (thread.closedBy || 'operator') + (thread.closedAt ? ' · ' + formatTime(thread.closedAt) : '') + '.';
+  }
+  if (open && canRespond) {
+    composerResolve.textContent = thread.kind === 'blocker' ? 'Reply & Resolve' : 'Acknowledge & Close';
+    composerHint.textContent = thread.kind === 'blocker'
+      ? 'Resolving records your reply as the resolution note and unblocks rerun on the ticket.'
+      : 'Acknowledging closes this deliverable thread.';
+  }
+}
+
+async function inboxRequest(url, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Inbox request failed');
+  return data;
+}
+
+async function refreshThreads(keepSelection = true) {
+  const response = await fetch('/api/inbox/threads', { headers: { Accept: 'application/json' } });
+  const data = await response.json();
+  if (response.ok) {
+    threads = data.threads;
+    if (keepSelection && selectedId && !threadById(selectedId)) selectedId = null;
+    renderList();
+    renderThread();
+  }
+}
+
+async function sendComposer(resolve) {
+  const body = composerBody.value.trim();
+  if (!body) {
+    showError('Message body is required.');
+    return;
+  }
+  try {
+    showError('');
+    await inboxRequest('/api/inbox/threads/' + selectedId + '/' + (resolve ? 'resolve' : 'reply'), { body });
+    composerBody.value = '';
+    await refreshThreads();
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+document.getElementById('inbox-tabs').addEventListener('click', event => {
+  const tab = event.target.closest('button[data-filter]');
+  if (!tab) return;
+  activeFilter = tab.dataset.filter;
+  document.querySelectorAll('.inbox-tab').forEach(button => button.classList.toggle('active', button === tab));
+  const visible = visibleThreads();
+  if (!visible.some(thread => thread.id === selectedId)) {
+    selectedId = visible.length > 0 ? visible[0].id : null;
+  }
+  renderList();
+  renderThread();
+});
+
+listEl.addEventListener('click', event => {
+  const item = event.target.closest('li[data-thread-id]');
+  if (!item) return;
+  selectedId = parseInt(item.dataset.threadId, 10);
+  renderList();
+  renderThread();
+});
+
+document.getElementById('composer-reply').addEventListener('click', () => sendComposer(false));
+composerResolve.addEventListener('click', () => sendComposer(true));
+
+(function init() {
+  if (preselectedThreadId && threadById(preselectedThreadId)) {
+    selectedId = preselectedThreadId;
+    const selected = threadById(selectedId);
+    if (selected && selected.status !== 'open') activeFilter = 'all';
+  } else if (preselectedTicketId) {
+    const match = threads.find(thread => thread.ticketId === preselectedTicketId && thread.status === 'open')
+      || threads.find(thread => thread.ticketId === preselectedTicketId);
+    if (match) {
+      selectedId = match.id;
+      if (match.status !== 'open') activeFilter = 'all';
+    }
+  }
+  if (selectedId === null) {
+    const visible = visibleThreads();
+    selectedId = visible.length > 0 ? visible[0].id : null;
+  }
+  document.querySelectorAll('.inbox-tab').forEach(button => button.classList.toggle('active', button.dataset.filter === activeFilter));
+  renderList();
+  renderThread();
+})();
+</script>

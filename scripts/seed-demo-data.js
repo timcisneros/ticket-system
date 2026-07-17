@@ -65,6 +65,7 @@ function run(id, ticketId, status, extra = {}) {
     executionMode: 'agent', workflowId: null, workflowInput: null,
     capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
     executionPolicySnapshot: { requireVerification: 'when_declared' },
+    runtimeLimitsSnapshot: { maxExecutionSteps: 10, maxModelRequestsPerRun: 10, maxWorkspaceOperationsPerRun: 50, maxRuntimeDurationMs: 600000, source: null },
     currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null,
     currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
     status, createdAt: T0, updatedAt: T0, startedAt: T0,
@@ -263,9 +264,14 @@ function seed() {
   // Verification verdicts (no execution_completed → startup reconciliation leaves
   // these terminal runs untouched; the verdict events keep the Usage/Attempt
   // verification line coherent with the run evaluation).
+  const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash } = require('../runtime/event-integrity');
+  const sealFirstRunEvent = event => {
+    const envelope = { schemaVersion: RUN_EVENT_SCHEMA_VERSION, stepId: null, seq: 0, prevHash: null, ...event };
+    return { ...envelope, hash: computeRunEventHash(envelope) };
+  };
   const events = [
-    { id: 'v101', ts: T0, type: 'run.verification_passed', ticketId: 1, runId: 101, payload: { status: 'passed' } },
-    { id: 'v102', ts: T0, type: 'run.verification_failed', ticketId: 2, runId: 102, payload: { status: 'failed', error: 'Verification failed: 1 postcondition did not pass' } }
+    sealFirstRunEvent({ id: 'v101', ts: T0, type: 'run.verification_passed', ticketId: 1, runId: 101, payload: { status: 'passed' } }),
+    sealFirstRunEvent({ id: 'v102', ts: T0, type: 'run.verification_failed', ticketId: 2, runId: 102, payload: { status: 'failed', error: 'Verification failed: 1 postcondition did not pass' } })
   ];
   fs.writeFileSync(path.join(DEMO_DATA_DIR, 'events.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n');
 

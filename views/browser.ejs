@@ -1,0 +1,406 @@
+<h1>Browser</h1>
+<p class="text-muted">Phase 1 browser environment: read-only navigation and inspection against a configured browser target. Every session and operation is recorded in the system log with pre/post page state.</p>
+
+<div class="admin-section">
+  <div class="workspace-header">
+    <div>
+      <h2>Runtime</h2>
+      <p class="text-muted">
+        Engine:
+        <span class="status-badge status-<%= browserEngineStatus.available ? 'active' : 'inactive' %>"><%= browserEngineStatus.available ? 'available' : 'unavailable' %></span>
+        <% if (browserEngineStatus.version) { %><code><%= browserEngineStatus.version %></code><% } %>
+      </p>
+    </div>
+  </div>
+  <% if (!browserEngineStatus.available) { %>
+    <p class="form-hint">Configure <code>BROWSER_ENGINE_EXECUTABLE</code> with an executable Chromium binary to enable browser sessions.</p>
+  <% } %>
+</div>
+
+<div id="browser-error" class="error-message" hidden></div>
+
+<section class="admin-block" id="session-open-panel" hidden>
+  <h2>Open Session</h2>
+  <% if (browserTargets.length === 0) { %>
+    <p class="text-muted">No active browser targets. Configure one under <a href="/admin/browser-targets">Admin → Browser Targets</a>.</p>
+  <% } else if (!canOperateBrowser) { %>
+    <p class="text-muted">You have read access to the browser environment but no <code>browser:operate</code> permission, so you cannot open a session.</p>
+  <% } else { %>
+    <form id="session-open-form" class="ticket-form">
+      <div class="form-group">
+        <label for="browser-target">Browser target</label>
+        <select id="browser-target" name="targetId" required>
+          <option value="">Choose target</option>
+          <% browserTargets.forEach(target => { %>
+            <option value="<%= target.id %>"><%= target.name %> (<%= target.id %>)</option>
+          <% }) %>
+        </select>
+      </div>
+      <dl class="detail-grid" id="target-detail" hidden>
+        <div><dt>Allowed origins</dt><dd id="target-origins"></dd></div>
+        <div><dt>Start URL</dt><dd><code id="target-start-url"></code></dd></div>
+        <div><dt>Session limits</dt><dd id="target-limits"></dd></div>
+      </dl>
+      <div class="form-actions">
+        <button type="submit" class="btn-submit">Open Session</button>
+      </div>
+    </form>
+  <% } %>
+</section>
+
+<section class="admin-block" id="session-panel" hidden>
+  <div class="workspace-header">
+    <div>
+      <h2>Session</h2>
+      <p class="text-muted">
+        Target <strong id="session-target-name"></strong>
+        · opened <span id="session-opened-at"></span>
+        · session <code id="session-id"></code>
+      </p>
+    </div>
+    <button type="button" class="btn-secondary btn-danger" id="session-close">Close Session</button>
+  </div>
+
+  <div class="browser-page-state">
+    <span class="text-muted">Current page:</span>
+    <code id="page-url">(no page loaded)</code>
+    <span id="page-title" class="text-muted"></span>
+  </div>
+
+  <p class="text-muted" id="session-counters"></p>
+
+  <div class="workspace-actions browser-toolbar">
+    <form id="navigate-form" class="workspace-inline-form browser-url-form">
+      <input type="url" name="url" id="navigate-url" placeholder="https://…" required list="allowed-origins">
+      <datalist id="allowed-origins"></datalist>
+      <button type="submit" class="btn-small">Navigate</button>
+    </form>
+
+    <button type="button" class="btn-small" data-operation="observe">Observe</button>
+    <button type="button" class="btn-small" data-operation="readPageText">Read Page Text</button>
+    <button type="button" class="btn-small" data-operation="screenshot">Screenshot</button>
+
+    <form id="wait-form" class="workspace-inline-form">
+      <input type="number" name="forMs" id="wait-ms" min="0" step="100" value="1000" required>
+      <button type="submit" class="btn-small">Wait (ms)</button>
+    </form>
+  </div>
+</section>
+
+<section class="admin-block" id="result-panel" hidden>
+  <h2 id="result-title">Result</h2>
+  <div id="result-body"></div>
+</section>
+
+<section class="admin-block" id="ledger-panel" hidden>
+  <h2>Session Activity</h2>
+  <p class="text-muted">Operations performed in this session. The authoritative audit trail is in the <a href="/logs">system log</a> as <code>browser:operator_operation</code> entries with pre/post page state.</p>
+  <table class="tickets-table">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Operation</th>
+        <th>Outcome</th>
+        <th>Duration</th>
+        <th>Detail</th>
+      </tr>
+    </thead>
+    <tbody id="ledger-entries"></tbody>
+  </table>
+</section>
+
+<script>
+const browserTargets = <%- serializeForInlineScript(browserTargets) %>;
+let browserSession = <%- serializeForInlineScript(browserSession) %>;
+const canOperate = <%- serializeForInlineScript(canOperateBrowser) %>;
+
+const errorBox = document.getElementById('browser-error');
+const openPanel = document.getElementById('session-open-panel');
+const openForm = document.getElementById('session-open-form');
+const targetSelect = document.getElementById('browser-target');
+const targetDetail = document.getElementById('target-detail');
+const sessionPanel = document.getElementById('session-panel');
+const resultPanel = document.getElementById('result-panel');
+const resultTitle = document.getElementById('result-title');
+const resultBody = document.getElementById('result-body');
+const ledgerPanel = document.getElementById('ledger-panel');
+const ledgerEntries = document.getElementById('ledger-entries');
+const navigateForm = document.getElementById('navigate-form');
+const navigateUrl = document.getElementById('navigate-url');
+const waitForm = document.getElementById('wait-form');
+const originsDatalist = document.getElementById('allowed-origins');
+
+function showError(message) {
+  errorBox.textContent = message;
+  errorBox.hidden = !message;
+}
+
+function findTarget(id) {
+  return browserTargets.find(target => target.id === id) || null;
+}
+
+async function browserRequest(url, options) {
+  const response = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Browser operation failed');
+  return data;
+}
+
+function renderTargetDetail() {
+  const target = findTarget(targetSelect.value);
+  targetDetail.hidden = !target;
+  if (!target) return;
+
+  const origins = document.getElementById('target-origins');
+  origins.replaceChildren();
+  (target.allowedOrigins || []).forEach(origin => {
+    const code = document.createElement('code');
+    code.textContent = origin;
+    const line = document.createElement('div');
+    line.appendChild(code);
+    origins.appendChild(line);
+  });
+
+  document.getElementById('target-start-url').textContent = target.startUrl || '-';
+
+  const limits = document.getElementById('target-limits');
+  limits.replaceChildren();
+  Object.entries(target.limits || {}).forEach(([key, value]) => {
+    const line = document.createElement('div');
+    line.textContent = key + ': ' + value;
+    limits.appendChild(line);
+  });
+}
+
+function renderSession() {
+  openPanel.hidden = Boolean(browserSession);
+  sessionPanel.hidden = !browserSession;
+  if (!browserSession) return;
+
+  document.getElementById('session-target-name').textContent = browserSession.target.name;
+  document.getElementById('session-opened-at').textContent = new Date(browserSession.openedAt).toLocaleString();
+  document.getElementById('session-id').textContent = browserSession.id;
+
+  const page = browserSession.page;
+  document.getElementById('page-url').textContent = page && page.url ? page.url : '(no page loaded)';
+  document.getElementById('page-title').textContent = page && page.title ? '— ' + page.title : '';
+
+  const limits = browserSession.target.limits || {};
+  const counters = browserSession.counters || {};
+  document.getElementById('session-counters').textContent =
+    'Actions ' + (counters.actions || 0) + '/' + limits.maxActionsPerRun +
+    ' · Navigations ' + (counters.navigations || 0) + '/' + limits.maxNavigationsPerRun +
+    ' · Screenshots ' + (counters.screenshots || 0) + '/' + limits.maxScreenshotsPerRun +
+    ' · Page text cap ' + limits.maxPageTextBytes + ' bytes' +
+    ' · Wait cap ' + limits.waitTimeoutMsCap + ' ms';
+
+  originsDatalist.replaceChildren();
+  (browserSession.target.allowedOrigins || []).forEach(origin => {
+    const option = document.createElement('option');
+    option.value = origin;
+    originsDatalist.appendChild(option);
+  });
+
+  if (!navigateUrl.value && browserSession.target.startUrl) {
+    navigateUrl.value = browserSession.target.startUrl;
+  }
+}
+
+function appendLedgerEntry(operation, outcome, durationMs, detail) {
+  ledgerPanel.hidden = false;
+  const row = document.createElement('tr');
+  [
+    new Date().toLocaleTimeString(),
+    operation,
+    outcome,
+    durationMs != null ? durationMs + ' ms' : '-',
+    detail || ''
+  ].forEach((value, index) => {
+    const cell = document.createElement('td');
+    if (index === 2) {
+      const badge = document.createElement('span');
+      badge.className = 'status-badge status-' + (value === 'ok' ? 'active' : 'inactive');
+      badge.textContent = value;
+      cell.appendChild(badge);
+    } else {
+      cell.textContent = value;
+    }
+    row.appendChild(cell);
+  });
+  ledgerEntries.prepend(row);
+}
+
+function renderKeyValueList(pairs) {
+  const list = document.createElement('dl');
+  list.className = 'detail-grid';
+  pairs.forEach(([label, value]) => {
+    const wrap = document.createElement('div');
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    if (value instanceof Node) dd.appendChild(value);
+    else dd.textContent = value == null ? '-' : String(value);
+    wrap.appendChild(dt);
+    wrap.appendChild(dd);
+    list.appendChild(wrap);
+  });
+  return list;
+}
+
+function renderResult(operation, data) {
+  resultPanel.hidden = false;
+  resultTitle.textContent = 'Result: ' + operation;
+  resultBody.replaceChildren();
+  const result = data.result || {};
+  const receipt = data.receipt || {};
+
+  if (operation === 'navigate') {
+    resultBody.appendChild(renderKeyValueList([
+      ['Requested URL', receipt.metadata.requestedUrl],
+      ['Final URL', receipt.metadata.finalUrl],
+      ['HTTP status', receipt.metadata.status],
+      ['Title', result.title],
+      ['Redirect chain', (receipt.metadata.redirectChain || []).join(' → ') || '(none)']
+    ]));
+  } else if (operation === 'observe') {
+    const note = document.createElement('p');
+    note.className = 'text-muted';
+    note.textContent = (result.elements || []).length + ' visible element(s)' + (receipt.truncated ? ' (truncated)' : '');
+    resultBody.appendChild(note);
+
+    const table = document.createElement('table');
+    table.className = 'tickets-table';
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    ['Element', 'Role', 'Name', 'Text', 'Enabled'].forEach(label => {
+      const th = document.createElement('th');
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const body = document.createElement('tbody');
+    (result.elements || []).forEach(element => {
+      const row = document.createElement('tr');
+      [element.elementId, element.role, element.name, element.text, element.enabled ? 'yes' : 'no'].forEach(value => {
+        const cell = document.createElement('td');
+        cell.textContent = value || '';
+        row.appendChild(cell);
+      });
+      body.appendChild(row);
+    });
+    table.appendChild(body);
+    resultBody.appendChild(table);
+  } else if (operation === 'readPageText') {
+    const note = document.createElement('p');
+    note.className = 'text-muted';
+    note.textContent = receipt.metadata.bytes + ' of ' + receipt.metadata.fullBytes + ' bytes' +
+      (receipt.truncated ? ' (truncated at target limit)' : '') +
+      ' · content hash ' + String(receipt.metadata.contentHash || '').slice(0, 16) + '…';
+    resultBody.appendChild(note);
+    const text = document.createElement('pre');
+    text.className = 'browser-page-text';
+    text.textContent = result.text || '(empty page)';
+    resultBody.appendChild(text);
+  } else if (operation === 'screenshot') {
+    resultBody.appendChild(renderKeyValueList([
+      ['Artifact', result.artifactPath],
+      ['Bytes', result.bytes],
+      ['SHA-256', result.sha256]
+    ]));
+    const figure = document.createElement('figure');
+    figure.className = 'browser-screenshot';
+    const image = document.createElement('img');
+    image.src = result.dataUrl;
+    image.alt = 'Screenshot of ' + (result.url || 'current page');
+    figure.appendChild(image);
+    resultBody.appendChild(figure);
+  } else if (operation === 'wait') {
+    resultBody.appendChild(renderKeyValueList([
+      ['Requested', result.requestedMs + ' ms'],
+      ['Waited', result.waitedMs + ' ms' + (receipt.truncated ? ' (capped by target limit)' : '')]
+    ]));
+  }
+}
+
+function ledgerDetail(operation, data) {
+  const receipt = (data && data.receipt) || {};
+  const metadata = receipt.metadata || {};
+  if (operation === 'navigate') return 'HTTP ' + metadata.status + ' ' + (metadata.finalUrl || '');
+  if (operation === 'observe') return metadata.elementCount + ' element(s)';
+  if (operation === 'readPageText') return metadata.bytes + ' bytes';
+  if (operation === 'screenshot') return (metadata.artifactPath || '') + ' · sha256 ' + String(metadata.sha256 || '').slice(0, 12) + '…';
+  if (operation === 'wait') return 'waited ' + metadata.waitedMs + ' ms';
+  return '';
+}
+
+async function runOperation(operation, args = {}) {
+  const startedAt = Date.now();
+  try {
+    showError('');
+    const data = await browserRequest('/api/browser/operation', {
+      method: 'POST',
+      body: JSON.stringify({ operation, args })
+    });
+    browserSession = data.session;
+    renderSession();
+    renderResult(operation, data);
+    appendLedgerEntry(operation, 'ok', data.receipt.durationMs, ledgerDetail(operation, data));
+  } catch (error) {
+    showError(error.message);
+    appendLedgerEntry(operation, 'refused', Date.now() - startedAt, error.message);
+  }
+}
+
+if (openForm) {
+  targetSelect.addEventListener('change', renderTargetDetail);
+  openForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    try {
+      showError('');
+      const data = await browserRequest('/api/browser/session', {
+        method: 'POST',
+        body: JSON.stringify({ targetId: targetSelect.value })
+      });
+      browserSession = data.session;
+      navigateUrl.value = '';
+      renderSession();
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+}
+
+document.getElementById('session-close').addEventListener('click', async () => {
+  if (!window.confirm('Close this browser session?')) return;
+  try {
+    showError('');
+    await browserRequest('/api/browser/session', { method: 'DELETE' });
+    browserSession = null;
+    resultPanel.hidden = true;
+    renderSession();
+  } catch (error) {
+    showError(error.message);
+  }
+});
+
+navigateForm.addEventListener('submit', event => {
+  event.preventDefault();
+  runOperation('navigate', { url: navigateUrl.value.trim() });
+});
+
+waitForm.addEventListener('submit', event => {
+  event.preventDefault();
+  runOperation('wait', { forMs: Number(document.getElementById('wait-ms').value) });
+});
+
+sessionPanel.addEventListener('click', event => {
+  const button = event.target.closest('button[data-operation]');
+  if (button) runOperation(button.dataset.operation);
+});
+
+renderSession();
+</script>

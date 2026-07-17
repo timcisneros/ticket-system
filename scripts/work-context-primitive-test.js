@@ -202,11 +202,11 @@ async function main() {
     const ctx1Tickets = await request('GET', '/tickets?workContextId=1', { cookie });
     assert(ctx1Tickets.body.includes('legal ops blocked ticket') && !ctx1Tickets.body.includes('billing done ticket') && !ctx1Tickets.body.includes('legacy contextless ticket'), 'ticket list filters by workContextId');
 
-    // Triage filter: uncontexted critical triage NEVER hidden by default.
-    const allTriage = await request('GET', '/triage', { cookie });
-    assert(allTriage.body.includes('/tickets/51') && allTriage.body.includes('/tickets/53'), 'default triage shows both contexted and uncontexted items');
-    const ctx1Triage = await request('GET', '/triage?workContextId=1', { cookie });
-    assert(ctx1Triage.body.includes('/tickets/51') && !ctx1Triage.body.includes('/tickets/53'), 'triage filters by workContextId when explicitly requested');
+    // Inbox filter: uncontexted critical triage NEVER hidden by default.
+    const allTriage = await request('GET', '/inbox', { cookie });
+    assert(allTriage.body.includes('"ticketId":51,') && allTriage.body.includes('"ticketId":53,'), 'default inbox shows both contexted and uncontexted items');
+    const ctx1Triage = await request('GET', '/inbox?workContextId=1', { cookie });
+    assert(ctx1Triage.body.includes('"ticketId":51,') && !ctx1Triage.body.includes('"ticketId":53,'), 'inbox filters by workContextId when explicitly requested');
 
     // Template filter.
     const allTmpls = await request('GET', '/process-templates', { cookie });

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// Operator-facing triage inbox at /triage. Read-only visibility/navigation surface:
-// lists unresolved ticket-level and run-level triage, links to existing detail pages,
-// and mutates nothing.
+// Operator inbox at /inbox (replaces the read-only /triage page). Blockers and
+// deliverables arrive as message threads reconciled from ticket/run state:
+// unresolved triage → open blocker threads; completed tickets → deliverable
+// threads. GET requests reconcile threads but never mutate tickets or runs,
+// never resolve triage, and never create runs. /triage redirects to /inbox.
 
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -78,6 +80,7 @@ function run(id, ticketId, status, triage, workspaceRoot) {
     executionMode: 'agent', workflowId: null, workflowInput: null,
     capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
     executionPolicySnapshot: { requireVerification: 'when_declared' },
+    runtimeLimitsSnapshot: { maxExecutionSteps: 10, maxModelRequestsPerRun: 10, maxWorkspaceOperationsPerRun: 50, maxRuntimeDurationMs: 600000, source: null },
     currentPhase: 'terminalization', leaseOwner: null, leaseExpiresAt: null,
     currentStepId: null, currentWorkflowAction: null, lastHeartbeatAt: null,
     status, triage: triage || undefined, createdAt: T0, updatedAt: T0, startedAt: T0, completedAt: T0
@@ -150,13 +153,13 @@ async function populatedPhase() {
     seedCommon(dataDir);
     const writeJson = (f, v) => fs.writeFileSync(path.join(dataDir, f), JSON.stringify(v, null, 2));
     writeJson('tickets.json', [
-      ticket(1, 'blocked', { ...TICKET_TRIAGE }),         // unresolved ticket-level
-      ticket(2, 'failed', { ...TICKET_TRIAGE_RESOLVED }), // resolved → excluded
+      ticket(1, 'blocked', { ...TICKET_TRIAGE }),         // unresolved ticket-level → open thread
+      ticket(2, 'failed', { ...TICKET_TRIAGE_RESOLVED }), // resolved before any thread existed → no thread
       ticket(3, 'failed', null)                            // hosts run triage
     ]);
     writeJson('runs.json', [
-      run(30, 3, 'failed', { ...RUN_TRIAGE }, workspaceRoot),          // unresolved run-level
-      run(31, 3, 'failed', { ...RUN_TRIAGE_RESOLVED }, workspaceRoot)  // resolved → excluded
+      run(30, 3, 'failed', { ...RUN_TRIAGE }, workspaceRoot),          // unresolved run-level → open thread
+      run(31, 3, 'failed', { ...RUN_TRIAGE_RESOLVED }, workspaceRoot)  // resolved → no thread
     ]);
 
     server = startServer(dataDir, workspaceRoot, port);
@@ -166,54 +169,63 @@ async function populatedPhase() {
     const runsBefore = fs.readFileSync(path.join(dataDir, 'runs.json'), 'utf8');
     const runCountBefore = JSON.parse(runsBefore).length;
 
-    // 1: ticket:read user gets 200.
     const viewer = await login(baseUrl, 'viewer');
-    const page = await request(baseUrl, 'GET', '/triage', { cookie: viewer });
-    assert(page.statusCode === 200, 'ticket:read user should GET /triage 200, got ' + page.statusCode);
-    const body = page.body;
 
-    // 2 + 5 + 7: unresolved ticket-level listed truthfully with link.
-    assert(body.includes('href="/tickets/1"'), 'ticket-level row should link to /tickets/1');
-    assert(body.includes('<code>authority_blocked</code>'), 'ticket reasonCode should render');
-    assert(body.includes('<code>change_scope</code>'), 'ticket requiredDecision should render');
-    assert(body.includes('TICKET-UNRESOLVED-SUMMARY'), 'ticket summary should render');
-    assert(body.includes('review, edit_ticket'), 'ticket allowedActions should render joined');
-    assert(body.includes('start_run_without_scope_change'), 'ticket prohibitedActions should render');
-    assert(body.includes(T0), 'triage createdAt should render');
+    // Legacy path redirects to the inbox.
+    const legacy = await request(baseUrl, 'GET', '/triage', { cookie: viewer });
+    assert(legacy.statusCode === 302 && String(legacy.headers.location).startsWith('/inbox'), '/triage should redirect to /inbox, got ' + legacy.statusCode);
 
-    // 3 + 6 + 7: unresolved run-level listed truthfully with both links.
-    assert(body.includes('href="/runs/30"'), 'run-level row should link to /runs/30');
-    assert(body.includes('href="/tickets/3"'), 'run-level row should link to parent /tickets/3');
-    assert(body.includes('<code>verification_failed</code>'), 'run reasonCode should render');
-    assert(body.includes('RUN-UNRESOLVED-SUMMARY'), 'run summary should render');
-    assert(body.includes('review, rerun_from_start'), 'run allowedActions should render joined');
-    assert(body.includes('mark_completed_without_verification'), 'run prohibitedActions should render');
+    // 1: ticket:read user gets 200.
+    const page = await request(baseUrl, 'GET', '/inbox', { cookie: viewer });
+    assert(page.statusCode === 200, 'ticket:read user should GET /inbox 200, got ' + page.statusCode);
+    assert(page.body.includes('<h1>Inbox</h1>'), 'inbox page should render');
 
-    // 4: resolved triage is NOT listed.
-    assert(!body.includes('TICKET-RESOLVED-SHOULD-NOT-APPEAR'), 'resolved ticket triage must not be listed');
-    assert(!body.includes('RUN-RESOLVED-SHOULD-NOT-APPEAR'), 'resolved run triage must not be listed');
-    assert(!body.includes('href="/runs/31"'), 'resolved run must not be linked');
+    // 2 + 3: blocker threads reconciled from unresolved ticket + run triage.
+    const api = await request(baseUrl, 'GET', '/api/inbox/threads', { cookie: viewer });
+    assert(api.statusCode === 200, '/api/inbox/threads should be 200');
+    const threads = JSON.parse(api.body).threads;
+    const ticketThread = threads.find(t => t.ticketId === 1 && t.kind === 'blocker');
+    const runThread = threads.find(t => t.runId === 30 && t.kind === 'blocker');
+    assert(ticketThread && ticketThread.status === 'open', 'unresolved ticket triage should be an open blocker thread');
+    assert(runThread && runThread.status === 'open', 'unresolved run triage should be an open blocker thread');
+    assert(ticketThread.reasonCode === 'authority_blocked' && ticketThread.requiredDecision === 'change_scope', 'ticket thread carries triage facts');
+    assert(ticketThread.messages[0].author === 'system' && ticketThread.messages[0].body === 'TICKET-UNRESOLVED-SUMMARY', 'ticket blocker message is the recorded gate text, system-attributed');
+    assert(runThread.messages[0].body === 'RUN-UNRESOLVED-SUMMARY', 'run blocker message is the recorded failure text (no model output recorded)');
+    assert(runThread.allowedActions.join(', ') === 'review, rerun_from_start', 'run thread allowedActions preserved');
+    assert(runThread.prohibitedActions.includes('mark_completed_without_verification'), 'run thread prohibitedActions preserved');
 
-    // 13: nav link present for ticket:read user.
-    assert(body.includes('href="/triage"'), 'nav should include Triage link for ticket:read user');
+    // 4: triage resolved before any thread existed does not create threads.
+    assert(!threads.some(t => t.ticketId === 2), 'resolved ticket triage must not create a thread');
+    assert(!threads.some(t => t.runId === 31), 'resolved run triage must not create a thread');
+    assert(!api.body.includes('TICKET-RESOLVED-SHOULD-NOT-APPEAR') && !api.body.includes('RUN-RESOLVED-SHOULD-NOT-APPEAR'), 'resolved triage summaries must not appear');
 
-    // 8: user without ticket:read → 403, no triage content leaked.
+    // Nav: inbox link present for ticket:read user.
+    assert(page.body.includes('href="/inbox"'), 'nav should include Inbox link for ticket:read user');
+    assert(!page.body.includes('href="/triage"'), 'nav must not point at the removed /triage page');
+
+    // 8: user without ticket:read → 403, no content leaked.
     const noread = await login(baseUrl, 'noread');
-    const denied = await request(baseUrl, 'GET', '/triage', { cookie: noread });
+    const denied = await request(baseUrl, 'GET', '/inbox', { cookie: noread });
     assert(denied.statusCode === 403, 'user without ticket:read must get 403, got ' + denied.statusCode);
     assert(!denied.body.includes('authority_blocked') && !denied.body.includes('verification_failed'), '403 must not leak triage content');
+    const deniedApi = await request(baseUrl, 'GET', '/api/inbox/threads', { cookie: noread });
+    assert(deniedApi.statusCode === 403, 'thread API must gate on ticket:read');
 
-    // 14: nav link absent for users without ticket:read (checked on a page they can load).
+    // Nav link absent for users without ticket:read (checked on a page they can load).
     const adminPage = await request(baseUrl, 'GET', '/admin', { cookie: noread });
     assert(adminPage.statusCode === 200, 'noread (user:read) should load /admin, got ' + adminPage.statusCode);
-    assert(!adminPage.body.includes('href="/triage"'), 'nav Triage link must be hidden from users without ticket:read');
+    assert(!adminPage.body.includes('href="/inbox"'), 'nav Inbox link must be hidden from users without ticket:read');
 
-    // 9 + 10 + 11: GET /triage mutates nothing and creates no run.
-    assert(fs.readFileSync(path.join(dataDir, 'tickets.json'), 'utf8') === ticketsBefore, 'GET /triage must not mutate tickets.json');
-    assert(fs.readFileSync(path.join(dataDir, 'runs.json'), 'utf8') === runsBefore, 'GET /triage must not mutate runs.json');
-    assert(JSON.parse(fs.readFileSync(path.join(dataDir, 'runs.json'), 'utf8')).length === runCountBefore, 'GET /triage must not create a run');
+    // Viewers (no ticket:update) cannot reply or resolve.
+    const replyDenied = await request(baseUrl, 'POST', `/api/inbox/threads/${runThread.id}/reply`, { cookie: viewer, form: { body: 'x' } });
+    assert(replyDenied.statusCode === 403, 'reply must gate on ticket:update, got ' + replyDenied.statusCode);
 
-    console.log('PASS: triage inbox lists unresolved triage, links out, gates on ticket:read, and mutates nothing');
+    // 9 + 10 + 11: GET /inbox mutates no tickets/runs and creates no run.
+    assert(fs.readFileSync(path.join(dataDir, 'tickets.json'), 'utf8') === ticketsBefore, 'GET /inbox must not mutate tickets.json');
+    assert(fs.readFileSync(path.join(dataDir, 'runs.json'), 'utf8') === runsBefore, 'GET /inbox must not mutate runs.json');
+    assert(JSON.parse(fs.readFileSync(path.join(dataDir, 'runs.json'), 'utf8')).length === runCountBefore, 'GET /inbox must not create a run');
+
+    console.log('PASS: inbox lists blocker threads from unresolved triage, gates on ticket:read, and mutates no tickets/runs');
   } finally {
     await stop(server);
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -229,7 +241,7 @@ async function emptyPhase() {
   try {
     seedCommon(dataDir);
     const writeJson = (f, v) => fs.writeFileSync(path.join(dataDir, f), JSON.stringify(v, null, 2));
-    // No required triage anywhere: one resolved-triage ticket, one no-triage ticket, one resolved run.
+    // No unresolved triage: one resolved-triage ticket, one completed ticket, one resolved completed run.
     writeJson('tickets.json', [ticket(1, 'failed', { ...TICKET_TRIAGE_RESOLVED }), ticket(2, 'completed', null)]);
     writeJson('runs.json', [run(20, 2, 'completed', { ...RUN_TRIAGE_RESOLVED }, workspaceRoot)]);
 
@@ -237,13 +249,18 @@ async function emptyPhase() {
     await waitForReady(baseUrl, server);
     const admin = await login(baseUrl, 'admin');
 
-    // 12: empty state renders.
-    const page = await request(baseUrl, 'GET', '/triage', { cookie: admin });
-    assert(page.statusCode === 200, 'empty /triage should be 200');
-    assert(page.body.includes('No unresolved triage.'), 'empty state message should render');
-    assert(!page.body.includes('TICKET-RESOLVED-SHOULD-NOT-APPEAR') && !page.body.includes('RUN-RESOLVED-SHOULD-NOT-APPEAR'), 'resolved triage must not appear in empty inbox');
+    const api = await request(baseUrl, 'GET', '/api/inbox/threads', { cookie: admin });
+    const threads = JSON.parse(api.body).threads;
+    assert(!threads.some(t => t.kind === 'blocker'), 'no blocker threads without unresolved triage');
+    // Completed ticket produces a deliverable thread (the finishing point for outputs).
+    const deliverable = threads.find(t => t.kind === 'deliverable' && t.ticketId === 2);
+    assert(deliverable && deliverable.status === 'open' && deliverable.runId === 20, 'completed ticket should surface a deliverable thread');
+    assert(!api.body.includes('TICKET-RESOLVED-SHOULD-NOT-APPEAR') && !api.body.includes('RUN-RESOLVED-SHOULD-NOT-APPEAR'), 'resolved triage must not appear');
 
-    console.log('PASS: triage inbox renders empty state when no unresolved triage');
+    const page = await request(baseUrl, 'GET', '/inbox', { cookie: admin });
+    assert(page.statusCode === 200, 'inbox should render with only deliverables, got ' + page.statusCode);
+
+    console.log('PASS: inbox with no unresolved triage shows only deliverable threads');
   } finally {
     await stop(server);
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -254,7 +271,7 @@ async function emptyPhase() {
 async function main() {
   await populatedPhase();
   await emptyPhase();
-  console.log('PASS: operator triage inbox');
+  console.log('PASS: operator inbox');
 }
 
 main().catch(error => { console.error(error.stack || error.message); process.exit(1); });

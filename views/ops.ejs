@@ -13,7 +13,7 @@
     <p class="text-muted">No warning flags.</p>
   <% } else { %>
     <ul class="item-list">
-      <% if (w.unresolvedTriageExists) { %><li>Unresolved triage exists — <a href="/triage">/triage</a></li><% } %>
+      <% if (w.unresolvedTriageExists) { %><li>Unresolved triage exists — <a href="/inbox">/inbox</a></li><% } %>
       <% if (w.blockedTicketsExist) { %><li>Blocked tickets exist — <a href="/tickets">/tickets</a></li><% } %>
       <% if (w.failedRunsExist) { %><li>Failed runs exist</li><% } %>
       <% if (w.connectorReadRefusalsExist) { %><li>Connector read refusals recorded — <a href="/connectors">/connectors</a></li><% } %>
@@ -52,7 +52,7 @@
     <tbody>
       <tr><th>Tickets</th><td>total <%= summary.tickets.total %> · open <%= summary.tickets.open %> · blocked <%= summary.tickets.blocked %> · completed <%= summary.tickets.completed %> · failed <%= summary.tickets.failed %></td></tr>
       <tr><th>Runs</th><td>total <%= summary.runs.total %> · running/pending <%= summary.runs.running %> · completed <%= summary.runs.completed %> · failed <%= summary.runs.failed %> · interrupted <%= summary.runs.interrupted %></td></tr>
-      <tr><th>Unresolved triage</th><td>tickets <%= summary.triage.unresolvedTicketCount %> · runs <%= summary.triage.unresolvedRunCount %> — <a href="/triage">/triage</a></td></tr>
+      <tr><th>Unresolved triage</th><td>tickets <%= summary.triage.unresolvedTicketCount %> · runs <%= summary.triage.unresolvedRunCount %> — <a href="/inbox">/inbox</a></td></tr>
       <tr><th>Work Contexts</th><td>active <%= summary.workContexts.active %> · archived <%= summary.workContexts.archived %> — <a href="/work-contexts">/work-contexts</a></td></tr>
       <tr><th>Watchers</th><td>active <%= summary.watchers.active %> · paused <%= summary.watchers.paused %> · archived <%= summary.watchers.archived %> — <a href="/watchers">/watchers</a></td></tr>
       <tr><th>Connectors</th><td>active <%= summary.connectors.active %> · paused <%= summary.connectors.paused %> · archived <%= summary.connectors.archived %> — <a href="/connectors">/connectors</a></td></tr>

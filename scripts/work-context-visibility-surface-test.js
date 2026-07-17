@@ -173,10 +173,10 @@ async function main() {
     // ---- Existing filters still work. ----
     const ft = await request('GET', '/tickets?workContextId=1', { cookie });
     assert(ft.body.includes('legal ops blocked ticket') && !ft.body.includes('billing done ticket') && !ft.body.includes('contextless done ticket'), '/tickets?workContextId filters');
-    const fr = await request('GET', '/triage?workContextId=1', { cookie });
-    assert(fr.body.includes('/tickets/51') && !fr.body.includes('/tickets/54'), '/triage?workContextId filters (uncontexted excluded only when filtered)');
-    const allTriage = await request('GET', '/triage', { cookie });
-    assert(allTriage.body.includes('/tickets/51') && allTriage.body.includes('/tickets/54'), 'unfiltered triage still shows uncontexted items');
+    const fr = await request('GET', '/inbox?workContextId=1', { cookie });
+    assert(fr.body.includes('"ticketId":51,') && !fr.body.includes('"ticketId":54,'), '/inbox?workContextId filters (uncontexted excluded only when filtered)');
+    const allTriage = await request('GET', '/inbox', { cookie });
+    assert(allTriage.body.includes('"ticketId":51,') && allTriage.body.includes('"ticketId":54,'), 'unfiltered inbox still shows uncontexted items');
     const fp = await request('GET', '/process-templates?workContextId=1', { cookie });
     assert(fp.body.includes('Legal template') && !fp.body.includes('Unscoped template'), '/process-templates?workContextId filters');
 

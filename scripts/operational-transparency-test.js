@@ -167,7 +167,7 @@ async function main() {
     assert(ws() === wsBefore, 'ops reads mutate no workspace');
     assert(dataFiles() === filesBefore, 'no new ops summary file created');
     const page = await request('GET', '/ops', { cookie: admin });
-    assert(page.statusCode === 200 && /Operational Transparency/.test(page.body) && page.body.includes('/triage') && page.body.includes('/connectors'), '/ops page renders with links');
+    assert(page.statusCode === 200 && /Operational Transparency/.test(page.body) && page.body.includes('/inbox') && page.body.includes('/connectors'), '/ops page renders with links');
     assert(page.body.includes('Event append admission') && page.body.includes('2048') && page.body.includes('do not cap or report total events.jsonl growth'), '/ops page distinguishes append admission from total journal growth');
 
     console.log('PASS: operational transparency — read-only derived summary; correct counts/warnings, bounded deterministic lists, no writes, no new ledger');

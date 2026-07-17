@@ -98,6 +98,7 @@ const CONNECTORS_FILE = path.join(DATA_DIR, 'connectors.json');
 const CONNECTOR_RECEIPTS_FILE = path.join(DATA_DIR, 'connector-receipts.json');
 const LOCAL_CONNECTOR_OBJECTS_FILE = path.join(DATA_DIR, 'local-connector-objects.json');
 const BROWSER_TARGETS_FILE = path.join(DATA_DIR, 'browser-targets.json');
+const MESSAGE_THREADS_FILE = path.join(DATA_DIR, 'message-threads.json');
 const WORK_TYPES_FILE = path.join(DATA_DIR, 'work-types.json');
 // Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
 // separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
@@ -160,6 +161,8 @@ const BUILTIN_PERMISSIONS = Object.freeze([
   'workspace:write',
   'workspace:reset',
   'workspace.delete.cross_ticket_artifact',
+  'browser:read',
+  'browser:operate',
   'processTemplate:manage',
   'workContext:manage',
   'watcher:manage',
@@ -233,7 +236,8 @@ function seedOperationalDataDir() {
     'model-routing-policies.json',
     'connectors.json',
     'connector-receipts.json',
-    'local-connector-objects.json'
+    'local-connector-objects.json',
+    'message-threads.json'
   ].forEach(fileName => writeMissingFile(fileName, '[]'));
 
   writeMissingFile('events.jsonl', '');
@@ -1693,6 +1697,14 @@ const SESSION_COOKIE_SECURE = Boolean(PUBLIC_ORIGIN && new URL(PUBLIC_ORIGIN).pr
 function requestOriginAllowed(request) {
   const origin = String(request.headers.origin || '').trim();
   if (!origin) return true;
+  // Browsers under a no-referrer policy (privacy extensions, older configs)
+  // serialize Origin as the literal string "null" even for same-origin form
+  // POSTs. Sec-Fetch-Site is browser-controlled (a forbidden header that
+  // attacker pages cannot set), so "same-origin" is a trustworthy vouch;
+  // cross-site posts carry "cross-site" and stay rejected.
+  if (origin === 'null') {
+    return String(request.headers['sec-fetch-site'] || '').trim() === 'same-origin';
+  }
   let parsed;
   try {
     parsed = new URL(origin);
@@ -1793,7 +1805,12 @@ fastify.register(require('@fastify/view'), {
 
 fastify.addHook('onSend', async (request, reply, payload) => {
   reply.header('Content-Security-Policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'");
-  reply.header('Referrer-Policy', 'no-referrer');
+  // same-origin (not no-referrer): still sends no referrer cross-origin, but
+  // keeps same-origin requests carrying a real Origin header — under
+  // no-referrer, Chromium serializes Origin as "null" on same-origin form
+  // POSTs, which the CSRF origin gate would reject, locking operators out of
+  // /login.
+  reply.header('Referrer-Policy', 'same-origin');
   reply.header('X-Content-Type-Options', 'nosniff');
   reply.header('X-Frame-Options', 'DENY');
   reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
@@ -22406,6 +22423,287 @@ fastify.post('/api/tickets/:id/execution-policy/max-attempts', { preHandler: fas
   return { ticket, maxAttempts: nextValue };
 });
 
+// ==================== OPERATOR INBOX (MESSAGING) ====================
+// The inbox is the single finishing point for work that needs a human: when a
+// run or ticket cannot complete (triage), the agent's blocker lands here as a
+// message thread; when a ticket completes, its deliverable summary lands here
+// for acknowledgement. Threads are derived from authoritative ticket/run state
+// by an idempotent reconciler, so every triage-creation path (feasibility,
+// ambiguity, routing, run failure) produces a message without bespoke hooks.
+// Operator responses live in the thread; resolving a blocker thread performs
+// the same triage annotation the old per-page resolve forms did.
+
+function readMessageThreads() {
+  return readJsonArrayCached(MESSAGE_THREADS_FILE);
+}
+
+function writeMessageThreads(threads) {
+  writeFileAtomic(MESSAGE_THREADS_FILE, JSON.stringify(Array.isArray(threads) ? threads : [], null, 2));
+}
+
+function inboxSubjectText(text, max = 80) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function inboxAgentName(agentId) {
+  if (agentId == null) return 'System';
+  const agent = readAgents().find(item => item.id === agentId);
+  return agent ? agent.name : `Agent #${agentId}`;
+}
+
+function appendInboxMessage(thread, { author, authorName, body, kind, createdAt = new Date().toISOString() }) {
+  const message = {
+    id: thread.messages.reduce((max, item) => Math.max(max, item.id || 0), 0) + 1,
+    author,
+    authorName,
+    kind,
+    body: sanitizeLogMessage(body),
+    createdAt
+  };
+  thread.messages.push(message);
+  thread.updatedAt = createdAt;
+  return message;
+}
+
+// Message bodies are never invented: an agent-authored message is the model's
+// own recorded terminal output, verbatim. When no model output exists (pre-run
+// gates, runtime crashes before a response), the thread instead carries a
+// system-attributed message whose body is the recorded gate/failure text.
+// Structured triage facts (reason, required decision, allowed/prohibited
+// actions, evidence) live on the thread record for the UI to render — they are
+// not serialized into message prose.
+
+// Factual, system-attributed summary of a completed run's recorded consequence.
+// Used only when the model left no terminal report message of its own.
+function summarizeDeliverableConsequence(run) {
+  const consequence = run && run.runConsequence ? run.runConsequence : null;
+  if (!consequence) {
+    return `Run #${run ? run.id : '?'} completed. No terminal report message and no recorded consequence summary are available.`;
+  }
+  const lines = [`Run #${run.id} completed without a terminal report message. Recorded consequence:`];
+  const describe = items => items.map(item => item.nextPath ? `${item.path} → ${item.nextPath}` : item.path).filter(Boolean).slice(0, 10).join(', ');
+  if (Array.isArray(consequence.created) && consequence.created.length > 0) lines.push(`Created (${consequence.created.length}): ${describe(consequence.created)}`);
+  if (Array.isArray(consequence.updated) && consequence.updated.length > 0) lines.push(`Updated (${consequence.updated.length}): ${describe(consequence.updated)}`);
+  if (Array.isArray(consequence.renamed) && consequence.renamed.length > 0) lines.push(`Renamed (${consequence.renamed.length}): ${describe(consequence.renamed)}`);
+  if (Array.isArray(consequence.deleted) && consequence.deleted.length > 0) lines.push(`Deleted (${consequence.deleted.length}): ${describe(consequence.deleted)}`);
+  if (Array.isArray(consequence.mutations) && consequence.mutations.length === 0) lines.push('No workspace mutations were recorded.');
+  if (consequence.verification) {
+    lines.push(`Verification: postconditions ${consequence.verification.postconditionsStatus}, violations ${consequence.verification.violationsStatus}`);
+  }
+  return lines.join('\n');
+}
+
+function createInboxThread(threads, fields) {
+  const now = new Date().toISOString();
+  const thread = {
+    id: nextId(threads),
+    key: fields.key,
+    kind: fields.kind,
+    ticketId: fields.ticketId,
+    runId: fields.runId || null,
+    workContextId: fields.workContextId != null ? fields.workContextId : null,
+    subject: fields.subject,
+    status: 'open',
+    reasonCode: fields.reasonCode || null,
+    requiredDecision: fields.requiredDecision || null,
+    summary: fields.summary || null,
+    allowedActions: Array.isArray(fields.allowedActions) ? fields.allowedActions : [],
+    prohibitedActions: Array.isArray(fields.prohibitedActions) ? fields.prohibitedActions : [],
+    evidenceRefs: Array.isArray(fields.evidenceRefs) ? fields.evidenceRefs : [],
+    createdAt: fields.createdAt || now,
+    updatedAt: fields.createdAt || now,
+    closedAt: null,
+    closedBy: null,
+    messages: []
+  };
+  threads.push(thread);
+  return thread;
+}
+
+function closeInboxThread(thread, closedBy, closedAt = new Date().toISOString()) {
+  thread.status = 'closed';
+  thread.closedAt = closedAt;
+  thread.closedBy = closedBy;
+  thread.updatedAt = closedAt;
+}
+
+// Extracts the model's own terminal message for a stored run (hydrating the
+// replay snapshot), so inbox messages lead with what the agent actually said
+// instead of only structured failure metadata.
+async function inboxRunModelMessage(run) {
+  try {
+    const hydrated = await hydrateRunReplaySnapshot(run);
+    const planMessage = getRunLatestParsedPlanMessage(hydrated);
+    if (planMessage) return planMessage;
+    const snapshot = hydrated && hydrated.replaySnapshot ? hydrated.replaySnapshot : null;
+    if (snapshot && typeof snapshot.browserReportMessage === 'string' && snapshot.browserReportMessage.trim()) {
+      return sanitizeLogMessage(snapshot.browserReportMessage.trim());
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Idempotent: derives missing threads/messages from ticket + run triage state and
+// completed-ticket deliverables. Never mutates tickets or runs. Safe to run on
+// every inbox read; only writes when something changed.
+async function reconcileInboxThreads() {
+  const threads = readMessageThreads();
+  const byKey = new Map(threads.map(thread => [thread.key, thread]));
+  const tickets = readTickets();
+  const ticketById = new Map(tickets.map(ticket => [ticket.id, ticket]));
+  let changed = false;
+
+  function ensureTriageThread({ key, kind, ticketId, runId, subject, triage, agentName = null, modelMessage = null }) {
+    let thread = byKey.get(key);
+    if (!thread && triage.required === true) {
+      const ticket = ticketById.get(ticketId) || null;
+      thread = createInboxThread(threads, {
+        key,
+        kind,
+        ticketId,
+        runId,
+        workContextId: ticket ? ticket.workContextId : null,
+        subject,
+        reasonCode: triage.reasonCode,
+        requiredDecision: triage.requiredDecision,
+        summary: triage.summary,
+        allowedActions: triage.allowedActions,
+        prohibitedActions: triage.prohibitedActions,
+        evidenceRefs: triage.evidenceRefs,
+        createdAt: triage.createdAt || new Date().toISOString()
+      });
+      byKey.set(key, thread);
+      if (modelMessage) {
+        // The model's own recorded terminal message, verbatim.
+        appendInboxMessage(thread, {
+          author: 'agent',
+          authorName: agentName || 'Agent',
+          kind: 'report',
+          body: modelMessage,
+          createdAt: triage.createdAt || thread.createdAt
+        });
+      } else {
+        // No model output exists for this blocker (pre-run gate or a failure
+        // before any model response) — attribute the recorded reason to the
+        // system rather than inventing an agent message.
+        appendInboxMessage(thread, {
+          author: 'system',
+          authorName: 'System',
+          kind: 'report',
+          body: triage.summary || 'No failure summary was recorded.',
+          createdAt: triage.createdAt || thread.createdAt
+        });
+      }
+      changed = true;
+    }
+    // Triage resolved outside the inbox (legacy API, scripts): mirror the
+    // resolution into the thread so both surfaces agree.
+    if (thread && thread.status === 'open' && triage.resolvedAt && !thread.messages.some(message => message.kind === 'resolution')) {
+      appendInboxMessage(thread, {
+        author: 'operator',
+        authorName: triage.resolvedBy || 'operator',
+        kind: 'resolution',
+        body: triage.resolution || 'Resolved.',
+        createdAt: triage.resolvedAt
+      });
+      closeInboxThread(thread, triage.resolvedBy || 'operator', triage.resolvedAt);
+      changed = true;
+    }
+  }
+
+  tickets.forEach(ticket => {
+    if (!ticket.triage || !ticket.triage.createdAt) return;
+    ensureTriageThread({
+      key: `ticket:${ticket.id}:triage:${ticket.triage.createdAt}`,
+      kind: 'blocker',
+      ticketId: ticket.id,
+      runId: null,
+      subject: `Ticket #${ticket.id} blocked: ${inboxSubjectText(ticket.objective, 60)}`,
+      triage: ticket.triage
+    });
+  });
+
+  const runs = readRuns();
+  for (const run of runs) {
+    if (!run.triage || !run.triage.createdAt) continue;
+    const key = `run:${run.id}:triage:${run.triage.createdAt}`;
+    const needsThread = !byKey.has(key) && run.triage.required === true;
+    const ticket = ticketById.get(run.ticketId) || null;
+    ensureTriageThread({
+      key,
+      kind: 'blocker',
+      ticketId: run.ticketId,
+      runId: run.id,
+      subject: `Run #${run.id} ${run.status === 'interrupted' ? 'interrupted' : 'blocked'}: ${inboxSubjectText(ticket ? ticket.objective : run.triage.summary, 60)}`,
+      triage: run.triage,
+      agentName: inboxAgentName(run.agentId),
+      modelMessage: needsThread ? await inboxRunModelMessage(run) : null
+    });
+  }
+
+  for (const ticket of tickets) {
+    if (ticket.status !== 'completed') continue;
+    const finalRun = runs
+      .filter(run => run.ticketId === ticket.id && run.status === 'completed')
+      .reduce((latest, run) => (!latest || (run.id > latest.id) ? run : latest), null);
+    const key = finalRun ? `ticket:${ticket.id}:deliverable:run:${finalRun.id}` : `ticket:${ticket.id}:deliverable:manual`;
+    if (byKey.has(key)) continue;
+    const createdAt = (finalRun && finalRun.updatedAt) || ticket.updatedAt || new Date().toISOString();
+    const thread = createInboxThread(threads, {
+      key,
+      kind: 'deliverable',
+      ticketId: ticket.id,
+      runId: finalRun ? finalRun.id : null,
+      workContextId: ticket.workContextId,
+      subject: `Deliverable: ${inboxSubjectText(ticket.objective, 64)}`,
+      createdAt
+    });
+    byKey.set(key, thread);
+    const modelMessage = finalRun ? await inboxRunModelMessage(finalRun) : null;
+    if (modelMessage) {
+      appendInboxMessage(thread, {
+        author: 'agent',
+        authorName: inboxAgentName(finalRun.agentId),
+        kind: 'report',
+        body: modelMessage,
+        createdAt
+      });
+    } else {
+      appendInboxMessage(thread, {
+        author: 'system',
+        authorName: 'System',
+        kind: 'report',
+        body: summarizeDeliverableConsequence(finalRun),
+        createdAt
+      });
+    }
+    changed = true;
+  }
+
+  if (changed) writeMessageThreads(threads);
+  return threads;
+}
+
+function syncInboxThreadResolution(ownerKind, ownerId, triage, resolvedBy) {
+  const threads = readMessageThreads();
+  const key = `${ownerKind}:${ownerId}:triage:${triage.createdAt}`;
+  const thread = threads.find(item => item.key === key);
+  if (!thread || thread.status !== 'open') return null;
+  appendInboxMessage(thread, {
+    author: 'operator',
+    authorName: resolvedBy,
+    kind: 'resolution',
+    body: triage.resolution || 'Resolved.',
+    createdAt: triage.resolvedAt
+  });
+  closeInboxThread(thread, resolvedBy, triage.resolvedAt);
+  writeMessageThreads(threads);
+  return thread;
+}
+
 // Human triage resolution: an operator annotation that marks an existing REQUIRED
 // triage record as resolved/acknowledged. This NEVER reruns, completes, fails,
 // retries, or modifies workspace/run state — it only flips triage.required to false
@@ -22422,6 +22720,53 @@ function resolveTriageRecord(triage, resolvedBy, resolution) {
     resolution
   };
 }
+
+function applyTicketTriageResolution(ticketId, resolvedBy, resolution) {
+  const tickets = readTickets();
+  const ticket = tickets.find(item => item.id === ticketId);
+  if (!ticket) return { error: 'Ticket not found', code: 404 };
+  if (!ticket.triage || ticket.triage.required !== true) {
+    return { error: 'No required ticket-level triage to resolve', code: 409 };
+  }
+
+  ticket.triage = resolveTriageRecord(ticket.triage, resolvedBy, resolution);
+  ticket.updatedAt = new Date().toISOString();
+  writeTickets(tickets);
+  broadcastTicketChange();
+  appendSystemLog('ticket:triage_resolve', `Ticket #${ticketId} ticket-level triage resolved by ${resolvedBy}`, null, {
+    ticketId,
+    changedBy: resolvedBy,
+    changedAt: ticket.updatedAt,
+    reasonCode: ticket.triage.reasonCode,
+    resolution
+  });
+  syncInboxThreadResolution('ticket', ticketId, ticket.triage, resolvedBy);
+  return { ticket, triage: ticket.triage };
+}
+
+function applyRunTriageResolution(runId, resolvedBy, resolution) {
+  const runs = readRuns();
+  const run = runs.find(item => item.id === runId);
+  if (!run) return { error: 'Run not found', code: 404 };
+  if (!run.triage || run.triage.required !== true) {
+    return { error: 'No required run-level triage to resolve', code: 409 };
+  }
+
+  run.triage = resolveTriageRecord(run.triage, resolvedBy, resolution);
+  run.updatedAt = new Date().toISOString();
+  writeRuns(runs);
+  appendSystemLog('run:triage_resolve', `Run #${runId} triage resolved by ${resolvedBy}`, null, {
+    runId,
+    ticketId: run.ticketId,
+    changedBy: resolvedBy,
+    changedAt: run.updatedAt,
+    reasonCode: run.triage.reasonCode,
+    resolution
+  });
+  syncInboxThreadResolution('run', runId, run.triage, resolvedBy);
+  return { run: { id: run.id, ticketId: run.ticketId, status: run.status, triage: run.triage }, triage: run.triage };
+}
+
 function readTriageResolutionInput(request) {
   const raw = request.body ? request.body.resolution : undefined;
   if (typeof raw !== 'string' || !raw.trim()) {
@@ -22448,31 +22793,13 @@ fastify.post('/api/tickets/:id/triage/resolve', { preHandler: fastify.requireAut
     return { error: parsed.error };
   }
 
-  const tickets = readTickets();
-  const ticket = tickets.find(item => item.id === ticketId);
-  if (!ticket) {
-    reply.code(404);
-    return { error: 'Ticket not found' };
-  }
-  if (!ticket.triage || ticket.triage.required !== true) {
-    reply.code(409);
-    return { error: 'No required ticket-level triage to resolve' };
-  }
-
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  ticket.triage = resolveTriageRecord(ticket.triage, changedBy, parsed.resolution);
-  ticket.updatedAt = new Date().toISOString();
-  writeTickets(tickets);
-  broadcastTicketChange();
-  appendSystemLog('ticket:triage_resolve', `Ticket #${ticketId} ticket-level triage resolved by ${changedBy}`, null, {
-    ticketId,
-    changedBy,
-    changedAt: ticket.updatedAt,
-    reasonCode: ticket.triage.reasonCode,
-    resolution: parsed.resolution
-  });
-
-  return { ticket, triage: ticket.triage };
+  const result = applyTicketTriageResolution(ticketId, changedBy, parsed.resolution);
+  if (result.error) {
+    reply.code(result.code);
+    return { error: result.error };
+  }
+  return { ticket: result.ticket, triage: result.triage };
 });
 
 fastify.post('/api/runs/:id/triage/resolve', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -22493,31 +22820,13 @@ fastify.post('/api/runs/:id/triage/resolve', { preHandler: fastify.requireAuth }
     return { error: parsed.error };
   }
 
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
-  if (!run) {
-    reply.code(404);
-    return { error: 'Run not found' };
-  }
-  if (!run.triage || run.triage.required !== true) {
-    reply.code(409);
-    return { error: 'No required run-level triage to resolve' };
-  }
-
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  run.triage = resolveTriageRecord(run.triage, changedBy, parsed.resolution);
-  run.updatedAt = new Date().toISOString();
-  writeRuns(runs);
-  appendSystemLog('run:triage_resolve', `Run #${runId} triage resolved by ${changedBy}`, null, {
-    runId,
-    ticketId: run.ticketId,
-    changedBy,
-    changedAt: run.updatedAt,
-    reasonCode: run.triage.reasonCode,
-    resolution: parsed.resolution
-  });
-
-  return { run: { id: run.id, ticketId: run.ticketId, status: run.status, triage: run.triage }, triage: run.triage };
+  const result = applyRunTriageResolution(runId, changedBy, parsed.resolution);
+  if (result.error) {
+    reply.code(result.code);
+    return { error: result.error };
+  }
+  return { run: result.run, triage: result.triage };
 });
 
 // ==================== RECOVERY ROUTES ====================
@@ -22705,12 +23014,22 @@ fastify.get('/logs', { preHandler: fastify.requireAuth }, async (request, reply)
   }, request.session.userId));
 });
 
-// Read-only operator triage inbox. Lists unresolved ticket-level and run-level
-// triage so an operator can see what needs attention and navigate to the existing
-// ticket/run detail pages (where the existing resolve controls already live). This
-// page only reads JSON state — it never resolves, reruns, creates runs, or mutates
-// any ticket/run.
-fastify.get('/triage', { preHandler: fastify.requireAuth }, async (request, reply) => {
+// ==================== INBOX ROUTES ====================
+// The inbox replaced the read-only /triage page: it is the messaging surface
+// where blocked/failed work and completed deliverables arrive as threads and
+// where the operator responds (the only place triage is resolved).
+
+function filterInboxThreads(threads, query = {}) {
+  const wcFilter = query.workContextId !== undefined && query.workContextId !== '' ? parseInt(query.workContextId, 10) : null;
+  if (wcFilter === null || Number.isNaN(wcFilter)) return threads;
+  return threads.filter(thread => thread.workContextId === wcFilter);
+}
+
+function sortInboxThreads(threads) {
+  return threads.slice().sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+
+fastify.get('/inbox', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
     return reply.view('error.ejs', viewData({
@@ -22719,45 +23038,140 @@ fastify.get('/triage', { preHandler: fastify.requireAuth }, async (request, repl
     }, request.session.userId));
   }
 
-  const tickets = readTickets();
-  const ticketById = new Map(tickets.map(ticket => [ticket.id, ticket]));
-
-  // Optional Work Context filter (r1.20). It is OFF by default — uncontexted/critical triage is
-  // never hidden unless the operator explicitly filters by a context.
-  const wcFilter = request.query && request.query.workContextId !== undefined && request.query.workContextId !== '' ? parseInt(request.query.workContextId, 10) : null;
-  const inContext = ticket => wcFilter === null || (ticket && ticket.workContextId === wcFilter);
-
-  const ticketTriageItems = tickets
-    .filter(ticket => ticket.triage && ticket.triage.required === true && inContext(ticket))
-    .map(ticket => ({
-      ticketId: ticket.id,
-      objective: ticket.objective,
-      ticketStatus: ticket.status,
-      triage: ticket.triage
-    }));
-
-  const runTriageItems = readRuns()
-    .filter(run => run.triage && run.triage.required === true)
-    .map(run => {
-      const ticket = ticketById.get(run.ticketId) || null;
-      return {
-        runId: run.id,
-        runStatus: run.status,
-        ticketId: run.ticketId,
-        ticketObjective: ticket ? ticket.objective : null,
-        ticketStatus: ticket ? ticket.status : null,
-        triage: run.triage,
-        _ticket: ticket
-      };
-    })
-    .filter(item => inContext(item._ticket))
-    .map(({ _ticket, ...item }) => item);
-
-  return renderCachedView(request, reply, 'triage.ejs', viewData({
+  const threads = sortInboxThreads(filterInboxThreads(await reconcileInboxThreads(), request.query || {}));
+  return reply.view('inbox.ejs', viewData({
     user: request.user,
-    ticketTriageItems,
-    runTriageItems
+    inboxThreads: threads,
+    selectedThreadId: request.query && request.query.thread ? parseInt(request.query.thread, 10) || null : null,
+    selectedTicketId: request.query && request.query.ticket ? parseInt(request.query.ticket, 10) || null : null,
+    canRespond: hasPermission(request.session.userId, 'ticket:update')
   }, request.session.userId));
+});
+
+// Legacy path: the triage inbox is now the messaging inbox.
+fastify.get('/triage', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  const suffix = request.query && request.query.workContextId ? `?workContextId=${encodeURIComponent(request.query.workContextId)}` : '';
+  return reply.redirect(`/inbox${suffix}`);
+});
+
+fastify.get('/api/inbox/threads', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  return { threads: sortInboxThreads(filterInboxThreads(await reconcileInboxThreads(), request.query || {})) };
+});
+
+function readInboxReplyInput(request) {
+  const raw = request.body ? request.body.body : undefined;
+  if (typeof raw !== 'string' || !raw.trim()) return { error: 'A non-empty message body is required' };
+  return { body: raw.trim() };
+}
+
+function findInboxThread(request, reply) {
+  const threadId = parseInt(request.params.id, 10);
+  if (Number.isNaN(threadId)) {
+    reply.code(400);
+    return { error: { error: 'Invalid thread id' } };
+  }
+  const threads = readMessageThreads();
+  const thread = threads.find(item => item.id === threadId);
+  if (!thread) {
+    reply.code(404);
+    return { error: { error: 'Thread not found' } };
+  }
+  return { threads, thread };
+}
+
+// Reply without resolving: appends an operator message to the thread record.
+fastify.post('/api/inbox/threads/:id/reply', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:update')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const parsed = readInboxReplyInput(request);
+  if (parsed.error) {
+    reply.code(400);
+    return { error: parsed.error };
+  }
+
+  const found = findInboxThread(request, reply);
+  if (found.error) return found.error;
+  const { threads, thread } = found;
+
+  const author = request.user ? request.user.username : String(request.session.userId);
+  const message = appendInboxMessage(thread, {
+    author: 'operator',
+    authorName: author,
+    kind: 'reply',
+    body: parsed.body
+  });
+  writeMessageThreads(threads);
+  appendSystemLog('inbox:reply', `Inbox reply on thread #${thread.id} by ${author}`, null, {
+    threadId: thread.id,
+    ticketId: thread.ticketId,
+    contextRunId: thread.runId,
+    changedBy: author
+  });
+  return { thread, message };
+});
+
+// Resolve a thread: for blocker threads this performs the triage resolution
+// (the operator's reply body is the resolution note) and unblocks rerun gates;
+// for deliverable threads it acknowledges receipt and closes the thread.
+fastify.post('/api/inbox/threads/:id/resolve', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:update')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const parsed = readInboxReplyInput(request);
+  if (parsed.error) {
+    reply.code(400);
+    return { error: parsed.error };
+  }
+
+  const found = findInboxThread(request, reply);
+  if (found.error) return found.error;
+  const { threads, thread } = found;
+
+  if (thread.status !== 'open') {
+    reply.code(409);
+    return { error: 'Thread is already closed' };
+  }
+
+  const author = request.user ? request.user.username : String(request.session.userId);
+
+  if (thread.kind === 'blocker') {
+    // applyTicketTriageResolution/applyRunTriageResolution append the
+    // resolution message and close the thread via syncInboxThreadResolution.
+    const result = thread.runId
+      ? applyRunTriageResolution(thread.runId, author, parsed.body)
+      : applyTicketTriageResolution(thread.ticketId, author, parsed.body);
+    if (result.error) {
+      reply.code(result.code);
+      return { error: result.error };
+    }
+    const updated = readMessageThreads().find(item => item.id === thread.id);
+    return { thread: updated || thread, triage: result.triage };
+  }
+
+  appendInboxMessage(thread, {
+    author: 'operator',
+    authorName: author,
+    kind: 'acknowledgement',
+    body: parsed.body
+  });
+  closeInboxThread(thread, author);
+  writeMessageThreads(threads);
+  appendSystemLog('inbox:deliverable_acknowledged', `Deliverable thread #${thread.id} acknowledged by ${author}`, null, {
+    threadId: thread.id,
+    ticketId: thread.ticketId,
+    contextRunId: thread.runId,
+    changedBy: author
+  });
+  return { thread };
 });
 
 fastify.get('/api/logs', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -23775,6 +24189,371 @@ fastify.post('/api/workspace/fixture', { preHandler: fastify.requireAuth }, asyn
     reply.code(400);
     return { error: error.message || 'Workspace fixture reset failed' };
   }
+});
+
+// ==================== BROWSER ENVIRONMENT (OPERATOR) ROUTES ====================
+// Operator-driven browser sessions mirror the run-side browser boundary: same
+// Phase 1 operations, same target-scoped origin allowlist and limits (applied
+// per operator session), and every session transition and operation lands in
+// the system log with pre/post page state — the browser counterpart of
+// workspace:operator_mutation.
+
+const OPERATOR_BROWSER_SESSION_IDLE_MS = 10 * 60 * 1000;
+const operatorBrowserSessions = new Map();
+let operatorBrowserSessionSequence = 0;
+
+function operatorBrowserError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.failureKind = 'browser_error';
+  return error;
+}
+
+async function captureOperatorBrowserPageState(entry) {
+  try {
+    const state = await entry.session.pageState();
+    return {
+      targetId: `browser:${entry.target.id}`,
+      targetKind: 'browser',
+      url: redactBrowserUrl(state.url),
+      titleHash: hashContent(state.title || ''),
+      capturedAt: new Date().toISOString()
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function operatorBrowserSessionSummary(entry) {
+  return {
+    id: entry.id,
+    target: entry.target,
+    counters: { ...entry.counters },
+    openedAt: entry.openedAt,
+    lastOperationAt: entry.lastOperationAt,
+    page: entry.lastKnownPage
+  };
+}
+
+async function openOperatorBrowserSession(userId, requestedBy, targetId) {
+  if (operatorBrowserSessions.has(userId)) {
+    throw operatorBrowserError('BROWSER_SESSION_EXISTS', 'An operator browser session is already open; close it before opening another');
+  }
+
+  const target = getBrowserTargetById(targetId);
+  if (!target || target.status !== 'active') {
+    throw operatorBrowserError('BROWSER_TARGET_UNAVAILABLE', 'Browser target is unknown or inactive');
+  }
+
+  const snapshot = normalizeBrowserTargetSnapshot(target);
+  const session = await createBrowserSession({
+    allowedOrigins: snapshot.allowedOrigins,
+    navTimeoutMs: browserLimit(snapshot, 'navTimeoutMs')
+  });
+
+  operatorBrowserSessionSequence += 1;
+  const entry = {
+    id: `operator-${operatorBrowserSessionSequence}-${Date.now()}`,
+    userId,
+    requestedBy,
+    target: snapshot,
+    session,
+    counters: { actions: 0, navigations: 0, screenshots: 0, artifactSequence: 0 },
+    openedAt: new Date().toISOString(),
+    lastOperationAt: new Date().toISOString(),
+    lastKnownPage: null,
+    busy: false
+  };
+  operatorBrowserSessions.set(userId, entry);
+
+  appendSystemLog('browser:operator_session_opened', `Operator browser session opened on target "${snapshot.name}" by ${requestedBy}`, {
+    operation: 'openBrowserSession',
+    args: { targetId: snapshot.id },
+    targetId: `browser:${snapshot.id}`,
+    targetKind: 'browser',
+    targetScope: snapshot.allowedOrigins
+  }, {
+    source: 'operator_browser_api',
+    requestedBy,
+    sessionId: entry.id,
+    browserTargetSnapshot: snapshot
+  });
+
+  return entry;
+}
+
+async function closeOperatorBrowserSession(userId, reason) {
+  const entry = operatorBrowserSessions.get(userId);
+  if (!entry) return null;
+  operatorBrowserSessions.delete(userId);
+  const postState = await captureOperatorBrowserPageState(entry);
+  await entry.session.close().catch(() => {});
+
+  appendSystemLog('browser:operator_session_closed', `Operator browser session on target "${entry.target.name}" closed: ${reason}`, {
+    operation: 'closeBrowserSession',
+    args: { reason },
+    targetId: `browser:${entry.target.id}`,
+    targetKind: 'browser',
+    targetScope: entry.target.allowedOrigins
+  }, {
+    source: 'operator_browser_api',
+    requestedBy: entry.requestedBy,
+    sessionId: entry.id,
+    reason,
+    counters: { ...entry.counters },
+    finalState: postState
+  });
+
+  return entry;
+}
+
+async function closeAllOperatorBrowserSessions(reason) {
+  await Promise.all(
+    [...operatorBrowserSessions.keys()].map(userId => closeOperatorBrowserSession(userId, reason).catch(() => {}))
+  );
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, entry] of operatorBrowserSessions) {
+    if (!entry.busy && now - Date.parse(entry.lastOperationAt) > OPERATOR_BROWSER_SESSION_IDLE_MS) {
+      void closeOperatorBrowserSession(userId, 'idle_timeout');
+    }
+  }
+}, 60 * 1000).unref();
+
+async function executeOperatorBrowserOperation(entry, operation, args = {}) {
+  const target = entry.target;
+  const startedAt = Date.now();
+
+  const maxActions = browserLimit(target, 'maxActionsPerRun');
+  if (entry.counters.actions + 1 > maxActions) {
+    throw operatorBrowserError('BROWSER_ACTION_LIMIT_EXCEEDED', `Browser action limit of ${maxActions} exceeded for this session`);
+  }
+  if (operation === 'navigate' && entry.counters.navigations + 1 > browserLimit(target, 'maxNavigationsPerRun')) {
+    throw operatorBrowserError('BROWSER_NAV_LIMIT_EXCEEDED', `Browser navigation limit of ${browserLimit(target, 'maxNavigationsPerRun')} exceeded for this session`);
+  }
+  if (operation === 'screenshot' && entry.counters.screenshots + 1 > browserLimit(target, 'maxScreenshotsPerRun')) {
+    throw operatorBrowserError('BROWSER_ACTION_LIMIT_EXCEEDED', `Browser screenshot limit of ${browserLimit(target, 'maxScreenshotsPerRun')} exceeded for this session`);
+  }
+
+  entry.counters.actions += 1;
+  const receipt = {
+    operation,
+    timestamp: createLogTimestamp(),
+    metadata: {},
+    partial: false,
+    truncated: false,
+    targetId: `browser:${target.id}`,
+    targetKind: 'browser',
+    targetScope: target.allowedOrigins,
+    targetResourceId: null,
+    resourceUrl: null
+  };
+  let result;
+
+  if (operation === 'navigate') {
+    if (typeof args.url !== 'string' || !args.url.trim()) {
+      throw operatorBrowserError('BROWSER_ORIGIN_BLOCKED', 'navigate requires a non-empty URL');
+    }
+    entry.counters.navigations += 1;
+    result = await entry.session.navigate(args.url.trim());
+    receipt.resourceUrl = redactBrowserUrl(result.finalUrl || result.requestedUrl);
+    receipt.metadata = {
+      requestedUrl: redactBrowserUrl(result.requestedUrl),
+      finalUrl: redactBrowserUrl(result.finalUrl),
+      status: result.status,
+      redirectChain: Array.isArray(result.redirectChain) ? result.redirectChain.map(redactBrowserUrl) : [],
+      pageStateHash: hashContent(JSON.stringify({ url: result.finalUrl, title: result.title }))
+    };
+  } else if (operation === 'observe') {
+    result = await entry.session.observe();
+    const inventory = Array.isArray(result.elements) ? result.elements : [];
+    receipt.resourceUrl = redactBrowserUrl(result.url);
+    receipt.truncated = Boolean(result.truncated);
+    receipt.metadata = {
+      elementCount: inventory.length,
+      pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title, elements: inventory }))
+    };
+  } else if (operation === 'readPageText') {
+    result = await entry.session.readPageText(browserLimit(target, 'maxPageTextBytes'));
+    receipt.resourceUrl = redactBrowserUrl(result.url);
+    receipt.truncated = Boolean(result.truncated);
+    receipt.partial = Boolean(result.truncated);
+    receipt.metadata = {
+      bytes: result.bytes,
+      fullBytes: result.fullBytes,
+      contentHash: hashContent(result.text),
+      pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title, text: result.text }))
+    };
+  } else if (operation === 'screenshot') {
+    entry.counters.screenshots += 1;
+    entry.counters.artifactSequence += 1;
+    const artifactDir = path.join(DATA_DIR, 'browser-artifacts', entry.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const artifactPath = path.join(artifactDir, `shot-${entry.counters.artifactSequence}.png`);
+    result = await entry.session.screenshot(artifactPath);
+    const bytes = fs.readFileSync(artifactPath);
+    const relativeArtifactPath = path.relative(DATA_DIR, artifactPath);
+    receipt.resourceUrl = redactBrowserUrl(result.url);
+    receipt.metadata = {
+      artifactPath: relativeArtifactPath,
+      bytes: bytes.length,
+      sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+      pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title }))
+    };
+    result = {
+      url: result.url,
+      title: result.title,
+      artifactPath: relativeArtifactPath,
+      bytes: bytes.length,
+      sha256: receipt.metadata.sha256,
+      dataUrl: `data:image/png;base64,${bytes.toString('base64')}`
+    };
+  } else if (operation === 'wait') {
+    const forMs = Number(args.forMs);
+    if (!Number.isFinite(forMs) || forMs < 0) {
+      throw operatorBrowserError('BROWSER_TIMEOUT', 'wait requires a non-negative numeric forMs');
+    }
+    result = await entry.session.wait(forMs, browserLimit(target, 'waitTimeoutMsCap'));
+    receipt.resourceUrl = redactBrowserUrl(result.url);
+    receipt.truncated = Boolean(result.truncated);
+    receipt.metadata = { requestedMs: result.requestedMs, waitedMs: result.waitedMs };
+  } else {
+    throw operatorBrowserError('BROWSER_OPERATION_UNSUPPORTED', `Unsupported browser operation: ${operation}`);
+  }
+
+  receipt.targetResourceId = receipt.resourceUrl;
+  receipt.durationMs = Date.now() - startedAt;
+  entry.lastKnownPage = { url: redactBrowserUrl(result.url || null), title: result.title || null };
+  return { result, receipt };
+}
+
+function operatorBrowserSafeArgs(operation, args = {}) {
+  if (operation === 'navigate') return { url: redactBrowserUrl(args.url) };
+  if (operation === 'wait') return { forMs: args.forMs };
+  return {};
+}
+
+async function operatorBrowserApi(request, reply, operationName, handler) {
+  if (!hasPermission(request.session.userId, 'browser:operate')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  try {
+    return await handler(request.user ? request.user.username : String(request.session.userId));
+  } catch (error) {
+    reply.code(error.code === 'BROWSER_SESSION_EXISTS' || error.code === 'BROWSER_SESSION_BUSY' ? 409 : 400);
+    return { error: error.message || `Browser ${operationName} failed`, code: error.code || null };
+  }
+}
+
+fastify.get('/browser', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'browser:read')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({
+      message: 'Access denied',
+      user: request.user
+    }, request.session.userId));
+  }
+
+  const entry = operatorBrowserSessions.get(request.session.userId) || null;
+  return reply.view('browser.ejs', viewData({
+    user: request.user,
+    browserEngineStatus: getEngineStatus(),
+    browserTargets: readBrowserTargets()
+      .filter(target => target && target.status === 'active')
+      .map(normalizeBrowserTargetSnapshot),
+    browserSession: entry ? operatorBrowserSessionSummary(entry) : null,
+    canOperateBrowser: hasPermission(request.session.userId, 'browser:operate')
+  }, request.session.userId));
+});
+
+fastify.get('/api/browser/session', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'browser:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const entry = operatorBrowserSessions.get(request.session.userId) || null;
+  return { session: entry ? operatorBrowserSessionSummary(entry) : null, engine: getEngineStatus() };
+});
+
+fastify.post('/api/browser/session', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  return operatorBrowserApi(request, reply, 'session open', async requestedBy => {
+    const entry = await openOperatorBrowserSession(
+      request.session.userId,
+      requestedBy,
+      String(request.body && request.body.targetId || '').trim()
+    );
+    return { session: operatorBrowserSessionSummary(entry) };
+  });
+});
+
+fastify.delete('/api/browser/session', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  return operatorBrowserApi(request, reply, 'session close', async () => {
+    const entry = await closeOperatorBrowserSession(request.session.userId, 'operator_close');
+    if (!entry) {
+      throw operatorBrowserError('BROWSER_SESSION_LOST', 'No operator browser session is open');
+    }
+    return { closed: true };
+  });
+});
+
+fastify.post('/api/browser/operation', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  return operatorBrowserApi(request, reply, 'operation', async requestedBy => {
+    const entry = operatorBrowserSessions.get(request.session.userId);
+    if (!entry) {
+      throw operatorBrowserError('BROWSER_SESSION_LOST', 'No operator browser session is open; open a session first');
+    }
+    if (entry.busy) {
+      throw operatorBrowserError('BROWSER_SESSION_BUSY', 'A browser operation is already in progress in this session');
+    }
+
+    const operation = String(request.body && request.body.operation || '').trim();
+    const args = request.body && typeof request.body.args === 'object' && request.body.args ? request.body.args : {};
+    if (!BROWSER_PHASE_ONE_OPERATIONS.includes(operation)) {
+      throw operatorBrowserError('BROWSER_OPERATION_UNSUPPORTED', `Unsupported browser operation: ${operation}`);
+    }
+
+    entry.busy = true;
+    const startedAt = Date.now();
+    const preState = await captureOperatorBrowserPageState(entry);
+    let outcome = null;
+    let operationError = null;
+
+    try {
+      outcome = await executeOperatorBrowserOperation(entry, operation, args);
+      return { ...outcome, session: operatorBrowserSessionSummary(entry) };
+    } catch (error) {
+      operationError = error;
+      throw error;
+    } finally {
+      entry.busy = false;
+      entry.lastOperationAt = new Date().toISOString();
+      const postState = await captureOperatorBrowserPageState(entry);
+      appendSystemLog('browser:operator_operation',
+        operationError
+          ? `Operator browser ${operation} by ${requestedBy} refused: ${operationError.message}`
+          : `Operator browser ${operation} by ${requestedBy}`, {
+        operation,
+        args: operatorBrowserSafeArgs(operation, args),
+        targetId: `browser:${entry.target.id}`,
+        targetKind: 'browser',
+        targetScope: entry.target.allowedOrigins
+      }, {
+        source: 'operator_browser_api',
+        requestedBy,
+        sessionId: entry.id,
+        preState,
+        postState,
+        receipt: outcome ? sanitizeSnapshotValue(outcome.receipt) : null,
+        error: operationError ? sanitizeLogMessage(operationError.message || String(operationError)) : null,
+        errorCode: operationError ? operationError.code || null : null,
+        durationMs: Date.now() - startedAt
+      });
+    }
+  });
 });
 
 // ==================== ADMIN DASHBOARD ====================
@@ -25068,7 +25847,7 @@ function shutdown(signal) {
     if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
     if (runtimeScheduler && typeof runtimeScheduler.whenIdle === 'function') await runtimeScheduler.whenIdle();
     if (runtimeTemplateScheduler && typeof runtimeTemplateScheduler.whenIdle === 'function') await runtimeTemplateScheduler.whenIdle();
-
+    await closeAllOperatorBrowserSessions('server_shutdown');
     // SSE responses otherwise keep Fastify open indefinitely during close.
     eventClients.forEach(client => {
       try { client.end(); } catch (_) {}
