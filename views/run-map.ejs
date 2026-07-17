@@ -43,10 +43,13 @@ const LANES = [
   { id: 'target', label: 'TARGET (facts)' },
   { id: 'outcome', label: 'OUTCOME (verified)' }
 ];
-const LANE_Y = { model: 70, authority: 200, target: 330, outcome: 460 };
 const NODE_W = 190;
 const NODE_H = 64;
 const COL_W = 220;
+const ROW_GAP = 10;
+const LANE_GAP = 56;
+const LANE_TOP = 70;
+const MAX_SUBCOLS = 3;
 const STATUS_COLORS = {
   complete_claimed: '#4f46e5', continuing: '#6366f1', recorded: '#6b7280',
   allowed: '#16a34a', blocked: '#dc2626', dropped: '#dc2626', unexecuted: '#d97706',
@@ -66,48 +69,71 @@ function el(name, attrs, parent) {
   return node;
 }
 
-// Column assignment: nodes with a step share that step's column block; per-lane
-// siblings within a step fan into sub-columns. Step-less nodes (browser ops,
-// workflow actions, outcome chain) get ordered columns after the last step.
+// Two-pass layout. Pass 1 measures: per-(lane, step) cell occupancy determines
+// how many sub-rows each lane needs, so lane bands are sized to their content
+// and can never overlap the lane below. Pass 2 positions nodes inside the
+// computed bands. Step-less nodes (browser ops, workflow actions, outcome
+// chain) get ordered columns after the last step, on their lane's first row.
 function layout(nodes) {
   const steps = [...new Set(nodes.filter(n => n.step !== null && n.step !== undefined).map(n => n.step))].sort((a, b) => a - b);
   const stepCol = new Map(steps.map((step, i) => [step, i]));
-  const perCell = new Map();
-  let stepColumns = steps.length;
-  const positions = new Map();
-  const stepless = { target: 0, outcome: 0, authority: 0, model: 0 };
 
-  // Sub-column widths: find max siblings per (lane, step) cell.
+  // Pass 1: cell occupancy → per-lane row depth and global sub-column width.
   const cellCounts = new Map();
+  const steplessCounts = { model: 0, authority: 0, target: 0, outcome: 0 };
   for (const n of nodes) {
-    if (n.step === null || n.step === undefined) continue;
-    const key = n.lane + ':' + n.step;
-    cellCounts.set(key, (cellCounts.get(key) || 0) + 1);
+    if (n.step !== null && n.step !== undefined) {
+      const key = n.lane + ':' + n.step;
+      cellCounts.set(key, (cellCounts.get(key) || 0) + 1);
+    } else {
+      steplessCounts[n.lane] = (steplessCounts[n.lane] || 0) + 1;
+    }
   }
-  const subCols = Math.max(1, ...cellCounts.values());
-  const cellWidth = subCols > 1 ? COL_W * Math.min(subCols, 3) : COL_W;
+  const subCols = Math.min(MAX_SUBCOLS, Math.max(1, ...cellCounts.values(), 1));
+  const cellWidth = COL_W + (subCols - 1) * (NODE_W + 8);
 
+  const laneRows = {};
+  for (const lane of LANES.map(l => l.id)) {
+    let rows = steplessCounts[lane] > 0 ? 1 : 1;
+    for (const [key, count] of cellCounts) {
+      if (key.startsWith(lane + ':')) rows = Math.max(rows, Math.ceil(count / MAX_SUBCOLS));
+    }
+    laneRows[lane] = rows;
+  }
+
+  // Lane bands stack: each lane's top clears the previous lane's deepest row.
+  const laneY = {};
+  let cursorY = LANE_TOP;
+  for (const lane of LANES.map(l => l.id)) {
+    laneY[lane] = cursorY;
+    cursorY += laneRows[lane] * (NODE_H + ROW_GAP) + LANE_GAP;
+  }
+
+  // Pass 2: position nodes inside their bands.
+  const positions = new Map();
+  const perCell = new Map();
+  const stepless = { model: 0, authority: 0, target: 0, outcome: 0 };
   for (const n of nodes) {
     if (n.step !== null && n.step !== undefined) {
       const key = n.lane + ':' + n.step;
       const index = perCell.get(key) || 0;
       perCell.set(key, index + 1);
       positions.set(n.id, {
-        x: 140 + stepCol.get(n.step) * cellWidth + (index % 3) * (NODE_W + 8),
-        y: LANE_Y[n.lane] + Math.floor(index / 3) * (NODE_H + 8)
+        x: 140 + stepCol.get(n.step) * cellWidth + (index % MAX_SUBCOLS) * (NODE_W + 8),
+        y: laneY[n.lane] + Math.floor(index / MAX_SUBCOLS) * (NODE_H + ROW_GAP)
       });
     }
   }
-  const steplessBase = 140 + stepColumns * cellWidth + 20;
+  const steplessBase = 140 + steps.length * cellWidth + 20;
   for (const n of nodes) {
     if (n.step === null || n.step === undefined) {
       const index = stepless[n.lane]++;
-      positions.set(n.id, { x: steplessBase + index * (NODE_W + 12), y: LANE_Y[n.lane] });
+      positions.set(n.id, { x: steplessBase + index * (NODE_W + 12), y: laneY[n.lane] });
     }
   }
   const maxX = Math.max(600, ...[...positions.values()].map(p => p.x + NODE_W + 40));
-  const maxY = Math.max(...Object.values(LANE_Y)) + NODE_H * 2 + 40;
-  return { positions, width: maxX, height: maxY };
+  const maxY = cursorY - LANE_GAP + NODE_H + 30;
+  return { positions, laneY, width: maxX, height: maxY };
 }
 
 function edgePath(a, b) {
@@ -137,14 +163,14 @@ function wrapText(text, max) {
 
 function render() {
   svg.replaceChildren();
-  const { positions, width, height } = layout(graph.nodes);
+  const { positions, laneY, width, height } = layout(graph.nodes);
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.setAttribute('width', width);
   svg.setAttribute('height', height);
 
   for (const lane of LANES) {
-    el('line', { x1: 0, y1: LANE_Y[lane.id] - 18, x2: width, y2: LANE_Y[lane.id] - 18, stroke: '#e5e7eb', 'stroke-width': 1 });
-    el('text', { x: 8, y: LANE_Y[lane.id] - 26, fill: '#9ca3af', 'font-size': 11, 'font-weight': 700, 'letter-spacing': '0.08em' }).textContent = lane.label;
+    el('line', { x1: 0, y1: laneY[lane.id] - 18, x2: width, y2: laneY[lane.id] - 18, stroke: '#e5e7eb', 'stroke-width': 1 });
+    el('text', { x: 8, y: laneY[lane.id] - 26, fill: '#9ca3af', 'font-size': 11, 'font-weight': 700, 'letter-spacing': '0.08em' }).textContent = lane.label;
   }
 
   for (const edge of graph.edges) {
@@ -173,7 +199,7 @@ function render() {
     }, group);
     el('text', { x: pos.x + 10, y: pos.y + 17, fill: color, 'font-size': 10, 'font-weight': 700 }, group).textContent =
       (node.step !== null && node.step !== undefined ? 'step ' + node.step + ' · ' : '') + node.kind.replace(/_/g, ' ');
-    wrapText(node.label, 32).forEach((line, i) => {
+    wrapText(node.label, 29).forEach((line, i) => {
       el('text', { x: pos.x + 10, y: pos.y + 32 + i * 13, fill: '#111827', 'font-size': 11 }, group).textContent = line;
     });
     group.addEventListener('click', () => showDetail(node));
