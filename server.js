@@ -4568,10 +4568,12 @@ function enrichTicketForDisplay(ticket, context) {
   };
 }
 
-function ticketsPageHref(page, limit) {
+function ticketsPageHref(page, limit, filters = {}) {
   const params = new URLSearchParams();
   params.set('page', String(page));
   params.set('limit', String(limit));
+  if (filters.status) params.set('status', filters.status);
+  if (filters.workContextId != null) params.set('workContextId', String(filters.workContextId));
   return `/tickets?${params.toString()}`;
 }
 
@@ -4579,10 +4581,21 @@ function getPaginatedTickets(query = {}) {
   const { page, limit } = getPagination(query, 25);
   // Optional Work Context filter (r1.20) — a read-only projection over existing tickets.
   const workContextFilter = query.workContextId !== undefined && query.workContextId !== '' ? parseInt(query.workContextId, 10) : null;
-  const allTickets = readTickets()
+  const statusFilter = typeof query.status === 'string' && TICKET_STATUSES.includes(query.status) ? query.status : null;
+  const contextTickets = readTickets()
     .slice()
     .filter(ticket => workContextFilter === null || (ticket && ticket.workContextId === workContextFilter))
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  // Status counts describe the context-filtered population so filter chips stay
+  // truthful regardless of which status page is being viewed.
+  const statusCounts = { all: contextTickets.length };
+  TICKET_STATUSES.forEach(status => { statusCounts[status] = 0; });
+  contextTickets.forEach(ticket => {
+    if (ticket && statusCounts[ticket.status] !== undefined) statusCounts[ticket.status] += 1;
+  });
+  const allTickets = statusFilter === null
+    ? contextTickets
+    : contextTickets.filter(ticket => ticket && ticket.status === statusFilter);
   const agents = readAgents();
   const agentGroups = getTicketAssignableGroups();
   const runs = readRuns();
@@ -4607,8 +4620,15 @@ function getPaginatedTickets(query = {}) {
       groupMembersById
     }));
 
+  const hrefFilters = { status: statusFilter, workContextId: workContextFilter };
   return {
     tickets: pageTickets,
+    statusFilter,
+    statusCounts,
+    filterHrefs: {
+      all: ticketsPageHref(1, limit, { workContextId: workContextFilter }),
+      ...Object.fromEntries(TICKET_STATUSES.map(status => [status, ticketsPageHref(1, limit, { status, workContextId: workContextFilter })]))
+    },
     pagination: {
       page: currentPage,
       limit,
@@ -4616,8 +4636,8 @@ function getPaginatedTickets(query = {}) {
       pageCount,
       start: total === 0 ? 0 : offset + 1,
       end: Math.min(offset + pageTickets.length, total),
-      previousHref: currentPage > 1 ? ticketsPageHref(currentPage - 1, limit) : null,
-      nextHref: currentPage < pageCount ? ticketsPageHref(currentPage + 1, limit) : null
+      previousHref: currentPage > 1 ? ticketsPageHref(currentPage - 1, limit, hrefFilters) : null,
+      nextHref: currentPage < pageCount ? ticketsPageHref(currentPage + 1, limit, hrefFilters) : null
     }
   };
 }
@@ -21456,6 +21476,9 @@ fastify.get('/tickets', { preHandler: fastify.requireAuth }, async (request, rep
   return renderCachedView(request, reply, 'tickets.ejs', viewData({
     tickets: ticketPage.tickets,
     pagination: ticketPage.pagination,
+    statusFilter: ticketPage.statusFilter,
+    statusCounts: ticketPage.statusCounts,
+    filterHrefs: ticketPage.filterHrefs,
     user: request.user,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update'),
     agents: readAgents(),

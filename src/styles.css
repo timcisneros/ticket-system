@@ -320,6 +320,11 @@ code {
 
 /* --- hero --- */
 .hero { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px 22px; }
+.hero-title { margin: 0; font-size: 26px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hero-subtitle { margin: 8px 0 0; max-width: 72ch; }
+.hero-subtitle a { color: #374151; }
+.hero-notes { margin-top: 12px; }
+.hero-notes .form-hint { margin: 6px 2px 0; font-size: 12.5px; line-height: 1.5; color: #6b7280; }
 .hero-top { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .hero-top > div:first-child { min-width: 0; }
 .hero-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
@@ -328,6 +333,8 @@ code {
 /* --- attention cards --- */
 .attn { border: 1px solid #fcd34d; border-left: 4px solid #f59e0b; background: #fffbeb; border-radius: 10px; padding: 18px 20px; }
 .attn.critical { border-color: #fca5a5; border-left-color: #dc2626; background: #fef2f2; }
+.attn.attn--calm { border-color: #e5e7eb; border-left-color: #9ca3af; background: #ffffff; }
+.attn.attn--calm .sev { color: #374151; }
 .attn + .attn { margin-top: 12px; }
 .attn h3 { margin: 0 0 10px; font-size: 15px; font-weight: 650; }
 .attn .sev { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #92400e; }
@@ -2712,9 +2719,54 @@ label.checkbox-label input[type="radio"] {
 
 /* Phase 4: Ticket Cards */
 
+.ticket-filters {
+  margin-bottom: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #4b5563;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.filter-chip:hover {
+  border-color: #9ca3af;
+  color: #111827;
+}
+
+.filter-chip.active {
+  background: #111827;
+  border-color: #111827;
+  color: #ffffff;
+}
+
+.filter-chip__count {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  font-variant-numeric: tabular-nums;
+}
+
+.filter-chip.active .filter-chip__count {
+  color: #d1d5db;
+}
+
+.filter-chip--empty {
+  color: #b6bcc5;
+}
+
 .ticket-cards {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .ticket-cards__empty {
@@ -2724,16 +2776,31 @@ label.checkbox-label input[type="radio"] {
 .ticket-card {
   background: #ffffff;
   border: 1px solid #e5e7eb;
+  border-left-width: 3px;
   border-radius: 8px;
   overflow: hidden;
+  transition: border-color .12s ease, box-shadow .12s ease;
 }
 
+.ticket-card:hover {
+  border-color: #c7ccd4;
+  box-shadow: 0 1px 4px rgba(17, 24, 39, 0.06);
+}
+
+/* Status accents on the left edge keep the list scannable at a glance. */
+.ticket-card--open { border-left-color: #2563eb; }
+.ticket-card--in_progress { border-left-color: #f59e0b; }
+.ticket-card--completed { border-left-color: #16a34a; }
+.ticket-card--failed { border-left-color: #dc2626; }
+.ticket-card--blocked { border-left-color: #dc2626; }
+.ticket-card--closed { border-left-color: #9ca3af; }
+
 .ticket-card.is-failed {
-  border-left: 3px solid #991b1b;
+  border-left-color: #991b1b;
 }
 
 .ticket-card.is-interrupted {
-  border-left: 3px solid #7c3aed;
+  border-left-color: #7c3aed;
 }
 
 .ticket-card__header {
@@ -2741,13 +2808,12 @@ label.checkbox-label input[type="radio"] {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
-  background: #fafafa;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 11px 14px 9px;
 }
 
 .ticket-card__number {
   color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 500;
   font-size: 0.82rem;
   flex: 0 0 auto;
@@ -2756,11 +2822,15 @@ label.checkbox-label input[type="radio"] {
 .ticket-card__objective {
   color: #111827;
   font-weight: 600;
-  font-size: 0.94rem;
+  font-size: 0.96rem;
   text-decoration: none;
   overflow-wrap: anywhere;
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.ticket-card__objective:hover {
+  text-decoration: underline;
 }
 
 .ticket-card__status {
@@ -2773,11 +2843,22 @@ label.checkbox-label input[type="radio"] {
 .ticket-card__meta {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 16px;
-  padding: 10px 14px;
+  align-items: baseline;
+  gap: 3px 0;
+  padding: 0 14px 11px;
   color: #6b7280;
   font-size: 0.82rem;
+}
+
+.ticket-card__meta span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ticket-card__meta span + span::before {
+  content: "·";
+  margin: 0 8px;
+  color: #d1d5db;
 }
 
 .ticket-card__actions {

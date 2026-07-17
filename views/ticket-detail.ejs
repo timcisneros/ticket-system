@@ -29,10 +29,10 @@
   <div class="hero" id="ticket-runtime-section" data-ticket-runtime-id="<%= ticket.id %>" data-ticket-runtime-active="<%= activeRuntimeRun ? 'true' : 'false' %>">
     <div class="hero-top">
       <div>
-        <h1 style="margin:0;font-size:26px;">Ticket #<%= ticket.id %>
+        <h1 class="hero-title">Ticket #<%= ticket.id %>
           <span id="ticket-live-status" class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span>
         </h1>
-        <p class="text-muted" style="margin:8px 0 0;max-width:62ch;"><%= ticket.objective %></p>
+        <p class="text-muted hero-subtitle"><%= ticket.objective %></p>
       </div>
       <div class="hero-actions">
         <a class="btn-secondary" href="/tickets">Back to Tickets</a>
@@ -58,21 +58,23 @@
     </dl>
     <% if (openStateNote) { %><p class="text-muted"><%= openStateNote %></p><% } %>
   </div>
-  <% if (canUpdateTickets && hasUnresolvedTriage) { %>
-  <p class="form-hint">Rerun disabled: unresolved ticket-level triage must be resolved or the ticket objective must be changed first.</p>
-<% } else if (canUpdateTickets && isBlockedSpawnedChild) { %>
-  <p class="form-hint">Rerun disabled: this child ticket was created by executeTicketPlan and is blocked by default. Open it explicitly to enable execution.</p>
-  <button type="button" class="btn-secondary" data-open-ticket-id="<%= ticket.id %>">Open Ticket</button>
-<% } else if (canUpdateTickets && ticket.status !== 'open') { %>
-  <%
-    const isGroupTicket = typeof executionState !== 'undefined' && executionState && executionState.isGroup;
-    const rerunWord = ticket.status === 'failed' ? 'Retry' : 'Rerun';
-  %>
-  <p class="form-hint"><%= rerunWord %> interrupts any active run, reopens this ticket, and starts a new run from the current objective and assignment.<%= isGroupTicket ? ' For this group ticket it regenerates the work-unit allocation across group members.' : '' %></p>
-<% } %>
-<% if (canUpdateTickets) { %>
-<p class="form-hint">Simulation tests the agent plan without creating a run or mutating the workspace. "Test agent plan" calls the model; "Test gate" returns the objective clarification verdict only.</p>
-<div id="simulation-result" class="simulation-result"></div>
+  <% if (canUpdateTickets) { %>
+  <div class="hero-notes">
+    <% if (hasUnresolvedTriage) { %>
+      <p class="form-hint">Rerun disabled: unresolved ticket-level triage must be resolved or the ticket objective must be changed first.</p>
+    <% } else if (isBlockedSpawnedChild) { %>
+      <p class="form-hint">Rerun disabled: this child ticket was created by executeTicketPlan and is blocked by default. Open it explicitly to enable execution.</p>
+      <button type="button" class="btn-secondary" data-open-ticket-id="<%= ticket.id %>">Open Ticket</button>
+    <% } else if (ticket.status !== 'open') { %>
+      <%
+        const isGroupTicket = typeof executionState !== 'undefined' && executionState && executionState.isGroup;
+        const rerunWord = ticket.status === 'failed' ? 'Retry' : 'Rerun';
+      %>
+      <p class="form-hint"><%= rerunWord %> interrupts any active run, reopens this ticket, and starts a new run from the current objective and assignment.<%= isGroupTicket ? ' For this group ticket it regenerates the work-unit allocation across group members.' : '' %></p>
+    <% } %>
+    <p class="form-hint">Simulation tests the agent plan without creating a run or mutating the workspace. "Test agent plan" calls the model; "Test gate" returns the objective clarification verdict only.</p>
+    <div id="simulation-result" class="simulation-result"></div>
+  </div>
 <% } %>
 </section>
 

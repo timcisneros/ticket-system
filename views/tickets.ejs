@@ -1,12 +1,24 @@
 <h1>Tickets</h1>
 <% const viewPagination = typeof pagination === 'undefined' ? null : pagination; %>
 <%
+  const viewStatusFilter = typeof statusFilter === 'undefined' ? null : statusFilter;
+  const viewStatusCounts = typeof statusCounts === 'undefined' || !statusCounts ? null : statusCounts;
+  const viewFilterHrefs = typeof filterHrefs === 'undefined' || !filterHrefs ? null : filterHrefs;
   function statusOptionLabel(status) {
     if (status === 'open') return 'open — starts run';
     if (status === 'closed') return 'closed — stops active runs';
     return status;
   }
 %>
+
+<% if (viewStatusCounts && viewFilterHrefs) { %>
+<div class="ticket-filters" role="navigation" aria-label="Filter tickets by status">
+  <a class="filter-chip <%= viewStatusFilter === null ? 'active' : '' %>" href="<%= viewFilterHrefs.all %>">All <span class="filter-chip__count"><%= viewStatusCounts.all %></span></a>
+  <% ticketStatuses.forEach(status => { %>
+    <a class="filter-chip <%= viewStatusFilter === status ? 'active' : '' %> <%= viewStatusCounts[status] === 0 ? 'filter-chip--empty' : '' %>" href="<%= viewFilterHrefs[status] %>"><%= status %> <span class="filter-chip__count"><%= viewStatusCounts[status] %></span></a>
+  <% }) %>
+</div>
+<% } %>
 
 <section class="admin-block">
   <% if (viewPagination && viewPagination.total > 0) { %>
@@ -39,7 +51,7 @@
         const hasPartial = (isFailed || isInterrupted) && ticket.lastRunHadPartialMutations;
         const accentClass = isFailed ? 'is-failed' : isInterrupted ? 'is-interrupted' : '';
       %>
-      <div class="ticket-card <%= accentClass %>" data-ticket-id="<%= ticket.id %>">
+      <div class="ticket-card <%= accentClass %> ticket-card--<%= ticket.status %>" data-ticket-id="<%= ticket.id %>">
         <div class="ticket-card__header">
           <span class="ticket-card__number">#<%= ticket.id %></span>
           <a href="/tickets/<%= ticket.id %>" class="ticket-card__objective"><%= ticket.objective %></a>
@@ -175,6 +187,7 @@ function createTicketCard(ticket) {
   const isInterrupted = ticket.lastRunStatus === 'interrupted';
   if (isFailed) card.classList.add('is-failed');
   if (isInterrupted) card.classList.add('is-interrupted');
+  card.classList.add('ticket-card--' + ticket.status);
   card.dataset.ticketId = ticket.id;
   card.dataset.ticketSignature = ticketSignature(ticket);
 

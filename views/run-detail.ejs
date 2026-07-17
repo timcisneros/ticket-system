@@ -1,70 +1,261 @@
-<div class="page-header">
-  <% const viewOperationalOutcome = typeof operationalOutcomeLabel === 'undefined' ? '-' : operationalOutcomeLabel; %>
-  <div>
-    <h1>Run #<%= run.id %></h1>
-    <p class="text-muted">Ticket <a href="/tickets/<%= run.ticketId %>">#<%= run.ticketId %></a> · <%= run.agentName %></p>
-    <% if (run.delegatedPermissionSource === 'auto_retry') { %>
-      <p class="text-muted">Created by: automatic retry</p>
-    <% } %>
-  </div>
-  <div class="actions">
-    <% if (canUpdateRuns && ['pending', 'running'].includes(run.status)) { %>
-      <button type="button" class="btn-secondary btn-danger" data-stop-run-id="<%= run.id %>">Stop Run</button>
-    <% } %>
-    <% if (canUpdateRuns && ['failed', 'interrupted'].includes(run.status)) { %>
-      <button type="button" class="btn-secondary" data-retry-run-id="<%= run.id %>">Retry</button>
-    <% } %>
-    <a class="btn-secondary" href="/logs?runId=<%= run.id %>">Run Logs</a>
-  </div>
-</div>
+<%
+  const viewOperationalOutcome = typeof operationalOutcomeLabel === 'undefined' ? '-' : operationalOutcomeLabel;
+  const attentionPartialExecution = ['failed', 'interrupted'].includes(run.status) && partialMutationCount > 0;
+  const attentionStateWarning = typeof runStateInconsistency !== 'undefined' && runStateInconsistency;
+  const attentionTriage = run.triage && (run.triage.required || run.triage.resolvedAt);
+  const attentionFailure = typeof failureSummary !== 'undefined' && failureSummary;
+  const attentionReview = typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable;
+  const hasRunAttention = Boolean(attentionPartialExecution || attentionStateWarning || attentionTriage || attentionFailure || attentionReview);
+%>
 
-<% if (['failed', 'interrupted'].includes(run.status) && partialMutationCount > 0) { %>
-<section class="detail-section partial-execution-banner">
-  <div class="partial-execution-header">
-    <span class="partial-execution-icon">&#9888;</span>
-    <div>
-      <strong>Partial execution</strong>
-      <span class="text-muted">This run failed after performing <%= partialMutationCount %> workspace mutation<%= partialMutationCount === 1 ? '' : 's' %>.</span>
+<section class="zone">
+  <div class="zone-head"><span class="zone-eyebrow">At a glance</span><span class="zone-q">What is this run, and where did it end up?</span></div>
+  <div class="hero">
+    <div class="hero-top">
+      <div>
+        <h1 class="hero-title">Run #<%= run.id %>
+          <span id="run-live-status" class="status-badge status-<%= run.status %>"><%= typeof runStatusLabel === 'undefined' ? run.status : runStatusLabel %></span>
+        </h1>
+        <p class="text-muted hero-subtitle">
+          Ticket <a href="/tickets/<%= run.ticketId %>">#<%= run.ticketId %></a>
+          · <%= run.agentName %>
+          <% if (snapshot && (snapshot.provider || snapshot.model)) { %> · <%= snapshot.provider || '-' %> / <%= snapshot.model || '-' %><% } %>
+          <% if (run.delegatedPermissionSource === 'auto_retry') { %> · created by automatic retry<% } %>
+        </p>
+      </div>
+      <div class="hero-actions">
+        <a class="btn-secondary" href="/tickets/<%= run.ticketId %>">Back to Ticket</a>
+        <a class="btn-secondary" href="/logs?runId=<%= run.id %>">Run Logs</a>
+        <% if (canUpdateRuns && ['pending', 'running'].includes(run.status)) { %>
+          <button type="button" class="btn-secondary btn-danger" data-stop-run-id="<%= run.id %>">Stop Run</button>
+        <% } %>
+        <% if (canUpdateRuns && ['failed', 'interrupted'].includes(run.status)) { %>
+          <button type="button" class="btn-secondary" data-retry-run-id="<%= run.id %>">Retry</button>
+        <% } %>
+      </div>
     </div>
-  </div>
-  <% if (operationHistory && operationHistory.length > 0) { %>
-    <div class="partial-execution-recovery">
-      <% if (failureSummary && !failureSummary.recoveryAvailable) { %>
-        <span class="text-muted">This run has replay/evidence data, but no safe automatic recovery action is currently offered. Review Operation History before retrying or applying manual cleanup.</span>
-      <% } else { %>
-        <span class="text-muted">Review Operation History below for recovery options.</span>
+    <dl class="live">
+      <div><dt>Run Outcome</dt><dd id="run-live-outcome"><%= viewOperationalOutcome || '-' %></dd></div>
+      <div><dt>Started</dt><dd><%= run.startedAt || '-' %></dd></div>
+      <div><dt>Completed</dt><dd id="run-live-completed"><%= run.completedAt || '-' %></dd></div>
+      <div>
+        <dt>Duration</dt>
+        <dd id="run-live-duration" data-started-at="<%= run.startedAt || run.createdAt || '' %>" data-completed-at="<%= run.completedAt || '' %>">
+          <% if (run.startedAt && run.completedAt) { %>
+            <%= typeof formatDurationHuman === 'function' ? formatDurationHuman(Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt)))) : Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt))) + 'ms' %>
+          <% } else if (['pending', 'running'].includes(run.status) && (run.startedAt || run.createdAt)) { %>
+            running for 0 seconds
+          <% } else { %>
+            -
+          <% } %>
+        </dd>
+      </div>
+      <div><dt>Mutations</dt><dd><%= partialMutationCount || 0 %></dd></div>
+      <% if (typeof eventSummary !== 'undefined' && eventSummary) { %>
+        <div><dt>Event Status</dt><dd id="run-live-event-status"><%= eventSummary.latestStatus ? eventSummary.latestStatus.status : '-' %></dd></div>
+        <div>
+          <dt>Latest Workflow Step</dt>
+          <dd>
+            <% if (eventSummary.currentStep) { %>
+              <code><%= eventSummary.currentStep.stepId %></code>
+              <span class="text-muted"><%= eventSummary.currentStep.action || '' %> <%= eventSummary.currentStep.status || '' %></span>
+            <% } else { %>-<% } %>
+          </dd>
+        </div>
+        <div>
+          <dt>Latest Workspace Mutation</dt>
+          <dd>
+            <% if (eventSummary.latestWorkspaceMutation) { %>
+              <code><%= eventSummary.latestWorkspaceMutation.operation %></code>
+              <% if (eventSummary.latestWorkspaceMutation.path) { %><code class="owned-path"><%= eventSummary.latestWorkspaceMutation.path %></code><% } %>
+            <% } else { %>-<% } %>
+          </dd>
+        </div>
+        <div><dt>Latest Event Error</dt><dd id="run-live-event-error"><%= eventSummary.latestError && eventSummary.latestError.message ? eventSummary.latestError.message : '-' %></dd></div>
       <% } %>
-    </div>
-  <% } %>
+      <div style="grid-column:1/-1;"><dt>Current Message</dt><dd id="run-live-message">-</dd></div>
+    </dl>
+
+    <% if (snapshot && snapshot.terminalStatus && snapshot.terminalStatus !== run.status) { %>
+      <div class="terminal-status-divider">
+        <span class="text-muted">Terminal status:</span>
+        <span class="status-badge status-<%= snapshot.terminalStatus %>"><%= snapshot.terminalStatus %></span>
+      </div>
+    <% } %>
+    <% if (snapshot && (snapshot.failureReason || run.error)) { %>
+      <div class="failure-reason-block">
+        <span class="failure-reason"><%= failureSummary && failureSummary.finalBlockingReason ? failureSummary.finalBlockingReason : (snapshot.failureReason || run.error) %></span>
+      </div>
+    <% } %>
+  </div>
+</section>
+
+<% if (hasRunAttention) { %>
+<section class="zone">
+<div class="zone-head" data-attn-zone><span class="zone-eyebrow">Needs your attention</span><span class="zone-q">Does it need me, and what do I decide?</span></div>
+
+<% if (attentionPartialExecution) { %>
+  <div class="attn critical partial-execution-banner">
+    <h3><span class="sev">Critical</span> Partial execution</h3>
+    <p>This run failed after performing <%= partialMutationCount %> workspace mutation<%= partialMutationCount === 1 ? '' : 's' %>.</p>
+    <% if (operationHistory && operationHistory.length > 0) { %>
+      <% if (failureSummary && !failureSummary.recoveryAvailable) { %>
+        <p class="text-muted">This run has replay/evidence data, but no safe automatic recovery action is currently offered. Review Operation History before retrying or applying manual cleanup.</p>
+      <% } else { %>
+        <p class="text-muted">Review Operation History below for recovery options.</p>
+      <% } %>
+    <% } %>
+  </div>
+<% } %>
+
+<% if (attentionStateWarning) { %>
+  <div class="attn critical state-inconsistency-warning">
+    <h3><span class="sev">Critical</span> State Warning</h3>
+    <p><%= runStateInconsistency.message %></p>
+    <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %>
+      <ul>
+        <% runStateInconsistency.reasons.forEach(reason => { %><li><%= reason %></li><% }) %>
+      </ul>
+    <% } %>
+  </div>
+<% } %>
+
+<% if (run.triage && run.triage.required) { %>
+  <div class="attn critical failure-summary">
+    <h3><span class="sev">Critical</span> Triage Required</h3>
+    <dl class="detail-grid">
+      <div><dt>Reason</dt><dd><code><%= run.triage.reasonCode %></code></dd></div>
+      <div><dt>Required decision</dt><dd><code><%= run.triage.requiredDecision %></code></dd></div>
+      <div><dt>Summary</dt><dd><%= run.triage.summary %></dd></div>
+      <div><dt>Created</dt><dd><%= run.triage.createdAt || '-' %></dd></div>
+      <div><dt>Allowed next actions</dt><dd><%= run.triage.allowedActions.length > 0 ? run.triage.allowedActions.join(', ') : 'none' %></dd></div>
+      <div><dt>Prohibited actions</dt><dd><%= run.triage.prohibitedActions.length > 0 ? run.triage.prohibitedActions.join(', ') : 'none' %></dd></div>
+    </dl>
+    <% if (run.triage.evidenceRefs.length > 0) { %>
+      <p class="text-muted">Evidence:
+        <% run.triage.evidenceRefs.forEach(ref => { %><code class="owned-path"><%= ref %></code> <% }) %>
+      </p>
+    <% } %>
+    <p><a class="btn-small" href="/inbox?ticket=<%= run.ticketId %>">Respond in Inbox</a> <span class="text-muted">This blocker is a message thread — reply and resolve it there.</span></p>
+  </div>
+<% } else if (run.triage && run.triage.resolvedAt) { %>
+  <div class="attn">
+    <h3><span class="sev">Resolved</span> Triage (resolved)</h3>
+    <dl class="detail-grid">
+      <div><dt>Reason</dt><dd><code><%= run.triage.reasonCode %></code></dd></div>
+      <div><dt>Required decision</dt><dd><code><%= run.triage.requiredDecision %></code></dd></div>
+      <div><dt>Summary</dt><dd><%= run.triage.summary %></dd></div>
+      <div><dt>Resolved by</dt><dd><%= run.triage.resolvedBy || '-' %></dd></div>
+      <div><dt>Resolved at</dt><dd><%= run.triage.resolvedAt || '-' %></dd></div>
+      <div><dt>Resolution</dt><dd><%= run.triage.resolution || '-' %></dd></div>
+    </dl>
+  </div>
+<% } %>
+
+<% if (attentionFailure) { %>
+  <div class="attn critical failure-summary">
+    <h3><span class="sev">Critical</span> Failure Summary</h3>
+    <% if (failureSummary.retryGuidance) { %>
+      <p class="failure-reason"><%= failureSummary.retryGuidance %></p>
+    <% } %>
+    <dl class="detail-grid">
+      <div>
+        <dt>Run Ended As</dt>
+        <dd><span class="status-badge status-<%= failureSummary.status %>"><%= failureSummary.statusLabel %></span></dd>
+      </div>
+      <div>
+        <dt>Root Cause</dt>
+        <dd><span class="failure-reason"><%= failureSummary.rootCause %></span></dd>
+      </div>
+      <div>
+        <dt>Final Blocking Reason</dt>
+        <dd><%= failureSummary.finalBlockingReason %></dd>
+      </div>
+      <div>
+        <dt>Last Model Message</dt>
+        <dd><%= failureSummary.lastModelMessage %></dd>
+      </div>
+      <div>
+        <dt>Last Proposed Actions</dt>
+        <dd>
+          <% if (failureSummary.lastProposedActions.length > 0) { %>
+            <% failureSummary.lastProposedActions.forEach(action => { %>
+              <code class="owned-path"><%= action %></code>
+            <% }) %>
+          <% } else { %>-<% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Mutations Performed</dt>
+        <dd>
+          <% if (failureSummary.mutationSummary.length > 0) { %>
+            <% failureSummary.mutationSummary.forEach(action => { %>
+              <code class="owned-path"><%= action %></code>
+            <% }) %>
+          <% } else { %>none<% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Output State</dt>
+        <dd><%= failureSummary.outputSatisfaction.label %></dd>
+      </div>
+      <div>
+        <dt>Recovery Action</dt>
+        <dd><span class="badge badge--<%= failureSummary.recoveryAvailable ? 'recovery-recoverable' : 'outcome-noop' %>"><%= failureSummary.recoveryAvailable ? 'Available' : 'Not currently offered' %></span></dd>
+      </div>
+      <div>
+        <dt>Debug Details</dt>
+        <dd>
+          <details class="collapsible">
+            <summary>Raw failure details</summary>
+            <div class="collapsible__content">
+              <dl class="detail-grid">
+                <div>
+                  <dt>Blocking Code</dt>
+                  <dd><code><%= failureSummary.blockingErrorCode %></code></dd>
+                </div>
+                <div>
+                  <dt>Code Meaning</dt>
+                  <dd><%= failureSummary.blockingErrorExplanation %></dd>
+                </div>
+                <div>
+                  <dt>First Failed Operation</dt>
+                  <dd><code class="owned-path"><%= failureSummary.firstFailedOperation %></code></dd>
+                </div>
+                <div>
+                  <dt>Bounded Rejections</dt>
+                  <dd><%= failureSummary.boundedTransitionRejectionCount %></dd>
+                </div>
+              </dl>
+            </div>
+          </details>
+        </dd>
+      </div>
+    </dl>
+  </div>
+<% } %>
+
+<% if (attentionReview) { %>
+  <div class="attn <%= reviewStatus.needsReview ? '' : 'attn--calm' %>">
+    <h3><span class="sev"><%= reviewStatus.needsReview ? 'Needs review' : 'Reviewed' %></span> Review status</h3>
+    <% if (reviewStatus.needsReview) { %>
+      <p><strong>Needs review</strong> — execution completed, but the result should be checked.</p>
+      <p class="text-muted">The system verified declared postconditions / workspace evidence, not the full ticket objective.</p>
+      <ul class="text-muted">
+        <% reviewStatus.reasons.forEach(reason => { %>
+          <li><%= reason %></li>
+        <% }) %>
+      </ul>
+    <% } else { %>
+      <p><strong>No review flag</strong> — no evidence warnings were detected.</p>
+      <p class="text-muted">Completion reflects declared postconditions / workspace evidence, not independent verification of the full ticket objective.</p>
+    <% } %>
+  </div>
+<% } %>
 </section>
 <% } %>
 
-<section class="detail-section">
-  <h2>Work Type Snapshot</h2>
-  <% if (run.workTypeSnapshot) { %>
-    <dl class="detail-grid">
-      <div><dt>Name</dt><dd><strong><%= run.workTypeSnapshot.name %></strong> · <code><%= run.workTypeSnapshot.id %></code></dd></div>
-      <div><dt>Description</dt><dd><%= run.workTypeSnapshot.description %></dd></div>
-      <div><dt>Status when captured</dt><dd><code><%= run.workTypeSnapshot.status %></code></dd></div>
-      <div><dt>Allowed target kinds</dt><dd><% run.workTypeSnapshot.allowedTargetKinds.forEach(function(kind) { %><code><%= kind %></code> <% }); %></dd></div>
-      <div><dt>Captured on ticket</dt><dd><%= run.workTypeSnapshot.capturedAt %></dd></div>
-    </dl>
-  <% } else { %>
-    <p class="text-muted">Unspecified</p>
-  <% } %>
-  <p class="text-muted">Immutable semantic context copied from the ticket. It is not authority and does not grant operations.</p>
-</section>
-
-<section class="detail-section">
-  <h2>Acceptance Criteria Snapshot</h2>
-  <% if (run.acceptanceCriteriaSnapshot) { %>
-    <p style="white-space:pre-wrap;"><%= run.acceptanceCriteriaSnapshot %></p>
-  <% } else { %>
-    <p class="text-muted">No acceptance criteria were captured for this run.</p>
-    <p class="text-muted">Runs capture acceptance criteria at creation time; this run has no captured criteria.</p>
-  <% } %>
-  <p class="text-muted">Frozen at run creation and supplied to the agent as part of the requested outcome; arbitrary prose criteria are not automatically verified.</p>
-</section>
+<div class="zone-head"><span class="zone-eyebrow">Outcome &amp; verification</span><span class="zone-q">What happened, and does the evidence support it?</span></div>
 
 <% if (typeof completionSummary !== 'undefined' && completionSummary) { %>
 <section class="detail-section completion-summary">
@@ -114,162 +305,6 @@
 </section>
 <% } %>
 
-<% if (run.triage && run.triage.required) { %>
-<section class="detail-section failure-summary">
-  <h2>Triage Required</h2>
-  <dl class="detail-grid">
-    <div><dt>Reason</dt><dd><code><%= run.triage.reasonCode %></code></dd></div>
-    <div><dt>Required decision</dt><dd><code><%= run.triage.requiredDecision %></code></dd></div>
-    <div><dt>Summary</dt><dd><%= run.triage.summary %></dd></div>
-    <div><dt>Created</dt><dd><%= run.triage.createdAt || '-' %></dd></div>
-  </dl>
-  <div class="allocation-item-row">
-    <span class="allocation-item-label">Allowed next actions</span>
-    <span class="allocation-item-value"><%= run.triage.allowedActions.length > 0 ? run.triage.allowedActions.join(', ') : 'none' %></span>
-  </div>
-  <div class="allocation-item-row">
-    <span class="allocation-item-label">Prohibited actions</span>
-    <span class="allocation-item-value"><%= run.triage.prohibitedActions.length > 0 ? run.triage.prohibitedActions.join(', ') : 'none' %></span>
-  </div>
-  <% if (run.triage.evidenceRefs.length > 0) { %>
-    <div class="allocation-item-row">
-      <span class="allocation-item-label">Evidence</span>
-      <span class="allocation-item-value">
-        <% run.triage.evidenceRefs.forEach(ref => { %><code class="owned-path"><%= ref %></code> <% }) %>
-      </span>
-    </div>
-  <% } %>
-  <p><a class="btn-small" href="/inbox?ticket=<%= run.ticketId %>">Respond in Inbox</a> <span class="text-muted">This blocker is a message thread — reply and resolve it there.</span></p>
-</section>
-<% } else if (run.triage && run.triage.resolvedAt) { %>
-<section class="detail-section">
-  <h2>Triage (resolved)</h2>
-  <dl class="detail-grid">
-    <div><dt>Reason</dt><dd><code><%= run.triage.reasonCode %></code></dd></div>
-    <div><dt>Required decision</dt><dd><code><%= run.triage.requiredDecision %></code></dd></div>
-    <div><dt>Summary</dt><dd><%= run.triage.summary %></dd></div>
-    <div><dt>Resolved by</dt><dd><%= run.triage.resolvedBy || '-' %></dd></div>
-    <div><dt>Resolved at</dt><dd><%= run.triage.resolvedAt || '-' %></dd></div>
-    <div><dt>Resolution</dt><dd><%= run.triage.resolution || '-' %></dd></div>
-  </dl>
-</section>
-<% } %>
-
-<% if (typeof attemptUsage !== 'undefined' && attemptUsage) { %>
-<section class="detail-section">
-  <h2>Usage / Attempt</h2>
-  <p class="text-muted">Measured from this run's recorded evidence. Counts shown as "unavailable" were not observable for this run. Measurement only — no limits are enforced.</p>
-  <dl class="detail-grid">
-    <div><dt>Attempt</dt><dd><%= attemptUsage.attemptNumber === null ? 'unavailable' : 'attempt ' + attemptUsage.attemptNumber + ' of ' + attemptUsage.attemptCount %></dd></div>
-    <div><dt>Outcome</dt><dd><code><%= attemptUsage.outcome || 'unavailable' %></code></dd></div>
-    <div><dt>Duration</dt><dd><%= attemptUsage.durationMs === null ? 'unavailable' : (typeof formatDurationHuman === 'function' ? formatDurationHuman(attemptUsage.durationMs) : attemptUsage.durationMs + 'ms') %></dd></div>
-    <div><dt>Model requests</dt><dd><%= attemptUsage.modelRequestCount === null ? 'unavailable' : attemptUsage.modelRequestCount %></dd></div>
-    <div><dt>Workspace operations</dt><dd><%= attemptUsage.workspaceOperationCount === null ? 'unavailable' : attemptUsage.workspaceOperationCount %></dd></div>
-    <div><dt>Mutating workspace operations</dt><dd><%= attemptUsage.mutatingWorkspaceOperationCount === null ? 'unavailable' : attemptUsage.mutatingWorkspaceOperationCount %></dd></div>
-    <div><dt>Verification</dt><dd><%= attemptUsage.verificationRequired ? 'required · ' + attemptUsage.verificationOutcome : 'not required' %></dd></div>
-    <div><dt>Triage</dt><dd><%= attemptUsage.triageRequired ? 'required' : 'none' %></dd></div>
-  </dl>
-</section>
-<% } %>
-
-<% if (typeof runtimeLimitsDisplay !== 'undefined' && runtimeLimitsDisplay) { %>
-<%
-  function runtimeLimitPair(used, limit, duration) {
-    var usedText = used === null || used === undefined
-      ? 'unavailable'
-      : (duration && typeof formatDurationHuman === 'function' ? formatDurationHuman(used) : used);
-    var limitText = duration && typeof formatDurationHuman === 'function' ? formatDurationHuman(limit) : limit;
-    return usedText + ' / ' + limitText;
-  }
-%>
-<section class="detail-section">
-  <h2>Runtime limits and usage</h2>
-  <p class="text-muted"><%= runtimeLimitsDisplay.sourceLabel %>.</p>
-  <dl class="detail-grid">
-    <div><dt>Execution turns</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.executionTurns, runtimeLimitsDisplay.limits.maxExecutionSteps, false) %></dd></div>
-    <div><dt>Runtime</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.runtimeMs, runtimeLimitsDisplay.limits.maxRuntimeDurationMs, true) %></dd></div>
-    <div><dt>Model requests</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.modelRequests, runtimeLimitsDisplay.limits.maxModelRequestsPerRun, false) %></dd></div>
-    <div><dt>Workspace operations</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.workspaceOperations, runtimeLimitsDisplay.limits.maxWorkspaceOperationsPerRun, false) %></dd></div>
-    <div><dt>Limit outcome</dt><dd><code><%= runtimeLimitsDisplay.limitOutcome %></code></dd></div>
-    <% if (runtimeLimitsDisplay.providerSymptom) { %>
-      <div><dt>Provider symptom</dt><dd><%= runtimeLimitsDisplay.providerSymptom %></dd></div>
-    <% } %>
-  </dl>
-</section>
-<% } %>
-
-<% if (typeof routingDisplay !== 'undefined' && routingDisplay) { %>
-<section class="detail-section">
-  <h2>Routing decision</h2>
-  <p class="text-muted"><%= routingDisplay.sourceLabel %> — may differ from the runtime context.</p>
-  <dl class="detail-grid">
-    <div><dt>Provider</dt><dd><%= routingDisplay.provider || 'unavailable' %></dd></div>
-    <div><dt>Model</dt><dd><%= routingDisplay.model || 'unavailable' %></dd></div>
-    <div><dt>Routing reason</dt><dd><code><%= routingDisplay.reason || 'unavailable' %></code></dd></div>
-    <div><dt>Fallback used</dt><dd><code><%= routingDisplay.fallbackUsed === true ? 'yes' : (routingDisplay.fallbackUsed === false ? 'no' : 'unavailable') %></code></dd></div>
-  </dl>
-</section>
-<% } %>
-
-<% if (typeof budgetStatus !== 'undefined' && budgetStatus) { %>
-<%
-  function budgetCell(m, unit) {
-    unit = unit || '';
-    if (m.status === 'not_configured') return 'not configured';
-    if (m.status === 'unavailable') return 'unavailable';
-    var pair = m.usage + unit + ' / ' + m.threshold + unit;
-    return m.status === 'exceeded' ? (pair + ' · exceeded (advisory)') : (pair + ' · within limit');
-  }
-%>
-<section class="detail-section">
-  <h2>Budget (advisory)</h2>
-  <p class="text-muted">Advisory only — no execution is blocked. Recorded usage compared against this run's recorded thresholds; an exceeded threshold is a warning, not a limit.</p>
-  <dl class="detail-grid">
-    <div><dt>Runtime</dt><dd><%= budgetCell(budgetStatus.runtimeMs, 'ms') %></dd></div>
-    <div><dt>Model requests</dt><dd><%= budgetCell(budgetStatus.modelRequests, '') %></dd></div>
-    <div><dt>Workspace operations</dt><dd><%= budgetCell(budgetStatus.workspaceOperations, '') %></dd></div>
-  </dl>
-</section>
-<% } %>
-
-<% if (run.executionPolicySnapshot) { %>
-<section class="detail-section">
-  <h2>Execution Policy Snapshot</h2>
-  <p class="text-muted">Policy copied from the ticket when this run was created.</p>
-  <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
-  <dl class="detail-grid">
-    <div><dt>Verification</dt><dd><code><%= run.executionPolicySnapshot.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
-    <div><dt>Workspace scope</dt><dd><code><%= run.executionPolicySnapshot.workspaceScope %></code> · enforced by this run's workspace path</dd></div>
-    <div><dt>Mode</dt><dd><code><%= run.executionPolicySnapshot.mode %></code> · recorded intent, not enforced</dd></div>
-    <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts === null ? 'unlimited · enforced for manual rerun-from-start when set' : run.executionPolicySnapshot.maxAttempts + ' · enforced for manual rerun-from-start' %></dd></div>
-    <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'unspecified' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
-    <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'unspecified' : run.executionPolicySnapshot.maxModelRequests %> · recorded intent, not enforced</dd></div>
-    <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'unspecified' : run.executionPolicySnapshot.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
-  </dl>
-</section>
-<% } %>
-
-<% if (typeof reviewStatus !== 'undefined' && reviewStatus && reviewStatus.applicable) { %>
-<section class="detail-section">
-  <h2>Review status</h2>
-  <% if (reviewStatus.needsReview) { %>
-    <p><strong>Needs review</strong> — execution completed, but the result should be checked.</p>
-    <p class="text-muted">The system verified declared postconditions / workspace evidence, not the full ticket objective.</p>
-    <ul class="text-muted">
-      <% reviewStatus.reasons.forEach(reason => { %>
-        <li><%= reason %></li>
-      <% }) %>
-    </ul>
-  <% } else { %>
-    <p><strong>No review flag</strong> — no evidence warnings were detected.</p>
-    <p class="text-muted">Completion reflects declared postconditions / workspace evidence, not independent verification of the full ticket objective.</p>
-  <% } %>
-</section>
-<% } %>
-
 <section class="detail-section">
   <h2>Workflow Postconditions</h2>
   <% const declaredPostconditions = run.verificationContractSnapshot && Array.isArray(run.verificationContractSnapshot.postconditions) ? run.verificationContractSnapshot.postconditions : []; %>
@@ -304,268 +339,6 @@
   <% } %>
   <% if (run.verificationContractSnapshot && run.verificationContractSnapshot.verifierContract) { %>
     <p class="text-muted"><strong>Fixture verifier not executed:</strong> <code><%= run.verificationContractSnapshot.verifierContract.id || 'unnamed' %></code> is offline benchmark metadata. Runtime completion is based only on the deterministic postconditions shown above.</p>
-  <% } %>
-</section>
-
-<% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
-<section class="detail-section state-inconsistency-warning">
-  <h2>State Warning</h2>
-  <p><%= runStateInconsistency.message %></p>
-  <% if (runStateInconsistency.reasons && runStateInconsistency.reasons.length > 0) { %>
-    <ul>
-      <% runStateInconsistency.reasons.forEach(reason => { %>
-        <li><%= reason %></li>
-      <% }) %>
-    </ul>
-  <% } %>
-</section>
-<% } %>
-
-<% if (typeof failureSummary !== 'undefined' && failureSummary) { %>
-<section class="detail-section failure-summary">
-  <h2>Failure Summary</h2>
-  <% if (failureSummary.retryGuidance) { %>
-    <p class="failure-reason"><%= failureSummary.retryGuidance %></p>
-  <% } %>
-  <dl class="detail-grid">
-    <div>
-      <dt>Run Ended As</dt>
-      <dd><span class="status-badge status-<%= failureSummary.status %>"><%= failureSummary.statusLabel %></span></dd>
-    </div>
-    <div>
-      <dt>Root Cause</dt>
-      <dd><span class="failure-reason"><%= failureSummary.rootCause %></span></dd>
-    </div>
-    <div>
-      <dt>Final Blocking Reason</dt>
-      <dd><%= failureSummary.finalBlockingReason %></dd>
-    </div>
-    <div>
-      <dt>Last Model Message</dt>
-      <dd><%= failureSummary.lastModelMessage %></dd>
-    </div>
-    <div>
-      <dt>Last Proposed Actions</dt>
-      <dd>
-        <% if (failureSummary.lastProposedActions.length > 0) { %>
-          <% failureSummary.lastProposedActions.forEach(action => { %>
-            <code class="owned-path"><%= action %></code>
-          <% }) %>
-        <% } else { %>
-          -
-        <% } %>
-      </dd>
-    </div>
-    <div>
-      <dt>Mutations Performed</dt>
-      <dd>
-        <% if (failureSummary.mutationSummary.length > 0) { %>
-          <% failureSummary.mutationSummary.forEach(action => { %>
-            <code class="owned-path"><%= action %></code>
-          <% }) %>
-        <% } else { %>
-          none
-        <% } %>
-      </dd>
-    </div>
-    <div>
-      <dt>Output State</dt>
-      <dd><%= failureSummary.outputSatisfaction.label %></dd>
-    </div>
-    <div>
-      <dt>Recovery Action</dt>
-      <dd><span class="badge badge--<%= failureSummary.recoveryAvailable ? 'recovery-recoverable' : 'outcome-noop' %>"><%= failureSummary.recoveryAvailable ? 'Available' : 'Not currently offered' %></span></dd>
-    </div>
-    <div>
-      <dt>Debug Details</dt>
-      <dd>
-        <details class="collapsible">
-          <summary>Raw failure details</summary>
-          <div class="collapsible__content">
-            <dl class="detail-grid">
-              <div>
-                <dt>Blocking Code</dt>
-                <dd><code><%= failureSummary.blockingErrorCode %></code></dd>
-              </div>
-              <div>
-                <dt>Code Meaning</dt>
-                <dd><%= failureSummary.blockingErrorExplanation %></dd>
-              </div>
-              <div>
-                <dt>First Failed Operation</dt>
-                <dd><code class="owned-path"><%= failureSummary.firstFailedOperation %></code></dd>
-              </div>
-              <div>
-                <dt>Bounded Rejections</dt>
-                <dd><%= failureSummary.boundedTransitionRejectionCount %></dd>
-              </div>
-            </dl>
-          </div>
-        </details>
-      </dd>
-    </div>
-  </dl>
-</section>
-<% } %>
-
-<section class="detail-section">
-  <h2>Run Summary</h2>
-  <dl class="detail-grid">
-    <div>
-      <dt>Status</dt>
-      <dd><span id="run-live-status" class="status-badge status-<%= run.status %>"><%= typeof runStatusLabel === 'undefined' ? run.status : runStatusLabel %></span></dd>
-    </div>
-    <div>
-      <dt>Run Outcome</dt>
-      <dd id="run-live-outcome"><%= viewOperationalOutcome || '-' %></dd>
-    </div>
-    <div>
-      <dt>Agent</dt>
-      <dd><%= run.agentName %></dd>
-    </div>
-    <div>
-      <dt>Started</dt>
-      <dd><%= run.startedAt || '-' %></dd>
-    </div>
-    <div>
-      <dt>Completed</dt>
-      <dd id="run-live-completed"><%= run.completedAt || '-' %></dd>
-    </div>
-    <div>
-      <dt>Duration</dt>
-      <dd id="run-live-duration" data-started-at="<%= run.startedAt || run.createdAt || '' %>" data-completed-at="<%= run.completedAt || '' %>">
-        <% if (run.startedAt && run.completedAt) { %>
-          <%= typeof formatDurationHuman === 'function' ? formatDurationHuman(Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt)))) : Math.max(0, Math.round(new Date(run.completedAt) - new Date(run.startedAt))) + 'ms' %>
-        <% } else if (['pending', 'running'].includes(run.status) && (run.startedAt || run.createdAt)) { %>
-          running for 0 seconds
-        <% } else { %>
-          -
-        <% } %>
-      </dd>
-    </div>
-    <div>
-      <dt>Current Message</dt>
-      <dd id="run-live-message">-</dd>
-    </div>
-    <div>
-      <dt>Mutations</dt>
-      <dd><%= partialMutationCount || 0 %></dd>
-    </div>
-    <% if (typeof eventSummary !== 'undefined' && eventSummary) { %>
-      <div>
-        <dt>Event Status</dt>
-        <dd id="run-live-event-status"><%= eventSummary.latestStatus ? eventSummary.latestStatus.status : '-' %></dd>
-      </div>
-      <div>
-        <dt>Latest Workflow Step</dt>
-        <dd>
-          <% if (eventSummary.currentStep) { %>
-            <code><%= eventSummary.currentStep.stepId %></code>
-            <span class="text-muted"><%= eventSummary.currentStep.action || '' %> <%= eventSummary.currentStep.status || '' %></span>
-          <% } else { %>
-            -
-          <% } %>
-        </dd>
-      </div>
-      <div>
-        <dt>Latest Workspace Mutation</dt>
-        <dd>
-          <% if (eventSummary.latestWorkspaceMutation) { %>
-            <code><%= eventSummary.latestWorkspaceMutation.operation %></code>
-            <% if (eventSummary.latestWorkspaceMutation.path) { %>
-              <code class="owned-path"><%= eventSummary.latestWorkspaceMutation.path %></code>
-            <% } %>
-          <% } else { %>
-            -
-          <% } %>
-        </dd>
-      </div>
-      <div>
-        <dt>Latest Event Error</dt>
-        <dd id="run-live-event-error"><%= eventSummary.latestError && eventSummary.latestError.message ? eventSummary.latestError.message : '-' %></dd>
-      </div>
-    <% } %>
-  </dl>
-
-  <% if (snapshot && snapshot.terminalStatus && snapshot.terminalStatus !== run.status) { %>
-    <div class="terminal-status-divider">
-      <span class="text-muted">Terminal status:</span>
-      <span class="status-badge status-<%= snapshot.terminalStatus %>"><%= snapshot.terminalStatus %></span>
-    </div>
-  <% } %>
-
-  <% if (snapshot && (snapshot.failureReason || run.error)) { %>
-    <div class="failure-reason-block">
-      <span class="failure-reason"><%= failureSummary && failureSummary.finalBlockingReason ? failureSummary.finalBlockingReason : (snapshot.failureReason || run.error) %></span>
-    </div>
-  <% } %>
-
-  <details class="collapsible collapsible--compact">
-    <summary>Run Context</summary>
-    <div class="collapsible__content">
-      <dl class="detail-grid">
-        <div>
-          <dt>Created</dt>
-          <dd><%= run.createdAt || '-' %></dd>
-        </div>
-        <div>
-          <dt>Batch Marker</dt>
-          <dd><%= run.ticketOpenedAt || '-' %></dd>
-        </div>
-        <div>
-          <dt>Workspace</dt>
-          <dd><%= run.executionWorkspaceType || (snapshot && snapshot.executionWorkspaceType) || 'main' %></dd>
-        </div>
-        <div>
-          <dt>Work Split</dt>
-          <dd><%= run.allocationPlanId || (snapshot && snapshot.allocationPlanId) || '-' %></dd>
-        </div>
-        <div>
-          <dt>Work Unit</dt>
-          <dd><%= run.allocationItemId || (snapshot && snapshot.allocationItemId) || '-' %></dd>
-        </div>
-        <div>
-          <dt>Main Workspace</dt>
-          <dd><%= authorityContext && authorityContext.authority ? authorityContext.authority.workspaceRoot : ((snapshot && snapshot.mainWorkspaceRoot) || '-') %></dd>
-        </div>
-        <div>
-          <dt>Allowed Folders</dt>
-          <dd>
-            <% const ownedPaths = (run.ownedOutputPaths && run.ownedOutputPaths.length ? run.ownedOutputPaths : (snapshot && snapshot.ownedOutputPaths) || []); %>
-            <% if (ownedPaths.length > 0) { %>
-              <code class="owned-path"><%= ownedPaths.join(', ') %></code>
-            <% } else { %>
-              -
-            <% } %>
-          </dd>
-        </div>
-        <div>
-          <dt>Subtask</dt>
-          <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
-        </div>
-        <% if (snapshot && snapshot.provider) { %>
-          <div>
-            <dt>Provider</dt>
-            <dd><%= snapshot.provider %></dd>
-          </div>
-        <% } %>
-        <% if (snapshot && snapshot.model) { %>
-          <div>
-            <dt>Model</dt>
-            <dd><%= snapshot.model %></dd>
-          </div>
-        <% } %>
-      </dl>
-    </div>
-  </details>
-
-  <% if (typeof runEvents !== 'undefined' && runEvents && runEvents.length > 0) { %>
-    <details class="collapsible collapsible--compact">
-      <summary>Operational Events</summary>
-      <div class="collapsible__content">
-        <pre class="code-block"><%= JSON.stringify(runEvents, null, 2) %></pre>
-      </div>
-    </details>
   <% } %>
 </section>
 
@@ -637,7 +410,7 @@
       </table>
     </div>
     <% if ((predictionComparison.unexpected || []).length > 0) { %>
-      <h2>Unexpected Actual Artifacts</h2>
+      <h3>Unexpected Actual Artifacts</h3>
       <div class="table-scroll-wrap">
         <table class="tickets-table">
           <thead>
@@ -659,167 +432,411 @@
         </table>
       </div>
     <% } %>
-    <div style="margin-top: 10px;">
-      <span class="text-muted">Source:</span>
-      <code><%= artifactPrediction.source || '-' %></code>
-      <span class="text-muted"> · Captured:</span>
-      <span><%= artifactPrediction.capturedAt || '-' %></span>
-    </div>
+    <p class="text-muted">
+      Source: <code><%= artifactPrediction.source || '-' %></code>
+      · Captured: <span><%= artifactPrediction.capturedAt || '-' %></span>
+    </p>
   <% } %>
 </section>
 
-<section class="detail-section">
-  <details class="collapsible" open>
-    <summary>Authority &amp; Scope</summary>
-    <div class="collapsible__content">
-      <% const ac = typeof authorityContext === 'undefined' ? null : authorityContext; %>
-      <% if (ac) { %>
+<% if (snapshot && (snapshot.browserTargetSnapshot || (snapshot.browserOperations && snapshot.browserOperations.length > 0))) { %>
+  <% const browserEvidenceStatus = snapshot.browserEvidenceStatus || (run.replaySummary && run.replaySummary.browserEvidenceStatus) || null; %>
+  <% const browserEvidenceDetail = snapshot.browserEvidenceDetail || (run.replaySummary && run.replaySummary.browserEvidenceDetail) || null; %>
+  <% const browserReport = snapshot.browserReport || run.browserReport || null; %>
+  <% if (browserEvidenceStatus) { %>
+  <section class="detail-section" id="browser-evidence-status">
+    <h2>Browser Evidence Status</h2>
+    <dl class="detail-grid">
+      <div><dt>Status</dt><dd><strong class="badge badge--outcome-<%= browserEvidenceStatus === 'evidence_available' ? 'success' : browserEvidenceStatus === 'target_blocked_or_redirected' ? 'error' : 'warning' %>"><%= browserEvidenceStatus %></strong></dd></div>
+      <% if (browserEvidenceDetail) { %><div><dt>Detail</dt><dd><%= browserEvidenceDetail %></dd></div><% } %>
+      <div><dt>Runtime status</dt><dd><%= snapshot.terminalStatus || run.status || '-' %> (independent of browser evidence)</dd></div>
+    </dl>
+  </section>
+  <% } %>
+  <% if (browserReport && browserReport.status === 'available') { %>
+  <section class="detail-section" id="browser-report">
+    <h2>Browser Report</h2>
+    <div class="browser-report-text">
+      <p><%= browserReport.text %></p>
+    </div>
+    <dl class="detail-grid">
+      <div><dt>Runtime status</dt><dd><%= snapshot.terminalStatus || run.status || '-' %></dd></div>
+      <div><dt>Browser evidence status</dt><dd><%= browserEvidenceStatus || '-' %></dd></div>
+      <div><dt>Browser report</dt><dd>available</dd></div>
+      <div><dt>Objective success</dt><dd>unverified</dd></div>
+    </dl>
+  </section>
+  <% } else { %>
+  <section class="detail-section" id="browser-report">
+    <h2>Browser Report</h2>
+    <p class="text-muted">Browser report: not available.</p>
+  </section>
+  <% } %>
+<% } %>
 
-      <div class="authority-grid">
-        <div class="authority-column">
-          <h3 class="authority-column-title">Principal</h3>
-          <dl class="authority-dl">
-            <div class="authority-row">
-              <dt>Agent</dt>
-              <dd><%= ac.principal.agentName %></dd>
-            </div>
-            <% if (ac.principal.allocationPlanId) { %>
-              <div class="authority-row">
-                <dt>Allocation Plan</dt>
-                <dd>#<%= ac.principal.allocationPlanId %></dd>
-              </div>
-              <div class="authority-row">
-                <dt>Allocation Item</dt>
-                <dd>#<%= ac.principal.allocationItemId %><% if (ac.principal.allocationSubtask) { %> · <%= ac.principal.allocationSubtask %><% } %></dd>
-              </div>
-            <% } %>
-            <% if (ac.principal.ownedOutputPaths.length > 0) { %>
-              <div class="authority-row">
-                <dt>Owned Paths</dt>
-                <dd>
-                  <% ac.principal.ownedOutputPaths.forEach(function(p) { %>
-                    <code class="owned-path"><%= p %></code>
-                  <% }) %>
-                </dd>
-              </div>
-            <% } else { %>
-              <div class="authority-row">
-                <dt>Owned Paths</dt>
-                <dd><span class="text-muted">None (full workspace)</span></dd>
-              </div>
-            <% } %>
-          </dl>
-        </div>
+<% if (typeof attemptUsage !== 'undefined' && attemptUsage) { %>
+<details class="disclosure">
+  <summary>Usage / Attempt <span class="sub"><%= attemptUsage.attemptNumber === null ? '' : 'attempt ' + attemptUsage.attemptNumber + ' of ' + attemptUsage.attemptCount + ' · ' %><%= attemptUsage.outcome || 'unavailable' %></span></summary>
+  <div class="body">
+    <p class="text-muted">Measured from this run's recorded evidence. Counts shown as "unavailable" were not observable for this run. Measurement only — no limits are enforced.</p>
+    <dl class="detail-grid">
+      <div><dt>Attempt</dt><dd><%= attemptUsage.attemptNumber === null ? 'unavailable' : 'attempt ' + attemptUsage.attemptNumber + ' of ' + attemptUsage.attemptCount %></dd></div>
+      <div><dt>Outcome</dt><dd><code><%= attemptUsage.outcome || 'unavailable' %></code></dd></div>
+      <div><dt>Duration</dt><dd><%= attemptUsage.durationMs === null ? 'unavailable' : (typeof formatDurationHuman === 'function' ? formatDurationHuman(attemptUsage.durationMs) : attemptUsage.durationMs + 'ms') %></dd></div>
+      <div><dt>Model requests</dt><dd><%= attemptUsage.modelRequestCount === null ? 'unavailable' : attemptUsage.modelRequestCount %></dd></div>
+      <div><dt>Workspace operations</dt><dd><%= attemptUsage.workspaceOperationCount === null ? 'unavailable' : attemptUsage.workspaceOperationCount %></dd></div>
+      <div><dt>Mutating workspace operations</dt><dd><%= attemptUsage.mutatingWorkspaceOperationCount === null ? 'unavailable' : attemptUsage.mutatingWorkspaceOperationCount %></dd></div>
+      <div><dt>Verification</dt><dd><%= attemptUsage.verificationRequired ? 'required · ' + attemptUsage.verificationOutcome : 'not required' %></dd></div>
+      <div><dt>Triage</dt><dd><%= attemptUsage.triageRequired ? 'required' : 'none' %></dd></div>
+    </dl>
+  </div>
+</details>
+<% } %>
 
-        <div class="authority-column">
-          <h3 class="authority-column-title">Authority</h3>
-          <dl class="authority-dl">
-            <div class="authority-row">
-              <dt>Allowed Ops</dt>
-              <dd><code class="auth-code"><%= ac.authority.allowedOperations.join(', ') %></code></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Mutating Ops</dt>
-              <dd><code class="auth-code"><%= ac.authority.mutatingOperations.join(', ') %></code></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Max Actions</dt>
-              <dd><%= ac.authority.maxActionsPerResponse %> per response · <%= ac.authority.maxMutatingActionsPerResponse %> mutating</dd>
-            </div>
-            <div class="authority-row">
-              <dt>Max Steps</dt>
-              <dd><%= ac.authority.maxSteps %></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Max Ops</dt>
-              <dd><%= ac.authority.maxWorkspaceOperations %> workspace · <%= ac.authority.maxModelRequests %> model requests</dd>
-            </div>
-            <div class="authority-row">
-              <dt>Max Runtime</dt>
-              <dd><%= typeof formatDurationHuman === 'function' ? formatDurationHuman(ac.authority.maxRuntimeDurationMs) : ac.authority.maxRuntimeDurationMs + 'ms' %></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Provider/Model</dt>
-              <dd><%= ac.authority.provider %> / <%= ac.authority.model %></dd>
-            </div>
-            <div class="authority-row">
-              <dt>Workspace Type</dt>
-              <dd><%= ac.authority.executionWorkspaceType %></dd>
-            </div>
-            <% if (ac.authority.workspaceRoot !== '-') { %>
-              <div class="authority-row">
-                <dt>Workspace Root</dt>
-                <dd><code class="auth-code"><%= ac.authority.workspaceRoot %></code></dd>
-              </div>
-            <% } %>
-            <% if (ac.provenance) { %>
-              <div class="authority-row">
-                <dt>Granted By</dt>
-                <dd><%= ac.provenance.assignment %></dd>
-              </div>
-              <div class="authority-row">
-                <dt>Agent Groups</dt>
-                <dd><%= ac.provenance.groups %></dd>
-              </div>
-              <div class="authority-row">
-                <dt>Runtime Policy</dt>
-                <dd><%= ac.provenance.runtimePolicy %></dd>
-              </div>
-              <div class="authority-row">
-                <dt>Scope Source</dt>
-                <dd><%= ac.provenance.scope %></dd>
-              </div>
-            <% } %>
-          </dl>
-        </div>
+<% if (typeof runtimeLimitsDisplay !== 'undefined' && runtimeLimitsDisplay) { %>
+<%
+  function runtimeLimitPair(used, limit, duration) {
+    var usedText = used === null || used === undefined
+      ? 'unavailable'
+      : (duration && typeof formatDurationHuman === 'function' ? formatDurationHuman(used) : used);
+    var limitText = duration && typeof formatDurationHuman === 'function' ? formatDurationHuman(limit) : limit;
+    return usedText + ' / ' + limitText;
+  }
+%>
+<details class="disclosure">
+  <summary>Runtime limits and usage <span class="sub"><%= runtimeLimitsDisplay.limitOutcome %></span></summary>
+  <div class="body">
+    <p class="text-muted"><%= runtimeLimitsDisplay.sourceLabel %>.</p>
+    <dl class="detail-grid">
+      <div><dt>Execution turns</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.executionTurns, runtimeLimitsDisplay.limits.maxExecutionSteps, false) %></dd></div>
+      <div><dt>Runtime</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.runtimeMs, runtimeLimitsDisplay.limits.maxRuntimeDurationMs, true) %></dd></div>
+      <div><dt>Model requests</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.modelRequests, runtimeLimitsDisplay.limits.maxModelRequestsPerRun, false) %></dd></div>
+      <div><dt>Workspace operations</dt><dd><%= runtimeLimitPair(runtimeLimitsDisplay.usage.workspaceOperations, runtimeLimitsDisplay.limits.maxWorkspaceOperationsPerRun, false) %></dd></div>
+      <div><dt>Limit outcome</dt><dd><code><%= runtimeLimitsDisplay.limitOutcome %></code></dd></div>
+      <% if (runtimeLimitsDisplay.providerSymptom) { %>
+        <div><dt>Provider symptom</dt><dd><%= runtimeLimitsDisplay.providerSymptom %></dd></div>
+      <% } %>
+    </dl>
+  </div>
+</details>
+<% } %>
 
-        <div class="authority-column">
-          <h3 class="authority-column-title">Runtime Controls</h3>
-          <dl class="authority-dl">
+<% if (typeof budgetStatus !== 'undefined' && budgetStatus) { %>
+<%
+  function budgetCell(m, unit) {
+    unit = unit || '';
+    if (m.status === 'not_configured') return 'not configured';
+    if (m.status === 'unavailable') return 'unavailable';
+    var pair = m.usage + unit + ' / ' + m.threshold + unit;
+    return m.status === 'exceeded' ? (pair + ' · exceeded (advisory)') : (pair + ' · within limit');
+  }
+  const budgetExceededCount = ['runtimeMs', 'modelRequests', 'workspaceOperations']
+    .filter(key => budgetStatus[key] && budgetStatus[key].status === 'exceeded').length;
+%>
+<details class="disclosure">
+  <summary>Budget (advisory) <span class="sub"><%= budgetExceededCount > 0 ? budgetExceededCount + ' threshold(s) exceeded' : 'within thresholds' %></span></summary>
+  <div class="body">
+    <p class="text-muted">Advisory only — no execution is blocked. Recorded usage compared against this run's recorded thresholds; an exceeded threshold is a warning, not a limit.</p>
+    <dl class="detail-grid">
+      <div><dt>Runtime</dt><dd><%= budgetCell(budgetStatus.runtimeMs, 'ms') %></dd></div>
+      <div><dt>Model requests</dt><dd><%= budgetCell(budgetStatus.modelRequests, '') %></dd></div>
+      <div><dt>Workspace operations</dt><dd><%= budgetCell(budgetStatus.workspaceOperations, '') %></dd></div>
+    </dl>
+  </div>
+</details>
+<% } %>
+
+<div class="zone-head"><span class="zone-eyebrow">How it was set up</span><span class="zone-q">What was this run allowed and instructed to do?</span></div>
+
+<details class="disclosure">
+  <summary>Work Type Snapshot <span class="sub"><%= run.workTypeSnapshot ? run.workTypeSnapshot.name : 'Unspecified' %></span></summary>
+  <div class="body">
+    <% if (run.workTypeSnapshot) { %>
+      <dl class="detail-grid">
+        <div><dt>Name</dt><dd><strong><%= run.workTypeSnapshot.name %></strong> · <code><%= run.workTypeSnapshot.id %></code></dd></div>
+        <div><dt>Description</dt><dd><%= run.workTypeSnapshot.description %></dd></div>
+        <div><dt>Status when captured</dt><dd><code><%= run.workTypeSnapshot.status %></code></dd></div>
+        <div><dt>Allowed target kinds</dt><dd><% run.workTypeSnapshot.allowedTargetKinds.forEach(function(kind) { %><code><%= kind %></code> <% }); %></dd></div>
+        <div><dt>Captured on ticket</dt><dd><%= run.workTypeSnapshot.capturedAt %></dd></div>
+      </dl>
+    <% } else { %>
+      <p class="text-muted">Unspecified</p>
+    <% } %>
+    <p class="text-muted">Immutable semantic context copied from the ticket. It is not authority and does not grant operations.</p>
+  </div>
+</details>
+
+<details class="disclosure">
+  <summary>Acceptance Criteria Snapshot <span class="sub"><%= run.acceptanceCriteriaSnapshot ? 'Captured' : 'None captured' %></span></summary>
+  <div class="body">
+    <% if (run.acceptanceCriteriaSnapshot) { %>
+      <p style="white-space:pre-wrap;"><%= run.acceptanceCriteriaSnapshot %></p>
+    <% } else { %>
+      <p class="text-muted">No acceptance criteria were captured for this run.</p>
+      <p class="text-muted">Runs capture acceptance criteria at creation time; this run has no captured criteria.</p>
+    <% } %>
+    <p class="text-muted">Frozen at run creation and supplied to the agent as part of the requested outcome; arbitrary prose criteria are not automatically verified.</p>
+  </div>
+</details>
+
+<% if (run.executionPolicySnapshot) { %>
+<details class="disclosure">
+  <summary>Execution Policy Snapshot <span class="sub">verification <%= run.executionPolicySnapshot.requireVerification %></span></summary>
+  <div class="body">
+    <p class="text-muted">Policy copied from the ticket when this run was created.</p>
+    <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
+    <dl class="detail-grid">
+      <div><dt>Verification</dt><dd><code><%= run.executionPolicySnapshot.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
+      <div><dt>Workspace scope</dt><dd><code><%= run.executionPolicySnapshot.workspaceScope %></code> · enforced by this run's workspace path</dd></div>
+      <div><dt>Mode</dt><dd><code><%= run.executionPolicySnapshot.mode %></code> · recorded intent, not enforced</dd></div>
+      <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+      <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+      <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
+      <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts === null ? 'unlimited · enforced for manual rerun-from-start when set' : run.executionPolicySnapshot.maxAttempts + ' · enforced for manual rerun-from-start' %></dd></div>
+      <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'unspecified' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
+      <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'unspecified' : run.executionPolicySnapshot.maxModelRequests %> · recorded intent, not enforced</dd></div>
+      <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'unspecified' : run.executionPolicySnapshot.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
+    </dl>
+  </div>
+</details>
+<% } %>
+
+<% if (typeof routingDisplay !== 'undefined' && routingDisplay) { %>
+<details class="disclosure">
+  <summary>Routing decision <span class="sub"><%= routingDisplay.provider || 'unavailable' %> / <%= routingDisplay.model || 'unavailable' %></span></summary>
+  <div class="body">
+    <p class="text-muted"><%= routingDisplay.sourceLabel %> — may differ from the runtime context.</p>
+    <dl class="detail-grid">
+      <div><dt>Provider</dt><dd><%= routingDisplay.provider || 'unavailable' %></dd></div>
+      <div><dt>Model</dt><dd><%= routingDisplay.model || 'unavailable' %></dd></div>
+      <div><dt>Routing reason</dt><dd><code><%= routingDisplay.reason || 'unavailable' %></code></dd></div>
+      <div><dt>Fallback used</dt><dd><code><%= routingDisplay.fallbackUsed === true ? 'yes' : (routingDisplay.fallbackUsed === false ? 'no' : 'unavailable') %></code></dd></div>
+    </dl>
+  </div>
+</details>
+<% } %>
+
+<details class="disclosure">
+  <summary>Authority &amp; Scope <span class="sub"><%= typeof authorityContext !== 'undefined' && authorityContext ? authorityContext.principal.agentName : 'unavailable' %></span></summary>
+  <div class="body">
+    <% const ac = typeof authorityContext === 'undefined' ? null : authorityContext; %>
+    <% if (ac) { %>
+
+    <div class="authority-grid">
+      <div class="authority-column">
+        <h3 class="authority-column-title">Principal</h3>
+        <dl class="authority-dl">
+          <div class="authority-row">
+            <dt>Agent</dt>
+            <dd><%= ac.principal.agentName %></dd>
+          </div>
+          <% if (ac.principal.allocationPlanId) { %>
             <div class="authority-row">
-              <dt>Interruptible</dt>
-              <dd><span class="badge badge--<%= ac.controls.interruptible ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.interruptible ? 'Yes' : 'No' %></span></dd>
+              <dt>Allocation Plan</dt>
+              <dd>#<%= ac.principal.allocationPlanId %></dd>
             </div>
             <div class="authority-row">
-              <dt>Recovery Analysis</dt>
-              <dd><span class="badge badge--<%= ac.controls.recoverable ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.recoverable ? 'Possible' : 'Not available' %></span></dd>
+              <dt>Allocation Item</dt>
+              <dd>#<%= ac.principal.allocationItemId %><% if (ac.principal.allocationSubtask) { %> · <%= ac.principal.allocationSubtask %><% } %></dd>
             </div>
+          <% } %>
+          <% if (ac.principal.ownedOutputPaths.length > 0) { %>
             <div class="authority-row">
-              <dt>Replay Evidence</dt>
-              <dd><span class="badge badge--<%= ac.controls.replayAvailable ? 'outcome-success' : 'outcome-error' %>"><%= ac.controls.replayAvailable ? 'Available' : 'Not available' %></span></dd>
+              <dt>Owned Paths</dt>
+              <dd>
+                <% ac.principal.ownedOutputPaths.forEach(function(p) { %>
+                  <code class="owned-path"><%= p %></code>
+                <% }) %>
+              </dd>
             </div>
+          <% } else { %>
             <div class="authority-row">
-              <dt>Recovery Action</dt>
-              <dd><% if (ac.controls.recoveryAvailable === true) { %><span class="badge badge--recovery-recoverable">Available</span><% } else if (ac.controls.recoveryAvailable === false) { %><span class="badge badge--outcome-noop">Not currently offered</span><% } else { %><span class="badge badge--outcome-noop">N/A</span><% } %></dd>
+              <dt>Owned Paths</dt>
+              <dd><span class="text-muted">None (full workspace)</span></dd>
             </div>
-          </dl>
-        </div>
+          <% } %>
+        </dl>
       </div>
 
-      <% } else { %>
-        <p class="text-muted">Authority context not available for this run.</p>
+      <div class="authority-column">
+        <h3 class="authority-column-title">Authority</h3>
+        <dl class="authority-dl">
+          <div class="authority-row">
+            <dt>Allowed Ops</dt>
+            <dd><code class="auth-code"><%= ac.authority.allowedOperations.join(', ') %></code></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Mutating Ops</dt>
+            <dd><code class="auth-code"><%= ac.authority.mutatingOperations.join(', ') %></code></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Max Actions</dt>
+            <dd><%= ac.authority.maxActionsPerResponse %> per response · <%= ac.authority.maxMutatingActionsPerResponse %> mutating</dd>
+          </div>
+          <div class="authority-row">
+            <dt>Max Steps</dt>
+            <dd><%= ac.authority.maxSteps %></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Max Ops</dt>
+            <dd><%= ac.authority.maxWorkspaceOperations %> workspace · <%= ac.authority.maxModelRequests %> model requests</dd>
+          </div>
+          <div class="authority-row">
+            <dt>Max Runtime</dt>
+            <dd><%= typeof formatDurationHuman === 'function' ? formatDurationHuman(ac.authority.maxRuntimeDurationMs) : ac.authority.maxRuntimeDurationMs + 'ms' %></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Provider/Model</dt>
+            <dd><%= ac.authority.provider %> / <%= ac.authority.model %></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Workspace Type</dt>
+            <dd><%= ac.authority.executionWorkspaceType %></dd>
+          </div>
+          <% if (ac.authority.workspaceRoot !== '-') { %>
+            <div class="authority-row">
+              <dt>Workspace Root</dt>
+              <dd><code class="auth-code"><%= ac.authority.workspaceRoot %></code></dd>
+            </div>
+          <% } %>
+          <% if (ac.provenance) { %>
+            <div class="authority-row">
+              <dt>Granted By</dt>
+              <dd><%= ac.provenance.assignment %></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Agent Groups</dt>
+              <dd><%= ac.provenance.groups %></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Runtime Policy</dt>
+              <dd><%= ac.provenance.runtimePolicy %></dd>
+            </div>
+            <div class="authority-row">
+              <dt>Scope Source</dt>
+              <dd><%= ac.provenance.scope %></dd>
+            </div>
+          <% } %>
+        </dl>
+      </div>
+
+      <div class="authority-column">
+        <h3 class="authority-column-title">Runtime Controls</h3>
+        <dl class="authority-dl">
+          <div class="authority-row">
+            <dt>Interruptible</dt>
+            <dd><span class="badge badge--<%= ac.controls.interruptible ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.interruptible ? 'Yes' : 'No' %></span></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Recovery Analysis</dt>
+            <dd><span class="badge badge--<%= ac.controls.recoverable ? 'outcome-success' : 'outcome-noop' %>"><%= ac.controls.recoverable ? 'Possible' : 'Not available' %></span></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Replay Evidence</dt>
+            <dd><span class="badge badge--<%= ac.controls.replayAvailable ? 'outcome-success' : 'outcome-error' %>"><%= ac.controls.replayAvailable ? 'Available' : 'Not available' %></span></dd>
+          </div>
+          <div class="authority-row">
+            <dt>Recovery Action</dt>
+            <dd><% if (ac.controls.recoveryAvailable === true) { %><span class="badge badge--recovery-recoverable">Available</span><% } else if (ac.controls.recoveryAvailable === false) { %><span class="badge badge--outcome-noop">Not currently offered</span><% } else { %><span class="badge badge--outcome-noop">N/A</span><% } %></dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+
+    <% } else { %>
+      <p class="text-muted">Authority context not available for this run.</p>
+    <% } %>
+  </div>
+</details>
+
+<details class="disclosure">
+  <summary>Run Context <span class="sub"><%= run.executionWorkspaceType || (snapshot && snapshot.executionWorkspaceType) || 'main' %> workspace</span></summary>
+  <div class="body">
+    <dl class="detail-grid">
+      <div>
+        <dt>Created</dt>
+        <dd><%= run.createdAt || '-' %></dd>
+      </div>
+      <div>
+        <dt>Batch Marker</dt>
+        <dd><%= run.ticketOpenedAt || '-' %></dd>
+      </div>
+      <div>
+        <dt>Workspace</dt>
+        <dd><%= run.executionWorkspaceType || (snapshot && snapshot.executionWorkspaceType) || 'main' %></dd>
+      </div>
+      <div>
+        <dt>Work Split</dt>
+        <dd><%= run.allocationPlanId || (snapshot && snapshot.allocationPlanId) || '-' %></dd>
+      </div>
+      <div>
+        <dt>Work Unit</dt>
+        <dd><%= run.allocationItemId || (snapshot && snapshot.allocationItemId) || '-' %></dd>
+      </div>
+      <div>
+        <dt>Main Workspace</dt>
+        <dd><%= (typeof authorityContext !== 'undefined' && authorityContext && authorityContext.authority) ? authorityContext.authority.workspaceRoot : ((snapshot && snapshot.mainWorkspaceRoot) || '-') %></dd>
+      </div>
+      <div>
+        <dt>Allowed Folders</dt>
+        <dd>
+          <% const ownedPaths = (run.ownedOutputPaths && run.ownedOutputPaths.length ? run.ownedOutputPaths : (snapshot && snapshot.ownedOutputPaths) || []); %>
+          <% if (ownedPaths.length > 0) { %>
+            <code class="owned-path"><%= ownedPaths.join(', ') %></code>
+          <% } else { %>-<% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Subtask</dt>
+        <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
+      </div>
+      <% if (snapshot && snapshot.provider) { %>
+        <div>
+          <dt>Provider</dt>
+          <dd><%= snapshot.provider %></dd>
+        </div>
       <% } %>
+      <% if (snapshot && snapshot.model) { %>
+        <div>
+          <dt>Model</dt>
+          <dd><%= snapshot.model %></dd>
+        </div>
+      <% } %>
+    </dl>
+  </div>
+</details>
+
+<% if (snapshot) { %>
+  <details class="disclosure">
+    <summary>Ticket Objective</summary>
+    <div class="body">
+      <pre class="run-text"><%= snapshot.ticketObjectiveSnapshot || (ticket && ticket.objective) || '-' %></pre>
     </div>
   </details>
-</section>
 
-<% const runRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
-<% if (runRecentLogs.length > 0) { %>
-<section class="detail-section">
-  <h2>Recent Activity</h2>
-  <div class="inline-log-list">
-    <% runRecentLogs.forEach(log => { %>
-      <div class="inline-log-item">
-        <span class="inline-log-type"><%= log.displayType || log.type %></span>
-        <span class="inline-log-message"><%= log.displayMessage || log.message %></span>
-        <% if (log.changedBy || log.requestedBy) { %>
-          <span class="audit-meta">Changed by <%= log.changedBy || log.requestedBy %> at <%= log.changedAt || log.timestamp || '-' %></span>
-        <% } %>
-      </div>
-    <% }) %>
-  </div>
-</section>
+  <details class="disclosure">
+    <summary>Prompt Instructions</summary>
+    <div class="body">
+      <pre class="run-text"><%= snapshot.systemInstructionSnapshot || '-' %></pre>
+    </div>
+  </details>
+
+  <details class="disclosure">
+    <summary><%= snapshot.browserTargetSnapshot ? 'Allowed Browser Actions' : 'Allowed Workspace Actions' %> <span class="sub">primitive contract</span></summary>
+    <div class="body">
+      <pre class="code-block"><%= JSON.stringify(snapshot.primitiveContract || {}, null, 2) %></pre>
+    </div>
+  </details>
+
+  <details class="disclosure">
+    <summary>Technical Runtime Details <span class="sub">runtime envelope</span></summary>
+    <div class="body">
+      <pre class="code-block"><%= JSON.stringify(snapshot.runtimeEnvelope || {}, null, 2) %></pre>
+    </div>
+  </details>
 <% } %>
+
+<div class="zone-head"><span class="zone-eyebrow">What the system did</span><span class="zone-q">Every recorded request, action, and event — the raw evidence.</span></div>
 
 <% if (!snapshot) { %>
   <section class="detail-section">
@@ -854,34 +871,6 @@
       <button type="button" class="btn-small" disabled title="No workspace mutations in this run">Mutations</button>
     <% } %>
   </div>
-
-  <section class="detail-section">
-    <details class="collapsible">
-      <summary>Ticket Objective</summary>
-      <pre class="run-text"><%= snapshot.ticketObjectiveSnapshot || (ticket && ticket.objective) || '-' %></pre>
-    </details>
-  </section>
-
-  <section class="detail-section">
-    <details class="collapsible">
-      <summary>Technical Runtime Details</summary>
-      <pre class="code-block"><%= JSON.stringify(snapshot.runtimeEnvelope || {}, null, 2) %></pre>
-    </details>
-  </section>
-
-  <section class="detail-section">
-    <details class="collapsible">
-      <summary><%= snapshot.browserTargetSnapshot ? 'Allowed Browser Actions' : 'Allowed Workspace Actions' %></summary>
-      <pre class="code-block"><%= JSON.stringify(snapshot.primitiveContract || {}, null, 2) %></pre>
-    </details>
-  </section>
-
-  <section class="detail-section">
-    <details class="collapsible">
-      <summary>Prompt Instructions</summary>
-      <pre class="run-text"><%= snapshot.systemInstructionSnapshot || '-' %></pre>
-    </details>
-  </section>
 
   <section class="detail-section replay-section" data-replay-section="providerRequests">
     <details class="collapsible">
@@ -928,38 +917,6 @@
   </section>
 
   <% if (snapshot.browserTargetSnapshot || (snapshot.browserOperations && snapshot.browserOperations.length > 0)) { %>
-  <% const browserEvidenceStatus = snapshot.browserEvidenceStatus || (run.replaySummary && run.replaySummary.browserEvidenceStatus) || null; %>
-  <% const browserEvidenceDetail = snapshot.browserEvidenceDetail || (run.replaySummary && run.replaySummary.browserEvidenceDetail) || null; %>
-  <% const browserReport = snapshot.browserReport || run.browserReport || null; %>
-  <% if (browserEvidenceStatus) { %>
-  <section class="detail-section" id="browser-evidence-status">
-    <h2>Browser Evidence Status</h2>
-    <dl class="detail-grid">
-      <div><dt>Status</dt><dd><strong class="badge badge--outcome-<%= browserEvidenceStatus === 'evidence_available' ? 'success' : browserEvidenceStatus === 'target_blocked_or_redirected' ? 'error' : 'warning' %>"><%= browserEvidenceStatus %></strong></dd></div>
-      <% if (browserEvidenceDetail) { %><div><dt>Detail</dt><dd><%= browserEvidenceDetail %></dd></div><% } %>
-      <div><dt>Runtime status</dt><dd><%= snapshot.terminalStatus || run.status || '-' %> (independent of browser evidence)</dd></div>
-    </dl>
-  </section>
-  <% } %>
-  <% if (browserReport && browserReport.status === 'available') { %>
-  <section class="detail-section" id="browser-report">
-    <h2>Browser Report</h2>
-    <div class="browser-report-text">
-      <p><%= browserReport.text %></p>
-    </div>
-    <dl class="detail-grid">
-      <div><dt>Runtime status</dt><dd><%= snapshot.terminalStatus || run.status || '-' %></dd></div>
-      <div><dt>Browser evidence status</dt><dd><%= browserEvidenceStatus || '-' %></dd></div>
-      <div><dt>Browser report</dt><dd>available</dd></div>
-      <div><dt>Objective success</dt><dd>unverified</dd></div>
-    </dl>
-  </section>
-  <% } else if (snapshot.browserTargetSnapshot || (snapshot.browserOperations && snapshot.browserOperations.length > 0)) { %>
-  <section class="detail-section" id="browser-report">
-    <h2>Browser Report</h2>
-    <p class="text-muted">Browser report: not available.</p>
-  </section>
-  <% } %>
   <section class="detail-section replay-section" id="replay-browser-operations" data-replay-section="browserOperations">
     <details class="collapsible">
       <summary>Browser Operations (<%= (snapshot.browserOperations || []).length %>)</summary>
@@ -1149,6 +1106,17 @@
   </section>
 <% } %>
 
+<% if (typeof runEvents !== 'undefined' && runEvents && runEvents.length > 0) { %>
+  <section class="detail-section">
+    <details class="collapsible">
+      <summary>Operational Events (<%= runEvents.length %>)</summary>
+      <div class="collapsible__content">
+        <pre class="code-block"><%= JSON.stringify(runEvents, null, 2) %></pre>
+      </div>
+    </details>
+  </section>
+<% } %>
+
 <% if (operationHistory && operationHistory.length > 0) { %>
 <section class="detail-section">
   <h2>Operation History</h2>
@@ -1250,6 +1218,24 @@
             <div class="recovery-preview-panel" id="recovery-preview-<%= record.id %>" style="display: none;"></div>
           <% } %>
         </div>
+      </div>
+    <% }) %>
+  </div>
+</section>
+<% } %>
+
+<% const runRecentLogs = typeof recentLogs === 'undefined' ? [] : recentLogs; %>
+<% if (runRecentLogs.length > 0) { %>
+<section class="detail-section">
+  <h2>Recent Activity</h2>
+  <div class="inline-log-list">
+    <% runRecentLogs.forEach(log => { %>
+      <div class="inline-log-item">
+        <span class="inline-log-type"><%= log.displayType || log.type %></span>
+        <span class="inline-log-message"><%= log.displayMessage || log.message %></span>
+        <% if (log.changedBy || log.requestedBy) { %>
+          <span class="audit-meta">Changed by <%= log.changedBy || log.requestedBy %> at <%= log.changedAt || log.timestamp || '-' %></span>
+        <% } %>
       </div>
     <% }) %>
   </div>
