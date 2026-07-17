@@ -81,3 +81,14 @@ category is visible on the run page the day it ships, with no view change.
 Known edge: one-off **scalar or object** snapshot fields written outside the evidence-recorder
 pipeline (the way `browserReportMessage` once was) are not covered by the catch-all and still need a
 hand-written rendering. When adding such a field, add its rendering in the same change.
+
+## Operator surface parity (pages ↔ oquery)
+
+The pages and the `oquery` CLI are two clients of the same system. History shows they drift when a
+feature ships on one without the other (the inbox, event journal, and admin listings existed for a
+while with no CLI equivalent). The rule: **a new operator-facing surface ships with its `oquery`
+command in the same change** — reads at minimum, mutations when the UI has them. Shared definitions
+back both clients where drift would be dangerous (`runtime/authority-paths.js` backs the runtime
+guard, the admin listing, and `oquery authority-paths` from one definition). Deliberate exception:
+*operating* the browser environment (navigate/screenshot) stays UI-only — interactive inspection
+with image output is not a CLI fit — but its state is readable via `oquery browser-status`.

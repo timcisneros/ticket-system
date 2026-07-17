@@ -428,18 +428,12 @@ const DEFAULT_LOCAL_MODEL_CONCURRENCY = 1;
 // DEFAULT_LOCAL_MODEL_CONCURRENCY (the inherited value when unconfigured): the UI is meant to
 // raise concurrency above the default, so the ceiling must not collapse onto that default.
 const DEFAULT_LOCAL_MODEL_CONCURRENCY_CAP = 32;
-const DEFAULT_PROTECTED_WORKSPACE_PATHS = ['.git', '.env', '.env.*', 'node_modules', 'package.json', 'pnpm-lock.yaml'];
-// Hardcoded application-file guard (WORKSPACE_SENSITIVE_PATH). Distinct from the
-// operator-editable protected-paths config; changing it is a code change.
-const SENSITIVE_APPLICATION_PATHS = Object.freeze([
-  'data',
-  'server.js',
-  'views/admin',
-  'views/login.ejs',
-  'views/layout.ejs',
-  'package.json',
-  'pnpm-lock.yaml'
-]);
+// Shared with the admin dashboard listing and the oquery CLI (runtime/authority-paths.js)
+// so the enforced rules and every operator-visible listing cannot drift.
+const {
+  SENSITIVE_APPLICATION_PATHS,
+  readProtectedWorkspacePaths: readProtectedWorkspacePathsFromFile
+} = require('./runtime/authority-paths');
 const WORKSPACE_FIXTURES = [
   { id: 'empty', name: 'Empty workspace' },
   { id: 'simple-files', name: 'Simple files' },
@@ -14781,20 +14775,7 @@ function validateWorkspaceActionBatch(actions) {
 }
 
 function readProtectedWorkspacePaths() {
-  try {
-    const configuredPaths = JSON.parse(fs.readFileSync(PROTECTED_PATHS_FILE, 'utf8'));
-
-    if (!Array.isArray(configuredPaths)) {
-      throw new Error('Protected workspace paths config must be an array');
-    }
-
-    return configuredPaths
-      .filter(item => typeof item === 'string')
-      .map(item => item.trim())
-      .filter(Boolean);
-  } catch (error) {
-    return [...DEFAULT_PROTECTED_WORKSPACE_PATHS];
-  }
+  return readProtectedWorkspacePathsFromFile(PROTECTED_PATHS_FILE).paths;
 }
 
 function normalizeWorkspacePattern(pattern) {
@@ -24723,8 +24704,10 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     hasOpenAIApiKeyFallback: Boolean(String(process.env.OPENAI_API_KEY || '').trim()),
     hasOpenAIModelFallback: Boolean(String(process.env.OPENAI_MODEL || '').trim()),
     hasOllamaModelFallback: Boolean(String(process.env.OLLAMA_MODEL || '').trim()),
-    protectedWorkspacePaths: readProtectedWorkspacePaths(),
-    protectedPathsFromConfig: (() => { try { return Array.isArray(JSON.parse(fs.readFileSync(PROTECTED_PATHS_FILE, 'utf8'))); } catch (_) { return false; } })(),
+    ...(() => {
+      const protectedPathsRead = readProtectedWorkspacePathsFromFile(PROTECTED_PATHS_FILE);
+      return { protectedWorkspacePaths: protectedPathsRead.paths, protectedPathsFromConfig: protectedPathsRead.fromConfig };
+    })(),
     sensitiveApplicationPaths: SENSITIVE_APPLICATION_PATHS,
     // A broken catalog must be visible on the dashboard, not a 500.
     ...(() => { try { return { workTypeCatalog: readWorkTypes(), workTypeCatalogError: null }; } catch (error) { return { workTypeCatalog: [], workTypeCatalogError: error.message || String(error) }; } })(),

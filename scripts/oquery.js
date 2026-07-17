@@ -2757,6 +2757,183 @@ async function cmdModelPolicyDetail(args) {
   console.log('');
 }
 
+// ── Inbox & visibility commands (headless equivalents of /inbox, /event-journal,
+// and the admin authority/catalog listings). Message bodies print verbatim —
+// they are the model's recorded output (docs/OPERATOR_INBOX.md). ──
+
+function inboxKindTag(thread) {
+  return thread.kind === 'blocker' ? red('blocker') : green('deliverable');
+}
+
+// List inbox threads. GET /api/inbox/threads
+async function cmdInbox(args) {
+  const cookie = requireSession(args);
+  if (!cookie) return;
+  const url = args.url || opercUrl();
+  const { status, data } = await operatorGetCall(url, cookie, '/api/inbox/threads');
+  if (status !== 200) return reportActionError(args, status, data);
+  let threads = data.threads || [];
+  if (args.status) threads = threads.filter(t => t.status === args.status);
+  if (args.ticket) threads = threads.filter(t => t.ticketId === parseInt(args.ticket, 10));
+  if (args.json) return console.log(JSON.stringify(threads, null, 2));
+  if (threads.length === 0) return console.log(dim('  No inbox threads' + (args.status ? ` with status ${args.status}` : '') + '.'));
+  console.log(`  ${bold('Inbox')} — ${threads.length} thread(s)`);
+  for (const t of threads) {
+    const refs = `ticket #${t.ticketId}` + (t.runId ? ` · run #${t.runId}` : '');
+    console.log(`    ${cyan('T' + t.id)} ${inboxKindTag(t)} ${t.status === 'open' ? yellow('open') : dim('closed')} ${bold(t.subject)}`);
+    console.log(`        ${dim(refs + ' · ' + (t.messages || []).length + ' message(s) · updated ' + t.updatedAt)}`);
+  }
+  console.log(dim('\n  Read one with: oquery inbox-thread <id>'));
+}
+
+// Show one inbox thread with verbatim messages. GET /api/inbox/threads
+async function cmdInboxThread(args) {
+  const cookie = requireSession(args);
+  if (!cookie) return;
+  const threadId = parseInt(args._[0] || args.id, 10);
+  if (Number.isNaN(threadId)) return console.log(red('  ✗ Usage: oquery inbox-thread <id>'));
+  const url = args.url || opercUrl();
+  const { status, data } = await operatorGetCall(url, cookie, '/api/inbox/threads');
+  if (status !== 200) return reportActionError(args, status, data);
+  const thread = (data.threads || []).find(t => t.id === threadId);
+  if (!thread) return console.log(red(`  ✗ Thread #${threadId} not found`));
+  if (args.json) return console.log(JSON.stringify(thread, null, 2));
+  console.log(`  ${bold(thread.subject)}`);
+  console.log(`  ${inboxKindTag(thread)} ${thread.status === 'open' ? yellow('open') : dim('closed')} · ticket #${thread.ticketId}${thread.runId ? ' · run #' + thread.runId : ''}`);
+  if (thread.kind === 'blocker') {
+    console.log(`  ${dim('reason')} ${thread.reasonCode || '-'} ${dim('· decision')} ${thread.requiredDecision || '-'}`);
+    console.log(`  ${dim('allowed')} ${(thread.allowedActions || []).join(', ') || 'none'} ${dim('· prohibited')} ${(thread.prohibitedActions || []).join(', ') || 'none'}`);
+    if ((thread.evidenceRefs || []).length > 0) console.log(`  ${dim('evidence')} ${thread.evidenceRefs.join(', ')}`);
+  }
+  for (const m of thread.messages || []) {
+    console.log(`\n  ${bold(m.authorName)} ${dim('(' + m.author + ' · ' + m.kind + ' · ' + m.createdAt + ')')}`);
+    for (const line of String(m.body || '').split('\n')) console.log(`    ${line}`);
+  }
+  if (thread.status === 'open') {
+    console.log(dim(`\n  Reply:   oquery inbox-reply ${thread.id} --message "..."`));
+    console.log(dim(`  Resolve: oquery inbox-resolve ${thread.id} --message "..." ${thread.kind === 'blocker' ? '(records the triage resolution and unblocks rerun)' : '(acknowledges the deliverable)'}`));
+  } else {
+    console.log(dim(`\n  Closed by ${thread.closedBy || 'operator'} at ${thread.closedAt || '-'}`));
+  }
+}
+
+// Reply to an inbox thread without resolving. POST /api/inbox/threads/:id/reply
+async function cmdInboxReply(args) {
+  const cookie = requireSession(args);
+  if (!cookie) return;
+  const threadId = parseInt(args._[0] || args.id, 10);
+  const message = args.message;
+  if (Number.isNaN(threadId) || typeof message !== 'string' || !message.trim()) {
+    return console.log(red('  ✗ Usage: oquery inbox-reply <id> --message "..."'));
+  }
+  const url = args.url || opercUrl();
+  const { status, data } = await operatorJsonCall(url, cookie, 'POST', `/api/inbox/threads/${threadId}/reply`, { body: message });
+  if (status !== 200) return reportActionError(args, status, data);
+  if (args.json) return console.log(JSON.stringify(data, null, 2));
+  console.log(`  ${green('✓')} Reply added to thread #${threadId} (still open)`);
+}
+
+// Resolve an inbox thread: blocker → triage resolution; deliverable → acknowledgement.
+// POST /api/inbox/threads/:id/resolve
+async function cmdInboxResolve(args) {
+  const cookie = requireSession(args);
+  if (!cookie) return;
+  const threadId = parseInt(args._[0] || args.id, 10);
+  const message = args.message;
+  if (Number.isNaN(threadId) || typeof message !== 'string' || !message.trim()) {
+    return console.log(red('  ✗ Usage: oquery inbox-resolve <id> --message "..."'));
+  }
+  const url = args.url || opercUrl();
+  const { status, data } = await operatorJsonCall(url, cookie, 'POST', `/api/inbox/threads/${threadId}/resolve`, { body: message });
+  if (status !== 200) return reportActionError(args, status, data);
+  if (args.json) return console.log(JSON.stringify(data, null, 2));
+  const kind = data.thread && data.thread.kind;
+  console.log(`  ${green('✓')} Thread #${threadId} closed${kind === 'blocker' ? ' — triage resolved; rerun gates reopened' : ' — deliverable acknowledged'}`);
+  console.log(dim('  Resolution recorded verbatim as your message. No rerun or status change was performed.'));
+}
+
+// Query the event journal. GET /api/event-journal
+async function cmdJournal(args) {
+  const cookie = requireSession(args);
+  if (!cookie) return;
+  const url = args.url || opercUrl();
+  const params = new URLSearchParams();
+  if (args.type) params.set('type', args.type);
+  if (args.ticket) params.set('ticketId', args.ticket);
+  if (args.run) params.set('runId', args.run);
+  if (args.limit) params.set('limit', args.limit);
+  const qs = params.toString();
+  const { status, data } = await operatorGetCall(url, cookie, '/api/event-journal' + (qs ? `?${qs}` : ''));
+  if (status !== 200) return reportActionError(args, status, data);
+  if (args.json) return console.log(JSON.stringify(data, null, 2));
+  const events = data.events || [];
+  if (events.length === 0) return console.log(dim('  No events match.'));
+  console.log(`  ${bold('Event Journal')} — ${events.length} event(s), oldest first${data.truncated ? yellow(' (truncated — more matched; raise --limit or narrow the filter)') : ''}`);
+  for (const e of events) {
+    const refs = [e.ticketId != null ? `t#${e.ticketId}` : null, e.runId != null ? `r#${e.runId}` : null, e.seq !== undefined ? `seq ${e.seq}` : null].filter(Boolean).join(' ');
+    console.log(`    ${dim(e.ts || '-')} ${cyan(e.type || '-')} ${dim(refs)}`);
+  }
+  console.log(dim('\n  Full payloads with --json'));
+}
+
+// List the Work Type catalog from the local store (read-only; no API mutation exists).
+function cmdWorkTypes(args) {
+  let catalog;
+  try {
+    catalog = require('../work-types').readWorkTypeCatalog(path.join(DATA_DIR, 'work-types.json'));
+  } catch (error) {
+    if (args.json) return console.log(JSON.stringify({ error: 'catalog_invalid', message: error.message }, null, 2));
+    return console.log(red(`  ✗ Catalog invalid: ${error.message}`));
+  }
+  if (args.json) return console.log(JSON.stringify(catalog, null, 2));
+  if (catalog.length === 0) return console.log(dim('  No Work Types defined.'));
+  console.log(`  ${bold('Work Type Catalog')} ${dim('(semantic context only — grants no target access or operations)')}`);
+  for (const w of catalog) {
+    console.log(`    ${cyan(w.id)} ${bold(w.name)} ${w.status === 'active' ? green(w.status) : dim(w.status)} ${dim('[' + w.allowedTargetKinds.join(', ') + ']')}`);
+    console.log(`        ${dim(w.description)}`);
+  }
+}
+
+// List workspace authority path rules from the same shared definition the runtime enforces.
+function cmdAuthorityPaths(args) {
+  const { SENSITIVE_APPLICATION_PATHS, readProtectedWorkspacePaths } = require('../runtime/authority-paths');
+  const protectedRead = readProtectedWorkspacePaths(path.join(ROOT, 'config', 'protected-paths.json'));
+  if (args.json) {
+    return console.log(JSON.stringify({
+      protectedWorkspacePaths: protectedRead.paths,
+      protectedPathsSource: protectedRead.fromConfig ? 'config/protected-paths.json' : 'built-in defaults',
+      sensitiveApplicationPaths: SENSITIVE_APPLICATION_PATHS
+    }, null, 2));
+  }
+  console.log(`  ${bold('Protected workspace paths')} ${dim('(source: ' + (protectedRead.fromConfig ? 'config/protected-paths.json' : 'built-in defaults — config missing or unreadable') + ')')}`);
+  for (const p of protectedRead.paths) console.log(`    ${cyan(p)}`);
+  console.log(`\n  ${bold('Sensitive application paths')} ${dim('(hardcoded guard; changing it is a code change)')}`);
+  for (const p of SENSITIVE_APPLICATION_PATHS) console.log(`    ${cyan(p)}`);
+  console.log(dim('\n  Blocked attempts appear on run pages as WORKSPACE_PROTECTED_PATH / WORKSPACE_SENSITIVE_PATH.'));
+}
+
+// Show browser engine availability and own operator session. GET /api/browser/session
+async function cmdBrowserStatus(args) {
+  const cookie = requireSession(args);
+  if (!cookie) return;
+  const url = args.url || opercUrl();
+  const { status, data } = await operatorGetCall(url, cookie, '/api/browser/session');
+  if (status !== 200) return reportActionError(args, status, data);
+  if (args.json) return console.log(JSON.stringify(data, null, 2));
+  const engine = data.engine || {};
+  console.log(`  ${bold('Browser engine')} ${engine.available ? green('available') : red('unavailable')}${engine.version ? ' ' + dim(engine.version) : ''}`);
+  console.log(`  ${dim('configured: ' + (engine.configured ? 'yes' : 'no') + ' · executable exists: ' + (engine.executableExists ? 'yes' : 'no'))}`);
+  if (data.session) {
+    const s = data.session;
+    console.log(`  ${bold('Session')} ${cyan(s.id)} on ${bold(s.target.name)} ${dim('(' + s.target.id + ')')} · opened ${dim(s.openedAt)}`);
+    const limits = s.target.limits || {};
+    console.log(`  ${dim('actions ' + s.counters.actions + '/' + limits.maxActionsPerRun + ' · navigations ' + s.counters.navigations + '/' + limits.maxNavigationsPerRun + ' · screenshots ' + s.counters.screenshots + '/' + limits.maxScreenshotsPerRun)}`);
+    if (s.page && s.page.url) console.log(`  ${dim('page: ' + s.page.url + (s.page.title ? ' — ' + s.page.title : ''))}`);
+  } else {
+    console.log(dim('  No operator browser session open. Sessions are driven from the /browser page.'));
+  }
+}
+
 // ── Main ──
 
 function help() {
@@ -3236,6 +3413,34 @@ function help() {
     node scripts/oquery.js template-activate 2 v3
     node scripts/oquery.js template-work-context 2 --work-context-id 1
     node scripts/oquery.js work-context-summary 1
+
+  ${bold('Inbox & Visibility Commands:')}
+    inbox           List inbox threads (blockers + deliverables)
+      --status <s>    open | closed
+      --ticket <id>   Filter by ticket
+      --json          Raw JSON output
+    inbox-thread <id>
+                    Show one thread with verbatim messages and triage facts
+    inbox-reply <id> --message "..."
+                    Reply without resolving (thread stays open)
+    inbox-resolve <id> --message "..."
+                    Blocker: records the triage resolution and reopens rerun gates.
+                    Deliverable: acknowledges and closes. Never reruns anything.
+    journal         Query the append-only event journal
+      --type <t>      Event type prefix (e.g. run., workspace.)
+      --ticket <id>   Filter by ticket
+      --run <id>      Filter by run
+      --limit <n>     Max events (default 200, max 1000)
+    work-types      List the Work Type catalog (local store, read-only)
+    authority-paths List protected workspace paths + sensitive application paths
+                    (same shared definition the runtime enforces)
+    browser-status  Show browser engine availability and own operator session
+
+  ${bold('Inbox examples:')}
+    node scripts/oquery.js inbox --status open
+    node scripts/oquery.js inbox-thread 3
+    node scripts/oquery.js inbox-resolve 3 --message "Restored the fixture; safe to rerun."
+    node scripts/oquery.js journal --type run.verification --limit 50
 `);
 }
 
@@ -3395,6 +3600,22 @@ async function main() {
     await cmdTemplateWorkContext(args).catch(e => console.error(red('Error: ' + e.message)));
   } else if (cmd === 'work-context-summary') {
     await cmdWorkContextSummary(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'inbox') {
+    await cmdInbox(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'inbox-thread') {
+    await cmdInboxThread(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'inbox-reply') {
+    await cmdInboxReply(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'inbox-resolve') {
+    await cmdInboxResolve(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'journal') {
+    await cmdJournal(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'work-types') {
+    cmdWorkTypes(args);
+  } else if (cmd === 'authority-paths') {
+    cmdAuthorityPaths(args);
+  } else if (cmd === 'browser-status') {
+    await cmdBrowserStatus(args).catch(e => console.error(red('Error: ' + e.message)));
   } else if (cmds[cmd]) {
     if (!args.json) {
       console.log(sourceLabelLine(args));
