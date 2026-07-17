@@ -18,6 +18,8 @@
     "test:browser-target": "NODE_ENV=test node scripts/browser-target-regression-test.js",
     "test:browser-environment": "NODE_ENV=test node scripts/browser-environment-test.js",
     "test:inbox": "NODE_ENV=test node scripts/inbox-messaging-test.js",
+    "test:oquery-parity": "NODE_ENV=test node scripts/oquery-parity-test.js",
+    "test:operator-visibility": "NODE_ENV=test node scripts/operator-visibility-test.js",
     "test:runtime-budget": "NODE_ENV=test node scripts/runtime-budget-test.js",
     "test:allocated": "NODE_ENV=test node scripts/allocated-regression-test.js",
     "test:recovery": "NODE_ENV=test node scripts/recovery-regression-test.js",

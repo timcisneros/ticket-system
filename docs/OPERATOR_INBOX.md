@@ -17,6 +17,18 @@ Before the inbox, a ticket always terminated silently: the operator had to open 
 
 Planned evolution: a runtime operation that lets the model send inbox messages directly during a run, so messages come from the model at the moment it is blocked rather than being extracted from terminal evidence afterwards.
 
+## Known asymmetry: the channel is one-way (audited 2026-07-17)
+
+The agent's words reach the operator; the operator's words do not reach the agent. A triage
+resolution note is an annotation on the triage record — nothing injects it (or thread replies)
+into the rerun's context, so a rerun starts from objective + assignment with no knowledge of
+what the operator said about the previous attempt. There is also no mid-run channel in either
+direction. Closing this is a design decision, not a bug fix: feeding operator prose into a
+bounded prompt has prompt-injection and boundedness implications, and per
+`decision-memo-objective-interpretation-direction.md` an operator-confirmed instruction is
+`human_confirmed`-source input with real authority — it deserves a decision memo before
+implementation.
+
 ## Data model
 
 `data/message-threads.json` — one record per thread:

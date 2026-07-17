@@ -102,7 +102,7 @@ Current behavior:
 
 | Field | Value |
 |-------|-------|
-| **Status** | Open diagnosis candidate (do not implement without diagnosis first) |
+| **Status** | Substantially resolved in runtime (audited 2026-07-17); entry retained for the record |
 | **Surfaced** | 2026-06-18, during live validation of the relative-objective anchoring fix (`83aead9`) |
 | **Evidence** | Live gpt-4.1-mini run: first response proposed E/F/G with `complete:true`; the per-response mutation cap (`MAX_MUTATING_ACTIONS_PER_RESPONSE`, default 2) executed only E/F; later steps created G; net outcome correct |
 | **Decision required** | Whether a capped, partially executed response may honor `complete:true` |
@@ -124,6 +124,15 @@ Open questions for the diagnosis:
 - Should the continuation prompt explicitly state that only the first N actions were executed and the rest were not applied?
 - Should replay show capped/skipped proposed actions separately from executed actions?
 - Is this a correctness gap anywhere in current behavior, or only a clarity gap? (Start in `runAgentTicket`: confirm how `complete:true` is honored when actions were truncated.)
+
+**Resolution status (audited 2026-07-17):** the runtime now answers the first and third
+questions directly — when per-response caps drop proposed actions, the continuation message
+states how many executed, how many were dropped, and that "`complete:true` was not honored …
+continue from the executed state and re-emit the remaining action(s)" (see the
+`truncatedMessage` construction in `server.js`). The second and fourth are answered by the
+run page's Parsed Model Plans section (per-plan complete flag and proposed actions,
+comparable against Workspace Actions). No further diagnosis is pending; reopen only if the
+cap-feedback path regresses.
 
 ---
 
