@@ -657,6 +657,30 @@ without any coordination machinery.
 
 ---
 
+## 11. Local Event Log × Git (Working-Copy Deletion Gotcha)
+
+`data/events.jsonl` is an append-only local **evidence artifact**: untracked via
+`git rm --cached` (commit `7d0449d`, "Adopt event-log lifecycle policy") and
+Git-ignored, but kept on disk.
+
+**Gotcha:** any local ref that still has the file *tracked* will **delete the
+working-tree copy** when it checks out or fast-forwards to a commit at/after the
+untrack. Observed live: `git switch master` (master still tracking the file)
+followed by `git pull --ff-only` across `7d0449d` physically removed
+`data/events.jsonl` (~30 MB, 172k lines of accumulated evidence).
+
+**Recovery (byte-identical; git state unaffected since the file is now ignored):**
+
+```
+git cat-file blob <any-pre-untrack-commit>:data/events.jsonl > data/events.jsonl
+```
+
+The server recreates an *empty* `events.jsonl` on next start (`writeMissingFile`),
+which silently loses the accumulated evidence — restore from the history blob
+instead if the evidence matters. To shrink the log deliberately, use
+`scripts/archive-local-events.js` (`--archive` / `--archive --reset`); archive
+reset is explicit and never runs automatically.
+
 ## Summary: The Operational Law
 
 ```

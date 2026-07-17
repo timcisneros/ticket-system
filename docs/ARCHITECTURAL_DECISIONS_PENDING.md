@@ -98,4 +98,33 @@ Current behavior:
 
 ---
 
-*Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28).*
+## complete:true Under Per-Response Action Caps
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open diagnosis candidate (do not implement without diagnosis first) |
+| **Surfaced** | 2026-06-18, during live validation of the relative-objective anchoring fix (`83aead9`) |
+| **Evidence** | Live gpt-4.1-mini run: first response proposed E/F/G with `complete:true`; the per-response mutation cap (`MAX_MUTATING_ACTIONS_PER_RESPONSE`, default 2) executed only E/F; later steps created G; net outcome correct |
+| **Decision required** | Whether a capped, partially executed response may honor `complete:true` |
+
+**Description:**
+
+`complete:true` in a capped response does not mean the requested target state was
+fully applied — it means "complete as proposed," while the runtime may have dropped
+proposed actions beyond the cap. In the observed run the runtime continued and the
+outcome was correct (this is NOT the moving-goalpost bug, which is fixed and
+validated), but in other scenarios a capped + `complete:true` response could
+terminate a run before the full target state is applied — a potential correctness
+gap, not just display clarity.
+
+Open questions for the diagnosis:
+
+- Should the runtime ignore/override `complete:true` when any proposed actions were dropped by per-response caps?
+- Should run detail surface "response proposed more actions than were executed"?
+- Should the continuation prompt explicitly state that only the first N actions were executed and the rest were not applied?
+- Should replay show capped/skipped proposed actions separately from executed actions?
+- Is this a correctness gap anywhere in current behavior, or only a clarity gap? (Start in `runAgentTicket`: confirm how `complete:true` is honored when actions were truncated.)
+
+---
+
+*Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16.*

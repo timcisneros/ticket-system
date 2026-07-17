@@ -45,6 +45,8 @@ substrate.
 - [`MODEL_PROVIDER_ROUTING.md`](MODEL_PROVIDER_ROUTING.md) — routing policy + run snapshot.
 - [`LOCAL_CONNECTOR_CONTRACT.md`](LOCAL_CONNECTOR_CONTRACT.md) — local/mock connector.
 - [`OPERATIONAL_TRANSPARENCY.md`](OPERATIONAL_TRANSPARENCY.md) — `/ops` surface.
+- [`OPERATOR_INBOX.md`](OPERATOR_INBOX.md) — `/inbox` messaging surface (blockers, deliverables, triage resolution).
+- [`BROWSER_ENVIRONMENT.md`](BROWSER_ENVIRONMENT.md) — `/browser` operator environment over the Phase 1 browser boundary.
 
 ## Design rationale / audits
 

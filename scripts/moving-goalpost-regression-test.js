@@ -1,5 +1,12 @@
 // Deterministic regression for the relative-objective anchoring fix.
 //
+// The fix is also validated against a real model (gpt-4.1-mini, 2026-06-18):
+// same A/B/C/D scenario created exactly E/F/G, initialWorkspaceSnapshot never
+// absorbed run outputs across model calls, and the run completed. Treat the
+// anchoring behavior as validated; do not re-diagnose the moving-goalpost bug.
+// Known adjacent open question: complete:true under per-response action caps —
+// see docs/ARCHITECTURAL_DECISIONS_PENDING.md.
+//
 // Reproduces Ticket #2: objective "Create folders with the 3 next letters of the
 // alphabet from the ones that are currently there" against an initial workspace
 // A/B/C/D. The scripted model emulates an agent that follows the new anchoring
