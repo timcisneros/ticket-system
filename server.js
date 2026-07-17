@@ -24726,6 +24726,8 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     protectedWorkspacePaths: readProtectedWorkspacePaths(),
     protectedPathsFromConfig: (() => { try { return Array.isArray(JSON.parse(fs.readFileSync(PROTECTED_PATHS_FILE, 'utf8'))); } catch (_) { return false; } })(),
     sensitiveApplicationPaths: SENSITIVE_APPLICATION_PATHS,
+    // A broken catalog must be visible on the dashboard, not a 500.
+    ...(() => { try { return { workTypeCatalog: readWorkTypes(), workTypeCatalogError: null }; } catch (error) { return { workTypeCatalog: [], workTypeCatalogError: error.message || String(error) }; } })(),
     user: request.user,
     resetError: request.query.resetError || null,
     resetSuccess: request.query.resetSuccess || null

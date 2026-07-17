@@ -279,6 +279,36 @@
   </dl>
 </section>
 
+<section class="admin-block">
+  <h2>Work Type Catalog</h2>
+  <p class="text-muted">Read-only listing of <code>data/work-types.json</code>. Work Types are semantic context copied onto tickets and runs as immutable snapshots; they do not grant target access or operations. Edit the catalog file to change; there is no UI mutation.</p>
+  <% if (workTypeCatalogError) { %>
+    <div class="error-message">Catalog invalid: <%= workTypeCatalogError %> — ticket creation cannot offer Work Types until this is fixed.</div>
+  <% } else if (workTypeCatalog.length === 0) { %>
+    <p class="text-muted">No Work Types defined.</p>
+  <% } else { %>
+    <div class="table-scroll-wrap">
+      <table class="tickets-table">
+        <thead>
+          <tr><th>ID</th><th>Name</th><th>Status</th><th>Allowed target kinds</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <% workTypeCatalog.forEach(workType => { %>
+            <tr>
+              <td><code><%= workType.id %></code></td>
+              <td><strong><%= workType.name %></strong></td>
+              <td><span class="status-badge status-<%= workType.status %>"><%= workType.status %></span></td>
+              <td><% workType.allowedTargetKinds.forEach(kind => { %><code><%= kind %></code> <% }) %></td>
+              <td><%= workType.description %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+    <p class="text-muted">Only active Work Types are offered at ticket creation; inactive ones remain listed here and in existing snapshots.</p>
+  <% } %>
+</section>
+
 <section class="admin-block admin-block--danger">
   <h2>Debug Reset</h2>
   <p class="text-muted">Destroys all local tickets, runs, logs, allocation plans, operation history, and workspace contents. Users, agents, groups, memberships, and permissions are preserved.</p>
