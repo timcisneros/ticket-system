@@ -19,8 +19,8 @@
   the target, and how the run was verified. <strong>Horizontal = execution steps</strong> (the
   runtime's model turns, step 0 onward; the outcome chain sits in the final column), left to right
   in recorded order. Dashed red nodes are proposals that never executed — dropped by caps or
-  blocked by guards. Hover a node for its full text; click for every recorded field. Nothing here
-  is inferred; every node cites its evidence.
+  blocked by guards. Nodes size to their content, so recorded text is shown in full; click a node
+  for every recorded field. Nothing here is inferred; every node cites its evidence.
 </p>
 
 <section class="admin-block">
@@ -46,9 +46,9 @@ const LANES = [
   { id: 'target', label: 'TARGET (facts)' },
   { id: 'outcome', label: 'OUTCOME (verified)' }
 ];
-const NODE_W = 190;
-const NODE_H = 72;
-const COL_W = 220;
+const NODE_W = 210;
+const MIN_NODE_H = 56;
+const COL_W = 240;
 const ROW_GAP = 10;
 const LANE_GAP = 56;
 const LANE_TOP = 96;
@@ -72,88 +72,143 @@ function el(name, attrs, parent) {
   return node;
 }
 
-// Two-pass layout. Pass 1 measures: per-(lane, step) cell occupancy determines
-// how many sub-rows each lane needs, so lane bands are sized to their content
-// and can never overlap the lane below. Pass 2 positions nodes inside the
-// computed bands. Step-less nodes (browser ops, workflow actions, outcome
-// chain) get ordered columns after the last step, on their lane's first row.
-function layout(nodes) {
+// Full display text per node, composed from the untruncated detail fields
+// (the projection contract guarantees them) — never from the layout-truncated
+// label. Nothing recorded is hidden on the map itself.
+function fullText(node) {
+  const d = node.detail || {};
+  if (d.message) return d.message;
+  if (node.kind === 'workspace_operation') {
+    return (d.operation || 'operation')
+      + (d.path ? ' ' + d.path : '')
+      + (d.nextPath ? ' → ' + d.nextPath : '')
+      + (d.reason ? '\n' + d.reason : '');
+  }
+  if (node.kind === 'authority_decision') return d.reason ? 'blocked: ' + d.reason : node.label;
+  if (node.kind === 'cap_dropped') return 'dropped by per-response cap: ' + (d.operation || '') + (d.path ? ' ' + d.path : '');
+  if (node.kind === 'unexecuted_proposal') return 'proposed; no recorded execution: ' + (d.operation || '') + (d.path ? ' ' + d.path : '');
+  if (node.kind === 'browser_operation') return (d.operation || 'browser operation') + (d.url ? ' ' + d.url : '') + (d.error ? '\n' + d.error : '');
+  if (node.kind === 'terminal') return 'run ' + node.status + (d.failureReason ? ': ' + d.failureReason : '');
+  if (node.kind === 'triage') return node.label + (d.summary ? '\n' + d.summary : '') + (d.resolution ? '\nresolution: ' + d.resolution : '');
+  return node.label;
+}
+
+// Measurement pass: render each node's real HTML content offscreen at node
+// width and take its actual height, so every node is sized to show its full
+// text — no clamping, no ellipsis, no estimation.
+function measureHeights(nodes) {
+  const host = document.createElement('div');
+  host.className = 'map-measure-host';
+  host.style.width = NODE_W + 'px';
+  document.body.appendChild(host);
+  const heights = new Map();
+  for (const n of nodes) {
+    const probe = document.createElement('div');
+    probe.className = 'map-node-body';
+    const head = document.createElement('div');
+    head.className = 'map-node-kind';
+    head.textContent = 'step 0 · ' + n.kind;
+    const label = document.createElement('div');
+    label.className = 'map-node-label';
+    label.textContent = fullText(n);
+    probe.appendChild(head);
+    probe.appendChild(label);
+    host.appendChild(probe);
+    heights.set(n.id, Math.max(MIN_NODE_H, Math.ceil(probe.offsetHeight) + 2));
+    host.removeChild(probe);
+  }
+  document.body.removeChild(host);
+  return heights;
+}
+
+// Layout with per-node heights. Pass 1: group nodes into (lane, step) cells;
+// each cell stacks sub-rows of up to MAX_SUBCOLS nodes, and a row is as tall
+// as its tallest node. A lane band is as tall as its tallest cell, so lanes
+// can never overlap regardless of content size. Pass 2 positions nodes.
+function layout(nodes, heights) {
   const steps = [...new Set(nodes.filter(n => n.step !== null && n.step !== undefined).map(n => n.step))].sort((a, b) => a - b);
   const stepCol = new Map(steps.map((step, i) => [step, i]));
+  const h = id => heights.get(id) || MIN_NODE_H;
 
-  // Pass 1: cell occupancy → per-lane row depth and global sub-column width.
-  const cellCounts = new Map();
-  const steplessCounts = { model: 0, authority: 0, target: 0, outcome: 0 };
+  const cells = new Map();
+  const steplessNodes = { model: [], authority: [], target: [], outcome: [] };
   for (const n of nodes) {
     if (n.step !== null && n.step !== undefined) {
       const key = n.lane + ':' + n.step;
-      cellCounts.set(key, (cellCounts.get(key) || 0) + 1);
+      if (!cells.has(key)) cells.set(key, []);
+      cells.get(key).push(n);
     } else {
-      steplessCounts[n.lane] = (steplessCounts[n.lane] || 0) + 1;
+      steplessNodes[n.lane].push(n);
     }
   }
-  const subCols = Math.min(MAX_SUBCOLS, Math.max(1, ...cellCounts.values(), 1));
+  const subCols = Math.min(MAX_SUBCOLS, Math.max(1, ...[...cells.values()].map(c => c.length), 1));
   const cellWidth = COL_W + (subCols - 1) * (NODE_W + 8);
 
-  const laneRows = {};
-  for (const lane of LANES.map(l => l.id)) {
-    let rows = steplessCounts[lane] > 0 ? 1 : 1;
-    for (const [key, count] of cellCounts) {
-      if (key.startsWith(lane + ':')) rows = Math.max(rows, Math.ceil(count / MAX_SUBCOLS));
-    }
-    laneRows[lane] = rows;
+  // Per-cell row heights → per-lane band height.
+  const cellRowHeights = new Map();
+  const laneHeight = { model: MIN_NODE_H, authority: MIN_NODE_H, target: MIN_NODE_H, outcome: MIN_NODE_H };
+  for (const [key, cellNodes] of cells) {
+    const lane = key.split(':')[0];
+    const rowHeights = [];
+    cellNodes.forEach((n, index) => {
+      const row = Math.floor(index / MAX_SUBCOLS);
+      rowHeights[row] = Math.max(rowHeights[row] || 0, h(n.id));
+    });
+    cellRowHeights.set(key, rowHeights);
+    const total = rowHeights.reduce((sum, rh) => sum + rh + ROW_GAP, -ROW_GAP);
+    laneHeight[lane] = Math.max(laneHeight[lane], total);
+  }
+  for (const lane of Object.keys(steplessNodes)) {
+    for (const n of steplessNodes[lane]) laneHeight[lane] = Math.max(laneHeight[lane], h(n.id));
   }
 
-  // Lane bands stack: each lane's top clears the previous lane's deepest row.
   const laneY = {};
   let cursorY = LANE_TOP;
   for (const lane of LANES.map(l => l.id)) {
     laneY[lane] = cursorY;
-    cursorY += laneRows[lane] * (NODE_H + ROW_GAP) + LANE_GAP;
+    cursorY += laneHeight[lane] + LANE_GAP;
   }
 
-  // Pass 2: position nodes inside their bands.
   const positions = new Map();
-  const perCell = new Map();
-  const stepless = { model: 0, authority: 0, target: 0, outcome: 0 };
-  for (const n of nodes) {
-    if (n.step !== null && n.step !== undefined) {
-      const key = n.lane + ':' + n.step;
-      const index = perCell.get(key) || 0;
-      perCell.set(key, index + 1);
+  for (const [key, cellNodes] of cells) {
+    const lane = key.split(':')[0];
+    const step = Number(key.split(':')[1]);
+    const rowHeights = cellRowHeights.get(key);
+    cellNodes.forEach((n, index) => {
+      const row = Math.floor(index / MAX_SUBCOLS);
+      let yOffset = 0;
+      for (let r = 0; r < row; r += 1) yOffset += rowHeights[r] + ROW_GAP;
       positions.set(n.id, {
-        x: 140 + stepCol.get(n.step) * cellWidth + (index % MAX_SUBCOLS) * (NODE_W + 8),
-        y: laneY[n.lane] + Math.floor(index / MAX_SUBCOLS) * (NODE_H + ROW_GAP)
+        x: 140 + stepCol.get(step) * cellWidth + (index % MAX_SUBCOLS) * (NODE_W + 8),
+        y: laneY[lane] + yOffset,
+        h: h(n.id)
       });
-    }
+    });
   }
   const steplessBase = 140 + steps.length * cellWidth + 20;
-  for (const n of nodes) {
-    if (n.step === null || n.step === undefined) {
-      const index = stepless[n.lane]++;
-      positions.set(n.id, { x: steplessBase + index * (NODE_W + 12), y: laneY[n.lane] });
-    }
+  for (const lane of Object.keys(steplessNodes)) {
+    steplessNodes[lane].forEach((n, index) => {
+      positions.set(n.id, { x: steplessBase + index * (NODE_W + 12), y: laneY[lane], h: h(n.id) });
+    });
   }
   const maxX = Math.max(600, ...[...positions.values()].map(p => p.x + NODE_W + 40));
-  const maxY = cursorY - LANE_GAP + NODE_H + 30;
+  const maxY = cursorY - LANE_GAP + 30;
 
   // Horizontal axis: one labeled column per execution step (the recorded
   // metric — model turns), plus a trailing column for outcome/unlinked nodes.
   const columns = steps.map(step => ({ x: 140 + stepCol.get(step) * cellWidth, width: cellWidth, label: 'STEP ' + step }));
-  const hasStepless = nodes.some(n => n.step === null || n.step === undefined);
+  const hasStepless = Object.values(steplessNodes).some(list => list.length > 0);
   if (hasStepless) columns.push({ x: steplessBase, width: Math.max(NODE_W + 20, maxX - steplessBase), label: 'OUTCOME / UNLINKED' });
 
   return { positions, laneY, width: maxX, height: maxY, columns };
 }
 
 function edgePath(a, b) {
-  const x1 = a.x + NODE_W / 2, y1 = a.y + NODE_H;
-  const x2 = b.x + NODE_W / 2, y2 = b.y;
   if (Math.abs(a.y - b.y) < 1) {
-    return `M ${a.x + NODE_W} ${a.y + NODE_H / 2} L ${b.x} ${b.y + NODE_H / 2}`;
+    return `M ${a.x + NODE_W} ${a.y + a.h / 2} L ${b.x} ${b.y + b.h / 2}`;
   }
-  const from = a.y < b.y ? { x: x1, y: y1 } : { x: a.x + NODE_W / 2, y: a.y };
-  const to = a.y < b.y ? { x: x2, y: y2 } : { x: b.x + NODE_W / 2, y: b.y + NODE_H };
+  const from = a.y < b.y ? { x: a.x + NODE_W / 2, y: a.y + a.h } : { x: a.x + NODE_W / 2, y: a.y };
+  const to = a.y < b.y ? { x: b.x + NODE_W / 2, y: b.y } : { x: b.x + NODE_W / 2, y: b.y + b.h };
   const midY = (from.y + to.y) / 2;
   return `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`;
 }
@@ -162,7 +217,8 @@ const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 
 function render() {
   svg.replaceChildren();
-  const { positions, laneY, width, height, columns } = layout(graph.nodes);
+  const heights = measureHeights(graph.nodes);
+  const { positions, laneY, width, height, columns } = layout(graph.nodes, heights);
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.setAttribute('width', width);
   svg.setAttribute('height', height);
@@ -198,28 +254,25 @@ function render() {
     const soft = node.kind === 'cap_dropped' || node.kind === 'unexecuted_proposal';
     const group = el('g', { cursor: 'pointer' });
     el('rect', {
-      x: pos.x, y: pos.y, width: NODE_W, height: NODE_H, rx: 8,
+      x: pos.x, y: pos.y, width: NODE_W, height: pos.h, rx: 8,
       fill: node.lane === 'model' ? '#eef2ff' : '#ffffff',
       stroke: color, 'stroke-width': 1.5,
       'stroke-dasharray': soft || node.lane === 'model' ? '4 3' : 'none'
     }, group);
-    // Real HTML text flow inside the node: overflow:hidden + line-clamp +
-    // overflow-wrap:anywhere guarantee containment for any content, including
-    // unbroken tokens (paths, URLs, hashes) that space-wrapping cannot split.
-    const body = el('foreignObject', { x: pos.x, y: pos.y, width: NODE_W, height: NODE_H }, group);
+    // Real HTML text flow inside a node auto-sized to its measured content:
+    // the FULL untruncated text (composed from detail fields) is always
+    // visible on the map itself — no clamping, no ellipsis, no hover needed.
+    const body = el('foreignObject', { x: pos.x, y: pos.y, width: NODE_W, height: pos.h }, group);
     const div = document.createElementNS(XHTML_NS, 'div');
     div.className = 'map-node-body';
-    // Native hover tooltip carries the full label (and full message for plans);
-    // click opens the detail panel with every untruncated field.
-    const tooltip = node.detail && node.detail.message ? node.detail.message : node.label;
-    div.title = tooltip + '\n(click for all recorded fields)';
+    div.title = '(click for all recorded fields)';
     const head = document.createElementNS(XHTML_NS, 'div');
     head.className = 'map-node-kind';
     head.style.color = color;
     head.textContent = (node.step !== null && node.step !== undefined ? 'step ' + node.step + ' · ' : '') + node.kind.replace(/_/g, ' ');
     const labelDiv = document.createElementNS(XHTML_NS, 'div');
     labelDiv.className = 'map-node-label';
-    labelDiv.textContent = node.label;
+    labelDiv.textContent = fullText(node);
     div.appendChild(head);
     div.appendChild(labelDiv);
     body.appendChild(div);
