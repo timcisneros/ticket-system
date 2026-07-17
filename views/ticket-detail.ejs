@@ -324,6 +324,16 @@
           </dd>
         </div>
       <% } %>
+      <% if (ticket.source && ticket.source.type === 'watcher_proposal') { %>
+        <div>
+          <dt>Created from watcher proposal</dt>
+          <dd>
+            <% if (ticket.source.watcherId != null) { %><a href="/watchers/<%= ticket.source.watcherId %>">Watcher #<%= ticket.source.watcherId %></a><% } else { %>Watcher unknown<% } %>
+            · proposal #<%= ticket.source.proposalId != null ? ticket.source.proposalId : '?' %><% if (ticket.source.observationId != null) { %> · observation #<%= ticket.source.observationId %><% } %>
+            · approved by <%= ticket.source.createdBy || ticket.source.fromActor || 'unknown' %>
+          </dd>
+        </div>
+      <% } %>
       <% if (ticket.workContextId && ticket.workContextSnapshot) { %>
         <div>
           <dt>Work Context</dt>

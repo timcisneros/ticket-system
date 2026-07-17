@@ -1,0 +1,75 @@
+<script>document.querySelector('main.container')?.classList.add('container--wide');</script>
+
+<div class="page-header">
+  <div>
+    <h1>Event Journal</h1>
+    <p class="text-muted">Read-only window over the append-only local event journal (<code>events.jsonl</code>). Run-scoped events carry seq/prevHash/hash chain fields; observational events (for example <code>scheduler.tick</code>) do not. Visibility only — nothing here mutates state. See <code>docs/EVIDENCE_VS_TELEMETRY.md</code> for the classification contract.</p>
+  </div>
+  <div class="actions">
+    <a class="btn-secondary" href="/ops">Back to Ops</a>
+  </div>
+</div>
+
+<section class="admin-block">
+  <form method="GET" action="/event-journal" class="workspace-actions journal-filter-form">
+    <label class="journal-filter">
+      <span class="text-muted">Type prefix</span>
+      <input type="text" name="type" value="<%= journalFilters.type || '' %>" placeholder="run. / ticket. / workspace.">
+    </label>
+    <label class="journal-filter">
+      <span class="text-muted">Ticket #</span>
+      <input type="number" name="ticketId" min="1" value="<%= journalFilters.ticketId != null ? journalFilters.ticketId : '' %>">
+    </label>
+    <label class="journal-filter">
+      <span class="text-muted">Run #</span>
+      <input type="number" name="runId" min="1" value="<%= journalFilters.runId != null ? journalFilters.runId : '' %>">
+    </label>
+    <label class="journal-filter">
+      <span class="text-muted">Limit</span>
+      <input type="number" name="limit" min="1" max="1000" value="<%= journalFilters.limit %>">
+    </label>
+    <button type="submit" class="btn-small">Apply</button>
+    <a class="btn-small" href="/event-journal">Reset</a>
+  </form>
+
+  <% if (journalTruncated) { %>
+    <p class="form-hint">More events matched than the limit — showing the most recent <%= journalFilters.limit %>. Narrow the filter or raise the limit (max 1000).</p>
+  <% } %>
+
+  <% if (journalEvents.length === 0) { %>
+    <p class="text-muted">No events match.</p>
+  <% } else { %>
+    <p class="text-muted"><%= journalEvents.length %> event(s), oldest first.</p>
+    <div class="table-scroll-wrap">
+      <table class="tickets-table journal-table">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Type</th>
+            <th>Ticket</th>
+            <th>Run</th>
+            <th>Seq</th>
+            <th>Payload</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% journalEvents.forEach(event => { %>
+            <tr>
+              <td class="journal-ts"><%= event.ts || '-' %></td>
+              <td><code><%= event.type || '-' %></code></td>
+              <td><% if (event.ticketId != null) { %><a href="/tickets/<%= event.ticketId %>">#<%= event.ticketId %></a><% } else { %>-<% } %></td>
+              <td><% if (event.runId != null) { %><a href="/runs/<%= event.runId %>">#<%= event.runId %></a><% } else { %>-<% } %></td>
+              <td><%= event.seq !== undefined ? event.seq : '-' %></td>
+              <td>
+                <details class="collapsible">
+                  <summary>View</summary>
+                  <pre class="code-block"><%= JSON.stringify(event, null, 2) %></pre>
+                </details>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+</section>

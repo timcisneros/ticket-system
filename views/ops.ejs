@@ -30,7 +30,7 @@
 <section class="admin-block">
   <h2>Event append admission</h2>
   <% var journal = summary.eventJournal; %>
-  <p class="text-muted">Live, process-local admission pressure. Durable acknowledgement still occurs only after the committed batch is synced. These metrics do not cap or report total events.jsonl growth.</p>
+  <p class="text-muted">Live, process-local admission pressure. Durable acknowledgement still occurs only after the committed batch is synced. These metrics do not cap or report total events.jsonl growth. Browse the recorded events themselves at <a href="/event-journal">/event-journal</a>.</p>
   <table class="tickets-table">
     <tbody>
       <tr><th>Status</th><td><%= journal.status %></td></tr>

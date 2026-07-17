@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
-const { readMatchingEvents } = require('./runtime/event-reader');
+const { readMatchingEvents, readRecentEvents } = require('./runtime/event-reader');
 const { scanCurrentEventJournal } = require('./runtime/event-journal-scan');
 const { createDurableAppendJournal, resolveDurableAppendJournalOptions } = require('./runtime/durable-append');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
@@ -20855,7 +20855,73 @@ fastify.get('/ops', { preHandler: fastify.requireAuth }, async (request, reply) 
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  return reply.view('ops.ejs', viewData({ user: request.user, summary: buildOperationalSummary() }, request.session.userId));
+  return reply.view('ops.ejs', viewData({ user: request.user, summary: await buildOperationalSummary() }, request.session.userId));
+});
+
+// ==================== EVENT JOURNAL BROWSER ====================
+// Read-only window over the append-only local event journal (events.jsonl).
+// Visibility only, like /ops: no mutation, no remediation, no auto-refresh.
+// Reads are bounded-memory via runtime/event-reader (backward tail read for
+// the unfiltered view; needle-prefiltered streaming scan for filtered views).
+
+const EVENT_JOURNAL_DEFAULT_LIMIT = 200;
+const EVENT_JOURNAL_MAX_LIMIT = 1000;
+
+function queryEventJournal(query = {}) {
+  const limitRaw = parseInt(query.limit || String(EVENT_JOURNAL_DEFAULT_LIMIT), 10);
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, EVENT_JOURNAL_MAX_LIMIT) : EVENT_JOURNAL_DEFAULT_LIMIT;
+  const typeFilter = typeof query.type === 'string' && query.type.trim() ? query.type.trim() : null;
+  const ticketFilter = query.ticketId !== undefined && query.ticketId !== '' ? parseInt(query.ticketId, 10) : null;
+  const runFilter = query.runId !== undefined && query.runId !== '' ? parseInt(query.runId, 10) : null;
+  const filtered = Boolean(typeFilter || Number.isInteger(ticketFilter) || Number.isInteger(runFilter));
+
+  let events;
+  let truncated = false;
+  if (!filtered) {
+    events = readRecentEvents(EVENTS_FILE, limit);
+  } else {
+    const needles = [];
+    if (Number.isInteger(ticketFilter)) needles.push(Buffer.from(`"ticketId":${ticketFilter}`));
+    else if (Number.isInteger(runFilter)) needles.push(Buffer.from(`"runId":${runFilter}`));
+    else if (typeFilter) needles.push(Buffer.from(`"type":"${typeFilter}`));
+    const matches = readMatchingEvents(EVENTS_FILE, {
+      needles,
+      predicate: event =>
+        (typeFilter === null || String(event.type || '').startsWith(typeFilter)) &&
+        (!Number.isInteger(ticketFilter) || event.ticketId === ticketFilter) &&
+        (!Number.isInteger(runFilter) || event.runId === runFilter)
+    });
+    truncated = matches.length > limit;
+    events = matches.slice(-limit);
+  }
+
+  return {
+    events,
+    filters: { limit, type: typeFilter, ticketId: Number.isInteger(ticketFilter) ? ticketFilter : null, runId: Number.isInteger(runFilter) ? runFilter : null },
+    truncated
+  };
+}
+
+fastify.get('/event-journal', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ops:read')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const page = queryEventJournal(request.query || {});
+  return reply.view('event-journal.ejs', viewData({
+    user: request.user,
+    journalEvents: page.events,
+    journalFilters: page.filters,
+    journalTruncated: page.truncated
+  }, request.session.userId));
+});
+
+fastify.get('/api/event-journal', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ops:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  return queryEventJournal(request.query || {});
 });
 
 // ==================== PROCESS TEMPLATE ROUTES ====================

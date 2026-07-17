@@ -57,3 +57,27 @@ no auto-refresh.
 Before a release decision, an operator can answer "what exists, what is active, what is blocked,
 what is unresolved, and does any source-of-truth boundary look unhealthy?" from one read-only place —
 without touching runtime behavior. It is a **lens**, not a control surface.
+
+## Event journal browser (`/event-journal`)
+
+The `/ops` metrics report journal *health*; `/event-journal` shows the recorded events themselves.
+It is a read-only, `ops:read`-gated window over the append-only local `events.jsonl`: the unfiltered
+view is a bounded backward tail read (default 200, max 1000 events); filtered views (type prefix,
+ticket id, run id) use the needle-prefiltered streaming scan from `runtime/event-reader.js` and keep
+the most recent matches, flagging truncation explicitly. Ticket/run columns link to the detail pages.
+Like `/ops`, it mutates nothing and has no auto-refresh. Run-scoped events display their seq chain
+fields; observational events (e.g. `scheduler.tick`) have none — the classification contract is
+`docs/EVIDENCE_VS_TELEMETRY.md`.
+
+## Run-page visibility contract
+
+The run detail page renders recorded evidence **by default, not by enumeration**: every
+replay-snapshot array with content either has a dedicated section (provider requests, model
+responses, parsed model plans, workflow actions, browser operations, workspace operations, events)
+or falls into the "Other Recorded Evidence" catch-all, which renders any remaining array raw with
+counts. Because the evidence recorder appends categories as snapshot arrays, any *future* evidence
+category is visible on the run page the day it ships, with no view change.
+
+Known edge: one-off **scalar or object** snapshot fields written outside the evidence-recorder
+pipeline (the way `browserReportMessage` once was) are not covered by the catch-all and still need a
+hand-written rendering. When adding such a field, add its rendering in the same change.
