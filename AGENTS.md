@@ -127,6 +127,8 @@ branch). When `git status` shows shared files (`server.js`, `scripts/oquery.js`,
 - Place insertions (new sections, list entries) away from the other agent's pending
   hunks so both patch sets apply cleanly in either order.
 
+## Current Known Reality
+
 - Runtime substrate is functioning.
 - `createWorkflowDraft` is visible in `allowedOperations` and runtime prompts.
 - Outer action JSON can work with Mike/Ollama.
