@@ -1647,6 +1647,40 @@ label.checkbox-label input[type="radio"] {
   font-size: 0.88rem;
 }
 
+.diagnostics-actions {
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.diagnostics-copy-status {
+  color: #16a34a;
+  font-size: 0.85rem;
+}
+
+.diagnostics-textarea {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  padding: 12px 14px;
+  background: #f9fafb;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+}
+
+.diagnostics-textarea:focus {
+  outline: none;
+  border-color: #111827;
+}
+
 .browser-page-state {
   margin-bottom: 12px;
   display: flex;
