@@ -1026,6 +1026,68 @@
     </details>
   </section>
 
+  <% if (snapshot.parsedModelPlans && snapshot.parsedModelPlans.length > 0) { %>
+  <section class="detail-section replay-section" data-replay-section="parsedModelPlans">
+    <details class="collapsible">
+      <summary>Parsed Model Plans (<%= snapshot.parsedModelPlans.length %>)</summary>
+      <div class="collapsible__content">
+        <p class="text-muted">The runtime's interpretation of each model response — the plan that actually drove execution. A <code>complete: true</code> flag is the model's claim about its proposed actions; under per-response action caps, not all proposed actions may have executed (compare with Workspace Actions).</p>
+        <% snapshot.parsedModelPlans.forEach((plan, index) => { %>
+          <div class="replay-sub-item">
+            <div class="replay-sub-item-header">
+              <span class="replay-sub-item-label">Plan <%= index + 1 %><%= plan.step !== undefined ? ' · step ' + plan.step : '' %></span>
+              <span class="badge badge--<%= plan.complete ? 'outcome-success' : 'outcome-noop' %>">complete: <%= plan.complete ? 'true' : 'false' %></span>
+              <span class="badge badge--timing"><%= Array.isArray(plan.actions) ? plan.actions.length : 0 %> action(s)</span>
+            </div>
+            <% if (plan.message) { %>
+              <p class="replay-plan-message"><%= plan.message %></p>
+            <% } %>
+            <% if (Array.isArray(plan.actions) && plan.actions.length > 0) { %>
+              <div class="replay-plan-actions">
+                <% plan.actions.forEach(action => { %>
+                  <div><code><%= action && action.operation ? action.operation : '-' %></code><% if (action && action.args && action.args.path) { %> <code class="owned-path"><%= action.args.path %></code><% } %><% if (action && action.args && action.args.nextPath) { %> &rarr; <code class="owned-path"><%= action.args.nextPath %></code><% } %><% if (action && action.args && action.args.url) { %> <code><%= action.args.url %></code><% } %></div>
+                <% }) %>
+              </div>
+            <% } %>
+            <details class="collapsible">
+              <summary>Payload</summary>
+              <pre class="code-block"><%= JSON.stringify(plan, null, 2) %></pre>
+            </details>
+          </div>
+        <% }) %>
+      </div>
+    </details>
+  </section>
+  <% } %>
+
+  <% if (snapshot.workflowActions && snapshot.workflowActions.length > 0) { %>
+  <section class="detail-section replay-section" data-replay-section="workflowActions">
+    <details class="collapsible">
+      <summary>Workflow Actions (<%= snapshot.workflowActions.length %>)</summary>
+      <div class="collapsible__content">
+        <p class="text-muted">Deterministic workflow steps executed by the runtime, in order, with recorded input and result.</p>
+        <% snapshot.workflowActions.forEach((action, index) => { %>
+          <div class="replay-sub-item">
+            <div class="replay-sub-item-header">
+              <span class="replay-sub-item-label">Step <%= index + 1 %> · <code><%= action.stepId || '-' %></code></span>
+              <span class="badge badge--outcome-success"><%= action.action || '-' %></span>
+              <% if (action.durationMs !== undefined) { %><span class="badge badge--timing"><%= action.durationMs %>ms</span><% } %>
+            </div>
+            <dl class="detail-grid">
+              <div><dt>Workflow</dt><dd><code><%= action.workflowId || '-' %></code></dd></div>
+              <div><dt>Started</dt><dd><%= action.startedAt || '-' %></dd></div>
+            </dl>
+            <details class="collapsible">
+              <summary>Input / result</summary>
+              <pre class="code-block"><%= JSON.stringify({ input: action.input, result: action.result }, null, 2) %></pre>
+            </details>
+          </div>
+        <% }) %>
+      </div>
+    </details>
+  </section>
+  <% } %>
+
   <% if (snapshot.browserTargetSnapshot || (snapshot.browserOperations && snapshot.browserOperations.length > 0)) { %>
   <section class="detail-section replay-section" id="replay-browser-operations" data-replay-section="browserOperations">
     <details class="collapsible">
@@ -1214,6 +1276,40 @@
       </div>
     <% }) %>
   </section>
+
+  <%
+    // Transparency by default: any recorded evidence array without a dedicated
+    // section above still renders here, so new evidence categories are never
+    // invisible to the operator.
+    const renderedEvidenceKeys = new Set([
+      'providerRequests', 'modelResponses', 'parsedModelPlans', 'workflowActions',
+      'browserOperations', 'workspaceOperations', 'events', 'ownedOutputPaths'
+    ]);
+    const otherEvidenceKeys = Object.keys(snapshot)
+      .filter(key => Array.isArray(snapshot[key]) && snapshot[key].length > 0 && !renderedEvidenceKeys.has(key))
+      .sort();
+  %>
+  <% if (otherEvidenceKeys.length > 0) { %>
+  <section class="detail-section replay-section" data-replay-section="otherEvidence">
+    <h2>Other Recorded Evidence</h2>
+    <p class="text-muted">Evidence categories recorded in this run's replay snapshot that have no dedicated section above. Shown raw so no recorded evidence is invisible.</p>
+    <% otherEvidenceKeys.forEach(key => { %>
+      <details class="collapsible">
+        <summary><code><%= key %></code> (<%= snapshot[key].length %>)</summary>
+        <div class="collapsible__content">
+          <% snapshot[key].forEach((item, index) => { %>
+            <div class="replay-sub-item">
+              <div class="replay-sub-item-header">
+                <span class="replay-sub-item-label"><%= key %> <%= index + 1 %></span>
+              </div>
+              <pre class="code-block"><%= JSON.stringify(item, null, 2) %></pre>
+            </div>
+          <% }) %>
+        </div>
+      </details>
+    <% }) %>
+  </section>
+  <% } %>
 <% } %>
 
 <% if (typeof runEvents !== 'undefined' && runEvents && runEvents.length > 0) { %>
