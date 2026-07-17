@@ -25,7 +25,7 @@
   }
 %>
 <section class="zone">
-  <div class="zone-head"><span class="zone-eyebrow">At a glance</span><span class="zone-q">What is this, and what's it doing right now?</span></div>
+  <div class="zone-head"><span class="zone-eyebrow">At a glance</span></div>
   <div class="hero" id="ticket-runtime-section" data-ticket-runtime-id="<%= ticket.id %>" data-ticket-runtime-active="<%= activeRuntimeRun ? 'true' : 'false' %>">
     <div class="hero-top">
       <div>
@@ -102,7 +102,7 @@
     || (typeof runStateInconsistency !== 'undefined' && runStateInconsistency);
 %>
 <% if (hasAttention) { %>
-<div class="zone-head" data-attn-zone><span class="zone-eyebrow">Needs your attention</span><span class="zone-q">Does it need me, and what do I decide?</span></div>
+<div class="zone-head" data-attn-zone><span class="zone-eyebrow">Needs your attention</span></div>
 
 <% if (typeof runStateInconsistency !== 'undefined' && runStateInconsistency) { %>
   <div class="attn critical" id="ticket-runtime-state-warning">
@@ -258,7 +258,7 @@
 <% } %>
 <% } %>
 
-<div class="zone-head"><span class="zone-eyebrow">How it's set up</span><span class="zone-q">How is this ticket configured?</span></div>
+<div class="zone-head"><span class="zone-eyebrow">How it's set up</span></div>
 <details class="disclosure" open>
   <summary>Acceptance Criteria <span class="sub"><%= ticket.acceptanceCriteria ? 'Declared' : 'None declared' %></span></summary>
   <div class="body">
@@ -591,7 +591,7 @@
   </div>
 </details>
 
-<div class="zone-head"><span class="zone-eyebrow">What has happened</span><span class="zone-q">What did the system actually do?</span></div>
+<div class="zone-head"><span class="zone-eyebrow">What has happened</span></div>
 
 <section class="detail-section">
   <h2>Runs &amp; attempts</h2>

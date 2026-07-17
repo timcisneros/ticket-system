@@ -9,7 +9,7 @@
 %>
 
 <section class="zone">
-  <div class="zone-head"><span class="zone-eyebrow">At a glance</span><span class="zone-q">What is this run, and where did it end up?</span></div>
+  <div class="zone-head"><span class="zone-eyebrow">At a glance</span></div>
   <div class="hero">
     <div class="hero-top">
       <div>
@@ -92,7 +92,7 @@
 
 <% if (hasRunAttention) { %>
 <section class="zone">
-<div class="zone-head" data-attn-zone><span class="zone-eyebrow">Needs your attention</span><span class="zone-q">Does it need me, and what do I decide?</span></div>
+<div class="zone-head" data-attn-zone><span class="zone-eyebrow">Needs your attention</span></div>
 
 <% if (attentionPartialExecution) { %>
   <div class="attn critical partial-execution-banner">
@@ -255,7 +255,7 @@
 </section>
 <% } %>
 
-<div class="zone-head"><span class="zone-eyebrow">Outcome &amp; verification</span><span class="zone-q">What happened, and does the evidence support it?</span></div>
+<div class="zone-head"><span class="zone-eyebrow">Outcome &amp; verification</span></div>
 
 <% if (typeof completionSummary !== 'undefined' && completionSummary) { %>
 <section class="detail-section completion-summary">
@@ -546,7 +546,7 @@
 </details>
 <% } %>
 
-<div class="zone-head"><span class="zone-eyebrow">How it was set up</span><span class="zone-q">What was this run allowed and instructed to do?</span></div>
+<div class="zone-head"><span class="zone-eyebrow">How it was set up</span></div>
 
 <details class="disclosure">
   <summary>Work Type Snapshot <span class="sub"><%= run.workTypeSnapshot ? run.workTypeSnapshot.name : 'Unspecified' %></span></summary>
@@ -836,7 +836,7 @@
   </details>
 <% } %>
 
-<div class="zone-head"><span class="zone-eyebrow">What the system did</span><span class="zone-q">Every recorded request, action, and event — the raw evidence.</span></div>
+<div class="zone-head"><span class="zone-eyebrow">What the system did</span></div>
 
 <% if (!snapshot) { %>
   <section class="detail-section">
