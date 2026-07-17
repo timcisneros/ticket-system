@@ -47,7 +47,7 @@ const LANES = [
   { id: 'outcome', label: 'OUTCOME (verified)' }
 ];
 const NODE_W = 190;
-const NODE_H = 64;
+const NODE_H = 72;
 const COL_W = 220;
 const ROW_GAP = 10;
 const LANE_GAP = 56;
@@ -158,25 +158,7 @@ function edgePath(a, b) {
   return `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`;
 }
 
-function wrapText(text, max) {
-  const full = String(text);
-  const words = full.split(' ');
-  const lines = [];
-  let line = '';
-  let consumed = 0;
-  for (const word of words) {
-    if ((line + ' ' + word).trim().length > max) { if (line) { lines.push(line); consumed += line.length + 1; } line = word; }
-    else line = (line + ' ' + word).trim();
-    if (lines.length === 2) break;
-  }
-  if (line && lines.length < 3) { lines.push(line); consumed += line.length + 1; }
-  const cut = consumed < full.length;
-  if (cut && lines.length > 0) {
-    const last = lines[lines.length - 1];
-    lines[lines.length - 1] = (last.length > max - 2 ? last.slice(0, max - 2) : last) + ' …';
-  }
-  return lines;
-}
+const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 
 function render() {
   svg.replaceChildren();
@@ -221,15 +203,26 @@ function render() {
       stroke: color, 'stroke-width': 1.5,
       'stroke-dasharray': soft || node.lane === 'model' ? '4 3' : 'none'
     }, group);
-    el('text', { x: pos.x + 10, y: pos.y + 17, fill: color, 'font-size': 10, 'font-weight': 700 }, group).textContent =
-      (node.step !== null && node.step !== undefined ? 'step ' + node.step + ' · ' : '') + node.kind.replace(/_/g, ' ');
-    wrapText(node.label, 29).forEach((line, i) => {
-      el('text', { x: pos.x + 10, y: pos.y + 32 + i * 13, fill: '#111827', 'font-size': 11 }, group).textContent = line;
-    });
+    // Real HTML text flow inside the node: overflow:hidden + line-clamp +
+    // overflow-wrap:anywhere guarantee containment for any content, including
+    // unbroken tokens (paths, URLs, hashes) that space-wrapping cannot split.
+    const body = el('foreignObject', { x: pos.x, y: pos.y, width: NODE_W, height: NODE_H }, group);
+    const div = document.createElementNS(XHTML_NS, 'div');
+    div.className = 'map-node-body';
     // Native hover tooltip carries the full label (and full message for plans);
     // click opens the detail panel with every untruncated field.
     const tooltip = node.detail && node.detail.message ? node.detail.message : node.label;
-    el('title', {}, group).textContent = tooltip + '\n(click for all recorded fields)';
+    div.title = tooltip + '\n(click for all recorded fields)';
+    const head = document.createElementNS(XHTML_NS, 'div');
+    head.className = 'map-node-kind';
+    head.style.color = color;
+    head.textContent = (node.step !== null && node.step !== undefined ? 'step ' + node.step + ' · ' : '') + node.kind.replace(/_/g, ' ');
+    const labelDiv = document.createElementNS(XHTML_NS, 'div');
+    labelDiv.className = 'map-node-label';
+    labelDiv.textContent = node.label;
+    div.appendChild(head);
+    div.appendChild(labelDiv);
+    body.appendChild(div);
     group.addEventListener('click', () => showDetail(node));
   }
 }

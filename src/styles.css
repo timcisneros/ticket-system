@@ -1647,6 +1647,36 @@ label.checkbox-label input[type="radio"] {
   font-size: 0.88rem;
 }
 
+.map-node-body {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 7px 10px;
+  overflow: hidden;
+  cursor: pointer;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.map-node-kind {
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-node-label {
+  margin-top: 2px;
+  color: #111827;
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .map-detail-wide {
   grid-column: 1 / -1;
 }
