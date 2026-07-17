@@ -82,6 +82,20 @@ Known edge: one-off **scalar or object** snapshot fields written outside the evi
 pipeline (the way `browserReportMessage` once was) are not covered by the catch-all and still need a
 hand-written rendering. When adding such a field, add its rendering in the same change.
 
+## Deliberate visibility boundaries
+
+Audited 2026-07-17; these are design decisions, not oversights:
+
+- **Browser screenshot artifacts** render as server-side path + SHA-256 only — no public
+  artifact-serving route (stated on the run page; rationale in `BROWSER_ENVIRONMENT.md`).
+- **No global cross-ticket mutation browser.** Operation history is surfaced per run and per
+  ticket; the event journal and logs cover forensic sweeps.
+- **In-memory transients** (per-ticket transition locks, workspace mutation locks, login
+  rate-limit counters, SSE client sets) are inherently invisible; the two that matter
+  operationally — scheduler state and event-append admission — are on `/ops`.
+- **Recording completeness** is the authority contracts' guarantee, enforced by runtime tests
+  (`RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`), not something any view layer can prove.
+
 ## Operator surface parity (pages ↔ oquery)
 
 The pages and the `oquery` CLI are two clients of the same system. History shows they drift when a

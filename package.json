@@ -19,6 +19,7 @@
     "test:browser-environment": "NODE_ENV=test node scripts/browser-environment-test.js",
     "test:inbox": "NODE_ENV=test node scripts/inbox-messaging-test.js",
     "test:oquery-parity": "NODE_ENV=test node scripts/oquery-parity-test.js",
+    "test:login-origin": "NODE_ENV=test node scripts/login-origin-test.js",
     "test:operator-visibility": "NODE_ENV=test node scripts/operator-visibility-test.js",
     "test:runtime-budget": "NODE_ENV=test node scripts/runtime-budget-test.js",
     "test:allocated": "NODE_ENV=test node scripts/allocated-regression-test.js",

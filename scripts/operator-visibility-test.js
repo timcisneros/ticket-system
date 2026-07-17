@@ -105,6 +105,13 @@ async function main() {
       return { status: r.status, text: await r.text() };
     };
 
+    // ── Tickets list filter chips ──
+    const ticketsPage = await get('/tickets');
+    assert(ticketsPage.text.includes('class="filter-chip') && ticketsPage.text.includes('filter-chip__count'), 'tickets page must render status filter chips with counts');
+    const failedFiltered = await get('/tickets?status=failed');
+    assert(failedFiltered.status === 200 && !failedFiltered.text.includes('ticket-card--completed'), '?status=failed must exclude completed cards');
+    assert(failedFiltered.text.includes('ticket-card--failed'), '?status=failed must include failed cards');
+
     // ── Event journal ──
     const journal = await get('/event-journal');
     assert(journal.status === 200 && journal.text.includes('<h1>Event Journal</h1>'), 'journal page must render');
