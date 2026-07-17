@@ -25,6 +25,7 @@
       </div>
       <div class="hero-actions">
         <a class="btn-secondary" href="/tickets/<%= run.ticketId %>">Back to Ticket</a>
+        <a class="btn-secondary" href="/runs/<%= run.id %>/map">Decision Map</a>
         <a class="btn-secondary" href="/logs?runId=<%= run.id %>">Run Logs</a>
         <% if (run.status === 'completed' || (run.triage && run.triage.createdAt)) { %>
           <a class="btn-secondary" href="/inbox?ticket=<%= run.ticketId %>">Inbox Thread</a>

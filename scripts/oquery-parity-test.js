@@ -108,8 +108,14 @@ async function main() {
     assert(bs.includes('Browser engine'), 'browser-status must report engine state');
     assert(bs.includes('No operator browser session'), 'browser-status must report absent session truthfully');
 
+    const graphOut = oquery(['run-graph', '102']);
+    assert(graphOut.includes('decision graph'), 'run-graph must render the graph header');
+    assert(graphOut.includes('run failed'), 'run-graph must show the terminal outcome');
+    const graphJson = JSON.parse(oquery(['run-graph', '102', '--json']));
+    assert(Array.isArray(graphJson.nodes) && graphJson.nodes.some(n => n.id === 'terminal'), 'run-graph --json must emit the projection');
+
     const helpOut = oquery(['--help']);
-    for (const c of ['inbox', 'inbox-thread', 'inbox-resolve', 'journal', 'work-types', 'authority-paths', 'browser-status']) {
+    for (const c of ['inbox', 'inbox-thread', 'inbox-resolve', 'journal', 'work-types', 'authority-paths', 'browser-status', 'run-graph']) {
       assert(helpOut.includes(c), `help must document ${c}`);
     }
 

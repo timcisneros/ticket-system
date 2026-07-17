@@ -94,6 +94,7 @@ const CHECKPOINT_TEST_SCRIPTS = [
   'oquery-parity-test.js',
   'operator-visibility-test.js',
   'login-origin-test.js',
+  'run-decision-graph-projection-test.js',
   // r1.32: the coverage guard verifies this very list stays honest.
   'release-checkpoint-coverage-test.js'
 ];

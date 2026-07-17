@@ -1647,6 +1647,16 @@ label.checkbox-label input[type="radio"] {
   font-size: 0.88rem;
 }
 
+.map-canvas-wrap {
+  overflow-x: auto;
+  padding: 8px 0;
+}
+
+.map-canvas-wrap svg {
+  display: block;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
 .journal-filter-form {
   align-items: flex-end;
 }

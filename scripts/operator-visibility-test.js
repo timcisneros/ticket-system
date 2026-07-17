@@ -167,6 +167,22 @@ async function main() {
     const workspaceLink = await get('/workspace?path=reports%2Fq3');
     assert(workspaceLink.status === 200, 'workspace link must resolve');
 
+    // ── Run decision map ──
+    assert(runPage.text.includes('href="/runs/101/map"'), 'run hero must link to the decision map');
+    const mapPage = await get('/runs/101/map');
+    assert(mapPage.status === 200 && mapPage.text.includes('Decision Map'), 'map page must render');
+    assert(mapPage.text.includes('every node cites its evidence'), 'map page must state the projection boundary');
+    const graphApi = JSON.parse((await get('/api/runs/101/decision-graph')).text);
+    assert(JSON.stringify(graphApi.lanes) === JSON.stringify(['model', 'authority', 'target', 'outcome']), 'graph must carry the lane order');
+    const planNode = graphApi.nodes.find(n => n.kind === 'parsed_plan');
+    assert(planNode && planNode.detail.message === 'Creating the summary file from the three inputs.', 'graph plan node must carry the verbatim model message');
+    assert(graphApi.nodes.some(n => n.kind === 'workflow_action'), 'graph must include workflow actions');
+    assert(graphApi.nodes.some(n => n.id === 'terminal' && n.status === 'completed'), 'graph must include the terminal outcome');
+    assert(graphApi.nodes.every(n => typeof n.evidenceRef === 'string' && n.evidenceRef.length > 0), 'every graph node must cite evidence');
+    assert(typeof graphApi.cursor === 'string' && graphApi.cursor.length > 0, 'graph must carry a change-detection cursor');
+    const missingGraph = await get('/api/runs/99999/decision-graph');
+    assert(missingGraph.status === 404, 'unknown run must 404');
+
     console.log('PASS: operator visibility — event journal, admin authority/catalog listings, watcher provenance, and run-page evidence sections render truthfully');
   } finally {
     server.kill('SIGTERM');

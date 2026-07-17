@@ -47,6 +47,7 @@ substrate.
 - [`OPERATIONAL_TRANSPARENCY.md`](OPERATIONAL_TRANSPARENCY.md) — `/ops` surface.
 - [`OPERATOR_INBOX.md`](OPERATOR_INBOX.md) — `/inbox` messaging surface (blockers, deliverables, triage resolution).
 - [`BROWSER_ENVIRONMENT.md`](BROWSER_ENVIRONMENT.md) — `/browser` operator environment over the Phase 1 browser boundary.
+- [`RUN_DECISION_MAP_DESIGN.md`](RUN_DECISION_MAP_DESIGN.md) — `/runs/:id/map` lane-graph projection of run evidence.
 
 ## Design rationale / audits
 

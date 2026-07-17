@@ -13,6 +13,7 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents, readRecentEvents } = require('./runtime/event-reader');
+const { buildRunDecisionGraph } = require('./runtime/run-decision-graph');
 const { scanCurrentEventJournal } = require('./runtime/event-journal-scan');
 const { createDurableAppendJournal, resolveDurableAppendJournalOptions } = require('./runtime/durable-append');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
@@ -20904,6 +20905,56 @@ fastify.get('/api/event-journal', { preHandler: fastify.requireAuth }, async (re
     return { error: 'Permission denied' };
   }
   return queryEventJournal(request.query || {});
+});
+
+// ==================== RUN DECISION MAP ====================
+// Read-only lane-graph projection of a run's recorded evidence
+// (runtime/run-decision-graph.js, docs/RUN_DECISION_MAP_DESIGN.md).
+// Visibility only: derives from replay/events/history, writes nothing.
+
+async function buildRunDecisionGraphForRequest(runId) {
+  const storedRun = readRuns().find(item => item.id === runId);
+  if (!storedRun) return null;
+  const run = await hydrateRunReplaySnapshot(storedRun);
+  return buildRunDecisionGraph(
+    run,
+    run.replaySnapshot || null,
+    getRunEvents(runId),
+    getOperationHistoryForRun(runId)
+  );
+}
+
+fastify.get('/runs/:id/map', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
+  }
+  const runId = parseInt(request.params.id, 10);
+  const graph = Number.isNaN(runId) ? null : await buildRunDecisionGraphForRequest(runId);
+  if (!graph) {
+    reply.code(404);
+    return reply.view('error.ejs', viewData({ message: 'Run not found', user: request.user }, request.session.userId));
+  }
+  const run = readRuns().find(item => item.id === runId);
+  return reply.view('run-map.ejs', viewData({
+    user: request.user,
+    run: { id: run.id, ticketId: run.ticketId, agentName: run.agentName, status: run.status },
+    decisionGraph: graph
+  }, request.session.userId));
+});
+
+fastify.get('/api/runs/:id/decision-graph', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const runId = parseInt(request.params.id, 10);
+  const graph = Number.isNaN(runId) ? null : await buildRunDecisionGraphForRequest(runId);
+  if (!graph) {
+    reply.code(404);
+    return { error: 'Run not found' };
+  }
+  return graph;
 });
 
 // ==================== PROCESS TEMPLATE ROUTES ====================

@@ -1,0 +1,238 @@
+<script>document.querySelector('main.container')?.classList.add('container--wide');</script>
+
+<div class="page-header">
+  <div>
+    <h1>Run #<%= run.id %> — Decision Map</h1>
+    <p class="text-muted">
+      Ticket <a href="/tickets/<%= run.ticketId %>">#<%= run.ticketId %></a> · <%= run.agentName %> ·
+      <span id="map-run-status" class="status-badge status-<%= run.status %>"><%= run.status %></span>
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn-secondary" href="/runs/<%= run.id %>">Run Detail</a>
+  </div>
+</div>
+
+<p class="text-muted">
+  A read-only projection of this run's recorded evidence as the truth hierarchy: what the model
+  proposed (its messages verbatim), what the runtime guards decided, what actually executed against
+  the target, and how the run was verified. Dashed red nodes are proposals that never executed —
+  dropped by caps or blocked by guards. Nothing here is inferred; every node cites its evidence.
+</p>
+
+<section class="admin-block">
+  <div id="map-canvas-wrap" class="map-canvas-wrap">
+    <svg id="map-canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</section>
+
+<section class="admin-block" id="map-detail-panel" hidden>
+  <h2 id="map-detail-title">Node</h2>
+  <dl class="detail-grid" id="map-detail-grid"></dl>
+  <p class="text-muted">Evidence: <code id="map-detail-evidence"></code> — full payloads on the <a href="/runs/<%= run.id %>">run page</a>.</p>
+</section>
+
+<script>
+let graph = <%- serializeForInlineScript(decisionGraph) %>;
+const runId = <%- serializeForInlineScript(run.id) %>;
+let currentStatus = <%- serializeForInlineScript(run.status) %>;
+
+const LANES = [
+  { id: 'model', label: 'MODEL (inference)' },
+  { id: 'authority', label: 'AUTHORITY (guards)' },
+  { id: 'target', label: 'TARGET (facts)' },
+  { id: 'outcome', label: 'OUTCOME (verified)' }
+];
+const LANE_Y = { model: 70, authority: 200, target: 330, outcome: 460 };
+const NODE_W = 190;
+const NODE_H = 64;
+const COL_W = 220;
+const STATUS_COLORS = {
+  complete_claimed: '#4f46e5', continuing: '#6366f1', recorded: '#6b7280',
+  allowed: '#16a34a', blocked: '#dc2626', dropped: '#dc2626', unexecuted: '#d97706',
+  created: '#16a34a', ok: '#16a34a', noop: '#d97706', error: '#dc2626',
+  passed: '#16a34a', failed: '#dc2626', completed: '#16a34a', interrupted: '#7c3aed',
+  required: '#dc2626', resolved: '#6b7280', annotation: '#d97706',
+  pending: '#2563eb', running: '#f59e0b'
+};
+
+const svg = document.getElementById('map-canvas');
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function el(name, attrs, parent) {
+  const node = document.createElementNS(SVG_NS, name);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+  (parent || svg).appendChild(node);
+  return node;
+}
+
+// Column assignment: nodes with a step share that step's column block; per-lane
+// siblings within a step fan into sub-columns. Step-less nodes (browser ops,
+// workflow actions, outcome chain) get ordered columns after the last step.
+function layout(nodes) {
+  const steps = [...new Set(nodes.filter(n => n.step !== null && n.step !== undefined).map(n => n.step))].sort((a, b) => a - b);
+  const stepCol = new Map(steps.map((step, i) => [step, i]));
+  const perCell = new Map();
+  let stepColumns = steps.length;
+  const positions = new Map();
+  const stepless = { target: 0, outcome: 0, authority: 0, model: 0 };
+
+  // Sub-column widths: find max siblings per (lane, step) cell.
+  const cellCounts = new Map();
+  for (const n of nodes) {
+    if (n.step === null || n.step === undefined) continue;
+    const key = n.lane + ':' + n.step;
+    cellCounts.set(key, (cellCounts.get(key) || 0) + 1);
+  }
+  const subCols = Math.max(1, ...cellCounts.values());
+  const cellWidth = subCols > 1 ? COL_W * Math.min(subCols, 3) : COL_W;
+
+  for (const n of nodes) {
+    if (n.step !== null && n.step !== undefined) {
+      const key = n.lane + ':' + n.step;
+      const index = perCell.get(key) || 0;
+      perCell.set(key, index + 1);
+      positions.set(n.id, {
+        x: 140 + stepCol.get(n.step) * cellWidth + (index % 3) * (NODE_W + 8),
+        y: LANE_Y[n.lane] + Math.floor(index / 3) * (NODE_H + 8)
+      });
+    }
+  }
+  const steplessBase = 140 + stepColumns * cellWidth + 20;
+  for (const n of nodes) {
+    if (n.step === null || n.step === undefined) {
+      const index = stepless[n.lane]++;
+      positions.set(n.id, { x: steplessBase + index * (NODE_W + 12), y: LANE_Y[n.lane] });
+    }
+  }
+  const maxX = Math.max(600, ...[...positions.values()].map(p => p.x + NODE_W + 40));
+  const maxY = Math.max(...Object.values(LANE_Y)) + NODE_H * 2 + 40;
+  return { positions, width: maxX, height: maxY };
+}
+
+function edgePath(a, b) {
+  const x1 = a.x + NODE_W / 2, y1 = a.y + NODE_H;
+  const x2 = b.x + NODE_W / 2, y2 = b.y;
+  if (Math.abs(a.y - b.y) < 1) {
+    return `M ${a.x + NODE_W} ${a.y + NODE_H / 2} L ${b.x} ${b.y + NODE_H / 2}`;
+  }
+  const from = a.y < b.y ? { x: x1, y: y1 } : { x: a.x + NODE_W / 2, y: a.y };
+  const to = a.y < b.y ? { x: x2, y: y2 } : { x: b.x + NODE_W / 2, y: b.y + NODE_H };
+  const midY = (from.y + to.y) / 2;
+  return `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`;
+}
+
+function wrapText(text, max) {
+  const words = String(text).split(' ');
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    if ((line + ' ' + word).trim().length > max) { if (line) lines.push(line); line = word; }
+    else line = (line + ' ' + word).trim();
+    if (lines.length === 2) break;
+  }
+  if (line && lines.length < 3) lines.push(line);
+  return lines;
+}
+
+function render() {
+  svg.replaceChildren();
+  const { positions, width, height } = layout(graph.nodes);
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+
+  for (const lane of LANES) {
+    el('line', { x1: 0, y1: LANE_Y[lane.id] - 18, x2: width, y2: LANE_Y[lane.id] - 18, stroke: '#e5e7eb', 'stroke-width': 1 });
+    el('text', { x: 8, y: LANE_Y[lane.id] - 26, fill: '#9ca3af', 'font-size': 11, 'font-weight': 700, 'letter-spacing': '0.08em' }).textContent = lane.label;
+  }
+
+  for (const edge of graph.edges) {
+    const a = positions.get(edge.from), b = positions.get(edge.to);
+    if (!a || !b) continue;
+    const failing = edge.kind === 'blocked' || edge.kind === 'dropped';
+    el('path', {
+      d: edgePath(a, b), fill: 'none',
+      stroke: failing ? '#dc2626' : '#c7ccd4',
+      'stroke-width': failing ? 1.6 : 1.2,
+      'stroke-dasharray': edge.kind === 'dropped' ? '5 4' : (edge.kind === 'proposed' ? '2 3' : 'none')
+    });
+  }
+
+  for (const node of graph.nodes) {
+    const pos = positions.get(node.id);
+    if (!pos) continue;
+    const color = STATUS_COLORS[node.status] || '#6b7280';
+    const soft = node.kind === 'cap_dropped' || node.kind === 'unexecuted_proposal';
+    const group = el('g', { cursor: 'pointer' });
+    el('rect', {
+      x: pos.x, y: pos.y, width: NODE_W, height: NODE_H, rx: 8,
+      fill: node.lane === 'model' ? '#eef2ff' : '#ffffff',
+      stroke: color, 'stroke-width': 1.5,
+      'stroke-dasharray': soft || node.lane === 'model' ? '4 3' : 'none'
+    }, group);
+    el('text', { x: pos.x + 10, y: pos.y + 17, fill: color, 'font-size': 10, 'font-weight': 700 }, group).textContent =
+      (node.step !== null && node.step !== undefined ? 'step ' + node.step + ' · ' : '') + node.kind.replace(/_/g, ' ');
+    wrapText(node.label, 32).forEach((line, i) => {
+      el('text', { x: pos.x + 10, y: pos.y + 32 + i * 13, fill: '#111827', 'font-size': 11 }, group).textContent = line;
+    });
+    group.addEventListener('click', () => showDetail(node));
+  }
+}
+
+function showDetail(node) {
+  const panel = document.getElementById('map-detail-panel');
+  panel.hidden = false;
+  document.getElementById('map-detail-title').textContent = node.kind.replace(/_/g, ' ') + ' — ' + node.status;
+  const grid = document.getElementById('map-detail-grid');
+  grid.replaceChildren();
+  const rows = { lane: node.lane, step: node.step, label: node.label, ...node.detail };
+  for (const [key, value] of Object.entries(rows)) {
+    if (value === null || value === undefined || value === '') continue;
+    const wrap = document.createElement('div');
+    const dt = document.createElement('dt'); dt.textContent = key;
+    const dd = document.createElement('dd'); dd.textContent = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    wrap.appendChild(dt); wrap.appendChild(dd); grid.appendChild(wrap);
+  }
+  document.getElementById('map-detail-evidence').textContent = node.evidenceRef;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function refresh() {
+  try {
+    const response = await fetch('/api/runs/' + encodeURIComponent(runId) + '/decision-graph', { headers: { Accept: 'application/json' } });
+    if (!response.ok) return;
+    const next = await response.json();
+    if (next.cursor === graph.cursor) return;
+    graph = next;
+    render();
+    const terminal = graph.nodes.find(node => node.id === 'terminal');
+    if (terminal) {
+      const badge = document.getElementById('map-run-status');
+      badge.className = 'status-badge status-' + terminal.status;
+      badge.textContent = terminal.status;
+      currentStatus = terminal.status;
+    }
+  } catch (_) {}
+}
+
+render();
+
+if (['pending', 'running'].includes(currentStatus)) {
+  let eventSource = null;
+  if (window.EventSource) {
+    eventSource = new EventSource('/api/events');
+    eventSource.addEventListener('run:status-changed', event => {
+      try { if (JSON.parse(event.data).runId === runId) refresh(); } catch (_) {}
+    });
+    eventSource.addEventListener('error', () => { if (eventSource) { eventSource.close(); eventSource = null; } });
+  }
+  const poll = setInterval(() => {
+    refresh();
+    if (!['pending', 'running'].includes(currentStatus)) {
+      clearInterval(poll);
+      if (eventSource) { eventSource.close(); eventSource = null; }
+    }
+  }, 3000);
+}
+</script>

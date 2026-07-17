@@ -2934,6 +2934,39 @@ async function cmdBrowserStatus(args) {
   }
 }
 
+// Render the run decision graph headlessly. GET /api/runs/:id/decision-graph
+async function cmdRunGraph(args) {
+  const cookie = requireSession(args);
+  if (!cookie) return;
+  const runId = parseInt(args._[0] || args.id, 10);
+  if (Number.isNaN(runId)) return console.log(red('  ✗ Usage: oquery run-graph <runId>'));
+  const url = args.url || opercUrl();
+  const { status, data } = await operatorGetCall(url, cookie, `/api/runs/${runId}/decision-graph`);
+  if (status !== 200) return reportActionError(args, status, data);
+  if (args.json) return console.log(JSON.stringify(data, null, 2));
+
+  const nodes = data.nodes || [];
+  const plans = nodes.filter(n => n.kind === 'parsed_plan');
+  console.log(`  ${bold('Run #' + data.runId + ' decision graph')} — ${nodes.length} node(s), ${(data.edges || []).length} edge(s)`);
+  for (const plan of plans) {
+    console.log(`\n  ${cyan('step ' + plan.step)} ${plan.detail.complete ? green('[complete:true]') : dim('[continuing]')} ${bold(plan.label)}`);
+    const stepNodes = nodes.filter(n => n.step === plan.step && n.id !== plan.id);
+    for (const n of stepNodes) {
+      const color = ['blocked', 'dropped', 'error'].includes(n.status) ? red : ['created', 'ok', 'allowed'].includes(n.status) ? green : dim;
+      console.log(`      ${dim(n.lane)} ${color(n.status)} ${n.label}`);
+    }
+  }
+  const stepless = nodes.filter(n => (n.step === null || n.step === undefined) && n.kind !== 'parsed_plan');
+  if (stepless.length > 0) {
+    console.log(`\n  ${bold('Outcome / unlinked')}`);
+    for (const n of stepless) {
+      const color = ['failed', 'blocked', 'required'].includes(n.status) ? red : ['passed', 'completed', 'ok'].includes(n.status) ? green : dim;
+      console.log(`      ${dim(n.lane)} ${color(n.status)} ${n.label}`);
+    }
+  }
+  console.log(dim('\n  Full graph with --json · visual map at /runs/' + data.runId + '/map'));
+}
+
 // ── Main ──
 
 function help() {
@@ -3435,6 +3468,9 @@ function help() {
     authority-paths List protected workspace paths + sensitive application paths
                     (same shared definition the runtime enforces)
     browser-status  Show browser engine availability and own operator session
+    run-graph <id>  Run decision graph: per-step model plans (verbatim) with
+                    authority decisions, executed/blocked/dropped actions, and
+                    the verified outcome chain (--json for the full graph)
 
   ${bold('Inbox examples:')}
     node scripts/oquery.js inbox --status open
@@ -3616,6 +3652,8 @@ async function main() {
     cmdAuthorityPaths(args);
   } else if (cmd === 'browser-status') {
     await cmdBrowserStatus(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'run-graph') {
+    await cmdRunGraph(args).catch(e => console.error(red('Error: ' + e.message)));
   } else if (cmds[cmd]) {
     if (!args.json) {
       console.log(sourceLabelLine(args));
