@@ -109,7 +109,23 @@ Use `--agent <id|name>` for Agent 1, Mike, or another configured agent. Use `--j
 - Do not treat real-model failures as substrate failures without evidence.
 - Do not rewrite unrelated user changes.
 
-## Current Known Reality
+## Committing Alongside a Concurrent Agent
+
+This repo sometimes has more than one agent/process working simultaneously (observed
+2026-07-16/17: UI/transparency work and persistence-cutover work in parallel on the same
+branch). When `git status` shows shared files (`server.js`, `scripts/oquery.js`,
+`scripts/release-checkpoint.js`, `AGENTS.md`, …) modified by work that is not yours:
+
+- **Never stage a shared file whole.** `git add <file>` commits the other agent's
+  uncommitted work-in-progress under your commit message, corrupting both histories.
+- Split by hunk instead: `git diff -U3 -- <file> > patch`, classify hunks by content
+  markers unique to your change, write a yours-only patch, `git apply --cached` it.
+- Before committing, validate the **staged blob**, not the working tree:
+  `git show :<file> | node --check /dev/stdin` (plus any list/shape assertions that
+  matter — the staged file is what the commit will contain).
+- Stage whole files only when `git status` shows them untouched by the other effort.
+- Place insertions (new sections, list entries) away from the other agent's pending
+  hunks so both patch sets apply cleanly in either order.
 
 - Runtime substrate is functioning.
 - `createWorkflowDraft` is visible in `allowedOperations` and runtime prompts.
