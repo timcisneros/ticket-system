@@ -3,7 +3,7 @@
 
 const assert = require('assert');
 const {
-  RECOVERY_STATE, reconstructAgentRecoveryState,
+  RECOVERY_STATE, reconstructAgentRecoveryState, resolveExecutionTurnProviderCall,
   eventRef, replayRef, operationRef, historyRef
 } = require('../runtime/recovery-state');
 const { computeRunEventHash } = require('../runtime/event-integrity');
@@ -56,9 +56,11 @@ function mockSnapshot(overrides = {}) {
 }
 
 function mockReq(turn, overrides = {}) {
+  const startedAt = new Date().toISOString();
   return {
     evidenceKey: `req:${turn}`, durationMs: 100,
     executionTurn: turn, modelCallKey: `call:${turn}`,
+    startedAt, capturedAt: startedAt,
     ...overrides
   };
 }
@@ -67,6 +69,7 @@ function mockResp(turn, overrides = {}) {
   return {
     text: '{}', evidenceKey: `resp:${turn}`, capturedAt: new Date().toISOString(),
     executionTurn: turn, modelCallKey: `call:${turn}`,
+    providerRequestEvidenceKey: `req:${turn}`,
     ...overrides
   };
 }
@@ -284,6 +287,19 @@ test('UNSAFE when request and response modelCallKey differ', () => {
   }));
   assertState(r, 'UNSAFE_TO_CONTINUE', '6a');
   assert.ok(r.inconsistencies.includes('request_response_model_call_key_mismatch'));
+});
+
+test('UNSAFE when response request evidence link differs from request', () => {
+  const r = reconstructAgentRecoveryState(opts({
+    run: mockRun(),
+    replaySnapshot: mockSnapshot({
+      providerRequests: [mockReq(1)],
+      modelResponses: [mockResp(1, { providerRequestEvidenceKey: 'req:other' })]
+    }),
+    events: []
+  }));
+  assertState(r, 'UNSAFE_TO_CONTINUE', '6b');
+  assert.ok(r.inconsistencies.includes('request_response_evidence_key_mismatch'));
 });
 
 // ── 7. Response/plan pairing ───────────────────────────────────────────
@@ -669,6 +685,54 @@ test('executionTurn from earliest unresolved turn', () => {
     events: []
   }));
   assert.strictEqual(r.executionTurn, 2);
+});
+
+// ── 18. Durable provider response recovery ─────────────────────────────
+
+test('recovery parses the persisted response without another provider call', () => {
+  const responseText = JSON.stringify({
+    message: 'continue from durable response',
+    actions: [{ operation: 'createFolder', args: { path: 'Recovered' } }],
+    complete: false
+  });
+  const replaySnapshot = mockSnapshot({
+    providerRequests: [mockReq(3, { startedAt: '2026-07-18T10:00:00.000Z' })],
+    modelResponses: [mockResp(3, {
+      text: responseText,
+      startedAt: '2026-07-18T10:00:05.000Z',
+      completedAt: '2026-07-18T10:00:10.000Z'
+    })]
+  });
+  const recoveryState = reconstructAgentRecoveryState(opts({
+    run: mockRun(), replaySnapshot, events: []
+  }));
+  assertState(recoveryState, 'NEEDS_RESPONSE_PARSE', '18a');
+
+  let providerCallCount = 1;
+  const providerCall = resolveExecutionTurnProviderCall({
+    recoveryState,
+    replaySnapshot,
+    requestProvider: () => {
+      providerCallCount += 1;
+      return { response: { text: '{"message":"replacement"}' } };
+    }
+  });
+  const parsedPlan = JSON.parse(providerCall.response.text);
+  const persistedPlan = {
+    ...parsedPlan,
+    executionTurn: recoveryState.executionTurn,
+    modelCallKey: recoveryState.modelCallKey,
+    planKey: `${recoveryState.modelCallKey}:plan`,
+    providerResponseEvidenceKey: providerCall.responseEvidenceKey
+  };
+
+  assert.strictEqual(providerCallCount, 1, 'recovery issued a duplicate provider request');
+  assert.strictEqual(providerCall.recovered, true);
+  assert.strictEqual(providerCall.requestStartedAt, Date.parse('2026-07-18T10:00:00.000Z'));
+  assert.strictEqual(providerCall.responseCompletedAt, Date.parse('2026-07-18T10:00:10.000Z'));
+  assert.strictEqual(providerCall.response.text, responseText, 'recovery did not preserve the durable response text');
+  assert.strictEqual(persistedPlan.providerResponseEvidenceKey, 'resp:3');
+  assert.strictEqual(persistedPlan.actions[0].operation, 'createFolder');
 });
 
 // ── Summary ────────────────────────────────────────────────────────────

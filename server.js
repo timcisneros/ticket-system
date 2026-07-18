@@ -42,6 +42,11 @@ const {
 } = require('./persistence/json/run-replay-repository');
 const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
+const {
+  RECOVERY_STATE,
+  reconstructAgentRecoveryState,
+  resolveExecutionTurnProviderCall
+} = require('./runtime/recovery-state');
 
 const PORT = process.env.PORT || 3099;
 const RUNTIME_PERSISTENCE_BACKEND = resolveRuntimePersistenceBackend(process.env);
@@ -546,6 +551,8 @@ const WORKLOAD_PROFILES = {
 
 const TEST_INTERRUPTION_POINT = process.env.TEST_INTERRUPTION_POINT || '';
 const TEST_SKIP_STARTUP_RUN_RECOVERY = process.env.NODE_ENV === 'test' && process.env.TEST_SKIP_STARTUP_RUN_RECOVERY === 'true';
+const TEST_INTERRUPT_AFTER_AGENT_PROVIDER_RESPONSE_PERSISTED = process.env.NODE_ENV === 'test' &&
+  process.env.TEST_INTERRUPT_AFTER_AGENT_PROVIDER_RESPONSE_PERSISTED === 'true';
 const testInterruptFirstAuthority = new Set();
 const testInterruptFirstWorkspaceOp = new Set();
 const testInterruptFirstWorkspaceTargetEffect = new Set();
@@ -586,6 +593,26 @@ async function maybeTestInterrupt(run, point) {
   }
 
   // Kill the server process to simulate a crash
+  process.kill(process.pid, 'SIGKILL');
+}
+
+async function maybeInterruptAfterAgentProviderResponsePersisted(run, metadata) {
+  if (!TEST_INTERRUPT_AFTER_AGENT_PROVIDER_RESPONSE_PERSISTED) return;
+  if (!run || !run.id || !metadata || !Number.isSafeInteger(metadata.executionTurn) ||
+      typeof metadata.modelCallKey !== 'string' || !metadata.modelCallKey) return;
+
+  await appendEvent({
+    type: 'interruption.test_hook',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: String(metadata.executionTurn),
+    payload: {
+      point: 'after_agent_provider_response_persisted',
+      reason: 'Deterministic provider-response recovery test interruption',
+      executionTurn: metadata.executionTurn,
+      modelCallKey: metadata.modelCallKey
+    }
+  });
   process.kill(process.pid, 'SIGKILL');
 }
 
@@ -1296,6 +1323,97 @@ function reconstructResumableState(run) {
     lastEvent,
     currentPhase
   };
+}
+
+function isAgentExecutionProviderEvidence(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+  if (item.phase === 'contract_compile') return false;
+  if (typeof item.workflowAction === 'string' && item.workflowAction) return false;
+  return true;
+}
+
+function buildAgentExecutionRecoverySnapshot(snapshot) {
+  const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  return {
+    ...source,
+    providerRequests: Array.isArray(source.providerRequests)
+      ? source.providerRequests.filter(isAgentExecutionProviderEvidence)
+      : [],
+    modelResponses: Array.isArray(source.modelResponses)
+      ? source.modelResponses.filter(isAgentExecutionProviderEvidence)
+      : [],
+    parsedModelPlans: Array.isArray(source.parsedModelPlans) ? source.parsedModelPlans : []
+  };
+}
+
+function countDurableAgentExecutionProviderRequests(snapshot) {
+  const requests = Array.isArray(snapshot && snapshot.providerRequests) ? snapshot.providerRequests : [];
+  const seenExecutionTurns = new Set();
+  const seenModelCallKeys = new Set();
+  const seenEvidenceKeys = new Set();
+
+  for (const request of requests) {
+    const hasDirectIdentity = request &&
+      Number.isSafeInteger(request.executionTurn) && request.executionTurn >= 0 &&
+      typeof request.modelCallKey === 'string' && request.modelCallKey &&
+      typeof request.evidenceKey === 'string' && request.evidenceKey;
+    if (!hasDirectIdentity) {
+      const error = new Error('Resume denied: agent provider request lacks direct execution-turn identity');
+      error.code = 'RUN_RESUME_UNSAFE';
+      error.failureKind = 'resume_rejected';
+      error.details = { inconsistencies: ['provider_request_missing_direct_identity'] };
+      throw error;
+    }
+
+    if (seenExecutionTurns.has(request.executionTurn) ||
+        seenModelCallKeys.has(request.modelCallKey) ||
+        seenEvidenceKeys.has(request.evidenceKey)) {
+      const error = new Error('Resume denied: duplicate or contradictory agent provider request identity');
+      error.code = 'RUN_RESUME_UNSAFE';
+      error.failureKind = 'resume_rejected';
+      error.details = { inconsistencies: ['duplicate_or_contradictory_provider_request_identity'] };
+      throw error;
+    }
+
+    seenExecutionTurns.add(request.executionTurn);
+    seenModelCallKeys.add(request.modelCallKey);
+    seenEvidenceKeys.add(request.evidenceKey);
+  }
+
+  return requests.length;
+}
+
+function hasDurableAgentResponseWithoutPlan(snapshot) {
+  const responses = Array.isArray(snapshot && snapshot.modelResponses) ? snapshot.modelResponses : [];
+  const plans = Array.isArray(snapshot && snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
+  const directlyIdentifiedResponses = responses.filter(response => response &&
+    Number.isSafeInteger(response.executionTurn) && response.executionTurn >= 0 &&
+    typeof response.modelCallKey === 'string' && response.modelCallKey &&
+    typeof response.evidenceKey === 'string' && response.evidenceKey &&
+    typeof response.providerRequestEvidenceKey === 'string' && response.providerRequestEvidenceKey
+  );
+
+  if (directlyIdentifiedResponses.length !== responses.length) {
+    const error = new Error('Resume denied: legacy provider response lacks direct execution-turn identity');
+    error.code = 'RUN_RESUME_UNSAFE';
+    error.failureKind = 'resume_rejected';
+    error.details = { inconsistencies: ['legacy_response_missing_direct_identity'] };
+    throw error;
+  }
+
+  const unmatchedResponses = directlyIdentifiedResponses.filter(response => !plans.some(plan => plan &&
+    plan.executionTurn === response.executionTurn &&
+    plan.modelCallKey === response.modelCallKey &&
+    plan.providerResponseEvidenceKey === response.evidenceKey
+  ));
+  if (unmatchedResponses.length > 1) {
+    const error = new Error('Resume denied: multiple durable provider responses await parsing');
+    error.code = 'RUN_RESUME_UNSAFE';
+    error.failureKind = 'resume_rejected';
+    error.details = { inconsistencies: ['multiple_unmatched_provider_responses'] };
+    throw error;
+  }
+  return unmatchedResponses.length === 1;
 }
 
 const AGENT_PRIMITIVE_METADATA = {
@@ -10435,6 +10553,7 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
   const requestStartedAt = Date.now();
   const startedAt = new Date(requestStartedAt).toISOString();
   const metadata = sanitizeSnapshotValue(options.metadata || {});
+  const providerRequestEvidenceKey = buildRunEvidenceKey(run, 'provider-request', slot);
   const sanitizeRequest = typeof options.sanitizeRequest === 'function'
     ? options.sanitizeRequest
     : value => value;
@@ -10502,6 +10621,7 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
           provider: error.provider || (agent && agent.provider) || 'openai',
           model: agent && agent.model ? agent.model : null,
           providerResponsePayload: safePayload,
+          providerRequestEvidenceKey,
           ...metadata,
           startedAt,
           completedAt,
@@ -10517,7 +10637,7 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
           status: safePayload ? safePayload.status || null : null,
           requestId: safePayload ? safePayload.requestId || null : null,
           durationMs: completedAtMs - requestStartedAt,
-          requestEvidenceKey: buildRunEvidenceKey(run, 'provider-request', slot)
+          requestEvidenceKey: providerRequestEvidenceKey
         },
           capturedAt: completedAt
         });
@@ -10547,6 +10667,7 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
       provider: response.provider || (agent && agent.provider) || 'openai',
       model: response.model || (agent && agent.model) || null,
       providerResponsePayload: safePayload,
+      providerRequestEvidenceKey,
       ...metadata,
       startedAt,
       completedAt,
@@ -10562,7 +10683,7 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
       requestId: safePayload ? safePayload.requestId || null : null,
       usage: response.usage || null,
       durationMs: completedAtMs - requestStartedAt,
-      requestEvidenceKey: buildRunEvidenceKey(run, 'provider-request', slot)
+      requestEvidenceKey: providerRequestEvidenceKey
     },
       capturedAt: completedAt
     });
@@ -10570,11 +10691,12 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
     error.providerEvidencePersistenceFailure = true;
     throw error;
   }
+  await maybeInterruptAfterAgentProviderResponsePersisted(run, metadata);
   return {
     response,
     requestStartedAt,
     responseCompletedAt: completedAtMs,
-    requestEvidenceKey: buildRunEvidenceKey(run, 'provider-request', slot),
+    requestEvidenceKey: providerRequestEvidenceKey,
     responseEvidenceKey: responseEvidence.evidenceKey
   };
 }
@@ -18417,6 +18539,8 @@ async function runAgentTicket(runId) {
     const listedDirectoryPaths = new Set();
     let completed = false;
     let resumedFromPersistedState = false;
+    let pendingRecoveredProviderCall = null;
+    let initialExecutionTurn = 0;
     const runStartedAtMs = Date.now();
     // Captured once at run start and never updated, so it does not absorb
     // folders/files this run creates. Anchors relative objectives.
@@ -18444,6 +18568,7 @@ async function runAgentTicket(runId) {
     const mutationsByThisRun = [];
 
     // ── Resumable execution check ─────────────────────────────────
+    const resumeEvents = readRunScopedEvents(run.id);
     const resumeState = reconstructResumableState(run);
     if (resumeState) {
       appendRunLog(run, 'run:resume_check', `Resumable state detected: ${resumeState.priorEvents} prior events, execution=${resumeState.safeToResumeExecution}, reconcile=${resumeState.safeToReconcileTerminalState}, unsafe=${resumeState.unsafeToContinue}, nextPhase=${resumeState.expectedNextPhase}`);
@@ -18489,6 +18614,36 @@ async function runAgentTicket(runId) {
       }
     }
 
+    if (!completed) {
+      const persistedReplay = await getRunReplayRepository().readRunReplay(run.id);
+      const persistedSnapshot = persistedReplay ? persistedReplay.snapshot : (run.replaySnapshot || {});
+      const executionRecoverySnapshot = buildAgentExecutionRecoverySnapshot(persistedSnapshot);
+      modelRequestCount = countDurableAgentExecutionProviderRequests(executionRecoverySnapshot);
+      if (hasDurableAgentResponseWithoutPlan(executionRecoverySnapshot)) {
+        const recoveryState = reconstructAgentRecoveryState({
+          run,
+          replaySnapshot: executionRecoverySnapshot,
+          events: resumeEvents,
+          operationHistory: readOperationHistory(),
+          mutatingOperations: AGENT_MUTATING_OPERATIONS
+        });
+        pendingRecoveredProviderCall = resolveExecutionTurnProviderCall({
+          recoveryState,
+          replaySnapshot: executionRecoverySnapshot,
+          requestProvider: () => {
+            throw new Error('Provider request is forbidden while a durable response awaits parsing');
+          }
+        });
+        initialExecutionTurn = recoveryState.executionTurn;
+        resumedFromPersistedState = true;
+        appendRunLog(run, 'run:resume_response_parse', 'Resuming from the durable provider response', null, {
+          executionTurn: recoveryState.executionTurn,
+          modelCallKey: recoveryState.modelCallKey,
+          providerResponseEvidenceKey: recoveryState.providerResponseEvidenceKey
+        });
+      }
+    }
+
     // Preflight objective contract compilation. First try the narrow deterministic
     // grammar; if it does not match, ask the model to compile a strict JSON contract.
     // A compiled contract feeds the existing feasibility gate; if compilation fails
@@ -18517,11 +18672,10 @@ async function runAgentTicket(runId) {
 
     assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract);
 
-    for (let step = 0; !completed; step += 1) {
+    for (let step = initialExecutionTurn; !completed; step += 1) {
       await heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       assertRunStepAllowed(run, step, limits);
-      assertRunModelRequestAllowed(run, modelRequestCount, limits);
 
       try { 
         const wsRoot = typeof workspaceProvider.root === 'string' ? workspaceProvider.root : String(workspaceProvider.root); 
@@ -18567,36 +18721,54 @@ async function runAgentTicket(runId) {
         mutationsByThisRun
       };
       const input = buildAgentPrompt(promptTicket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
-      appendRunLog(run, 'model:request', `${providerConfig.provider} request sent with model ${providerConfig.model}`);
-      modelRequestCount += 1;
-      const providerCall = await callModelProviderWithRunEvidence(run, agent, input, runStartedAtMs, limits, {
-        slot: `agent:${step}:provider`,
-        sanitizeRequest: requestPayload => isBrowserRun(run)
-          ? sanitizeBrowserProviderRequestEvidence(requestPayload)
-          : requestPayload,
-        sanitizeResponsePayload: responsePayload => isBrowserRun(run)
-          ? sanitizeBrowserProviderResponseEvidence(responsePayload)
-          : responsePayload,
-        sanitizeResponseText: text => isBrowserRun(run)
-          ? '[redacted browser model response]'
-          : text
-      });
+
+      const modelCallKey = `agent:${step}:provider`;
+      let providerCall;
+      if (pendingRecoveredProviderCall) {
+        providerCall = pendingRecoveredProviderCall;
+        pendingRecoveredProviderCall = null;
+      } else {
+        assertRunModelRequestAllowed(run, modelRequestCount, limits);
+        appendRunLog(run, 'model:request', `${providerConfig.provider} request sent with model ${providerConfig.model}`);
+        modelRequestCount += 1;
+        const issuedProviderCall = await callModelProviderWithRunEvidence(run, agent, input, runStartedAtMs, limits, {
+          slot: modelCallKey,
+          metadata: { executionTurn: step, modelCallKey },
+          sanitizeRequest: requestPayload => isBrowserRun(run)
+            ? sanitizeBrowserProviderRequestEvidence(requestPayload)
+            : requestPayload,
+          sanitizeResponsePayload: responsePayload => isBrowserRun(run)
+            ? sanitizeBrowserProviderResponseEvidence(responsePayload)
+            : responsePayload,
+          sanitizeResponseText: text => isBrowserRun(run)
+            ? '[redacted browser model response]'
+            : text
+        });
+        providerCall = {
+          ...issuedProviderCall,
+          recovered: false,
+          executionTurn: step,
+          modelCallKey
+        };
+      }
       const modelResponse = providerCall.response;
       const modelResponseCompletedAt = providerCall.responseCompletedAt;
       const modelRequestStartedAt = providerCall.requestStartedAt;
       const modelCallDurationMs = modelResponseCompletedAt - modelRequestStartedAt;
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       const modelText = modelResponse.text;
-      appendRunLog(
-        run,
-        'model:response',
-        isBrowserRun(run) ? 'Browser model response received (content redacted from durable logs)' : modelText,
-        null,
-        {
-          ...(modelResponse.usage ? { usage: modelResponse.usage } : {}),
-          requestId: modelResponse.responsePayload ? modelResponse.responsePayload.requestId || null : null
-        }
-      );
+      if (!providerCall.recovered) {
+        appendRunLog(
+          run,
+          'model:response',
+          isBrowserRun(run) ? 'Browser model response received (content redacted from durable logs)' : modelText,
+          null,
+          {
+            ...(modelResponse.usage ? { usage: modelResponse.usage } : {}),
+            requestId: modelResponse.responsePayload ? modelResponse.responsePayload.requestId || null : null
+          }
+        );
+      }
       // Preserve the response to the already-issued request, then fence all
       // parsing-derived execution and target side effects on renewed ownership.
       await heartbeatRunLease(run.id, { phase: 'provider_response_received', step });
@@ -18621,7 +18793,11 @@ async function runAgentTicket(runId) {
           actions: modelPlan.actions,
           complete: modelPlan.complete
         }),
-        step
+        step,
+        executionTurn: providerCall.executionTurn,
+        modelCallKey: providerCall.modelCallKey,
+        planKey: `${providerCall.modelCallKey}:plan`,
+        providerResponseEvidenceKey: providerCall.responseEvidenceKey
       };
       await recordNonTerminalRunEvidence(run, {
         category: 'parsed-model-plan',

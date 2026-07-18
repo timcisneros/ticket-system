@@ -111,6 +111,7 @@ function reconstructAgentRecoveryState({
     state: RECOVERY_STATE.NEEDS_MODEL_REQUEST,
     executionTurn: 0,
     modelCallKey: null,
+    providerResponseEvidenceKey: null,
     planKey: null,
     nextActionIndex: 0,
     operationKey: null,
@@ -233,6 +234,7 @@ function reconstructAgentRecoveryState({
     if (!isNonNegInt(r.executionTurn)) return unsafe('response_non_integer_turn');
     if (!isNonEmptyStr(r.modelCallKey)) return unsafe('response_missing_model_call_key');
     if (!isNonEmptyStr(r.evidenceKey)) return unsafe('response_missing_evidence_key');
+    if (!isNonEmptyStr(r.providerRequestEvidenceKey)) return unsafe('response_missing_provider_request_evidence_key');
   }
   for (const p of parsedPlans) {
     if (!isNonNegInt(p.executionTurn)) return unsafe('plan_non_integer_turn');
@@ -249,12 +251,9 @@ function reconstructAgentRecoveryState({
     if (!isNonEmptyStr(op.operationKey)) return unsafe('operation_missing_operation_key');
   }
   for (const req of providerRequests) {
-    if (req.executionTurn !== undefined && !isNonNegInt(req.executionTurn)) {
-      return unsafe('request_non_integer_turn');
-    }
-    if (req.modelCallKey !== undefined && !isNonEmptyStr(req.modelCallKey)) {
-      return unsafe('request_missing_model_call_key');
-    }
+    if (!isNonNegInt(req.executionTurn)) return unsafe('request_non_integer_turn');
+    if (!isNonEmptyStr(req.modelCallKey)) return unsafe('request_missing_model_call_key');
+    if (!isNonEmptyStr(req.evidenceKey)) return unsafe('request_missing_evidence_key');
   }
 
   // ── 7. Build per-turn ledger (issue #1) ─────────────────────────────
@@ -356,6 +355,9 @@ function reconstructAgentRecoveryState({
     if (entry.response && entry.request) {
       if (entry.request.modelCallKey && entry.request.modelCallKey !== entry.response.modelCallKey) {
         return unsafe('request_response_model_call_key_mismatch', [replayRef(entry.request), replayRef(entry.response)]);
+      }
+      if (entry.response.providerRequestEvidenceKey !== entry.request.evidenceKey) {
+        return unsafe('request_response_evidence_key_mismatch', [replayRef(entry.request), replayRef(entry.response)]);
       }
     }
     if (entry.response && !entry.request) {
@@ -604,6 +606,7 @@ function reconstructAgentRecoveryState({
   if (hasResponse && !hasPlan) {
     result.state = RECOVERY_STATE.NEEDS_RESPONSE_PARSE;
     result.modelCallKey = entry.response.modelCallKey || null;
+    result.providerResponseEvidenceKey = entry.response.evidenceKey || null;
     result.nextPhase = 'response_parse';
     result.evidenceRefs.push(replayRef(entry.response));
     return result;
@@ -615,9 +618,108 @@ function reconstructAgentRecoveryState({
   return result;
 }
 
+function createUnsafeRecoveryError(inconsistencies) {
+  const reasons = Array.isArray(inconsistencies)
+    ? inconsistencies.filter(isNonEmptyStr)
+    : [inconsistencies].filter(isNonEmptyStr);
+  const error = new Error(`Resume denied: ${reasons.join(', ') || 'provider response identity is unsafe'}`);
+  error.code = 'RUN_RESUME_UNSAFE';
+  error.failureKind = 'resume_rejected';
+  error.details = { inconsistencies: reasons };
+  return error;
+}
+
+function evidenceTimestamp(value, fallback) {
+  const timestamp = Date.parse(value || '');
+  return Number.isFinite(timestamp) ? timestamp : fallback;
+}
+
+function resolveExecutionTurnProviderCall({
+  recoveryState,
+  replaySnapshot,
+  requestProvider
+} = {}) {
+  if (!recoveryState || typeof recoveryState !== 'object') {
+    throw new TypeError('recoveryState is required');
+  }
+
+  if (recoveryState.state === RECOVERY_STATE.UNSAFE_TO_CONTINUE) {
+    throw createUnsafeRecoveryError(recoveryState.inconsistencies);
+  }
+
+  if (recoveryState.state === RECOVERY_STATE.NEEDS_MODEL_REQUEST) {
+    if (typeof requestProvider !== 'function') throw new TypeError('requestProvider is required');
+    return requestProvider();
+  }
+
+  if (recoveryState.state !== RECOVERY_STATE.NEEDS_RESPONSE_PARSE) {
+    throw createUnsafeRecoveryError(`unexpected_recovery_state_${recoveryState.state || 'missing'}`);
+  }
+
+  const executionTurn = recoveryState.executionTurn;
+  const modelCallKey = recoveryState.modelCallKey;
+  const responseEvidenceKey = recoveryState.providerResponseEvidenceKey;
+  if (!isNonNegInt(executionTurn) || !isNonEmptyStr(modelCallKey) || !isNonEmptyStr(responseEvidenceKey)) {
+    throw createUnsafeRecoveryError('response_recovery_cursor_missing_identity');
+  }
+
+  const snapshot = replaySnapshot && typeof replaySnapshot === 'object' ? replaySnapshot : {};
+  const responses = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses : [];
+  const matches = responses.filter(response => response &&
+    response.executionTurn === executionTurn &&
+    response.modelCallKey === modelCallKey &&
+    response.evidenceKey === responseEvidenceKey
+  );
+  if (matches.length !== 1) {
+    throw createUnsafeRecoveryError(matches.length === 0
+      ? 'persisted_response_identity_not_found'
+      : 'persisted_response_identity_ambiguous');
+  }
+
+  const persistedResponse = matches[0];
+  if (typeof persistedResponse.text !== 'string') {
+    throw createUnsafeRecoveryError('persisted_response_text_missing');
+  }
+  if (!isNonEmptyStr(persistedResponse.providerRequestEvidenceKey)) {
+    throw createUnsafeRecoveryError('persisted_response_request_link_missing');
+  }
+
+  const requests = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests : [];
+  const requestMatches = requests.filter(request => request &&
+    request.executionTurn === executionTurn &&
+    request.modelCallKey === modelCallKey &&
+    request.evidenceKey === persistedResponse.providerRequestEvidenceKey
+  );
+  if (requestMatches.length !== 1 || !isNonEmptyStr(requestMatches[0].evidenceKey)) {
+    throw createUnsafeRecoveryError(requestMatches.length > 1
+      ? 'persisted_request_identity_ambiguous'
+      : 'persisted_request_identity_not_found');
+  }
+
+  const responseCompletedAt = evidenceTimestamp(
+    persistedResponse.completedAt || persistedResponse.capturedAt,
+    Date.now()
+  );
+  const requestStartedAt = evidenceTimestamp(
+    requestMatches[0].startedAt || requestMatches[0].capturedAt,
+    responseCompletedAt
+  );
+  return {
+    recovered: true,
+    executionTurn,
+    modelCallKey,
+    requestStartedAt,
+    responseCompletedAt,
+    requestEvidenceKey: requestMatches[0].evidenceKey,
+    responseEvidenceKey,
+    response: { text: persistedResponse.text }
+  };
+}
+
 module.exports = {
   RECOVERY_STATE,
   reconstructAgentRecoveryState,
+  resolveExecutionTurnProviderCall,
   eventRef,
   replayRef,
   operationRef,
