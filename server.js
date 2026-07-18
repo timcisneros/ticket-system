@@ -13,7 +13,7 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { readMatchingEvents, readRecentEvents } = require('./runtime/event-reader');
-const { buildRunDecisionGraph } = require('./runtime/run-decision-graph');
+const { buildRunDecisionGraph, renderRunDecisionGraphText } = require('./runtime/run-decision-graph');
 const { scanCurrentEventJournal } = require('./runtime/event-journal-scan');
 const { createDurableAppendJournal, resolveDurableAppendJournalOptions } = require('./runtime/durable-append');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
@@ -23823,8 +23823,28 @@ function buildRunDiagnosticBundle(ctx) {
   out('```');
   out('');
 
-  // 18. Redaction Notice
-  out('## 18. Redaction Notice');
+  // 18. Decision Graph — the same projection as /runs/:id/map and
+  // `oquery run-graph`, rendered from runtime/run-decision-graph.js so the
+  // copyable bundle can never drift from the map: per-step verbatim model
+  // messages with complete flags, every action's fate (executed / blocked
+  // with reason / cap-dropped / unexecuted), workflow actions, outcome chain.
+  out('## 18. Decision Graph');
+  out('- Same projection as /runs/' + (run && run.id) + '/map and `oquery run-graph` (runtime/run-decision-graph.js).');
+  try {
+    const decisionGraph = buildRunDecisionGraph(
+      run,
+      s,
+      typeof getRunEvents === 'function' && run && run.id != null ? getRunEvents(run.id) : [],
+      Array.isArray(operationHistory) ? operationHistory : []
+    );
+    renderRunDecisionGraphText(decisionGraph).forEach(line => out(line));
+  } catch (error) {
+    out('- (decision graph unavailable: ' + (error && error.message ? error.message : String(error)) + ')');
+  }
+  out('');
+
+  // 19. Redaction Notice
+  out('## 19. Redaction Notice');
   out('Provider keys, session cookies, password hashes, auth tokens, and environment secrets are excluded from this diagnostic bundle.');
   out('');
 

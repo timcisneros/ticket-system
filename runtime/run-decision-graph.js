@@ -303,4 +303,69 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
   };
 }
 
-module.exports = { buildRunDecisionGraph };
+// Full display text for a node, composed from the untruncated detail fields —
+// the same no-truncation contract the map page renders under.
+function nodeFullText(node) {
+  const d = node.detail || {};
+  if (d.message) return d.message;
+  if (node.kind === 'workspace_operation') {
+    return (d.operation || 'operation')
+      + (d.path ? ' ' + d.path : '')
+      + (d.nextPath ? ' -> ' + d.nextPath : '')
+      + (d.reason ? ' — ' + d.reason : '');
+  }
+  if (node.kind === 'authority_decision') return d.reason || node.label;
+  if (node.kind === 'cap_dropped') return 'dropped by per-response cap: ' + (d.operation || '') + (d.path ? ' ' + d.path : '');
+  if (node.kind === 'unexecuted_proposal') return 'proposed; no recorded execution: ' + (d.operation || '') + (d.path ? ' ' + d.path : '');
+  if (node.kind === 'browser_operation') return (d.operation || 'browser operation') + (d.url ? ' ' + d.url : '') + (d.error ? ' — ' + d.error : '');
+  if (node.kind === 'terminal') return 'run ' + node.status + (d.failureReason ? ': ' + d.failureReason : '');
+  if (node.kind === 'triage') {
+    return node.label
+      + (d.summary ? ' — ' + d.summary : '')
+      + (d.resolution ? ' — resolution: ' + d.resolution : '');
+  }
+  return node.label;
+}
+
+// Plain-text rendering of the graph for the diagnostics bundle (and any other
+// text surface). Same projection as the map page and `oquery run-graph`, so
+// the copyable diagnostics can never drift from what the map shows: per-step
+// verbatim model messages with complete flags, every action's fate (executed /
+// blocked with reason / cap-dropped / unexecuted), workflow actions, and the
+// outcome chain.
+function nodeRenderText(node) {
+  const text = nodeFullText(node);
+  if (text === node.status) return node.status;
+  return `${node.status}: ${text}`;
+}
+
+function renderRunDecisionGraphText(graph) {
+  const lines = [];
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  const laneOrder = { model: 0, authority: 1, target: 2, outcome: 3 };
+  const plans = nodes.filter(node => node.kind === 'parsed_plan');
+
+  lines.push(`- Nodes: ${nodes.length} · Edges: ${Array.isArray(graph.edges) ? graph.edges.length : 0} · Lanes: model / authority / target / outcome`);
+  for (const plan of plans) {
+    const d = plan.detail || {};
+    lines.push(`- step ${plan.step} [${d.complete ? 'complete:true' : 'continuing'}] model message (verbatim):`);
+    String(d.message || plan.label || '').split('\n').forEach(line => lines.push('    ' + line));
+    const siblings = nodes
+      .filter(node => node.step === plan.step && node.id !== plan.id && node.kind !== 'provider_request')
+      .sort((a, b) => (laneOrder[a.lane] || 0) - (laneOrder[b.lane] || 0));
+    for (const node of siblings) {
+      lines.push(`    [${node.lane}] ${nodeRenderText(node)}`);
+    }
+  }
+  const stepless = nodes.filter(node => (node.step === null || node.step === undefined) && node.kind !== 'parsed_plan');
+  if (stepless.length > 0) {
+    lines.push('- outcome / unlinked:');
+    for (const node of stepless.sort((a, b) => (laneOrder[a.lane] || 0) - (laneOrder[b.lane] || 0))) {
+      lines.push(`    [${node.lane}] ${nodeRenderText(node)}`);
+    }
+  }
+  if (plans.length === 0 && stepless.length === 0) lines.push('- (no evidence recorded)');
+  return lines;
+}
+
+module.exports = { buildRunDecisionGraph, nodeFullText, renderRunDecisionGraphText };

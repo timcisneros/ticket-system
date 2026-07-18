@@ -183,6 +183,13 @@ async function main() {
     const missingGraph = await get('/api/runs/99999/decision-graph');
     assert(missingGraph.status === 404, 'unknown run must 404');
 
+    // Diagnostics bundle must carry the decision graph (same projection).
+    assert(runPage.text.includes('## 18. Decision Graph'), 'bundle must have the Decision Graph section');
+    assert(runPage.text.includes('## 19. Redaction Notice'), 'redaction notice must remain the final section');
+    assert(runPage.text.includes('model message (verbatim):') && runPage.text.includes('Creating the summary file from the three inputs.'), 'bundle must carry the verbatim plan message');
+    assert(runPage.text.includes('[complete:true]'), 'bundle must carry the complete flag');
+    assert(runPage.text.includes('read_inputs'), 'bundle must carry workflow actions');
+
     console.log('PASS: operator visibility — event journal, admin authority/catalog listings, watcher provenance, and run-page evidence sections render truthfully');
   } finally {
     server.kill('SIGTERM');

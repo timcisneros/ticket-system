@@ -8,7 +8,7 @@
 // proposed-vs-executed divergence rendered first-class, verbatim plan
 // messages, and a stable cursor.
 
-const { buildRunDecisionGraph } = require('../runtime/run-decision-graph');
+const { buildRunDecisionGraph, renderRunDecisionGraphText } = require('../runtime/run-decision-graph');
 
 function assert(c, m) { if (!c) throw new Error(m); }
 
@@ -110,6 +110,19 @@ const again = buildRunDecisionGraph(run, snapshot, runEvents, operationHistory);
 assert(again.cursor === graph.cursor, 'cursor must be deterministic for identical evidence');
 const grown = buildRunDecisionGraph(run, { ...snapshot, workspaceOperations: [...snapshot.workspaceOperations, { operation: { operation: 'writeFile', args: { path: 'x' } }, result: {} }] }, runEvents, operationHistory);
 assert(grown.cursor !== graph.cursor, 'cursor must change when evidence grows');
+
+// Text rendering (diagnostics bundle): same projection, plain text, nothing lost.
+const text = renderRunDecisionGraphText(graph).join('\n');
+assert(text.includes('step 0 [continuing] model message (verbatim):') && text.includes('Listing the workspace to find existing reports.'), 'text must carry step-0 verbatim message');
+assert(text.includes('step 1 [complete:true] model message (verbatim):') && text.includes('Creating the summary and archive; removing the scratch file.'), 'text must carry step-1 message with complete flag');
+assert(text.includes('[authority] blocked: blocked: Path is outside owned output paths') || text.includes('blocked: Path is outside owned output paths'), 'text must carry the full refusal reason');
+assert(text.includes('dropped by per-response cap: deletePath tmp/scratch.txt'), 'text must carry the cap-dropped proposal');
+assert(text.includes('run failed: Verification failed: 1 postcondition'), 'text must carry the terminal outcome with full reason');
+assert(text.includes('resolution: Reviewed.'), 'text must carry the triage resolution');
+
+// Renderer honesty on empty graphs.
+const bareText = renderRunDecisionGraphText(buildRunDecisionGraph({ id: 1, ticketId: 1, status: 'pending' }, null, [], []));
+assert(bareText.some(line => line.includes('run pending')), 'bare-run text must render only the status');
 
 // Empty-evidence honesty: a run with no snapshot still yields a terminal node, nothing invented.
 const bare = buildRunDecisionGraph({ id: 1, ticketId: 1, status: 'pending' }, null, [], []);
