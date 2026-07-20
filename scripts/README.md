@@ -7,6 +7,11 @@
 - `codex-bootstrap.js` — print current runtime architecture and commands.
 - `codex-trace.js` — fetch exact run state/events/map/log evidence through the API.
 - `postgres-migrate.js` — apply ordered migrations using `DATABASE_URL` and `POSTGRES_SCHEMA`.
+- `dev-setup.js` — non-destructive local config, explicit migrations, and initial-admin bootstrap.
+- `dev-doctor.js` — read-only environment, schema, path, and bootstrap-state diagnostics.
+- `dev.js` — development startup guarded by the read-only doctor.
+- `admin-password.js` — hidden-input password rotation through the audited user repository.
+- `dev-environment.js` — shared validation and secret-safe local environment utilities.
 
 The operator tools do not read runtime JSON files. Collection exports traverse bounded cursor pages.
 

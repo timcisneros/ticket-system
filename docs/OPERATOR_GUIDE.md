@@ -14,12 +14,14 @@ substrate bounded.
 ```sh
 corepack enable
 pnpm install --frozen-lockfile
-pnpm run dev       # http://localhost:3099, ignored .local-data / .local-workspace
+pnpm dev:setup
+pnpm dev            # http://localhost:3099
 ```
 
-For local demo/development, log in as the bootstrap admin (`admin` / `admin123`, or
-`ADMIN_BOOTSTRAP_PASSWORD`). For a no-provider-key tour of the full loop, use
-`pnpm run demo:seed && pnpm run demo:dev`.
+Log in as `admin` with the password chosen during `dev:setup`. Use `pnpm dev:doctor` for
+read-only environment diagnostics and `pnpm admin:password` for a hidden-input, audited password
+change. The development workspace and browser artifact defaults are `.local-workspace` and
+`.local-artifacts`; PostgreSQL owns structured runtime state.
 
 ## 3. Accounts and permissions
 

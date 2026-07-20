@@ -115,8 +115,12 @@ assert.equal(fs.existsSync(path.join(ROOT, 'persistence', 'json')), false, 'acti
 assert.ok(serverSource.includes("if (!DATABASE_URL) throw new Error('DATABASE_URL is required for the PostgreSQL runtime')"));
 assert.ok(serverSource.includes('new PostgresSessionStore(postgresRuntimeStore)'), 'HTTP sessions must use PostgreSQL');
 assert.ok(!serverSource.includes('process.env.DATA_DIR'), 'server must not select a JSON data directory');
-assert.match(packageJson.scripts.dev, /node --env-file-if-exists=\.env\.local server\.js$/,
-  'development startup must load the ignored local environment file');
+assert.match(packageJson.scripts.dev, /node --env-file-if-exists=\.env\.local scripts\/dev\.js$/,
+  'development startup must load local configuration through the preflight wrapper');
+assert.match(packageJson.scripts['dev:setup'], /scripts\/dev-setup\.js$/, 'development setup command must remain wired');
+assert.match(packageJson.scripts['dev:doctor'], /scripts\/dev-doctor\.js$/, 'development doctor command must remain wired');
+assert.match(packageJson.scripts['admin:password'], /scripts\/admin-password\.js$/,
+  'audited password command must remain wired');
 assert.match(packageJson.scripts['db:migrate'], /node --env-file-if-exists=\.env\.local scripts\/postgres-migrate\.js$/,
   'the migration command must load the same local environment file');
 assert.match(envExampleSource, /^DATABASE_URL=/m, '.env.example must teach the PostgreSQL connection');

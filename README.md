@@ -56,15 +56,19 @@ restart-required outage.
 
 ```sh
 pnpm install --frozen-lockfile
-
-cp .env.example .env.local
-# Edit .env.local with the connection and secrets for your development database.
-
-npm run db:migrate
-npm run dev
+pnpm dev:setup
+pnpm dev
 ```
 
-`dev` and `db:migrate` load the ignored `.env.local` file. Explicit environment variables take precedence.
+`dev:setup` creates ignored `.env.local` configuration only when the file is absent, applies
+explicit migrations, and creates the first admin only when no admin exists. Interactive password
+entry is hidden and is not stored in the env file. Existing configuration, migrations, and
+credentials are preserved on repeated runs.
+
+To provision the optional local PostgreSQL container first, run
+`docker compose -f compose.dev.yml up -d` (or the equivalent Podman Compose command). You may
+instead supply any PostgreSQL URL. Explicit environment variables take precedence over
+`.env.local`.
 
 Optional settings:
 
@@ -74,8 +78,10 @@ Optional settings:
 - provider settings such as `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, and
   `OLLAMA_BASE_URL`
 
-Development startup can create the first `admin` user with the local default password `admin123`
-when `ADMIN_BOOTSTRAP_PASSWORD` is absent. Production initialization refuses that default.
+`pnpm dev` runs a read-only preflight and never migrates or rotates credentials. Use
+`pnpm dev:doctor` for the same diagnostics without starting the server. Rotate an existing
+credential with `pnpm admin:password`; passwords are rejected as command-line arguments.
+`ADMIN_BOOTSTRAP_PASSWORD` is creation-only and is ignored after the account exists.
 
 ## Operator flow
 

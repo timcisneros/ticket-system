@@ -10,6 +10,7 @@ const ROOT = path.resolve(__dirname, '..');
 const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'bounded-worker-pool-test.js',
   'business-scenario-contracts-test.js',
+  'dev-environment-test.js',
   'catalog-consistency-test.js',
   'mutation-admission-contract-test.js',
   'mutation-admission-scheduler-test.js',

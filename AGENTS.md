@@ -34,9 +34,12 @@ evaluation, and consequence contracts.
 ## Commands
 
 - Install: `pnpm install --frozen-lockfile`
-- Configure local development: `cp .env.example .env.local`, then edit its database and secret values
-- Migrate: `npm run db:migrate` (loads `.env.local`; explicit environment variables win)
-- Start: `npm run dev` (loads `.env.local`; explicit environment variables win)
+- Configure/migrate/bootstrap local development: `pnpm dev:setup`
+- Diagnose local configuration without mutation: `pnpm dev:doctor`
+- Start with read-only preflight: `pnpm dev`
+- Rotate a user password through the audited repository: `pnpm admin:password`
+- Apply migrations only: `pnpm db:migrate`
+- All development commands load `.env.local`; explicit environment variables win
 - Syntax: `npm run build`
 - Orientation: `npm run codex:bootstrap`
 - Trace a run: `npm run codex:trace -- --run <id>`

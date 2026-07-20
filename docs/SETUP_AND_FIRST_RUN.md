@@ -10,14 +10,21 @@
 
 ```sh
 pnpm install --frozen-lockfile
-
-cp .env.example .env.local
-# Edit .env.local with the connection and secrets for your development database.
+# Optional local database:
+docker compose -f compose.dev.yml up -d
+pnpm dev:setup
 ```
 
-`dev` and `db:migrate` load `.env.local`; explicit environment variables take precedence.
-`DATABASE_URL` and `SESSION_SECRET` remain mandatory. `ADMIN_BOOTSTRAP_PASSWORD` is mandatory when a
-production-mode startup must create the first admin. Optional environment variables are:
+`dev:setup` creates `.env.local` with mode `0600` only when absent, applies explicit migrations,
+and creates the first admin only when absent. It never replaces existing configuration or
+credentials. The initial password uses a hidden interactive prompt and is not persisted in the env
+file. In non-interactive automation, provide `DATABASE_URL`, `SESSION_SECRET`, and
+`ADMIN_BOOTSTRAP_PASSWORD` through the process environment.
+
+All development commands load `.env.local`; explicit environment variables take precedence.
+`DATABASE_URL` and `SESSION_SECRET` are mandatory. `ADMIN_BOOTSTRAP_PASSWORD` is creation-only,
+must contain at least 12 characters, and is ignored after the admin exists. Optional environment
+variables are:
 
 - `POSTGRES_SCHEMA` (default `ticket_system`)
 - `WORKSPACE_ROOT` (development default `.local-workspace`)
@@ -32,13 +39,18 @@ The migration CLI and server use the same `POSTGRES_SCHEMA` setting.
 ## Migrate and start
 
 ```sh
-npm run db:migrate
-npm run dev
+pnpm dev:doctor
+pnpm dev
 ```
 
-Migrations are explicit. The server verifies the schema at startup; it does not silently migrate a
-production database. Open `http://127.0.0.1:3099`, sign in, and change a development bootstrap
-password before sharing the environment.
+The `dev` command runs the same read-only preflight before startup. It does not silently migrate,
+create users, or rotate credentials. Run `pnpm dev:setup` again when explicit migrations are
+needed; repeated setup preserves an existing admin.
+
+To change an existing credential, use `pnpm admin:password` (or
+`pnpm admin:password -- --username <name>`). Passwords are accepted only through the hidden prompt,
+never through argv. The command uses the transactional user repository, preserves memberships, and
+writes the normal administrative audit event.
 
 ## Verify the runtime
 

@@ -15,6 +15,7 @@ for (const name of all) {
   assert.equal(fs.existsSync(path.join(ROOT, 'scripts', name)), true, `missing checkpoint test ${name}`);
 }
 for (const required of [
+  'dev-environment-test.js',
   'postgres-persistence-contract-test.js',
   'postgres-persistence-integration-test.js',
   'postgres-runtime-cutover-test.js',
