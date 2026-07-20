@@ -104,6 +104,14 @@ async function runSetup({ env = process.env, storeFactory = config => new Postgr
       console.log(`Configured agents already exist; preserved "${agentSetup.agent.name}" and all existing agent records.`);
     }
 
+    if (agentSetup.agent.provider === 'ollama') {
+      console.log(
+        `Ollama must be running with model "${agentSetup.agent.model}" installed. ` +
+        'Confirm it with `ollama list`, then validate the live path with pnpm dev:smoke.'
+      );
+    } else {
+      console.log(`OpenAI model "${agentSetup.agent.model}" is configured. Validate the live path with pnpm dev:smoke.`);
+    }
     await store.prepareRuntimePersistence();
     console.log('Development setup is complete. Run pnpm dev.');
     return true;

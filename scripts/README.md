@@ -7,6 +7,7 @@
 - `codex-bootstrap.js` — print current runtime architecture and commands.
 - `codex-trace.js` — fetch exact run state/events/map/log evidence through the API.
 - `postgres-migrate.js` — apply ordered migrations using `DATABASE_URL` and `POSTGRES_SCHEMA`.
+- `dev-database.js` — start the local PostgreSQL service through Docker or Podman Compose.
 - `dev-setup.js` — non-destructive config, migrations, initial admin, and initial agent bootstrap.
 - `dev-agent-config.js` — shared provider readiness and audited initial-agent creation.
 - `dev-doctor.js` — read-only environment, schema, path, admin, and agent diagnostics.

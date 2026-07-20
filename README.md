@@ -49,21 +49,27 @@ restart-required outage.
 ## Requirements
 
 - Node.js 24 or newer
-- PostgreSQL 17 (the CI baseline)
+- PostgreSQL 17 (the CI baseline), or Docker Compose/Podman Compose for the bundled database
 - pnpm 11 is the lockfile/package-manager baseline; npm remains supported for invoking scripts
+- One model provider: an OpenAI API key, or a running Ollama installation with a pulled model
 
 ## First run
 
 ```sh
+# If pnpm is not already installed with Node 24:
+corepack enable
+corepack install
+
 pnpm install --frozen-lockfile
-# If you do not already have PostgreSQL:
-docker compose -f compose.dev.yml up -d --wait
+# Skip this when DATABASE_URL points to an existing PostgreSQL 17 database:
+pnpm dev:db
 pnpm dev:setup
 pnpm dev
 ```
 
 `dev:setup` creates ignored `.env.local` only when absent, applies explicit migrations, and
-creates the initial admin when absent and a provider-configured agent when no runnable agent exists. Interactive
+creates the initial admin when absent and a provider-configured agent when no runnable
+agent exists. Interactive
 password and OpenAI-key entry is hidden. Existing configuration, users, agents, and credentials are
 preserved on repeated runs.
 
@@ -71,6 +77,15 @@ The setup prompt supports OpenAI or Ollama. Non-interactive setup must provide
 `OPENAI_API_KEY` plus `OPENAI_MODEL`, or `OLLAMA_MODEL`; `DEV_AGENT_PROVIDER`,
 `DEV_AGENT_NAME`, and `OLLAMA_BASE_URL` are optional. Explicit environment variables take
 precedence over `.env.local`.
+
+Provider preparation:
+
+- **OpenAI:** run `pnpm dev:setup`, choose `openai`, accept the supported `gpt-4.1-mini`
+  default (or enter another enabled model), and enter the API key at the hidden prompt.
+- **Ollama:** install Ollama, run `ollama serve`, then `ollama pull <model>`. Confirm the exact tag
+  with `ollama list`; enter that tag and the Ollama base URL during `pnpm dev:setup`.
+
+The repository does not create external provider accounts or download model weights implicitly.
 
 `pnpm dev` runs a read-only preflight that verifies the schema, paths, admin, and at least one
 provider-configured agent. It never migrates or rotates credentials. Use `pnpm dev:doctor` for the

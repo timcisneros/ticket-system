@@ -3,20 +3,26 @@
 ## Prerequisites
 
 - Node.js 24+
-- PostgreSQL 17 (CI baseline)
+- PostgreSQL 17 (CI baseline), or Docker Compose/Podman Compose for the bundled database
 - pnpm 11 for lockfile-faithful installation
+- An OpenAI API key, or a running Ollama installation with a pulled model
 
 ## Install and configure
 
 ```sh
+# If pnpm is not already installed with Node 24:
+corepack enable
+corepack install
+
 pnpm install --frozen-lockfile
-# Optional local database:
-docker compose -f compose.dev.yml up -d --wait
+# Skip this when DATABASE_URL points to an existing PostgreSQL 17 database:
+pnpm dev:db
 pnpm dev:setup
 ```
 
 `dev:setup` creates `.env.local` with mode `0600` only when absent, applies explicit migrations,
-and creates the initial admin when absent and a provider-configured agent when no runnable agent exists. Existing
+and creates the initial admin when absent and a provider-configured agent when no runnable
+agent exists. Existing
 configuration, users, agents, memberships, and credentials are preserved on repeated runs.
 
 Interactive setup prompts for the database URL, a hidden admin password, an OpenAI or Ollama
@@ -25,6 +31,20 @@ only in local PostgreSQL through the existing agent repository. For non-interact
 provide `DATABASE_URL`, `SESSION_SECRET`, and `ADMIN_BOOTSTRAP_PASSWORD`, plus either
 `OPENAI_API_KEY` and `OPENAI_MODEL` or `OLLAMA_MODEL`. Supply the same provider environment
 when starting the server if it is not persisted in `.env.local`.
+
+For OpenAI, choose `openai` during interactive setup and accept `gpt-4.1-mini` or enter another
+model enabled for the account; the API-key prompt is hidden. For Ollama, provision the provider
+before setup:
+
+```sh
+# Keep the service running in its own terminal or through the OS service manager.
+ollama serve
+ollama pull <model>
+ollama list
+```
+
+Enter the exact installed model tag and base URL during setup. The repository does not create
+external provider accounts or download model weights implicitly.
 
 All development commands load `.env.local`; explicit environment variables take precedence.
 `ADMIN_BOOTSTRAP_PASSWORD` is creation-only, must contain at least 12 characters, and is ignored

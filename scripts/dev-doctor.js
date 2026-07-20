@@ -19,7 +19,7 @@ function addCheck(checks, status, label, message) {
 }
 
 function postgresHelp() {
-  return 'Start local PostgreSQL with `docker compose -f compose.dev.yml up -d` (or Podman Compose), then run `pnpm dev:setup`.';
+  return 'Start local PostgreSQL with `pnpm dev:db`, then run `pnpm dev:setup`.';
 }
 
 function packageManagerCheck(userAgent) {

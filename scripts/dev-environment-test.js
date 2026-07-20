@@ -17,7 +17,14 @@ const {
   writeLocalEnv
 } = require('./dev-environment');
 const { inspectDevelopmentEnvironment, packageManagerCheck, printChecks } = require('./dev-doctor');
-const { agentReadiness, ensureInitialAgent, providerConfigFromEnvironment } = require('./dev-agent-config');
+const {
+  DEFAULT_OPENAI_MODEL,
+  agentReadiness,
+  ensureInitialAgent,
+  promptProviderConfig,
+  providerConfigFromEnvironment
+} = require('./dev-agent-config');
+const { selectComposeRuntime, startDevelopmentDatabase } = require('./dev-database');
 const { createInitialAdmin } = require('./dev-setup');
 const { parseArgs, rotateUserPassword } = require('./admin-password');
 const { parseArgs: parseSmokeArgs, runSmoke, SMOKE_OBJECTIVE } = require('./dev-smoke');
@@ -125,6 +132,47 @@ async function main() {
   assert.equal(agentReadiness({ provider: 'ollama', model: 'local-test' }, {}).ready, true);
   assert.equal(providerConfigFromEnvironment({ OPENAI_API_KEY: 'key', OPENAI_MODEL: 'model' }).provider, 'openai');
   assert.equal(providerConfigFromEnvironment({ OLLAMA_MODEL: 'local' }).provider, 'ollama');
+
+  const promptedOpenAI = await promptProviderConfig({
+    env: { DEV_AGENT_PROVIDER: 'openai' },
+    visiblePrompt: async (_message, { defaultValue }) => defaultValue,
+    hiddenPrompt: async () => 'hidden-test-key'
+  });
+  assert.equal(promptedOpenAI.model, DEFAULT_OPENAI_MODEL);
+  assert.equal(promptedOpenAI.apiKey, 'hidden-test-key');
+
+  const podmanRuntime = selectComposeRuntime({
+    spawn(command, args) {
+      assert.deepEqual(args, ['compose', 'version']);
+      return { status: command === 'podman' ? 0 : 1 };
+    }
+  });
+  assert.equal(podmanRuntime.label, 'Podman Compose');
+  const standaloneRuntime = selectComposeRuntime({
+    spawn(command, args) {
+      if (command === 'podman-compose') assert.deepEqual(args, ['version']);
+      return { status: command === 'podman-compose' ? 0 : 1 };
+    }
+  });
+  assert.equal(standaloneRuntime.command, 'podman-compose');
+  const composeCalls = [];
+  const startedRuntime = startDevelopmentDatabase({
+    runtime: podmanRuntime,
+    composeFile: '/repo/compose.dev.yml',
+    spawn(command, args, options) {
+      composeCalls.push({ command, args, options });
+      return { status: 0 };
+    }
+  });
+  assert.equal(startedRuntime, podmanRuntime);
+  assert.equal(composeCalls[0].command, 'podman');
+  assert.deepEqual(composeCalls[0].args, [
+    'compose', '-f', '/repo/compose.dev.yml', 'up', '-d', '--wait'
+  ]);
+  assert.throws(
+    () => startDevelopmentDatabase({ runtime: null, spawn: () => ({ status: 1 }) }),
+    /Docker Compose or Podman Compose is required/
+  );
 
   let bootstrapCalls = 0;
   const created = await createInitialAdmin({
@@ -289,6 +337,7 @@ async function main() {
 
   const packageJson = require('../package.json');
   assert.match(packageJson.scripts.dev, /scripts\/dev\.js$/);
+  assert.match(packageJson.scripts['dev:db'], /scripts\/dev-database\.js$/);
   assert.match(packageJson.scripts['dev:smoke'], /scripts\/dev-smoke\.js$/);
   assert.match(packageJson.scripts['dev:setup'], /scripts\/dev-setup\.js$/);
   assert.match(packageJson.scripts['dev:doctor'], /scripts\/dev-doctor\.js$/);

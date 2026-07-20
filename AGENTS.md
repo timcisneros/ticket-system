@@ -34,6 +34,7 @@ evaluation, and consequence contracts.
 ## Commands
 
 - Install: `pnpm install --frozen-lockfile`
+- Start bundled PostgreSQL with Docker or Podman Compose: `pnpm dev:db`
 - Configure/migrate/bootstrap local development: `pnpm dev:setup`
 - Diagnose local configuration without mutation: `pnpm dev:doctor`
 - Start with read-only preflight: `pnpm dev`

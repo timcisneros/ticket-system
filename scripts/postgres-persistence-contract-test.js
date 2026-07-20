@@ -117,6 +117,7 @@ assert.ok(serverSource.includes('new PostgresSessionStore(postgresRuntimeStore)'
 assert.ok(!serverSource.includes('process.env.DATA_DIR'), 'server must not select a JSON data directory');
 assert.match(packageJson.scripts.dev, /node --env-file-if-exists=\.env\.local scripts\/dev\.js$/,
   'development startup must load local configuration through the preflight wrapper');
+assert.match(packageJson.scripts['dev:db'], /scripts\/dev-database\.js$/, 'development database command must remain wired');
 assert.match(packageJson.scripts['dev:setup'], /scripts\/dev-setup\.js$/, 'development setup command must remain wired');
 assert.match(packageJson.scripts['dev:doctor'], /scripts\/dev-doctor\.js$/, 'development doctor command must remain wired');
 assert.match(packageJson.scripts['dev:smoke'], /scripts\/dev-smoke\.js$/, 'development smoke command must remain wired');

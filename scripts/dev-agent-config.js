@@ -4,6 +4,7 @@ const { promptHidden, promptVisible } = require('./dev-environment');
 
 const PROVIDERS = Object.freeze(['openai', 'ollama']);
 const DEFAULT_AGENT_NAME = 'Developer Agent';
+const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
 const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 
 function normalized(value) {
@@ -68,7 +69,8 @@ async function promptProviderConfig({
 
   const configuredModel = provider === 'openai' ? env.OPENAI_MODEL : env.OLLAMA_MODEL;
   const model = normalized(await visiblePrompt(`${provider === 'openai' ? 'OpenAI' : 'Ollama'} model`, {
-    defaultValue: normalized(configuredModel)
+    defaultValue: normalized(configuredModel) ||
+      (provider === 'openai' ? DEFAULT_OPENAI_MODEL : '')
   }));
   if (!model) throw new Error('Initial agent model is required');
 
@@ -153,6 +155,7 @@ async function ensureInitialAgent({
 
 module.exports = {
   DEFAULT_AGENT_NAME,
+  DEFAULT_OPENAI_MODEL,
   DEFAULT_OLLAMA_BASE_URL,
   PROVIDERS,
   agentReadiness,
