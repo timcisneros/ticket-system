@@ -4,6 +4,20 @@ A server-rendered system for bounded agent work. A ticket assigns responsibility
 execution attempt, and every admitted operation passes through authority, evidence, evaluation, and
 consequence boundaries.
 
+[Portfolio case study](https://timcis.com/projects/ticket-system)
+
+![Triage showing allowed and prohibited operator actions](docs/images/triage.png)
+
+## System guarantees
+
+The reference implementation demonstrates five reliability properties:
+
+- Persistent state keeps tickets and runs beyond a single model response.
+- Scoped authority checks operations against explicit permissions.
+- Inspectable evidence records external effects through append-only PostgreSQL events and receipts.
+- Independent verification keeps run completion separate from acceptance of the ticket objective.
+- Recoverable failure exposes triage, replay, and allowed operator actions without hiding failed work.
+
 ## Current architecture
 
 PostgreSQL is the only structured runtime store. It owns tickets, runs, leases, event history,

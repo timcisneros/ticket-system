@@ -104,6 +104,8 @@ for (const obj of deleteForms) {
   const c = buildObjectiveContract('Delete CD and EF');
   assert('"Delete CD and EF" is a deterministic exact-target delete',
     c.recognized === true && c.intent === 'delete' &&
+    c.targetPath === null &&
+    hasPostcondition(c, 'path_absent', 'CD') && hasPostcondition(c, 'path_absent', 'EF') &&
     JSON.stringify(c.allowedMutations) === JSON.stringify([
       { operation: 'deletePath', path: 'CD' },
       { operation: 'deletePath', path: 'EF' }
