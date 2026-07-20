@@ -1,6 +1,7 @@
 .env
 .env.local
 .env.test.local
+.local-artifacts/
 .local-data/
 .local-workspace/
 .local-demo-data/
@@ -27,6 +28,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Editor
+.claude/settings.local.json
 .vscode/*
 !.vscode/extensions.json
 .idea
