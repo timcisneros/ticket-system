@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "NODE_ENV=production node server.js",
-    "dev": "NODE_ENV=development WORKSPACE_ROOT=${WORKSPACE_ROOT:-.local-workspace} ARTIFACT_ROOT=${ARTIFACT_ROOT:-.local-artifacts} node server.js",
+    "dev": "NODE_ENV=development WORKSPACE_ROOT=${WORKSPACE_ROOT:-.local-workspace} ARTIFACT_ROOT=${ARTIFACT_ROOT:-.local-artifacts} node --env-file-if-exists=.env.local server.js",
     "build": "node scripts/check-js-syntax.js",
     "preview": "NODE_ENV=production node server.js",
     "codex:bootstrap": "node scripts/codex-bootstrap.js",
@@ -18,7 +18,7 @@
     "test:persistence:postgres": "node scripts/postgres-persistence-integration-test.js",
     "test:cutover:postgres": "node scripts/postgres-runtime-cutover-test.js",
     "test:page-render:postgres": "node scripts/page-render-regression-test.js",
-    "db:migrate": "node scripts/postgres-migrate.js",
+    "db:migrate": "node --env-file-if-exists=.env.local scripts/postgres-migrate.js",
     "checkpoint:release": "node scripts/release-checkpoint.js",
     "test": "npm run checkpoint:release"
   },

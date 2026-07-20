@@ -11,12 +11,12 @@
 ```sh
 pnpm install --frozen-lockfile
 
-export DATABASE_URL='postgresql://user:password@127.0.0.1:5432/ticket_system'
-export SESSION_SECRET='a stable high-entropy secret'
-export ADMIN_BOOTSTRAP_PASSWORD='a non-default password'
+cp .env.example .env.local
+# Edit .env.local with the connection and secrets for your development database.
 ```
 
-`DATABASE_URL` and `SESSION_SECRET` are mandatory. `ADMIN_BOOTSTRAP_PASSWORD` is mandatory when a
+`dev` and `db:migrate` load `.env.local`; explicit environment variables take precedence.
+`DATABASE_URL` and `SESSION_SECRET` remain mandatory. `ADMIN_BOOTSTRAP_PASSWORD` is mandatory when a
 production-mode startup must create the first admin. Optional environment variables are:
 
 - `POSTGRES_SCHEMA` (default `ticket_system`)

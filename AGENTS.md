@@ -34,8 +34,9 @@ evaluation, and consequence contracts.
 ## Commands
 
 - Install: `pnpm install --frozen-lockfile`
-- Migrate: `DATABASE_URL=... npm run db:migrate`
-- Start: `DATABASE_URL=... SESSION_SECRET=... npm run dev`
+- Configure local development: `cp .env.example .env.local`, then edit its database and secret values
+- Migrate: `npm run db:migrate` (loads `.env.local`; explicit environment variables win)
+- Start: `npm run dev` (loads `.env.local`; explicit environment variables win)
 - Syntax: `npm run build`
 - Orientation: `npm run codex:bootstrap`
 - Trace a run: `npm run codex:trace -- --run <id>`

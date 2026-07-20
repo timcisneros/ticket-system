@@ -56,6 +56,8 @@ const PROCESS_TEMPLATE_TICKET_PROVENANCE_MIGRATION_PATH = path.join(MIGRATIONS_D
 const APPLICATION_STATE_METHODS_PATH = path.join(ROOT, 'persistence', 'postgres', 'application-state-methods.js');
 const RUNTIME_BACKEND_PATH = path.join(ROOT, 'persistence', 'runtime-backend.js');
 const SERVER_PATH = path.join(ROOT, 'server.js');
+const PACKAGE_PATH = path.join(ROOT, 'package.json');
+const ENV_EXAMPLE_PATH = path.join(ROOT, '.env.example');
 const coreMigration = fs.readFileSync(CORE_MIGRATION_PATH, 'utf8');
 const evidenceMigration = fs.readFileSync(EVIDENCE_MIGRATION_PATH, 'utf8');
 const nonTerminalEvidenceMigration = fs.readFileSync(NON_TERMINAL_EVIDENCE_MIGRATION_PATH, 'utf8');
@@ -86,6 +88,8 @@ const processTemplateTicketProvenanceMigration = fs.readFileSync(PROCESS_TEMPLAT
 const applicationStateMethodsSource = fs.readFileSync(APPLICATION_STATE_METHODS_PATH, 'utf8');
 const runtimeBackendSource = fs.readFileSync(RUNTIME_BACKEND_PATH, 'utf8');
 const serverSource = fs.readFileSync(SERVER_PATH, 'utf8');
+const packageJson = JSON.parse(fs.readFileSync(PACKAGE_PATH, 'utf8'));
+const envExampleSource = fs.readFileSync(ENV_EXAMPLE_PATH, 'utf8');
 
 assert.equal(quoteIdentifier('ticket_system'), '"ticket_system"');
 assert.throws(() => quoteIdentifier('public; DROP SCHEMA public'), /Invalid PostgreSQL identifier/);
@@ -111,6 +115,12 @@ assert.equal(fs.existsSync(path.join(ROOT, 'persistence', 'json')), false, 'acti
 assert.ok(serverSource.includes("if (!DATABASE_URL) throw new Error('DATABASE_URL is required for the PostgreSQL runtime')"));
 assert.ok(serverSource.includes('new PostgresSessionStore(postgresRuntimeStore)'), 'HTTP sessions must use PostgreSQL');
 assert.ok(!serverSource.includes('process.env.DATA_DIR'), 'server must not select a JSON data directory');
+assert.match(packageJson.scripts.dev, /node --env-file-if-exists=\.env\.local server\.js$/,
+  'development startup must load the ignored local environment file');
+assert.match(packageJson.scripts['db:migrate'], /node --env-file-if-exists=\.env\.local scripts\/postgres-migrate\.js$/,
+  'the migration command must load the same local environment file');
+assert.match(envExampleSource, /^DATABASE_URL=/m, '.env.example must teach the PostgreSQL connection');
+assert.match(envExampleSource, /^SESSION_SECRET=/m, '.env.example must teach the session secret');
 
 assert.equal(normalizeWorkspacePath('./reports//daily.json'), 'reports/daily.json');
 assert.equal(normalizeWorkspacePath('.'), '');

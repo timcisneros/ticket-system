@@ -57,13 +57,14 @@ restart-required outage.
 ```sh
 pnpm install --frozen-lockfile
 
-export DATABASE_URL='postgresql://user:password@127.0.0.1:5432/ticket_system'
-export SESSION_SECRET='a stable high-entropy secret'
-export ADMIN_BOOTSTRAP_PASSWORD='a non-default password'
+cp .env.example .env.local
+# Edit .env.local with the connection and secrets for your development database.
 
 npm run db:migrate
 npm run dev
 ```
+
+`dev` and `db:migrate` load the ignored `.env.local` file. Explicit environment variables take precedence.
 
 Optional settings:
 
