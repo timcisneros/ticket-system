@@ -302,7 +302,24 @@ async function main() {
     const invalidExport = await request('GET', '/api/export?domain=unknown&limit=1', { cookie });
     assert(invalidExport.statusCode === 400, 'unknown export domains must be rejected');
 
-    console.log('PASS: page render regression — current PostgreSQL fixtures, authenticated pages, bounded reads, and ticket mutation');
+    const logout = await request('POST', '/logout', { cookie, body: {} });
+    assert(logout.statusCode === 302 && logout.headers.location === '/login',
+      `logout returned HTTP ${logout.statusCode} without redirecting to login`);
+    const clearedCookies = logout.headers['set-cookie'] || [];
+    assert(clearedCookies.some(value =>
+      /^sessionId=;/i.test(value) && /(?:Max-Age=0|Expires=Thu, 01 Jan 1970)/i.test(value)
+    ), 'logout must expire the browser session cookie');
+
+    const rejectedOldSession = await request('GET', '/', { cookie });
+    assert(rejectedOldSession.statusCode === 302 && rejectedOldSession.headers.location === '/login',
+      'the pre-logout session remained authenticated');
+
+    const replacementCookie = await login();
+    assert(replacementCookie !== cookie, 'login must rotate the pre-authentication session');
+    const authenticatedAgain = await request('GET', '/', { cookie: replacementCookie });
+    assert(authenticatedAgain.statusCode === 200, 'login after logout did not restore an authenticated session');
+
+    console.log('PASS: page render regression — current PostgreSQL fixtures, login/logout session lifecycle, authenticated pages, bounded reads, and ticket mutation');
   } finally {
     if (server) {
       server.kill('SIGTERM');

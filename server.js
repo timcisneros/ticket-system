@@ -19411,12 +19411,19 @@ fastify.post('/login', async (request, reply) => {
   }
 
   loginFailures.delete(failureKey);
+  await request.session.regenerate();
   request.session.userId = user.id;
   return reply.redirect('/');
 });
 
 fastify.post('/logout', async (request, reply) => {
-  request.session.destroy();
+  await request.session.destroy();
+  reply.clearCookie('sessionId', {
+    path: '/',
+    secure: SESSION_COOKIE_SECURE,
+    httpOnly: true,
+    sameSite: 'lax'
+  });
   return reply.redirect('/login');
 });
 
