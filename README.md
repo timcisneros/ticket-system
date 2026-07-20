@@ -56,40 +56,46 @@ restart-required outage.
 
 ```sh
 pnpm install --frozen-lockfile
+# If you do not already have PostgreSQL:
+docker compose -f compose.dev.yml up -d --wait
 pnpm dev:setup
 pnpm dev
 ```
 
-`dev:setup` creates ignored `.env.local` configuration only when the file is absent, applies
-explicit migrations, and creates the first admin only when no admin exists. Interactive password
-entry is hidden and is not stored in the env file. Existing configuration, migrations, and
-credentials are preserved on repeated runs.
+`dev:setup` creates ignored `.env.local` only when absent, applies explicit migrations, and
+creates the initial admin when absent and a provider-configured agent when no runnable agent exists. Interactive
+password and OpenAI-key entry is hidden. Existing configuration, users, agents, and credentials are
+preserved on repeated runs.
 
-To provision the optional local PostgreSQL container first, run
-`docker compose -f compose.dev.yml up -d` (or the equivalent Podman Compose command). You may
-instead supply any PostgreSQL URL. Explicit environment variables take precedence over
-`.env.local`.
+The setup prompt supports OpenAI or Ollama. Non-interactive setup must provide
+`OPENAI_API_KEY` plus `OPENAI_MODEL`, or `OLLAMA_MODEL`; `DEV_AGENT_PROVIDER`,
+`DEV_AGENT_NAME`, and `OLLAMA_BASE_URL` are optional. Explicit environment variables take
+precedence over `.env.local`.
 
-Optional settings:
+`pnpm dev` runs a read-only preflight that verifies the schema, paths, admin, and at least one
+provider-configured agent. It never migrates or rotates credentials. Use `pnpm dev:doctor` for the
+same checks without starting the server.
 
-- `POSTGRES_SCHEMA` (default `ticket_system`)
-- `WORKSPACE_ROOT` (development default `.local-workspace`)
-- `ARTIFACT_ROOT` (development default `.local-artifacts`)
-- provider settings such as `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, and
-  `OLLAMA_BASE_URL`
+In a second terminal, exercise one real provider-backed ticket and verify its workspace effect:
 
-`pnpm dev` runs a read-only preflight and never migrates or rotates credentials. Use
-`pnpm dev:doctor` for the same diagnostics without starting the server. Rotate an existing
-credential with `pnpm admin:password`; passwords are rejected as command-line arguments.
-`ADMIN_BOOTSTRAP_PASSWORD` is creation-only and is ignored after the account exists.
+```sh
+pnpm dev:smoke
+```
 
-## Operator flow
+A model/provider failure is reported as a failed smoke run with a `codex:trace` command; it is never
+converted into a passing result. For general operator work:
 
 ```sh
 node scripts/oquery.js login --url http://127.0.0.1:3099
-node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent Mike --wait --json '<objective>'
+node scripts/oquery.js agents --url http://127.0.0.1:3099
+node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent 'Developer Agent' --wait --json '<objective>'
 npm run codex:trace -- --run <runId>
 ```
+
+Rotate an existing credential with `pnpm admin:password`; passwords are rejected as command-line
+arguments. `ADMIN_BOOTSTRAP_PASSWORD` is creation-only and ignored after the account exists.
+
+## Evidence
 
 The primary evidence surfaces are `/api/runs/:id/state`, `/api/runs/:id/events`,
 `/api/runs/:id/decision-graph`, `/api/event-journal`, and `/api/runtime/status`.

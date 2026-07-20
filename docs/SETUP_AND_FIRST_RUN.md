@@ -11,20 +11,24 @@
 ```sh
 pnpm install --frozen-lockfile
 # Optional local database:
-docker compose -f compose.dev.yml up -d
+docker compose -f compose.dev.yml up -d --wait
 pnpm dev:setup
 ```
 
 `dev:setup` creates `.env.local` with mode `0600` only when absent, applies explicit migrations,
-and creates the first admin only when absent. It never replaces existing configuration or
-credentials. The initial password uses a hidden interactive prompt and is not persisted in the env
-file. In non-interactive automation, provide `DATABASE_URL`, `SESSION_SECRET`, and
-`ADMIN_BOOTSTRAP_PASSWORD` through the process environment.
+and creates the initial admin when absent and a provider-configured agent when no runnable agent exists. Existing
+configuration, users, agents, memberships, and credentials are preserved on repeated runs.
+
+Interactive setup prompts for the database URL, a hidden admin password, an OpenAI or Ollama
+provider, an agent name, and model details. An interactively entered OpenAI key is hidden and stored
+only in local PostgreSQL through the existing agent repository. For non-interactive automation,
+provide `DATABASE_URL`, `SESSION_SECRET`, and `ADMIN_BOOTSTRAP_PASSWORD`, plus either
+`OPENAI_API_KEY` and `OPENAI_MODEL` or `OLLAMA_MODEL`. Supply the same provider environment
+when starting the server if it is not persisted in `.env.local`.
 
 All development commands load `.env.local`; explicit environment variables take precedence.
-`DATABASE_URL` and `SESSION_SECRET` are mandatory. `ADMIN_BOOTSTRAP_PASSWORD` is creation-only,
-must contain at least 12 characters, and is ignored after the admin exists. Optional environment
-variables are:
+`ADMIN_BOOTSTRAP_PASSWORD` is creation-only, must contain at least 12 characters, and is ignored
+after the admin exists. Optional environment variables are:
 
 - `POSTGRES_SCHEMA` (default `ticket_system`)
 - `WORKSPACE_ROOT` (development default `.local-workspace`)
@@ -32,11 +36,12 @@ variables are:
 - `PORT` (default `3099`)
 - `SESSION_PURGE_INTERVAL_MS` (default `60000`)
 - `SESSION_PURGE_BATCH_SIZE` (default and current repository maximum `1000`)
+- `DEV_AGENT_PROVIDER`, `DEV_AGENT_NAME`
 - `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, `OLLAMA_BASE_URL`
 
 The migration CLI and server use the same `POSTGRES_SCHEMA` setting.
 
-## Migrate and start
+## Start and verify the first ticket
 
 ```sh
 pnpm dev:doctor
@@ -44,8 +49,19 @@ pnpm dev
 ```
 
 The `dev` command runs the same read-only preflight before startup. It does not silently migrate,
-create users, or rotate credentials. Run `pnpm dev:setup` again when explicit migrations are
-needed; repeated setup preserves an existing admin.
+create accounts, or rotate credentials. Run `pnpm dev:setup` again when explicit migrations or a
+missing initial account are needed.
+
+With the server running, use a second terminal:
+
+```sh
+pnpm dev:smoke
+```
+
+The smoke command securely prompts for the admin password, creates one bounded
+`Ensure folder onboarding-smoke exists` ticket through the authenticated HTTP surface, waits for
+its run, and verifies the workspace folder. It is an observational provider check: model/provider
+failures remain failures and include the exact `codex:trace` follow-up command.
 
 To change an existing credential, use `pnpm admin:password` (or
 `pnpm admin:password -- --username <name>`). Passwords are accepted only through the hidden prompt,

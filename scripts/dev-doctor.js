@@ -12,6 +12,7 @@ const {
   validateSessionSecret,
   writablePathStatus
 } = require('./dev-environment');
+const { agentReadiness, firstConfiguredAgentPage } = require('./dev-agent-config');
 
 function addCheck(checks, status, label, message) {
   checks.push({ status, label, message });
@@ -95,6 +96,28 @@ async function inspectDevelopmentEnvironment({
       } catch (_) {
         // A malformed stored hash is reported by runtime integrity checks.
       }
+    }
+
+    const agentPage = await firstConfiguredAgentPage(store);
+    const readiness = agentPage.agents.map(agent => ({
+      agent,
+      status: agentReadiness(agent, env)
+    }));
+    const readyAgents = readiness.filter(item => item.status.ready);
+    if (agentPage.agents.length === 0) {
+      addCheck(checks, 'fail', 'configured agents', 'none exist; run pnpm dev:setup');
+    } else if (readyAgents.length === 0) {
+      const reasons = [...new Set(readiness.flatMap(item => item.status.reasons))].join(', ');
+      addCheck(checks, agentPage.truncated ? 'warn' : 'fail', 'runnable agent configuration',
+        agentPage.truncated
+          ? `none of the first 100 agents is runnable (${reasons}); inspect the remaining catalog in Admin`
+          : `no agent has complete provider configuration (${reasons}); update Admin or rerun pnpm dev:setup`);
+    } else {
+      addCheck(checks, 'pass', 'runnable agent configuration',
+        `${readyAgents.length} of ${agentPage.agents.length} inspected agent(s) have a provider, model, and required credential`);
+    }
+    if (agentPage.truncated) {
+      addCheck(checks, 'warn', 'configured agents', 'doctor inspection is intentionally bounded to the first 100 agents');
     }
   } catch (error) {
     addCheck(checks, 'fail', 'PostgreSQL', `${safeErrorMessage(error)}. ${postgresHelp()}`);

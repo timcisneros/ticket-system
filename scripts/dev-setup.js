@@ -17,6 +17,7 @@ const {
   validateSessionSecret,
   writeLocalEnv
 } = require('./dev-environment');
+const { ensureInitialAgent } = require('./dev-agent-config');
 const { postgresHelp } = require('./dev-doctor');
 
 const DEFAULT_DATABASE_URL = 'postgresql://ticket_system:ticket_system@127.0.0.1:5432/ticket_system';
@@ -96,6 +97,13 @@ async function runSetup({ env = process.env, storeFactory = config => new Postgr
       if (result.created) console.log('Created the initial admin account through the audited PostgreSQL access repository.');
     }
 
+    const agentSetup = await ensureInitialAgent({ store, env });
+    if (agentSetup.created) {
+      console.log(`Created initial agent "${agentSetup.agent.name}" with ${agentSetup.agent.provider} through the audited PostgreSQL agent repository.`);
+    } else {
+      console.log(`Configured agents already exist; preserved "${agentSetup.agent.name}" and all existing agent records.`);
+    }
+
     await store.prepareRuntimePersistence();
     console.log('Development setup is complete. Run pnpm dev.');
     return true;
@@ -106,7 +114,7 @@ async function runSetup({ env = process.env, storeFactory = config => new Postgr
 
 async function main() {
   if (process.argv.includes('--help')) {
-    console.log('Usage: pnpm dev:setup\n\nCreates .env.local only when absent, runs migrations, and creates the first admin only when absent.');
+    console.log('Usage: pnpm dev:setup\n\nCreates local config only when absent, runs migrations, and creates the initial admin when absent and an agent when no runnable agent exists.');
     return;
   }
   if (process.argv.length > 2) throw new Error('dev:setup does not accept arguments');

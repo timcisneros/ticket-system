@@ -8,6 +8,7 @@
     "dev": "node --env-file-if-exists=.env.local scripts/dev.js",
     "dev:setup": "node --env-file-if-exists=.env.local scripts/dev-setup.js",
     "dev:doctor": "node --env-file-if-exists=.env.local scripts/dev-doctor.js",
+    "dev:smoke": "node --env-file-if-exists=.env.local scripts/dev-smoke.js",
     "admin:password": "node --env-file-if-exists=.env.local scripts/admin-password.js",
     "build": "node scripts/check-js-syntax.js",
     "preview": "NODE_ENV=production node server.js",

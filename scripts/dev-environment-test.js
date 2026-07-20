@@ -17,8 +17,10 @@ const {
   writeLocalEnv
 } = require('./dev-environment');
 const { inspectDevelopmentEnvironment, packageManagerCheck, printChecks } = require('./dev-doctor');
+const { agentReadiness, ensureInitialAgent, providerConfigFromEnvironment } = require('./dev-agent-config');
 const { createInitialAdmin } = require('./dev-setup');
 const { parseArgs, rotateUserPassword } = require('./admin-password');
+const { parseArgs: parseSmokeArgs, runSmoke, SMOKE_OBJECTIVE } = require('./dev-smoke');
 
 async function main() {
   assert.match(validateDatabaseUrl(''), /required/);
@@ -82,6 +84,7 @@ async function main() {
     storeFactory: () => ({
       async prepareRuntimePersistence() {},
       async getUserByUsername() { return existingAdmin; },
+      async listConfiguredAgents() { return { agents: [{ provider: 'openai', model: 'test-model', apiKey: 'stored' }], nextAfterId: null }; },
       async close() { closed = true; }
     }),
     verifyPassword: async (_hash, candidate) => candidate === 'current-password'
@@ -98,11 +101,30 @@ async function main() {
     storeFactory: () => ({
       async prepareRuntimePersistence() {},
       async getUserByUsername() { return null; },
+      async listConfiguredAgents() { return { agents: [{ provider: 'ollama', model: 'test-model' }], nextAfterId: null }; },
       async close() {}
     })
   });
   assert.equal(missingAdmin.ok, false);
   assert.ok(missingAdmin.checks.some(check => check.status === 'fail' && check.label === 'initial admin'));
+
+  const missingAgents = await inspectDevelopmentEnvironment({
+    env: baseEnv,
+    storeFactory: () => ({
+      async prepareRuntimePersistence() {},
+      async getUserByUsername() { return existingAdmin; },
+      async listConfiguredAgents() { return { agents: [], nextAfterId: null }; },
+      async close() {}
+    }),
+    verifyPassword: async () => false
+  });
+  assert.equal(missingAgents.ok, false);
+  assert.ok(missingAgents.checks.some(check => check.status === 'fail' && check.label === 'configured agents'));
+  assert.equal(agentReadiness({ provider: 'openai', model: 'gpt-test' }, {}).ready, false);
+  assert.equal(agentReadiness({ provider: 'openai', model: 'gpt-test' }, { OPENAI_API_KEY: 'set' }).ready, true);
+  assert.equal(agentReadiness({ provider: 'ollama', model: 'local-test' }, {}).ready, true);
+  assert.equal(providerConfigFromEnvironment({ OPENAI_API_KEY: 'key', OPENAI_MODEL: 'model' }).provider, 'openai');
+  assert.equal(providerConfigFromEnvironment({ OLLAMA_MODEL: 'local' }).provider, 'ollama');
 
   let bootstrapCalls = 0;
   const created = await createInitialAdmin({
@@ -128,6 +150,66 @@ async function main() {
   });
   assert.equal(preserved.created, false);
 
+  let createdAgentInput;
+  const initialAgent = await ensureInitialAgent({
+    store: {
+      async listConfiguredAgents() { return { agents: [], nextAfterId: null }; },
+      async listGroups() { return { groups: [{ id: 9, name: 'Agent Support' }] }; },
+      async createConfiguredAgent(input) {
+        createdAgentInput = input;
+        return { agent: { id: 11, ...input.value, groupIds: input.groupIds } };
+      }
+    },
+    env: { OLLAMA_MODEL: 'local-test-model' },
+    interactive: false
+  });
+  assert.equal(initialAgent.created, true);
+  assert.equal(createdAgentInput.changedBy, 'dev-setup');
+  assert.deepEqual(createdAgentInput.groupIds, [9]);
+  assert.equal(createdAgentInput.value.provider, 'ollama');
+  assert.equal(createdAgentInput.value.model, 'local-test-model');
+
+  const existingAgent = { id: 12, name: 'Existing', provider: 'openai', model: 'existing-model', apiKey: 'stored' };
+  const preservedAgent = await ensureInitialAgent({
+    store: {
+      async listConfiguredAgents() { return { agents: [existingAgent], nextAfterId: null }; },
+      async listGroups() { throw new Error('must not inspect groups'); },
+      async createConfiguredAgent() { throw new Error('must not create'); }
+    },
+    env: {},
+    interactive: false
+  });
+  assert.equal(preservedAgent.created, false);
+  assert.equal(preservedAgent.agent, existingAgent);
+
+  let repairInput;
+  const repairedCatalog = await ensureInitialAgent({
+    store: {
+      async listConfiguredAgents() {
+        return { agents: [{ id: 13, name: 'Developer Agent', provider: 'openai', model: '' }], nextAfterId: null };
+      },
+      async listGroups() { return { groups: [{ id: 9, name: 'Agent Support' }] }; },
+      async createConfiguredAgent(input) {
+        repairInput = input;
+        return { agent: { id: 14, ...input.value, groupIds: input.groupIds } };
+      }
+    },
+    env: { OLLAMA_MODEL: 'repair-model' },
+    interactive: false
+  });
+  assert.equal(repairedCatalog.created, true);
+  assert.equal(repairInput.value.name, 'Developer Agent 2');
+  assert.equal(repairInput.value.provider, 'ollama');
+
+  await assert.rejects(
+    ensureInitialAgent({
+      store: { async listConfiguredAgents() { return { agents: [], nextAfterId: null }; } },
+      env: {},
+      interactive: false
+    }),
+    /No runnable configured agent exists/
+  );
+
   let update;
   const rotated = await rotateUserPassword({
     store: {
@@ -152,9 +234,62 @@ async function main() {
   assert.throws(() => parseArgs(['--password', 'visible-secret']), /cannot be passed/);
   assert.deepEqual(parseArgs(['--username', 'operator']), { help: false, username: 'operator' });
   assert.deepEqual(parseArgs(['--', '--username', 'operator']), { help: false, username: 'operator' });
+  assert.throws(() => parseSmokeArgs(['--password', 'visible-secret']), /cannot be passed/);
+
+  let smokeTicketCreated = false;
+  const smokeOutput = [];
+  const smokeResult = await runSmoke({
+    options: parseSmokeArgs(['--timeout-ms', '1000']),
+    env: { DEV_SMOKE_PASSWORD: 'hidden-test-password' },
+    output: { write(value) { smokeOutput.push(value); } },
+    sleep: async () => {},
+    request: async (method, url, requestOptions = {}) => {
+      if (url.endsWith('/health')) {
+        assert.equal(method, 'GET');
+        return { status: 200, headers: {}, body: JSON.stringify({ status: 'ok', ready: true }) };
+      }
+      if (url.endsWith('/login')) {
+        assert.equal(method, 'POST');
+        assert.match(requestOptions.body, /username=admin/);
+        assert.match(requestOptions.body, /password=hidden-test-password/);
+        return { status: 302, headers: { 'set-cookie': ['sessionId=test-cookie; Path=/'] }, body: '' };
+      }
+      if (url.includes('/api/configured-agents/resolve')) {
+        return { status: 200, headers: {}, body: JSON.stringify({ agent: { id: 5, name: 'Developer Agent' } }) };
+      }
+      if (url.endsWith('/tickets') && method === 'POST') {
+        assert.equal(new URLSearchParams(requestOptions.body).get('objective'), SMOKE_OBJECTIVE);
+        smokeTicketCreated = true;
+        return { status: 302, headers: {}, body: '' };
+      }
+      if (url.includes('/api/tickets/3/runtime')) {
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify({
+            ticket: { id: 3, objective: SMOKE_OBJECTIVE, status: 'completed' },
+            latestRun: { id: 4, status: 'completed' }
+          })
+        };
+      }
+      if (url.includes('/api/workspace/list')) {
+        return { status: 200, headers: {}, body: JSON.stringify({ entries: [] }) };
+      }
+      if (url.endsWith('/api/tickets')) {
+        const tickets = smokeTicketCreated
+          ? [{ id: 3, objective: SMOKE_OBJECTIVE }]
+          : [{ id: 2, objective: 'existing' }];
+        return { status: 200, headers: {}, body: JSON.stringify({ tickets }) };
+      }
+      throw new Error('Unexpected smoke request: ' + method + ' ' + url);
+    }
+  });
+  assert.equal(smokeResult.workspaceVerified, true);
+  assert.match(smokeOutput.join(''), /ticket #3, run #4/);
 
   const packageJson = require('../package.json');
   assert.match(packageJson.scripts.dev, /scripts\/dev\.js$/);
+  assert.match(packageJson.scripts['dev:smoke'], /scripts\/dev-smoke\.js$/);
   assert.match(packageJson.scripts['dev:setup'], /scripts\/dev-setup\.js$/);
   assert.match(packageJson.scripts['dev:doctor'], /scripts\/dev-doctor\.js$/);
   assert.match(packageJson.scripts['admin:password'], /scripts\/admin-password\.js$/);

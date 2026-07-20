@@ -18,10 +18,13 @@ pnpm dev:setup
 pnpm dev            # http://localhost:3099
 ```
 
-Log in as `admin` with the password chosen during `dev:setup`. Use `pnpm dev:doctor` for
-read-only environment diagnostics and `pnpm admin:password` for a hidden-input, audited password
-change. The development workspace and browser artifact defaults are `.local-workspace` and
-`.local-artifacts`; PostgreSQL owns structured runtime state.
+Setup also creates one provider-configured agent when no runnable agent exists, without changing existing agent records. Log in as `admin`
+with the password chosen during setup. With the server running, execute `pnpm dev:smoke` in a
+second terminal to prove login, agent resolution, ticket/run execution, and the workspace target.
+
+Use `pnpm dev:doctor` for read-only diagnostics and `pnpm admin:password` for a hidden-input,
+audited password change. The development workspace and browser artifact defaults are
+`.local-workspace` and `.local-artifacts`; PostgreSQL owns structured runtime state.
 
 ## 3. Accounts and permissions
 
@@ -46,9 +49,9 @@ contract — the single mutation boundary. The workspace target is `WORKSPACE_RO
 
 ## 6. Authority and receipts
 
-Every mutation requires authority and produces a **receipt** in `operation-history.json` plus
-events. Authority decisions (allowed/denied) are recorded as evidence. Receipts derive from durable
-evidence, **not** agent self-report. See `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`.
+Every mutation requires authority and produces a transactional PostgreSQL operation receipt plus
+event and replay evidence. Authority decisions (allowed/denied) are recorded as evidence. Receipts
+derive from durable runtime evidence, **not** agent self-report.
 
 ## 7. Verification and triage
 
@@ -120,12 +123,12 @@ build → checkpoint → ff-merge → annotated tag).
 
 ## 17. Troubleshooting
 
-- **Run failed: "Agent API key is missing"** — configure a provider/model on the agent (Admin or
-  env). Tracked seed agents carry no keys.
+- **Doctor reports no configured/runnable agent** — rerun `pnpm dev:setup` when the catalog is
+  empty, or update the existing agent in Admin with a provider, model, and required credential.
+- **Run failed: "Agent API key is missing"** — configure the OpenAI key on the agent or in the
+  environment used to start the server.
 - **Local model timeout** — small local models may be slow or not follow the protocol; a timeout is
   not by itself a bad mutation or false completion.
-- **`data/events.jsonl` missing after a pull** — expected (it became untracked); the app recreates an
-  empty one. Restore old contents deliberately if needed (see README).
 - **No-route triage** — a routing policy permitted no provider; edit the policy or reassign.
 - **Connector read refused** — the object is out of `sourceRoots`, cross-context, or the connector/
   context is inactive; the receipt records the reason.

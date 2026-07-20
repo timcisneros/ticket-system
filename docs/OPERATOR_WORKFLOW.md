@@ -14,12 +14,14 @@ The operator creates a ticket with a clear objective and assigns it to an agent.
 
 **CLI:**
 ```bash
-node scripts/oquery.js create-ticket --url http://127.0.0.1:3000 --agent 1 --json "Create a workspace status report named status.md"
+node scripts/oquery.js login --url http://127.0.0.1:3099
+node scripts/oquery.js agents --url http://127.0.0.1:3099
+node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent 'Developer Agent' --json "Create a workspace status report named status.md"
 ```
 
 **API:**
 ```bash
-curl -X POST http://127.0.0.1:3000/tickets \
+curl -X POST http://127.0.0.1:3099/tickets \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -H "Cookie: sessionId=<session>" \
   -d "objective=Create+a+workspace+status+report" \
@@ -27,7 +29,7 @@ curl -X POST http://127.0.0.1:3000/tickets \
   -d "assignmentTargetId=1"
 ```
 
-**Expected response:** `{ ticketId: N, runId: M, status: "pending" }`
+**Expected response:** the browser route redirects to the created ticket. Prefer the CLI with `--json` when ticket and run IDs are needed by automation.
 
 ### 2. Observe Run Status
 
@@ -35,12 +37,12 @@ The operator polls the run status until it reaches a terminal state.
 
 **CLI:**
 ```bash
-node scripts/oquery.js runs --url http://127.0.0.1:3000 --id <runId> --json --api
+node scripts/oquery.js runs --url http://127.0.0.1:3099 --id <runId> --json --api
 ```
 
 **API:**
 ```bash
-curl http://127.0.0.1:3000/api/runs/<runId>/state \
+curl http://127.0.0.1:3099/api/runs/<runId>/state \
   -H "Cookie: sessionId=<session>"
 ```
 
@@ -52,12 +54,12 @@ If the run failed, the operator inspects the failure reason.
 
 **CLI:**
 ```bash
-node scripts/oquery.js replay --url http://127.0.0.1:3000 --api <runId>
+pnpm codex:trace -- --run <runId>
 ```
 
 **API:**
 ```bash
-curl http://127.0.0.1:3000/api/runs/<runId>/events \
+curl http://127.0.0.1:3099/api/runs/<runId>/events \
   -H "Cookie: sessionId=<session>"
 ```
 
@@ -76,12 +78,12 @@ Use when the objective was valid but the model got stuck or the run timed out. C
 
 **CLI:**
 ```bash
-node scripts/oquery.js rerun --url http://127.0.0.1:3000 --id <ticketId> --json
+node scripts/oquery.js rerun --url http://127.0.0.1:3099 --id <ticketId> --json
 ```
 
 **API:**
 ```bash
-curl -X POST http://127.0.0.1:3000/api/tickets/<ticketId>/rerun \
+curl -X POST http://127.0.0.1:3099/api/tickets/<ticketId>/rerun \
   -H "Content-Type: application/json" \
   -H "Cookie: sessionId=<session>" \
   -d '{}'
@@ -92,7 +94,7 @@ Use when the model failed with a specific error and the operator wants the next 
 
 **API:**
 ```bash
-curl -X POST http://127.0.0.1:3000/api/tickets/<ticketId>/rerun \
+curl -X POST http://127.0.0.1:3099/api/tickets/<ticketId>/rerun \
   -H "Content-Type: application/json" \
   -H "Cookie: sessionId=<session>" \
   -d '{"mode":"reassess"}'
@@ -103,39 +105,39 @@ Use when the objective itself was too broad or ambiguous. The operator closes th
 
 **CLI:**
 ```bash
-node scripts/oquery.js create-ticket --url http://127.0.0.1:3000 --agent 1 --json "Narrower objective here"
+node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent 'Developer Agent' --json "Narrower objective here"
 ```
 
 ### 5. Inspect Final Artifact
 
 After the run completes, the operator checks the workspace for the expected artifact.
 
-**CLI:**
+**CLI/API:**
 ```bash
-ls workspace-root/
-cat workspace-root/<artifact-name>.md
+node scripts/oquery.js workspace --url http://127.0.0.1:3099 ls
+node scripts/oquery.js workspace --url http://127.0.0.1:3099 cat <artifact-name>.md
 ```
 
-**Evidence:** The artifact path can also be found in the operation history:
+**Evidence:** Trace the run to inspect its persisted events, operations, evaluation, and consequence:
 ```bash
-grep 'writeFile' data/operation-history.json | grep <runId>
+pnpm codex:trace -- --run <runId>
 ```
 
-### 6. Confirm Telemetry
+### 6. Confirm Runtime Evidence
 
-The operator regenerates the telemetry report to confirm the outcome is recorded.
+Confirm the terminal state and its PostgreSQL-backed runtime evidence.
 
 **CLI:**
 ```bash
-node scripts/telemetry-report.js
-cat data/telemetry-report.md
+node scripts/oquery.js runs --url http://127.0.0.1:3099 --id <runId> --json --api
+pnpm codex:trace -- --run <runId>
 ```
 
 **What to verify:**
-- The run appears in the summary with correct status
-- The profile metrics reflect the ticket class
-- Failure metrics are accurate if the run failed
-- Artifact metrics include the generated file
+- The run has the expected terminal status
+- Events and operations correspond to the run
+- `runEvaluation` and `runConsequence` reflect the outcome
+- The expected artifact is visible through the workspace API
 
 ## Decision Matrix
 
@@ -152,7 +154,7 @@ cat data/telemetry-report.md
 
 ```bash
 # 1. Create ticket
-$ node scripts/oquery.js create-ticket --agent 1 --json "List all files"
+$ node scripts/oquery.js create-ticket --agent "Developer Agent" --json "List all files"
 { "ticketId": 49, "runId": 60, "status": "pending" }
 
 # 2. Wait and check status
@@ -160,22 +162,22 @@ $ node scripts/oquery.js runs --id 60 --json --api
 [ { "status": "failed", "error": "Agent run exceeded listDirectory limit of 3" } ]
 
 # 3. Inspect failure
-$ node scripts/oquery.js replay --api 60
+$ pnpm codex:trace -- --run 60
 # Shows: agent listed root, then src, then config, then hit limit before moving any files
 
 # 4. Decide: objective was too broad. Revise.
-$ node scripts/oquery.js create-ticket --agent 1 --json "List the workspace root and create status.md"
+$ node scripts/oquery.js create-ticket --agent "Developer Agent" --json "List the workspace root and create status.md"
 { "ticketId": 54, "runId": 65, "status": "pending" }
 
 # 5. Check completion
 $ node scripts/oquery.js runs --id 65 --json --api
 [ { "status": "completed" } ]
-$ ls workspace-root/status.md
-workspace-root/status.md
+$ node scripts/oquery.js workspace cat status.md
+<file contents>
 
-# 6. Confirm telemetry
-$ node scripts/telemetry-report.js
-# Report shows: report profile 1 completed, 0 phase violations, 1 artifact generated
+# 6. Confirm persisted evidence
+$ pnpm codex:trace -- --run 65
+# Trace shows the terminal run, operations, evaluation, and consequence
 ```
 
 ## Operator Invariants
@@ -184,5 +186,5 @@ $ node scripts/telemetry-report.js
 2. Every terminal run has a `replaySummary` with a `failure.kind` or `terminalStatus === 'completed'`.
 3. The rerun endpoint always accepts `mode` (defaults to `retry`).
 4. Reassess mode injects `priorFailureContext` only on the first model request of the new run.
-5. Telemetry is deterministic: the same ledger always produces the same report.
-6. Artifacts are inspectable directly in `workspace-root/`.
+5. Terminal evidence remains queryable from PostgreSQL through the trace and API surfaces.
+6. Artifacts are inspectable through the workspace API and CLI.

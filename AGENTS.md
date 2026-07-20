@@ -37,6 +37,7 @@ evaluation, and consequence contracts.
 - Configure/migrate/bootstrap local development: `pnpm dev:setup`
 - Diagnose local configuration without mutation: `pnpm dev:doctor`
 - Start with read-only preflight: `pnpm dev`
+- Verify the first real ticket/provider/workspace path: `pnpm dev:smoke`
 - Rotate a user password through the audited repository: `pnpm admin:password`
 - Apply migrations only: `pnpm db:migrate`
 - All development commands load `.env.local`; explicit environment variables win
@@ -51,7 +52,8 @@ evaluation, and consequence contracts.
 
 ```sh
 node scripts/oquery.js login --url http://127.0.0.1:3099
-node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent Mike --wait --json '<objective>'
+node scripts/oquery.js agents --url http://127.0.0.1:3099
+node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent 'Developer Agent' --wait --json '<objective>'
 npm run codex:trace -- --run <runId>
 ```
 

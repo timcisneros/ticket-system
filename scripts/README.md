@@ -7,8 +7,10 @@
 - `codex-bootstrap.js` — print current runtime architecture and commands.
 - `codex-trace.js` — fetch exact run state/events/map/log evidence through the API.
 - `postgres-migrate.js` — apply ordered migrations using `DATABASE_URL` and `POSTGRES_SCHEMA`.
-- `dev-setup.js` — non-destructive local config, explicit migrations, and initial-admin bootstrap.
-- `dev-doctor.js` — read-only environment, schema, path, and bootstrap-state diagnostics.
+- `dev-setup.js` — non-destructive config, migrations, initial admin, and initial agent bootstrap.
+- `dev-agent-config.js` — shared provider readiness and audited initial-agent creation.
+- `dev-doctor.js` — read-only environment, schema, path, admin, and agent diagnostics.
+- `dev-smoke.js` — authenticated first-ticket run and workspace-target verification.
 - `dev.js` — development startup guarded by the read-only doctor.
 - `admin-password.js` — hidden-input password rotation through the audited user repository.
 - `dev-environment.js` — shared validation and secret-safe local environment utilities.
