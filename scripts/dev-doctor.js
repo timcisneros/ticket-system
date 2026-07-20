@@ -71,27 +71,12 @@ async function inspectDevelopmentEnvironment({
     if (!admin) {
       const passwordError = validateAdminPassword(config.adminBootstrapPassword, { required: true });
       const detail = passwordError ? `${passwordError}; run pnpm dev:setup` : 'account is missing; run pnpm dev:setup';
-      addCheck(checks, 'fail', 'initial admin', detail);
+      addCheck(checks, 'fail', 'admin account', detail);
     } else {
-      addCheck(checks, 'pass', 'initial admin', 'admin account exists');
-      if (config.adminBootstrapPassword) {
-        const passwordError = validateAdminPassword(config.adminBootstrapPassword);
-        addCheck(checks, 'warn', 'ADMIN_BOOTSTRAP_PASSWORD',
-          passwordError || 'creation-only setting remains present after bootstrap');
-        let matches = false;
-        try {
-          matches = await verifyPassword(admin.passwordHash, config.adminBootstrapPassword);
-        } catch (_) {
-          matches = false;
-        }
-        if (!matches) {
-          addCheck(checks, 'warn', 'bootstrap password state',
-            'configured creation-only value does not match the current admin password; use pnpm admin:password to rotate it');
-        }
-      }
+      addCheck(checks, 'pass', 'admin account', 'configured');
       try {
         if (await verifyPassword(admin.passwordHash, 'admin123')) {
-          addCheck(checks, 'warn', 'admin password', 'current admin still uses the legacy development default; rotate it with pnpm admin:password');
+          addCheck(checks, 'warn', 'admin password', 'current password is a predictable default; change it with pnpm admin:password');
         }
       } catch (_) {
         // A malformed stored hash is reported by runtime integrity checks.

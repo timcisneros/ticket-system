@@ -38,8 +38,8 @@ async function createInitialAdmin({ store, password, hashPassword = argon2.hash 
 
 async function passwordForInitialAdmin(env = process.env) {
   if (env.ADMIN_BOOTSTRAP_PASSWORD) return env.ADMIN_BOOTSTRAP_PASSWORD;
-  const first = await promptHidden('Initial admin password');
-  const second = await promptHidden('Confirm initial admin password');
+  const first = await promptHidden('Admin password');
+  const second = await promptHidden('Confirm admin password');
   if (first !== second) throw new Error('Admin password confirmation did not match');
   return first;
 }
@@ -88,18 +88,15 @@ async function runSetup({ env = process.env, storeFactory = config => new Postgr
     const existing = await store.getUserByUsername('admin');
     if (existing) {
       console.log('Admin account already exists; credentials were preserved.');
-      if (config.adminBootstrapPassword) {
-        console.warn('ADMIN_BOOTSTRAP_PASSWORD is creation-only and is ignored after bootstrap. Use pnpm admin:password to rotate the current password.');
-      }
     } else {
       const password = await passwordForInitialAdmin(env);
       const result = await createInitialAdmin({ store, password });
-      if (result.created) console.log('Created the initial admin account through the audited PostgreSQL access repository.');
+      if (result.created) console.log('Created the admin account through the audited PostgreSQL access repository.');
     }
 
     const agentSetup = await ensureInitialAgent({ store, env });
     if (agentSetup.created) {
-      console.log(`Created initial agent "${agentSetup.agent.name}" with ${agentSetup.agent.provider} through the audited PostgreSQL agent repository.`);
+      console.log(`Created agent "${agentSetup.agent.name}" with ${agentSetup.agent.provider} through the audited PostgreSQL agent repository.`);
     } else {
       console.log(`Configured agents already exist; preserved "${agentSetup.agent.name}" and all existing agent records.`);
     }
@@ -122,7 +119,7 @@ async function runSetup({ env = process.env, storeFactory = config => new Postgr
 
 async function main() {
   if (process.argv.includes('--help')) {
-    console.log('Usage: pnpm dev:setup\n\nCreates local config only when absent, runs migrations, and creates the initial admin when absent and an agent when no runnable agent exists.');
+    console.log('Usage: pnpm dev:setup\n\nCreates local config only when absent, runs migrations, and creates an admin when absent and an agent when no runnable agent exists.');
     return;
   }
   if (process.argv.length > 2) throw new Error('dev:setup does not accept arguments');

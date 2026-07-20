@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const dotenv = require('dotenv');
 const {
+  MIN_ADMIN_PASSWORD_LENGTH,
   applyLocalEnv,
   generateSessionSecret,
   renderLocalEnv,
@@ -36,7 +37,7 @@ async function main() {
   assert.match(validateSessionSecret('short'), /32/);
   assert.match(validateSessionSecret('replace-with-at-least-32-random-characters'), /placeholder/);
   assert.equal(validateSessionSecret(generateSessionSecret()), null);
-  assert.match(validateAdminPassword('short', { required: true }), /12/);
+  assert.match(validateAdminPassword('short', { required: true }), new RegExp(String(MIN_ADMIN_PASSWORD_LENGTH)));
   assert.equal(validateAdminPassword('long-enough-development-password', { required: true }), null);
   assert.equal(safeErrorMessage(new Error('connect postgresql://user:secret@localhost/db failed')).includes('secret'), false);
 
@@ -94,11 +95,17 @@ async function main() {
       async listConfiguredAgents() { return { agents: [{ provider: 'openai', model: 'test-model', apiKey: 'stored' }], nextAfterId: null }; },
       async close() { closed = true; }
     }),
-    verifyPassword: async (_hash, candidate) => candidate === 'current-password'
+    verifyPassword: async (_hash, candidate) => candidate === 'admin123'
   });
   assert.equal(healthy.ok, true, 'warnings must not turn a usable environment into a startup outage');
   assert.equal(closed, true);
-  assert.ok(healthy.checks.some(check => check.status === 'warn' && check.label === 'bootstrap password state'));
+  assert.equal(healthy.checks.some(check => check.label === 'ADMIN_BOOTSTRAP_PASSWORD'), false);
+  const passwordWarning = healthy.checks.find(
+    check => check.status === 'warn' && check.label === 'admin password'
+  );
+  assert.ok(passwordWarning);
+  assert.match(passwordWarning.message, /predictable default/);
+  assert.doesNotMatch(passwordWarning.message, /legacy|initial/i);
   const rendered = [];
   printChecks(healthy, { write(value) { rendered.push(value); } });
   assert.equal(rendered.join('').includes('stale'), false, 'doctor output must not expose secret values');
@@ -113,7 +120,7 @@ async function main() {
     })
   });
   assert.equal(missingAdmin.ok, false);
-  assert.ok(missingAdmin.checks.some(check => check.status === 'fail' && check.label === 'initial admin'));
+  assert.ok(missingAdmin.checks.some(check => check.status === 'fail' && check.label === 'admin account'));
 
   const missingAgents = await inspectDevelopmentEnvironment({
     env: baseEnv,
