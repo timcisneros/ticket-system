@@ -1,80 +1,104 @@
 # Local Connector Contract
 
-r1.30 implements the smallest connector boundary using a **local/mock connector only**, per
-`docs/CONNECTOR_BOUNDARY_DESIGN_AUDIT.md`. It proves connector boundaries, receipts, scoping, and
-permission behavior **without adding any real external connector**.
+The current connector implementation establishes a connector authority boundary using a
+**local/mock adapter only**. It proves catalog, receipt, Work Context, permission, and persistence
+behavior without representing the product's future connector catalog as local-only.
 
-## Scope and non-goals
+## Current scope
 
-- **Local/mock only** — the only `kind` is `local_mock`, which reads from a local fixture object
-  store (`data/local-connector-objects.json`). There is **no external system, OAuth, Google Drive,
-  Slack, Gmail, Discord, external API call, API key, or plaintext secret**, and **no background
-  sync**.
-- The local object store is a **test/demo fixture, not final product seed data**. Businesses will
-  connect their own data through future, separately-audited connectors.
+- The only implemented adapter `kind` is `local_mock`. It reads from the disposable fixture object
+  store `data/local-connector-objects.json`.
+- There is no external system call, OAuth flow, Google Drive, Slack, Gmail, Discord, background sync,
+  API-key ingestion, or plaintext credential storage in this implementation.
+- The local object store is a test/demo fixture, not connector authority and not final product seed
+  data. Future external adapters must preserve the authority and receipt contract and receive their
+  own security and operational review.
 
-## Stores
+## Persistence authority
 
-- `data/connectors.json` — connector records.
-- `data/connector-receipts.json` — one receipt per read/refused-write.
-- `data/local-connector-objects.json` — the mock object fixture.
+Connector definitions and receipts use the `connector-authority` repository contract:
 
-## Connector shape
+- The selected JSON development adapter persists definitions in `data/connectors.json` and receipts
+  in `data/connector-receipts.json` under the process's existing single-writer authority.
+- Migration `022_connector_authority.sql` supplies PostgreSQL `connectors` and append-only
+  `connector_receipts` tables. PostgreSQL owns identity and timestamps, enforces revision and
+  reference constraints, indexes catalog, Work Context, receipt, and refusal reads, and maintains
+  exact status counts across 256 ID-derived shards.
+- Catalog lists and receipt histories use bounded keyset cursors. A page bound limits query work; it
+  does not cap the total number of connectors or receipts.
+- Connector create/update and required diagnostic audit evidence roll back together in JSON or
+  commit in one PostgreSQL transaction. Updates require the rendered/current `revision`; a stale
+  writer receives a conflict instead of overwriting another update.
+- Receipt append and its required diagnostic audit commit together. PostgreSQL receipts are
+  database-enforced append-only. The JSON adapter retains its single-process file semantics.
+- Persisted connector and receipt records must use the current format. Disposable obsolete records
+  are rejected; there is no development-data importer or compatibility branch.
+
+The active Fastify server still selects the JSON adapter. The PostgreSQL implementation is a
+cutover-ready authority seam, not a dual-write mode or a claim that partial PostgreSQL server mode
+is enabled. The mock object fixture intentionally remains file-backed because it is not a production
+connector source.
+
+## Connector record
 
 `{ id, name, status(active|paused|archived), kind(local_mock), workContextId, credentialRef,
 allowedScopes(read|write), sourceRoots, targetRoots, readPolicy, writePolicy, receiptPolicy,
-syncPolicy{mode:'manual'}, ... }`.
+syncPolicy{mode:'manual'}, revision, createdBy, createdAt, updatedBy, updatedAt }`.
 
-- A new **active** connector requires an **active** Work Context.
-- **No plaintext secret may be stored** — the record holds a `credentialRef` only; any
-  `credential`/`secret`/`apiKey`/`token`/`password` field is rejected.
-- **`connector:manage`** gates CRUD; **`connector:read`** gates reads; **`connector:write`** gates
-  the write endpoint (which still refuses). Connector permission is **not** ticket authority.
+- An **active** connector requires an **active** Work Context.
+- The record holds a `credentialRef` only. Plaintext `credential`, `secret`, `apiKey`, `token`, or
+  `password` fields are rejected recursively.
+- `connector:manage` gates catalog management, `connector:read` gates reads, and `connector:write`
+  gates the write endpoint. Connector permission is not ticket or target-operation authority.
 
-## Receipt shape
+## Receipt record
 
 `{ id, connectorId, workContextId, operation(read|read_refused|write_refused), sourceRef, targetRef,
-externalObjectId, ticketId, runId, actor, timestamp, request{bounded}, result{status, bytes, hash,
-reason?}, error }`.
+externalObjectId, ticketId, runId, actor, timestamp, request{bounded:true}, result{status, bytes?,
+hash?, reason?}, error }`.
 
-- Receipts store **metadata + hash only — never full content**.
+Receipts contain metadata and a SHA-256 hash for successful reads, never returned object content or
+credentials. Receipt connector/Work Context references must agree. A successful read requires a
+non-negative byte count and a lowercase SHA-256 hash.
 
 ## Read behavior
 
-`POST /api/connectors/:id/read` (needs `connector:read`):
-- the connector must be **active**, its Work Context **active**, and its kind `local_mock`;
-- `read` must be in `allowedScopes`;
-- the object must be **under `sourceRoots`** (no traversal) and belong to the **same Work Context**;
-- on success it returns **bounded content in the API response** and writes a receipt with
-  `{status:'ok', bytes, hash}` (content not persisted);
-- a missing object records a `failed` receipt; an out-of-bounds / cross-context / inactive request
-  records a `read_refused` receipt. It **never guesses**, creates no ticket/run, and mutates no
-  workspace.
+`POST /api/connectors/:id/read` requires `connector:read`:
 
-## Write behavior (refused in r1.30)
+- the connector and its Work Context must be active, its kind must be `local_mock`, and `read` must
+  be in `allowedScopes`;
+- the object identifier must be under `sourceRoots` without traversal and the fixture object must
+  belong to the same Work Context;
+- a successful read commits its metadata/hash receipt before returning the fixture content;
+- a missing object commits a failed receipt; an out-of-scope, cross-context, or inactive request
+  commits a `read_refused` receipt;
+- no read creates a ticket/run or mutates the workspace.
 
-`POST /api/connectors/:id/write` (needs `connector:write`) **always refuses** with reason
-`write_disabled_in_r1.30` and records a `write_refused` receipt. This proves that **connector
-availability is not write authority** — even a connector with a `write` scope performs no external
-mutation in r1.30.
+Here, `bounded` describes authority scope and request admission. The local fixture adapter returns
+the stored string as one response and does not independently enforce a response-byte limit. A real
+external adapter needs an explicit configured size or streaming contract before it is enabled.
 
-## UI
+## Write behavior
 
-`/connectors` (list) and `/connectors/:id` (detail with recent receipts), nav gated by
-`connector:manage`. The credential is shown as a **reference only**, never a value. No OAuth/API-key/
-Google/Slack/Gmail/sync/chat UI.
+`POST /api/connectors/:id/write` requires `connector:write` and currently always refuses with reason
+`connector_write_disabled`, committing a `write_refused` receipt and its diagnostic audit. Connector
+availability and an allowed `write` scope do not grant target-operation authority or perform an
+external mutation.
 
-## Timeline
+## UI and CLI
 
-r1.30 connector reads are standalone (no `ticketId`/`runId` tie), so **connector-receipt timeline
-projection is deferred** — receipts are visible on the connector detail page. No connector timeline
-ledger is created and source precedence is unchanged.
+`/connectors` provides a cursor-paged list. `/connectors/:id` shows one definition and a cursor-paged
+receipt history. Management forms submit the current revision. The credential is shown only as a
+reference. `oquery connectors` follows all catalog cursors, and `oquery connector-update` fetches the
+current revision before submitting an update.
 
-## Boundaries (unchanged by r1.30)
+Standalone connector reads currently have null `ticketId`/`runId`, so receipts appear on connector
+detail rather than in a ticket/run timeline. No additional connector timeline ledger is created.
 
-No external connector, no OAuth/API keys/secrets, no background sync, no hidden work, no ticket/run
-creation, no workspace mutation, no scheduler/scheduled-token change, no model-provider-routing
-change, no bounded-watcher change, no handoff change, no Work Context execution change, no
-verification/triage/auto-retry change. The Target Provider remains the mutation boundary; a
-watcher cannot mutate through a connector, and model routing cannot grant connector access. Old
-tickets/runs/evidence are not rewritten and nothing is backfilled.
+## Product boundary
+
+This implementation adds no external connector, credential exchange, background sync, hidden work,
+ticket/run creation, workspace mutation, scheduler authority, watcher mutation path, model-routing
+grant, verification change, triage change, or automatic retry. The target-provider contract remains
+the mutation boundary. These are boundaries of the current implementation, not a decision to limit
+the future hosted product to a local adapter or one process.

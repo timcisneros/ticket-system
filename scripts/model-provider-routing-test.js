@@ -87,6 +87,16 @@ async function loginAs(u) { const res = await request('POST', '/login', { form: 
 function newestTicketId() { return tickets().reduce((m, t) => Math.max(m, t.id), 0); }
 const createTicket = (cookie, form) => request('POST', '/tickets', { cookie, form: { assignmentTargetType: 'agent', assignmentTargetId: '1', capabilityType: 'directAction', ...form } });
 function latestRunFor(ticketId) { return runs().filter(r => r.ticketId === ticketId).sort((a, b) => b.id - a.id)[0]; }
+async function updateRoutingPolicy(cookie, policyId, patch) {
+  const current = await request('GET', '/api/model-routing-policies/' + policyId, { cookie });
+  assert(current.statusCode === 200 && current.json && current.json.policy, 'current routing policy loads before update');
+  const updated = await request('POST', '/api/model-routing-policies/' + policyId, {
+    cookie,
+    json: { ...patch, expectedRevision: current.json.policy.revision }
+  });
+  assert(updated.statusCode === 200 && updated.json && updated.json.policy, 'routing policy update succeeds');
+  return updated;
+}
 
 async function main() {
   seed();
@@ -112,6 +122,20 @@ async function main() {
     const created = await request('POST', '/api/model-routing-policies', { cookie: admin, json: { name: 'Default', allowedProviders: [] } });
     assert(created.statusCode === 200 && created.json.policy.id === 1 && created.json.policy.status === 'active', 'policy created');
     assert(tickets().length === ticketsBefore && readRaw('runs.json') === runsBefore && ws() === wsBefore, 'policy CRUD creates no ticket/run/workspace mutation');
+    const renamed = await request('POST', '/api/model-routing-policies/1', {
+      cookie: admin,
+      json: { name: 'Default current', expectedRevision: created.json.policy.revision }
+    });
+    assert(renamed.statusCode === 200 && renamed.json.policy.revision === created.json.policy.revision + 1,
+      'policy API increments the optimistic revision');
+    const staleUpdate = await request('POST', '/api/model-routing-policies/1', {
+      cookie: admin,
+      json: { name: 'Stale overwrite', expectedRevision: created.json.policy.revision }
+    });
+    assert(staleUpdate.statusCode === 409 && staleUpdate.json.current.revision === renamed.json.policy.revision,
+      'policy API rejects stale updates and returns the current revision');
+    assert((await request('GET', '/api/model-routing-policies/1', { cookie: admin })).json.policy.name === 'Default current',
+      'stale policy update does not overwrite current state');
 
     // ---- 2: with a default unrestricted policy, a new run gets a routingSnapshot using agent provider/model. ----
     assert((await createTicket(admin, { objective: 'route me with default policy' })).statusCode === 302, 'ticket created');
@@ -122,7 +146,7 @@ async function main() {
     assert(r1.routingSnapshot.policyId === 1 && r1.routingSnapshot.reason === 'policy_preferred' && r1.routingSnapshot.fallbackUsed === false, 'unrestricted default policy → policy_preferred, no fallback');
 
     // ---- 3: provider restriction enforced — disallowed provider with no fallback refuses into triage. ----
-    await request('POST', '/api/model-routing-policies/1', { cookie: admin, json: { allowedProviders: ['anthropic'] } }); // openai now disallowed
+    await updateRoutingPolicy(admin, 1, { allowedProviders: ['anthropic'] }); // openai now disallowed
     const refusedRes = await createTicket(admin, { objective: 'should refuse, provider not allowed' });
     assert(refusedRes.statusCode === 302, 'ticket object still created');
     const tRef = newestTicketId();
@@ -133,7 +157,7 @@ async function main() {
     assert(runs().filter(r => r.ticketId === tRef).length === 0, 'refused ticket creates no run (no hidden fallback)');
 
     // ---- 5: fallback only when explicitly allowed (agent provider listed as a fallback). ----
-    await request('POST', '/api/model-routing-policies/1', { cookie: admin, json: { allowedProviders: ['anthropic'], fallbackProviders: ['openai'] } });
+    await updateRoutingPolicy(admin, 1, { allowedProviders: ['anthropic'], fallbackProviders: ['openai'] });
     assert((await createTicket(admin, { objective: 'allowed via explicit fallback' })).statusCode === 302, 'fallback ticket created');
     const tFb = newestTicketId();
     const rFb = latestRunFor(tFb);
@@ -141,7 +165,7 @@ async function main() {
     assert(tickets().find(t => t.id === tFb).status !== 'blocked', 'fallback ticket is not blocked');
 
     // ---- 6: archived policy is never selected — run falls back to no_policy (agent default). ----
-    await request('POST', '/api/model-routing-policies/1', { cookie: admin, json: { status: 'archived' } });
+    await updateRoutingPolicy(admin, 1, { status: 'archived' });
     assert((await createTicket(admin, { objective: 'archived policy ignored' })).statusCode === 302, 'ticket created with archived policy');
     const tArch = newestTicketId();
     const rArch = latestRunFor(tArch);
@@ -168,8 +192,8 @@ async function main() {
 
     // ---- 9: handoff-created and watcher-approved tickets still route normally. ----
     // Re-activate an unrestricted default so new runs route cleanly.
-    await request('POST', '/api/model-routing-policies/2', { cookie: admin, json: { status: 'archived' } });
-    await request('POST', '/api/model-routing-policies/3', { cookie: admin, json: { status: 'archived' } });
+    await updateRoutingPolicy(admin, 2, { status: 'archived' });
+    await updateRoutingPolicy(admin, 3, { status: 'archived' });
     const ho = await request('POST', `/api/tickets/${tSpec}/handoff`, { cookie: admin, json: { objective: 'handoff routes normally', toAssignmentTargetId: 1 } });
     assert(ho.statusCode === 200, 'handoff ok');
     const rHo = latestRunFor(ho.json.createdTicketId);

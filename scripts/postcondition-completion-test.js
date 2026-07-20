@@ -908,6 +908,7 @@ async function main() {
           const enableResponse = await request('POST', '/admin/workflows/agent-draft-valid', {
             cookie,
             form: {
+              expectedRevision: String(draft.revision),
               definition: JSON.stringify({
                 ...draft,
                 enabled: true,

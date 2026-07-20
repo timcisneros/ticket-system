@@ -21,29 +21,26 @@
       <% if (w.noActiveWorkContexts) { %><li>No active Work Contexts — <a href="/work-contexts">/work-contexts</a></li><% } %>
       <% if (w.noRoutingPolicies) { %><li>No model routing policies — <a href="/model-routing-policies">/model-routing-policies</a></li><% } %>
       <% if (w.noConnectors) { %><li>No connectors configured</li><% } %>
-      <% if (w.eventJournalPressureExists) { %><li>Event append pressure or backpressure rejection detected — inspect Event append admission below</li><% } %>
+      <% if (w.mutationAdmissionPressureExists) { %><li>Mutation admission pressure detected — inspect Mutation admission below</li><% } %>
       <% if (w.versionConsistencyUnresolved) { %><li>Process-template version consistency unresolved — see <a href="/logs">/logs</a></li><% } %>
     </ul>
   <% } %>
 </section>
 
 <section class="admin-block">
-  <h2>Event append admission</h2>
-  <% var journal = summary.eventJournal; %>
-  <p class="text-muted">Live, process-local admission pressure. Durable acknowledgement still occurs only after the committed batch is synced. These metrics do not cap or report total events.jsonl growth. Browse the recorded events themselves at <a href="/event-journal">/event-journal</a>.</p>
-  <table class="tickets-table">
+  <h2>Mutation admission</h2>
+  <% var admission = summary.mutationAdmission; %>
+  <p class="text-muted">Live, process-local admission pressure for mutation-producing requests and runs. Durable evidence is committed transactionally in PostgreSQL. Deployment-wide run concurrency is enforced separately by PostgreSQL lease admission.</p>
+  <div class="table-wrap"><table>
     <tbody>
-      <tr><th>Status</th><td><%= journal.status %></td></tr>
-      <tr><th>Admitted producers</th><td><%= journal.current.admittedProducers %> / <%= journal.config.maxOutstandingEntries %> record slots · <%= journal.current.availableProducerSlots %> slots available</td></tr>
-      <tr><th>Reserved capacity</th><td><%= journal.current.admissionReservedBytes %> / <%= journal.config.maxOutstandingBytes %> bytes · <%= journal.current.availableReservationBytes %> bytes available · <%= journal.config.maxWorstCaseProducers %> simultaneous maximum-record scopes</td></tr>
-      <tr><th>Outstanding</th><td><%= journal.current.outstandingEntries %> / <%= journal.config.maxOutstandingEntries %> entries · <%= journal.current.outstandingBytes %> / <%= journal.config.maxOutstandingBytes %> bytes · <%= Math.round(journal.current.utilization * 1000) / 10 %>% utilized</td></tr>
-      <tr><th>High-water mark</th><td><%= journal.highWatermarks.outstandingEntries %> outstanding entries · <%= journal.highWatermarks.outstandingBytes %> outstanding bytes · <%= journal.highWatermarks.admittedProducers %> admitted producers · <%= journal.highWatermarks.admissionReservedBytes %> reserved bytes</td></tr>
-      <tr><th>Committed</th><td><%= journal.totals.committedEntries %> entries · <%= journal.totals.committedBytes %> bytes · <%= journal.totals.commitBatches %> batches</td></tr>
-      <tr><th>Admission outcomes</th><td><%= journal.totals.admissionAcquired %> acquired · <%= journal.totals.admissionReleased %> released · <%= journal.totals.admissionRejected %> refused · <%= journal.totals.oversizedRejections %> oversized</td></tr>
-      <tr><th>Commit latency</th><td>last <%= journal.commitTiming.lastCommitDurationMs === null ? 'unavailable' : journal.commitTiming.lastCommitDurationMs.toFixed(2) + ' ms' %> · max <%= journal.commitTiming.maxCommitDurationMs.toFixed(2) %> ms</td></tr>
-      <tr><th>Batch configuration</th><td>up to <%= journal.config.maxBatchEntries %> entries / <%= journal.config.maxBatchBytes %> bytes · record maximum <%= journal.config.maxRecordBytes %> bytes</td></tr>
+      <tr><th>Status</th><td><%= admission.status %></td></tr>
+      <tr><th>Outstanding scopes</th><td><%= admission.current.outstanding %> / <%= admission.limits.maxOutstanding %> · <%= admission.current.availableSlots %> available</td></tr>
+      <tr><th>Reserved capacity</th><td><%= admission.current.outstandingBytes %> / <%= admission.limits.maxOutstandingBytes %> bytes · <%= Math.round(admission.current.utilization * 1000) / 10 %>% utilized</td></tr>
+      <tr><th>High-water mark</th><td><%= admission.highWatermarks.outstanding %> scopes · <%= admission.highWatermarks.outstandingBytes %> bytes</td></tr>
+      <tr><th>Admission outcomes</th><td><%= admission.totals.acquired %> acquired · <%= admission.totals.released %> released · <%= admission.totals.rejected %> refused · <%= admission.totals.oversizedRejected %> oversized</td></tr>
+      <tr><th>Per-scope maximum</th><td><%= admission.limits.maxReservationBytes %> bytes</td></tr>
     </tbody>
-  </table>
+  </table></div>
 </section>
 
 <section class="admin-block">

@@ -114,6 +114,28 @@ function seed() {
     runEvaluation: null, runConsequence: null, triage: null, replaySnapshotPath: null, replaySummary: null,
     status: 'completed', createdAt: ISO, updatedAt: ISO, startedAt: ISO, completedAt: ISO
   }]);
+  const currentTemplates = readJsonData('process-templates.json').map(template => ({
+    ...template,
+    version: Number.isInteger(template.version) ? template.version : 1,
+    currentVersion: Number.isInteger(template.version) ? template.version : 1,
+    currentVersionId: `ptv_${template.id}_${Number.isInteger(template.version) ? template.version : 1}`
+  }));
+  writeJson('process-templates.json', currentTemplates);
+  writeJson('process-template-versions.json', currentTemplates.map(template => ({
+    id: template.currentVersionId,
+    templateId: template.id,
+    version: template.currentVersion,
+    status: 'active',
+    name: template.name,
+    ticketTemplate: template.ticketTemplate,
+    executionPolicy: template.ticketTemplate.executionPolicy || null,
+    createdBy: template.createdBy || 'admin',
+    createdAt: template.createdAt || ISO,
+    activatedBy: template.createdBy || 'admin',
+    activatedAt: template.createdAt || ISO,
+    supersedesVersionId: null,
+    changeSummary: null
+  })));
   writeJson('process-template-triggers.json', [{ triggerToken: 'prior-101', templateId: 1, ticketId: 101, triggeredBy: 'admin', triggerType: 'manual', createdAt: ISO }]);
   fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), '');
 }

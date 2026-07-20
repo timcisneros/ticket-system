@@ -3,11 +3,11 @@ function createRuntimeScheduler({
   readRuns,
   listPendingRuns = null,
   readLogs,
+  hasRunLogType = null,
   appendRunLog,
   appendEvent,
-  canStartRunNow,
-  getRunStartBlockReason = run => canStartRunNow(run) ? null : 'concurrency_limit',
   tryReserveRunStart = run => ({ runId: run.id }),
+  prepareRunStartContext = async () => null,
   releaseRunStartReservation = () => {},
   acquireRunLease,
   releaseRunLease = null,
@@ -15,7 +15,7 @@ function createRuntimeScheduler({
   isRunStarting,
   isRunActiveInMemory,
   isAdmissionPaused = () => false,
-  // Callers that do not supply journal admission keep the scheduler's prior
+  // Callers that do not supply mutation admission keep the scheduler's prior
   // behavior. The server supplies the bounded admission implementation.
   acquireRunAdmission = () => ({}),
   releaseRunAdmission = () => {},
@@ -53,27 +53,6 @@ function createRuntimeScheduler({
     pendingCursor = page.nextCursor || null;
     pendingScanEndCursor = pendingCursor === null ? null : page.scanEndCursor || pendingScanEndCursor;
     return page;
-  }
-
-  async function logQueuedOnce(run, reason) {
-    const alreadyLogged = readLogs().some(log => log.runId === run.id && log.type === 'run:queued');
-    if (alreadyLogged) return;
-
-    await appendEvent({
-      type: 'scheduler.capacity_blocked',
-      ticketId: run.ticketId,
-      runId: run.id,
-      payload: { reason }
-    });
-    await appendEvent({
-      type: 'run.queued',
-      ticketId: run.ticketId,
-      runId: run.id,
-      payload: {
-        status: 'queued'
-      }
-    });
-    appendRunLog(run, 'run:queued', `Queued for ${reason.replaceAll('_', ' ')}`);
   }
 
   async function selectAndDispatchRun(run, runAdmission, startReservation) {
@@ -121,7 +100,7 @@ function createRuntimeScheduler({
         return;
       }
 
-      const started = runner.startRun(leasedRun);
+      const started = await runner.startRun(leasedRun);
       if (started === false) {
         await releaseClaimedRun('runner_start_refused');
         releaseRunStartReservation(startReservation);
@@ -140,7 +119,7 @@ function createRuntimeScheduler({
     ticking = true;
 
     try {
-      // Journal capacity pressure is recoverable. Leave pending runs untouched
+      // Mutation admission pressure is recoverable. Leave pending runs untouched
       // and let the next tick resume automatically after durable appends drain.
       if (isAdmissionPaused()) return;
       if (typeof expireStaleRunLeases === 'function') await expireStaleRunLeases();
@@ -150,6 +129,7 @@ function createRuntimeScheduler({
         .filter(run => run.status === 'pending')
         .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
 
+      const runStartContext = pendingRuns.length > 0 ? await prepareRunStartContext(pendingRuns) : null;
       // Emit scheduler.tick only when there is pending work to observe.
       // Idle ticks (pendingRuns === 0) are no-op heartbeat telemetry and are
       // not written to the append-only evidence log.
@@ -185,16 +165,7 @@ function createRuntimeScheduler({
           continue;
         }
 
-        const blockReason = getRunStartBlockReason(run);
-        if (blockReason) {
-          await logQueuedOnce(run, blockReason);
-          // A process-wide limit applies to every later run. Provider-specific
-          // pressure does not: keep scanning so another provider can start.
-          if (blockReason === 'process_concurrency_limit') break;
-          continue;
-        }
-
-        const startReservation = tryReserveRunStart(run);
+        const startReservation = await tryReserveRunStart(run, runStartContext);
         if (!startReservation) continue;
 
         const runAdmission = acquireRunAdmission(run);
@@ -205,7 +176,7 @@ function createRuntimeScheduler({
           releaseRunStartReservation(startReservation);
           break;
         }
-        // Start all bounded selections before awaiting them. The single writer
+        // Start all bounded selections before awaiting them. The transactional event store
         // can group their lease/selection records into durable batches instead
         // of forcing one sync barrier per run.
         selections.push(selectAndDispatchRun(run, runAdmission, startReservation));

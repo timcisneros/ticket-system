@@ -58,7 +58,7 @@ function request(baseUrl, method, urlPath, options = {}) {
 }
 
 function startServer(dataDir, workspaceRoot, port, interruptionPoint = null) {
-  return spawn(process.execPath, ['server.js'], {
+  const child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
     env: {
       ...process.env,
@@ -71,12 +71,18 @@ function startServer(dataDir, workspaceRoot, port, interruptionPoint = null) {
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  child.testOutput = '';
+  child.stdout.on('data', chunk => { child.testOutput += String(chunk); });
+  child.stderr.on('data', chunk => { child.testOutput += String(chunk); });
+  return child;
 }
 
 async function waitForReady(baseUrl, child, timeout = 15000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
-    if (child.exitCode !== null) throw new Error(`Server exited before ready with code ${child.exitCode}`);
+    if (child.exitCode !== null) {
+      throw new Error(`Server exited before ready with code ${child.exitCode}: ${child.testOutput.slice(-1200)}`);
+    }
     try {
       const response = await request(baseUrl, 'GET', '/health');
       if (response.statusCode === 200 && JSON.parse(response.body).ready) return;

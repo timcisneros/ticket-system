@@ -83,6 +83,7 @@
               <% if (userPermissions.includes('user:delete') && (account.type === 'agent' || account.id !== user.id)) { %>
                 <form action="/admin/users/<%= account.id %>/delete" method="POST" class="inline-form" onsubmit="return confirm('Delete this <%= account.type %>?');">
                   <input type="hidden" name="accountType" value="<%= account.type %>">
+                  <input type="hidden" name="revision" value="<%= account.revision %>">
                   <button type="submit" class="btn-small btn-danger">Delete</button>
                 </form>
               <% } %>
@@ -213,6 +214,7 @@
               <% } %>
               <% if (userPermissions.includes('group:delete') && group.id !== 1) { %>
                 <form action="/admin/groups/<%= group.id %>/delete" method="POST" class="inline-form" onsubmit="return confirm('Delete this group?');">
+                  <input type="hidden" name="revision" value="<%= group.revision %>">
                   <button type="submit" class="btn-small btn-danger">Delete</button>
                 </form>
               <% } %>
@@ -281,7 +283,7 @@
 
 <section class="admin-block">
   <h2>Work Type Catalog</h2>
-  <p class="text-muted">Read-only listing of <code>data/work-types.json</code>. Work Types are semantic context copied onto tickets and runs as immutable snapshots; they do not grant target access or operations. Edit the catalog file to change; there is no UI mutation.</p>
+  <p class="text-muted">Read-only listing of the PostgreSQL Work Type catalog. Work Types are semantic context copied onto tickets and runs as immutable snapshots; they do not grant target access or operations. This page does not mutate the catalog.</p>
   <% if (workTypeCatalogError) { %>
     <div class="error-message">Catalog invalid: <%= workTypeCatalogError %> — ticket creation cannot offer Work Types until this is fixed.</div>
   <% } else if (workTypeCatalog.length === 0) { %>

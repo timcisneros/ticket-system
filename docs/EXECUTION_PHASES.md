@@ -69,7 +69,11 @@ After the model returns a response, the runtime infers the phase from the action
 The runtime checks each response:
 1. If `mixed`, emit `execution.phase_violation` event with type `mixed_phase` and reject the response.
 2. If `terminalization` with actions, emit `execution.phase_violation` event with type `terminalization_blocked` and reject the response.
-3. If compliant and phase moved forward, emit `execution.phase_transition` event and update `run.currentPhase`.
+3. If compliant and phase moved forward, the selected phase repository commits `run.currentPhase`
+   and `execution.phase_transition` as one authority operation. PostgreSQL makes them one
+   transaction; JSON preserves the event before its run-file projection. Refused backward movement
+   and idempotent retries do not emit a transition event. Terminalization phase is committed inside
+   the terminalization repository bundle with terminal status, lease clear, and final evidence.
 
 ### Resume Compatibility
 When resuming a run, `reconstructResumableState` replays phase transition events from the event log to restore `run.currentPhase`. This ensures phase tracking continues correctly after a process restart.

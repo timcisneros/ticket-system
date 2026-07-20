@@ -65,6 +65,11 @@
       <% }); %>
     </tbody>
   </table>
+  <% if (typeof nextAfterId !== 'undefined' && nextAfterId != null) { %>
+    <p>
+      <a href="/work-contexts?afterId=<%= nextAfterId %>&limit=<%= typeof pageLimit === 'undefined' ? 100 : pageLimit %>">Next Work Contexts →</a>
+    </p>
+  <% } %>
 <% } %>
 
 <script>
@@ -87,7 +92,7 @@
         })
       });
       var data = await res.json().catch(function() { return null; });
-      if (res.ok && data && data.id != null) { window.location.reload(); return; }
+      if (res.ok && data && data.workContext && data.workContext.id != null) { window.location.reload(); return; }
       msg.textContent = (data && data.error) ? data.error : 'Create failed';
     } catch (err) { msg.textContent = 'Create failed'; }
     btn.disabled = false;

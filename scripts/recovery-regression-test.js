@@ -327,7 +327,8 @@ async function main() {
         PORT,
         NODE_OPTIONS: `--require ${preloadPath}`,
         WORKSPACE_ROOT,
-        DATA_DIR
+        DATA_DIR,
+        TEST_INTERRUPT_AFTER_OPERATOR_RECOVERY_EFFECT: 'true'
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -358,7 +359,17 @@ async function main() {
     assert(writePreview.preview && writePreview.preview.canProceed === true, 'writeFile recovery preview should indicate can proceed');
     assert(writePreview.preview.proposedAction && writePreview.preview.proposedAction.operation === 'deletePath', 'writeFile recovery should propose deletePath');
 
-    // Execute writeFile recovery
+    // Interrupt after the external effect but before completion evidence. A
+    // retry must confirm the prepared effect and must not execute it again.
+    const interruptedWriteRecoverResponse = await request('POST', `/api/operations/${writeOp.id}/recover`, {
+      cookie,
+      body: { confirmed: true }
+    });
+    assert(interruptedWriteRecoverResponse.statusCode === 400,
+      `interrupted writeFile recovery should expose the test interruption: HTTP ${interruptedWriteRecoverResponse.statusCode}`);
+    assert(!fs.existsSync(path.join(WORKSPACE_ROOT, WRITE_TEST_FILE)),
+      'interrupted recovery should have applied the target effect before evidence completion');
+
     const writeRecoverResponse = await request('POST', `/api/operations/${writeOp.id}/recover`, {
       cookie,
       body: { confirmed: true }
@@ -367,7 +378,25 @@ async function main() {
     const writeRecover = JSON.parse(writeRecoverResponse.body);
     assert(writeRecover.recovery && writeRecover.recovery.isRecovery === true, 'Recovery record should be marked isRecovery');
     assert(writeRecover.recovery.recoveredHistoryId === writeOp.id, 'Recovery record should link to original history');
+    assert(writeRecover.reconciled === true, 'Retry should reconcile the already-applied prepared recovery effect');
     assert(!fs.existsSync(path.join(WORKSPACE_ROOT, WRITE_TEST_FILE)), 'writeFile recovery should delete the file');
+
+    const duplicateWriteRecoverResponse = await request('POST', `/api/operations/${writeOp.id}/recover`, {
+      cookie,
+      body: { confirmed: true }
+    });
+    assert(duplicateWriteRecoverResponse.statusCode === 200, 'Repeated recovery should be an idempotent success');
+    const duplicateWriteRecover = JSON.parse(duplicateWriteRecoverResponse.body);
+    assert(duplicateWriteRecover.idempotent === true, 'Repeated recovery response should be labelled idempotent');
+    assert(duplicateWriteRecover.recovery.id === writeRecover.recovery.id,
+      'Repeated recovery must return the original completion receipt');
+
+    const writeEvents = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8').trim().split(/\r?\n/)
+      .filter(Boolean).map(line => JSON.parse(line)).filter(event => event.runId === writeRun.id);
+    assert(writeEvents.some(event => event.type === 'workspace.recovery_prepared'),
+      'Recovery intent must be durably recorded before the target effect');
+    assert(writeEvents.some(event => event.type === 'workspace.recovery_completed'),
+      'Reconciled recovery must record completion evidence');
 
     // Recovery blocked on diverged state
     fs.writeFileSync(path.join(WORKSPACE_ROOT, WRITE_TEST_FILE), 'modified-content');

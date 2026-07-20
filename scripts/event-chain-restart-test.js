@@ -168,9 +168,12 @@ async function main() {
       .filter(event => event.runId === 1);
     assert(events.length >= 2, `restart did not persist a continuation event; saw ${events.length}`);
     verifyContinuousSealedChain(events);
+    const recoveryClaimed = events.find(event => event.type === 'run.recovery_claimed');
     const resumed = events.find(event => event.type === 'run.resumed');
-    assert(resumed && resumed.seq === 1, 'run.resumed did not continue at seq 1');
-    assert(resumed.prevHash === initialEvent.hash, 'run.resumed did not link to the prior process hash');
+    assert(recoveryClaimed && recoveryClaimed.seq === 1, 'run.recovery_claimed did not continue at seq 1');
+    assert(recoveryClaimed.prevHash === initialEvent.hash, 'recovery claim did not link to the prior process hash');
+    assert(resumed && resumed.seq === 2, 'run.resumed did not follow the recovery claim at seq 2');
+    assert(resumed.prevHash === recoveryClaimed.hash, 'run.resumed did not link to the recovery claim');
     console.log(`PASS: restart restored and gracefully drained a continuous ${events.length}-event sealed run chain`);
   } catch (error) {
     console.error(error.stack || error.message);

@@ -49,6 +49,14 @@
 <%
   var templateList = typeof templates === 'undefined' ? [] : templates;
   var allowTrigger = typeof canTrigger !== 'undefined' && canTrigger;
+  var currentAfterId = typeof pageAfterId === 'number' ? pageAfterId : 0;
+  var currentPageLimit = typeof pageLimit === 'number' ? pageLimit : 100;
+  var currentWorkContextId = typeof workContextId === 'number' ? workContextId : null;
+  function templatePageHref(afterId) {
+    var href = '/process-templates?afterId=' + afterId + '&limit=' + currentPageLimit;
+    if (currentWorkContextId !== null) href += '&workContextId=' + currentWorkContextId;
+    return href;
+  }
   function describeAssignment(tt) {
     if (!tt) return '';
     return (tt.assignmentTargetType || '?') + ' #' + (tt.assignmentTargetId == null ? '?' : tt.assignmentTargetId);
@@ -187,6 +195,17 @@
       <% }); %>
     </tbody>
   </table>
+<% } %>
+
+<% if (currentAfterId > 0 || (typeof nextAfterId !== 'undefined' && nextAfterId !== null)) { %>
+  <nav class="pagination" aria-label="Process-template pages">
+    <% if (currentAfterId > 0) { %>
+      <a class="btn-small" href="<%= templatePageHref(0) %>">First page</a>
+    <% } %>
+    <% if (typeof nextAfterId !== 'undefined' && nextAfterId !== null) { %>
+      <a class="btn-small" href="<%= templatePageHref(nextAfterId) %>">Next templates</a>
+    <% } %>
+  </nav>
 <% } %>
 
 <script>

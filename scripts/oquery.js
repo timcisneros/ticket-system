@@ -5,46 +5,26 @@ const http = require('http');
 const readline = require('readline');
 
 const ROOT = path.resolve(__dirname, '..');
-const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(ROOT, 'data'));
-const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_ROOT || path.join(ROOT, 'workspace-root'));
 
-function readJson(name) {
-  const fp = path.join(DATA_DIR, name);
-  if (!fs.existsSync(fp)) return [];
-  try { return JSON.parse(fs.readFileSync(fp, 'utf8')); } catch (e) { return []; }
-}
-
-function resolveLocalAgent(value) {
-  const agents = readJson('agents.json');
+async function resolveServerAgent(url, cookie, value) {
   const requested = value === undefined || value === null || value === '' ? '1' : String(value).trim();
-  const id = parseInt(requested, 10);
-  if (!Number.isNaN(id) && String(id) === requested) {
-    return agents.find(agent => agent.id === id) || { id, name: `Agent ${id}` };
+  const response = await httpReq('GET', `${url}/api/configured-agents/resolve?value=${encodeURIComponent(requested)}`, {
+    headers: { 'Cookie': `sessionId=${cookie}` }
+  });
+  if (response.status === 404) return null;
+  if (response.status !== 200) {
+    let detail = null;
+    try { detail = JSON.parse(response.body); } catch (_) {}
+    throw new Error(detail && detail.error ? detail.error : `Configured-agent lookup failed (${response.status})`);
   }
-  const lower = requested.toLowerCase();
-  return agents.find(agent => String(agent.name || '').toLowerCase() === lower) || null;
-}
-
-function loadAll() {
-  return {
-    tickets: readJson('tickets.json'),
-    runs: readJson('runs.json'),
-    logs: readJson('logs.json'),
-    history: readJson('operation-history.json'),
-    plans: readJson('allocation-plans.json'),
-  };
+  const data = JSON.parse(response.body);
+  return data.agent || null;
 }
 
 function readRunReplaySnapshot(run) {
-  if (!run || typeof run !== 'object') return null;
-  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
-  if (!run.replaySnapshotPath) return null;
-
-  const snapshotPath = path.resolve(DATA_DIR, run.replaySnapshotPath);
-  if (!snapshotPath.startsWith(DATA_DIR + path.sep)) return null;
-  if (!fs.existsSync(snapshotPath)) return null;
-
-  try { return JSON.parse(fs.readFileSync(snapshotPath, 'utf8')); } catch (e) { return null; }
+  return run && typeof run === 'object' && run.replaySnapshot && typeof run.replaySnapshot === 'object'
+    ? run.replaySnapshot
+    : null;
 }
 
 function hydrateRunReplaySnapshot(run) {
@@ -256,8 +236,7 @@ function ticketWithOperationalOutcome(ticket, data) {
 }
 
 function sourceLabel(args) {
-  if (args.api) return `[remote substrate — live server: ${args.url || opercUrl()}]`;
-  return `[local substrate — files on disk, not the running server: ${DATA_DIR}]`;
+  return `[PostgreSQL runtime — live server: ${args.url || opercUrl()}]`;
 }
 
 function sourceLabelLine(args) {
@@ -274,98 +253,48 @@ async function fetchServerIdentity(url) {
   return null;
 }
 
-async function printDivergenceWarning(args) {
-  if (args.api || args.json) return;
-  const identity = await fetchServerIdentity(args.url || opercUrl());
-  if (!identity) return;
+async function printDivergenceWarning() {}
 
-  let any = false;
-  if (identity.dataDir && identity.dataDir !== DATA_DIR) {
-    console.log(dim(`  \u26A0 dataDir:        ${identity.dataDir} (server)`));
-    console.log(dim(`                     ${DATA_DIR} (local)`));
-    any = true;
-  }
-  if (identity.workspaceRoot && identity.workspaceRoot !== WORKSPACE_ROOT) {
-    console.log(dim(`  \u26A0 workspaceRoot:  ${identity.workspaceRoot} (server)`));
-    console.log(dim(`                     ${WORKSPACE_ROOT} (local)`));
-    any = true;
-  }
-  if (any) {
-    console.log(dim(`    These reads come from local files on disk, not the running server. Pass --api to query the server.`));
-    console.log('');
+async function fetchRemoteDomain(args, domain) {
+  const url = args.url || opercUrl();
+  const cookie = readCookie();
+  const headers = cookie ? { Cookie: `sessionId=${cookie}` } : {};
+  const items = [];
+  let cursor = null;
+  while (true) {
+    const params = new URLSearchParams({ domain, limit: '100' });
+    if (cursor !== null) params.set('cursor', String(cursor));
+    const res = await httpReq('GET', `${url}/api/export?${params}`, { headers });
+    if (res.status === 401 || res.status === 403) throw new Error('Not authenticated. Run login first.');
+    if (res.status !== 200) throw new Error(`Failed to fetch ${domain}: HTTP ${res.status}`);
+    const page = JSON.parse(res.body);
+    if (!page || !Array.isArray(page.items) || page.domain !== domain) throw new Error(`Malformed ${domain} export page`);
+    items.push(...page.items);
+    if (page.nextCursor === null || page.nextCursor === undefined) return items;
+    if (String(page.nextCursor) === String(cursor)) throw new Error(`${domain} export returned a non-advancing cursor`);
+    cursor = page.nextCursor;
   }
 }
 
 async function fetchRemoteData(args) {
-  const url = args.url || opercUrl();
-  const cookie = readCookie();
-  const headers = {};
-  if (cookie) headers['Cookie'] = `sessionId=${cookie}`;
-  const res = await httpReq('GET', `${url}/api/export`, { headers });
-  if (res.status === 200) {
-    const data = JSON.parse(res.body);
-    return {
-      tickets: data.tickets || [],
-      runs: data.runs || [],
-      logs: data.logs || [],
-      history: data.history || [],
-      plans: data.plans || []
-    };
-  }
-  if (res.status === 401 || res.status === 403) {
-    console.log(red('  \u2717 Not authenticated. Run login first.'));
-    process.exit(1);
-  }
-  throw new Error(`Failed to fetch remote data: HTTP ${res.status}`);
+  const [tickets, runs, logs, history, plans] = await Promise.all(
+    ['tickets', 'runs', 'logs', 'history', 'plans'].map(domain => fetchRemoteDomain(args, domain))
+  );
+  return { tickets, runs, logs, history, plans };
 }
 
 async function fetchRemoteDataForRuns(args) {
-  const url = args.url || opercUrl();
-  const cookie = readCookie();
-  const headers = {};
-  if (cookie) headers['Cookie'] = `sessionId=${cookie}`;
-
-  let res;
   try {
-    res = await httpReq('GET', `${url}/api/export`, { headers });
+    return { data: await fetchRemoteData(args) };
   } catch (error) {
-    return { error: 'transport_error', message: error.message || String(error) };
+    return { error: 'api_error', message: error.message || String(error) };
   }
-
-  if (!res || typeof res.body !== 'string' || res.body.trim() === '') {
-    return { error: 'empty_response', message: `API returned empty response from ${url}/api/export` };
-  }
-
-  if (res.status !== 200) {
-    return { error: 'api_error', message: `API returned HTTP ${res.status}` };
-  }
-
-  let data;
-  try {
-    data = JSON.parse(res.body);
-  } catch (error) {
-    return { error: 'malformed_response', message: error.message || 'API returned malformed JSON' };
-  }
-
-  if (!data || typeof data !== 'object' || !Array.isArray(data.runs)) {
-    return { error: 'malformed_response', message: 'API response did not contain a runs array' };
-  }
-
-  return {
-    data: {
-      tickets: Array.isArray(data.tickets) ? data.tickets : [],
-      runs: data.runs,
-      logs: Array.isArray(data.logs) ? data.logs : [],
-      history: Array.isArray(data.history) ? data.history : [],
-      plans: Array.isArray(data.plans) ? data.plans : []
-    }
-  };
 }
 
 // ── Commands ──
 
 async function cmdTickets(args) {
-  const data = args.api ? await fetchRemoteData(args) : loadAll();
+  const data = await fetchRemoteData(args);
   let list = data.tickets;
 
   if (args.status) list = list.filter(t => t.status === args.status);
@@ -418,7 +347,7 @@ async function cmdRuns(args) {
   };
 
   try {
-    const remote = args.api ? await fetchRemoteDataForRuns(args) : null;
+    const remote = await fetchRemoteDataForRuns(args);
     if (remote && remote.error) {
       const state = { state: remote.error, message: remote.message };
       if (args.json) return print(JSON.stringify(state, null, 2));
@@ -427,7 +356,7 @@ async function cmdRuns(args) {
       return;
     }
 
-    const data = remote ? remote.data : loadAll();
+    const data = remote.data;
     let list = data.runs;
 
     if (!Array.isArray(list)) {
@@ -495,7 +424,7 @@ async function cmdRuns(args) {
 }
 
 async function cmdLogs(args) {
-  const data = args.api ? await fetchRemoteData(args) : loadAll();
+  const data = await fetchRemoteData(args);
   let list = data.logs;
 
   if (args.run) list = list.filter(l => l.runId === parseInt(args.run));
@@ -531,7 +460,7 @@ async function cmdLogs(args) {
 }
 
 async function cmdMutations(args) {
-  const data = args.api ? await fetchRemoteData(args) : loadAll();
+  const data = await fetchRemoteData(args);
   let list = data.history;
 
   if (args.run) list = list.filter(h => h.runId === parseInt(args.run));
@@ -571,7 +500,7 @@ async function cmdReplay(args) {
   const runId = parseInt(args._[0] || args.id || '');
   if (!runId) return console.log(red('Usage: oquery replay <run-id>'));
 
-  const data = args.api ? await fetchRemoteData(args) : loadAll();
+  const data = await fetchRemoteData(args);
   const run = hydrateRunReplaySnapshot(data.runs.find(r => r.id === runId));
   if (!run) return console.log(red(`Run #${runId} not found.`));
   const snap = run.replaySnapshot;
@@ -660,7 +589,7 @@ function classifyFailure(run) {
 }
 
 async function cmdFailures(args) {
-  const data = args.api ? await fetchRemoteData(args) : loadAll();
+  const data = await fetchRemoteData(args);
   let list = data.runs.filter(r => r.status === 'failed' || r.status === 'interrupted');
 
   if (args.ticket) list = list.filter(r => r.ticketId === parseInt(args.ticket));
@@ -975,7 +904,7 @@ async function cmdCoverage(args) {
   const ticketId = parseInt(args._[0], 10);
   if (!ticketId) return console.log(red('Usage: oquery coverage <ticket-id>'));
 
-  const data = args.api ? await fetchRemoteData(args) : loadAll();
+  const data = await fetchRemoteData(args);
   const ticket = data.tickets.find(t => t.id === ticketId);
   if (!ticket) return console.log(red(`Ticket T${ticketId} not found.`));
 
@@ -1042,7 +971,7 @@ async function cmdSearch(args) {
   const q = args._.join(' ') || args.query || '';
   if (!q) return console.log(red('Usage: oquery search <text>'));
 
-  const data = args.api ? await fetchRemoteData(args) : loadAll();
+  const data = await fetchRemoteData(args);
   const limit = parseInt(args.limit || '10');
   const query = q.toLowerCase();
   let results = [];
@@ -1051,17 +980,17 @@ async function cmdSearch(args) {
   data.tickets.forEach(t => {
     const obj = (t.objective || '').toLowerCase();
     if (obj.includes(query)) {
-      results.push({ type: 'ticket', id: t.id, source: `data/tickets.json`, preview: truncate(t.objective.replace(/\r?\n/g, '\\n'), 120), ref: `T${t.id}` });
+      results.push({ type: 'ticket', id: t.id, source: 'PostgreSQL tickets', preview: truncate(t.objective.replace(/\r?\n/g, '\\n'), 120), ref: `T${t.id}` });
     }
   });
 
   // Search runs
   data.runs.forEach(r => {
     if (r.error && r.error.toLowerCase().includes(query)) {
-      results.push({ type: 'run', id: r.id, source: `data/runs.json`, preview: truncate(r.error, 120), ref: `R${r.id} error` });
+      results.push({ type: 'run', id: r.id, source: 'PostgreSQL runs', preview: truncate(r.error, 120), ref: `R${r.id} error` });
     }
     if (r.allocationSubtask && r.allocationSubtask.toLowerCase().includes(query)) {
-      results.push({ type: 'run', id: r.id, source: `data/runs.json`, preview: truncate(r.allocationSubtask, 120), ref: `R${r.id} subtask` });
+      results.push({ type: 'run', id: r.id, source: 'PostgreSQL runs', preview: truncate(r.allocationSubtask, 120), ref: `R${r.id} subtask` });
     }
   });
 
@@ -1069,10 +998,10 @@ async function cmdSearch(args) {
   data.history.forEach(h => {
     const p = h.args ? (h.args.path || '') : '';
     if (p.toLowerCase().includes(query)) {
-      results.push({ type: 'mutation', id: h.id, source: `data/operation-history.json`, preview: `${h.operation}: ${p}`, ref: `R${h.runId} step ${h.step}` });
+      results.push({ type: 'mutation', id: h.id, source: 'PostgreSQL operation receipts', preview: `${h.operation}: ${p}`, ref: `R${h.runId} step ${h.step}` });
     }
     if (h.error && h.error.toLowerCase().includes(query)) {
-      results.push({ type: 'mutation', id: h.id, source: `data/operation-history.json`, preview: truncate(h.error, 120), ref: `R${h.runId}` });
+      results.push({ type: 'mutation', id: h.id, source: 'PostgreSQL operation receipts', preview: truncate(h.error, 120), ref: `R${h.runId}` });
     }
   });
 
@@ -1080,7 +1009,7 @@ async function cmdSearch(args) {
   data.logs.forEach(l => {
     const msg = (l.message || '') + ' ' + JSON.stringify(l.workspaceAction || '');
     if (msg.toLowerCase().includes(query)) {
-      results.push({ type: 'log', id: l.id, source: `data/logs.json`, preview: truncate(l.message || '', 120), ref: l.runId ? `R${l.runId}` : '' });
+      results.push({ type: 'log', id: l.id, source: 'PostgreSQL diagnostic logs', preview: truncate(l.message || '', 120), ref: l.runId ? `R${l.runId}` : '' });
     }
   });
 
@@ -1088,7 +1017,7 @@ async function cmdSearch(args) {
   data.plans.forEach(p => {
     (p.items || []).forEach(item => {
       if (item.allocationSubtask && item.allocationSubtask.toLowerCase().includes(query)) {
-        results.push({ type: 'allocation', id: p.id, source: `data/allocation-plans.json`, preview: truncate(item.allocationSubtask, 120), ref: `T${p.ticketId} agent ${item.assignedAgentId}` });
+        results.push({ type: 'allocation', id: p.id, source: 'PostgreSQL allocation plans', preview: truncate(item.allocationSubtask, 120), ref: `T${p.ticketId} agent ${item.assignedAgentId}` });
       }
     });
   });
@@ -1219,16 +1148,12 @@ async function fetchTicketAndRun(url, cookie, fallbackObjective = null) {
     : tickets.reduce((a, b) => (a.id > b.id ? a : b), null);
   if (!ticket) return { ticket: null, run: null };
 
-  const exportRes = await httpReq('GET', `${url}/api/export`, {
+  const runtimeRes = await httpReq('GET', `${url}/api/tickets/${ticket.id}/runtime`, {
     headers: { 'Cookie': `sessionId=${cookie}` }
   });
-  if (exportRes.status !== 200) return { ticket, run: null };
-
-  const data = JSON.parse(exportRes.body);
-  const runs = (data.runs || [])
-    .filter(run => run.ticketId === ticket.id)
-    .sort((a, b) => (a.id || 0) - (b.id || 0));
-  return { ticket, run: runs.length > 0 ? runs[runs.length - 1] : null };
+  if (runtimeRes.status !== 200) return { ticket, run: null };
+  const runtime = JSON.parse(runtimeRes.body);
+  return { ticket: runtime.ticket || ticket, run: runtime.latestRun || runtime.currentRun || null };
 }
 
 async function waitForCreatedTicketRun(url, cookie, ticketId) {
@@ -1238,16 +1163,13 @@ async function waitForCreatedTicketRun(url, cookie, ticketId) {
   let latest = { ticket: null, run: null };
 
   while (Date.now() - started < timeoutMs) {
-    const exportRes = await httpReq('GET', `${url}/api/export`, {
+    const runtimeRes = await httpReq('GET', `${url}/api/tickets/${ticketId}/runtime`, {
       headers: { 'Cookie': `sessionId=${cookie}` }
     });
-    if (exportRes.status === 200) {
-      const data = JSON.parse(exportRes.body);
-      const ticket = (data.tickets || []).find(item => item.id === ticketId) || null;
-      const runs = (data.runs || [])
-        .filter(run => run.ticketId === ticketId)
-        .sort((a, b) => (a.id || 0) - (b.id || 0));
-      const run = runs.length > 0 ? runs[runs.length - 1] : null;
+    if (runtimeRes.status === 200) {
+      const data = JSON.parse(runtimeRes.body);
+      const ticket = data.ticket || null;
+      const run = data.latestRun || data.currentRun || null;
       latest = { ticket, run };
       if (ticket && ['completed', 'failed'].includes(ticket.status) && run && terminal.has(run.status)) {
         return latest;
@@ -1275,7 +1197,7 @@ async function cmdCreateTicket(args) {
   }
 
   const url = args.url || opercUrl();
-  const agent = resolveLocalAgent(args.agent || '1');
+  const agent = await resolveServerAgent(url, cookie, args.agent || '1');
   if (!agent) {
     const message = `Agent not found: ${args.agent}`;
     if (args.json) return console.log(JSON.stringify({ error: 'agent_not_found', message }, null, 2));
@@ -1319,7 +1241,7 @@ async function cmdCreateTicket(args) {
 }
 
 async function cmdStats(args) {
-  const data = args && args.api ? await fetchRemoteData(args) : loadAll();
+  const data = args && await fetchRemoteData(args);
   const ticketsByStatus = {};
   data.tickets.forEach(t => { ticketsByStatus[t.status] = (ticketsByStatus[t.status] || 0) + 1; });
   const runsByStatus = {};
@@ -1392,18 +1314,32 @@ async function cmdStats(args) {
 
 // ── Operator action commands (headless equivalents of UI controls) ──
 
-// List agents from the local store so an operator can discover the id/name to
-// assign without reading raw agents.json. Never prints provider API keys.
-function cmdAgents(args) {
-  const agents = readJson('agents.json');
+// List a bounded page from the server's selected configured-agent authority.
+// The API projection never includes provider API keys.
+async function cmdAgents(args) {
+  const cookie = requireSession(args); if (!cookie) return;
+  const url = args.url || opercUrl();
+  const afterId = args.after === undefined ? 0 : Number(args.after);
+  const limit = args.limit === undefined ? 100 : Number(args.limit);
+  if (!Number.isSafeInteger(afterId) || afterId < 0 || !Number.isSafeInteger(limit) || limit <= 0) {
+    return console.log(red('Usage: oquery agents [--after <id>] [--limit <n>] [--json]'));
+  }
+  const response = await httpReq('GET', `${url}/api/configured-agents?afterId=${afterId}&limit=${limit}`, {
+    headers: { 'Cookie': `sessionId=${cookie}` }
+  });
+  if (response.status !== 200) {
+    let detail = null;
+    try { detail = JSON.parse(response.body); } catch (_) {}
+    throw new Error(detail && detail.error ? detail.error : `Configured-agent list failed (${response.status})`);
+  }
+  const data = JSON.parse(response.body);
+  const agents = Array.isArray(data.agents) ? data.agents : [];
   if (args.json) {
-    console.log(JSON.stringify(agents.map(a => ({
-      id: a.id, name: a.name || `Agent ${a.id}`, provider: a.provider || null, model: a.model || null
-    })), null, 2));
+    console.log(JSON.stringify({ agents, nextAfterId: data.nextAfterId ?? null }, null, 2));
     return;
   }
   if (!agents.length) {
-    console.log(dim('  No agents in the local store.'));
+    console.log(dim('  No configured agents in this page.'));
     return;
   }
   console.log(`  ${bold('Agents')}`);
@@ -1411,6 +1347,7 @@ function cmdAgents(args) {
     const name = a.name || `Agent ${a.id}`;
     const pm = `${a.provider || '?'}/${a.model || '?'}`;
     console.log(`    ${cyan('A' + a.id)}  ${bold(name)}  ${dim(pm)}`);
+  if (data.nextAfterId != null) console.log(dim(`  More agents available: --after ${data.nextAfterId}`));
   }
   console.log(dim('\n  Assign with: oquery create-ticket --agent <id|name> "<objective>"'));
 }
@@ -1528,7 +1465,7 @@ async function cmdAssignTicket(args) {
   if (!agentValue) return console.log(red('Usage: oquery assign-ticket <ticketId> --agent <id|name>'));
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const agent = resolveLocalAgent(agentValue);
+  const agent = await resolveServerAgent(url, cookie, agentValue);
   if (!agent) return console.log(red(`  ✗ Agent not found: ${agentValue}`));
   const { status, data } = await operatorJsonCall(url, cookie, 'PATCH', `/api/tickets/${ticketId}/assignment`, { agentId: agent.id });
   if (status === 200 && data && data.ticket) {
@@ -1863,7 +1800,7 @@ async function cmdHandoff(args) {
   const url = args.url || opercUrl();
   const body = { objective: objective.trim() };
   if (args.agent) {
-    const agent = resolveLocalAgent(args.agent);
+    const agent = await resolveServerAgent(url, cookie, args.agent);
     if (!agent) return console.log(red(`  ✗ Agent not found: ${args.agent}`));
     body.toAssignmentTargetType = 'agent';
     body.toAssignmentTargetId = agent.id;
@@ -1882,7 +1819,11 @@ async function cmdHandoff(args) {
 async function cmdRuntimeStatus(args) {
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const { status, data } = await operatorGetCall(url, cookie, '/api/runtime/status');
+  const params = new URLSearchParams();
+  if (args['after-id'] != null) params.set('afterId', String(args['after-id']));
+  if (args.limit != null) params.set('limit', String(args.limit));
+  const route = `/api/runtime/status${params.size > 0 ? `?${params.toString()}` : ''}`;
+  const { status, data } = await operatorGetCall(url, cookie, route);
   if (status !== 200 || !data) return reportActionError(args, status, data);
   if (args.json) return console.log(JSON.stringify(data, null, 2));
   const counts = data.counts || {};
@@ -1891,17 +1832,28 @@ async function cmdRuntimeStatus(args) {
   console.log(`  ${dim('lease owner')} ${data.leaseOwner || 'none'}`);
   console.log(`  ${dim('active runs')} ${counts.active || 0}  ${dim('pending')} ${counts.pending || 0}  ${dim('running')} ${counts.running || 0}`);
   if (counts.expiredLeases) console.log(`  ${yellow('expired leases')} ${counts.expiredLeases}`);
-  if (data.eventJournal) {
-    const journal = data.eventJournal;
-    const current = journal.current || {};
-    const config = journal.config || {};
-    const totals = journal.totals || {};
+  if (data.concurrencyLimits) {
+    const concurrency = data.concurrencyLimits;
+    console.log(`  ${dim('deployment limits')} active runs: ${concurrency.maxActiveRuns || 'unlimited'}  local model: ${concurrency.localModelConcurrency || 'unlimited'}`);
+  }
+  if (data.mutationAdmission) {
+    const admission = data.mutationAdmission;
+    const current = admission.current || {};
+    const limits = admission.limits || {};
+    const totals = admission.totals || {};
     const utilization = Number.isFinite(current.utilization) ? `${(current.utilization * 100).toFixed(1)}%` : 'unavailable';
-    console.log(`  ${dim('event append')} ${journal.status || 'unknown'}  outstanding: ${current.outstandingEntries || 0}/${config.maxOutstandingEntries || '?'}  pressure: ${utilization}  backpressure rejects: ${totals.backpressureRejections || 0}`);
+    console.log(`  ${dim('mutation admission')} ${admission.status || 'unknown'}  outstanding: ${current.outstanding || 0}/${limits.maxOutstanding || '?'}  pressure: ${utilization}  refusals: ${totals.rejected || 0}`);
   }
   if (data.runtimeLimits) {
     const rl = data.runtimeLimits;
     console.log(`  ${dim('limits')} steps: ${rl.maxExecutionSteps || 'unlim'}  reqs: ${rl.maxModelRequestsPerRun || 'unlim'}  ops: ${rl.maxWorkspaceOperationsPerRun || 'unlim'}`);
+  }
+  if (data.pagination) {
+    const shown = Array.isArray(data.activeRuns) ? data.activeRuns.length : 0;
+    console.log(`  ${dim('active detail')} ${shown} shown (limit ${data.pagination.limit})`);
+    if (data.pagination.nextAfterId != null) {
+      console.log(dim(`  Next page: oquery runtime-status --after-id ${data.pagination.nextAfterId} --limit ${data.pagination.limit}`));
+    }
   }
   console.log('');
 }
@@ -1910,50 +1862,59 @@ async function cmdRuntimeStatus(args) {
 async function cmdRuntimeLimits(args) {
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
+  const { status: gs, data: gd } = await operatorGetCall(url, cookie, '/api/runtime-limits');
+  if (gs !== 200 || !gd) return reportActionError(args, gs, gd);
+
   const setFields = {};
   if (args.set) {
     const pairs = Array.isArray(args.set) ? args.set : [args.set];
-    pairs.forEach(p => {
-      const eq = p.indexOf('=');
-      if (eq > 0) setFields[p.slice(0, eq)] = p.slice(eq + 1);
+    pairs.forEach(pair => {
+      const eq = pair.indexOf('=');
+      if (eq <= 0) return;
+      const raw = pair.slice(eq + 1).trim();
+      setFields[pair.slice(0, eq)] = raw === '' || raw === 'null'
+        ? null
+        : /^\d+$/.test(raw) ? Number(raw) : raw;
     });
   }
   if (Object.keys(setFields).length > 0) {
-    const { status: ps, data: pd } = await operatorJsonCall(url, cookie, 'POST', '/api/runtime-limits', setFields);
+    const expectedRevision = gd.config && gd.config.revision;
+    const { status: ps, data: pd } = await operatorJsonCall(url, cookie, 'POST', '/api/runtime-limits', {
+      ...setFields,
+      expectedRevision
+    });
     if (ps !== 200 || !pd) return reportActionError(args, ps, pd);
     if (args.json) return console.log(JSON.stringify(pd, null, 2));
-    console.log(`  ${green('✓')} Runtime limits updated.`);
+    console.log(`  ${green('✓')} Runtime limits updated (revision ${pd.config.revision}).`);
     const eff = pd.effectiveLimits || {};
-    console.log(`  ${dim('effective limits')}`);
-    console.log(`    maxExecutionSteps:          ${eff.maxExecutionSteps}`);
-    console.log(`    maxModelRequestsPerRun:     ${eff.maxModelRequestsPerRun}`);
-    console.log(`    maxWorkspaceOperationsPerRun: ${eff.maxWorkspaceOperationsPerRun}`);
-    console.log(`    maxConsecutiveContinuations: ${eff.maxConsecutiveContinuations}`);
-    console.log(`    maxExecutionTimeMs:          ${eff.maxExecutionTimeMs}`);
+    console.log(`  ${dim('effective per-run limits')}`);
+    console.log(`    maxExecutionSteps:             ${eff.maxExecutionSteps}`);
+    console.log(`    maxModelRequestsPerRun:        ${eff.maxModelRequestsPerRun}`);
+    console.log(`    maxWorkspaceOperationsPerRun:  ${eff.maxWorkspaceOperationsPerRun}`);
+    console.log(`    maxRuntimeDurationMs:           ${eff.maxRuntimeDurationMs}`);
     return;
   }
-  const { status: gs, data: gd } = await operatorGetCall(url, cookie, '/api/runtime-limits');
-  if (gs !== 200 || !gd) return reportActionError(args, gs, gd);
   if (args.json) return console.log(JSON.stringify(gd, null, 2));
   const config = gd.config || {};
   const eff = gd.effectiveLimits || {};
-  console.log(`\n  ${bold('Runtime Limits')}`);
-  console.log(`  ${dim('config')}`);
-  console.log(`    maxExecutionSteps:          ${config.maxExecutionSteps !== undefined ? config.maxExecutionSteps : '(default)'}`);
-  console.log(`    maxModelRequestsPerRun:     ${config.maxModelRequestsPerRun !== undefined ? config.maxModelRequestsPerRun : '(default)'}`);
-  console.log(`    maxWorkspaceOperationsPerRun: ${config.maxWorkspaceOperationsPerRun !== undefined ? config.maxWorkspaceOperationsPerRun : '(default)'}`);
-  console.log(`    maxConsecutiveContinuations: ${config.maxConsecutiveContinuations !== undefined ? config.maxConsecutiveContinuations : '(default)'}`);
-  console.log(`    maxExecutionTimeMs:          ${config.maxExecutionTimeMs !== undefined ? config.maxExecutionTimeMs : '(default)'}`);
-  console.log(`  ${dim('effective (after deployment caps)')}`);
-  console.log(`    maxExecutionSteps:          ${eff.maxExecutionSteps}`);
-  console.log(`    maxModelRequestsPerRun:     ${eff.maxModelRequestsPerRun}`);
-  console.log(`    maxWorkspaceOperationsPerRun: ${eff.maxWorkspaceOperationsPerRun}`);
-  console.log(`    maxConsecutiveContinuations: ${eff.maxConsecutiveContinuations}`);
-  console.log(`    maxExecutionTimeMs:          ${eff.maxExecutionTimeMs}`);
-  if (gd.deploymentCaps) {
-    console.log(`  ${dim('deployment caps')}`);
-    Object.entries(gd.deploymentCaps).forEach(([k, v]) => {
-      if (v !== undefined && v !== null) console.log(`    ${k}: ${v}`);
+  const shown = value => value === null || value === undefined ? '(inherit)' : value;
+  console.log(`\n  ${bold('Runtime Limits')} ${dim(`revision ${config.revision || '?'}`)}`);
+  console.log(`  ${dim('configured policy')}`);
+  console.log(`    maxExecutionSteps:             ${shown(config.maxExecutionSteps)}`);
+  console.log(`    maxModelRequestsPerRun:        ${shown(config.maxModelRequestsPerRun)}`);
+  console.log(`    maxWorkspaceOperationsPerRun:  ${shown(config.maxWorkspaceOperationsPerRun)}`);
+  console.log(`    maxRuntimeDurationMs:           ${shown(config.maxRuntimeDurationMs)}`);
+  console.log(`    maxActiveRuns (per process):    ${shown(config.maxActiveRuns)}`);
+  console.log(`    localModelConcurrency (process): ${shown(config.localModelConcurrency)}`);
+  console.log(`  ${dim('effective per-run limits')}`);
+  console.log(`    maxExecutionSteps:             ${eff.maxExecutionSteps}`);
+  console.log(`    maxModelRequestsPerRun:        ${eff.maxModelRequestsPerRun}`);
+  console.log(`    maxWorkspaceOperationsPerRun:  ${eff.maxWorkspaceOperationsPerRun}`);
+  console.log(`    maxRuntimeDurationMs:           ${eff.maxRuntimeDurationMs}`);
+  if (gd.deploymentDefaults) {
+    console.log(`  ${dim('deployment defaults')}`);
+    Object.entries(gd.deploymentDefaults).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) console.log(`    ${key}: ${value}`);
     });
   }
   console.log(dim('\n  Update with: oquery runtime-limits --set maxExecutionSteps=100'));
@@ -2180,21 +2141,30 @@ async function cmdWorkContexts(args) {
   console.log('');
 }
 
-// List watchers. GET /api/watchers
+// List watchers. GET /api/watchers, following the bounded keyset cursor.
 async function cmdWatchers(args) {
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const { status, data } = await operatorGetCall(url, cookie, '/api/watchers');
-  if (status !== 200 || !data) return reportActionError(args, status, data);
-  const list = data.watchers || [];
+  const list = [];
+  let afterId = 0;
+  while (true) {
+    const suffix = afterId > 0 ? `?afterId=${afterId}` : '';
+    const pageResult = await operatorGetCall(url, cookie, '/api/watchers' + suffix);
+    if (pageResult.status !== 200 || !pageResult.data) return reportActionError(args, pageResult.status, pageResult.data);
+    list.push(...(pageResult.data.watchers || []));
+    if (pageResult.data.nextAfterId == null) break;
+    if (!Number.isSafeInteger(pageResult.data.nextAfterId) || pageResult.data.nextAfterId <= afterId) {
+      return console.log(red('  ✗ Watcher API returned a non-advancing cursor.'));
+    }
+    afterId = pageResult.data.nextAfterId;
+  }
   if (args.json) return console.log(JSON.stringify(list, null, 2));
   if (list.length === 0) return console.log(dim('  No watchers.'));
   console.log(`\n  ${bold('Watchers')}  ${dim(list.length + ' total')}`);
   list.forEach(w => {
     const name = w.name || `#${w.id}`;
-    const status2 = w.archived ? red('archived') : w.paused ? yellow('paused') : green('active');
-    const schedule = w.schedule ? dim(` (${w.schedule})`) : '';
-    console.log(`  ${bold('#' + w.id)} ${name}  ${status2}${schedule}`);
+    const status = w.status === 'archived' ? red('archived') : w.status === 'paused' ? yellow('paused') : green('active');
+    console.log(`  ${bold('#' + w.id)} ${name}  ${status}`);
   });
   console.log('');
 }
@@ -2203,17 +2173,26 @@ async function cmdWatchers(args) {
 async function cmdConnectors(args) {
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const { status, data } = await operatorGetCall(url, cookie, '/api/connectors');
-  if (status !== 200 || !data) return reportActionError(args, status, data);
-  const list = data.connectors || [];
+  const list = [];
+  let afterId = 0;
+  while (true) {
+    const suffix = afterId > 0 ? `?afterId=${afterId}` : '';
+    const pageResult = await operatorGetCall(url, cookie, '/api/connectors' + suffix);
+    if (pageResult.status !== 200 || !pageResult.data) return reportActionError(args, pageResult.status, pageResult.data);
+    list.push(...(pageResult.data.connectors || []));
+    if (pageResult.data.nextAfterId == null) break;
+    if (!Number.isSafeInteger(pageResult.data.nextAfterId) || pageResult.data.nextAfterId <= afterId) {
+      return console.log(red('  ✗ Connector API returned a non-advancing cursor.'));
+    }
+    afterId = pageResult.data.nextAfterId;
+  }
   if (args.json) return console.log(JSON.stringify(list, null, 2));
   if (list.length === 0) return console.log(dim('  No connectors.'));
   console.log(`\n  ${bold('Connectors')}  ${dim(list.length + ' total')}`);
   list.forEach(c => {
     const name = c.name || `#${c.id}`;
-    const status2 = c.archived ? red('archived') : c.paused ? yellow('paused') : green('active');
-    const type = c.type || c.connectorType || '';
-    console.log(`  ${bold('#' + c.id)} ${name}  ${status2}  ${dim(type)}`);
+    const status2 = c.status === 'archived' ? red('archived') : c.status === 'paused' ? yellow('paused') : green('active');
+    console.log(`  ${bold('#' + c.id)} ${name}  ${status2}  ${dim(c.kind || '')}`);
   });
   console.log('');
 }
@@ -2222,9 +2201,19 @@ async function cmdConnectors(args) {
 async function cmdModelPolicies(args) {
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const { status, data } = await operatorGetCall(url, cookie, '/api/model-routing-policies');
-  if (status !== 200 || !data) return reportActionError(args, status, data);
-  const list = data.policies || [];
+  const list = [];
+  let afterId = 0;
+  while (true) {
+    const suffix = afterId > 0 ? '?afterId=' + afterId : '';
+    const pageResult = await operatorGetCall(url, cookie, '/api/model-routing-policies' + suffix);
+    if (pageResult.status !== 200 || !pageResult.data) return reportActionError(args, pageResult.status, pageResult.data);
+    list.push(...(pageResult.data.policies || []));
+    if (pageResult.data.nextAfterId == null) break;
+    if (!Number.isSafeInteger(pageResult.data.nextAfterId) || pageResult.data.nextAfterId <= afterId) {
+      return console.log(red('  ✗ Model routing policy API returned a non-advancing cursor.'));
+    }
+    afterId = pageResult.data.nextAfterId;
+  }
   if (args.json) return console.log(JSON.stringify(list, null, 2));
   if (list.length === 0) return console.log(dim('  No model routing policies.'));
   console.log(`\n  ${bold('Model Routing Policies')}  ${dim(list.length + ' total')}`);
@@ -2295,15 +2284,20 @@ async function cmdWatcherCreate(args) {
   reportActionError(args, status, data);
 }
 
-// Update a watcher. POST /api/watchers/:id
+// Update a watcher. Fetch the current revision before the optimistic write.
 async function cmdWatcherUpdate(args) {
   const id = parseInt(args._[0] || args.id, 10);
   if (Number.isNaN(id)) return console.log(red('Usage: oquery watcher-update <id> [--name <name>]'));
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const body = {};
+  const currentResult = await operatorGetCall(url, cookie, `/api/watchers/${id}`);
+  if (currentResult.status !== 200 || !currentResult.data) {
+    return reportActionError(args, currentResult.status, currentResult.data);
+  }
+  const current = currentResult.data.watcher || currentResult.data;
+  const body = { expectedRevision: current.revision };
   if (args.name) body.name = args.name;
-  if (Object.keys(body).length === 0) return console.log(red('  ✗ At least one field to update required (--name).'));
+  if (Object.keys(body).length === 1) return console.log(red('  ✗ At least one field to update required (--name).'));
   const { status, data } = await operatorJsonCall(url, cookie, 'POST', `/api/watchers/${id}`, body);
   if (status === 200 && data && data.ok) {
     if (args.json) return console.log(JSON.stringify(data.watcher, null, 2));
@@ -2330,23 +2324,23 @@ async function cmdWatcherObserve(args) {
   reportActionError(args, status, data);
 }
 
-// List proposals for a watcher. POST /api/watchers/:id/proposals
+// List the bounded recent proposal page returned with watcher detail.
 async function cmdWatcherProposals(args) {
   const id = parseInt(args._[0] || args.id, 10);
   if (Number.isNaN(id)) return console.log(red('Usage: oquery watcher-proposals <watcherId>'));
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const { status, data } = await operatorJsonCall(url, cookie, 'POST', `/api/watchers/${id}/proposals`, {});
+  const { status, data } = await operatorGetCall(url, cookie, `/api/watchers/${id}`);
   if (status === 200 && data && data.ok) {
     const list = data.proposals || [];
     if (args.json) return console.log(JSON.stringify(list, null, 2));
     if (list.length === 0) return console.log(dim(`  No proposals for watcher #${id}.`));
-    console.log(`\n  ${bold(`Proposals for Watcher #${id}`)}  ${dim(list.length + ' total')}`);
+    console.log(`\n  ${bold(`Proposals for Watcher #${id}`)}  ${dim(list.length + (data.nextProposalBeforeId ? '+ recent' : ' total'))}`);
     list.forEach(p => {
-      const ts = datetime(p.createdAt || p.timestamp);
-      const status2 = p.approvedAt ? green('approved') : p.rejectedAt ? red('rejected') : yellow('pending');
-      console.log(`  ${bold('#P' + (p.id || ''))} ${status2} ${dim(ts)}`);
-      if (p.summary) console.log(`       ${truncate(p.summary, 120)}`);
+      const ts = datetime(p.createdAt);
+      const disposition = p.status === 'approved' ? green('approved') : p.status === 'rejected' ? red('rejected') : yellow('proposed');
+      console.log(`  ${bold('#P' + p.id)} ${disposition} ${dim(ts)}`);
+      console.log(`       ${truncate(p.objective, 120)}`);
     });
     console.log('');
     return;
@@ -2354,13 +2348,20 @@ async function cmdWatcherProposals(args) {
   reportActionError(args, status, data);
 }
 
-// Approve a watcher proposal. POST /api/watcher-proposals/:id/approve
+// Approve a watcher proposal into a normal assigned ticket.
 async function cmdWatcherApprove(args) {
   const id = parseInt(args._[0] || args.id, 10);
-  if (Number.isNaN(id)) return console.log(red('Usage: oquery watcher-approve <proposalId>'));
+  const assignmentTargetId = parseInt(args['assignment-target-id'], 10);
+  if (Number.isNaN(id) || Number.isNaN(assignmentTargetId)) {
+    return console.log(red('Usage: oquery watcher-approve <proposalId> --assignment-target-id <id> [--assignment-target-type agent|group]'));
+  }
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const { status, data } = await operatorJsonCall(url, cookie, 'POST', `/api/watcher-proposals/${id}/approve`, {});
+  const body = {
+    assignmentTargetType: args['assignment-target-type'] || 'agent',
+    assignmentTargetId
+  };
+  const { status, data } = await operatorJsonCall(url, cookie, 'POST', `/api/watcher-proposals/${id}/approve`, body);
   if (status === 200 && data && data.ok) {
     if (args.json) return console.log(JSON.stringify({ proposalId: id, action: 'approve', ticketId: data.createdTicketId }, null, 2));
     console.log(`  ${green('✓')} Proposal #${id} approved. Ticket #${data.createdTicketId} created.`);
@@ -2413,9 +2414,14 @@ async function cmdConnectorUpdate(args) {
   if (Number.isNaN(id)) return console.log(red('Usage: oquery connector-update <id> [--name <name>]'));
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const body = {};
+  const currentResult = await operatorGetCall(url, cookie, `/api/connectors/${id}`);
+  if (currentResult.status !== 200 || !currentResult.data) {
+    return reportActionError(args, currentResult.status, currentResult.data);
+  }
+  const current = currentResult.data.connector || currentResult.data;
+  const body = { expectedRevision: current.revision };
   if (args.name) body.name = args.name;
-  if (Object.keys(body).length === 0) return console.log(red('  ✗ At least one field to update required (--name).'));
+  if (Object.keys(body).length === 1) return console.log(red('  ✗ At least one field to update required (--name).'));
   const { status, data } = await operatorJsonCall(url, cookie, 'POST', `/api/connectors/${id}`, body);
   if (status === 200 && data && data.ok) {
     if (args.json) return console.log(JSON.stringify(data.connector, null, 2));
@@ -2472,10 +2478,14 @@ async function cmdModelPolicyUpdate(args) {
   if (Number.isNaN(id)) return console.log(red('Usage: oquery model-policy-update <id> [--name <name>]'));
   const cookie = requireSession(args); if (!cookie) return;
   const url = args.url || opercUrl();
-  const body = {};
+  const currentResult = await operatorGetCall(url, cookie, '/api/model-routing-policies/' + id);
+  if (currentResult.status !== 200 || !currentResult.data || !currentResult.data.policy) {
+    return reportActionError(args, currentResult.status, currentResult.data);
+  }
+  const body = { expectedRevision: currentResult.data.policy.revision };
   if (args.name) body.name = args.name;
-  if (Object.keys(body).length === 0) return console.log(red('  ✗ At least one field to update required (--name).'));
-  const { status, data } = await operatorJsonCall(url, cookie, 'POST', `/api/model-routing-policies/${id}`, body);
+  if (Object.keys(body).length === 1) return console.log(red('  ✗ At least one field to update required (--name).'));
+  const { status, data } = await operatorJsonCall(url, cookie, 'POST', '/api/model-routing-policies/' + id, body);
   if (status === 200 && data && data.ok) {
     if (args.json) return console.log(JSON.stringify(data.policy, null, 2));
     console.log(`  ${green('✓')} Model routing policy #${id} updated.`);
@@ -2483,6 +2493,7 @@ async function cmdModelPolicyUpdate(args) {
   }
   reportActionError(args, status, data);
 }
+
 
 // Create a process template. POST /api/process-templates
 async function cmdTemplateCreate(args) {
@@ -2876,21 +2887,30 @@ async function cmdJournal(args) {
   console.log(dim('\n  Full payloads with --json'));
 }
 
-// List the Work Type catalog from the local store (read-only; no API mutation exists).
-function cmdWorkTypes(args) {
-  let catalog;
-  try {
-    catalog = require('../work-types').readWorkTypeCatalog(path.join(DATA_DIR, 'work-types.json'));
-  } catch (error) {
-    if (args.json) return console.log(JSON.stringify({ error: 'catalog_invalid', message: error.message }, null, 2));
-    return console.log(red(`  ✗ Catalog invalid: ${error.message}`));
+// List the PostgreSQL-backed Work Type catalog (read-only; no mutation command exists).
+async function cmdWorkTypes(args) {
+  const cookie = requireSession(args);
+  if (!cookie) return;
+  const url = args.url || opercUrl();
+  const catalog = [];
+  let afterId = '';
+  while (true) {
+    const query = new URLSearchParams({ limit: '100' });
+    if (afterId) query.set('afterId', afterId);
+    const { status, data } = await operatorGetCall(url, cookie, `/api/work-types?${query}`);
+    if (status !== 200) return reportActionError(args, status, data);
+    catalog.push(...(data.workTypes || []));
+    if (!data.nextAfterId) break;
+    if (data.nextAfterId === afterId) throw new Error('Work Type catalog returned a non-advancing cursor');
+    afterId = data.nextAfterId;
   }
   if (args.json) return console.log(JSON.stringify(catalog, null, 2));
   if (catalog.length === 0) return console.log(dim('  No Work Types defined.'));
   console.log(`  ${bold('Work Type Catalog')} ${dim('(semantic context only — grants no target access or operations)')}`);
   for (const w of catalog) {
-    console.log(`    ${cyan(w.id)} ${bold(w.name)} ${w.status === 'active' ? green(w.status) : dim(w.status)} ${dim('[' + w.allowedTargetKinds.join(', ') + ']')}`);
-    console.log(`        ${dim(w.description)}`);
+    const kinds = Array.isArray(w.allowedTargetKinds) ? w.allowedTargetKinds : [];
+    console.log(`    ${cyan(w.id)} ${bold(w.name)} ${w.status === 'active' ? green(w.status) : dim(w.status)} ${dim('[' + kinds.join(', ') + ']')}`);
+    console.log(`        ${dim(w.description || '')}`);
   }
 }
 
@@ -3034,7 +3054,7 @@ function help() {
     stats           Show operational statistics
       --api           Query remote server substrate
 
-    agents          List agents from the local store (id, name, provider/model)
+    agents          List agents from the server catalog (id, name, provider/model)
                       Use the id/name with create-ticket --agent
       --json          Raw JSON output
 
@@ -3165,6 +3185,8 @@ function help() {
 
   ${bold('System Commands:')}
     runtime-status  Show runtime status (scheduler, leases, active runs)
+      --after-id <id> Continue the cursor-paged active-run detail
+      --limit <n>     Active-run detail page size (maximum 100)
       --json          Raw JSON output
       --url <url>     Server base URL
 
@@ -3298,6 +3320,10 @@ function help() {
 
     watcher-approve <proposalId>
                     Approve a watcher proposal
+      --assignment-target-id <id>
+                      Required agent or group id
+      --assignment-target-type <type>
+                      Assignment type (agent by default, or group)
       --json          Raw JSON output
       --url <url>     Server base URL
 
@@ -3425,7 +3451,7 @@ function help() {
     node scripts/oquery.js watcher-create --name "Watch src" --work-context-id 1 --source-refs workspace-root/
     node scripts/oquery.js watcher-observe 1
     node scripts/oquery.js watcher-proposals 1
-    node scripts/oquery.js watcher-approve 3
+    node scripts/oquery.js watcher-approve 3 --assignment-target-id 1
     node scripts/oquery.js connector-create --name "Data feed" --work-context-id 1 --allowed-scopes read
     node scripts/oquery.js connector-read 1 --path /data
     node scripts/oquery.js model-policy-create --name "Fast policy" --allowed-providers ollama --fallback-providers openai
@@ -3464,7 +3490,7 @@ function help() {
       --ticket <id>   Filter by ticket
       --run <id>      Filter by run
       --limit <n>     Max events (default 200, max 1000)
-    work-types      List the Work Type catalog (local store, read-only)
+    work-types      List the PostgreSQL Work Type catalog (read-only)
     authority-paths List protected workspace paths + sensitive application paths
                     (same shared definition the runtime enforces)
     browser-status  Show browser engine availability and own operator session
@@ -3647,7 +3673,7 @@ async function main() {
   } else if (cmd === 'journal') {
     await cmdJournal(args).catch(e => console.error(red('Error: ' + e.message)));
   } else if (cmd === 'work-types') {
-    cmdWorkTypes(args);
+    await cmdWorkTypes(args).catch(e => console.error(red('Error: ' + e.message)));
   } else if (cmd === 'authority-paths') {
     cmdAuthorityPaths(args);
   } else if (cmd === 'browser-status') {

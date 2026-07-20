@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Local/mock connector contract (r1.30). A bounded source/target adapter scoped to a Work Context.
+// Local/mock connector contract. A bounded source/target adapter scoped to a Work Context.
 // Proves: CRUD is inert (no ticket/run/workspace mutation); an active connector needs an active
 // Work Context; no plaintext secret may be stored (credentialRef only); reads require connector:read,
 // are bounded to sourceRoots, cannot cross Work Context, and produce a receipt with metadata/hash
 // (never full content); a missing object records a failed receipt; writes require connector:write
-// but are REFUSED in r1.30 (availability is not write authority); connectors create no ticket/run
+// but are REFUSED (availability is not write authority); connectors create no ticket/run
 // and mutate no workspace; routing/watcher cannot grant connector access/mutation; no new ledgers.
 
 const { spawn } = require('child_process');
@@ -113,24 +113,25 @@ async function main() {
     const objectsBefore = readRaw('local-connector-objects.json');
 
     // ---- 1: CRUD is inert; scope/secret rules. ----
-    assert((await request('GET', '/api/connectors', { cookie: noread })).statusCode === 403 || true, 'noread has connector:manage'); // noread has manage but not read
+    assert((await request('GET', '/api/connectors', { cookie: noread })).statusCode === 200, 'connector catalog requires manage but not read authority'); // noread has manage but not read
     const created = await request('POST', '/api/connectors', { cookie: admin, json: CONN });
     assert(created.statusCode === 200 && created.json.connector.id === 1, 'connector created: ' + created.body);
     assert(created.json.connector.credentialRef === 'vault://legal/mock' && created.json.connector.writePolicy.mode === 'disabled' && created.json.connector.syncPolicy.mode === 'manual', 'connector defaults: credentialRef ref, writes disabled, manual sync');
     assert(readJsonData('tickets.json').length === 0 && readRaw('runs.json') === runsBefore && ws() === wsBefore, 'connector create creates no ticket/run/workspace mutation');
     // Plaintext secret rejected.
     assert((await request('POST', '/api/connectors', { cookie: admin, json: { ...CONN, name: 'bad', apiKey: 'sk-secret' } })).statusCode === 400, 'plaintext secret field rejected');
+    assert((await request('POST', '/api/connectors', { cookie: admin, json: { ...CONN, name: 'nested bad', readPolicy: { mode: 'bounded', token: 'secret' } } })).statusCode === 400, 'nested plaintext secret field rejected without a server error');
     // Active connector requires active Work Context.
     assert((await request('POST', '/api/connectors', { cookie: admin, json: { ...CONN, name: 'arch', workContextId: 3 } })).statusCode === 400, 'active connector in archived Work Context rejected');
     // Unknown kind rejected.
-    assert((await request('POST', '/api/connectors', { cookie: admin, json: { ...CONN, name: 'ext', kind: 'google_drive' } })).statusCode === 400, 'non-local kind rejected (r1.30 local-only)');
+    assert((await request('POST', '/api/connectors', { cookie: admin, json: { ...CONN, name: 'ext', kind: 'google_drive' } })).statusCode === 400, 'non-local kind rejected (current local-only contract)');
 
     // ---- 2: read requires connector:read. ----
     assert((await request('POST', '/api/connectors/1/read', { cookie: noread, json: { objectId: 'inbox/client-a.txt' } })).statusCode === 403, 'read requires connector:read');
 
-    // ---- 3: bounded read produces a receipt; content NOT in receipt; metadata/hash present. ----
+    // ---- 3: authorized in-scope read produces a receipt; content NOT in receipt; metadata/hash present. ----
     const read = await request('POST', '/api/connectors/1/read', { cookie: admin, json: { objectId: 'inbox/client-a.txt' } });
-    assert(read.statusCode === 200 && read.json.ok && read.json.content === OBJ_CONTENT, 'read returns bounded content in response');
+    assert(read.statusCode === 200 && read.json.ok && read.json.content === OBJ_CONTENT, 'read returns authorized in-scope content in response');
     const rcpt = read.json.receipt;
     assert(rcpt && rcpt.connectorId === 1 && rcpt.workContextId === 1 && rcpt.operation === 'read' && rcpt.sourceRef === 'inbox/client-a.txt' && rcpt.externalObjectId === 'inbox/client-a.txt', 'receipt carries connectorId/workContextId/operation/sourceRef/externalObjectId');
     assert(rcpt.result.status === 'ok' && rcpt.result.hash && rcpt.result.bytes === Buffer.byteLength(OBJ_CONTENT, 'utf8'), 'receipt carries hash + byte metadata');
@@ -152,11 +153,13 @@ async function main() {
     const missing = await request('POST', '/api/connectors/1/read', { cookie: admin, json: { objectId: 'inbox/nope.txt' } });
     assert(missing.statusCode === 404 && missing.json.receipt.result.status === 'failed', 'missing object records a failed receipt (no guess)');
 
-    // ---- 7: write requires connector:write AND is REFUSED in r1.30. ----
-    // Give the connector a write scope to prove availability still is not write authority.
-    await request('POST', '/api/connectors/1', { cookie: admin, json: { allowedScopes: ['read', 'write'], targetRoots: ['inbox'] } });
+    // ---- 7: update is revision-guarded; write availability still grants no authority. ----
+    const update = await request('POST', '/api/connectors/1', { cookie: admin, json: { expectedRevision: created.json.connector.revision, allowedScopes: ['read', 'write'], targetRoots: ['inbox'] } });
+    assert(update.statusCode === 200 && update.json.connector.revision === 2, 'connector update advances its revision');
+    const stale = await request('POST', '/api/connectors/1', { cookie: admin, json: { expectedRevision: created.json.connector.revision, name: 'stale update' } });
+    assert(stale.statusCode === 409 && stale.json.current.revision === 2, 'stale connector update is refused with the current revision');
     const write = await request('POST', '/api/connectors/1/write', { cookie: admin, json: { objectId: 'inbox/client-a.txt', content: 'tampered' } });
-    assert(write.statusCode === 409 && write.json.reason === 'write_disabled_in_r1.30' && write.json.receipt.operation === 'write_refused', 'write is refused in r1.30 with a refused receipt');
+    assert(write.statusCode === 409 && write.json.reason === 'connector_write_disabled' && write.json.receipt.operation === 'write_refused', 'write is refused with a refused receipt');
     assert(readJsonData('local-connector-objects.json').find(o => o.id === 'inbox/client-a.txt').content === OBJ_CONTENT, 'refused write did not mutate the object (no external mutation)');
 
     // ---- 8: connector activity created no ticket/run/workspace mutation; no new ledgers. ----
@@ -177,7 +180,7 @@ async function main() {
     const detail = await request('GET', '/connectors/1', { cookie: admin });
     assert(detail.statusCode === 200 && detail.body.includes('reference only') && !detail.body.includes('SECRET-PII-Ssn'), 'connector detail shows credentialRef-only and leaks no content');
 
-    console.log('PASS: local connector contract — bounded local/mock reads with receipts (no content), writes refused, Work-Context scoped, credentialRef-only, no ticket/run/workspace mutation, no new ledger');
+    console.log('PASS: local connector contract — scope-bounded local/mock reads with receipts (no content), writes refused, Work-Context scoped, credentialRef-only, no ticket/run/workspace mutation, no new ledger');
   } catch (error) {
     if (out) process.stderr.write(out);
     throw error;

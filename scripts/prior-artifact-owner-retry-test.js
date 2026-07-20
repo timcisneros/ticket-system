@@ -74,6 +74,13 @@ function seedData() {
     capabilityType: 'directAction',
     capabilityId: 'agent-selected-actions',
     executionPolicySnapshot: { requireVerification: 'when_declared' },
+    runtimeLimitsSnapshot: {
+      maxExecutionSteps: 10,
+      maxModelRequestsPerRun: 10,
+      maxWorkspaceOperationsPerRun: 50,
+      maxRuntimeDurationMs: 600000,
+      source: null
+    },
     currentPhase: 'terminalization',
     leaseOwner: null,
     leaseExpiresAt: null,

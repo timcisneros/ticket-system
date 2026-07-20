@@ -116,6 +116,28 @@ function seed() {
     template(6, 'Invalid schedule', 'Create folder invalid', { schedule: schedule('not-a-date') }),              // invalid → skipped safely
     template(7, 'AutoRetry inert', 'Create folder retryable', { schedule: schedule(PAST), executionPolicy: { autoRetry: true } }) // autoRetry true + no maxAttempts
   ]);
+  const currentTemplates = readJsonData('process-templates.json').map(template => ({
+    ...template,
+    version: Number.isInteger(template.version) ? template.version : 1,
+    currentVersion: Number.isInteger(template.version) ? template.version : 1,
+    currentVersionId: `ptv_${template.id}_${Number.isInteger(template.version) ? template.version : 1}`
+  }));
+  writeJson('process-templates.json', currentTemplates);
+  writeJson('process-template-versions.json', currentTemplates.map(template => ({
+    id: template.currentVersionId,
+    templateId: template.id,
+    version: template.currentVersion,
+    status: 'active',
+    name: template.name,
+    ticketTemplate: template.ticketTemplate,
+    executionPolicy: template.ticketTemplate.executionPolicy || null,
+    createdBy: template.createdBy || 'admin',
+    createdAt: template.createdAt || ISO,
+    activatedBy: template.createdBy || 'admin',
+    activatedAt: template.createdAt || ISO,
+    supersedesVersionId: null,
+    changeSummary: null
+  })));
   writeJson('process-template-triggers.json', []);
   fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), '');
 }

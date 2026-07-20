@@ -1509,7 +1509,12 @@
       } else if (jump === 'mutation') {
         target = document.querySelector('[data-op-mutation="true"]');
       }
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (target) {
+        for (var details = target.closest('details'); details; details = details.parentElement ? details.parentElement.closest('details') : null) {
+          details.open = true;
+        }
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
     });
   });
 })();

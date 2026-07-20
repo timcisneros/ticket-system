@@ -339,6 +339,7 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts, options = {})
   const runId = 9100 + fixtureNumber;
   const now = new Date().toISOString();
   const status = options.status || 'completed';
+  const ticketStatus = options.ticketStatus || (['pending', 'running'].includes(status) ? 'in_progress' : status);
   const error = options.error || null;
   appendJsonRecord('tickets.json', {
     id: ticketId,
@@ -349,7 +350,7 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts, options = {})
     executionMode: 'agent',
     capabilityType: 'directAction',
     capabilityId: 'agent-selected-actions',
-    status,
+    status: ticketStatus,
     createdBy: 'test',
     changedBy: 'test',
     changedAt: now,
@@ -393,10 +394,13 @@ function addAccuracyFixtureRun(name, predictions, actualArtifacts, options = {})
     capabilityId: 'agent-selected-actions',
     runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
     status,
+    leaseOwner: options.leaseOwner || null,
+    leaseExpiresAt: options.leaseExpiresAt || null,
+    lastHeartbeatAt: options.lastHeartbeatAt || null,
     ticketOpenedAt: now,
     createdAt: now,
     updatedAt: now,
-    startedAt: now,
+    startedAt: status === 'pending' ? null : now,
     completedAt: ['completed', 'failed', 'interrupted'].includes(status) ? now : null,
     error,
     replaySnapshotPath,
@@ -504,7 +508,12 @@ async function main() {
 
     const pendingFixture = addAccuracyFixtureRun('pending-objective', [
       'accuracy-pending-' + STAMP + '-a.txt'
-    ], [], { status: 'running' });
+    ], [], {
+      status: 'running',
+      leaseOwner: 'artifact-fixture-observer',
+      leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+      lastHeartbeatAt: new Date().toISOString()
+    });
     await assertRunDetailContains(cookie, pendingFixture.runId, ['Objective Success:</strong> Not scored']);
 
     const partialFailedFixture = addAccuracyFixtureRun('partial-failed-objective', [

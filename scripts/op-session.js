@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 // Operational session helper — interact with the running server
 const http = require('http');
-const path = require('path');
-const fs = require('fs');
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3099';
-const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 
 function dim(s) { return `\x1b[2m${s}\x1b[0m`; }
 function green(s) { return `\x1b[32m${s}\x1b[0m`; }
@@ -38,6 +35,22 @@ function req(m, p, o = {}) {
 async function login() {
   const r = await req('POST', '/login', { form: { username: 'admin', password: 'admin123' } });
   return r.cookie;
+}
+
+async function listRuns(cookie) {
+  const runs = [];
+  let cursor = null;
+  while (true) {
+    const query = new URLSearchParams({ domain: 'runs', limit: '100' });
+    if (cursor !== null) query.set('cursor', String(cursor));
+    const response = await req('GET', `/api/export?${query}`, { cookie });
+    if (response.status !== 200) throw new Error(`Failed to fetch runs (HTTP ${response.status})`);
+    const page = JSON.parse(response.body);
+    runs.push(...(page.items || []));
+    if (page.nextCursor === null || page.nextCursor === undefined) return runs;
+    if (String(page.nextCursor) === String(cursor)) throw new Error('Run export returned a non-advancing cursor');
+    cursor = page.nextCursor;
+  }
 }
 
 async function main() {
@@ -75,68 +88,35 @@ async function main() {
     console.log(r.body);
   }
 
-  if (cmd === 'list-runs') {
-    console.error(dim(`[remote substrate: ${BASE}]`));
-    const r = await req('GET', '/api/export', { cookie });
-    if (r.status === 200) {
-      try {
-        const data = JSON.parse(r.body);
-        const runs = (data.runs || []).map(run => ({ id: run.id, ticketId: run.ticketId, status: run.status, agent: run.agentName }));
-        console.log(JSON.stringify(runs, null, 2));
-      } catch (e) {
-        console.log(red('Failed to parse run data.'));
-      }
-    } else {
-      console.log(red(`Failed to fetch runs (HTTP ${r.status})`));
-    }
-  }
-
-  if (cmd === 'run-status') {
-    console.log(dim(`[local substrate: ${DATA_DIR}]`));
-    const runsData = fs.readFileSync(path.join(DATA_DIR, 'runs.json'), 'utf8');
-    const runs = JSON.parse(runsData);
-    console.log(JSON.stringify(runs.map(r => ({ id: r.id, ticketId: r.ticketId, status: r.status, agent: r.agentName })), null, 2));
+  if (cmd === 'list-runs' || cmd === 'run-status') {
+    console.error(dim(`[PostgreSQL runtime: ${BASE}]`));
+    const runs = await listRuns(cookie);
+    console.log(JSON.stringify(runs.map(run => ({ id: run.id, ticketId: run.ticketId, status: run.status, agent: run.agentName })), null, 2));
   }
 
   if (cmd === 'wait') {
     const ticketId = parseInt(args[1]);
     if (!ticketId) { console.error('Usage: op-session wait <ticketId>'); process.exit(1); }
-    console.log(dim(`[remote substrate: ${BASE}]`));
+    console.log(dim(`[PostgreSQL runtime: ${BASE}]`));
     console.log('Waiting for ticket', ticketId, '...');
-
-    // Check ticket exists
-    const check = await req('GET', `/api/tickets`, { cookie });
-    if (check.status === 200) {
-      try {
-        const tickets = JSON.parse(check.body).tickets || JSON.parse(check.body);
-        if (!tickets.some(t => t.id === ticketId)) {
-          console.log(red(`  ✗ Ticket T${ticketId} not found on server.`));
+    for (let i = 0; i < 60; i++) {
+      const response = await req('GET', `/api/tickets/${ticketId}/runtime`, { cookie });
+      if (response.status === 404) {
+        console.log(red(`  ✗ Ticket T${ticketId} not found on server.`));
+        return;
+      }
+      if (response.status === 200) {
+        const data = JSON.parse(response.body);
+        const ticket = data.ticket;
+        const run = data.latestRun || data.currentRun || null;
+        if (ticket && ['completed', 'failed'].includes(ticket.status)) {
+          const statusLabel = ticket.status === 'completed' ? green(ticket.status) : red(ticket.status);
+          console.log('  Ticket', ticketId, 'status:', statusLabel);
+          if (run) console.log('    Run', run.id, 'status:', run.status, run.error ? '- ERROR: ' + run.error.substring(0, 100) : '');
           return;
         }
-      } catch (e) { /* fall through to polling */ }
-    }
-
-    for (let i = 0; i < 60; i++) {
-      const listRes = await req('GET', '/api/tickets', { cookie });
-      if (listRes.status === 200) {
-        try {
-          const tickets = JSON.parse(listRes.body).tickets || JSON.parse(listRes.body);
-          const t = tickets.find(item => item.id === ticketId);
-          if (t && (t.status === 'completed' || t.status === 'failed')) {
-            const statusLabel = t.status === 'completed' ? green(t.status) : red(t.status);
-            console.log('  Ticket', ticketId, 'status:', statusLabel);
-            // Fetch run details
-            const exportRes = await req('GET', '/api/export', { cookie });
-            if (exportRes.status === 200) {
-              const data = JSON.parse(exportRes.body);
-              const runs = (data.runs || []).filter(r => r.ticketId === ticketId);
-              runs.forEach(r => console.log('    Run', r.id, 'status:', r.status, r.error ? '- ERROR: ' + r.error.substring(0, 100) : ''));
-            }
-            return;
-          }
-        } catch (e) { /* retry */ }
       }
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
     console.log(red('  ✗ Timeout waiting for ticket'), ticketId);
   }
@@ -151,7 +131,7 @@ async function main() {
     create-ticket <objective>   Create a ticket on the server
     list-tickets                List all tickets (JSON, via API)
     list-runs                   List all runs (JSON, via API)
-    run-status                  Show run statuses (from local data file)
+    run-status                  Show run statuses (from PostgreSQL via API)
     wait <ticketId>              Poll API until ticket completes/fails
     help                         This help
     `);

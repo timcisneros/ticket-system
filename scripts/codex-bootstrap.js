@@ -1,82 +1,50 @@
 #!/usr/bin/env node
+'use strict';
+
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = path.resolve(__dirname, '..');
-
-function exists(relativePath) {
-  return fs.existsSync(path.join(ROOT, relativePath)) ? 'present' : 'missing';
-}
+const root = path.resolve(__dirname, '..');
+const migrations = fs.readdirSync(path.join(root, 'persistence', 'postgres', 'migrations'))
+  .filter(name => name.endsWith('.sql'))
+  .sort();
 
 const sections = [
-  ['Architecture Summary', [
-    'Fastify server-rendered ticket system in server.js.',
-    'Ticket -> Agent -> Capability -> Actions -> Environment.',
-    'Capabilities are direct actions or enabled workflow JSON definitions.',
-    'Execution is single-process with JSON persistence and append-only events.',
-    'Mutations go through authority checks, replay, operation history, recovery, evaluation, and consequence recording.'
+  ['Runtime', [
+    'Fastify/EJS server: server.js',
+    'Structured state, evidence, sessions, leases, and coordination: PostgreSQL only',
+    `PostgreSQL migrations: ${migrations.length} (${migrations[0]} through ${migrations[migrations.length - 1]})`,
+    'Filesystem state: execution workspace and replaceable browser artifacts only',
+    'Run admission: deployment-wide PostgreSQL policy; mutation admission: recoverable process-local pressure'
   ]],
-  ['Important Runtime Files', [
-    `server.js (${exists('server.js')})`,
-    `views/ (${exists('views')})`,
-    `data/tickets.json (${exists('data/tickets.json')})`,
-    `data/runs.json (${exists('data/runs.json')})`,
-    `data/events.jsonl (${exists('data/events.jsonl')})`,
-    `data/workflows.json (${exists('data/workflows.json')})`,
-    `data/replay-snapshots/ (${exists('data/replay-snapshots')})`,
-    `workspace-root/ (${exists('workspace-root')})`
+  ['Required startup environment', [
+    'DATABASE_URL=postgresql://...',
+    'SESSION_SECRET=<stable high-entropy secret>',
+    'POSTGRES_SCHEMA=ticket_system (optional)',
+    'WORKSPACE_ROOT=.local-workspace (optional)',
+    'ARTIFACT_ROOT=.local-artifacts (optional)'
   ]],
-  ['Verification Commands', [
+  ['Verification', [
     'npm run build',
-    'npm run test:workflow',
-    'npm run test:postcondition',
-    'npm run benchmark:operational-endurance',
-    'node scripts/page-render-regression-test.js',
-    'node scripts/catalog-consistency-test.js'
+    'TEST_DATABASE_URL=postgresql://... npm run test:persistence:postgres',
+    'TEST_DATABASE_URL=postgresql://... npm run test:cutover:postgres',
+    'TEST_DATABASE_URL=postgresql://... npm run checkpoint:release'
   ]],
-  ['Benchmark Commands', [
-    'npm run benchmark:workflow-drafts',
-    'npm run benchmark:workflow-repair',
-    'npm run benchmark:ambiguous-operational',
-    'REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-drafts',
-    'REAL_MODEL_BENCHMARK=1 npm run benchmark:workflow-repair',
-    'REAL_MODEL_BENCHMARK=1 npm run benchmark:ambiguous-operational',
-    'npm run experiment:workflow-schema-teaching'
+  ['Operator flow', [
+    'node scripts/oquery.js login --url http://127.0.0.1:3099',
+    'node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent <id|name> --wait --json "<objective>"',
+    'npm run codex:trace -- --run <id>'
   ]],
-  ['Tracing Commands', [
-    'npm run codex:trace -- --run <id>',
-    'node scripts/oquery.js replay <id>',
-    'node scripts/oquery.js failures --run <id> --json',
-    'curl -s http://localhost:3000/api/runs/<id>/state',
-    'curl -s http://localhost:3000/api/runs/<id>/events'
-  ]],
-  ['Evidence Locations', [
-    'data/events.jsonl: append-only event records',
-    'data/runs.json: run records, leases, runEvaluation, runConsequence',
-    'data/replay-snapshots/run-<id>.json: provider requests, model responses, parsed actions, workflow actions, authority checks',
-    'data/operation-history.json: workspace mutation history and recovery source',
-    'data/logs.json: run and system logs',
-    'data/benchmark-results.jsonl: real-model benchmark evidence'
-  ]],
-  ['Operational Rules', [
-    'Inspect evidence before changing code.',
-    'Keep mocked mode deterministic and fail-hard.',
-    'Keep real mode observational and append JSONL evidence.',
-    'Do not weaken validation to produce green benchmarks.',
-    'Do not add ontology systems, semantic graphs, broad DSLs, approval workflows, or new orchestration infrastructure.'
-  ]],
-  ['Safe Debugging Order', [
-    '1. Inspect evidence.',
-    '2. Trace one failed run.',
-    '3. Verify runtime assumptions.',
-    '4. Isolate model vs runtime failure.',
-    '5. Reproduce minimally.',
-    '6. Change code only after evidence identifies a runtime bug.',
-    '7. Re-run deterministic verification.'
+  ['Evidence inspection', [
+    'GET /api/runs/:id/state',
+    'GET /api/runs/:id/events',
+    'GET /api/runs/:id/decision-graph',
+    'GET /api/event-journal (bounded filters)',
+    'GET /api/runtime/status'
   ]]
 ];
 
 for (const [title, lines] of sections) {
   console.log(`\n## ${title}`);
-  lines.forEach(line => console.log(`- ${line}`));
+  for (const line of lines) console.log(`- ${line}`);
 }

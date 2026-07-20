@@ -1,5 +1,5 @@
 <h1>Runtime Limits</h1>
-<p class="text-muted">Per-run limits for newly started agent runs. System-wide limits apply to the entire server. UI values can lower deployment caps but cannot raise above deployment caps. Leave a field empty to inherit its deployment/default cap.</p>
+<p class="text-muted">Per-run budgets apply to newly started agent runs. Deployment concurrency limits are admitted atomically through PostgreSQL across server processes. Leave an optional per-run field empty to inherit its deployment/default cap.</p>
 
 <div class="actions actions--page-header">
   <a href="/admin" class="btn-small">Back to Admin</a>
@@ -13,13 +13,14 @@
 <% } %>
 
 <form action="/admin/runtime-limits" method="POST">
+  <input type="hidden" name="expectedRevision" value="<%= runtimeLimitsState.config.revision %>">
   <section class="admin-block">
     <h2>Per-Run Limits</h2>
     <table class="tickets-table">
       <thead>
         <tr>
           <th>Limit</th>
-          <th>Deployment cap</th>
+          <th>Inherited default</th>
           <th>Configured UI value</th>
           <th>Effective value</th>
         </tr>
@@ -31,7 +32,7 @@
               <label for="<%= row.key %>"><strong><%= row.label %></strong></label>
               <div class="form-hint"><%= row.help %></div>
             </td>
-            <td><code><%= row.deploymentCap %></code></td>
+            <td><code><%= row.inheritedDefault %></code></td>
             <td>
               <div class="form-group form-group--compact">
                 <input
@@ -55,12 +56,12 @@
   </section>
 
   <section class="admin-block admin-block--spaced">
-    <h2>System-Wide Limits</h2>
+    <h2>Process-Enforced Limits</h2>
     <table class="tickets-table">
       <thead>
         <tr>
           <th>Limit</th>
-          <th>Deployment cap</th>
+          <th>Configured maximum</th>
           <th>Configured UI value</th>
           <th>Effective value</th>
         </tr>
@@ -72,7 +73,7 @@
               <label for="<%= row.key %>"><strong><%= row.label %></strong></label>
               <div class="form-hint"><%= row.help %></div>
             </td>
-            <td><code><%= row.deploymentCap %></code></td>
+            <td><code><%= row.configuredMaximum %></code></td>
             <td>
               <div class="form-group form-group--compact">
                 <input

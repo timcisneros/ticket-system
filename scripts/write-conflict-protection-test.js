@@ -216,7 +216,10 @@ async function main() {
     const second = await createTicket(cookie, agents.agentB, objectiveB);
     const secondRun = await waitForTerminalRun(second.run.id);
     assert(secondRun.status === 'failed', 'second ticket should fail on write conflict, got ' + secondRun.status);
-    assert(String(secondRun.error || '').includes('Workspace write conflict: path was previously produced by ticket ' + first.ticket.id + ', run ' + firstRun.id), 'second run error should identify prior ticket/run conflict');
+    const expectedConflict = 'Workspace write conflict: path ' + TARGET +
+      ' was previously produced by ticket ' + first.ticket.id + ', run ' + firstRun.id;
+    assert(String(secondRun.error || '').includes(expectedConflict),
+      'second run error should identify the path and prior ticket/run conflict; got: ' + String(secondRun.error || ''));
 
     const historyAfterConflict = readJson('operation-history.json').filter(item => item.args && item.args.path === TARGET);
     assert(historyAfterConflict.length === 1, 'failed cross-ticket write must not create operation history');

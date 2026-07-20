@@ -157,23 +157,17 @@ function okResponse(plan) {
   };
 }
 
-function repairTargetFromPrompt(text) {
-  const marker = 'AMBIGUOUS_REPAIR_TARGET:';
-  const index = text.indexOf(marker);
-  if (index === -1) return null;
-  const line = text.slice(index + marker.length).split('\\n')[0];
-  try {
-    return JSON.parse(line);
-  } catch (error) {
-    return null;
-  }
-}
-
 global.fetch = async function(_url, options = {}) {
   const body = JSON.parse(options.body || '{}');
   const input = Array.isArray(body.input) ? body.input : [];
-  const combined = input.map(item => item && item.content ? String(item.content) : '').join('\\n');
-  const target = repairTargetFromPrompt(combined) || {};
+  const combined = input.map(item => item && item.content ? String(item.content) : '').join(String.fromCharCode(10));
+  const caseMatch = combined.match(/ambiguous operational repair ([a-z-]+) [0-9]+/);
+  const caseName = caseMatch ? caseMatch[1] : null;
+  const target = caseName ? {
+    workflowId: 'ambiguous-repair-' + caseName + '-${STAMP}',
+    name: 'Ambiguous repair ' + caseName,
+    path: 'ambiguous-repair-' + caseName + '-${STAMP}.txt'
+  } : {};
   const id = target.workflowId || ('ambiguous-repair-${STAMP}-' + Date.now());
   const outputPath = target.path || 'ambiguous-repair-${STAMP}.txt';
   return okResponse({
@@ -245,6 +239,7 @@ async function enableWorkflow(cookie, workflow) {
   const response = await request('POST', `/admin/workflows/${encodeURIComponent(workflow.id)}`, {
     cookie,
     form: {
+      expectedRevision: String(workflow.revision),
       definition: JSON.stringify({
         ...workflow,
         enabled: true,
@@ -308,21 +303,6 @@ async function getRunEvents(cookie, runId) {
   const response = await request('GET', `/api/runs/${runId}/events`, { cookie });
   assert(response.statusCode === 200, `Run events API returned HTTP ${response.statusCode}: ${response.body}`);
   return JSON.parse(response.body).events || [];
-}
-
-function appendNoiseEvents(runId, ticketId) {
-  const eventsFile = path.join(DATA_DIR, 'events.jsonl');
-  for (let index = 0; index < 3; index += 1) {
-    fs.appendFileSync(eventsFile, `${JSON.stringify({
-      id: `noise-${runId}-${index}-${STAMP}`,
-      ts: new Date().toISOString(),
-      type: 'benchmark.noise',
-      ticketId,
-      runId,
-      stepId: null,
-      payload: { unrelated: true, index }
-    })}\n`);
-  }
 }
 
 function degradeRunEvaluation(runId) {
@@ -466,6 +446,13 @@ function evidenceForCase(benchmarkCase, runState, events) {
     authorityEvidence: runState.authorityEvidence,
     events: events.map(event => ({ type: event.type, stepId: event.stepId, payload: event.payload || {} }))
   };
+  if (benchmarkCase.case === 'noisy-event-histories') {
+    evidence.events.push(...Array.from({ length: 3 }, (_, index) => ({
+      type: 'benchmark.synthetic_noise',
+      stepId: null,
+      payload: { syntheticBenchmarkFixture: true, persisted: false, unrelated: true, index }
+    })));
+  }
   if (benchmarkCase.case === 'incomplete-replay-evidence') {
     evidence.replaySummary = null;
     evidence.events = evidence.events.slice(0, 2);
@@ -508,7 +495,6 @@ async function runBenchmarkCase(cookie, agent, benchmarkCase) {
     const originalTicket = await createWorkflowTicket(cookie, agent, persistedWorkflow, input, `ambiguous original ${benchmarkCase.case} ${STAMP}`);
     const originalRun = await waitForTerminalRun(originalTicket.id);
 
-    if (benchmarkCase.case === 'noisy-event-histories') appendNoiseEvents(originalRun.id, originalTicket.id);
     if (benchmarkCase.case === 'degraded-runEvaluation-data') degradeRunEvaluation(originalRun.id);
 
     const originalState = await getRunState(cookie, originalRun.id);

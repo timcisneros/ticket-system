@@ -4,6 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -83,7 +84,11 @@ function seedData() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_ROOT, { recursive: true });
   for (const file of ['users.json', 'groups.json', 'memberships.json', 'permissions.json', 'workflows.json']) copySeed(file);
-  writeJson('agents.json', [{ id: 9902, name: 'Quality Aggregation Agent', provider: 'openai', model: 'model-quality-a', apiKey: 'fake-key', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }]);
+  const seedAgents = JSON.parse(fs.readFileSync(path.join(REAL_DATA_DIR, 'agents.json'), 'utf8'));
+  writeJson('agents.json', [...seedAgents, {
+    id: 9902, name: 'Quality Aggregation Agent', provider: 'openai', model: 'model-quality-a',
+    apiKey: 'fake-key', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  }]);
   writeJson('logs.json', []);
   writeJson('allocation-plans.json', []);
   fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), '');
@@ -145,6 +150,8 @@ function seedData() {
     executionMode: 'agent',
     capabilityType: 'directAction',
     capabilityId: 'agent-selected-actions',
+    runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
+    runEvaluation: { effectiveness: { status: run.status === 'completed' ? 'passed' : 'failed' } },
     ticketOpenedAt: now,
     createdAt: now,
     updatedAt: now,
@@ -190,14 +197,14 @@ async function main() {
     await startServer();
     const cookie = await login();
     const agentsPage = await request('GET', '/agents', { cookie });
-    assert(agentsPage.statusCode === 200, '/agents should render, got HTTP ' + agentsPage.statusCode);
+    assert(agentsPage.statusCode === 200, '/agents should render, got HTTP ' + agentsPage.statusCode + ': ' + agentsPage.body.slice(0, 500));
     const body = agentsPage.body;
     ['Agent Quality Metrics', 'Model Quality Metrics', 'Quality Aggregation Agent', 'model-quality-a'].forEach(text => {
       assert(body.includes(text), '/agents missing ' + text);
     });
     assert(body.includes('67%'), 'quality averages should include rounded 67% values');
     assert(body.includes('83%'), 'path coverage average should include rounded 83%');
-    assert(body.includes('0/2/2'), 'agent disagreement summary should be 0/2/2');
+    assert(body.includes('A/S: 0 · S/C: 2 · A/C: 2'), 'agent disagreement summary should be 0/2/2: ' + (body.match(/A\/S:[^<]*/g) || []).join(' | '));
     assert(body.includes('<td>0</td>') && body.includes('<td>2</td>'), 'model disagreement counts should render');
     console.log(JSON.stringify({ qualityAggregation: true, agent: 'Quality Aggregation Agent', model: 'model-quality-a' }));
   } finally {

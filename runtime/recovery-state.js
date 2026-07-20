@@ -264,12 +264,9 @@ function reconstructAgentRecoveryState({
     return ledger.get(turn);
   }
 
-  // Index provider requests by turn (new schema) or by array position (legacy).
-  for (let i = 0; i < providerRequests.length; i++) {
-    const req = providerRequests[i];
-    const turn = typeof req.executionTurn === 'number' ? req.executionTurn : null;
-    if (turn === null) continue; // Legacy request without turn — skip ledger entry.
-    const entry = ensureTurn(turn);
+  // Current-format provider requests have already passed direct identity validation.
+  for (const req of providerRequests) {
+    const entry = ensureTurn(req.executionTurn);
     if (entry.request) return unsafe('multiple_requests_for_turn', [replayRef(req)]);
     entry.request = req;
   }

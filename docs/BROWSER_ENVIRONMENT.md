@@ -24,7 +24,7 @@ Mirrors `workspace:operator_mutation`: every session transition and operation la
 - `browser:operator_session_opened` / `browser:operator_session_closed` (with reason and counters),
 - `browser:operator_operation` with pre/post page state (redacted URL + title hash), a receipt (hashes, redacted URLs, duration, error codes), and `requestedBy`.
 
-Screenshots persist under `DATA_DIR/browser-artifacts/<sessionId>/` with SHA-256 in the receipt; the base64 preview returned to the UI is never logged. URLs in evidence are always redacted (`redactBrowserUrl`: credentials stripped, query values replaced, fragment dropped).
+Screenshots persist under `ARTIFACT_ROOT/browser/<sessionId>/` with SHA-256 in the receipt; the base64 preview returned to the UI is never logged. URLs in evidence are always redacted (`redactBrowserUrl`: credentials stripped, query values replaced, fragment dropped).
 
 ## Routes
 

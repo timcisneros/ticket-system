@@ -56,11 +56,12 @@
   <p class="text-muted">No routing policies. With none, runs use the agent's own provider/model (<code>no_policy</code>).</p>
 <% } else { %>
   <table class="data-table">
-    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Work Context</th><th>Capability</th><th>Allowed providers</th><th>Actions</th></tr></thead>
+    <thead><tr><th>#</th><th>Revision</th><th>Name</th><th>Status</th><th>Work Context</th><th>Capability</th><th>Allowed providers</th><th>Actions</th></tr></thead>
     <tbody>
       <% policies.forEach(function (p) { %>
         <tr>
           <td><%= p.id %></td>
+          <td><%= p.revision %></td>
           <td><a href="/model-routing-policies/<%= p.id %>"><%= p.name %></a></td>
           <td><% if (p.status !== 'active') { %><span class="text-muted"><%= p.status %></span><% } else { %>active<% } %></td>
           <td class="text-muted"><%= p.workContextId != null ? ('#' + p.workContextId) : 'any' %></td>
@@ -69,13 +70,17 @@
           <td class="actions">
             <a href="/model-routing-policies/<%= p.id %>" class="btn-small">Edit</a>
             <% if (p.status !== 'archived') { %>
-              <button class="btn-small btn-danger archive-btn" data-id="<%= p.id %>" data-resource="model-routing-policies">Archive</button>
+              <button class="btn-small btn-danger archive-btn" data-id="<%= p.id %>" data-revision="<%= p.revision %>" data-resource="model-routing-policies">Archive</button>
             <% } %>
           </td>
         </tr>
       <% }); %>
     </tbody>
   </table>
+<% } %>
+
+<% if (typeof nextAfterId !== 'undefined' && nextAfterId != null) { %>
+  <p><a href="/model-routing-policies?afterId=<%= nextAfterId %>">Next policies →</a></p>
 <% } %>
 
 <script>
@@ -118,7 +123,7 @@
         var res = await fetch('/api/' + btn.dataset.resource + '/' + btn.dataset.id, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'archived' })
+          body: JSON.stringify({ status: 'archived', expectedRevision: parseInt(btn.dataset.revision, 10) })
         });
         var data = await res.json().catch(function() { return null; });
         if (res.ok) { window.location.reload(); return; }

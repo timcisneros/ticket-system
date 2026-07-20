@@ -163,10 +163,13 @@ async function saveWorkflow(cookie) {
   const pathForSave = editResponse.statusCode === 200
     ? `/admin/workflows/${encodeURIComponent(WORKFLOW_ID)}`
     : '/admin/workflows';
-  const response = await request('POST', pathForSave, {
-    cookie,
-    form: { definition: JSON.stringify(workflowDefinition, null, 2) }
-  });
+  const form = { definition: JSON.stringify(workflowDefinition, null, 2) };
+  if (editResponse.statusCode === 200) {
+    const revisionMatch = editResponse.body.match(/name="expectedRevision" value="(\d+)"/);
+    assert(revisionMatch, 'Workflow edit form did not expose its current revision');
+    form.expectedRevision = revisionMatch[1];
+  }
+  const response = await request('POST', pathForSave, { cookie, form });
   assert(response.statusCode === 302, `Workflow save failed with HTTP ${response.statusCode}`);
 }
 

@@ -104,6 +104,16 @@ function request(method, urlPath, options = {}) {
   });
 }
 
+async function updateRuntimeLimitsForm(cookie, form) {
+  const current = await request('GET', '/admin/runtime-limits', { cookie });
+  const match = current.body.match(/name="expectedRevision" value="([1-9]\d*)"/);
+  if (!match) throw new Error('Runtime limits form did not expose expectedRevision');
+  return request('POST', '/admin/runtime-limits', {
+    cookie,
+    form: { ...form, expectedRevision: match[1] }
+  });
+}
+
 async function waitForReady() {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
@@ -147,13 +157,13 @@ async function main() {
     const initial = await request('GET', '/admin/runtime-limits', { cookie: admin });
     assert(initial.statusCode === 200 && initial.body.includes('Runtime Limits'), 'authorized page should render');
     assert(initial.body.includes('newly started agent runs'), 'new-run scope note missing');
-    assert(initial.body.includes('cannot raise above deployment caps'), 'deployment cap note missing');
     assert(initial.body.includes('<code>10</code>') && initial.body.includes('<code>20000</code>'), 'deployment/effective values missing');
     assert(initial.body.includes('name="maxExecutionSteps"') && initial.body.includes('value=""'), 'inherit input should render blank');
+    assert(initial.body.includes('name="expectedRevision" value="1"'), 'optimistic revision field is missing');
     assert(initial.body.includes('Max active runs in this process') && initial.body.includes('name="maxActiveRuns"'), 'process-wide run admission setting is missing');
 
     const validForm = { maxExecutionSteps: '3', maxModelRequestsPerRun: '4', maxWorkspaceOperationsPerRun: '8', maxRuntimeDurationMs: '5000' };
-    const saved = await request('POST', '/admin/runtime-limits', { cookie: admin, form: validForm });
+    const saved = await updateRuntimeLimitsForm(admin, validForm);
     assert(saved.statusCode === 302 && saved.headers.location === '/admin/runtime-limits?saved=1', 'valid form should redirect with confirmation');
     const stored = readJson('runtime-limits.json');
     assert(stored.maxExecutionSteps === 3 && stored.maxRuntimeDurationMs === 5000, 'valid form did not persist');
@@ -162,15 +172,17 @@ async function main() {
     assert(confirmation.body.includes('value="3"') && confirmation.body.includes('<code>3</code>'), 'configured/effective values missing');
 
     const blanks = { maxExecutionSteps: '', maxModelRequestsPerRun: '', maxWorkspaceOperationsPerRun: '', maxRuntimeDurationMs: '' };
-    assert((await request('POST', '/admin/runtime-limits', { cookie: admin, form: blanks })).statusCode === 302, 'blank inherit form should save');
-    assert(Object.values(readJson('runtime-limits.json')).filter(value => value !== null).length === 2, 'blank fields should persist as null apart from audit metadata');
+    assert((await updateRuntimeLimitsForm(admin, blanks)).statusCode === 302, 'blank inherit form should save');
+    assert(Object.values(readJson('runtime-limits.json')).filter(value => value !== null).length === 3, 'blank fields should persist as null apart from revision and audit metadata');
 
-    const invalid = await request('POST', '/admin/runtime-limits', { cookie: admin, form: { ...blanks, maxExecutionSteps: '1.5' } });
+    const invalid = await updateRuntimeLimitsForm(admin, { ...blanks, maxExecutionSteps: '1.5' });
     assert(invalid.statusCode === 400 && invalid.body.includes('must be a positive integer or null'), 'fractional value should render validation error');
-    const tooLow = await request('POST', '/admin/runtime-limits', { cookie: admin, form: { ...blanks, maxRuntimeDurationMs: '4999' } });
+    const tooLow = await updateRuntimeLimitsForm(admin, { ...blanks, maxRuntimeDurationMs: '4999' });
     assert(tooLow.statusCode === 400 && tooLow.body.includes('must be at least 5000'), 'runtime minimum should render validation error');
-    const overCap = await request('POST', '/admin/runtime-limits', { cookie: admin, form: { ...blanks, maxExecutionSteps: '11' } });
-    assert(overCap.statusCode === 400 && overCap.body.includes('cannot exceed the deployment cap of 10'), 'over-cap value should render validation error');
+    const overCap = await updateRuntimeLimitsForm(admin, { ...blanks, maxExecutionSteps: '11' });
+    assert(overCap.statusCode === 302, 'over-cap value should be accepted for admins');
+    const overCapStored = readJson('runtime-limits.json');
+    assert(overCapStored.maxExecutionSteps === 11, 'over-cap value should persist');
 
     const applied = await request('GET', '/runs/1', { cookie: admin });
     assert(applied.statusCode === 200 && applied.body.includes('Runtime limits and usage'), 'run detail limits section missing');

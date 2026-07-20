@@ -7,11 +7,23 @@
 
 const { spawn } = require('child_process');
 const fs = require('fs');
+const net = require('net');
 const http = require('http');
 const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -79,7 +91,7 @@ function cookieFrom(response) {
 async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'internal-demo-security-data-'));
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'internal-demo-security-workspace-'));
-  const port = process.env.PORT || '3599';
+  const port = String(process.env.PORT || await getFreePort());
   let output = '';
   const server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,

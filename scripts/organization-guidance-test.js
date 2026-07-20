@@ -185,12 +185,12 @@ function testPhaseGatedCatalog() {
   const promptFn = extractFunction(code, 'buildAgentPrompt');
 
   assert(promptFn.includes('currentPhase'), 'prompt should reference currentPhase');
-  assert(promptFn.includes('buildPhaseGatedCatalog'), 'prompt should call buildPhaseGatedCatalog');
+  assert(promptFn.includes('getAllowedOperationsForPhase') && promptFn.includes('currentPhaseAllowedOps'), 'prompt should derive current phase operations');
 
-  const catalogFn = extractFunction(code, 'buildPhaseGatedCatalog');
-  assert(catalogFn, 'buildPhaseGatedCatalog should exist');
+  const catalogFn = extractFunction(code, 'getAllowedOperationsForPhase');
+  assert(catalogFn, 'getAllowedOperationsForPhase should exist');
   assert(catalogFn.includes('PHASE_OPERATIONS'), 'catalog should use PHASE_OPERATIONS');
-  assert(catalogFn.includes('currentPhase'), 'catalog should reference currentPhase');
+  assert(catalogFn.includes('phase'), 'catalog should reference its phase argument');
 
   console.log('  ✓ phase-gated-catalog: prompt uses phase-gated operation catalog');
 }

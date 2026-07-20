@@ -8,6 +8,7 @@
 <table class="data-table">
   <tbody>
     <tr><th>Status</th><td><%= policy.status %></td></tr>
+    <tr><th>Revision</th><td><%= policy.revision %></td></tr>
     <tr><th>Work Context</th><td class="text-muted"><%= policy.workContextId != null ? ('#' + policy.workContextId) : 'any' %></td></tr>
     <tr><th>Capability</th><td class="text-muted"><%= policy.capabilityId || 'any' %></td></tr>
     <tr><th>Allowed providers</th><td class="text-muted"><%= (policy.allowedProviders || []).join(', ') || 'any (unrestricted)' %></td></tr>
@@ -80,6 +81,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          expectedRevision: <%= policy.revision %>,
           name: document.getElementById('pol-name').value.trim(),
           workContextId: wctx ? parseInt(wctx, 10) : null,
           allowedProviders: providers ? providers.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [],

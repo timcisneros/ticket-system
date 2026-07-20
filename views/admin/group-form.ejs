@@ -5,6 +5,7 @@
 <% } %>
 
 <form action="<%= editGroup ? '/admin/groups/' + editGroup.id : '/admin/groups' %>" method="POST" class="ticket-form">
+  <% if (editGroup) { %><input type="hidden" name="revision" value="<%= editGroup.revision %>"><% } %>
   <div class="form-group">
     <label for="name">Group Name *</label>
     <input type="text" id="name" name="name" value="<%= editGroup ? editGroup.name : '' %>" required>

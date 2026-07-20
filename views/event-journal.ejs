@@ -3,7 +3,7 @@
 <div class="page-header">
   <div>
     <h1>Event Journal</h1>
-    <p class="text-muted">Read-only window over the append-only local event journal (<code>events.jsonl</code>). Run-scoped events carry seq/prevHash/hash chain fields; observational events (for example <code>scheduler.tick</code>) do not. Visibility only — nothing here mutates state. See <code>docs/EVIDENCE_VS_TELEMETRY.md</code> for the classification contract.</p>
+    <p class="text-muted">Read-only window over append-only PostgreSQL event history. Run-scoped events carry seq/prevHash/hash chain fields. Visibility only — nothing here mutates state.</p>
   </div>
   <div class="actions">
     <a class="btn-secondary" href="/ops">Back to Ops</a>

@@ -64,12 +64,11 @@ function loadFunctions() {
     AGENT_HANDOFF_OPERATIONS: []
   };
 
-  // Extract buildPhaseGatedCatalog
-  const gatedMatch = source.match(/function buildPhaseGatedCatalog\(currentPhase, baseAllowedOps\) \{([^}]+)\}/);
+  // Extract getAllowedOperationsForPhase
+  const gatedMatch = source.match(/function getAllowedOperationsForPhase\(phase\) \{[\s\S]*?^\}/m);
   if (gatedMatch) {
-    const fnSource = `function buildPhaseGatedCatalog(currentPhase, baseAllowedOps) {${gatedMatch[1]}}`;
-    eval(fnSource); // eslint-disable-line no-eval
-    context.buildPhaseGatedCatalog = buildPhaseGatedCatalog;
+    eval(gatedMatch[0]); // eslint-disable-line no-eval
+    context.getAllowedOperationsForPhase = getAllowedOperationsForPhase;
   }
 
   // Extract buildTransitionGuidance
@@ -87,7 +86,7 @@ function loadFunctions() {
   const promptMatch = source.match(/function buildAgentPrompt\(ticket, runtimeEnvelope, actionResults[^)]*\) \{[\s\S]*?^\}/m);
   if (promptMatch) {
     // We need to construct a compatible version that uses our context vars
-    // The actual function is complex; instead, we'll test buildPhaseGatedCatalog directly
+    // The actual function is complex; instead, we'll test getAllowedOperationsForPhase directly
     // and verify the prompt text exists in source.
   }
 
@@ -97,11 +96,11 @@ function loadFunctions() {
 // ── Test 1: After inspection, catalog excludes listDirectory ─────
 function testCatalogExcludesInspectionAfterInspection() {
   const ctx = loadFunctions();
-  assert(ctx.buildPhaseGatedCatalog, 'buildPhaseGatedCatalog should exist');
+  assert(ctx.getAllowedOperationsForPhase, 'getAllowedOperationsForPhase should exist');
 
   // Simulate mutation phase with full allowed ops
   const baseOps = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
-  const mutationCatalog = ctx.buildPhaseGatedCatalog('mutation', baseOps);
+  const mutationCatalog = ctx.getAllowedOperationsForPhase('mutation').filter(op => baseOps.includes(op));
 
   assert(!mutationCatalog.includes('listDirectory'), 'mutation phase catalog should exclude listDirectory');
   assert(!mutationCatalog.includes('readFile'), 'mutation phase catalog should exclude readFile');
@@ -115,7 +114,7 @@ function testCatalogExcludesInspectionAfterInspection() {
 function testCatalogExposesMutationsAfterInspection() {
   const ctx = loadFunctions();
   const baseOps = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
-  const mutationCatalog = ctx.buildPhaseGatedCatalog('mutation', baseOps);
+  const mutationCatalog = ctx.getAllowedOperationsForPhase('mutation').filter(op => baseOps.includes(op));
 
   assert(mutationCatalog.includes('createFolder'), 'mutation catalog should include createFolder');
   assert(mutationCatalog.includes('writeFile'), 'mutation catalog should include writeFile');
@@ -130,11 +129,13 @@ function testCatalogExposesMutationsAfterInspection() {
 function testCatalogIncludesInspectionInPlanning() {
   const ctx = loadFunctions();
   const baseOps = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
-  const planningCatalog = ctx.buildPhaseGatedCatalog('planning', baseOps);
+  const planningCatalog = ctx.getAllowedOperationsForPhase('planning').filter(op => baseOps.includes(op));
 
-  // planning phase has empty PHASE_OPERATIONS, so it falls back to baseOps
+  // planning advertises inspection only; a pure mutation response may transition directly
   assert(planningCatalog.includes('listDirectory'), 'planning phase catalog should include listDirectory');
   assert(planningCatalog.includes('readFile'), 'planning phase catalog should include readFile');
+  assert(!planningCatalog.includes('writeFile'), 'planning phase catalog should not advertise mutation operations');
+  assert(planningCatalog.length === 2, `planning catalog should expose exactly two inspection operations, got ${planningCatalog.length}`);
 
   console.log('  ✓ catalog-includes-inspection-planning: planning phase includes inspection ops');
 }
@@ -145,8 +146,8 @@ function testPromptIncludesPhaseGatedList() {
   const promptFn = source.match(/function buildAgentPrompt[\s\S]*?^\}/m);
   assert(promptFn, 'buildAgentPrompt should exist');
 
-  assert(promptFn[0].includes('buildPhaseGatedCatalog'), 'prompt should call buildPhaseGatedCatalog');
-  assert(promptFn[0].includes('allowed operations are:'), 'prompt should mention allowed operations are:');
+  assert(promptFn[0].includes('getAllowedOperationsForPhase') && promptFn[0].includes('currentPhaseAllowedOps'), 'prompt should derive operations from the current phase');
+  assert(promptFn[0].includes('Operations available without transitioning from this phase:'), 'prompt should state operations available in the current phase');
   assert(promptFn[0].includes('runtimeEnvelope.currentPhase'), 'prompt should reference currentPhase');
 
   console.log('  ✓ prompt-includes-phase-gated-list: prompt references phase-gated catalog');

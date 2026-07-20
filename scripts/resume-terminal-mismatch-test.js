@@ -74,17 +74,23 @@ function startServer(dataDir, workspaceRoot) {
       OPERC_PASSWORD: 'admin123'
     };
     const proc = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
-      cwd: ROOT, env, stdio: ['ignore', 'ignore', 'ignore']
+      cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe']
     });
+    let output = '';
+    proc.stdout.on('data', chunk => { output += String(chunk); });
+    proc.stderr.on('data', chunk => { output += String(chunk); });
     proc.on('error', reject);
+    proc.on('exit', code => {
+      if (code !== null) reject(new Error(`Server exited ${code}: ${output.slice(-1200)}`));
+    });
     const deadline = Date.now() + 10000;
     const poll = () => {
       http.get(`http://127.0.0.1:${PORT}/api/health`, (res) => {
         if (res.statusCode === 200) resolve(proc);
-        else if (Date.now() > deadline) reject(new Error('Server timeout'));
+        else if (Date.now() > deadline) reject(new Error(`Server timeout: ${output.slice(-1200)}`));
         else setTimeout(poll, 200);
       }).on('error', () => {
-        if (Date.now() > deadline) reject(new Error('Server timeout'));
+        if (Date.now() > deadline) reject(new Error(`Server timeout: ${output.slice(-1200)}`));
         else setTimeout(poll, 200);
       });
     };

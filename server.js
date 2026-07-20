@@ -12,35 +12,69 @@ const crypto = require('crypto');
 const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
-const { readMatchingEvents, readRecentEvents } = require('./runtime/event-reader');
 const { buildRunDecisionGraph, renderRunDecisionGraphText } = require('./runtime/run-decision-graph');
-const { scanCurrentEventJournal } = require('./runtime/event-journal-scan');
-const { createDurableAppendJournal, resolveDurableAppendJournalOptions } = require('./runtime/durable-append');
+const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
 const { resolveRuntimePersistenceBackend } = require('./persistence/runtime-backend');
+const { PostgresRuntimeStore } = require('./persistence/postgres/store');
+const { PostgresSessionStore } = require('./persistence/postgres/session-store');
 const {
-  JsonRunLeaseRepository,
   RunLeaseLostError,
-  assertRunLeaseRepository
-} = require('./persistence/json/run-lease-repository');
+  assertRunLeaseRepository,
+  assertRunPhaseRepository,
+  assertRunTerminalizationRepository,
+  assertTicketRunLifecycleRepository,
+  assertNonTerminalEvidenceRepository,
+  assertWorkspaceOwnershipRepository,
+  assertOperatorRecoveryRepository,
+  assertRunReplayRepository,
+  assertRuntimeStateReadRepository,
+  assertRunRecoveryRepository,
+  assertRuntimeBootstrapRepository,
+  assertTriageRepository,
+  assertOperationalStatusRepository,
+  assertDiagnosticLogRepository,
+  assertPerformanceAnalyticsRepository,
+  assertWorkContextRepository,
+  assertConfiguredAgentRepository,
+  assertProcessTemplateProjectionRepository
+} = require('./persistence/runtime-contracts');
+const { snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const {
-  JsonRunTerminalizationRepository,
-  assertRunTerminalizationRepository
-} = require('./persistence/json/run-terminalization-repository');
+  BUILTIN_PERMISSIONS,
+  assertAccessCatalogRepository
+} = require('./persistence/access-catalog');
 const {
-  JsonTicketRunLifecycleRepository,
-  assertTicketRunLifecycleRepository
-} = require('./persistence/json/ticket-run-lifecycle-repository');
+  WorkflowCatalogConflictError,
+  WorkflowCatalogIdConflictError,
+  assertWorkflowCatalogRepository
+} = require('./persistence/workflow-catalog');
 const {
-  JsonNonTerminalEvidenceRepository,
-  assertNonTerminalEvidenceRepository
-} = require('./persistence/json/non-terminal-evidence-repository');
+  ModelRoutingPolicyConflictError,
+  assertModelRoutingPolicyRepository
+} = require('./persistence/model-routing-policy-catalog');
 const {
-  JsonRunReplayRepository,
-  assertRunReplayRepository
-} = require('./persistence/json/run-replay-repository');
-const { readWorkTypeCatalog, snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
+  ConnectorConflictError,
+  ConnectorReferenceError,
+  assertConnectorAuthorityRepository
+} = require('./persistence/connector-authority');
+const {
+  WatcherConflictError,
+  WatcherReferenceError,
+  WatcherStateConflictError,
+  assertWatcherAuthorityRepository
+} = require('./persistence/watcher-authority');
+const {
+  RuntimeLimitsConflictError,
+  assertRuntimeLimitsRepository
+} = require('./persistence/runtime-limits');
+const {
+  ProcessTemplateConflictError,
+  assertProcessTemplateAuthorityRepository,
+  computeNextRunAt,
+  scheduleHasReusableInterval
+} = require('./persistence/process-template-authority');
 const { buildObjectiveContract, buildObjectiveContractFromCompiled, parseSimpleFolderListObjective: contractParseSimpleFolderListObjective, isReportObjective: contractIsReportObjective, getReportRuntimeLimits: contractGetReportRuntimeLimits, runObjectiveClarificationGate } = require('./objective-contract');
 const {
   RECOVERY_STATE,
@@ -50,70 +84,25 @@ const {
 
 const PORT = process.env.PORT || 3099;
 const RUNTIME_PERSISTENCE_BACKEND = resolveRuntimePersistenceBackend(process.env);
+const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
+if (!DATABASE_URL) throw new Error('DATABASE_URL is required for the PostgreSQL runtime');
+const POSTGRES_SCHEMA = String(process.env.POSTGRES_SCHEMA || 'ticket_system').trim();
 
-// Data file paths
-const REPO_DATA_DIR = path.join(__dirname, 'data');
-const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : REPO_DATA_DIR;
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-const DATA_FILE = path.join(DATA_DIR, 'tickets.json');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const AGENTS_FILE = path.join(DATA_DIR, 'agents.json');
-const GROUPS_FILE = path.join(DATA_DIR, 'groups.json');
-const PERMISSIONS_FILE = path.join(DATA_DIR, 'permissions.json');
-const MEMBERSHIPS_FILE = path.join(DATA_DIR, 'memberships.json');
-const RUNS_FILE = path.join(DATA_DIR, 'runs.json');
-const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
-const EVENTS_FILE = path.join(DATA_DIR, 'events.jsonl');
-const EVENT_JOURNAL_OPTIONS = Object.freeze(resolveDurableAppendJournalOptions(process.env));
+// PostgreSQL owns all structured runtime state. The filesystem remains only
+// the execution workspace and a replaceable browser-artifact blob target.
+const ARTIFACT_ROOT = path.resolve(process.env.ARTIFACT_ROOT || path.join(__dirname, '.local-artifacts'));
+const BROWSER_ARTIFACTS_DIR = path.join(ARTIFACT_ROOT, 'browser');
+fs.mkdirSync(BROWSER_ARTIFACTS_DIR, { recursive: true });
+const MUTATION_ADMISSION_OPTIONS = resolveMutationAdmissionOptions(process.env);
 const SHUTDOWN_RUN_DRAIN_TIMEOUT_MS = getPositiveIntegerEnv('SHUTDOWN_RUN_DRAIN_TIMEOUT_MS', 120000);
-const RUNTIME_LIMITS_FILE = path.join(DATA_DIR, 'runtime-limits.json');
-const DATA_DIR_WRITER_LOCK_FILE = path.join(DATA_DIR, 'writer-lock.json');
-const ALLOCATION_PLANS_FILE = path.join(DATA_DIR, 'allocation-plans.json');
-const OPERATION_HISTORY_FILE = path.join(DATA_DIR, 'operation-history.json');
-const WORKFLOWS_FILE = path.join(DATA_DIR, 'workflows.json');
-const PROCESS_TEMPLATES_FILE = path.join(DATA_DIR, 'process-templates.json');
-const PROCESS_TEMPLATE_TRIGGERS_FILE = path.join(DATA_DIR, 'process-template-triggers.json');
-// Append-only template version records (r1.12). Edits create draft versions; activation
-// supersedes the prior active version. Records are never deleted; the trigger ledger
-// remains the provenance authority for created tickets.
-const PROCESS_TEMPLATE_VERSIONS_FILE = path.join(DATA_DIR, 'process-template-versions.json');
-// Work Context (r1.20): a product-layer grouping ABOVE the runtime. It groups related
-// tickets/templates and supplies creation-time defaults + listing filters only. The runtime
-// never dereferences workContextId during execution — see docs/WORK_CONTEXT_PRIMITIVE.md.
-const WORK_CONTEXTS_FILE = path.join(DATA_DIR, 'work-contexts.json');
-// Bounded watcher (r1.26): a scoped, MANUAL observer/proposer over a Work Context. It observes a
-// narrow bounded source (workspace_file), writes observation receipts, and may draft ticket
-// proposals — it never mutates targets, runs templates, wakes agents, or creates hidden work.
-// See docs/BOUNDED_WATCHER.md. There is no background daemon and no automatic polling loop.
-const WATCHERS_FILE = path.join(DATA_DIR, 'watchers.json');
-const WATCHER_OBSERVATIONS_FILE = path.join(DATA_DIR, 'watcher-observations.json');
-const WATCHER_TICKET_PROPOSALS_FILE = path.join(DATA_DIR, 'watcher-ticket-proposals.json');
-// Model/provider routing (r1.28): dispatch policy + an immutable per-run routingSnapshot. Routing
-// records WHICH provider/model a run was dispatched to; it never changes actual provider execution
-// (the agent's own provider/model remains the backend), never grants authority, and never bypasses
-// verification/triage. See docs/MODEL_PROVIDER_ROUTING.md.
-const MODEL_ROUTING_POLICIES_FILE = path.join(DATA_DIR, 'model-routing-policies.json');
-// Local/mock connector contract (r1.30): a bounded source/target ADAPTER scoped to a Work Context.
-// It is a local mock only — NO external system, OAuth, API key, or background sync. Reads return
-// bounded content + a receipt; writes are refused in r1.30 (connector availability is not write
-// authority). The local object store is a test/demo fixture, not product data. See
-// docs/LOCAL_CONNECTOR_CONTRACT.md.
-const CONNECTORS_FILE = path.join(DATA_DIR, 'connectors.json');
-const CONNECTOR_RECEIPTS_FILE = path.join(DATA_DIR, 'connector-receipts.json');
-const LOCAL_CONNECTOR_OBJECTS_FILE = path.join(DATA_DIR, 'local-connector-objects.json');
-const BROWSER_TARGETS_FILE = path.join(DATA_DIR, 'browser-targets.json');
-const MESSAGE_THREADS_FILE = path.join(DATA_DIR, 'message-threads.json');
-const WORK_TYPES_FILE = path.join(DATA_DIR, 'work-types.json');
-// Smallest allowed scheduled-trigger interval. Guards against sub-minute storms; the
-// separate template scheduler scans at PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS (default 60s).
+const SESSION_PURGE_INTERVAL_MS = getPositiveIntegerEnv('SESSION_PURGE_INTERVAL_MS', 60000);
+const SESSION_PURGE_BATCH_SIZE = getPositiveIntegerEnv('SESSION_PURGE_BATCH_SIZE', 1000);
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
-const REPLAY_SNAPSHOTS_DIR = path.join(DATA_DIR, 'replay-snapshots');
 const PROTECTED_PATHS_FILE = path.join(__dirname, 'config', 'protected-paths.json');
 function resolveSessionSecret() {
   const configured = String(process.env.SESSION_SECRET || '').trim();
-  return configured || crypto.randomBytes(32).toString('hex');
+  if (!configured) throw new Error('SESSION_SECRET is required so sessions remain valid across server processes');
+  return configured;
 }
 
 const SESSION_SECRET = resolveSessionSecret();
@@ -148,224 +137,16 @@ const BROWSER_TARGET_LIMIT_FIELDS = Object.freeze([
 ]);
 const BROWSER_PHASE_ONE_OPERATIONS = Object.freeze(['navigate', 'observe', 'readPageText', 'screenshot', 'wait']);
 
-const BUILTIN_PERMISSIONS = Object.freeze([
-  'ticket:create',
-  'ticket:read',
-  'ticket:update',
-  'ticket:delete',
-  'user:create',
-  'user:read',
-  'user:update',
-  'user:delete',
-  'group:create',
-  'group:read',
-  'group:update',
-  'group:delete',
-  'permission:assign',
-  'workflow:manage',
-  'workspace:read',
-  'workspace:write',
-  'workspace:reset',
-  'workspace.delete.cross_ticket_artifact',
-  'browser:read',
-  'browser:operate',
-  'processTemplate:manage',
-  'workContext:manage',
-  'watcher:manage',
-  'modelRouting:manage',
-  'connector:manage',
-  'connector:read',
-  'connector:write',
-  'ops:read',
-  'runtimeLimits:manage'
-]);
-
-function isRepoDataDir() {
-  return path.resolve(DATA_DIR) === path.resolve(REPO_DATA_DIR);
-}
-
-console.log(`DATA_DIR=${DATA_DIR}`);
 console.log(`WORKSPACE_ROOT=${WORKSPACE_ROOT}`);
-console.log(`repo-store=${isRepoDataDir()}`);
+console.log(`ARTIFACT_ROOT=${ARTIFACT_ROOT}`);
 console.log(`persistence-backend=${RUNTIME_PERSISTENCE_BACKEND}`);
-
-function writeMissingFile(fileName, content) {
-  const targetPath = path.join(DATA_DIR, fileName);
-  if (fs.existsSync(targetPath)) return;
-  fs.writeFileSync(targetPath, content);
-}
-
-function copyMissingSeedFile(fileName, fallbackContent = '[]') {
-  const targetPath = path.join(DATA_DIR, fileName);
-  if (fs.existsSync(targetPath)) return;
-
-  const sourcePath = path.join(REPO_DATA_DIR, fileName);
-  if (fs.existsSync(sourcePath)) {
-    fs.copyFileSync(sourcePath, targetPath);
-    return;
-  }
-
-  fs.writeFileSync(targetPath, fallbackContent);
-}
-
-function seedOperationalDataDir() {
-  if (isRepoDataDir()) return;
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-
-  // Every fresh local store starts from the same tracked internal-demo catalog.
-  // NODE_ENV selects runtime behavior; it is not a separate deployment product.
-  [
-    'users.json',
-    'agents.json',
-    'groups.json',
-    'memberships.json',
-    'permissions.json',
-    'workflows.json',
-    'browser-targets.json',
-    'work-types.json',
-    'protected-paths.json'
-  ].forEach(fileName => copyMissingSeedFile(fileName, '[]'));
-
-  [
-    'tickets.json',
-    'runs.json',
-    'logs.json',
-    'operation-history.json',
-    'allocation-plans.json',
-    'process-templates.json',
-    'process-template-triggers.json',
-    'process-template-versions.json',
-    'work-contexts.json',
-    'watchers.json',
-    'watcher-observations.json',
-    'watcher-ticket-proposals.json',
-    'model-routing-policies.json',
-    'connectors.json',
-    'connector-receipts.json',
-    'local-connector-objects.json',
-    'message-threads.json'
-  ].forEach(fileName => writeMissingFile(fileName, '[]'));
-
-  writeMissingFile('events.jsonl', '');
-  writeMissingFile('runtime-limits.json', JSON.stringify({
-    maxExecutionSteps: null,
-    maxModelRequestsPerRun: null,
-    maxWorkspaceOperationsPerRun: null,
-    maxRuntimeDurationMs: null,
-    maxActiveRuns: null,
-    localModelConcurrency: null,
-    updatedBy: null,
-    updatedAt: null
-  }, null, 2));
-}
-function readDataDirWriterLock() {
-  try {
-    return JSON.parse(fs.readFileSync(DATA_DIR_WRITER_LOCK_FILE, 'utf8'));
-  } catch (_) {
-    return null;
-  }
-}
-
-function isProcessAlive(pid) {
-  const numericPid = Number(pid);
-  if (!Number.isInteger(numericPid) || numericPid <= 0) return false;
-  try {
-    process.kill(numericPid, 0);
-    return true;
-  } catch (error) {
-    return error && error.code === 'EPERM';
-  }
-}
-
-function buildDataDirWriterLock(now = new Date()) {
-  const timestamp = now.toISOString();
-  return {
-    pid: process.pid,
-    startedAt: timestamp,
-    dataDir: DATA_DIR,
-    workspaceRoot: WORKSPACE_ROOT,
-    heartbeatAt: timestamp
-  };
-}
-
-function writeDataDirWriterLock(lock) {
-  fs.writeFileSync(DATA_DIR_WRITER_LOCK_FILE, JSON.stringify(lock, null, 2));
-}
-
-function acquireDataDirWriterLock() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const lock = buildDataDirWriterLock();
-
-  try {
-    const fd = fs.openSync(DATA_DIR_WRITER_LOCK_FILE, 'wx');
-    try {
-      fs.writeFileSync(fd, JSON.stringify(lock, null, 2));
-    } finally {
-      fs.closeSync(fd);
-    }
-    dataDirWriterLock = lock;
-    return { acquired: true, lock };
-  } catch (error) {
-    if (!error || error.code !== 'EEXIST') throw error;
-  }
-
-  const existingLock = readDataDirWriterLock();
-  if (existingLock && isProcessAlive(existingLock.pid)) {
-    return { acquired: false, lock: existingLock };
-  }
-
-  try {
-    fs.unlinkSync(DATA_DIR_WRITER_LOCK_FILE);
-  } catch (error) {
-    if (!error || error.code !== 'ENOENT') throw error;
-  }
-
-  return acquireDataDirWriterLock();
-}
-
-function heartbeatDataDirWriterLock() {
-  if (!dataDirWriterLock) return;
-  const currentLock = readDataDirWriterLock();
-  if (!currentLock || currentLock.pid !== process.pid) return;
-  dataDirWriterLock = {
-    ...dataDirWriterLock,
-    heartbeatAt: new Date().toISOString()
-  };
-  writeDataDirWriterLock(dataDirWriterLock);
-}
-
-function startDataDirWriterLockHeartbeat() {
-  if (!dataDirWriterLock || dataDirWriterLockHeartbeatTimer) return;
-  dataDirWriterLockHeartbeatTimer = setInterval(heartbeatDataDirWriterLock, 5000);
-}
-
-function releaseDataDirWriterLock() {
-  if (dataDirWriterLockHeartbeatTimer) clearInterval(dataDirWriterLockHeartbeatTimer);
-  dataDirWriterLockHeartbeatTimer = null;
-
-  const currentLock = readDataDirWriterLock();
-  if (currentLock && currentLock.pid === process.pid) {
-    try {
-      fs.unlinkSync(DATA_DIR_WRITER_LOCK_FILE);
-    } catch (error) {
-      if (!error || error.code !== 'ENOENT') throw error;
-    }
-  }
-  dataDirWriterLock = null;
-}
-
-function refreshDataDirWriterLockForDebugReset() {
-  if (!dataDirWriterLock) return;
-  dataDirWriterLock = buildDataDirWriterLock();
-  writeDataDirWriterLock(dataDirWriterLock);
-}
 
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_BROWSER_OPERATIONS = ['navigate', 'observe', 'readPageText', 'screenshot', 'wait'];
 // Navigation changes browser-session state and screenshots create artifacts. Pure
 // observation and bounded waits do not need to reserve worst-case event capacity
 // for the duration of the operation; their evidence append waits on record-sized capacity.
-const BROWSER_OPERATIONS_REQUIRING_EVENT_ADMISSION = new Set(['navigate', 'screenshot']);
+const BROWSER_OPERATIONS_REQUIRING_MUTATION_ADMISSION = new Set(['navigate', 'screenshot']);
 const BROWSER_OPERATION_ARGS = Object.freeze({
   navigate: ['url'],
   observe: [],
@@ -420,8 +201,8 @@ const RUNTIME_SYSTEM_CONFIG_KEYS = Object.freeze([
   'localModelConcurrency'
 ]);
 const RUNTIME_SYSTEM_DISPLAY = Object.freeze({
-  maxActiveRuns: { label: 'Max active runs in this process', help: 'Process-wide admission bound across every provider. Pending runs resume as active slots are released.' },
-  localModelConcurrency: { label: 'Max concurrent local model runs', help: 'Max concurrent runs using local model providers (Ollama, etc.). 1 = serial, 2 = two parallel.' }
+  maxActiveRuns: { label: 'Max active runs in this deployment', help: 'Deployment-wide admission bound across every server and provider. Pending runs resume as active slots are released.' },
+  localModelConcurrency: { label: 'Max concurrent local model runs in this deployment', help: 'Deployment-wide maximum for runs using local model providers (Ollama, etc.). 1 = serial, 2 = two parallel.' }
 });
 const RUNTIME_SYSTEM_MINIMUMS = Object.freeze({
   maxActiveRuns: 1,
@@ -434,6 +215,18 @@ const DEFAULT_LOCAL_MODEL_CONCURRENCY = 1;
 // DEFAULT_LOCAL_MODEL_CONCURRENCY (the inherited value when unconfigured): the UI is meant to
 // raise concurrency above the default, so the ceiling must not collapse onto that default.
 const DEFAULT_LOCAL_MODEL_CONCURRENCY_CAP = 32;
+const postgresRuntimeStore = new PostgresRuntimeStore({
+  connectionString: DATABASE_URL,
+  schema: POSTGRES_SCHEMA,
+  maxConnections: getPositiveIntegerEnv('POSTGRES_POOL_MAX', 16),
+  connectionTimeoutMs: getPositiveIntegerEnv('POSTGRES_CONNECTION_TIMEOUT_MS', 5000),
+  statementTimeoutMs: getPositiveIntegerEnv('POSTGRES_STATEMENT_TIMEOUT_MS', 30000),
+  lockTimeoutMs: getPositiveIntegerEnv('POSTGRES_LOCK_TIMEOUT_MS', 5000),
+  maxQueryRows: getRuntimeSchedulerCandidateLimit(),
+  maxEligibleRunIds: getRuntimeSchedulerCandidateLimit(),
+  defaultMaxActiveRuns: getPositiveIntegerEnv('MAX_ACTIVE_RUNS', DEFAULT_MAX_ACTIVE_RUNS),
+  defaultLocalModelConcurrency: getPositiveIntegerEnv('LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY)
+});
 // Shared with the admin dashboard listing and the oquery CLI (runtime/authority-paths.js)
 // so the enforced rules and every operator-visible listing cannot drift.
 const {
@@ -553,6 +346,9 @@ const TEST_INTERRUPTION_POINT = process.env.TEST_INTERRUPTION_POINT || '';
 const TEST_SKIP_STARTUP_RUN_RECOVERY = process.env.NODE_ENV === 'test' && process.env.TEST_SKIP_STARTUP_RUN_RECOVERY === 'true';
 const TEST_INTERRUPT_AFTER_AGENT_PROVIDER_RESPONSE_PERSISTED = process.env.NODE_ENV === 'test' &&
   process.env.TEST_INTERRUPT_AFTER_AGENT_PROVIDER_RESPONSE_PERSISTED === 'true';
+const TEST_INTERRUPT_AFTER_OPERATOR_RECOVERY_EFFECT = process.env.NODE_ENV === 'test' &&
+  process.env.TEST_INTERRUPT_AFTER_OPERATOR_RECOVERY_EFFECT === 'true';
+let testInterruptedOperatorRecoveryEffect = false;
 const testInterruptFirstAuthority = new Set();
 const testInterruptFirstWorkspaceOp = new Set();
 const testInterruptFirstWorkspaceTargetEffect = new Set();
@@ -594,6 +390,14 @@ async function maybeTestInterrupt(run, point) {
 
   // Kill the server process to simulate a crash
   process.kill(process.pid, 'SIGKILL');
+}
+
+function maybeInterruptAfterOperatorRecoveryEffect() {
+  if (!TEST_INTERRUPT_AFTER_OPERATOR_RECOVERY_EFFECT || testInterruptedOperatorRecoveryEffect) return;
+  testInterruptedOperatorRecoveryEffect = true;
+  const error = new Error('Deterministic operator recovery interruption after target effect');
+  error.code = 'TEST_OPERATOR_RECOVERY_INTERRUPTION';
+  throw error;
 }
 
 async function maybeInterruptAfterAgentProviderResponsePersisted(run, metadata) {
@@ -658,13 +462,11 @@ function getRunExecutionEvidenceAttempt(run) {
   const runId = run && Number.isSafeInteger(run.id) ? run.id : null;
   if (!runId) throw new TypeError('A persisted run is required for an execution evidence attempt');
   const cached = runExecutionEvidenceAttempts.get(runId);
-  if (cached) return cached;
-  const attempt = Math.max(1, getRunEvents(runId).filter(event => event && event.type === 'run.started').length);
-  runExecutionEvidenceAttempts.set(runId, attempt);
-  return attempt;
+  if (!cached) throw new Error(`Run ${runId} execution-attempt evidence was not initialized`);
+  return cached;
 }
 
-async function recordNonTerminalRunEvidence(run, {
+function buildNonTerminalRunEvidenceInput(run, {
   category,
   slot,
   replayKey,
@@ -680,56 +482,38 @@ async function recordNonTerminalRunEvidence(run, {
     ...sanitizeSnapshotValue(replayItem || {}),
     capturedAt: replayItem && replayItem.capturedAt ? replayItem.capturedAt : timestamp
   };
+  return {
+    runId: run.id,
+    ticketId: run.ticketId,
+    evidenceKey,
+    replayKey,
+    replayItem: item,
+    event: {
+      type: eventType,
+      ...(stepId === null || stepId === undefined ? {} : { stepId: String(stepId) }),
+      payload: sanitizeSnapshotValue(eventPayload || {})
+    }
+  };
+}
+
+async function recordNonTerminalRunEvidence(run, options) {
+  const input = buildNonTerminalRunEvidenceInput(run, options);
   let recorded;
   try {
-    recorded = await getNonTerminalEvidenceRepository().appendRunEvidence({
-      runId: run.id,
-      ticketId: run.ticketId,
-      evidenceKey,
-      replayKey,
-      replayItem: item,
-      event: {
-        type: eventType,
-        ...(stepId === null || stepId === undefined ? {} : { stepId: String(stepId) }),
-        payload: sanitizeSnapshotValue(eventPayload || {})
-      }
-    });
+    recorded = await getNonTerminalEvidenceRepository().appendRunEvidence(input);
   } catch (error) {
     error.nonTerminalEvidencePersistenceFailure = true;
     throw error;
   }
-  return { ...recorded, evidenceKey };
+  return { ...recorded, evidenceKey: input.evidenceKey };
 }
 
-function computeMutationFingerprint(operation, args) {
-  if (operation === 'writeFile') return `writeFile:${args.path}`;
-  if (operation === 'createFolder') return `createFolder:${args.path}`;
-  if (operation === 'renamePath') return `renamePath:${args.path}->${args.nextPath}`;
-  if (operation === 'deletePath') return `deletePath:${args.path}`;
-  return null;
-}
-
-function computePathFingerprint(operation, args) {
-  if (operation === 'writeFile') return `path:${args.path}`;
-  if (operation === 'createFolder') return `path:${args.path}`;
-  if (operation === 'renamePath') return `path:${args.path}`;
-  if (operation === 'deletePath') return `path:${args.path}`;
-  return null;
-}
-
-function findConflictingMutation(runId, operation, args) {
-  const histories = readOperationHistory();
-  const pathFingerprint = computePathFingerprint(operation, args);
-  if (!pathFingerprint) return null;
-  return histories.find(h => {
-    if (h.runId !== runId) return false;
-    if (computePathFingerprint(h.operation, h.args) !== pathFingerprint) return false;
-    if (computeMutationFingerprint(h.operation, h.args) === computeMutationFingerprint(operation, args)) return false;
-    // Allow writeFile -> renamePath and createFolder -> renamePath sequences
-    if (operation === 'renamePath' && ['writeFile', 'createFolder'].includes(h.operation)) {
-      return false;
-    }
-    return true;
+async function findPersistedMutationConflict(run, operation, args, provider) {
+  return getWorkspaceOwnershipRepository().findMutationConflict({
+    runId: run.id,
+    targetId: provider.id,
+    operation,
+    args
   });
 }
 
@@ -741,108 +525,16 @@ function normalizeArtifactOwnershipPath(value) {
 }
 
 function getSuccessfulArtifactOwnershipPath(record) {
-  if (!record || record.error) return null;
+  if (!record || record.error || record.outcome === 'failed' || record.outcome === 'refused') return null;
+  if (record.artifactPath) {
+    return normalizeArtifactOwnershipPath(record.artifactPath);
+  }
   const args = record.args || {};
   const result = record.result || {};
   if (record.operation === 'writeFile') return normalizeArtifactOwnershipPath(result.path || args.path);
   if (record.operation === 'createFolder') return normalizeArtifactOwnershipPath(result.path || args.path);
   if (record.operation === 'renamePath') return normalizeArtifactOwnershipPath(args.nextPath);
   return null;
-}
-
-function findPriorSuccessfulArtifactOwner(operationHistory, run, targetPath) {
-  if (!run) return null;
-  const normalizedTarget = normalizeArtifactOwnershipPath(targetPath);
-  if (!normalizedTarget) return null;
-  return (operationHistory || []).find(record => {
-    if (!record || record.error) return false;
-    if (record.ticketId === run.ticketId) return false;
-    return getSuccessfulArtifactOwnershipPath(record) === normalizedTarget;
-  }) || null;
-}
-
-// True when normalized relative paths a and b are the same path or one contains
-// the other (ancestor/descendant). Used so a destructive deletePath/renamePath on
-// `parent/` is recognized as overlapping an artifact produced at `parent/` or
-// `parent/nested/file.txt`, and vice versa. `alpha/` and `beta/` do not overlap.
-function workspacePathsOverlap(a, b) {
-  if (!a || !b) return false;
-  if (a === b) return true;
-  return a.startsWith(b + '/') || b.startsWith(a + '/');
-}
-
-// Process-local path coordination closes the check-then-mutate race between
-// concurrent runs without globally serializing unrelated workspace paths. The
-// process-wide active-run bound also bounds the number of lock waiters.
-const activeWorkspaceMutationLocks = new Set();
-let workspaceMutationLockVersion = 0;
-let workspaceMutationLockChangePromise = null;
-let resolveWorkspaceMutationLockChange = null;
-
-function workspaceMutationPaths(operation, args = {}) {
-  const values = operation === 'renamePath'
-    ? [args.path, args.nextPath]
-    : [args.path];
-  return [...new Set(values.map(normalizeArtifactOwnershipPath).filter(Boolean))];
-}
-
-function workspaceMutationLocksOverlap(paths, lock) {
-  return paths.some(candidate => lock.paths.some(active => workspacePathsOverlap(candidate, active)));
-}
-
-function notifyWorkspaceMutationLockChange() {
-  workspaceMutationLockVersion += 1;
-  if (!resolveWorkspaceMutationLockChange) return;
-  const resolve = resolveWorkspaceMutationLockChange;
-  resolveWorkspaceMutationLockChange = null;
-  workspaceMutationLockChangePromise = null;
-  resolve(workspaceMutationLockVersion);
-}
-
-function waitForWorkspaceMutationLockChange(observedVersion) {
-  if (observedVersion !== workspaceMutationLockVersion) return Promise.resolve(workspaceMutationLockVersion);
-  if (!workspaceMutationLockChangePromise) {
-    workspaceMutationLockChangePromise = new Promise(resolve => {
-      resolveWorkspaceMutationLockChange = resolve;
-    });
-  }
-  return workspaceMutationLockChangePromise;
-}
-
-async function acquireWorkspaceMutationLock(run, operation, args) {
-  const paths = workspaceMutationPaths(operation, args);
-  if (paths.length === 0) return () => {};
-
-  while (true) {
-    const observedVersion = workspaceMutationLockVersion;
-    const blocked = [...activeWorkspaceMutationLocks].some(lock => workspaceMutationLocksOverlap(paths, lock));
-    if (!blocked) {
-      const lock = { runId: run && run.id ? run.id : null, operation, paths };
-      activeWorkspaceMutationLocks.add(lock);
-      return () => {
-        if (!activeWorkspaceMutationLocks.delete(lock)) return;
-        notifyWorkspaceMutationLockChange();
-      };
-    }
-    await waitForWorkspaceMutationLockChange(observedVersion);
-  }
-}
-
-// Like findPriorSuccessfulArtifactOwner, but matches when another ticket's
-// produced artifact overlaps (equals, contains, or is contained by) the candidate
-// path — the protection a destructive deletePath/renamePath needs so it cannot
-// remove or move a directory holding another ticket's output. Same-ticket records
-// are ignored (rerun/idempotency stay allowed).
-function findOverlappingSuccessfulArtifactOwner(operationHistory, run, candidatePath) {
-  if (!run) return null;
-  const normalizedCandidate = normalizeArtifactOwnershipPath(candidatePath);
-  if (!normalizedCandidate) return null;
-  return (operationHistory || []).find(record => {
-    if (!record || record.error) return false;
-    if (record.ticketId === run.ticketId) return false;
-    const produced = getSuccessfulArtifactOwnershipPath(record);
-    return produced && workspacePathsOverlap(normalizedCandidate, produced);
-  }) || null;
 }
 
 // Permission that lets a human-delegated ticket authorize deleting an artifact
@@ -905,7 +597,7 @@ function delegatedFromRequest(request, source) {
   };
 }
 
-// Resolve the acting principal for shared ticket creation. Mirrors the historical
+// Resolve the acting principal for shared ticket creation. Mirrors the current
 // POST /tickets createdBy resolution (username when known, else the session user id).
 function actorFromRequest(request) {
   if (!request || !request.session) return { userId: null, username: null };
@@ -948,25 +640,77 @@ async function recordPermissionedCrossTicketDelete(run, operation, args, candida
 // dirPath (non-recursive single depth, which works because any writeFile or
 // createFolder under dirPath creates an entry visible in the parent listing).
 // Used by both the prior-owner and overlap stale-ownership checks.
-function ticketHasOwnedContentInDirectory(provider, ticketId, dirPath) {
-  const history = readOperationHistory();
-  const listing = provider.list(dirPath);
-  return listing.entries.some(entry => {
-    const entryPath = path.posix.join(dirPath, entry.name);
-    return (history || []).some(record => {
-      if (record.error) return false;
-      if (record.ticketId !== ticketId) return false;
-      const recordPath = getSuccessfulArtifactOwnershipPath(record);
-      if (!recordPath || recordPath === dirPath) return false;
-      if (!workspacePathsOverlap(recordPath, entryPath)) return false;
-      if (!provider.exists(recordPath)) return false;
-      if (record.operation === 'createFolder') {
-        try { return !isEffectivelyEmptyDirectory(provider, recordPath); }
-        catch (e) { return false; }
+async function ticketHasOwnedContentInDirectory(provider, ticketId, dirPath) {
+  const normalizedDir = normalizeArtifactOwnershipPath(dirPath);
+  if (!normalizedDir) return false;
+  let afterId = 0;
+  const limit = getRuntimeSchedulerCandidateLimit();
+  while (true) {
+    const page = await getWorkspaceOwnershipRepository().listArtifactOwners({
+      targetId: provider.id,
+      candidatePath: normalizedDir,
+      overlap: true,
+      ticketId,
+      afterId,
+      limit
+    });
+    for (const owner of page.owners) {
+      const recordPath = getSuccessfulArtifactOwnershipPath(owner);
+      if (!recordPath || recordPath === normalizedDir || !recordPath.startsWith(`${normalizedDir}/`)) continue;
+      if (!provider.exists(recordPath)) continue;
+      if (owner.operation === 'createFolder') {
+        try {
+          if (!isEffectivelyEmptyDirectory(provider, recordPath)) return true;
+        } catch (_) {}
+        continue;
       }
       return true;
+    }
+    if (page.nextAfterId === null) return false;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) {
+      throw new Error('Workspace ownership repository returned a non-advancing cursor');
+    }
+    afterId = page.nextAfterId;
+  }
+}
+
+async function isArtifactOwnerStale(provider, owner, operation, overlap) {
+  const ownerPath = getSuccessfulArtifactOwnershipPath(owner);
+  if (!ownerPath || !provider.exists(ownerPath)) return true;
+  const info = provider.getPathInfo(ownerPath);
+  if (!info.exists || info.type !== 'directory') return false;
+  const listing = provider.list(ownerPath);
+  if (listing.entries.length === 0) return true;
+  if (overlap && operation === 'deletePath') return false;
+  return !(await ticketHasOwnedContentInDirectory(provider, owner.ticketId, ownerPath));
+}
+
+async function findLiveWorkspaceArtifactOwner(run, provider, operation, candidatePath, overlap) {
+  let afterId = 0;
+  const limit = getRuntimeSchedulerCandidateLimit();
+  while (true) {
+    const page = await getWorkspaceOwnershipRepository().listArtifactOwners({
+      targetId: provider.id,
+      candidatePath,
+      overlap,
+      excludeTicketId: run.ticketId,
+      afterId,
+      limit
     });
-  });
+    for (const owner of page.owners) {
+      if (!(await isArtifactOwnerStale(provider, owner, operation, overlap))) return owner;
+      const ownerPath = getSuccessfulArtifactOwnershipPath(owner);
+      appendRunLog(run, 'workspace:stale_ownership',
+        `Skipping ${overlap ? 'cross-ticket overlap' : 'prior-artifact-owner'} check for ${candidatePath}: owner path ${ownerPath} (ticket ${owner.ticketId}, run ${owner.runId}) no longer contains any owned content on disk.`,
+        { operation, candidatePath, ownerPath, ownerTicketId: owner.ticketId, ownerRunId: owner.runId }
+      );
+    }
+    if (page.nextAfterId === null) return null;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) {
+      throw new Error('Workspace ownership repository returned a non-advancing cursor');
+    }
+    afterId = page.nextAfterId;
+  }
 }
 
 // Guard a destructive op whose path overlaps another ticket's produced artifact.
@@ -976,42 +720,9 @@ function ticketHasOwnedContentInDirectory(provider, ticketId, dirPath) {
 // Permission is evaluated live against that fixed initiator identity. Throws
 // before any fs mutation or history persist; same-ticket never reaches here.
 async function assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, args, candidatePath) {
-  const owner = findOverlappingSuccessfulArtifactOwner(readOperationHistory(), run, candidatePath);
+  const owner = await findLiveWorkspaceArtifactOwner(run, runWorkspaceProvider, operation, candidatePath, true);
   if (!owner) return;
-  const ownerPath = getSuccessfulArtifactOwnershipPath(owner);
-  if (ownerPath) {
-    const stale = (() => {
-      if (!runWorkspaceProvider.exists(ownerPath)) return true;
-      const info = runWorkspaceProvider.getPathInfo(ownerPath);
-      if (info.exists && info.type === 'directory') {
-        const listing = runWorkspaceProvider.list(ownerPath);
-        if (listing.entries.length === 0) return true;
-        if (operation === 'deletePath') {
-          // Destructive delete: only skip if completely empty — files from
-          // other tickets (even if not the conflicting owner) could be
-          // destroyed.  Rename is safe because it moves a single file,
-          // leaving other entries untouched.
-          return false;
-        }
-        // Non-destructive (writeFile/createFolder/renamePath): skip if the
-        // conflicting ticket has no owned content on disk inside this
-        // directory.  Other tickets' files are protected by their own
-        // ownership, not by this ticket's ownership of the containing
-        // directory.  RenamePath is non-destructive to the directory — it only
-        // moves one file, leaving other entries untouched.
-        return !ticketHasOwnedContentInDirectory(runWorkspaceProvider, owner.ticketId, ownerPath);
-      }
-      return false;
-    })();
-    if (stale) {
-      appendRunLog(run, 'workspace:stale_ownership',
-        `Skipping cross-ticket overlap check for ${candidatePath}: owner path ${ownerPath} (ticket ${owner.ticketId}, run ${owner.runId}) no longer contains any owned content on disk.`,
-        { operation, candidatePath, ownerPath, ownerTicketId: owner.ticketId, ownerRunId: owner.runId }
-      );
-      return;
-    }
-  }
-  if (operation === 'deletePath' && run && run.delegatedUserId != null && hasPermission(run.delegatedUserId, CROSS_TICKET_DELETE_PERMISSION)) {
+  if (operation === 'deletePath' && run && run.delegatedUserId != null && await userHasPermission(run.delegatedUserId, CROSS_TICKET_DELETE_PERMISSION)) {
     await recordPermissionedCrossTicketDelete(run, operation, args, candidatePath, owner);
     return;
   }
@@ -1127,23 +838,30 @@ function buildPhaseViolationFeedback(phaseCheck, actions) {
   return `${phaseCheck.reason}. No proposed action was executed. On the next response, emit actions from exactly one execution phase.`;
 }
 
-function advanceRunPhase(run, phase) {
-  if (!run || !phase) return run;
-  if (run.currentPhase === phase) return run;
+async function advanceRunPhase(run, phase, { stepId = null, reason = 'Inferred from model response actions' } = {}) {
+  if (!run || !phase) return { run, event: null, changed: false };
+  const currentPhase = run.currentPhase || 'planning';
+  if (currentPhase === phase) return { run, event: null, changed: false };
   // Phase state tracks forward progression only. Do not record backward moves.
-  if (!isPhaseTransitionAllowed(run.currentPhase || 'planning', phase)) return run;
-  run.currentPhase = phase;
-  const runs = readRuns();
-  const idx = runs.findIndex(r => r.id === run.id);
-  if (idx !== -1) {
-    runs[idx].currentPhase = phase;
-    writeRuns(runs);
+  if (!isPhaseTransitionAllowed(currentPhase, phase)) {
+    return { run, event: null, changed: false };
   }
-  return run;
+  const result = await getRunPhaseRepository().advanceRunPhase({
+    runId: run.id,
+    leaseOwner: RUN_LEASE_OWNER,
+    fromPhase: currentPhase,
+    toPhase: phase,
+    stepId,
+    reason
+  });
+  if (!result) throw new RunLeaseLostError(run.id, RUN_LEASE_OWNER);
+  Object.assign(run, result.run);
+  return { ...result, run };
 }
 
-function reconstructRunPhase(run) {
-  const runEvents = readRunScopedEvents(run.id).sort((a, b) => {
+function reconstructRunPhase(run, suppliedEvents = null) {
+  if (!Array.isArray(suppliedEvents)) throw new TypeError('reconstructRunPhase requires supplied events');
+  const runEvents = suppliedEvents.slice().sort((a, b) => {
     const tsCmp = String(a.ts).localeCompare(String(b.ts));
     if (tsCmp !== 0) return tsCmp;
     if (a.seq !== undefined && b.seq !== undefined) return a.seq - b.seq;
@@ -1163,26 +881,31 @@ function reconstructRunPhase(run) {
   return phase;
 }
 
-function reconstructResumableState(run) {
+function reconstructResumableState(run, suppliedEvents = null) {
   // File order is the event order. Startup already rejects non-current chains.
-  const runEvents = readRunScopedEvents(run.id);
+  if (!Array.isArray(suppliedEvents)) throw new TypeError('reconstructResumableState requires supplied events');
+  const runEvents = suppliedEvents;
+  // Recovery claims are fencing evidence, not execution progress. Keep them in
+  // the chain verification, but do not let a claim turn an otherwise eventless
+  // run into a resumable run or hide the last execution phase.
+  const executionEvents = runEvents.filter(event => event && event.type !== 'run.recovery_claimed');
 
-  if (runEvents.length === 0) return null;
+  if (executionEvents.length === 0) return null;
 
   // Count prior workspace operations
   let workspaceOperationCount = 0;
   const listedDirectoryPaths = new Set();
   const stalledResponses = 0; // We don't track stalled across restarts
   const noProgressResponses = 0;
-  const hasTerminal = runEvents.some(e => e.type === 'run.terminalized');
-  const hasExecutionCompleted = runEvents.some(e => e.type === 'run.execution_completed');
-  const hasSnapshotFinalized = runEvents.some(e => e.type === 'replay.snapshot.finalized' || e.type === 'run.snapshot_finalized');
+  const hasTerminal = executionEvents.some(e => e.type === 'run.terminalized');
+  const hasExecutionCompleted = executionEvents.some(e => e.type === 'run.execution_completed');
+  const hasSnapshotFinalized = executionEvents.some(e => e.type === 'replay.snapshot.finalized' || e.type === 'run.snapshot_finalized');
   const isTerminal = hasTerminal;
 
   const hashChainIntact = verifyCurrentRunEventChain(runEvents).chainValid;
 
   // Check for duplicate mutating operations
-  const mutatingOps = runEvents.filter(e => e.type === 'workspace.operation' && e.payload && AGENT_MUTATING_OPERATIONS.includes(e.payload.operation));
+  const mutatingOps = executionEvents.filter(e => e.type === 'workspace.operation' && e.payload && AGENT_MUTATING_OPERATIONS.includes(e.payload.operation));
   const seenMutations = new Set();
   let hasDuplicateMutation = false;
   for (const m of mutatingOps) {
@@ -1200,7 +923,7 @@ function reconstructResumableState(run) {
   }
 
   // Check authority chain for mutating ops
-  const authEvents = runEvents.filter(e => e.type === 'authority.allowed' || e.type === 'authority.denied');
+  const authEvents = executionEvents.filter(e => e.type === 'authority.allowed' || e.type === 'authority.denied');
   let authorityIntact = true;
   for (const m of mutatingOps) {
     const p = m.payload;
@@ -1216,7 +939,7 @@ function reconstructResumableState(run) {
   }
 
   // Determine expected next phase
-  const lastEvent = runEvents[runEvents.length - 1];
+  const lastEvent = executionEvents[executionEvents.length - 1];
   let expectedNextPhase = 'unknown';
   if (lastEvent) {
     if (lastEvent.type === 'run.terminalized') {
@@ -1265,7 +988,7 @@ function reconstructResumableState(run) {
   }
 
   // Rebuild listedDirectoryPaths from events
-  for (const e of runEvents) {
+  for (const e of executionEvents) {
     if (e.type === 'workspace.operation' && e.payload && e.payload.operation === 'listDirectory') {
       const listedPath = e.payload.result && typeof e.payload.result.path === 'string'
         ? e.payload.result.path
@@ -1301,10 +1024,10 @@ function reconstructResumableState(run) {
     hasDuplicateMutation;
 
   // Reconstruct current phase from events
-  const currentPhase = reconstructRunPhase(run);
+  const currentPhase = reconstructRunPhase(run, executionEvents);
 
   return {
-    priorEvents: runEvents.length,
+    priorEvents: executionEvents.length,
     workspaceOperationCount,
     listedDirectoryPaths,
     stalledResponses,
@@ -1394,10 +1117,10 @@ function hasDurableAgentResponseWithoutPlan(snapshot) {
   );
 
   if (directlyIdentifiedResponses.length !== responses.length) {
-    const error = new Error('Resume denied: legacy provider response lacks direct execution-turn identity');
+    const error = new Error('Resume denied: provider response violates the current execution-turn identity contract');
     error.code = 'RUN_RESUME_UNSAFE';
     error.failureKind = 'resume_rejected';
-    error.details = { inconsistencies: ['legacy_response_missing_direct_identity'] };
+    error.details = { inconsistencies: ['provider_response_missing_direct_identity'] };
     throw error;
   }
 
@@ -1415,43 +1138,42 @@ function hasDurableAgentResponseWithoutPlan(snapshot) {
   }
   return unmatchedResponses.length === 1;
 }
-
 const AGENT_PRIMITIVE_METADATA = {
   listDirectory: {
     responseShape: { path: 'string', entries: [{ name: 'string', type: 'file', size: 'number', modifiedAt: 'string' }] },
     errorShape: { error: 'string' },
     authorityConstraints: 'Agent workspace scope; protected/sensitive paths blocked',
-    provenanceSurface: 'Run replay snapshot workspaceOperations; run log workspace:list'
+    provenanceSurface: 'Run replay snapshot workspaceOperations; diagnostic log workspace:list'
   },
   readFile: {
     responseShape: { path: 'string', content: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Agent workspace scope; sensitive application paths blocked',
-    provenanceSurface: 'Run replay snapshot workspaceOperations; run log workspace:read'
+    provenanceSurface: 'Run replay snapshot workspaceOperations; diagnostic log workspace:read'
   },
   createFolder: {
     responseShape: { path: 'string', status: 'created' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Agent workspace scope; allocated ownership required; protected paths blocked',
-    provenanceSurface: 'Run replay snapshot workspaceOperations; operation-history; run log workspace:create; recovery preview'
+    provenanceSurface: 'Run replay snapshot workspaceOperations; PostgreSQL operation receipts; diagnostic log workspace:create; recovery preview'
   },
   writeFile: {
     responseShape: { path: 'string', size: 'number' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Agent workspace scope; allocated ownership required; existing protected files blocked',
-    provenanceSurface: 'Run replay snapshot workspaceOperations; operation-history; run log workspace:write; recovery preview'
+    provenanceSurface: 'Run replay snapshot workspaceOperations; PostgreSQL operation receipts; diagnostic log workspace:write; recovery preview'
   },
   renamePath: {
     responseShape: { path: 'string', status: 'renamed' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Agent workspace scope; allocated ownership on both source and dest; protected paths blocked',
-    provenanceSurface: 'Run replay snapshot workspaceOperations; operation-history; run log workspace:rename; recovery preview'
+    provenanceSurface: 'Run replay snapshot workspaceOperations; PostgreSQL operation receipts; diagnostic log workspace:rename; recovery preview'
   },
   deletePath: {
     responseShape: { path: 'string', status: 'deleted' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Agent workspace scope; allocated ownership required; protected paths blocked',
-    provenanceSurface: 'Run replay snapshot workspaceOperations; operation-history; run log workspace:delete; recovery preview'
+    provenanceSurface: 'Run replay snapshot workspaceOperations; PostgreSQL operation receipts; diagnostic log workspace:delete; recovery preview'
   }
 };
 const GENERATED_AGENT_ACTIONS = AGENT_ALLOWED_OPERATIONS.map(op => ({
@@ -1471,7 +1193,7 @@ const ACTIONS_CATALOG = [
     responseShape: { proposedActions: [{}], acceptedActions: [{}], rejectedActions: [{}], executedActions: [{}], status: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Workflow-only bounded dynamic workspace action plan; catalog actions only; existing authority checks apply',
-    provenanceSurface: 'Run replay snapshot workflowActionPlans, workflowActions, workspaceOperations, operation-history, events'
+    provenanceSurface: 'Run replay snapshot workflowActionPlans, workflowActions, workspaceOperations, PostgreSQL operation receipts, events'
   },
   {
     name: 'executeTicketPlan', displayName: 'Execute Ticket Plan', category: 'workflow', type: 'workflowAction', invoker: 'workflow', mutating: false,
@@ -1527,7 +1249,7 @@ const ACTIONS_CATALOG = [
     responseShape: { workflowId: 'string', enabled: 'boolean', status: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Agent may save disabled workflow drafts only; existing action contracts only; mutating workflows require postconditions',
-    provenanceSurface: 'data/workflows.json disabled draft; workflow.draft_created event; run replay snapshot workflowDrafts'
+    provenanceSurface: 'workflow catalog disabled draft; workflow.draft_created event; run replay snapshot workflowDrafts'
   },
   {
     name: 'createWorkflowDraftIntent', displayName: 'Create Workflow Draft Intent', category: 'workflow', type: 'workflowAction', invoker: 'agent', mutating: false,
@@ -1547,7 +1269,7 @@ const ACTIONS_CATALOG = [
     responseShape: { executorAgentId: 'number', executorAgentName: 'string', operation: 'writeFile', path: 'string', status: 'executed' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Planner may create one validated writeFile handoff to one existing executor agent; runtime executes directly through workspace authority',
-    provenanceSurface: 'Run replay snapshot handoffTasks, authorityChecks, workspaceOperations, operation-history, run.evaluation, run.consequence'
+    provenanceSurface: 'Run replay snapshot handoffTasks, authorityChecks, workspaceOperations, PostgreSQL operation receipts, run.evaluation, run.consequence'
   },
   {
     name: 'providerModelCall', displayName: 'Provider/Model Call', category: 'provider', invoker: 'agent', mutating: false,
@@ -1556,7 +1278,7 @@ const ACTIONS_CATALOG = [
     responseShape: { text: 'string', usage: { promptTokens: 'number', completionTokens: 'number' }, provider: 'string', model: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Agent-scoped API key; OpenAI or Ollama provider; model constrained by agent config; no shell/network access outside LLM API',
-    provenanceSurface: 'Run replay snapshot providerRequests and modelResponses; run log model:request'
+    provenanceSurface: 'Run replay snapshot providerRequests and modelResponses; diagnostic log model:request'
   },
   {
     name: 'ticketShaping', displayName: 'Ticket Shaping', category: 'provider', invoker: 'operator', mutating: false,
@@ -1565,7 +1287,7 @@ const ACTIONS_CATALOG = [
     responseShape: { suggestedObjective: 'string', expectedOutputs: ['string'], decomposition: ['string'], warnings: ['string'], tooBroadForOneRun: 'boolean', groupModeFit: 'string', providerRequestId: 'string', usage: {} },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires ticket:create permission; uses agent-scoped OpenAI call; no execution side effects',
-    provenanceSurface: 'HTTP response; system log ticket:shaped; no replay snapshot (pre-execution)'
+    provenanceSurface: 'HTTP response; diagnostic log ticket:shaped; no replay snapshot (pre-execution)'
   },
   {
     name: 'retryRerun', displayName: 'Retry / Rerun', category: 'operator', invoker: 'operator', mutating: true,
@@ -1573,7 +1295,7 @@ const ACTIONS_CATALOG = [
     responseShape: { ticket: {} },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires ticket:update permission; only failed/interrupted runs; allocation constraints re-checked',
-    provenanceSurface: 'System log ticket:rerun; run log run:interrupted; old run replay snapshot finalized as interrupted'
+    provenanceSurface: 'Diagnostic log ticket:rerun; diagnostic log run:interrupted; old run replay snapshot finalized as interrupted'
   },
   {
     name: 'stopInterruption', displayName: 'Stop / Interruption', category: 'operator', invoker: 'operator', mutating: true,
@@ -1581,7 +1303,7 @@ const ACTIONS_CATALOG = [
     responseShape: { run: {} },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires ticket:update permission; only pending or running runs; triggers replay snapshot finalization',
-    provenanceSurface: 'Run replay snapshot finalized as interrupted; run log run:interrupted; system log'
+    provenanceSurface: 'Run replay snapshot finalized as interrupted; diagnostic log run:interrupted; diagnostic log'
   },
   {
     name: 'operatorWorkspaceCreateFile', displayName: 'Operator: Create File', category: 'operator', invoker: 'operator', mutating: true,
@@ -1589,7 +1311,7 @@ const ACTIONS_CATALOG = [
     responseShape: { path: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
-    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+    provenanceSurface: 'Diagnostic log workspace:operator_mutation with pre/post state capture'
   },
   {
     name: 'operatorWorkspaceCreateFolder', displayName: 'Operator: Create Folder', category: 'operator', invoker: 'operator', mutating: true,
@@ -1597,7 +1319,7 @@ const ACTIONS_CATALOG = [
     responseShape: { path: 'string', status: 'created' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
-    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+    provenanceSurface: 'Diagnostic log workspace:operator_mutation with pre/post state capture'
   },
   {
     name: 'operatorWorkspaceWriteFile', displayName: 'Operator: Write File', category: 'operator', invoker: 'operator', mutating: true,
@@ -1605,7 +1327,7 @@ const ACTIONS_CATALOG = [
     responseShape: { path: 'string', size: 'number' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
-    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+    provenanceSurface: 'Diagnostic log workspace:operator_mutation with pre/post state capture'
   },
   {
     name: 'operatorWorkspaceRenamePath', displayName: 'Operator: Rename', category: 'operator', invoker: 'operator', mutating: true,
@@ -1613,7 +1335,7 @@ const ACTIONS_CATALOG = [
     responseShape: { path: 'string', status: 'renamed' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
-    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+    provenanceSurface: 'Diagnostic log workspace:operator_mutation with pre/post state capture'
   },
   {
     name: 'operatorWorkspaceDeletePath', displayName: 'Operator: Delete', category: 'operator', invoker: 'operator', mutating: true,
@@ -1621,7 +1343,7 @@ const ACTIONS_CATALOG = [
     responseShape: { path: 'string', status: 'deleted' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires workspace:write permission; bypasses agent scope checks; allows hidden paths',
-    provenanceSurface: 'System log workspace:operator_mutation with pre/post state capture'
+    provenanceSurface: 'Diagnostic log workspace:operator_mutation with pre/post state capture'
   },
   {
     name: 'workspaceFixtureReset', displayName: 'Workspace Fixture Reset', category: 'workspace', invoker: 'operator', mutating: true,
@@ -1629,15 +1351,15 @@ const ACTIONS_CATALOG = [
     responseShape: { path: 'string', entries: [] },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires workspace:reset permission; destructive; clears entire workspace root and applies fixture',
-    provenanceSurface: 'System log workspace:fixture with pre/post workspace listing'
+    provenanceSurface: 'Diagnostic log workspace:fixture with pre/post workspace listing'
   },
   {
     name: 'recovery', displayName: 'Recovery', category: 'workspace', invoker: 'operator', mutating: true,
     requestShape: { confirmed: true }, optionalShape: null,
     responseShape: { recovery: { id: 'number', originalId: 'number', operation: 'string', args: {}, preState: {}, restoredState: {} } },
     errorShape: { error: 'string' },
-    authorityConstraints: 'Requires ticket:update permission; only recovers failed/interrupted operations; undoes previous mutation',
-    provenanceSurface: 'Operation-history record with original and recovery pair; system log workspace:recovery'
+    authorityConstraints: 'Requires ticket:update permission; only a recoverable committed operation whose current target still matches its recorded post-state may be undone',
+    provenanceSurface: 'Operation-history record with original and recovery pair; diagnostic log workspace:recovery'
   },
   {
     name: 'ticketAssignment', displayName: 'Ticket Assignment', category: 'operator', invoker: 'operator', mutating: true,
@@ -1645,7 +1367,7 @@ const ACTIONS_CATALOG = [
     responseShape: { ticket: {} },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires ticket:update permission; only open tickets; creates pending runs for the runtime scheduler',
-    provenanceSurface: 'Ticket record updated (assignmentTargetType, assignmentTargetId); broadcastTicketChange; system log'
+    provenanceSurface: 'Ticket record updated (assignmentTargetType, assignmentTargetId); broadcastTicketChange; diagnostic log'
   },
   {
     name: 'ticketStatusUpdate', displayName: 'Ticket Status Update', category: 'operator', invoker: 'operator', mutating: true,
@@ -1653,7 +1375,7 @@ const ACTIONS_CATALOG = [
     responseShape: { ticket: {} },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires ticket:update permission; creates pending runs for the runtime scheduler',
-    provenanceSurface: 'Ticket record updated; broadcastTicketChange; system log'
+    provenanceSurface: 'Ticket record updated; broadcastTicketChange; diagnostic log'
   },
   {
     name: 'adminCreateAccount', displayName: 'Admin: Create User/Agent', category: 'operator', invoker: 'operator', mutating: true,
@@ -1662,7 +1384,7 @@ const ACTIONS_CATALOG = [
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires user:create permission; setting group membership also requires permission:assign; admin only',
-    provenanceSurface: 'Data file updated (users.json / agents.json); system log (user:created / agent:created)'
+    provenanceSurface: 'PostgreSQL user/agent catalog transaction committed; diagnostic log (user:created / agent:created)'
   },
   {
     name: 'adminUpdateAccount', displayName: 'Admin: Update User/Agent', category: 'operator', invoker: 'operator', mutating: true,
@@ -1671,7 +1393,7 @@ const ACTIONS_CATALOG = [
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires user:update permission; changing group membership also requires permission:assign; admin only',
-    provenanceSurface: 'Data file updated (users.json / agents.json / memberships.json); system log'
+    provenanceSurface: 'PostgreSQL user/agent membership transaction committed; diagnostic log'
   },
   {
     name: 'adminDeleteAccount', displayName: 'Admin: Delete User/Agent', category: 'operator', invoker: 'operator', mutating: true,
@@ -1679,7 +1401,7 @@ const ACTIONS_CATALOG = [
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires user:delete permission; cannot delete self if user type; admin only',
-    provenanceSurface: 'Data file updated (users.json / agents.json); memberships cleaned up; system log'
+    provenanceSurface: 'PostgreSQL user/agent catalog transaction committed; memberships cleaned up; diagnostic log'
   },
   {
     name: 'adminCreateGroup', displayName: 'Admin: Create Group', category: 'operator', invoker: 'operator', mutating: true,
@@ -1688,7 +1410,7 @@ const ACTIONS_CATALOG = [
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires group:create permission; granting any permissions also requires permission:assign; admin only',
-    provenanceSurface: 'Data file updated (groups.json); system log'
+    provenanceSurface: 'PostgreSQL group catalog transaction committed; diagnostic log'
   },
   {
     name: 'adminUpdateGroup', displayName: 'Admin: Update Group', category: 'operator', invoker: 'operator', mutating: true,
@@ -1697,7 +1419,7 @@ const ACTIONS_CATALOG = [
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires group:update permission; changing granted permissions also requires permission:assign; admin only',
-    provenanceSurface: 'Data file updated (groups.json); system log'
+    provenanceSurface: 'PostgreSQL group catalog transaction committed; diagnostic log'
   },
   {
     name: 'adminDeleteGroup', displayName: 'Admin: Delete Group', category: 'operator', invoker: 'operator', mutating: true,
@@ -1705,7 +1427,7 @@ const ACTIONS_CATALOG = [
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires group:delete permission; group id 1 (Administrators) protected; admin only',
-    provenanceSurface: 'Data file updated (groups.json); memberships cleaned up; system log'
+    provenanceSurface: 'PostgreSQL group catalog transaction committed; memberships cleaned up; diagnostic log'
   },
   {
     name: 'debugReset', displayName: 'Debug Reset', category: 'system', type: 'systemAction', invoker: 'operator', mutating: true,
@@ -1713,7 +1435,7 @@ const ACTIONS_CATALOG = [
     responseShape: { redirect: 'string' },
     errorShape: { error: 'string' },
     authorityConstraints: 'Requires user:update permission; disabled in NODE_ENV=production; destroys all ticket/run/log/history/workspace data',
-    provenanceSurface: 'System log system:reset; all volatile data files emptied; workspace cleared'
+    provenanceSurface: 'Diagnostic log system:reset; ticket-linked PostgreSQL execution state reset; workspace cleared'
   },
   {
     name: 'systemInterruptStaleRuns', displayName: 'System: Interrupt Stale Runs', category: 'system', type: 'systemAction', invoker: 'system', mutating: true,
@@ -1721,7 +1443,7 @@ const ACTIONS_CATALOG = [
     responseShape: { status: 'interrupted', runs: ['number'] },
     errorShape: { error: 'string' },
     authorityConstraints: 'Automatic on server start; only affects pending/running runs; invokes interruptAgentRun per stale run',
-    provenanceSurface: 'Run replay snapshots finalized as interrupted; run logs run:interrupted'
+    provenanceSurface: 'Run replay snapshots finalized as interrupted; diagnostic logs run:interrupted'
   },
   {
     name: 'systemAutoStartRuns', displayName: 'System: Auto-Start Ticket Runs', category: 'system', type: 'systemAction', invoker: 'system', mutating: true,
@@ -1729,7 +1451,7 @@ const ACTIONS_CATALOG = [
     responseShape: { runs: [{}] },
     errorShape: { error: 'string' },
     authorityConstraints: 'Triggered by ticket creation, assignment, or status change to open; respects agent group canReceiveTickets; enforces allocation constraints',
-    provenanceSurface: 'Run record created; runs.json updated; replay snapshot initialized; run log run:started'
+    provenanceSurface: 'PostgreSQL run, replay, lifecycle event, and diagnostic evidence committed'
   }
 ];
 
@@ -1786,14 +1508,75 @@ const RUN_LEASE_OWNER = `${process.pid}:${crypto.randomUUID()}`;
 const DEFAULT_RUN_LEASE_DURATION_MS = 180000;
 let lastLogTimestampNs = 0n;
 let serverReady = false;
-let dataDirWriterLock = null;
-let dataDirWriterLockHeartbeatTimer = null;
 let runLeaseRepository = null;
+let runPhaseRepository = null;
 let runTerminalizationRepository = null;
 let ticketRunLifecycleRepository = null;
 let nonTerminalEvidenceRepository = null;
+let workspaceOwnershipRepository = null;
+let operatorRecoveryRepository = null;
 let runReplayRepository = null;
+let runtimeStateReadRepository = null;
+let runRecoveryRepository = null;
+let runtimeBootstrapRepository = null;
+let triageRepository = null;
+let operationalStatusRepository = null;
+let diagnosticLogRepository = null;
+let performanceAnalyticsRepository = null;
+let workContextRepository = null;
 let dataVersion = 0;
+let configuredAgentRepository = null;
+let accessCatalogRepository = null;
+let workflowCatalogRepository = null;
+let workflowCatalogMutationTail = Promise.resolve();
+
+function queueWorkflowCatalogMutation(operation) {
+  const result = workflowCatalogMutationTail.then(operation, operation);
+  workflowCatalogMutationTail = result.catch(() => {});
+  return result;
+}
+let modelRoutingPolicyRepository = null;
+let modelRoutingPolicyMutationTail = Promise.resolve();
+
+function queueModelRoutingPolicyMutation(operation) {
+  const result = modelRoutingPolicyMutationTail.then(operation, operation);
+  modelRoutingPolicyMutationTail = result.catch(() => {});
+  return result;
+}
+let connectorAuthorityRepository = null;
+let connectorAuthorityMutationTail = Promise.resolve();
+
+function queueConnectorAuthorityMutation(operation) {
+  const result = connectorAuthorityMutationTail.then(operation, operation);
+  connectorAuthorityMutationTail = result.catch(() => {});
+  return result;
+}
+let watcherAuthorityRepository = null;
+let watcherAuthorityMutationTail = Promise.resolve();
+
+function queueWatcherAuthorityMutation(operation) {
+  const result = watcherAuthorityMutationTail.then(operation, operation);
+  watcherAuthorityMutationTail = result.catch(() => {});
+  return result;
+}
+let runtimeLimitsRepository = null;
+let runtimeLimitsMutationTail = Promise.resolve();
+
+function queueRuntimeLimitsMutation(operation) {
+  const result = runtimeLimitsMutationTail.then(operation, operation);
+  runtimeLimitsMutationTail = result.catch(() => {});
+  return result;
+}
+let principalCatalogMutationTail = Promise.resolve();
+
+function queuePrincipalCatalogMutation(operation) {
+  const result = principalCatalogMutationTail.then(operation, operation);
+  principalCatalogMutationTail = result.catch(() => {});
+  return result;
+}
+let processTemplateAuthorityRepository = null;
+let processTemplateProjectionRepository = null;
+const requestAuthorizationContext = new AsyncLocalStorage();
 const pageRenderCache = new Map();
 const pageRenderInFlight = new Map();
 const PAGE_RENDER_CACHE_TTL_MS = 10000;
@@ -1844,6 +1627,7 @@ function requestOriginAllowed(request) {
 fastify.register(require('@fastify/cookie'));
 fastify.register(require('@fastify/session'), {
   secret: SESSION_SECRET,
+  store: new PostgresSessionStore(postgresRuntimeStore),
   cookie: {
     secure: SESSION_COOKIE_SECURE,
     httpOnly: true,
@@ -1855,11 +1639,11 @@ fastify.register(require('@fastify/formbody'));
 
 fastify.addHook('onRequest', async (request, reply) => {
   request.routeStartedAtNs = process.hrtime.bigint();
-  const requiresEventAdmission = requestRequiresEventJournalAdmission(request);
-  if (requiresEventAdmission && eventAppendFailure) {
+  const requiresMutationAdmission = requestRequiresMutationAdmission(request);
+  if (requiresMutationAdmission && evidencePersistenceFailure) {
     reply.code(503);
     return reply.send({
-      error: 'Event persistence is unavailable; journal-dependent mutations are disabled',
+      error: 'Event persistence is unavailable; evidence-dependent mutations are disabled',
       code: 'EVENT_PERSISTENCE_UNAVAILABLE'
     });
   }
@@ -1867,8 +1651,8 @@ fastify.addHook('onRequest', async (request, reply) => {
     reply.code(403);
     return reply.send({ error: 'Request origin is not allowed' });
   }
-  if (requiresEventAdmission) {
-    const token = eventJournal.tryAcquireAdmission({
+  if (requiresMutationAdmission) {
+    const token = mutationAdmission.tryAcquireAdmission({
       source: 'http',
       method: request.method,
       route: request.routeOptions && request.routeOptions.url ? request.routeOptions.url : request.url
@@ -1877,31 +1661,31 @@ fastify.addHook('onRequest', async (request, reply) => {
       reply.header('Retry-After', '1');
       reply.code(503);
       return reply.send({
-        error: 'Event journal mutation admission is temporarily full; retry after an admitted producer finishes',
-        code: 'EVENT_ADMISSION_BACKPRESSURED'
+        error: 'Mutation admission is temporarily full; retry after an admitted producer finishes',
+        code: 'MUTATION_ADMISSION_BACKPRESSURED'
       });
     }
-    request.eventJournalAdmission = token;
-    eventAdmissionContext.enterWith({ token });
+    request.mutationAdmission = token;
+    mutationAdmissionContext.enterWith({ token });
   }
 });
 
-function releaseRequestEventJournalAdmission(request) {
-  if (request.eventJournalAdmission) {
-    const token = request.eventJournalAdmission;
-    const store = eventAdmissionContext.getStore();
+function releaseRequestMutationAdmission(request) {
+  if (request.mutationAdmission) {
+    const token = request.mutationAdmission;
+    const store = mutationAdmissionContext.getStore();
     if (store && store.token === token) store.token = null;
-    eventJournal.releaseAdmission(token);
-    request.eventJournalAdmission = null;
+    mutationAdmission.releaseAdmission(token);
+    request.mutationAdmission = null;
   }
 }
 
 fastify.addHook('onResponse', async request => {
-  releaseRequestEventJournalAdmission(request);
+  releaseRequestMutationAdmission(request);
 });
 
 fastify.addHook('onRequestAbort', async request => {
-  releaseRequestEventJournalAdmission(request);
+  releaseRequestMutationAdmission(request);
 });
 
 fastify.get('/styles.css', async (request, reply) => {
@@ -1910,13 +1694,13 @@ fastify.get('/styles.css', async (request, reply) => {
 });
 
 fastify.get('/health', async (request, reply) => {
-  if (!serverReady || eventAppendFailure) {
+  if (!serverReady || evidencePersistenceFailure) {
     reply.code(503);
-    return { status: eventAppendFailure ? 'degraded' : 'starting', ready: false };
+    return { status: evidencePersistenceFailure ? 'degraded' : 'starting', ready: false };
   }
-  if (isEventJournalAdmissionBackpressured()) {
+  if (isMutationAdmissionBackpressured()) {
     reply.code(503);
-    return { status: 'backpressured', ready: false, reason: 'event_journal_capacity' };
+    return { status: 'backpressured', ready: false, reason: 'mutation_admission_capacity' };
   }
   return { status: 'ok', ready: true };
 });
@@ -1951,68 +1735,24 @@ fastify.addHook('onSend', async (request, reply, payload) => {
 
 // ==================== DATA HELPERS ====================
 
-const jsonReadCache = new Map();
-
-function nextId(items) {
-  return items.length > 0 ? Math.max(...items.map(item => item.id)) + 1 : 1;
+function readTickets(options = {}) {
+  return readAllRuntimeTickets(options);
 }
 
-function readJsonArrayCached(filePath) {
-  try {
-    const stat = fs.statSync(filePath);
-    const cached = jsonReadCache.get(filePath);
-    const mtimeNs = stat.mtimeNs !== undefined ? stat.mtimeNs.toString() : String(stat.mtimeMs);
-
-    if (cached && cached.size === stat.size && cached.mtimeNs === mtimeNs) {
-      return cached.value;
-    }
-
-    const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (!Array.isArray(value)) {
-      const error = new Error(`Data integrity check failed: ${filePath} must contain a JSON array`);
-      error.code = 'DATA_INTEGRITY_ERROR';
-      error.filePath = filePath;
-      throw error;
-    }
-    const arrayValue = value;
-    jsonReadCache.set(filePath, { size: stat.size, mtimeNs, value: arrayValue });
-    return arrayValue;
-  } catch (error) {
-    jsonReadCache.delete(filePath);
-    if (error && error.code === 'DATA_INTEGRITY_ERROR') throw error;
-    const integrityError = new Error(`Data integrity check failed: unable to read ${filePath}: ${error && error.message ? error.message : 'unknown error'}`);
-    integrityError.code = 'DATA_INTEGRITY_ERROR';
-    integrityError.filePath = filePath;
-    integrityError.cause = error;
-    throw integrityError;
-  }
-}
-
-function readTickets() {
-  const tickets = readJsonArrayCached(DATA_FILE);
-  // Ticket normalization is a runtime convenience, never an integrity filter.
-  // Validate the persisted identities first so duplicates or malformed ids
-  // cannot disappear before startup/runtime checks see them.
-  validateUniqueIntegerIds('tickets.json', tickets);
-  return normalizeTickets(tickets);
-}
-
-function getTicketById(id) {
+async function getTicketById(id) {
   if (id == null) return null;
-  return readTickets().find(ticket => ticket.id === id) || null;
+  return getRuntimeStateReadRepository().getTicket(id);
 }
 
-function getChildTickets(parentTicketId) {
-  if (parentTicketId == null) return [];
-  return readTickets().filter(ticket => ticket.parentTicketId === parentTicketId);
+async function getRunById(id) {
+  if (id == null) return null;
+  return getRuntimeStateReadRepository().getRun(id);
 }
 
-function getChildTicketSummaries(parentTicketId) {
-  const runs = readRuns();
-  return getChildTickets(parentTicketId).map(ticket => {
-    const latestChildRun = runs
-      .filter(run => run.ticketId === ticket.id)
-      .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
+function buildChildTicketSummaries(tickets, latestRuns) {
+  const latestRunByTicketId = new Map((latestRuns || []).map(run => [run.ticketId, run]));
+  return (tickets || []).map(ticket => {
+    const latestChildRun = latestRunByTicketId.get(ticket.id) || null;
     return {
       id: ticket.id,
       objective: ticket.objective,
@@ -2026,26 +1766,40 @@ function getChildTicketSummaries(parentTicketId) {
   });
 }
 
-function readBrowserTargets() {
-  return readJsonArrayCached(BROWSER_TARGETS_FILE);
+async function readBrowserTargets(options = {}) {
+  const targets = [];
+  let afterId = '';
+  const limit = getRuntimeSchedulerCandidateLimit();
+  while (true) {
+    const page = await postgresRuntimeStore.listBrowserTargets({ ...options, afterId, limit });
+    targets.push(...page.targets);
+    if (page.nextAfterId === null) return targets;
+    if (!page.nextAfterId || page.nextAfterId === afterId) throw new Error('listBrowserTargets returned a non-advancing cursor');
+    afterId = page.nextAfterId;
+  }
 }
 
-function readWorkTypes() {
-  return readWorkTypeCatalog(WORK_TYPES_FILE);
+async function readWorkTypes(options = {}) {
+  const workTypes = [];
+  let afterId = '';
+  const limit = getRuntimeSchedulerCandidateLimit();
+  while (true) {
+    const page = await postgresRuntimeStore.listWorkTypes({ ...options, afterId, limit });
+    workTypes.push(...page.workTypes);
+    if (page.nextAfterId === null) return workTypes;
+    if (!page.nextAfterId || page.nextAfterId === afterId) throw new Error('listWorkTypes returned a non-advancing cursor');
+    afterId = page.nextAfterId;
+  }
 }
 
-function getWorkTypeById(id) {
+async function getWorkTypeById(id) {
   if (typeof id !== 'string' || !id.trim()) return null;
-  return readWorkTypes().find(workType => workType.id === id.trim()) || null;
+  return postgresRuntimeStore.getWorkType(id.trim());
 }
 
-function writeBrowserTargets(targets) {
-  writeFileAtomic(BROWSER_TARGETS_FILE, JSON.stringify(Array.isArray(targets) ? targets : [], null, 2));
-}
-
-function getBrowserTargetById(id) {
+async function getBrowserTargetById(id) {
   if (typeof id !== 'string' || !id.trim()) return null;
-  return readBrowserTargets().find(target => target && target.id === id.trim()) || null;
+  return postgresRuntimeStore.getBrowserTarget(id.trim());
 }
 
 function getBrowserEngineAdminStatus() {
@@ -3247,10 +3001,6 @@ function createSharedDriveCleanupWorkflowDefinition(now = new Date().toISOString
   };
 }
 
-function readWorkflows() {
-  return readJsonArrayCached(WORKFLOWS_FILE);
-}
-
 function cachePageRender(key, html) {
   pageRenderCache.set(key, {
     html,
@@ -3447,186 +3197,35 @@ function normalizeTickets(tickets) {
   });
 }
 
-function writeTickets(tickets) {
-  validateUniqueIntegerIds('tickets.json', tickets);
-  writeFileAtomic(DATA_FILE, JSON.stringify(normalizeTickets(tickets), null, 2));
-}
-
 // ==================== PROCESS TEMPLATES ====================
 // Durable, manual-trigger-only process templates. A template stores a reusable
 // ticket input and creates ordinary tickets through the same createTicketFromInput
 // path as the POST /tickets route. Templates never create runs directly and never
 // schedule themselves (schedule is inert in v1). The trigger log is append-only and
 // serves as both the idempotency ledger and the provenance record.
-function readProcessTemplates() {
-  return readJsonArrayCached(PROCESS_TEMPLATES_FILE);
-}
-
-function writeProcessTemplates(templates) {
-  writeFileAtomic(PROCESS_TEMPLATES_FILE, JSON.stringify(Array.isArray(templates) ? templates : [], null, 2));
-}
-
-function getProcessTemplateById(id) {
-  const numericId = parseInt(id, 10);
-  if (Number.isNaN(numericId)) return null;
-  return readProcessTemplates().find(template => template.id === numericId) || null;
-}
-
-function readProcessTemplateTriggers() {
-  return readJsonArrayCached(PROCESS_TEMPLATE_TRIGGERS_FILE);
-}
-
-function appendProcessTemplateTrigger(entry) {
-  const triggers = readProcessTemplateTriggers();
-  triggers.push(entry);
-  writeFileAtomic(PROCESS_TEMPLATE_TRIGGERS_FILE, JSON.stringify(triggers, null, 2));
-  return entry;
-}
-
-function findProcessTemplateTrigger(templateId, triggerToken) {
-  if (!triggerToken) return null;
-  return readProcessTemplateTriggers().find(entry =>
-    entry && entry.templateId === templateId && entry.triggerToken === triggerToken) || null;
-}
-
-// ---- Append-only process-template version store (r1.12) ----
-// Version records are immutable history: a record's content (name/ticketTemplate) is
-// never rewritten once written; only its `status` transitions (draft → active →
-// superseded, or draft → discarded). Records are never deleted. Generated tickets and
-// the trigger ledger are NOT rewritten when versions change — they keep the materialized
-// content/provenance they captured at trigger time.
-function readProcessTemplateVersions() {
-  return readJsonArrayCached(PROCESS_TEMPLATE_VERSIONS_FILE);
-}
-
-function writeProcessTemplateVersions(versions) {
-  writeFileAtomic(PROCESS_TEMPLATE_VERSIONS_FILE, JSON.stringify(Array.isArray(versions) ? versions : [], null, 2));
-}
-
-function processTemplateVersionId(templateId, version) {
-  return `ptv_${templateId}_${version}`;
-}
-
-function versionsForTemplate(templateId) {
-  return readProcessTemplateVersions().filter(v => v && v.templateId === templateId);
-}
-
-// Active version number for a template: prefer the explicit currentVersion pointer,
-// fall back to the r1.10 root `version`, default 1 (lazy backward-compat — legacy
-// templates are never rewritten just to gain a version).
-function activeVersionNumber(template) {
-  if (template && Number.isInteger(template.currentVersion) && template.currentVersion > 0) return template.currentVersion;
-  if (template && Number.isInteger(template.version) && template.version > 0) return template.version;
-  return 1;
-}
-
-// ---- Startup reconciliation: template version store ↔ root pointer (r1.12.2) ----
-// Activation (and lazy v1 materialization) writes the append-only version store FIRST,
-// then re-points the root process-template record in a SEPARATE atomic write. A crash in
-// that gap can leave the durable version store ahead of the root pointer. This reconciler
-// converges the root to the store's single active version — the store is the source of
-// truth: it is written first and its records are immutable history.
-//
-// It is deliberately conservative and deterministic:
-//   - It only ever rewrites ROOT pointer/content fields. It never touches a version record,
-//     a ticket/run, the trigger ledger, a ticket.source, the schedule cursor / enabled flag,
-//     trigger tokens, or the workspace. It creates nothing and runs no work.
-//   - It repairs ONLY when the direction is explained by the activation write order — i.e.
-//     the store's single active version is the SAME as, or NEWER than, the root pointer.
-//   - If the root points AHEAD of the store's active version, or the store has zero or more
-//     than one active record for a template, the state is ambiguous (it cannot be produced
-//     by the forward write order). It logs an unresolved consistency issue and changes
-//     nothing — it never demotes a root, never activates a draft, never picks among actives.
-//   - It is idempotent at the data level: once the root matches the active record, a re-run
-//     makes no change.
-function processTemplateRootMatchesActive(root, active) {
-  return root.currentVersionId === active.id
-    && root.currentVersion === active.version
-    && root.version === active.version
-    && root.name === active.name
-    && JSON.stringify(root.ticketTemplate || null) === JSON.stringify(active.ticketTemplate || null);
-}
-
-function reconcileProcessTemplateVersionConsistencyOnStartup() {
-  const templates = readProcessTemplates();
-  const versions = readProcessTemplateVersions();
-  if (!Array.isArray(templates) || templates.length === 0) return;
-  let repairedCount = 0;
-  let unresolvedCount = 0;
-  let changed = false;
-
-  templates.forEach(root => {
-    if (!root || typeof root.id !== 'number') return;
-    const records = versions.filter(v => v && v.templateId === root.id);
-    if (records.length === 0) return; // un-versioned (legacy) template — nothing to reconcile.
-    const activeRecords = records.filter(v => v.status === 'active');
-
-    // Must be exactly one active record. Zero (draft-only / all-superseded) or many
-    // (split-brain) is never produced by the forward write order — refuse + log.
-    if (activeRecords.length !== 1) {
-      unresolvedCount++;
-      appendSystemLog('process_template:version_consistency_unresolved',
-        `Process template "${root.name}" version store has ${activeRecords.length} active records; root pointer left unchanged for manual review`, null,
-        { templateId: root.id, templateName: root.name, reason: activeRecords.length === 0 ? 'no_active_version' : 'multiple_active_versions',
-          activeCount: activeRecords.length, rootVersion: root.version || null, rootCurrentVersion: root.currentVersion || null, rootCurrentVersionId: root.currentVersionId || null });
-      return;
-    }
-
-    const active = activeRecords[0];
-    if (processTemplateRootMatchesActive(root, active)) return; // already consistent.
-
-    // Root AHEAD of the store's active version cannot result from the activation write order
-    // (the root is written last). Treat as ambiguous corruption: never demote the root and
-    // never activate a draft — log and leave for manual review.
-    const rootActiveVersion = activeVersionNumber(root);
-    if (active.version < rootActiveVersion) {
-      unresolvedCount++;
-      appendSystemLog('process_template:version_consistency_unresolved',
-        `Process template "${root.name}" root points to v${rootActiveVersion} but the store's active version is v${active.version}; root pointer left unchanged for manual review`, null,
-        { templateId: root.id, templateName: root.name, reason: 'root_ahead_of_store', activeVersion: active.version, activeVersionId: active.id,
-          rootVersion: root.version || null, rootCurrentVersion: root.currentVersion || null, rootCurrentVersionId: root.currentVersionId || null });
-      return;
-    }
-
-    // Deterministic repair: finish the interrupted activation by converging the root to the
-    // single active version record. Content + version pointers only; the schedule cursor,
-    // enabled flag, and trigger behavior are deliberately untouched.
-    const fromVersion = root.currentVersion || root.version || null;
-    root.name = active.name;
-    root.ticketTemplate = JSON.parse(JSON.stringify(active.ticketTemplate));
-    root.currentVersion = active.version;
-    root.currentVersionId = active.id;
-    root.version = active.version;
-    root.updatedBy = 'system';
-    root.updatedAt = new Date().toISOString();
-    changed = true;
-    repairedCount++;
-    appendSystemLog('process_template:version_consistency_repaired',
-      `Process template "${root.name}" root pointer reconciled to active v${active.version} after interrupted activation`, null,
-      { templateId: root.id, templateName: root.name, fromVersion, toVersion: active.version, activeVersionId: active.id, changedBy: 'system' });
-  });
-
-  if (changed) writeProcessTemplates(templates);
-  if (repairedCount > 0) console.log(`Reconciled ${repairedCount} process-template version pointer(s) on startup`);
-  if (unresolvedCount > 0) console.log(`Left ${unresolvedCount} process-template version consistency issue(s) unresolved for manual review`);
-}
-
 // ---- Work Context store (r1.20) ----
 // A Work Context is a PRODUCT-LAYER grouping above the runtime: it groups related tickets and
 // templates, supplies creation-time defaults, and scopes listing — nothing more. It owns no
 // execution state and the runtime never dereferences it. See docs/WORK_CONTEXT_PRIMITIVE.md.
 const WORK_CONTEXT_STATUSES = ['active', 'archived'];
 
-function readWorkContexts() {
-  return readJsonArrayCached(WORK_CONTEXTS_FILE);
-}
-function writeWorkContexts(contexts) {
-  writeFileAtomic(WORK_CONTEXTS_FILE, JSON.stringify(Array.isArray(contexts) ? contexts : [], null, 2));
-}
-function getWorkContextById(id) {
+async function getWorkContextById(id) {
   const numericId = parseInt(id, 10);
   if (Number.isNaN(numericId)) return null;
-  return readWorkContexts().find(ctx => ctx && ctx.id === numericId) || null;
+  return getWorkContextRepository().getWorkContextById(numericId);
+}
+async function listWorkContextOptions({ statuses = null } = {}) {
+  const page = await getWorkContextRepository().listWorkContexts({
+    afterId: 0,
+    statuses,
+    limit: getRuntimeSchedulerCandidateLimit()
+  });
+  if (page.nextAfterId !== null) {
+    const error = new Error('Work Context option list exceeds the configured page capacity; use the paged API');
+    error.code = 'WORK_CONTEXT_OPTIONS_TRUNCATED';
+    throw error;
+  }
+  return page.workContexts;
 }
 
 // A compact, immutable label captured ONTO a ticket/template at creation/assignment time.
@@ -3698,11 +3297,11 @@ function validateWorkContextInput(body, existing = null) {
 // Validate that a record (ticket/template) may be ASSIGNED to a Work Context. Enforces that the
 // assignment never EXCEEDS the context's non-empty allow-lists — context can only narrow, never
 // widen, authority. Returns the context + a snapshot on success.
-function validateWorkContextAssignment(workContextId, { capabilityId, templateId, targetId } = {}) {
+async function validateWorkContextAssignment(workContextId, { capabilityId, templateId, targetId } = {}) {
   if (workContextId === undefined || workContextId === null || workContextId === '') {
     return { ok: true, context: null, snapshot: null }; // contextless is always valid.
   }
-  const ctx = getWorkContextById(workContextId);
+  const ctx = await getWorkContextById(workContextId);
   if (!ctx) return { ok: false, code: 404, error: 'Work Context not found' };
   if (ctx.status !== 'active') return { ok: false, code: 409, error: 'Work Context is archived and cannot be assigned to new records' };
   const allowedCapabilities = Array.isArray(ctx.allowedCapabilities) ? ctx.allowedCapabilities : [];
@@ -3726,73 +3325,80 @@ function validateWorkContextAssignment(workContextId, { capabilityId, templateId
 // source of truth — every field is derived live from the existing stores.
 const WORK_CONTEXT_SUMMARY_LIMIT = 10;
 
-function buildWorkContextSummary(ctx, options = {}) {
+async function buildWorkContextSummary(ctx, options = {}) {
   const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : WORK_CONTEXT_SUMMARY_LIMIT;
-  const allTickets = readTickets();
-  const ctxTickets = allTickets.filter(t => t && t.workContextId === ctx.id);
-  const ctxTicketIds = new Set(ctxTickets.map(t => t.id));
-  const ctxRuns = readRuns().filter(r => r && ctxTicketIds.has(r.ticketId));
-  const ctxTemplates = readProcessTemplates().filter(t => t && t.workContextId === ctx.id);
-  const derivedById = new Map(
-    deriveProcessTemplateState(ctxTemplates, readProcessTemplateTriggers(), allTickets, Date.now()).map(row => [row.templateId, row])
-  );
-
-  // Deterministic ordering (id desc for recency-stable lists; id asc for templates).
-  const byIdDesc = (a, b) => b.id - a.id;
-  const ticketsSorted = ctxTickets.slice().sort(byIdDesc);
-  const runsSorted = ctxRuns.slice().sort(byIdDesc);
+  const [runtimeSummary, templatePage, templateContextCounts] = await Promise.all([
+    getRuntimeStateReadRepository().getWorkContextRuntimeSummary({ workContextId: ctx.id, limit }),
+    getProcessTemplateProjectionRepository().listProcessTemplateStates({
+      workContextId: ctx.id,
+      limit,
+      now: Date.now()
+    }),
+    getProcessTemplateProjectionRepository().getProcessTemplateCountsByWorkContextIds({ workContextIds: [ctx.id] })
+  ]);
+  const ctxTemplates = templatePage.processTemplates;
+  const templateCounts = templateContextCounts[0] || { processTemplateCount: 0, scheduledTemplateCount: 0 };
   const templatesSorted = ctxTemplates.slice().sort((a, b) => a.id - b.id);
-
-  const ticketTriage = ticketsSorted
-    .filter(t => t.triage && t.triage.required === true)
-    .map(t => ({ ticketId: t.id, objective: t.objective, reasonCode: t.triage.reasonCode || null, requiredDecision: t.triage.requiredDecision || null }));
-  const runTriage = runsSorted
-    .filter(r => r.triage && r.triage.required === true)
-    .map(r => ({ runId: r.id, ticketId: r.ticketId, reasonCode: r.triage.reasonCode || null }));
+  const ticketTriage = runtimeSummary.ticketTriage.map(ticket => ({
+    ticketId: ticket.id,
+    objective: ticket.objective,
+    reasonCode: ticket.triage.reasonCode || null,
+    requiredDecision: ticket.triage.requiredDecision || null
+  }));
+  const runTriage = runtimeSummary.runTriage.map(run => ({
+    runId: run.id,
+    ticketId: run.ticketId,
+    reasonCode: run.triage.reasonCode || null
+  }));
 
   return {
     workContext: ctx,
     counts: {
-      ticketCount: ctxTickets.length,
-      openTicketCount: ctxTickets.filter(t => t.status === 'open' || t.status === 'in_progress').length,
-      blockedTicketCount: ctxTickets.filter(t => t.status === 'blocked').length,
-      unresolvedTriageCount: ticketTriage.length + runTriage.length,
-      processTemplateCount: ctxTemplates.length,
-      scheduledTemplateCount: ctxTemplates.filter(t => t.schedule && t.schedule.enabled === true).length,
-      recentRunCount: ctxRuns.length
+      ticketCount: runtimeSummary.counts.ticketCount,
+      openTicketCount: runtimeSummary.counts.openTicketCount,
+      blockedTicketCount: runtimeSummary.counts.blockedTicketCount,
+      unresolvedTriageCount: runtimeSummary.counts.ticketTriageCount + runtimeSummary.counts.runTriageCount,
+      processTemplateCount: templateCounts.processTemplateCount,
+      scheduledTemplateCount: templateCounts.scheduledTemplateCount,
+      recentRunCount: runtimeSummary.counts.runCount
     },
-    tickets: ticketsSorted.slice(0, limit).map(t => ({ id: t.id, objective: t.objective, status: t.status, updatedAt: t.updatedAt || null })),
-    triage: { tickets: ticketTriage.slice(0, limit), runs: runTriage.slice(0, limit) },
-    processTemplates: templatesSorted.slice(0, limit).map(t => {
-      const d = derivedById.get(t.id) || {};
-      return { id: t.id, name: t.name, enabled: t.enabled !== false, version: t.currentVersion || t.version || 1,
-        scheduled: Boolean(t.schedule && t.schedule.enabled === true), dueStatus: d.dueStatus || null };
-    }),
-    recentRuns: runsSorted.slice(0, limit).map(r => ({ id: r.id, ticketId: r.ticketId, status: r.status, createdAt: r.createdAt || null }))
+    tickets: runtimeSummary.recentTickets.map(ticket => ({
+      id: ticket.id,
+      objective: ticket.objective,
+      status: ticket.status,
+      updatedAt: ticket.updatedAt || null
+    })),
+    triage: { tickets: ticketTriage, runs: runTriage },
+    processTemplates: templatesSorted.slice(0, limit).map(template => ({
+      id: template.id,
+      name: template.name,
+      enabled: template.enabled !== false,
+      version: template.currentVersion || template.version || 1,
+      scheduled: Boolean(template.schedule && template.schedule.enabled === true),
+      dueStatus: template.dueStatus || null
+    })),
+    recentRuns: runtimeSummary.recentRuns.map(run => ({
+      id: run.id,
+      ticketId: run.ticketId,
+      status: run.status,
+      createdAt: run.createdAt || null
+    }))
   };
 }
 
-// ---- Bounded watcher store + manual observe (r1.26) ----
+
+// ---- Bounded watcher authority + manual observation ----
 // A watcher is a scoped, MANUAL observer/proposer. It never executes: observe reads only its
-// bounded source and writes a receipt; proposals are drafts; only an explicit authorized approval
-// creates a normal ticket through createTicketFromInput.
+// bounded source and commits an append-only receipt with its cursor; proposals remain drafts until
+// an explicit authorized approval creates a normal ticket through createTicketFromInput.
 const WATCHER_STATUSES = ['active', 'paused', 'archived'];
 const WATCHER_SOURCE_KINDS = ['workspace_file'];
 const WATCHER_ALLOWED_ACTIONS = ['summarize', 'raise_triage', 'propose_ticket', 'notify'];
 const WATCHER_OBSERVATION_LIMIT = 20;
 
-function readWatchers() { return readJsonArrayCached(WATCHERS_FILE); }
-function writeWatchers(list) { writeFileAtomic(WATCHERS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
-function getWatcherById(id) { const n = parseInt(id, 10); return Number.isNaN(n) ? null : readWatchers().find(w => w && w.id === n) || null; }
-function readWatcherObservations() { return readJsonArrayCached(WATCHER_OBSERVATIONS_FILE); }
-function writeWatcherObservations(list) { writeFileAtomic(WATCHER_OBSERVATIONS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
-function readWatcherProposals() { return readJsonArrayCached(WATCHER_TICKET_PROPOSALS_FILE); }
-function writeWatcherProposals(list) { writeFileAtomic(WATCHER_TICKET_PROPOSALS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
-function getWatcherProposalById(id) { const n = parseInt(id, 10); return Number.isNaN(n) ? null : readWatcherProposals().find(p => p && p.id === n) || null; }
-
-// Validate a watcher create/update payload. A new ACTIVE watcher requires an ACTIVE Work Context;
-// the action policy can never include execution verbs. Pure validation — creates nothing.
-function validateWatcherInput(body, existing = null) {
+// Validate transport input before the strict repository contract. This keeps response messages
+// useful while the repository remains the final authority for current-format records.
+async function validateWatcherInput(body, existing = null) {
   const b = body && typeof body === 'object' ? body : {};
   const name = typeof b.name === 'string' ? b.name.trim() : (existing ? existing.name : '');
   if (!name) return { ok: false, error: 'Watcher name is required' };
@@ -3801,16 +3407,15 @@ function validateWatcherInput(body, existing = null) {
 
   const workContextId = b.workContextId !== undefined ? b.workContextId : (existing ? existing.workContextId : null);
   const wcId = workContextId != null ? parseInt(workContextId, 10) : null;
-  if (!Number.isInteger(wcId)) return { ok: false, error: 'workContextId is required' };
-  const ctx = getWorkContextById(wcId);
+  if (!Number.isSafeInteger(wcId) || wcId <= 0) return { ok: false, error: 'workContextId is required' };
+  const ctx = await getWorkContextById(wcId);
   if (!ctx) return { ok: false, error: 'Work Context not found' };
-  // A watcher must belong to an active Work Context; an active watcher cannot live in an archived one.
   if (status === 'active' && ctx.status !== 'active') return { ok: false, error: 'An active watcher requires an active Work Context' };
 
   const sourceKind = b.sourceKind !== undefined ? b.sourceKind : (existing ? existing.sourceKind : 'workspace_file');
   if (!WATCHER_SOURCE_KINDS.includes(sourceKind)) return { ok: false, error: `sourceKind must be one of ${WATCHER_SOURCE_KINDS.join(', ')}` };
   const rawRefs = b.sourceRefs !== undefined ? b.sourceRefs : (existing ? existing.sourceRefs : []);
-  if (!Array.isArray(rawRefs) || rawRefs.length === 0) return { ok: false, error: 'sourceRefs must list at least one bounded source' };
+  if (!Array.isArray(rawRefs) || rawRefs.length !== 1) return { ok: false, error: 'sourceRefs must contain exactly one bounded source' };
   const sourceRefs = [];
   for (const ref of rawRefs) {
     const p = ref && typeof ref === 'object' ? ref.path : ref;
@@ -3818,353 +3423,143 @@ function validateWatcherInput(body, existing = null) {
     sourceRefs.push({ path: p.trim() });
   }
 
-  const actionPolicy = b.actionPolicy && typeof b.actionPolicy === 'object' ? b.actionPolicy : (existing ? existing.actionPolicy : { allowedActions: ['summarize'] });
+  const actionPolicy = b.actionPolicy && typeof b.actionPolicy === 'object'
+    ? b.actionPolicy
+    : (existing ? existing.actionPolicy : { allowedActions: ['summarize'] });
   const allowedActions = Array.isArray(actionPolicy.allowedActions) ? actionPolicy.allowedActions : ['summarize'];
-  for (const a of allowedActions) {
-    if (!WATCHER_ALLOWED_ACTIONS.includes(a)) return { ok: false, error: `action "${a}" is not allowed (observer/proposer only)` };
+  for (const action of allowedActions) {
+    if (!WATCHER_ALLOWED_ACTIONS.includes(action)) return { ok: false, error: `action "${action}" is not allowed (observer/proposer only)` };
   }
 
   return {
     ok: true,
     value: {
-      name, status, workContextId: wcId, sourceKind, sourceRefs,
-      cadence: b.cadence && typeof b.cadence === 'object' ? { mode: b.cadence.mode === 'manual' ? 'manual' : 'manual' } : (existing ? existing.cadence : { mode: 'manual' }),
+      name,
+      status,
+      workContextId: wcId,
+      sourceKind,
+      sourceRefs,
+      cadence: { mode: 'manual' },
       triggerPolicy: { mode: 'manual' },
-      deltaPolicy: b.deltaPolicy && typeof b.deltaPolicy === 'object' ? { mode: b.deltaPolicy.mode || 'hash' } : (existing ? existing.deltaPolicy : { mode: 'hash' }),
+      deltaPolicy: { mode: 'hash' },
       actionPolicy: { allowedActions: [...new Set(allowedActions)] },
-      triagePolicy: b.triagePolicy && typeof b.triagePolicy === 'object' ? b.triagePolicy : (existing ? existing.triagePolicy : { mode: 'manual' }),
-      ticketProposalPolicy: b.ticketProposalPolicy && typeof b.ticketProposalPolicy === 'object' ? b.ticketProposalPolicy : (existing ? existing.ticketProposalPolicy : { enabled: false }),
-      notificationPolicy: b.notificationPolicy && typeof b.notificationPolicy === 'object' ? b.notificationPolicy : (existing ? existing.notificationPolicy : { mode: 'none' })
+      triagePolicy: b.triagePolicy && typeof b.triagePolicy === 'object'
+        ? b.triagePolicy
+        : (existing ? existing.triagePolicy : { mode: 'manual' }),
+      ticketProposalPolicy: b.ticketProposalPolicy && typeof b.ticketProposalPolicy === 'object'
+        ? b.ticketProposalPolicy
+        : (existing ? existing.ticketProposalPolicy : { enabled: false }),
+      notificationPolicy: { mode: 'none' }
     }
   };
 }
 
-// Perform ONE manual observation of a watcher's single bounded source. Reads only that source via
-// the workspace provider boundary, records a receipt (hash + metadata, never file contents), and
-// updates the watcher cursor. It creates no ticket/run, mutates no target or workspace, wakes no
-// agent, and runs no template.
-function performWatcherObservation(watcher, changedBy) {
-  const now = new Date().toISOString();
-  const ctx = getWorkContextById(watcher.workContextId);
-  const observations = readWatcherObservations();
-  const nextId = nextId_(observations);
-  const ref = (watcher.sourceRefs && watcher.sourceRefs[0]) || null;
-  const base = { id: nextId, watcherId: watcher.id, workContextId: watcher.workContextId, observedAt: now, sourceKind: watcher.sourceKind, sourceRefs: watcher.sourceRefs || [], previousHash: watcher.lastObservationHash || null, currentHash: null, summary: null, actionTaken: null, ticketProposalId: null, error: null };
+// Perform one bounded source read. The repository atomically records the observation and advances
+// the cursor in PostgreSQL; a concurrent watcher edit is refused instead of attaching stale data.
+async function performWatcherObservation(watcher, changedBy) {
+  const repository = getWatcherAuthorityRepository();
+  const base = {
+    watcherId: watcher.id,
+    workContextId: watcher.workContextId,
+    sourceKind: watcher.sourceKind,
+    sourceRefs: watcher.sourceRefs || [],
+    previousHash: watcher.lastObservationHash || null,
+    currentHash: null,
+    summary: null,
+    actionTaken: null,
+    ticketProposalId: null,
+    error: null
+  };
+  const commit = async (status, patch, advanceCursor) => {
+    const result = await repository.recordWatcherObservation({
+      watcherId: watcher.id,
+      expectedRevision: watcher.revision,
+      value: { ...base, ...patch, status },
+      changedBy,
+      advanceCursor,
+      audit: {
+        type: 'watcher:observed',
+        message: `Watcher "${watcher.name}" observation ${status}`,
+        metadata: { changedBy }
+      }
+    });
+    return result || null;
+  };
 
-  // Refusals (archived watcher / archived context / no source / paused) record evidence; no guess.
-  if (watcher.status === 'archived') return finalizeObservation(observations, { ...base, status: 'refused', error: 'watcher is archived' });
-  if (watcher.status === 'paused') return finalizeObservation(observations, { ...base, status: 'refused', error: 'watcher is paused' });
-  if (!ctx || ctx.status !== 'active') return finalizeObservation(observations, { ...base, status: 'refused', error: 'Work Context is not active' });
-  if (!ref || typeof ref.path !== 'string') return finalizeObservation(observations, { ...base, status: 'refused', error: 'no bounded source configured' });
+  const ctx = await getWorkContextById(watcher.workContextId);
+  const ref = (watcher.sourceRefs && watcher.sourceRefs[0]) || null;
+  if (watcher.status === 'archived') return commit('refused', { error: 'watcher is archived' }, false);
+  if (watcher.status === 'paused') return commit('refused', { error: 'watcher is paused' }, false);
+  if (!ctx || ctx.status !== 'active') return commit('refused', { error: 'Work Context is not active' }, false);
+  if (!ref || typeof ref.path !== 'string') return commit('refused', { error: 'no bounded source configured' }, false);
 
   let content;
   try {
     content = workspaceProvider.readFile(ref.path);
   } catch (error) {
-    const rec = finalizeObservation(observations, { ...base, status: 'failed', error: (error && error.message) ? String(error.message).slice(0, 200) : 'source unavailable' });
-    updateWatcherCursor(watcher.id, now, watcher.lastObservationHash || null, changedBy);
-    return rec;
+    return commit('failed', {
+      error: error && error.message ? String(error.message).slice(0, 200) : 'source unavailable'
+    }, true);
   }
   const currentHash = crypto.createHash('sha256').update(content).digest('hex');
   const changed = watcher.lastObservationHash !== currentHash;
-  const summary = { bytes: Buffer.byteLength(content, 'utf8'), lineCount: content === '' ? 0 : content.split('\n').length };
-  const rec = finalizeObservation(observations, { ...base, status: changed ? 'changed' : 'unchanged', currentHash, summary, actionTaken: 'summarized' });
-  updateWatcherCursor(watcher.id, now, currentHash, changedBy);
-  return rec;
-}
-function finalizeObservation(observations, record) {
-  observations.push(record);
-  writeWatcherObservations(observations);
-  return record;
-}
-function updateWatcherCursor(watcherId, observedAt, hash, changedBy) {
-  const list = readWatchers();
-  const w = list.find(item => item && item.id === watcherId);
-  if (!w) return;
-  w.lastObservedAt = observedAt;
-  w.lastObservationHash = hash;
-  w.updatedBy = changedBy;
-  w.updatedAt = observedAt;
-  writeWatchers(list);
-}
-function nextId_(list) { return (Array.isArray(list) ? list : []).reduce((m, x) => Math.max(m, (x && x.id) || 0), 0) + 1; }
-
-// Second idempotency source: an already-created ticket carrying this trigger token in
-// its provenance. Closes the crash window where the ticket was created but the
-// append-only trigger log write did not complete.
-function findTicketByProcessTemplateToken(triggerToken) {
-  if (!triggerToken) return null;
-  return readTickets().find(ticket =>
-    ticket && ticket.source && ticket.source.type === 'process_template' &&
-    ticket.source.triggerToken === triggerToken) || null;
+  return commit(changed ? 'changed' : 'unchanged', {
+    currentHash,
+    summary: { bytes: Buffer.byteLength(content, 'utf8'), lineCount: content === '' ? 0 : content.split('\n').length },
+    actionTaken: 'summarized'
+  }, true);
 }
 
-// Pure forward interval arithmetic (UTC). Returns null for an invalid schedule.
-function computeNextRunAt(schedule, fromIso) {
-  const everySeconds = schedule && Number.isInteger(schedule.everySeconds) ? schedule.everySeconds : null;
-  if (!everySeconds || everySeconds <= 0) return null;
-  const fromMs = Date.parse(fromIso);
-  if (Number.isNaN(fromMs)) return null;
-  return new Date(fromMs + everySeconds * 1000).toISOString();
-}
-
-// Advance an interval schedule's cursor FORWARD FROM `fromIso` (never by replaying
-// missed slots). Used on a deduped scheduled re-entry so a stale nextRunAt (e.g. a
-// crash that lost the post-create cursor update) cannot re-process the same past slot
-// forever — the slot is already in the authoritative trigger log, so we just move on.
-function advanceScheduleCursorForward(templateId, fromIso) {
-  const templates = readProcessTemplates();
-  const t = templates.find(item => item.id === templateId);
-  if (!t || !t.schedule || t.schedule.kind !== 'interval' || t.schedule.enabled !== true) return;
-  t.schedule.nextRunAt = computeNextRunAt(t.schedule, fromIso);
-  t.updatedAt = fromIso;
-  writeProcessTemplates(templates);
-}
-
-// Shared process-template trigger used by BOTH the manual route and the scheduled
-// scanner. It enforces idempotency (append-only trigger log AND existing
-// ticket.source.triggerToken), creates the ticket ONLY through createTicketFromInput
-// (→ createRunsForTicket, inheriting every gate), appends the trigger log, writes a
-// compact system log, and advances the template cursor. It never creates runs,
-// calls createAgentRun, or mutates the workspace directly.
-//
-// triggerContext: { triggerType: 'manual'|'schedule', triggerToken, scheduledFor? }
-//   actor: { userId, username }  (a manual live user, or { userId: null, username: 'system' })
 async function triggerProcessTemplate(template, actor, triggerContext) {
-  const triggerToken = triggerContext.triggerToken;
   const triggerType = triggerContext.triggerType;
-  const isScheduled = triggerType === 'schedule';
-
-  // Idempotency: authoritative trigger log first, then existing tickets by source
-  // token (the crash-window backstop). A deduped scheduled re-entry still advances
-  // the cursor so the template moves past the already-handled slot.
-  const existingTrigger = findProcessTemplateTrigger(template.id, triggerToken);
-  const existingTicket = existingTrigger ? null : findTicketByProcessTemplateToken(triggerToken);
-  if (existingTrigger || existingTicket) {
-    if (isScheduled) advanceScheduleCursorForward(template.id, new Date().toISOString());
-    return {
-      ok: true,
-      deduped: true,
-      ticketId: existingTrigger ? existingTrigger.ticketId : existingTicket.id,
-      templateId: template.id,
-      triggerToken
-    };
-  }
-
-  const triggeredBy = isScheduled
+  const triggeredBy = triggerType === 'schedule'
     ? 'system'
     : (actor && actor.username ? actor.username : (actor && actor.userId != null ? String(actor.userId) : 'system'));
-  const now = new Date().toISOString();
-  const tt = template.ticketTemplate || {};
-  // Active template version used for this trigger. Absent version is treated as 1
-  // (lazy backward-compat — old templates are never rewritten). This labels which
-  // template definition produced the ticket; it is NOT part of the scheduled token,
-  // so per-slot idempotency stays version-independent.
-  const templateVersion = Number.isInteger(template.version) && template.version > 0 ? template.version : 1;
-  const source = {
-    type: 'process_template',
-    templateId: template.id,
-    templateName: template.name,
-    templateVersion,
-    triggeredBy,
-    triggerType,
-    triggerRunId: null,
-    triggerToken,
-    createdAt: now
+  const delegated = {
+    userId: actor ? actor.userId : null,
+    username: triggeredBy,
+    source: triggerType === 'schedule' ? 'process_template_schedule' : 'process_template_trigger'
   };
-  if (triggerContext.scheduledFor) source.scheduledFor = triggerContext.scheduledFor;
-
-  const result = await createTicketFromInput({
-    objective: tt.objective,
-    assignmentTargetType: tt.assignmentTargetType,
-    assignmentTargetId: tt.assignmentTargetId,
-    assignmentMode: tt.assignmentMode,
-    capabilityType: tt.capabilityType,
-    executionMode: tt.capabilityType === 'workflow' ? 'workflow' : 'agent',
-    workflowId: tt.workflowId,
-    workflowInput: tt.workflowInput,
-    ownedOutputPaths: tt.ownedOutputPaths,
-    executionPolicy: tt.executionPolicy
-  }, { userId: actor ? actor.userId : null, username: triggeredBy }, {
-    source,
-    delegated: {
-      userId: actor ? actor.userId : null,
-      username: triggeredBy,
-      source: isScheduled ? 'process_template_schedule' : 'process_template_trigger'
+  const result = await getProcessTemplateAuthorityRepository().executeProcessTemplateTrigger({
+    templateId: template.id,
+    triggerToken: triggerContext.triggerToken,
+    triggerType,
+    scheduledFor: triggerContext.scheduledFor || null,
+    triggeredBy,
+    createTicket: async ({ template: lockedTemplate, source, spawnIdempotencyKey, persistence = {} }) => {
+      const ticketTemplate = lockedTemplate.ticketTemplate || {};
+      return createTicketFromInput({
+        objective: ticketTemplate.objective,
+        assignmentTargetType: ticketTemplate.assignmentTargetType,
+        assignmentTargetId: ticketTemplate.assignmentTargetId,
+        assignmentMode: ticketTemplate.assignmentMode,
+        capabilityType: ticketTemplate.capabilityType,
+        executionMode: ticketTemplate.capabilityType === 'workflow' ? 'workflow' : 'agent',
+        workflowId: ticketTemplate.workflowId,
+        workflowInput: ticketTemplate.workflowInput,
+        ownedOutputPaths: ticketTemplate.ownedOutputPaths,
+        executionPolicy: ticketTemplate.executionPolicy
+      }, { userId: actor ? actor.userId : null, username: triggeredBy }, {
+        source,
+        spawnIdempotencyKey,
+        delegated,
+        deferRunCreation: true,
+        persistence
+      });
     }
   });
-
-  if (!result.ok) {
-    return { ok: false, error: result.error };
-  }
-
-  const generatedTicket = result.ticket;
-
-  // Append-only trigger log: idempotency ledger + provenance snapshot.
-  const logEntry = {
-    triggerToken,
-    templateId: template.id,
-    templateName: template.name,
-    templateVersion,
-    ticketId: generatedTicket.id,
-    triggeredBy,
-    triggerType,
-    createdAt: now,
-    ticketTemplateSnapshot: tt,
-    executionPolicyUsed: generatedTicket.executionPolicy
-  };
-  if (triggerContext.scheduledFor) logEntry.scheduledFor = triggerContext.scheduledFor;
-  if (template.createdBy) logEntry.templateCreatedBy = template.createdBy;
-  if (template.schedule && template.schedule.scheduledBy) logEntry.scheduledBy = template.schedule.scheduledBy;
-  appendProcessTemplateTrigger(logEntry);
-
-  // Advance the template cursor. Manual: lastTriggeredAt. Scheduled: also move
-  // nextRunAt FORWARD FROM NOW (no replay of missed slots) + record last trigger.
-  const templates = readProcessTemplates();
-  const persisted = templates.find(item => item.id === template.id);
-  if (persisted) {
-    persisted.lastTriggeredAt = now;
-    persisted.updatedAt = now;
-    if (isScheduled && persisted.schedule && persisted.schedule.kind === 'interval' && persisted.schedule.enabled === true) {
-      persisted.schedule.lastScheduledTriggerAt = now;
-      persisted.schedule.nextRunAt = computeNextRunAt(persisted.schedule, now);
-    }
-    writeProcessTemplates(templates);
-  }
-
-  appendSystemLog('process_template:triggered', `Process template "${template.name}" created ticket #${generatedTicket.id}`, null, {
-    contextTicketId: generatedTicket.id,
-    templateId: template.id,
-    templateName: template.name,
-    triggeredBy,
-    triggerType,
-    triggerToken
-  });
-
+  if (!result || result.ok !== true) return result || { ok: false, error: 'Template trigger failed' };
+  if (result.ticket) await createRunsForTicket(result.ticket, delegated);
   return {
     ok: true,
-    deduped: false,
-    ticketId: generatedTicket.id,
-    ticket: generatedTicket,
+    deduped: result.deduped === true,
+    ticketId: result.ticket ? result.ticket.id : null,
+    ticket: result.ticket || null,
     templateId: template.id,
-    triggerToken,
-    source
+    triggerToken: triggerContext.triggerToken,
+    source: result.source || (result.ticket && result.ticket.source) || null,
+    stale: result.stale === true
   };
-}
-
-// Pure, read-only derivation of operator-facing process-template state. Joins the
-// existing stores (templates + tickets) in memory and returns one derived row per
-// template. It writes nothing, triggers nothing, and never calls the scheduler or any
-// trigger / run-creation path — rendering this state is a pure read. `now` is a
-// millisecond timestamp (injected for deterministic tests). The `triggers` ledger is
-// accepted for signature symmetry but counts are derived from tickets (authoritative
-// and dedupe-proof: deduped re-entries create no ticket, so they cannot double-count).
-function deriveProcessTemplateState(templates, triggers, tickets, now) {
-  const nowMs = typeof now === 'number' ? now : Date.now();
-
-  const ticketsByTemplate = new Map();
-  (tickets || []).forEach(ticket => {
-    const src = ticket && ticket.source;
-    if (!src || src.type !== 'process_template' || src.templateId == null) return;
-    const list = ticketsByTemplate.get(src.templateId) || [];
-    list.push(ticket);
-    ticketsByTemplate.set(src.templateId, list);
-  });
-
-  function ticketOrderKey(t) {
-    const createdMs = Date.parse((t.source && t.source.createdAt) || t.createdAt || '') || 0;
-    return createdMs * 1e7 + (Number(t.id) || 0);
-  }
-  function isTriaged(t) { return Boolean(t && t.triage && t.triage.required === true); }
-
-  function computeDueStatus(template) {
-    if (!template || template.enabled !== true) return 'template_disabled';
-    const s = template.schedule;
-    if (!s) return 'unscheduled';
-    // A schedule turned off while retaining a reusable interval config is "paused"
-    // (one-click Resume restores it); without reusable config it is plainly disabled.
-    if (s.enabled !== true) return scheduleHasReusableInterval(s) ? 'schedule_paused' : 'schedule_disabled';
-    if (s.kind !== 'interval') return 'invalid_schedule';
-    if (!Number.isInteger(s.everySeconds) || s.everySeconds <= 0) return 'invalid_schedule';
-    const nextMs = typeof s.nextRunAt === 'string' ? Date.parse(s.nextRunAt) : NaN;
-    if (Number.isNaN(nextMs)) return 'invalid_schedule';
-    return nextMs <= nowMs ? 'due' : 'not_due';
-  }
-
-  return (templates || []).map(template => {
-    const generated = (ticketsByTemplate.get(template.id) || []).slice().sort((a, b) => ticketOrderKey(a) - ticketOrderKey(b));
-    const counts = { total: 0, blocked: 0, triaged: 0, pending: 0, inProgress: 0, completed: 0, failed: 0 };
-    generated.forEach(t => {
-      counts.total++;
-      if (t.status === 'blocked') counts.blocked++;
-      if (isTriaged(t)) counts.triaged++;
-      if (t.status === 'open') counts.pending++;
-      if (t.status === 'in_progress') counts.inProgress++;
-      if (t.status === 'completed') counts.completed++;
-      if (t.status === 'failed') counts.failed++;
-    });
-
-    const last = generated.length > 0 ? generated[generated.length - 1] : null;
-    const recentGeneratedTickets = generated.slice(-5).reverse().map(t => ({
-      ticketId: t.id,
-      triggerType: (t.source && t.source.triggerType) || 'manual',
-      status: t.status,
-      triageReason: isTriaged(t) ? (t.triage.reasonCode || null) : null,
-      scheduledFor: (t.source && t.source.scheduledFor) || null,
-      // Legacy tickets created before r1.10 have no templateVersion → null (unlabeled).
-      templateVersion: (t.source && t.source.templateVersion) || null
-    }));
-
-    const dueStatus = computeDueStatus(template);
-
-    // Advisory health (derived; NOT a correctness guarantee; no remediation).
-    let healthStatus;
-    if (template.enabled !== true) {
-      healthStatus = 'disabled';
-    } else if (dueStatus === 'invalid_schedule') {
-      healthStatus = 'invalid_schedule';
-    } else if (last && (last.status === 'blocked' || isTriaged(last))) {
-      healthStatus = 'attention_needed';
-    } else if (recentGeneratedTickets.some(t => t.status === 'failed' || t.status === 'blocked')) {
-      healthStatus = 'attention_needed';
-    } else if (dueStatus === 'schedule_paused') {
-      // Paused is neutral — but a real blocked/failed issue above still wins.
-      healthStatus = 'paused';
-    } else if (counts.total === 0) {
-      healthStatus = 'no_recent_triggers';
-    } else {
-      healthStatus = 'ok';
-    }
-
-    const schedule = template.schedule || null;
-    const tt = template.ticketTemplate || {};
-    return {
-      templateId: template.id,
-      name: template.name,
-      // Active template version (absent → 1 for legacy templates; never rewritten).
-      version: activeVersionNumber(template),
-      currentVersionId: template.currentVersionId || null,
-      objective: tt.objective || '',
-      assignmentTargetType: tt.assignmentTargetType || null,
-      assignmentTargetId: tt.assignmentTargetId != null ? tt.assignmentTargetId : null,
-      enabled: template.enabled === true,
-      manualAvailable: template.enabled === true,
-      scheduleEnabled: Boolean(schedule && schedule.enabled === true),
-      scheduleKind: schedule ? (schedule.kind || null) : null,
-      scheduleEverySeconds: schedule && Number.isInteger(schedule.everySeconds) ? schedule.everySeconds : null,
-      nextRunAt: schedule ? (schedule.nextRunAt || null) : null,
-      lastScheduledTriggerAt: schedule ? (schedule.lastScheduledTriggerAt || null) : null,
-      lastTriggeredAt: template.lastTriggeredAt || null,
-      lastTriggerType: last ? ((last.source && last.source.triggerType) || null) : null,
-      lastGeneratedTicketId: last ? last.id : null,
-      lastGeneratedTicketStatus: last ? last.status : null,
-      lastGeneratedTicketTriageReason: last && isTriaged(last) ? (last.triage.reasonCode || null) : null,
-      generatedTicketCounts: counts,
-      recentGeneratedTickets,
-      dueStatus,
-      healthStatus
-    };
-  });
 }
 
 function normalizeWorkflowPolicy(policy) {
@@ -4210,83 +3605,18 @@ function buildWorkflowContractEvidence(workflow) {
   };
 }
 
-function normalizeWorkflows(workflows) {
-  const seenWorkflowIds = new Set();
-  const now = new Date().toISOString();
-
-  return workflows.filter(workflow => {
-    if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) return false;
-    if (typeof workflow.id !== 'string' || !workflow.id.trim()) return false;
-    const workflowId = workflow.id.trim();
-    if (seenWorkflowIds.has(workflowId)) return false;
-    seenWorkflowIds.add(workflowId);
-
-    workflow.id = workflowId;
-    workflow.name = typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim() : workflow.id;
-    workflow.description = typeof workflow.description === 'string' ? workflow.description : '';
-    workflow.version = typeof workflow.version === 'string' && workflow.version.trim() ? workflow.version.trim() : '1';
-    const normalizedPolicy = normalizeWorkflowPolicy(workflow.policy);
-    if (normalizedPolicy) workflow.policy = normalizedPolicy;
-    else delete workflow.policy;
-    workflow.taskPromptTemplate = typeof workflow.taskPromptTemplate === 'string' ? workflow.taskPromptTemplate : '';
-    const normalizedVerifierContract = normalizeWorkflowVerifierContract(workflow.verifierContract);
-    if (normalizedVerifierContract) workflow.verifierContract = normalizedVerifierContract;
-    else delete workflow.verifierContract;
-    workflow.enabled = workflow.enabled !== false;
-    workflow.inputSchema = workflow.inputSchema && typeof workflow.inputSchema === 'object' && !Array.isArray(workflow.inputSchema)
-      ? workflow.inputSchema
-      : {};
-    workflow.actions = Array.isArray(workflow.actions) ? workflow.actions : [];
-    workflow.postconditions = Array.isArray(workflow.postconditions)
-      ? workflow.postconditions.filter(item => item && typeof item === 'object' && !Array.isArray(item)).map((item, index) => ({
-        ...item,
-        id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `postcondition-${index + 1}`,
-        type: typeof item.type === 'string' ? item.type.trim() : ''
-      }))
-      : [];
-    workflow.createdAt = typeof workflow.createdAt === 'string' ? workflow.createdAt : now;
-    workflow.updatedAt = typeof workflow.updatedAt === 'string' ? workflow.updatedAt : now;
-    return true;
-  });
-}
-
-function writeWorkflows(workflows) {
-  writeFileAtomic(WORKFLOWS_FILE, JSON.stringify(normalizeWorkflows(workflows), null, 2));
-}
-
 function getWorkflowById(workflowId) {
-  return readWorkflows().find(workflow => workflow.id === workflowId) || null;
+  return getWorkflowCatalogRepository().getWorkflowById(workflowId);
 }
 
 function getEnabledWorkflows() {
-  return readWorkflows().filter(workflow => workflow.enabled !== false);
+  return collectWorkflowCatalogPages({ enabled: true });
 }
 
 function workflowHasMutatingActions(workflow) {
   return Boolean(workflow && Array.isArray(workflow.actions) && workflow.actions.some(step =>
     step && AGENT_MUTATING_OPERATIONS.includes(step.action)
   ));
-}
-
-function getTicketsForDisplay() {
-  const agents = readAgents();
-  const agentGroups = getTicketAssignableGroups();
-  const runs = readRuns();
-  const logs = readLogs();
-  const history = readOperationHistory();
-  const runsByTicketId = groupBy(runs, run => run.ticketId);
-  const logsByRunId = groupBy(logs, log => log.runId);
-  const mutationCountByRunId = buildMutationCountByRunId(history);
-  const tickets = readTickets().map(ticket => enrichTicketForDisplay(ticket, {
-    agents,
-    agentGroups,
-    runsByTicketId,
-    logsByRunId,
-    mutationCountByRunId
-  }));
-
-  tickets.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-  return tickets;
 }
 
 function getRunLatestParsedPlanMessage(run) {
@@ -4406,7 +3736,7 @@ function getRunDisplayState(run, logsByRunId) {
 function getRunCurrentMessage(run, logsByRunId, suppliedSummary = null) {
   if (!run) return null;
 
-  const eventSummary = suppliedSummary || recentEventSummary(run.id);
+  const eventSummary = suppliedSummary || { currentStep: null, latestStatus: null, latestError: null, latestWorkspaceMutation: null };
   if (eventSummary.latestError && eventSummary.latestError.message) return eventSummary.latestError.message;
   if (eventSummary.currentStep && run.status === 'running') {
     const action = eventSummary.currentStep.action || eventSummary.currentStep.stepId;
@@ -4435,7 +3765,7 @@ function getRunCurrentMessage(run, logsByRunId, suppliedSummary = null) {
 function getRunCurrentMessageWithSource(run, logsByRunId, suppliedSummary = null) {
   if (!run) return { message: null, source: 'unavailable' };
 
-  const eventSummary = suppliedSummary || recentEventSummary(run.id);
+  const eventSummary = suppliedSummary || { currentStep: null, latestStatus: null, latestError: null, latestWorkspaceMutation: null };
   if (eventSummary.latestError && eventSummary.latestError.message) {
     return { message: eventSummary.latestError.message, source: 'latest run error' };
   }
@@ -4458,7 +3788,7 @@ function getRunCurrentMessageWithSource(run, logsByRunId, suppliedSummary = null
   const runLogs = (logsByRunId && typeof logsByRunId.get === 'function' ? logsByRunId.get(run.id) : null) || [];
   for (let index = runLogs.length - 1; index >= 0; index -= 1) {
     const message = getDisplayMessageFromRunLog(runLogs[index]);
-    if (message) return { message, source: 'latest run log' };
+    if (message) return { message, source: 'latest diagnostic log' };
   }
 
   return { message: null, source: 'unavailable' };
@@ -4467,7 +3797,7 @@ function getRunCurrentMessageWithSource(run, logsByRunId, suppliedSummary = null
 // Display-only: a single object summarizing a ticket's execution state for the
 // Ticket Detail page. Reads existing ticket/run/allocation data only; it does
 // not change scheduling, assignment, allocation, or rerun behavior.
-function buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, groups) {
+async function buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, groups) {
   const isGroup = ticket.assignmentTargetType === 'group';
   const target = isGroup
     ? (groups || []).find(group => group.id === ticket.assignmentTargetId)
@@ -4495,7 +3825,7 @@ function buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, g
   // blockedReason still exists on the record.
   const blocked = ticket.status === 'blocked';
   const blockedReason = ticket.blockedReason || (ticket.feasibility && ticket.feasibility.reason) || null;
-  const memberCount = isGroup ? (getAgentGroupMembers()[ticket.assignmentTargetId] || []).length : 0;
+  const memberCount = isGroup ? ((await getAgentGroupMembers())[ticket.assignmentTargetId] || []).length : 0;
 
   let autoRun;
   if (blocked) {
@@ -4534,8 +3864,12 @@ function buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, g
   const visibleRun = activeRun || latestRun;
   let currentMessage = { text: null, source: 'unavailable' };
   if (visibleRun) {
-    const logsForRun = readLogs().filter(log => log.runId === visibleRun.id);
-    const result = getRunCurrentMessageWithSource(visibleRun, new Map([[visibleRun.id, logsForRun]]));
+    const logsForRun = await getDiagnosticLogRepository().listLogsForRuns({
+      runIds: [visibleRun.id],
+      limitPerRun: 25
+    });
+    const visibleRunEventSummary = await recentEventSummary(visibleRun.id);
+    const result = getRunCurrentMessageWithSource(visibleRun, new Map([[visibleRun.id, logsForRun]]), visibleRunEventSummary);
     currentMessage = { text: result.message, source: result.message ? result.source : 'unavailable' };
   }
 
@@ -4570,9 +3904,10 @@ function detectRunStateInconsistency(run, {
   if (!run || !['pending', 'running', 'in_progress'].includes(run.status)) return null;
 
   const runLogs = Array.isArray(logs) ? logs.filter(log => log && log.runId === run.id) : [];
-  const runEvents = Array.isArray(events) ? events.filter(event => event && event.runId === run.id) : getRunEvents(run.id);
+  if (!Array.isArray(events) || !suppliedEventSummary) return null;
+  const runEvents = events.filter(event => event && event.runId === run.id);
   const snapshot = replaySnapshot || run.replaySnapshot || {};
-  const eventSummary = suppliedEventSummary || recentEventSummary(run.id);
+  const eventSummary = suppliedEventSummary;
   const providerRequestCount = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests.length : 0;
   const modelResponseCount = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses.length : 0;
   const replayWorkspaceCount = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations.length : 0;
@@ -4637,16 +3972,24 @@ function enrichTicketForDisplay(ticket, context) {
     .slice()
     .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))[0] || null;
   const currentRunDisplayState = primaryActiveRun ? getRunDisplayState(primaryActiveRun, context.logsByRunId) : null;
+  const primaryActiveSummary = primaryActiveRun && context.eventSummaryByRunId
+    ? context.eventSummaryByRunId.get(primaryActiveRun.id) || null
+    : null;
+  const lastRunSummary = lastRun && context.eventSummaryByRunId
+    ? context.eventSummaryByRunId.get(lastRun.id) || null
+    : null;
   // For an active run show its live message; otherwise, for a terminally
   // failed/interrupted ticket, surface the last run's failure reason (the same
   // source Ticket Detail and Run Detail use) so the list card explains why,
   // not just that it failed. Display-only; does not affect execution or retry.
   const currentMessage = primaryActiveRun
-    ? getRunCurrentMessage(primaryActiveRun, context.logsByRunId)
+    ? getRunCurrentMessage(primaryActiveRun, context.logsByRunId, primaryActiveSummary)
     : (lastRun && ['failed', 'interrupted'].includes(lastRun.status)
-        ? getRunCurrentMessage(lastRun, context.logsByRunId)
+        ? getRunCurrentMessage(lastRun, context.logsByRunId, lastRunSummary)
         : null);
-  const lastRunOperationalOutcome = lastRun ? classifyRunOperationalOutcome(lastRun) : null;
+  const lastRunOperationalOutcome = lastRun
+    ? classifyRunOperationalOutcome({ ...lastRun, mutationCount: lastRunPartialMutationCount })
+    : null;
   const groupMemberCount = ticket.assignmentTargetType === 'group' && context.groupMembersById
     ? (context.groupMembersById[ticket.assignmentTargetId] || []).length
     : null;
@@ -4678,7 +4021,7 @@ function enrichTicketForDisplay(ticket, context) {
     currentRunDisplayState,
     currentRunDisplayLabel: currentRunDisplayState ? currentRunDisplayState.label : null,
     currentRunElapsedMs: currentRunDisplayState ? currentRunDisplayState.elapsedMs : null,
-    currentRunTimeoutLimit: currentRunDisplayState ? currentRunDisplayState.timeoutLimit : formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs),
+    currentRunTimeoutLimit: currentRunDisplayState ? currentRunDisplayState.timeoutLimit : formatDurationHuman(context.runtimeLimits.maxRuntimeDurationMs),
     currentRunState: currentRunDisplayState ? currentRunDisplayState.state : null,
     currentRunStartedAt: primaryActiveRun ? primaryActiveRun.startedAt || null : null,
     currentRunCreatedAt: primaryActiveRun ? primaryActiveRun.createdAt || null : null,
@@ -4692,59 +4035,100 @@ function enrichTicketForDisplay(ticket, context) {
   };
 }
 
-function ticketsPageHref(page, limit, filters = {}) {
+function ticketsPageHref(page, limit, filters = {}, cursor = null) {
   const params = new URLSearchParams();
   params.set('page', String(page));
   params.set('limit', String(limit));
   if (filters.status) params.set('status', filters.status);
   if (filters.workContextId != null) params.set('workContextId', String(filters.workContextId));
+  if (cursor && cursor.updatedAt && cursor.id) {
+    params.set('cursorUpdatedAt', cursor.updatedAt);
+    params.set('cursorId', String(cursor.id));
+    params.set('direction', cursor.direction === 'previous' ? 'previous' : 'next');
+  }
   return `/tickets?${params.toString()}`;
 }
 
-function getPaginatedTickets(query = {}) {
+async function getPaginatedTickets(query = {}) {
   const { page, limit } = getPagination(query, 25);
-  // Optional Work Context filter (r1.20) — a read-only projection over existing tickets.
-  const workContextFilter = query.workContextId !== undefined && query.workContextId !== '' ? parseInt(query.workContextId, 10) : null;
+  const parsedWorkContextId = query.workContextId !== undefined && query.workContextId !== ''
+    ? parseInt(query.workContextId, 10)
+    : null;
+  const workContextFilter = Number.isSafeInteger(parsedWorkContextId) && parsedWorkContextId > 0
+    ? parsedWorkContextId
+    : null;
   const statusFilter = typeof query.status === 'string' && TICKET_STATUSES.includes(query.status) ? query.status : null;
-  const contextTickets = readTickets()
-    .slice()
-    .filter(ticket => workContextFilter === null || (ticket && ticket.workContextId === workContextFilter))
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-  // Status counts describe the context-filtered population so filter chips stay
-  // truthful regardless of which status page is being viewed.
-  const statusCounts = { all: contextTickets.length };
-  TICKET_STATUSES.forEach(status => { statusCounts[status] = 0; });
-  contextTickets.forEach(ticket => {
-    if (ticket && statusCounts[ticket.status] !== undefined) statusCounts[ticket.status] += 1;
-  });
-  const allTickets = statusFilter === null
-    ? contextTickets
-    : contextTickets.filter(ticket => ticket && ticket.status === statusFilter);
-  const agents = readAgents();
-  const agentGroups = getTicketAssignableGroups();
-  const runs = readRuns();
-  const logs = readLogs();
-  const history = readOperationHistory();
+  const parsedCursorId = parseInt(query.cursorId || '', 10);
+  const cursorUpdatedAt = typeof query.cursorUpdatedAt === 'string' && !Number.isNaN(Date.parse(query.cursorUpdatedAt))
+    ? new Date(query.cursorUpdatedAt).toISOString()
+    : null;
+  const cursorId = cursorUpdatedAt && Number.isSafeInteger(parsedCursorId) && parsedCursorId > 0
+    ? parsedCursorId
+    : null;
+  const direction = query.direction === 'previous' ? 'previous' : 'next';
+  const repository = getRuntimeStateReadRepository();
+  const [ticketPage, statusCounts] = await Promise.all([
+    repository.listTicketPage({
+      statuses: statusFilter ? [statusFilter] : null,
+      workContextId: workContextFilter,
+      cursorUpdatedAt: cursorId ? cursorUpdatedAt : null,
+      cursorId,
+      direction,
+      limit
+    }),
+    repository.countTicketsByStatus({ workContextId: workContextFilter })
+  ]);
+  const rawPageTickets = ticketPage.tickets;
+  const ticketIds = rawPageTickets.map(ticket => ticket.id);
+  const [agents, agentGroups, resolvedRuntimeLimits] = await Promise.all([
+    listConfiguredAgentOptions(),
+    getTicketAssignableGroups(),
+    resolveAgentRuntimeLimits()
+  ]);
+  const [latestRuns, activeRuns] = ticketIds.length > 0
+    ? await Promise.all([
+      readLatestRunsForTickets(ticketIds),
+      collectRuntimeStatePages('listRunsForTickets', 'runs', {
+        ticketIds,
+        statuses: ['pending', 'running']
+      })
+    ])
+    : [[], []];
+  const runById = new Map([...latestRuns, ...activeRuns].map(run => [run.id, run]));
+  const runs = await hydrateRunReplaySnapshots([...runById.values()]);
   const runsByTicketId = groupBy(runs, run => run.ticketId);
+  const logs = runs.length > 0
+    ? await getDiagnosticLogRepository().listLogsForRuns({ runIds: runs.map(run => run.id), limitPerRun: 25 })
+    : [];
   const logsByRunId = groupBy(logs, log => log.runId);
-  const mutationCountByRunId = buildMutationCountByRunId(history);
-  const groupMembersById = getAgentGroupMembers();
-  const total = allTickets.length;
+  const latestRunIds = [...new Set(latestRuns.map(run => run.id))];
+  const mutationCounts = latestRunIds.length > 0
+    ? await repository.countRunMutations({ runIds: latestRunIds })
+    : [];
+  const mutationCountByRunId = new Map(mutationCounts.map(item => [item.runId, item.count]));
+  const eventSummaryByRunId = new Map(await Promise.all(runs.map(async run => [
+    run.id,
+    await recentEventSummary(run.id, await readAllRunTimelineEvents(run.id))
+  ])));
+  const groupMembersById = await getAgentGroupMembers();
+  const total = statusFilter ? statusCounts[statusFilter] : statusCounts.all;
   const pageCount = Math.max(1, Math.ceil(total / limit));
-  const currentPage = Math.min(page, pageCount);
+  const currentPage = cursorId ? Math.min(page, pageCount) : 1;
   const offset = (currentPage - 1) * limit;
-  const pageTickets = allTickets
-    .slice(offset, offset + limit)
-    .map(ticket => enrichTicketForDisplay(ticket, {
+  const pageTickets = rawPageTickets.map(ticket => enrichTicketForDisplay(ticket, {
       agents,
       agentGroups,
       runsByTicketId,
       logsByRunId,
       mutationCountByRunId,
-      groupMembersById
+      eventSummaryByRunId,
+      groupMembersById,
+      runtimeLimits: resolvedRuntimeLimits.limits
     }));
 
   const hrefFilters = { status: statusFilter, workContextId: workContextFilter };
+  const firstTicket = rawPageTickets[0] || null;
+  const lastTicket = rawPageTickets[rawPageTickets.length - 1] || null;
   return {
     tickets: pageTickets,
     statusFilter,
@@ -4760,8 +4144,20 @@ function getPaginatedTickets(query = {}) {
       pageCount,
       start: total === 0 ? 0 : offset + 1,
       end: Math.min(offset + pageTickets.length, total),
-      previousHref: currentPage > 1 ? ticketsPageHref(currentPage - 1, limit, hrefFilters) : null,
-      nextHref: currentPage < pageCount ? ticketsPageHref(currentPage + 1, limit, hrefFilters) : null
+      previousHref: ticketPage.hasPrevious && firstTicket
+        ? ticketsPageHref(currentPage - 1, limit, hrefFilters, {
+          updatedAt: firstTicket.updatedAt,
+          id: firstTicket.id,
+          direction: 'previous'
+        })
+        : null,
+      nextHref: ticketPage.hasNext && lastTicket
+        ? ticketsPageHref(currentPage + 1, limit, hrefFilters, {
+          updatedAt: lastTicket.updatedAt,
+          id: lastTicket.id,
+          direction: 'next'
+        })
+        : null
     }
   };
 }
@@ -4770,7 +4166,9 @@ function getRunMutationCount(run) {
   if (run && run.mutationCount !== undefined) return run.mutationCount;
   if (run && run.replaySummary && run.replaySummary.mutationCount !== undefined) return run.replaySummary.mutationCount;
   if (run && run.replaySnapshot && run.replaySnapshot.mutationCount !== undefined) return run.replaySnapshot.mutationCount;
-  return run ? countRunMutatingOperations(run.id) : 0;
+  // Collection and detail queries attach mutationCount from PostgreSQL.
+  // Keep this classifier pure when a deliberately lightweight projection omits it.
+  return 0;
 }
 
 function classifyRunOperationalOutcome(run) {
@@ -4823,7 +4221,6 @@ function classifyOperationAllowance(source) {
 
   if (err) {
     const code = typeof err === 'string' ? err : (err.code || '');
-    const msg = typeof err === 'string' ? err : (err.message || '');
 
     // Classify by error code (preferred path)
     if (code === 'WORKSPACE_SENSITIVE_PATH') return ALLOWANCE_MAP.blocked_sensitive_path;
@@ -4834,14 +4231,6 @@ function classifyOperationAllowance(source) {
     if (code === 'WORKSPACE_UNSUPPORTED_OPERATION') return ALLOWANCE_MAP.blocked_unsupported_op;
     if (code === 'RUN_INTERRUPTED') return ALLOWANCE_MAP.blocked_run_interrupted;
 
-    // Backward-compatible message fallback for legacy records
-    // stored before error codes were added
-    if (msg.includes('sensitive application path')) return ALLOWANCE_MAP.blocked_sensitive_path;
-    if (msg.includes('protected workspace path')) return ALLOWANCE_MAP.blocked_protected_path;
-    if (msg.includes('outside owned output paths')) return ALLOWANCE_MAP.blocked_ownership;
-    if (msg.includes('limit')) return ALLOWANCE_MAP.blocked_budget;
-    if (msg.includes('Unsupported workspace operation') || msg.includes('unsupported field') || msg.includes('must be an object') || msg.includes('is required') || msg.includes('must be a string') || msg.includes('cannot be blank')) return ALLOWANCE_MAP.blocked_malformed;
-    if (msg.includes('Run interrupted')) return ALLOWANCE_MAP.blocked_run_interrupted;
     return { allowed: false, type: 'block', label: 'Operation error' };
   }
 
@@ -4979,7 +4368,7 @@ function buildOutputSatisfactionSummary(ticket) {
   };
 }
 
-function buildRunFailureSummary(run, snapshot, operationHistory, mutationCount, recoveryAvailable) {
+function buildRunFailureSummary(run, snapshot, operationHistory, mutationCount, recoveryAvailable, ticket) {
   if (!['failed', 'interrupted'].includes(run.status)) return null;
 
   const workspaceOps = snapshot && Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
@@ -4992,10 +4381,9 @@ function buildRunFailureSummary(run, snapshot, operationHistory, mutationCount, 
   const code = getErrorCodeFromSource(firstFailedOperation) || getErrorCodeFromSource(snapshotFailure) || (run.status === 'interrupted' ? 'RUN_INTERRUPTED' : null);
   const rootCause = (snapshot && snapshot.failureReason) || run.error || getErrorMessageFromSource(firstFailedOperation) || (code ? explainErrorCode(code) : 'Run ended without a structured failure reason.');
   const timedOut = code === 'RUN_LIMIT_EXCEEDED' && snapshotFailure && snapshotFailure.kind === 'timeout' || /runtime duration limit/i.test(rootCause);
-  const finalBlockingReason = timedOut ? `timed out after ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}` : rootCause;
+  const finalBlockingReason = timedOut ? `timed out after ${formatDurationHuman(getRunRuntimeLimitsSnapshot(run).maxRuntimeDurationMs)}` : rootCause;
   const limitType = snapshotFailure && snapshotFailure.detail ? snapshotFailure.detail.limitType : null;
   const stepLimitWithMutations = code === 'RUN_LIMIT_EXCEEDED' && limitType === 'step' && (mutationCount || 0) > 0;
-  const ticket = run && run.ticketId ? readTickets().find(item => item.id === run.ticketId) : null;
 
   return {
     status: run.status,
@@ -5082,7 +4470,7 @@ function buildRunCompletionSummary(run, snapshot, runEvents, operationHistory, f
       const latestPhase = evidence.providerRequests > evidence.modelResponses
         ? 'waiting for model response'
         : 'runtime timeout';
-      timeoutNote = `Run timed out after ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}. Latest observed phase: ${latestPhase}.`;
+      timeoutNote = `Run timed out after ${formatDurationHuman(getRunRuntimeLimitsSnapshot(run).maxRuntimeDurationMs)}. Latest observed phase: ${latestPhase}.`;
       if (evidence.providerRequests > evidence.modelResponses) {
         timeoutNote += ' Available evidence suggests the run timed out after the last model request and before a matching model response was recorded.';
       }
@@ -5126,16 +4514,16 @@ function buildRunCompletionSummary(run, snapshot, runEvents, operationHistory, f
   return { state: run.status, source, label, checkedPaths, capNote, timeoutNote, modelCallNote, progressNote, evidence };
 }
 
-function buildRunAuthorityContext(run, ticket, agent, snapshot) {
+async function buildRunAuthorityContext(run, ticket, agent, snapshot) {
   const s = snapshot || {};
   const allocationItem = getRunAllocationItem(run);
   const allocationPlanId = run.allocationPlanId || s.allocationPlanId || null;
   const allocationItemId = run.allocationItemId || s.allocationItemId || null;
   const ownedOutputPaths = getRunOwnedOutputPaths(run);
   const limits = getRunRuntimeLimitsSnapshot(run);
-  const groups = readGroups();
+  const groups = await listAccessGroups();
   const agentGroupNames = agent
-    ? getPrincipalGroupIds('agent', agent.id).map(groupId => (groups.find(group => group.id === groupId) || {}).name).filter(Boolean)
+    ? (agent.groupIds || []).map(groupId => (groups.find(group => group.id === groupId) || {}).name).filter(Boolean)
     : [];
   const assignmentGroup = ticket && ticket.assignmentTargetType === 'group'
     ? groups.find(group => group.id === ticket.assignmentTargetId)
@@ -5267,8 +4655,13 @@ function displayLogType(type) {
 
 function displayLogMessage(log) {
   if (!log) return '';
-  if (log.type === 'run:timeout') return `Timed out after ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}`;
-  if (log.type === 'run:failed' && /runtime duration limit/i.test(log.message || '')) return `Failed after timing out at ${formatDurationHuman(getAgentRuntimeLimits().maxRuntimeDurationMs)}`;
+  if (log.type === 'run:timeout' || (log.type === 'run:failed' && /runtime duration limit/i.test(log.message || ''))) {
+    const match = String(log.message || '').match(/limit of (\d+)ms/i);
+    if (match) {
+      const prefix = log.type === 'run:timeout' ? 'Timed out after ' : 'Failed after timing out at ';
+      return prefix + formatDurationHuman(Number(match[1]));
+    }
+  }
   if (log.type === 'model:request') return 'Waiting for model response';
   if (log.type === 'model:no_progress') return 'The model repeated an inspection without making progress';
   if (log.type === 'run:queued') return 'Waiting to start';
@@ -5325,46 +4718,49 @@ function createLogTimestamp() {
   return `${baseIso}.${fractionalNs.toString().padStart(9, '0')}Z`;
 }
 
-let eventAppendFailure = null;
-let eventJournal = createDurableAppendJournal(EVENTS_FILE, EVENT_JOURNAL_OPTIONS);
-const eventAdmissionContext = new AsyncLocalStorage();
+let evidencePersistenceFailure = null;
+const mutationAdmission = createMutationAdmissionController(MUTATION_ADMISSION_OPTIONS);
+const mutationAdmissionContext = new AsyncLocalStorage();
 
-function requestRequiresEventJournalAdmission(request) {
+function requestRequiresMutationAdmission(request) {
   if (!request || !UNSAFE_HTTP_METHODS.has(request.method)) return false;
   const config = request.routeOptions && request.routeOptions.config;
-  return Boolean(config && config.eventJournalAdmission === true);
+  return Boolean(config && config.mutationAdmission === true);
 }
 
-function currentEventJournalAdmission() {
-  const store = eventAdmissionContext.getStore();
+function currentMutationAdmission() {
+  const store = mutationAdmissionContext.getStore();
   return store && store.token ? store.token : null;
 }
 
-async function runWithEventJournalAdmission(token, operation) {
+async function runWithMutationAdmission(token, operation) {
   if (!token) return operation();
-  return eventAdmissionContext.run({ token }, operation);
+  return mutationAdmissionContext.run({ token }, operation);
 }
 
-async function runWithNewEventJournalAdmission(metadata, operation) {
-  const existing = currentEventJournalAdmission();
+async function runWithNewMutationAdmission(metadata, operation) {
+  const existing = currentMutationAdmission();
   if (existing) return operation();
-  const token = eventJournal.tryAcquireAdmission(metadata);
+  if (evidencePersistenceFailure || mutationAdmission.failure || mutationAdmission.closing || mutationAdmission.closed) {
+    throw eventPersistenceUnavailableError();
+  }
+  const token = mutationAdmission.tryAcquireAdmission(metadata);
   if (!token) {
-    const error = new Error('Event journal mutation admission is temporarily full');
-    error.code = 'EVENT_ADMISSION_BACKPRESSURED';
+    const error = new Error('Mutation admission is temporarily full');
+    error.code = 'MUTATION_ADMISSION_BACKPRESSURED';
     error.statusCode = 503;
     throw error;
   }
   try {
-    return await runWithEventJournalAdmission(token, operation);
+    return await runWithMutationAdmission(token, operation);
   } finally {
-    eventJournal.releaseAdmission(token);
+    mutationAdmission.releaseAdmission(token);
   }
 }
 
 function eventPersistenceUnavailableError() {
-  const detail = eventAppendFailure && eventAppendFailure.message
-    ? `: ${eventAppendFailure.message}`
+  const detail = evidencePersistenceFailure && evidencePersistenceFailure.message
+    ? `: ${evidencePersistenceFailure.message}`
     : '';
   const error = new Error(`Event persistence is unavailable${detail}`);
   error.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
@@ -5372,346 +4768,98 @@ function eventPersistenceUnavailableError() {
   return error;
 }
 
-async function acquireRequiredEventJournalAdmission(metadata, reservationBytes = eventJournal.maxRecordBytes) {
+async function acquireRequiredMutationAdmission(metadata, reservationBytes = mutationAdmission.maxRecordBytes) {
   while (true) {
-    if (eventAppendFailure || eventJournal.failure || eventJournal.closing || eventJournal.closed) {
+    if (evidencePersistenceFailure || mutationAdmission.failure || mutationAdmission.closing || mutationAdmission.closed) {
       throw eventPersistenceUnavailableError();
     }
-    const admissionVersion = eventJournal.admissionVersion;
-    const token = eventJournal.tryAcquireAdmission(metadata, reservationBytes);
+    const admissionVersion = mutationAdmission.admissionVersion;
+    const token = mutationAdmission.tryAcquireAdmission(metadata, reservationBytes);
     if (token) return token;
     // Accepted runtime work waits before its next mutation. This is not an
     // event buffer: all waiters share one capacity-change signal and no side
     // effect or evidence record has been created yet.
-    await eventJournal.waitForAdmissionChange(admissionVersion);
+    await mutationAdmission.waitForAdmissionChange(admissionVersion);
   }
 }
 
-async function runWithRequiredEventJournalAdmission(metadata, operation, reservationBytes = eventJournal.maxRecordBytes) {
-  if (currentEventJournalAdmission()) return operation();
-  const token = await acquireRequiredEventJournalAdmission(metadata, reservationBytes);
+async function runWithRequiredMutationAdmission(metadata, operation, reservationBytes = mutationAdmission.maxRecordBytes) {
+  if (currentMutationAdmission()) return operation();
+  const token = await acquireRequiredMutationAdmission(metadata, reservationBytes);
   try {
-    return await runWithEventJournalAdmission(token, operation);
+    return await runWithMutationAdmission(token, operation);
   } finally {
-    eventJournal.releaseAdmission(token);
+    mutationAdmission.releaseAdmission(token);
   }
 }
 
-async function enterRequiredEventJournalAdmission(metadata, reservationBytes = eventJournal.maxRecordBytes) {
-  if (currentEventJournalAdmission()) return () => {};
-  const store = eventAdmissionContext.getStore();
+async function enterRequiredMutationAdmission(metadata, reservationBytes = mutationAdmission.maxRecordBytes) {
+  if (currentMutationAdmission()) return () => {};
+  const store = mutationAdmissionContext.getStore();
   if (!store) {
-    throw new Error('Runtime event admission scope requires an isolated execution context');
+    throw new Error('Runtime mutation admission scope requires an isolated execution context');
   }
-  const token = await acquireRequiredEventJournalAdmission(metadata, reservationBytes);
+  const token = await acquireRequiredMutationAdmission(metadata, reservationBytes);
   store.token = token;
   return () => {
     if (store.token === token) store.token = null;
-    eventJournal.releaseAdmission(token);
+    mutationAdmission.releaseAdmission(token);
   };
 }
 
-function isEventJournalAdmissionBackpressured() {
-  return !eventAppendFailure && eventJournal.isBackpressured();
+function isMutationAdmissionBackpressured() {
+  return !evidencePersistenceFailure && mutationAdmission.isBackpressured();
 }
 
-// Per-run event chain state for forensic sequence numbers and hash chaining
-const runEventChains = new Map(); // runId -> { seq: number, prevHash: string | null }
-const reservedRunEventChains = new Map();
-const reservedEventIds = new Set();
-
-function normalizeEventId() {
-  return crypto.randomUUID();
-}
-
-// Rebuild chain tips before startup recovery can append events. The journal is
-// streamed, so startup memory does not grow with total historical event count.
-async function restoreRunEventChainsFromDisk() {
-  runEventChains.clear();
-  reservedRunEventChains.clear();
-  reservedEventIds.clear();
-  let states;
-  try {
-    ({ states } = await scanCurrentEventJournal(EVENTS_FILE, {
-      maxLineBytes: eventJournal.maxRecordBytes
-    }));
-  } catch (error) {
-    throw dataIntegrityError('events.jsonl', error.message);
-  }
-
-  states.forEach((state, runId) => {
-    runEventChains.set(runId, {
-      seq: state.nextSeq,
-      prevHash: state.previousHash
-    });
-  });
-}
-
-function normalizeNullableInteger(value) {
-  if (value === undefined || value === null || value === '') return null;
-  if (Number.isSafeInteger(value) && value > 0) return value;
-  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-function eventAdmissionReservationBytes(event) {
-  const reservationEnvelope = event.runId === null
-    ? event
-    : {
-        ...event,
-        seq: Number.MAX_SAFE_INTEGER,
-        prevHash: '0'.repeat(64),
-        hash: '0'.repeat(64)
-      };
-  return Math.min(
-    eventJournal.maxRecordBytes,
-    Buffer.byteLength(`${JSON.stringify(reservationEnvelope)}\n`)
-  );
-}
-
+// Event identity, ordering, and per-run hash-chain positions are assigned by
+// PostgreSQL in the same transaction as repository-owned state mutations.
 async function appendEvent(event = {}) {
-  if (eventAppendFailure) {
-    const error = new Error(`Event persistence is unavailable: ${eventAppendFailure.message}`);
-    error.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
-    throw error;
-  }
-  const ticketId = normalizeNullableInteger(event.ticketId);
-  const runId = normalizeNullableInteger(event.runId);
-  if (event.ticketId !== undefined && event.ticketId !== null && ticketId === null) {
-    throw dataIntegrityError('events.jsonl', `cannot append event ${event.type || 'event'} with invalid ticketId`);
-  }
-  if (event.runId !== undefined && event.runId !== null && runId === null) {
-    throw dataIntegrityError('events.jsonl', `cannot append event ${event.type || 'event'} with invalid runId`);
-  }
-  let normalized = {
-    schemaVersion: RUN_EVENT_SCHEMA_VERSION,
-    // Event identity is owned by the writer. Accepting caller-provided IDs
-    // would require a history-sized uniqueness index or an external database.
-    id: normalizeEventId(),
-    ts: typeof event.ts === 'string' && event.ts.trim() ? event.ts : createLogTimestamp(),
-    type: typeof event.type === 'string' && event.type.trim() ? event.type.trim() : 'event',
-    ticketId,
-    runId,
-    stepId: event.stepId === undefined || event.stepId === null ? null : String(event.stepId),
-    payload: sanitizeSnapshotValue(event.payload && typeof event.payload === 'object' ? event.payload : {})
-  };
-  const envelopeErrors = validateCurrentEventEnvelope(normalized);
-  if (envelopeErrors.length > 0) {
-    throw dataIntegrityError('events.jsonl', `cannot append event ${normalized.type}: ${envelopeErrors[0].message}`);
-  }
-  if (reservedEventIds.has(normalized.id)) {
-    throw dataIntegrityError('events.jsonl', `cannot append duplicate event id ${normalized.id}`);
-  }
-
-  let admissionToken = currentEventJournalAdmission();
-  let ownsAdmission = false;
-  if (!admissionToken) {
-    admissionToken = await acquireRequiredEventJournalAdmission(
-      { source: 'internal_event', eventType: normalized.type },
-      eventAdmissionReservationBytes(normalized)
-    );
-    ownsAdmission = true;
-  }
-
+  if (evidencePersistenceFailure) throw eventPersistenceUnavailableError();
   try {
-    // A standalone event may have yielded while waiting for capacity. Recheck
-    // identity, then reserve its chain position synchronously so the position is
-    // based on the latest committed/reserved tip.
-    if (reservedEventIds.has(normalized.id)) {
-      throw dataIntegrityError('events.jsonl', `cannot append duplicate event id ${normalized.id}`);
-    }
-
-    let chain = null;
-    if (normalized.runId !== null) {
-      const runId = normalized.runId;
-      chain = reservedRunEventChains.get(runId) || runEventChains.get(runId) || { seq: 0, prevHash: null };
-      normalized.seq = chain.seq;
-      normalized.prevHash = chain.prevHash;
-      normalized.hash = computeRunEventHash(normalized);
-    }
-
-    let line = `${JSON.stringify(normalized)}\n`;
-    const requestedRecordBytes = Buffer.byteLength(line);
-    let recordRejection = null;
-    if (requestedRecordBytes > eventJournal.maxRecordBytes) {
-      eventJournal.noteOversizedRejection();
-      const requestedType = normalized.type;
-      normalized = {
-        schemaVersion: normalized.schemaVersion,
-        id: normalized.id,
-        ts: normalized.ts,
-        type: 'event.record_rejected',
-        ticketId: normalized.ticketId,
-        runId: normalized.runId,
-        stepId: normalized.stepId,
-        payload: {
-          reasonCode: 'event_record_too_large',
-          outcome: 'rejected',
-          requestedType,
-          requestedRecordBytes,
-          maxRecordBytes: eventJournal.maxRecordBytes
-        }
-      };
-      if (chain) {
-        normalized.seq = chain.seq;
-        normalized.prevHash = chain.prevHash;
-        normalized.hash = computeRunEventHash(normalized);
-      }
-      line = `${JSON.stringify(normalized)}\n`;
-      recordRejection = new Error(
-        `Event ${requestedType} is ${requestedRecordBytes} bytes; journal record limit is ${eventJournal.maxRecordBytes}`
-      );
-      recordRejection.code = 'EVENT_RECORD_TOO_LARGE';
-      recordRejection.statusCode = 413;
-      recordRejection.requestedType = requestedType;
-      recordRejection.requestedRecordBytes = requestedRecordBytes;
-      recordRejection.maxRecordBytes = eventJournal.maxRecordBytes;
-    }
-
-    if (Buffer.byteLength(line) > eventJournal.maxRecordBytes) {
-      const error = recordRejection || new Error(`Event ${normalized.type} exceeds the journal record limit`);
-      error.code = 'EVENT_RECORD_TOO_LARGE';
-      error.statusCode = 413;
+    return await postgresRuntimeStore.appendEvent({
+      type: typeof event.type === 'string' && event.type.trim() ? event.type.trim() : 'event',
+      ticketId: event.ticketId === undefined ? null : event.ticketId,
+      runId: event.runId === undefined ? null : event.runId,
+      stepId: event.stepId === undefined ? null : event.stepId,
+      payload: sanitizeSnapshotValue(event.payload && typeof event.payload === 'object' ? event.payload : {})
+    });
+  } catch (error) {
+    if (error && (error.code === 'POSTGRES_RECORD_TOO_LARGE' || error instanceof TypeError || error instanceof RangeError)) {
+      if (!error.statusCode) error.statusCode = 413;
       throw error;
     }
-
-    const nextChain = chain ? { seq: chain.seq + 1, prevHash: normalized.hash } : null;
-    if (nextChain) reservedRunEventChains.set(normalized.runId, nextChain);
-    reservedEventIds.add(normalized.id);
-
-    function releaseEventReservation() {
-      reservedEventIds.delete(normalized.id);
-      if (!nextChain || reservedRunEventChains.get(normalized.runId) !== nextChain) return;
-      const committed = runEventChains.get(normalized.runId) || { seq: 0, prevHash: null };
-      if (chain.seq === committed.seq && chain.prevHash === committed.prevHash) {
-        reservedRunEventChains.delete(normalized.runId);
-      } else {
-        reservedRunEventChains.set(normalized.runId, chain);
-      }
-    }
-
-    try {
-      await eventJournal.appendWithAdmission(line, admissionToken);
-    } catch (error) {
-      if (error && (
-        error.code === 'EVENT_JOURNAL_ADMISSION_INVALID' ||
-        error.code === 'EVENT_JOURNAL_ADMISSION_CONCURRENT_APPEND' ||
-        error.code === 'EVENT_JOURNAL_ADMISSION_RESERVATION_EXCEEDED'
-      )) {
-        const admissionError = new Error(`Failed to admit event ${normalized.type}: ${error.message}`);
-        admissionError.code = error.code;
-        admissionError.statusCode = 503;
-        admissionError.cause = error;
-        releaseEventReservation();
-        throw admissionError;
-      }
-      if (!eventAppendFailure) eventAppendFailure = error;
-      serverReady = false;
-      if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
-      if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
-      const persistenceError = new Error(`Failed to append event ${normalized.type}: ${error.message}`);
-      persistenceError.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
-      persistenceError.cause = error;
-      throw persistenceError;
-    }
-    if (nextChain) {
-      const committed = runEventChains.get(normalized.runId) || { seq: 0, prevHash: null };
-      if (nextChain.seq > committed.seq) runEventChains.set(normalized.runId, nextChain);
-      if (reservedRunEventChains.get(normalized.runId) === nextChain) {
-        reservedRunEventChains.delete(normalized.runId);
-      }
-    }
-    reservedEventIds.delete(normalized.id);
-
-    if (recordRejection) throw recordRejection;
-    return normalized;
-  } finally {
-    if (ownsAdmission) eventJournal.releaseAdmission(admissionToken);
+    if (!evidencePersistenceFailure) evidencePersistenceFailure = error;
+    serverReady = false;
+    if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
+    if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
+    throw eventPersistenceUnavailableError();
   }
 }
 
-function failClosedEventRead(error) {
-  if (!eventAppendFailure) eventAppendFailure = error;
-  serverReady = false;
-  if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
-  if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
-  throw error;
-}
-
-function validateProjectedEvents(events) {
-  const ids = new Set();
-  const byRunId = new Map();
-  events.forEach((event, index) => {
-    const envelopeErrors = validateCurrentEventEnvelope(event);
-    if (envelopeErrors.length > 0) {
-      throw dataIntegrityError('events.jsonl', `projected event ${index + 1}: ${envelopeErrors[0].message}`);
-    }
-    if (ids.has(event.id)) throw dataIntegrityError('events.jsonl', `projected events contain duplicate event id ${event.id}`);
-    ids.add(event.id);
-    if (event.runId !== null) {
-      const runEvents = byRunId.get(event.runId) || [];
-      runEvents.push(event);
-      byRunId.set(event.runId, runEvents);
-    }
-  });
-  byRunId.forEach((runEvents, runId) => {
-    const verification = verifyCurrentRunEventChain(runEvents);
-    if (!verification.chainValid) {
-      throw dataIntegrityError('events.jsonl', `run ${runId} projection failed current-schema verification: ${verification.errors[0].message}`);
-    }
-  });
-  return events;
-}
-
-function readBufferedAndMatchingEvents({ needles, predicate }) {
-  try {
-    return validateProjectedEvents(readMatchingEvents(EVENTS_FILE, {
-      needles,
-      predicate,
-      strict: true,
-      maxLineBytes: eventJournal.maxRecordBytes
-    }));
-  } catch (error) {
-    return failClosedEventRead(error);
-  }
-}
-
-function getRunEvents(runId) {
+async function getRunEvents(runId) {
   const parsedRunId = parseInt(runId, 10);
-  if (Number.isNaN(parsedRunId)) return [];
-  const run = readRuns().find(item => item.id === parsedRunId) || null;
-  const ticketId = run ? run.ticketId : null;
-  // Raw-line prefilter: only run-id matches or (for the ticket-scoped branch)
-  // ticket-id matches can satisfy the predicate, so lines containing neither
-  // needle are skipped without parsing. The exact predicate runs after parse.
-  const needles = [`"runId":${parsedRunId}`];
-  if (Number.isInteger(ticketId)) needles.push(`"ticketId":${ticketId}`);
-  return readBufferedAndMatchingEvents({
-    needles,
-    predicate: event =>
-      event.runId === parsedRunId ||
-      (run && event.runId === null && event.ticketId === ticketId)
-  });
+  if (!Number.isSafeInteger(parsedRunId) || parsedRunId <= 0) return [];
+  return readAllRunTimelineEvents(parsedRunId);
 }
 
-// Events for a single run scoped strictly by runId (excludes the ticket-scoped
-// null-runId events that getRunEvents also returns).
-function readRunScopedEvents(runId) {
+async function readRunScopedEvents(runId) {
   const parsedRunId = parseInt(runId, 10);
-  if (Number.isNaN(parsedRunId)) return [];
-  return readBufferedAndMatchingEvents({
-    needles: [`"runId":${parsedRunId}`],
-    predicate: event => event.runId === parsedRunId
-  });
+  if (!Number.isSafeInteger(parsedRunId) || parsedRunId <= 0) return [];
+  return readAllRunScopedEvents(parsedRunId);
+}
+
+async function getTicketEvents(ticketId) {
+  const parsedTicketId = parseInt(ticketId, 10);
+  if (!Number.isSafeInteger(parsedTicketId) || parsedTicketId <= 0) return [];
+  return readAllTicketEvents(parsedTicketId);
 }
 
 // `suppliedEvents`, when an array, is used instead of re-reading the event log.
-// Callers that already hold getRunEvents(runId) for this run pass it in to avoid
+// Callers that already hold (await getRunEvents(runId)) for this run pass it in to avoid
 // a redundant full-log scan. The result is identical to computing from a fresh
-// getRunEvents(runId) read.
-function recentEventSummary(runId, suppliedEvents = null) {
-  const events = Array.isArray(suppliedEvents) ? suppliedEvents : getRunEvents(runId);
+// (await getRunEvents(runId)) read.
+async function recentEventSummary(runId, suppliedEvents = null) {
+  const events = Array.isArray(suppliedEvents) ? suppliedEvents : (await getRunEvents(runId));
   const summary = {
     currentStep: null,
     latestStatus: null,
@@ -5772,193 +4920,32 @@ function isValidIsoTimestamp(value) {
   return !Number.isNaN(Date.parse(value));
 }
 
+function finalizeDiagnosticLogAppend(result, { ticketChanged = false } = {}) {
+  const publish = log => {
+    broadcastLogEntry(log);
+    if (ticketChanged) broadcastTicketChange();
+    return log;
+  };
+  return result && typeof result.then === 'function' ? result.then(publish) : publish(result);
+}
+
 function appendRunLog(run, type, message, workspaceAction = null, extraFields = {}) {
-  const logs = readLogs();
-  const log = {
-    id: nextId(logs),
-    timestamp: createLogTimestamp(),
-    runId: run.id,
-    ticketId: run.ticketId,
-    agentId: run.agentId,
-    agentName: run.agentName,
+  return finalizeDiagnosticLogAppend(getDiagnosticLogRepository().appendRunLog({
+    run,
     type,
     message: sanitizeLogMessage(message),
     workspaceAction,
-    ...extraFields
-  };
-
-  logs.push(log);
-  writeLogs(logs);
-  broadcastLogEntry(log);
-  broadcastTicketChange();
-  return log;
+    metadata: extraFields
+  }), { ticketChanged: true });
 }
 
 function appendSystemLog(type, message, workspaceAction = null, extraFields = {}) {
-  const logs = readLogs();
-  const contextFields = { ...extraFields };
-  if (Object.prototype.hasOwnProperty.call(contextFields, 'ticketId')) {
-    contextFields.contextTicketId = contextFields.ticketId;
-    delete contextFields.ticketId;
-  }
-  if (Object.prototype.hasOwnProperty.call(contextFields, 'runId')) {
-    contextFields.contextRunId = contextFields.runId;
-    delete contextFields.runId;
-  }
-  delete contextFields.agentId;
-  delete contextFields.agentName;
-  const log = {
-    id: nextId(logs),
-    timestamp: createLogTimestamp(),
-    runId: null,
-    ticketId: null,
-    agentId: null,
-    agentName: 'System',
+  return finalizeDiagnosticLogAppend(getDiagnosticLogRepository().appendSystemLog({
     type,
     message: sanitizeLogMessage(message),
     workspaceAction,
-    ...contextFields
-  };
-
-  logs.push(log);
-  writeLogs(logs);
-  broadcastLogEntry(log);
-  return log;
-}
-
-function readUsers() {
-  return readJsonArrayCached(USERS_FILE);
-}
-
-function normalizeUsers(users) {
-  const seenUserIds = new Set();
-
-  return users.filter(user => {
-    const userId = parseInt(user.id, 10);
-    if (Number.isNaN(userId) || seenUserIds.has(userId)) return false;
-
-    seenUserIds.add(userId);
-    user.id = userId;
-    user.type = 'user';
-    return true;
-  });
-}
-
-function writeUsers(users) {
-  writeFileAtomic(USERS_FILE, JSON.stringify(normalizeUsers(users), null, 2));
-}
-
-function readGroups() {
-  return readJsonArrayCached(GROUPS_FILE);
-}
-
-function normalizeGroups(groups) {
-  const seenGroupIds = new Set();
-  const validPermissions = new Set(readPermissions());
-
-  return groups.reduce((normalized, group) => {
-    const groupId = parseInt(group.id, 10);
-
-    if (Number.isNaN(groupId) || seenGroupIds.has(groupId)) return normalized;
-
-    seenGroupIds.add(groupId);
-    const submittedPermissions = Array.isArray(group.permissions) ? group.permissions : [];
-
-    const permissions = [];
-    submittedPermissions.forEach(permission => {
-      const normalizedPermission = String(permission || '').trim();
-      if (normalizedPermission && validPermissions.has(normalizedPermission) && !permissions.includes(normalizedPermission)) {
-        permissions.push(normalizedPermission);
-      }
-    });
-
-    normalized.push({
-      id: groupId,
-      name: String(group.name || '').trim() || `Group ${groupId}`,
-      permissions,
-      canReceiveTickets: group.canReceiveTickets === true
-    });
-
-    return normalized;
-  }, []);
-}
-
-function writeGroups(groups) {
-  writeFileAtomic(GROUPS_FILE, JSON.stringify(normalizeGroups(groups), null, 2));
-}
-
-function readPermissions() {
-  const filePermissions = readJsonArrayCached(PERMISSIONS_FILE);
-  const merged = [...BUILTIN_PERMISSIONS];
-  for (const p of filePermissions) {
-    if (!merged.includes(p)) merged.push(p);
-  }
-  return merged;
-}
-
-function readMemberships() {
-  return readJsonArrayCached(MEMBERSHIPS_FILE);
-}
-
-function normalizeMemberships(memberships) {
-  const seenMemberships = new Set();
-  const normalized = [];
-  const userIds = new Set(readUsers().map(user => user.id));
-  const agentIds = new Set(readAgents().map(agent => agent.id));
-  const groupIds = new Set(readGroups().map(group => group.id));
-
-  memberships.forEach(membership => {
-    const principalType = membership.principalType === 'agent' ? 'agent' : 'user';
-    const principalId = parseInt(membership.principalId ?? membership.userId, 10);
-    const groupId = parseInt(membership.groupId, 10);
-
-    if (Number.isNaN(principalId) || Number.isNaN(groupId) || !groupIds.has(groupId)) return;
-    if (principalType === 'user' && !userIds.has(principalId)) return;
-    if (principalType === 'agent' && !agentIds.has(principalId)) return;
-
-    const membershipKey = `${principalType}:${principalId}:${groupId}`;
-    if (seenMemberships.has(membershipKey)) return;
-
-    seenMemberships.add(membershipKey);
-    normalized.push({
-      id: normalized.length + 1,
-      principalType,
-      principalId,
-      groupId
-    });
-  });
-
-  return normalized;
-}
-
-function writeMemberships(memberships) {
-  writeFileAtomic(MEMBERSHIPS_FILE, JSON.stringify(normalizeMemberships(memberships), null, 2));
-}
-
-function normalizeSubmittedGroupIds(groupIds) {
-  if (!groupIds) return [];
-
-  const validGroupIds = new Set(readGroups().map(group => group.id));
-  const submittedGroupIds = Array.isArray(groupIds) ? groupIds : [groupIds];
-  const normalizedGroupIds = [];
-
-  submittedGroupIds.forEach(groupId => {
-    const normalizedGroupId = parseInt(groupId, 10);
-
-    if (Number.isNaN(normalizedGroupId)) {
-      throw new Error('Invalid group selection');
-    }
-
-    if (!validGroupIds.has(normalizedGroupId)) {
-      throw new Error('Selected group does not exist');
-    }
-
-    if (!normalizedGroupIds.includes(normalizedGroupId)) {
-      normalizedGroupIds.push(normalizedGroupId);
-    }
-  });
-
-  return normalizedGroupIds;
+    metadata: extraFields
+  }));
 }
 
 function sameValueSet(left, right) {
@@ -5967,102 +4954,8 @@ function sameValueSet(left, right) {
   return leftSet.size === rightSet.size && [...leftSet].every(value => rightSet.has(value));
 }
 
-function getPrincipalGroupIds(principalType, principalId) {
-  return readMemberships()
-    .filter(membership => membership.principalType === principalType && membership.principalId === principalId)
-    .map(membership => membership.groupId);
-}
-
-function canAssignSubmittedGroups(userId, principalType, principalId, submittedGroupIds, { creating = false } = {}) {
-  const currentGroupIds = creating ? [] : getPrincipalGroupIds(principalType, principalId);
-  return sameValueSet(currentGroupIds, submittedGroupIds) || hasPermission(userId, 'permission:assign');
-}
-
-function setPrincipalGroupMemberships(principalType, principalId, groupIds) {
-  const normalizedPrincipalType = principalType === 'agent' ? 'agent' : 'user';
-  const normalizedPrincipalId = parseInt(principalId, 10);
-
-  if (Number.isNaN(normalizedPrincipalId)) {
-    throw new Error('Account not found for group assignment');
-  }
-
-  if (normalizedPrincipalType === 'user' && !readUsers().some(user => user.id === normalizedPrincipalId)) {
-    throw new Error('User account not found for group assignment');
-  }
-
-  if (normalizedPrincipalType === 'agent' && !readAgents().some(agent => agent.id === normalizedPrincipalId)) {
-    throw new Error('Agent account not found for group assignment');
-  }
-
-  const normalizedGroupIds = normalizeSubmittedGroupIds(groupIds);
-  const existingMemberships = readMemberships().filter(membership =>
-    membership.principalType !== normalizedPrincipalType || membership.principalId !== normalizedPrincipalId
-  );
-  const nextMemberships = normalizedGroupIds.map((groupId, index) => ({
-    id: existingMemberships.length + index + 1,
-    principalType: normalizedPrincipalType,
-    principalId: normalizedPrincipalId,
-    groupId
-  }));
-
-  writeMemberships([...existingMemberships, ...nextMemberships]);
-}
-
-function normalizeSubmittedPermissions(permissions) {
-  if (!permissions) return [];
-
-  const validPermissions = new Set(readPermissions());
-  const submittedPermissions = Array.isArray(permissions) ? permissions : [permissions];
-  const normalizedPermissions = [];
-
-  submittedPermissions.forEach(permission => {
-    const normalizedPermission = String(permission || '').trim();
-
-    if (!normalizedPermission || !validPermissions.has(normalizedPermission)) {
-      throw new Error('Invalid permission selection');
-    }
-
-    if (!normalizedPermissions.includes(normalizedPermission)) {
-      normalizedPermissions.push(normalizedPermission);
-    }
-  });
-
-  return normalizedPermissions;
-}
-
-function readAgents() {
-  return readJsonArrayCached(AGENTS_FILE);
-}
-
-function normalizeAgents(agents) {
-  const seenAgentIds = new Set();
-
-  return agents.filter(agent => {
-    const agentId = parseInt(agent.id, 10);
-    if (Number.isNaN(agentId) || seenAgentIds.has(agentId)) return false;
-
-    seenAgentIds.add(agentId);
-    agent.id = agentId;
-    agent.type = 'agent';
-    agent.provider = PROVIDERS.includes(agent.provider) ? agent.provider : 'openai';
-    return true;
-  });
-}
-
-function writeAgents(agents) {
-  writeFileAtomic(AGENTS_FILE, JSON.stringify(normalizeAgents(agents), null, 2));
-}
-
-function readRuns() {
-  return readJsonArrayCached(RUNS_FILE);
-}
-
-function replaySnapshotRelativePath(runId) {
-  return path.join('replay-snapshots', `run-${runId}.json`);
-}
-
-function replaySnapshotFilePath(runId) {
-  return path.join(DATA_DIR, replaySnapshotRelativePath(runId));
+function readRuns(options = {}) {
+  return readAllRuntimeRuns(options);
 }
 
 function extractReplaySummary(snapshot) {
@@ -6092,22 +4985,6 @@ function extractReplaySummary(snapshot) {
     browserEvidenceStatus: snapshot.browserEvidenceStatus || null,
     browserEvidenceDetail: snapshot.browserEvidenceDetail || null
   };
-}
-
-function readReplaySnapshotFile(run) {
-  if (!run || typeof run !== 'object') return null;
-  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
-  if (!run.replaySnapshotPath) return null;
-
-  const snapshotPath = path.resolve(DATA_DIR, run.replaySnapshotPath);
-  if (!snapshotPath.startsWith(DATA_DIR + path.sep)) return null;
-  if (!fs.existsSync(snapshotPath)) return null;
-
-  try {
-    return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
-  } catch (error) {
-    return null;
-  }
 }
 
 async function readRunReplaySnapshot(run) {
@@ -6141,125 +5018,8 @@ async function hydrateRunReplaySnapshots(runs, { limit = getRuntimeSchedulerCand
     : { ...run });
 }
 
-function writeReplaySnapshotFile(runId, snapshot) {
-  if (!fs.existsSync(REPLAY_SNAPSHOTS_DIR)) {
-    fs.mkdirSync(REPLAY_SNAPSHOTS_DIR, { recursive: true });
-  }
-
-  const filePath = replaySnapshotFilePath(runId);
-  writeFileAtomic(filePath, JSON.stringify(snapshot, null, 2));
-  return replaySnapshotRelativePath(runId);
-}
-
-function attachReplayMetadata(run, snapshot) {
-  const summary = extractReplaySummary(snapshot);
-  run.replaySnapshotPath = replaySnapshotRelativePath(run.id);
-  run.replaySummary = summary;
-  if (summary && summary.mutationCount !== undefined) run.mutationCount = summary.mutationCount;
-  if (summary && summary.mutationOutcome) run.mutationOutcome = summary.mutationOutcome;
-  delete run.replaySnapshot;
-  return run;
-}
-
-async function writeRunReplaySnapshot(runId, snapshot, { allowFinalizedAppend = false } = {}) {
-  const result = await getRunReplayRepository().updateRunReplay({
-    runId,
-    update: () => sanitizeSnapshotValue(snapshot),
-    allowFinalizedAppend
-  });
-  return result ? result.record.snapshot : null;
-}
-
-function clearReplaySnapshotFiles() {
-  fs.rmSync(REPLAY_SNAPSHOTS_DIR, { recursive: true, force: true });
-  fs.mkdirSync(REPLAY_SNAPSHOTS_DIR, { recursive: true });
-  dataVersion += 1;
-  pageRenderCache.clear();
-  pageRenderInFlight.clear();
-}
-
 async function resetDebugEventState() {
-  try {
-    await eventJournal.close();
-  } catch (_) {
-    // Debug reset is the explicit local recovery surface for a failed journal;
-    // close() still releases the persistent descriptor before replacement.
-  }
-  writeFileAtomic(EVENTS_FILE, '');
-  eventJournal = createDurableAppendJournal(EVENTS_FILE, EVENT_JOURNAL_OPTIONS);
-  runEventChains.clear();
-  reservedRunEventChains.clear();
-  reservedEventIds.clear();
-  eventAppendFailure = null;
-}
-
-function normalizeRuns(runs) {
-  return runs.map(run => {
-    const runId = parseInt(run.id, 10);
-    const ticketId = parseInt(run.ticketId, 10);
-    const agentId = parseInt(run.agentId, 10);
-
-    run.id = runId;
-    run.ticketId = ticketId;
-    run.agentId = agentId;
-    run.workspaceRoot = run.workspaceRoot || WORKSPACE_ROOT;
-    run.mainWorkspaceRoot = run.mainWorkspaceRoot || run.workspaceRoot || WORKSPACE_ROOT;
-    run.executionWorkspaceType = run.executionWorkspaceType === 'main_owned_paths'
-      ? run.executionWorkspaceType
-      : 'main';
-    run.allocationPlanId = run.allocationPlanId ? parseInt(run.allocationPlanId, 10) : null;
-    run.allocationPlanId = Number.isNaN(run.allocationPlanId) ? null : run.allocationPlanId;
-    run.allocationItemId = run.allocationItemId ? parseInt(run.allocationItemId, 10) : null;
-    run.allocationItemId = Number.isNaN(run.allocationItemId) ? null : run.allocationItemId;
-    run.ownedOutputPaths = Array.isArray(run.ownedOutputPaths) ? run.ownedOutputPaths : [];
-    run.allocationSubtask = typeof run.allocationSubtask === 'string' ? run.allocationSubtask : null;
-    run.executionMode = run.executionMode === 'workflow' ? 'workflow' : 'agent';
-    run.workflowId = run.executionMode === 'workflow' && typeof run.workflowId === 'string' ? run.workflowId : null;
-    run.workflowInput = run.executionMode === 'workflow' && run.workflowInput && typeof run.workflowInput === 'object' && !Array.isArray(run.workflowInput)
-      ? run.workflowInput
-      : null;
-    run.capabilityType = run.executionMode === 'workflow' ? 'workflow' : 'directAction';
-    run.capabilityId = run.capabilityType === 'workflow' ? run.workflowId : 'agent-selected-actions';
-    run.capabilityInput = run.capabilityType === 'workflow' ? run.workflowInput : null;
-    run.executionPolicySnapshot = copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run));
-    run.runtimeLimitsSnapshot = normalizeRuntimeLimitsSnapshot(run.runtimeLimitsSnapshot);
-    run.verificationContractSnapshot = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
-    run.workTypeSnapshot = normalizeWorkTypeSnapshot(run.workTypeSnapshot);
-    run.workTypeId = run.workTypeSnapshot ? run.workTypeSnapshot.id : null;
-    run.leaseOwner = typeof run.leaseOwner === 'string' && run.leaseOwner.trim() ? run.leaseOwner : null;
-    run.leaseExpiresAt = typeof run.leaseExpiresAt === 'string' && isValidIsoTimestamp(run.leaseExpiresAt) ? run.leaseExpiresAt : null;
-    run.currentStepId = typeof run.currentStepId === 'string' && run.currentStepId.trim() ? run.currentStepId : null;
-    run.currentWorkflowAction = typeof run.currentWorkflowAction === 'string' && run.currentWorkflowAction.trim() ? run.currentWorkflowAction : null;
-    run.currentPhase = EXECUTION_PHASES.includes(run.currentPhase) ? run.currentPhase : 'planning';
-    run.lastHeartbeatAt = typeof run.lastHeartbeatAt === 'string' && isValidIsoTimestamp(run.lastHeartbeatAt) ? run.lastHeartbeatAt : null;
-    run.runEvaluation = run.runEvaluation && typeof run.runEvaluation === 'object' && !Array.isArray(run.runEvaluation)
-      ? sanitizeSnapshotValue(run.runEvaluation)
-      : null;
-    run.runConsequence = run.runConsequence && typeof run.runConsequence === 'object' && !Array.isArray(run.runConsequence)
-      ? sanitizeSnapshotValue(run.runConsequence)
-      : null;
-    run.triage = normalizeTriage(run.triage);
-    if (run.replaySnapshot && typeof run.replaySnapshot === 'object') {
-      const snapshot = sanitizeSnapshotValue(run.replaySnapshot);
-      writeReplaySnapshotFile(run.id, snapshot);
-      attachReplayMetadata(run, snapshot);
-    } else {
-      run.replaySnapshotPath = typeof run.replaySnapshotPath === 'string' ? run.replaySnapshotPath : null;
-      run.replaySummary = run.replaySummary && typeof run.replaySummary === 'object' ? run.replaySummary : null;
-    }
-    return run;
-  });
-}
-
-function writeRuns(runs) {
-  validateUniqueIntegerIds('runs.json', runs);
-  runs.forEach(run => {
-    if (!Number.isSafeInteger(run.ticketId) || run.ticketId <= 0 || !Number.isSafeInteger(run.agentId) || run.agentId <= 0) {
-      throw dataIntegrityError('runs.json', `run ${run.id} has an invalid ticketId or agentId`);
-    }
-    getRunRuntimeLimitsSnapshot(run);
-  });
-  writeFileAtomic(RUNS_FILE, JSON.stringify(normalizeRuns(runs), null, 2));
+  evidencePersistenceFailure = null;
 }
 
 function getRunLeaseDurationMs() {
@@ -6273,76 +5033,560 @@ function getRuntimeSchedulerCandidateLimit() {
 
 function getRunLeaseRepository() {
   if (runLeaseRepository) return runLeaseRepository;
-  const candidateLimit = getRuntimeSchedulerCandidateLimit();
-  runLeaseRepository = assertRunLeaseRepository(new JsonRunLeaseRepository({
-    readRuns,
-    writeRuns,
-    appendEvent,
-    sanitizePayload: sanitizeSnapshotValue,
-    maxQueryRows: candidateLimit,
-    maxEligibleRunIds: candidateLimit
-  }));
+  runLeaseRepository = assertRunLeaseRepository(postgresRuntimeStore);
   return runLeaseRepository;
+}
+
+function getRunPhaseRepository() {
+  if (runPhaseRepository) return runPhaseRepository;
+  runPhaseRepository = assertRunPhaseRepository(postgresRuntimeStore);
+  return runPhaseRepository;
 }
 
 function getRunTerminalizationRepository() {
   if (runTerminalizationRepository) return runTerminalizationRepository;
-  runTerminalizationRepository = assertRunTerminalizationRepository(new JsonRunTerminalizationRepository({
-    readRuns,
-    writeRuns,
-    writeReplaySnapshotFile,
-    attachReplayMetadata,
-    appendEvent,
-    sanitizePayload: sanitizeSnapshotValue
-  }));
+  runTerminalizationRepository = assertRunTerminalizationRepository(postgresRuntimeStore);
   return runTerminalizationRepository;
 }
 
 function getTicketRunLifecycleRepository() {
   if (ticketRunLifecycleRepository) return ticketRunLifecycleRepository;
-  ticketRunLifecycleRepository = assertTicketRunLifecycleRepository(new JsonTicketRunLifecycleRepository({
-    readTickets,
-    writeTickets,
-    readRuns,
-    writeRuns,
-    appendEvent,
-    sanitizePayload: sanitizeSnapshotValue
-  }));
+  ticketRunLifecycleRepository = assertTicketRunLifecycleRepository(postgresRuntimeStore);
   return ticketRunLifecycleRepository;
 }
 
 function getRunReplayRepository() {
   if (runReplayRepository) return runReplayRepository;
-  runReplayRepository = assertRunReplayRepository(new JsonRunReplayRepository({
-    readRuns,
-    writeRuns,
-    readReplaySnapshotFile,
-    writeReplaySnapshotFile,
-    attachReplayMetadata,
-    sanitizePayload: sanitizeSnapshotValue,
-    maxQueryRows: getRuntimeSchedulerCandidateLimit()
-  }));
+  runReplayRepository = assertRunReplayRepository(postgresRuntimeStore);
   return runReplayRepository;
+}
+
+function getRuntimeStateReadRepository() {
+  if (runtimeStateReadRepository) return runtimeStateReadRepository;
+  runtimeStateReadRepository = assertRuntimeStateReadRepository(postgresRuntimeStore);
+  return runtimeStateReadRepository;
+}
+
+function getRunRecoveryRepository() {
+  if (runRecoveryRepository) return runRecoveryRepository;
+  runRecoveryRepository = assertRunRecoveryRepository(postgresRuntimeStore);
+  return runRecoveryRepository;
+}
+
+function getRuntimeBootstrapRepository() {
+  if (runtimeBootstrapRepository) return runtimeBootstrapRepository;
+  runtimeBootstrapRepository = assertRuntimeBootstrapRepository(postgresRuntimeStore);
+  return runtimeBootstrapRepository;
+}
+
+function getTriageRepository() {
+  if (triageRepository) return triageRepository;
+  triageRepository = assertTriageRepository(postgresRuntimeStore);
+  return triageRepository;
+}
+
+function getOperationalStatusRepository() {
+  if (operationalStatusRepository) return operationalStatusRepository;
+  operationalStatusRepository = assertOperationalStatusRepository(postgresRuntimeStore);
+  return operationalStatusRepository;
+}
+
+function getDiagnosticLogRepository() {
+  if (diagnosticLogRepository) return diagnosticLogRepository;
+  diagnosticLogRepository = assertDiagnosticLogRepository(postgresRuntimeStore);
+  return diagnosticLogRepository;
+}
+function getPerformanceAnalyticsRepository() {
+  if (performanceAnalyticsRepository) return performanceAnalyticsRepository;
+  performanceAnalyticsRepository = assertPerformanceAnalyticsRepository(postgresRuntimeStore);
+  return performanceAnalyticsRepository;
+}
+
+function getWorkContextRepository() {
+  if (workContextRepository) return workContextRepository;
+  workContextRepository = assertWorkContextRepository(postgresRuntimeStore);
+  return workContextRepository;
+}
+function getConfiguredAgentRepository() {
+  if (configuredAgentRepository) return configuredAgentRepository;
+  configuredAgentRepository = assertConfiguredAgentRepository(postgresRuntimeStore);
+  return configuredAgentRepository;
+}
+
+function getAccessCatalogRepository() {
+  if (accessCatalogRepository) return accessCatalogRepository;
+  accessCatalogRepository = assertAccessCatalogRepository(postgresRuntimeStore);
+  return accessCatalogRepository;
+}
+
+function getWorkflowCatalogRepository() {
+  if (workflowCatalogRepository) return workflowCatalogRepository;
+  workflowCatalogRepository = assertWorkflowCatalogRepository(postgresRuntimeStore);
+  return workflowCatalogRepository;
+}
+
+async function collectWorkflowCatalogPages(options = {}) {
+  const repository = getWorkflowCatalogRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const workflows = [];
+  let afterId = "";
+  while (true) {
+    const page = await repository.listWorkflows({ ...options, afterId, limit });
+    workflows.push(...page.workflows);
+    if (page.nextAfterId === null || page.nextAfterId === undefined) break;
+    if (typeof page.nextAfterId !== "string" || !page.nextAfterId || page.nextAfterId === afterId) {
+      throw new Error("listWorkflows returned a non-advancing cursor");
+    }
+    afterId = page.nextAfterId;
+  }
+  return workflows;
+}
+
+function getModelRoutingPolicyRepository() {
+  if (modelRoutingPolicyRepository) return modelRoutingPolicyRepository;
+  modelRoutingPolicyRepository = assertModelRoutingPolicyRepository(postgresRuntimeStore);
+  return modelRoutingPolicyRepository;
+}
+
+async function collectModelRoutingPolicyPages(options = {}) {
+  const repository = getModelRoutingPolicyRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const policies = [];
+  let afterId = 0;
+  while (true) {
+    const page = await repository.listModelRoutingPolicies({ ...options, afterId, limit });
+    policies.push(...page.policies);
+    if (page.nextAfterId === null || page.nextAfterId === undefined) break;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) {
+      throw new Error('listModelRoutingPolicies returned a non-advancing cursor');
+    }
+    afterId = page.nextAfterId;
+  }
+  return policies;
+}
+
+function getConnectorAuthorityRepository() {
+  if (connectorAuthorityRepository) return connectorAuthorityRepository;
+  connectorAuthorityRepository = assertConnectorAuthorityRepository(postgresRuntimeStore);
+  return connectorAuthorityRepository;
+}
+
+function getWatcherAuthorityRepository() {
+  if (watcherAuthorityRepository) return watcherAuthorityRepository;
+  watcherAuthorityRepository = assertWatcherAuthorityRepository(postgresRuntimeStore);
+  return watcherAuthorityRepository;
+}
+
+function getRuntimeLimitsRepository() {
+  if (runtimeLimitsRepository) return runtimeLimitsRepository;
+  runtimeLimitsRepository = assertRuntimeLimitsRepository(postgresRuntimeStore);
+  return runtimeLimitsRepository;
+}
+
+async function collectWatcherPages(options = {}) {
+  const repository = getWatcherAuthorityRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const watchers = [];
+  let afterId = 0;
+  while (true) {
+    const page = await repository.listWatchers({ ...options, afterId, limit });
+    watchers.push(...page.watchers);
+    if (page.nextAfterId === null || page.nextAfterId === undefined) break;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) {
+      throw new Error('listWatchers returned a non-advancing cursor');
+    }
+    afterId = page.nextAfterId;
+  }
+  return watchers;
+}
+
+async function verifyWatcherEvidencePages() {
+  const repository = getWatcherAuthorityRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  for (const method of ['listWatcherObservations', 'listWatcherProposals']) {
+    let beforeId = null;
+    while (true) {
+      const page = await repository[method]({ beforeId, limit });
+      const next = page.nextBeforeId;
+      if (next === null || next === undefined) break;
+      if (!Number.isSafeInteger(next) || next <= 0 || (beforeId !== null && next >= beforeId)) {
+        throw new Error(`${method} returned a non-advancing cursor`);
+      }
+      beforeId = next;
+    }
+  }
+}
+
+async function collectConnectorPages(options = {}) {
+  const repository = getConnectorAuthorityRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const connectors = [];
+  let afterId = 0;
+  while (true) {
+    const page = await repository.listConnectors({ ...options, afterId, limit });
+    connectors.push(...page.connectors);
+    if (page.nextAfterId === null || page.nextAfterId === undefined) break;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) {
+      throw new Error('listConnectors returned a non-advancing cursor');
+    }
+    afterId = page.nextAfterId;
+  }
+  return connectors;
+}
+
+async function verifyConnectorReceiptPages() {
+  const repository = getConnectorAuthorityRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  let beforeId = null;
+  while (true) {
+    const page = await repository.listConnectorReceipts({ beforeId, limit });
+    if (page.nextBeforeId === null || page.nextBeforeId === undefined) return;
+    if (!Number.isSafeInteger(page.nextBeforeId) || page.nextBeforeId <= 0 ||
+        (beforeId !== null && page.nextBeforeId >= beforeId)) {
+      throw new Error('listConnectorReceipts returned a non-advancing cursor');
+    }
+    beforeId = page.nextBeforeId;
+  }
+}
+
+async function listAccessUsers(options = {}) {
+  const page = await getAccessCatalogRepository().listUsers({
+    ...options, afterId: 0, limit: getRuntimeSchedulerCandidateLimit()
+  });
+  if (page.nextAfterId !== null) throw new RangeError('User catalog exceeds the configured page capacity');
+  return page.users;
+}
+
+async function listAccessGroups(options = {}) {
+  const page = await getAccessCatalogRepository().listGroups({
+    ...options, afterId: 0, limit: getRuntimeSchedulerCandidateLimit()
+  });
+  if (page.nextAfterId !== null) throw new RangeError('Group catalog exceeds the configured page capacity');
+  return page.groups;
+}
+
+async function listAccessPermissions() {
+  const page = await getAccessCatalogRepository().listPermissions({
+    afterName: '', limit: getRuntimeSchedulerCandidateLimit()
+  });
+  if (page.nextAfterName !== null) throw new RangeError('Permission catalog exceeds the configured page capacity');
+  return page.permissions;
+}
+
+async function listAccessUserMemberships(options = {}) {
+  const page = await getAccessCatalogRepository().listUserGroupMemberships({
+    ...options,
+    afterUserId: 0,
+    afterGroupId: 0,
+    limit: getRuntimeSchedulerCandidateLimit()
+  });
+  if (page.nextCursor !== null) throw new RangeError('User membership catalog exceeds the configured page capacity');
+  return page.memberships;
+}
+
+async function normalizeSubmittedGroupIdsForCatalog(groupIds) {
+  if (!groupIds) return [];
+  const submitted = Array.isArray(groupIds) ? groupIds : [groupIds];
+  const ids = [];
+  for (const value of submitted) {
+    const id = parseInt(value, 10);
+    if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Invalid group selection');
+    if (!ids.includes(id)) ids.push(id);
+  }
+  if (ids.length > getRuntimeSchedulerCandidateLimit()) throw new Error('Group selection exceeds the configured capacity');
+  const groups = ids.length ? await getAccessCatalogRepository().getGroupsByIds({ groupIds: ids }) : [];
+  if (groups.length !== ids.length) throw new Error('Selected group does not exist');
+  return ids;
+}
+
+async function normalizeSubmittedPermissionsForCatalog(permissions) {
+  if (!permissions) return [];
+  const submitted = Array.isArray(permissions) ? permissions : [permissions];
+  const normalized = [...new Set(submitted.map(value => String(value || '').trim()))];
+  if (normalized.some(value => !value)) throw new Error('Invalid permission selection');
+  const valid = new Set(await listAccessPermissions());
+  if (normalized.some(value => !valid.has(value))) throw new Error('Invalid permission selection');
+  return normalized;
+}
+
+function getProcessTemplateProjectionRepository() {
+  if (processTemplateProjectionRepository) return processTemplateProjectionRepository;
+  processTemplateProjectionRepository = assertProcessTemplateProjectionRepository(postgresRuntimeStore);
+  return processTemplateProjectionRepository;
+}
+
+function getProcessTemplateAuthorityRepository() {
+  if (processTemplateAuthorityRepository) return processTemplateAuthorityRepository;
+  processTemplateAuthorityRepository = assertProcessTemplateAuthorityRepository(postgresRuntimeStore);
+  return processTemplateAuthorityRepository;
+}
+
+async function listConfiguredAgentOptions(options = {}) {
+  const page = await getConfiguredAgentRepository().listConfiguredAgents({
+    ...options,
+    afterId: 0,
+    limit: getRuntimeSchedulerCandidateLimit()
+  });
+  if (page.nextAfterId !== null) {
+    const error = new Error('Configured-agent option list exceeds the configured page capacity');
+    error.code = 'CONFIGURED_AGENT_OPTIONS_TRUNCATED';
+    throw error;
+  }
+  return page.agents;
+}
+
+async function listAgentGroupMembershipOptions(options = {}) {
+  const page = await getConfiguredAgentRepository().listAgentGroupMemberships({
+    ...options,
+    afterAgentId: 0,
+    afterGroupId: 0,
+    limit: getRuntimeSchedulerCandidateLimit()
+  });
+  if (page.nextCursor !== null) {
+    const error = new Error('Configured-agent membership list exceeds the configured page capacity');
+    error.code = 'CONFIGURED_AGENT_MEMBERSHIPS_TRUNCATED';
+    throw error;
+  }
+  return page.memberships;
+}
+
+
+async function collectDiagnosticLogPages(options = {}) {
+  const repository = getDiagnosticLogRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const logs = [];
+  let afterId = 0;
+  while (true) {
+    const page = await repository.listLogs({ ...options, afterId, order: 'asc', limit });
+    logs.push(...page.logs);
+    if (page.nextAfterId === null || page.nextAfterId === undefined) break;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) {
+      throw new Error('listLogs returned a non-advancing cursor');
+    }
+    afterId = page.nextAfterId;
+  }
+  return logs;
+}
+
+async function collectRuntimeStatePages(method, key, options = {}) {
+  const repository = getRuntimeStateReadRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const records = [];
+  let afterId = 0;
+  while (true) {
+    const page = await repository[method]({ ...options, afterId, limit });
+    const values = page && Array.isArray(page[key]) ? page[key] : [];
+    records.push(...values);
+    if (!page || page.nextAfterId === null || page.nextAfterId === undefined) break;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) {
+      throw new Error(`${method} returned a non-advancing cursor`);
+    }
+    afterId = page.nextAfterId;
+  }
+  return records;
+}
+
+async function visitPerformanceRunEvidencePages(visitor) {
+  if (typeof visitor !== 'function') throw new TypeError('performance evidence visitor must be a function');
+  const repository = getPerformanceAnalyticsRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  let afterRunId = 0;
+  let throughRunId = null;
+  while (true) {
+    const page = await repository.listPerformanceRunEvidence({ afterRunId, throughRunId, limit });
+    if (!Number.isSafeInteger(page.throughRunId) || page.throughRunId < 0) {
+      throw new Error('listPerformanceRunEvidence returned an invalid high-water run id');
+    }
+    if (throughRunId !== null && page.throughRunId !== throughRunId) {
+      throw new Error('listPerformanceRunEvidence changed its high-water run id');
+    }
+    throughRunId = page.throughRunId;
+    await visitor(page.evidence);
+    if (page.nextAfterRunId === null || page.nextAfterRunId === undefined) break;
+    if (!Number.isSafeInteger(page.nextAfterRunId) || page.nextAfterRunId <= afterRunId) {
+      throw new Error('listPerformanceRunEvidence returned a non-advancing cursor');
+    }
+    afterRunId = page.nextAfterRunId;
+  }
+}
+
+function readAllRuntimeTickets(options = {}) {
+  return collectRuntimeStatePages('listTickets', 'tickets', options);
+}
+
+function readAllRuntimeRuns(options = {}) {
+  return collectRuntimeStatePages('listRuns', 'runs', options);
+}
+
+function readAllRunsForTicket(ticketId) {
+  return collectRuntimeStatePages('listRunsForTicket', 'runs', { ticketId });
+}
+
+function readAllChildTickets(parentTicketId) {
+  return collectRuntimeStatePages('listChildTickets', 'tickets', { parentTicketId });
+}
+
+async function readLatestRunsForTickets(ticketIds) {
+  const ids = [...new Set((ticketIds || []).filter(id => Number.isSafeInteger(id) && id > 0))];
+  if (ids.length === 0) return [];
+  const repository = getRuntimeStateReadRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const runs = [];
+  for (let offset = 0; offset < ids.length; offset += limit) {
+    runs.push(...await repository.listLatestRunsForTickets({ ticketIds: ids.slice(offset, offset + limit) }));
+  }
+  return runs;
+}
+
+function readRunsNeedingTerminalReconciliation() {
+  return collectRuntimeStatePages('listRunsNeedingTerminalReconciliation', 'runs');
+}
+
+async function readAllRecoverableRuns(mode) {
+  const repository = getRunRecoveryRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const runs = [];
+  let afterId = 0;
+  while (true) {
+    const page = await repository.listRecoverableRuns({ mode, afterId, limit });
+    runs.push(...(page && Array.isArray(page.runs) ? page.runs : []));
+    if (!page || page.nextAfterId === null || page.nextAfterId === undefined) break;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) {
+      throw new Error('listRecoverableRuns returned a non-advancing cursor');
+    }
+    afterId = page.nextAfterId;
+  }
+  return runs;
+}
+
+async function readAllRunScopedEvents(runId) {
+  const repository = getRuntimeStateReadRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const events = [];
+  let afterSeq = -1;
+  while (true) {
+    const page = await repository.listRunEvents(runId, { afterSeq, limit });
+    if (!Array.isArray(page) || page.length === 0) break;
+    events.push(...page);
+    const next = page[page.length - 1].seq;
+    if (!Number.isSafeInteger(next) || next <= afterSeq) {
+      throw new Error('listRunEvents returned a non-advancing cursor');
+    }
+    afterSeq = next;
+    if (page.length < limit) break;
+  }
+  return events;
+}
+
+async function readAllRunTimelineEvents(runId) {
+  const repository = getRuntimeStateReadRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const events = [];
+  let afterPosition = 0;
+  while (true) {
+    const page = await repository.listRunTimelineEvents(runId, { afterPosition, limit });
+    events.push(...(page && Array.isArray(page.events) ? page.events : []));
+    if (!page || page.nextPosition === null || page.nextPosition === undefined) break;
+    if (!Number.isSafeInteger(page.nextPosition) || page.nextPosition <= afterPosition) {
+      throw new Error('listRunTimelineEvents returned a non-advancing cursor');
+    }
+    afterPosition = page.nextPosition;
+  }
+  return events;
+}
+
+async function readAllTicketEvents(ticketId) {
+  const repository = getRuntimeStateReadRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const events = [];
+  let afterPosition = 0;
+  while (true) {
+    const page = await repository.listTicketEvents(ticketId, { afterPosition, limit });
+    events.push(...(page && Array.isArray(page.events) ? page.events : []));
+    if (!page || page.nextPosition === null || page.nextPosition === undefined) break;
+    if (!Number.isSafeInteger(page.nextPosition) || page.nextPosition <= afterPosition) {
+      throw new Error('listTicketEvents returned a non-advancing cursor');
+    }
+    afterPosition = page.nextPosition;
+  }
+  return events;
+}
+
+async function readAllRunOperations(runId) {
+  const repository = getRuntimeStateReadRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const operations = [];
+  let afterId = 0;
+  while (true) {
+    const page = await repository.listRunOperations(runId, { afterId, limit });
+    if (!Array.isArray(page) || page.length === 0) break;
+    operations.push(...page);
+    const next = page[page.length - 1].id;
+    if (!Number.isSafeInteger(next) || next <= afterId) {
+      throw new Error('listRunOperations returned a non-advancing cursor');
+    }
+    afterId = next;
+    if (page.length < limit) break;
+  }
+  return operations;
+}
+
+async function readAllTicketOperations(ticketId) {
+  const repository = getRuntimeStateReadRepository();
+  const limit = getRuntimeSchedulerCandidateLimit();
+  const operations = [];
+  let afterId = 0;
+  while (true) {
+    const page = await repository.listTicketOperations(ticketId, { afterId, limit });
+    if (!Array.isArray(page) || page.length === 0) break;
+    operations.push(...page);
+    const next = page[page.length - 1].id;
+    if (!Number.isSafeInteger(next) || next <= afterId) {
+      throw new Error('listTicketOperations returned a non-advancing cursor');
+    }
+    afterId = next;
+    if (page.length < limit) break;
+  }
+  return operations;
+}
+
+async function readRuntimeRunAuthority(runId) {
+  const repository = getRuntimeStateReadRepository();
+  const run = await repository.getRun(runId);
+  if (!run) return null;
+  const [ticket, replay, evaluation, consequence] = await Promise.all([
+    repository.getTicket(run.ticketId),
+    getRunReplayRepository().readRunReplay(run.id),
+    repository.getRunEvaluation(run.id),
+    repository.getRunConsequence(run.id)
+  ]);
+  return {
+    ticket,
+    run: {
+      ...run,
+      ...(replay ? { replaySnapshot: replay.snapshot, replaySummary: extractReplaySummary(replay.snapshot) } : {}),
+      ...(evaluation ? { runEvaluation: evaluation.evaluation } : {}),
+      ...(consequence ? { runConsequence: consequence.consequence } : {})
+    }
+  };
 }
 
 function getNonTerminalEvidenceRepository() {
   if (nonTerminalEvidenceRepository) return nonTerminalEvidenceRepository;
-  nonTerminalEvidenceRepository = assertNonTerminalEvidenceRepository(new JsonNonTerminalEvidenceRepository({
-    readOperationHistory,
-    writeOperationHistory,
-    readReplaySnapshot: async runId => {
-      const record = await getRunReplayRepository().readRunReplay(runId);
-      return record ? record.snapshot : null;
-    },
-    writeReplaySnapshot: async (runId, snapshot) => writeRunReplaySnapshot(runId, snapshot, {
-      allowFinalizedAppend: true
-    }),
-    getRunEvents,
-    appendEvent,
-    acquireTargetLock: ({ run, operation, args }) => acquireWorkspaceMutationLock(run, operation, args),
-    sanitizePayload: sanitizeSnapshotValue
-  }));
+  nonTerminalEvidenceRepository = assertNonTerminalEvidenceRepository(postgresRuntimeStore);
   return nonTerminalEvidenceRepository;
+}
+
+function getWorkspaceOwnershipRepository() {
+  if (workspaceOwnershipRepository) return workspaceOwnershipRepository;
+  workspaceOwnershipRepository = assertWorkspaceOwnershipRepository(postgresRuntimeStore);
+  return workspaceOwnershipRepository;
+}
+
+function getOperatorRecoveryRepository() {
+  if (operatorRecoveryRepository) return operatorRecoveryRepository;
+  operatorRecoveryRepository = assertOperatorRecoveryRepository(postgresRuntimeStore);
+  return operatorRecoveryRepository;
 }
 
 function isRunLeaseExpired(run, nowMs = Date.now()) {
@@ -6359,15 +5603,14 @@ function isRunLeaseHeldByCurrentProcess(run) {
 }
 
 async function acquireRunLease(runId) {
+  const pendingRun = await getRunLeaseRepository().getRun(runId);
+  const ticket = pendingRun ? await getRuntimeStateReadRepository().getTicket(pendingRun.ticketId) : null;
   const claim = await getRunLeaseRepository().claimPendingRun({
     leaseOwner: RUN_LEASE_OWNER,
     leaseDurationMs: getRunLeaseDurationMs(),
     eligibleRunIds: [runId],
     claimPayload: claimedRun => ({
-      claimReceipt: buildClaimReceipt(
-        claimedRun,
-        readTickets().find(item => item && item.id === claimedRun.ticketId) || null
-      )
+      claimReceipt: buildClaimReceipt(claimedRun, ticket)
     })
   });
   return claim ? claim.run : null;
@@ -6402,11 +5645,12 @@ async function releaseRunLease(runId, payload = {}) {
   return released ? released.run : null;
 }
 
-function countRunRetryAttempts(run) {
+function countRunRetryAttempts(run, suppliedRuns = null) {
   if (!run) return 0;
   const runCreatedAt = run.createdAt ? Date.parse(run.createdAt) : null;
 
-  return readRuns().filter(item => {
+  const runs = Array.isArray(suppliedRuns) ? suppliedRuns : [];
+  return runs.filter(item => {
     if (item.id === run.id || item.ticketId !== run.ticketId) return false;
     if (runCreatedAt === null || Number.isNaN(runCreatedAt)) return item.id < run.id;
     const itemCreatedAt = item.createdAt ? Date.parse(item.createdAt) : null;
@@ -6415,19 +5659,29 @@ function countRunRetryAttempts(run) {
   }).length;
 }
 
-function buildRunEvaluation(run, { snapshot: suppliedSnapshot = null, events: suppliedEvents = null } = {}) {
+function buildRunEvaluation(run, {
+  snapshot: suppliedSnapshot = null,
+  events: suppliedEvents = null,
+  logs: suppliedLogs = null,
+  operations: suppliedOperations = null,
+  ticketRuns: suppliedTicketRuns = null,
+  attemptPosition: suppliedAttemptPosition = null
+} = {}) {
   if (!run) return null;
 
   const snapshot = suppliedSnapshot || run.replaySnapshot || {};
   const replaySummary = suppliedSnapshot
     ? extractReplaySummary(snapshot) || {}
     : run.replaySummary || extractReplaySummary(snapshot) || {};
-  const events = suppliedEvents || getRunEvents(run.id);
-  const runLogs = readLogs().filter(log => log.runId === run.id);
+  const events = Array.isArray(suppliedEvents)
+    ? suppliedEvents
+    : (Array.isArray(snapshot.events) ? snapshot.events : []);
+  const runLogs = (suppliedLogs || []).filter(log => log.runId === run.id);
   const workflowActions = Array.isArray(snapshot.workflowActions) ? snapshot.workflowActions : [];
   const providerRequests = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests : [];
   const modelResponses = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses : [];
   const postconditionsCheckedEvents = events.filter(event => event.type === 'run.postconditions_checked');
+  const workspaceOperations = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
   const postconditionFailedEvents = events.filter(event => event.type === 'run.postcondition_failed');
   const latestPostconditionsChecked = postconditionsCheckedEvents[postconditionsCheckedEvents.length - 1] || null;
   const latestPostconditionsPayload = latestPostconditionsChecked && latestPostconditionsChecked.payload
@@ -6460,7 +5714,9 @@ function buildRunEvaluation(run, { snapshot: suppliedSnapshot = null, events: su
     event.type === 'workspace.violation_detected'
   );
   const formalViolationCheckEvents = events.filter(event => event.type === 'run.violations_checked');
-  const mutationCount = getRunMutationCount({ ...run, replaySnapshot: snapshot, replaySummary });
+  const mutationCount = suppliedOperations
+    ? countRunMutatingOperations(run.id, suppliedOperations)
+    : getRunMutationCount({ ...run, replaySnapshot: snapshot, replaySummary });
   const violationItems = formalViolationEvents.map(event => ({
     id: event.id || null,
     ts: event.ts || null,
@@ -6518,7 +5774,9 @@ function buildRunEvaluation(run, { snapshot: suppliedSnapshot = null, events: su
       modelResponses: replaySummary.modelResponses !== undefined ? replaySummary.modelResponses : modelResponses.length,
       workspaceOperations: replaySummary.workspaceOperations !== undefined ? replaySummary.workspaceOperations : workspaceOperations.length,
       mutationCount,
-      retryCount: countRunRetryAttempts(run)
+      retryCount: suppliedAttemptPosition && Number.isSafeInteger(suppliedAttemptPosition.attemptNumber)
+        ? Math.max(0, suppliedAttemptPosition.attemptNumber - 1)
+        : countRunRetryAttempts(run, suppliedTicketRuns)
     },
     violations: {
       status: violationStatus,
@@ -6666,19 +5924,24 @@ function makeUnavailableBrowserReport() {
 // limits. Unobservable metrics are reported as null (rendered as "unavailable")
 // rather than fabricated. This is evidence for future retry/budget work; it does
 // not change completion, verification, triage, or lifecycle semantics.
-function buildRunAttemptUsage(run, ticketRuns = null) {
+function buildRunAttemptUsage(run, ticketRuns = null, suppliedEvents = null, suppliedAttemptPosition = null) {
   if (!run) return null;
 
   // Attempt ordering is creation order; run ids are globally monotonic via
   // nextId(), so id-ascending within a ticket is a stable attempt sequence.
-  const siblings = (Array.isArray(ticketRuns)
-    ? ticketRuns
-    : readRuns().filter(item => item.ticketId === run.ticketId))
-    .slice()
-    .sort((a, b) => (a.id || 0) - (b.id || 0));
-  const attemptCount = siblings.length;
-  const index = siblings.findIndex(item => item.id === run.id);
-  const attemptNumber = index >= 0 ? index + 1 : null;
+  let attemptCount;
+  let attemptNumber;
+  if (suppliedAttemptPosition) {
+    attemptCount = suppliedAttemptPosition.attemptCount;
+    attemptNumber = suppliedAttemptPosition.attemptNumber;
+  } else {
+    const siblings = (Array.isArray(ticketRuns) ? ticketRuns : [])
+      .slice()
+      .sort((a, b) => (a.id || 0) - (b.id || 0));
+    attemptCount = siblings.length;
+    const index = siblings.findIndex(item => item.id === run.id);
+    attemptNumber = index >= 0 ? index + 1 : null;
+  }
 
   const isTerminal = ['completed', 'failed', 'interrupted'].includes(run.status);
   // Only trust usage counts once there is terminal evidence (persisted evaluation
@@ -6699,7 +5962,7 @@ function buildRunAttemptUsage(run, ticketRuns = null) {
   if (!verificationRequired) {
     verificationOutcome = 'not_required';
   } else {
-    const events = getRunEvents(run.id);
+    const events = Array.isArray(suppliedEvents) ? suppliedEvents : [];
     if (events.some(event => event.type === 'run.verification_passed')) {
       verificationOutcome = 'passed';
     } else if (events.some(event => event.type === 'run.verification_failed' || event.type === 'run.postcondition_failed')) {
@@ -6955,7 +6218,7 @@ function collectFormalWorkspaceViolations(run, {
 
   const snapshot = suppliedSnapshot || run.replaySnapshot || {};
   const workspaceOperations = Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : [];
-  const workspaceOperationEvents = (suppliedEvents || getRunEvents(run.id))
+  const workspaceOperationEvents = (Array.isArray(suppliedEvents) ? suppliedEvents : [])
     .filter(event => event.type === 'workspace.operation');
   const violations = [];
   const seen = new Set();
@@ -6991,37 +6254,6 @@ function collectFormalWorkspaceViolations(run, {
   });
 
   return violations;
-}
-
-async function completeRunViolationCheck(runId) {
-  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
-  if (!run) return [];
-
-  const existingEvents = getRunEvents(run.id);
-  if (existingEvents.some(event => event.type === 'run.violation_detected' || event.type === 'run.violations_checked')) {
-    return existingEvents.filter(event => event.type === 'run.violation_detected').map(event => event.payload || {});
-  }
-
-  const violations = collectFormalWorkspaceViolations(run);
-  if (violations.length > 0) {
-    for (const violation of violations) {
-      await appendEvent({
-        type: 'run.violation_detected',
-        ticketId: run.ticketId,
-        runId: run.id,
-        payload: sanitizeSnapshotValue(violation)
-      });
-    }
-    return violations;
-  }
-
-  await appendEvent({
-    type: 'run.violations_checked',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: { status: 'none', checked: 'workspace_mutations' }
-  });
-  return [];
 }
 
 function getValueAtPath(source, pathExpression) {
@@ -7130,13 +6362,16 @@ function evaluateWorkflowPostcondition(run, workflow, postcondition, output) {
   };
 }
 
-async function completeRunPostconditionCheck(runId) {
-  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
+function buildRunPostconditionEvidence(run, existingEvents = []) {
   if (!run || run.executionMode !== 'workflow' || !run.workflowId) return null;
 
-  const existingEvents = getRunEvents(run.id);
   if (existingEvents.some(event => event.type === 'run.postconditions_checked')) {
-    return existingEvents.filter(event => event.type === 'run.postcondition_failed').map(event => event.payload || {});
+    return {
+      failedResults: existingEvents
+        .filter(event => event.type === 'run.postcondition_failed')
+        .map(event => event.payload && event.payload.postcondition ? event.payload.postcondition : event.payload || {}),
+      events: []
+    };
   }
 
   const capturedContract = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
@@ -7155,41 +6390,53 @@ async function completeRunPostconditionCheck(runId) {
   };
   const contractSource = 'run_snapshot';
   const postconditions = workflow && Array.isArray(workflow.postconditions) ? workflow.postconditions : [];
-  if (postconditions.length === 0) return null;
+  if (postconditions.length === 0) return { failedResults: [], events: [] };
 
   const output = getRunWorkflowOutput(run);
   const results = postconditions.map(postcondition => evaluateWorkflowPostcondition(run, workflow, postcondition, output));
   const failedResults = results.filter(result => !result.passed);
 
-  for (const result of failedResults) {
-    await appendEvent({
+  return {
+    failedResults,
+    events: [
+      ...failedResults.map(result => ({
       type: 'run.postcondition_failed',
-      ticketId: run.ticketId,
-      runId: run.id,
       payload: sanitizeSnapshotValue({
         workflowId: workflow.id,
         contractSource,
         postcondition: result
       })
+      })),
+      {
+        type: 'run.postconditions_checked',
+        payload: {
+          workflowId: workflow.id,
+          contractSource,
+          verifierContractExecution: workflow.verifierContract ? 'metadata_only_not_executed' : 'not_declared',
+          status: failedResults.length > 0 ? 'failed' : 'passed',
+          passed: results.length - failedResults.length,
+          failed: failedResults.length,
+          total: results.length,
+          results: sanitizeSnapshotValue(results)
+        }
+      }
+    ]
+  };
+}
+
+async function completeRunPostconditionCheck(runId) {
+  const run = await hydrateRunReplaySnapshot(await getRunById(runId));
+  if (!run) return null;
+  const plan = buildRunPostconditionEvidence(run, (await getRunEvents(run.id)));
+  if (!plan) return null;
+  for (const event of plan.events) {
+    await appendEvent({
+      ...event,
+      ticketId: run.ticketId,
+      runId: run.id
     });
   }
-  await appendEvent({
-    type: 'run.postconditions_checked',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
-      workflowId: workflow.id,
-      contractSource,
-      verifierContractExecution: workflow.verifierContract ? 'metadata_only_not_executed' : 'not_declared',
-      status: failedResults.length > 0 ? 'failed' : 'passed',
-      passed: results.length - failedResults.length,
-      failed: failedResults.length,
-      total: results.length,
-      results: sanitizeSnapshotValue(results)
-    }
-  });
-
-  return failedResults;
+  return plan.failedResults;
 }
 
 function buildVerificationFailureReason(failedResults) {
@@ -7209,28 +6456,6 @@ function buildVerificationFailure(failedResults) {
       failedPostconditions: sanitizeSnapshotValue(Array.isArray(failedResults) ? failedResults : [])
     }
   };
-}
-
-async function persistRunEvaluation(runId) {
-  const runs = readRuns();
-  const storedRun = runs.find(item => item.id === runId);
-  const run = await hydrateRunReplaySnapshot(storedRun);
-  if (!run) return null;
-
-  const runEvaluation = buildRunEvaluation(run);
-  if (!runEvaluation) return null;
-
-  storedRun.runEvaluation = runEvaluation;
-  writeRuns(runs);
-  await appendEvent({
-    type: 'run.evaluation_completed',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
-      evaluation: runEvaluation
-    }
-  });
-  return runEvaluation;
 }
 
 function buildMutationConsequenceFromHistory(record) {
@@ -7298,7 +6523,7 @@ function collectAttemptedMutationConsequences(run, snapshot, suppliedEvents = nu
     });
   });
 
-  (suppliedEvents || getRunEvents(run.id)).filter(event => event.type === 'workspace.operation').forEach(event => {
+  (Array.isArray(suppliedEvents) ? suppliedEvents : []).filter(event => event.type === 'workspace.operation').forEach(event => {
     const payload = event.payload || {};
     const operation = getWorkspaceOperationNameFromEvidence(payload);
     if (!operation || !AGENT_MUTATING_OPERATIONS.includes(operation)) return;
@@ -7317,7 +6542,7 @@ function collectAttemptedMutationConsequences(run, snapshot, suppliedEvents = nu
 }
 
 function collectExplicitExternalEffects(run, suppliedEvents = null) {
-  return (suppliedEvents || getRunEvents(run.id))
+  return (Array.isArray(suppliedEvents) ? suppliedEvents : [])
     .filter(event => event.type === 'external.effect')
     .map(event => ({
       id: event.id || null,
@@ -7327,7 +6552,7 @@ function collectExplicitExternalEffects(run, suppliedEvents = null) {
 }
 
 function collectExplicitNotifications(run, suppliedEvents = null) {
-  return (suppliedEvents || getRunEvents(run.id))
+  return (Array.isArray(suppliedEvents) ? suppliedEvents : [])
     .filter(event => event.type === 'notification.sent')
     .map(event => ({
       id: event.id || null,
@@ -7339,7 +6564,8 @@ function collectExplicitNotifications(run, suppliedEvents = null) {
 function buildRunConsequence(run, {
   snapshot: suppliedSnapshot = null,
   evaluation: suppliedEvaluation = null,
-  events: suppliedEvents = null
+  events: suppliedEvents = null,
+  operations: suppliedOperations = null
 } = {}) {
   if (!run) return null;
 
@@ -7362,7 +6588,7 @@ function buildRunConsequence(run, {
     }
   };
 
-  getOperationHistoryForRun(run.id).forEach(record => {
+  (Array.isArray(suppliedOperations) ? suppliedOperations : []).forEach(record => {
     const mutation = buildMutationConsequenceFromHistory(record);
     if (!mutation) return;
     consequence.mutations.push(mutation.item);
@@ -7379,46 +6605,47 @@ function buildRunConsequence(run, {
   return consequence;
 }
 
-async function persistRunConsequence(runId) {
-  const runs = readRuns();
-  const storedRun = runs.find(item => item.id === runId);
-  const run = await hydrateRunReplaySnapshot(storedRun);
-  if (!run) return null;
-
-  await maybeTestInterrupt(run, 'before_run.consequence_recorded');
-
-  const runConsequence = buildRunConsequence(run);
-  if (!runConsequence) return null;
-
-  storedRun.runConsequence = runConsequence;
-  writeRuns(runs);
-  await appendEvent({
-    type: 'run.consequence_recorded',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
-      consequence: runConsequence
-    }
-  });
-  return runConsequence;
-}
-
 async function expireStaleRunLeases() {
-  const expiredRuns = await getRunLeaseRepository().listExpiredRunningRuns({
-    limit: getRuntimeSchedulerCandidateLimit()
-  });
+  const expiredRuns = await readAllRecoverableRuns('lease_expiry');
 
-  for (const run of expiredRuns) {
-    const targetReconciliation = await reconcilePreparedTargetOperations(run);
+  for (const discoveredRun of expiredRuns) {
+    const recovery = await getRunRecoveryRepository().claimRunRecovery({
+      runId: discoveredRun.id,
+      recoveryOwner: RUN_LEASE_OWNER,
+      leaseDurationMs: getRunLeaseDurationMs(),
+      mode: 'lease_expiry',
+      eventPayload: { reason: 'expired or missing run lease' }
+    });
+    if (!recovery) continue;
+    const run = recovery.run;
+    let runEvents = await readAllRunScopedEvents(run.id);
+    const claimedState = reconstructResumableState(run, runEvents);
+    if (claimedState && claimedState.isTerminal) {
+      const terminalEvent = runEvents.find(event => event.type === 'run.terminalized');
+      const status = (terminalEvent.payload && terminalEvent.payload.status) || 'completed';
+      await getRunRecoveryRepository().repairRecoveredRunTerminalProjection({
+        runId: run.id,
+        recoveryOwner: RUN_LEASE_OWNER,
+        status,
+        eventPayload: {
+          reason: 'terminal event already committed before projection update',
+          terminalEventId: terminalEvent.id || null
+        }
+      });
+      continue;
+    }
+    const targetReconciliation = await reconcilePreparedTargetOperations(run, runEvents);
     if (targetReconciliation.uncertain > 0) {
       await interruptAgentRun(run, 'target operation effect requires explicit reconciliation');
       continue;
     }
     // Check if run is safe to resume before interrupting
-    const resumeState = reconstructResumableState(run);
+    runEvents = await readAllRunScopedEvents(run.id);
+    const resumeState = reconstructResumableState(run, runEvents);
     if (resumeState && resumeState.safeToResumeExecution) {
-      const recovered = await getRunLeaseRepository().recoverExpiredRun({
+      const recovered = await getRunRecoveryRepository().resumeRecoveredRun({
         runId: run.id,
+        recoveryOwner: RUN_LEASE_OWNER,
         eventPayload: {
           reason: 'stale lease, safe to resume',
           priorEvents: resumeState.priorEvents,
@@ -7442,21 +6669,25 @@ async function expireStaleRunLeases() {
       ticketId: run.ticketId,
       runId: run.id,
       payload: {
-        leaseOwner: run.leaseOwner || null,
-        leaseExpiresAt: run.leaseExpiresAt || null,
+        leaseOwner: recovery.previousLease.leaseOwner,
+        leaseExpiresAt: recovery.previousLease.leaseExpiresAt,
         currentStepId: run.currentStepId || null,
         currentWorkflowAction: run.currentWorkflowAction || null,
-        lastHeartbeatAt: run.lastHeartbeatAt || null
+        lastHeartbeatAt: recovery.previousLease.lastHeartbeatAt
       }
     });
-    await interruptAgentRun(run, `Run lease expired for owner ${run.leaseOwner || 'unknown'}`);
+    await interruptAgentRun(run, `Run lease expired for owner ${recovery.previousLease.leaseOwner || 'unknown'}`);
   }
 
   return expiredRuns;
 }
 
-async function reconcilePreparedTargetOperations(run) {
-  const preparedEvents = getRunEvents(run.id).filter(event =>
+async function reconcilePreparedTargetOperations(run, suppliedEvents = null) {
+  const events = Array.isArray(suppliedEvents) ? suppliedEvents : (await getRunEvents(run.id));
+  const completedOperationKeys = new Set(events
+    .filter(event => event && event.type === 'workspace.operation' && event.payload && event.payload.operationKey)
+    .map(event => event.payload.operationKey));
+  const preparedEvents = events.filter(event =>
     event && event.type === 'workspace.operation_prepared' && event.payload && event.payload.operationKey
   );
   let applied = 0;
@@ -7474,7 +6705,11 @@ async function reconcilePreparedTargetOperations(run) {
       paths: [args.path, args.nextPath].filter(value => typeof value === 'string'),
       operation: preparedIntent.operation,
       args
-    }, () => reconcilePreparedTargetOperation(run, preparedEvent));
+    }, () => reconcilePreparedTargetOperation(
+      run,
+      preparedEvent,
+      completedOperationKeys.has(preparedEvent.payload.operationKey)
+    ));
     if (status === 'applied') applied += 1;
     if (status === 'not_applied') notApplied += 1;
     if (status === 'uncertain') uncertain += 1;
@@ -7482,10 +6717,13 @@ async function reconcilePreparedTargetOperations(run) {
   return { applied, notApplied, uncertain };
 }
 
-async function reconcilePreparedTargetOperation(run, preparedEvent) {
+async function reconcilePreparedTargetOperation(run, preparedEvent, completionEvidenceCommitted = false) {
   const operationKey = preparedEvent.payload.operationKey;
   const state = await getNonTerminalEvidenceRepository().getTargetOperation(run.id, operationKey);
   if (state.receipt) {
+    // The receipt, replay item, and completion event commit atomically. Once
+    // completion evidence exists, reconciliation is a bounded idempotent no-op.
+    if (completionEvidenceCommitted) return 'already_reconciled';
     await completeWorkspaceMutationEvidence({
       run,
       step: preparedEvent.stepId == null ? 0 : preparedEvent.stepId,
@@ -7603,11 +6841,11 @@ function serializeRunLease(run) {
   };
 }
 
-function getRunAuthorityEvidence(run) {
+function getRunAuthorityEvidence(run, suppliedEvents = null) {
   if (!run) return [];
   const snapshot = run.replaySnapshot || {};
   const replayChecks = Array.isArray(snapshot.authorityChecks) ? snapshot.authorityChecks : [];
-  const eventChecks = getRunEvents(run.id)
+  const eventChecks = (Array.isArray(suppliedEvents) ? suppliedEvents : [])
     .filter(event => event.type === 'authority.allowed' || event.type === 'authority.denied')
     .map(event => ({
       id: event.id || null,
@@ -7631,12 +6869,19 @@ function getRunAuthorityEvidence(run) {
 // the same run more than once per request supply it to avoid repeat scans.
 function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
   if (!run) return null;
-  const summary = options.eventSummary || recentEventSummary(run.id);
+  const suppliedEvents = Array.isArray(options.events) ? options.events : null;
+  const suppliedOperations = Array.isArray(options.operations) ? options.operations : null;
+  const summary = options.eventSummary || { currentStep: null, latestStatus: null, latestError: null, latestWorkspaceMutation: null };
   const replaySummary = run.replaySummary || extractReplaySummary(run.replaySnapshot) || null;
-  const effectiveLogsByRunId = logsByRunId || groupBy(readLogs(), log => log.runId);
+  const effectiveLogsByRunId = logsByRunId || new Map();
   const runLogs = effectiveLogsByRunId.get(run.id) || [];
   const replaySnapshot = run.replaySnapshot || null;
-  const serializedAttemptUsage = buildRunAttemptUsage(run, options.ticketRuns || null);
+  const serializedAttemptUsage = buildRunAttemptUsage(
+    run,
+    options.ticketRuns || null,
+    suppliedEvents,
+    options.attemptPosition || null
+  );
 
   return {
     id: run.id,
@@ -7660,19 +6905,33 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     eventSummary: summary,
     latestEventSummary: summary,
     replaySummary,
-    authorityEvidence: getRunAuthorityEvidence(run),
-    runEvaluation: run.runEvaluation || buildRunEvaluation(run),
+    authorityEvidence: getRunAuthorityEvidence(run, suppliedEvents),
+    runEvaluation: run.runEvaluation || buildRunEvaluation(run, {
+      events: suppliedEvents,
+      logs: runLogs,
+      operations: suppliedOperations,
+      ticketRuns: options.ticketRuns || null,
+      attemptPosition: options.attemptPosition || null
+    }),
     attemptUsage: serializedAttemptUsage,
     budgetStatus: buildRunBudgetStatus(run, serializedAttemptUsage),
-    runConsequence: run.runConsequence || buildRunConsequence(run),
+    runConsequence: run.runConsequence || buildRunConsequence(run, {
+      events: suppliedEvents,
+      operations: suppliedOperations,
+      evaluation: run.runEvaluation || null
+    }),
     currentMessage: getRunCurrentMessage(run, effectiveLogsByRunId, summary),
     stateInconsistency: detectRunStateInconsistency(run, {
       logs: runLogs,
+      events: suppliedEvents,
       replaySnapshot,
       recentEventSummary: summary
     }),
     outcome: classifyRunOperationalOutcome(run),
-    outcomeLabel: displayOperationalOutcome(classifyRunOperationalOutcome(run), countRunMutatingOperations(run.id)),
+    outcomeLabel: displayOperationalOutcome(
+      classifyRunOperationalOutcome(run),
+      countRunMutatingOperations(run.id, suppliedOperations || undefined)
+    ),
     createdAt: run.createdAt || null,
     startedAt: run.startedAt || null,
     completedAt: run.completedAt || null,
@@ -7681,23 +6940,79 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
   };
 }
 
-async function getRuntimeStatusSnapshot() {
-  const runs = await hydrateRunReplaySnapshots(readRuns()
-    .filter(run => ['pending', 'running'].includes(run.status)));
-  const activeRuns = runs.filter(run => ['pending', 'running'].includes(run.status));
-  const pendingRuns = runs.filter(run => run.status === 'pending');
-  const runningRuns = runs.filter(run => run.status === 'running');
-  const expiredLeases = runs.filter(run => run.status === 'running' && isRunLeaseExpired(run));
-  const localAgentIds = new Set(readAgents().filter(isLocalModelAgent).map(agent => agent.id));
-
-  // The same run appears across activeRuns/pendingRuns/runningRuns/expiredLeases,
-  // so memoize its event summary once per request and reuse it for every
-  // serialization to avoid re-scanning the event log for the same run.
-  const summaryByRunId = new Map();
-  const serializeRunOnce = run => {
-    if (!summaryByRunId.has(run.id)) summaryByRunId.set(run.id, recentEventSummary(run.id));
-    return serializeRunRuntimeState(run, null, { eventSummary: summaryByRunId.get(run.id) });
+// Runtime status is a collection projection, not a substitute for the exact-run
+// evidence endpoint. Keep each row independent of replay/event/operation history
+// size so one long-running run cannot make the process-status request unbounded.
+function serializeRunOperationalStatus(run, logsByRunId, attemptPosition = null) {
+  if (!run) return null;
+  const noEventSummary = {
+    currentStep: null,
+    latestStatus: null,
+    latestError: null,
+    latestWorkspaceMutation: null
   };
+  const attemptUsage = buildRunAttemptUsage(run, null, [], attemptPosition);
+  const outcome = classifyRunOperationalOutcome(run);
+  return {
+    id: run.id,
+    ticketId: run.ticketId,
+    agentId: run.agentId,
+    agentName: run.agentName,
+    status: run.status,
+    executionMode: run.executionMode || 'agent',
+    capabilityType: run.capabilityType || null,
+    capabilityId: run.capabilityId || null,
+    workflowId: run.workflowId || null,
+    triage: normalizeTriage(run.triage),
+    lease: serializeRunLease(run),
+    leaseOwner: run.leaseOwner || null,
+    leaseExpiresAt: run.leaseExpiresAt || null,
+    currentStepId: run.currentStepId || null,
+    currentWorkflowAction: run.currentWorkflowAction || null,
+    lastHeartbeatAt: run.lastHeartbeatAt || null,
+    attemptUsage,
+    budgetStatus: buildRunBudgetStatus(run, attemptUsage),
+    currentMessage: getRunCurrentMessage(run, logsByRunId, noEventSummary),
+    outcome,
+    outcomeLabel: displayOperationalOutcome(outcome),
+    createdAt: run.createdAt || null,
+    startedAt: run.startedAt || null,
+    completedAt: run.completedAt || null,
+    updatedAt: run.updatedAt || null,
+    error: run.error || null,
+    detailScope: 'lifecycle_status',
+    evidenceHref: `/api/runs/${run.id}/state`
+  };
+}
+
+async function getRuntimeStatusSnapshot({ afterId = 0, limit = 50 } = {}) {
+  const repository = getRuntimeStateReadRepository();
+  const pageLimit = Math.min(limit, getRuntimeSchedulerCandidateLimit());
+  const runPage = await repository.listRuns({
+    statuses: ['pending', 'running'],
+    afterId,
+    limit: pageLimit
+  });
+  const activeRuns = runPage.runs.filter(run => ['pending', 'running'].includes(run.status));
+  const pendingRuns = activeRuns.filter(run => run.status === 'pending');
+  const runningRuns = activeRuns.filter(run => run.status === 'running');
+  const expiredLeases = runningRuns.filter(isRunLeaseExpired);
+  const runIds = activeRuns.map(run => run.id);
+  const [operational, attemptPositions, runtimeLimitsConfig] = await Promise.all([
+    getOperationalStatusRepository().getRuntimeOperationalSummary({ limit: pageLimit }),
+    runIds.length > 0 ? repository.getRunAttemptPositions({ runIds }) : [],
+    getRuntimeLimitsRepository().getRuntimeLimitsConfig()
+  ]);
+  const attemptPositionByRunId = new Map(attemptPositions.map(item => [item.runId, item]));
+  const logs = runIds.length > 0
+    ? await getDiagnosticLogRepository().listLogsForRuns({ runIds, limitPerRun: 25 })
+    : [];
+  const logsByRunId = groupBy(logs, log => log.runId);
+  const serializedByRunId = new Map(activeRuns.map(run => [
+    run.id,
+    serializeRunOperationalStatus(run, logsByRunId, attemptPositionByRunId.get(run.id) || null)
+  ]));
+  const serializeRunOnce = run => serializedByRunId.get(run.id);
 
   return {
     scheduler: {
@@ -7706,28 +7021,37 @@ async function getRuntimeStatusSnapshot() {
     },
     leaseOwner: RUN_LEASE_OWNER,
     concurrencyLimits: {
-      process: getMaxActiveRunsLimit(),
-      admittedRuns: admittedRunIds.size,
-      activeProcessRuns: activeRunIdSet().size,
-      localModel: getLocalModelConcurrencyLimit(),
-      activeLocalModelRuns: runningRuns.filter(run => localAgentIds.has(run.agentId)).length,
-      startingLocalModelRuns: startingLocalModelRunIds.size
+      scope: 'deployment',
+      maxActiveRuns: getMaxActiveRunsLimit(runtimeLimitsConfig),
+      localModelConcurrency: getLocalModelConcurrencyLimit(runtimeLimitsConfig),
+      localProcess: {
+        admittedRuns: admittedRunIds.size,
+        startingRuns: startingRunIds.size,
+        admittedLocalModelRuns: admittedLocalModelRunIds.size,
+        startingLocalModelRuns: startingLocalModelRunIds.size
+      }
     },
     activeRuns: activeRuns.map(serializeRunOnce),
     pendingRuns: pendingRuns.map(serializeRunOnce),
     runningRuns: runningRuns.map(serializeRunOnce),
     expiredLeases: expiredLeases.map(serializeRunOnce),
     counts: {
-      active: activeRuns.length,
-      pending: pendingRuns.length,
-      running: runningRuns.length,
-      expiredLeases: expiredLeases.length
+      active: operational.runs.active,
+      pending: operational.runs.pending,
+      running: operational.runs.running,
+      expiredLeases: operational.runs.expiredLeases,
+      expiredLeasesTruncated: operational.runs.expiredLeasesTruncated
+    },
+    pagination: {
+      limit: pageLimit,
+      afterId,
+      nextAfterId: runPage.nextAfterId
     },
     shutdown: {
       activeRunDrainTimeoutMs: SHUTDOWN_RUN_DRAIN_TIMEOUT_MS
     },
-    eventJournal: eventJournal.getMetrics(),
-    runtimeLimits: getAgentRuntimeLimits()
+    mutationAdmission: mutationAdmission.getMetrics(),
+    runtimeLimits: resolveAgentRuntimeLimitsFromConfig(null, runtimeLimitsConfig).limits
   };
 }
 
@@ -7740,177 +7064,94 @@ async function serializeTicketRuntimeState(ticketId) {
   const parsedTicketId = parseInt(ticketId, 10);
   if (Number.isNaN(parsedTicketId)) return null;
 
-  const ticket = readTickets().find(item => item.id === parsedTicketId);
+  const repository = getRuntimeStateReadRepository();
+  const ticket = await repository.getTicket(parsedTicketId);
   if (!ticket) return null;
 
-  const logsByRunId = groupBy(readLogs(), log => log.runId);
-  const ticketRuns = await hydrateRunReplaySnapshots(readRuns()
-    .filter(run => run.ticketId === parsedTicketId)
-    .sort(compareRunsNewestFirst));
+  const ticketRuns = await hydrateRunReplaySnapshots(
+    (await readAllRunsForTicket(parsedTicketId)).sort(compareRunsNewestFirst)
+  );
   const currentRun = ticketRuns.find(run => ['pending', 'running'].includes(run.status)) || null;
   const latestRun = ticketRuns[0] || null;
   const visibleRun = currentRun || latestRun;
-  // visibleRun, currentRun and latestRun frequently overlap, so memoize each
-  // run's event summary once and reuse it everywhere below to avoid re-scanning
-  // the event log for the same run.
-  const summaryByRunId = new Map();
-  const summaryFor = id => {
-    if (!summaryByRunId.has(id)) summaryByRunId.set(id, recentEventSummary(id));
-    return summaryByRunId.get(id);
-  };
-  const eventSummary = visibleRun ? summaryFor(visibleRun.id) : null;
-  const outcome = latestRun ? classifyRunOperationalOutcome(latestRun) : null;
+  const visibleRuns = [...new Map([currentRun, latestRun].filter(Boolean).map(run => [run.id, run])).values()];
+  const visibleLogs = visibleRuns.length > 0
+    ? await getDiagnosticLogRepository().listLogsForRuns({ runIds: visibleRuns.map(run => run.id), limitPerRun: 25 })
+    : [];
+  const logsByRunId = groupBy(visibleLogs, log => log.runId);
+  const eventsByRunId = new Map(await Promise.all(visibleRuns.map(async run => [
+    run.id,
+    await readAllRunTimelineEvents(run.id)
+  ])));
+  const operationsByRunId = new Map(await Promise.all(visibleRuns.map(async run => [
+    run.id,
+    await readAllRunOperations(run.id)
+  ])));
+  const summaryByRunId = new Map(await Promise.all(visibleRuns.map(async run => [
+    run.id,
+    await recentEventSummary(run.id, eventsByRunId.get(run.id))
+  ])));
+  const eventSummary = visibleRun ? summaryByRunId.get(visibleRun.id) : null;
+  const latestOperations = latestRun ? operationsByRunId.get(latestRun.id) || [] : [];
+  const latestMutationCount = latestRun ? countRunMutatingOperations(latestRun.id, latestOperations) : 0;
+  const outcome = latestRun
+    ? classifyRunOperationalOutcome({ ...latestRun, mutationCount: latestMutationCount })
+    : null;
   const runStateInconsistency = visibleRun
     ? detectRunStateInconsistency(visibleRun, {
       logs: logsByRunId.get(visibleRun.id) || [],
+      events: eventsByRunId.get(visibleRun.id) || [],
       recentEventSummary: eventSummary
     })
     : null;
 
   return {
     ticket,
-    currentRun: currentRun ? serializeRunRuntimeState(currentRun, logsByRunId, { eventSummary: summaryFor(currentRun.id) }) : null,
-    latestRun: latestRun ? serializeRunRuntimeState(latestRun, logsByRunId, { eventSummary: summaryFor(latestRun.id) }) : null,
+    currentRun: currentRun ? serializeRunRuntimeState(currentRun, logsByRunId, {
+      eventSummary: summaryByRunId.get(currentRun.id),
+      events: eventsByRunId.get(currentRun.id),
+      operations: operationsByRunId.get(currentRun.id),
+      ticketRuns
+    }) : null,
+    latestRun: latestRun ? serializeRunRuntimeState(latestRun, logsByRunId, {
+      eventSummary: summaryByRunId.get(latestRun.id),
+      events: eventsByRunId.get(latestRun.id),
+      operations: operationsByRunId.get(latestRun.id),
+      ticketRuns
+    }) : null,
     currentMessage: visibleRun ? getRunCurrentMessage(visibleRun, logsByRunId, eventSummary) : null,
     currentStep: eventSummary ? eventSummary.currentStep : null,
     leaseState: visibleRun ? serializeRunLease(visibleRun) : null,
     runStateInconsistency,
     outcome,
-    outcomeLabel: latestRun ? displayOperationalOutcome(outcome, countRunMutatingOperations(latestRun.id)) : null
+    outcomeLabel: latestRun ? displayOperationalOutcome(outcome, latestMutationCount) : null
   };
 }
 
-function readAllocationPlans() {
-  return readJsonArrayCached(ALLOCATION_PLANS_FILE);
+async function readAllocationPlans() {
+  const plans = [];
+  let afterId = 0;
+  const limit = getRuntimeSchedulerCandidateLimit();
+  while (true) {
+    const page = await postgresRuntimeStore.listAllocationPlans({ afterId, limit });
+    plans.push(...page.plans);
+    if (page.nextAfterId === null) return plans;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) throw new Error('listAllocationPlans returned a non-advancing cursor');
+    afterId = page.nextAfterId;
+  }
 }
 
-function normalizeAllocationPlans(plans) {
-  const seenPlanIds = new Set();
-  const seenItemIds = new Set();
 
-  return plans.filter(plan => {
-    const planId = parseInt(plan.id, 10);
-    const ticketId = parseInt(plan.ticketId, 10);
-
-    if (Number.isNaN(planId) || Number.isNaN(ticketId) || seenPlanIds.has(planId)) return false;
-
-    seenPlanIds.add(planId);
-    plan.id = planId;
-    plan.ticketId = ticketId;
-    plan.mode = plan.mode === 'owned_paths' ? plan.mode : 'owned_paths';
-    plan.ticketOpenedAt = typeof plan.ticketOpenedAt === 'string' ? plan.ticketOpenedAt : null;
-    plan.status = ['pending', 'running', 'completed', 'failed', 'interrupted'].includes(plan.status) ? plan.status : 'pending';
-    plan.createdAt = typeof plan.createdAt === 'string' ? plan.createdAt : new Date().toISOString();
-    plan.items = Array.isArray(plan.items) ? plan.items.filter(item => {
-      const allocationItemId = parseInt(item.allocationItemId, 10);
-      const assignedAgentId = parseInt(item.assignedAgentId, 10);
-
-      if (Number.isNaN(allocationItemId) || Number.isNaN(assignedAgentId) || seenItemIds.has(allocationItemId)) return false;
-
-      seenItemIds.add(allocationItemId);
-      item.allocationItemId = allocationItemId;
-      item.assignedAgentId = assignedAgentId;
-      item.allocationSubtask = typeof item.allocationSubtask === 'string' ? item.allocationSubtask : '';
-      item.ownedOutputPaths = Array.isArray(item.ownedOutputPaths)
-        ? item.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath).filter(Boolean)
-        : [];
-      item.status = ['pending', 'running', 'completed', 'failed', 'interrupted'].includes(item.status) ? item.status : 'pending';
-      item.createdAt = typeof item.createdAt === 'string' ? item.createdAt : plan.createdAt;
-      return true;
-    }) : [];
-
-    return true;
-  });
+async function getOperationHistoryForRun(runId, history = null) {
+  return Array.isArray(history)
+    ? history.filter(record => record.runId === runId)
+    : readAllRunOperations(runId);
 }
 
-function writeAllocationPlans(plans) {
-  writeFileAtomic(ALLOCATION_PLANS_FILE, JSON.stringify(normalizeAllocationPlans(plans), null, 2));
-}
-
-function readLogs() {
-  return readJsonArrayCached(LOGS_FILE);
-}
-
-function normalizeLogs(logs) {
-  const seenLogIds = new Set();
-  const runsById = new Map(readRuns().map(run => [run.id, run]));
-
-  return logs.filter(log => {
-    const logId = parseInt(log.id, 10);
-    const isSystemLog = log.runId === null && log.ticketId === null;
-    const runId = isSystemLog ? null : parseInt(log.runId, 10);
-    const ticketId = isSystemLog ? null : parseInt(log.ticketId, 10);
-    const run = runsById.get(runId);
-
-    if (Number.isNaN(logId)) return false;
-    if (!isSystemLog && (Number.isNaN(runId) || Number.isNaN(ticketId))) return false;
-    if (!isValidIsoTimestamp(log.timestamp)) return false;
-    if (!isSystemLog && (!run || run.ticketId !== ticketId)) return false;
-    if (seenLogIds.has(logId)) return false;
-
-    seenLogIds.add(logId);
-    log.id = logId;
-    log.runId = runId;
-    log.ticketId = ticketId;
-    log.agentId = isSystemLog ? null : run.agentId;
-    log.message = sanitizeLogMessage(log.message);
-    return true;
-  });
-}
-
-function writeLogs(logs) {
-  writeFileAtomic(LOGS_FILE, JSON.stringify(normalizeLogs(logs), null, 2));
-}
-
-function readOperationHistory() {
-  return readJsonArrayCached(OPERATION_HISTORY_FILE);
-}
-
-function normalizeOperationHistory(history) {
-  const seenIds = new Set();
-  const runsById = new Map(readRuns().map(run => [run.id, run]));
-
-  return history.filter(record => {
-    const id = parseInt(record.id, 10);
-    if (Number.isNaN(id) || seenIds.has(id)) return false;
-    seenIds.add(id);
-    record.id = id;
-    record.ticketId = parseInt(record.ticketId, 10);
-    record.runId = parseInt(record.runId, 10);
-    record.allocationPlanId = record.allocationPlanId ? parseInt(record.allocationPlanId, 10) : null;
-    record.allocationItemId = record.allocationItemId ? parseInt(record.allocationItemId, 10) : null;
-    record.step = parseInt(record.step, 10);
-    record.isRecovery = record.isRecovery === true;
-    record.recoveredHistoryId = record.recoveredHistoryId ? parseInt(record.recoveredHistoryId, 10) : null;
-    if (!isValidIsoTimestamp(record.timestamp)) return false;
-    const run = runsById.get(record.runId);
-    if (!run || run.ticketId !== record.ticketId) return false;
-    const isBrowserReadOperation = record.targetKind === 'browser' && AGENT_BROWSER_OPERATIONS.includes(record.operation);
-    if (!AGENT_MUTATING_OPERATIONS.includes(record.operation) && !isBrowserReadOperation) return false;
-    return true;
-  });
-}
-
-function writeFileAtomic(filePath, data) {
-  const tempPath = `${filePath}.tmp`;
-  fs.writeFileSync(tempPath, data);
-  fs.renameSync(tempPath, filePath);
-  jsonReadCache.delete(filePath);
-  dataVersion += 1;
-  pageRenderCache.clear();
-  pageRenderInFlight.clear();
-}
-
-function writeOperationHistory(history) {
-  writeFileAtomic(OPERATION_HISTORY_FILE, JSON.stringify(normalizeOperationHistory(history), null, 2));
-}
-
-function getOperationHistoryForRun(runId, history = readOperationHistory()) {
-  return history.filter(record => record.runId === runId);
-}
-
-function getOperationHistoryForTicket(ticketId, history = readOperationHistory()) {
-  return history.filter(record => record.ticketId === ticketId);
+async function getOperationHistoryForTicket(ticketId, history = null) {
+  return Array.isArray(history)
+    ? history.filter(record => record.ticketId === ticketId)
+    : readAllTicketOperations(ticketId);
 }
 
 const TICKET_TIMELINE_SOURCE_PRIORITY = {
@@ -8035,15 +7276,34 @@ function timelineEntrySort(a, b) {
 }
 
 // ---- Agent handoff/queue protocol receipts (r1.23) ----
-// These are READ-ONLY derivations over existing evidence (runs, lease events, operation-history,
+// These are READ-ONLY derivations over existing evidence (runs, lease events, PostgreSQL operation receipts,
 // replay summary, verification, triage). They create no new persisted ledger and never include
 // full file contents or provider response bodies — only counts, ids, paths, and refs.
+
+function runtimeAuthoritySourceRef(kind, id, suffix = '') {
+  const relation = {
+    ticket: 'tickets',
+    run: 'runs',
+    event: 'events',
+    operation: 'operation_receipts',
+    replay: 'replay_snapshots',
+    evaluation: 'run_evaluations',
+    consequence: 'run_consequences',
+    diagnostic_log: 'diagnostic_logs',
+    process_template_trigger: 'process_template_triggers'
+  }[kind];
+  return `postgres:${relation || kind}:${id}${suffix}`;
+}
+
+function runReplaySourceRef(run, suffix = '') {
+  return runtimeAuthoritySourceRef('replay', run.id, suffix);
+}
 
 // A Claim Receipt formalizes the existing run lease acquisition (run.lease_acquired event):
 // who claimed which ticket/run, when, the lease window, and the Work Context if present.
 function buildClaimReceipt(run, ticket) {
   if (!run) return null;
-  const t = ticket || readTickets().find(item => item && item.id === run.ticketId) || null;
+  const t = ticket || null;
   return {
     receiptKind: 'claim_receipt',
     ticketId: run.ticketId,
@@ -8062,15 +7322,15 @@ function buildClaimReceipt(run, ticket) {
 
 // A Work Receipt summarizes what a run did, derived entirely from existing evidence. It carries
 // refs/counts/paths — never file contents or provider bodies.
-function buildWorkReceipt(run, ticket) {
+function buildWorkReceipt(run, ticket, options = {}) {
   if (!run) return null;
-  const t = ticket || readTickets().find(item => item && item.id === run.ticketId) || null;
+  const t = ticket || null;
   const snapshot = run.replaySnapshot || {};
   const summary = run.replaySummary || extractReplaySummary(snapshot) || {};
   const evaluation = run.runEvaluation || null;
   const effectiveness = evaluation && evaluation.effectiveness ? evaluation.effectiveness : null;
-  const history = readOperationHistory().filter(record => record && record.runId === run.id);
-  const events = getRunEvents(run.id);
+  const history = Array.isArray(options.operations) ? options.operations : [];
+  const events = Array.isArray(options.events) ? options.events : [];
   const authorityAllowed = events.filter(e => e && e.type === 'authority.allowed').length;
   const authorityDenied = events.filter(e => e && e.type === 'authority.denied').length;
   const verificationRequired = isRunVerificationRequired(run);
@@ -8089,7 +7349,11 @@ function buildWorkReceipt(run, ticket) {
     completedAt: run.completedAt || null,
     status: run.status,
     stoppedAt: ['completed', 'failed', 'interrupted'].includes(run.status) ? run.status : 'in_progress',
-    sourceRefsRead: [t ? `tickets.json:${t.id}` : null, `runs.json:${run.id}`, run.replaySnapshotPath || null].filter(Boolean),
+    sourceRefsRead: [
+      t ? runtimeAuthoritySourceRef('ticket', t.id) : null,
+      runtimeAuthoritySourceRef('run', run.id),
+      run.replaySnapshot || run.replaySnapshotPath ? runReplaySourceRef(run) : null
+    ].filter(Boolean),
     targetOperationsPerformed: targetOps,
     artifactsProduced: artifactPaths,
     authorityDecisions: { allowed: authorityAllowed, denied: authorityDenied },
@@ -8118,18 +7382,26 @@ function deriveNeedsInput(triage) {
 async function buildTicketTimeline(ticketId) {
   const parsedTicketId = parseInt(ticketId, 10);
   if (Number.isNaN(parsedTicketId)) return null;
-  const ticket = readTickets().find(item => item.id === parsedTicketId);
+  const repository = getRuntimeStateReadRepository();
+  const ticket = await repository.getTicket(parsedTicketId);
   if (!ticket) return null;
 
-  const runs = await hydrateRunReplaySnapshots(readRuns()
-    .filter(run => run.ticketId === parsedTicketId)
-    .sort((a, b) => (a.id || 0) - (b.id || 0)));
+  const replayHydratedRuns = await hydrateRunReplaySnapshots(
+    (await readAllRunsForTicket(parsedTicketId)).sort((a, b) => (a.id || 0) - (b.id || 0))
+  );
+  const runs = await Promise.all(replayHydratedRuns.map(async run => {
+    const [evaluation, consequence] = await Promise.all([
+      repository.getRunEvaluation(run.id),
+      repository.getRunConsequence(run.id)
+    ]);
+    return {
+      ...run,
+      ...(evaluation ? { runEvaluation: evaluation.evaluation } : {}),
+      ...(consequence ? { runConsequence: consequence.consequence } : {})
+    };
+  }));
   const runIds = new Set(runs.map(run => run.id));
-  const eventNeedles = [`"ticketId":${parsedTicketId}`, ...runs.map(run => `"runId":${run.id}`)];
-  const events = readBufferedAndMatchingEvents({
-    needles: eventNeedles,
-    predicate: event => event.ticketId === parsedTicketId || runIds.has(event.runId)
-  })
+  const events = (await readAllTicketEvents(parsedTicketId))
     .slice()
     .sort((a, b) => {
       const time = String(a.ts || '').localeCompare(String(b.ts || ''));
@@ -8138,21 +7410,15 @@ async function buildTicketTimeline(ticketId) {
       if ((a.seq ?? -1) !== (b.seq ?? -1)) return (a.seq ?? -1) - (b.seq ?? -1);
       return String(a.id || '').localeCompare(String(b.id || ''));
     });
-  const history = getOperationHistoryForTicket(parsedTicketId);
+  const history = await readAllTicketOperations(parsedTicketId);
   const historyIds = new Set(history.map(record => record.id));
-  const logs = readLogs().filter(log =>
-    log.ticketId === parsedTicketId ||
-    log.contextTicketId === parsedTicketId ||
-    runIds.has(log.runId) ||
-    runIds.has(log.contextRunId)
-  );
+  const logs = await collectDiagnosticLogPages({ ticketId: parsedTicketId });
   const snapshots = new Map(runs.map(run => [run.id, run.replaySnapshot]).filter(([, snapshot]) => snapshot));
   const trigger = ticket.source && ticket.source.type === 'process_template'
-    ? readProcessTemplateTriggers().find(item =>
-      item && (
-        item.ticketId === parsedTicketId ||
-        (ticket.source.triggerToken && item.triggerToken === ticket.source.triggerToken)
-      )) || null
+    ? await getProcessTemplateProjectionRepository().getProcessTemplateTriggerProvenance({
+      ticketId: parsedTicketId,
+      triggerToken: ticket.source.triggerToken || null
+    })
     : null;
 
   const entriesByDedupeKey = new Map();
@@ -8204,7 +7470,7 @@ async function buildTicketTimeline(ticketId) {
       title: 'Ticket created',
       summary: timelineText(ticket.objective),
       sourceType: 'ticket',
-      sourceRef: `tickets.json:${parsedTicketId}`,
+      sourceRef: runtimeAuthoritySourceRef('ticket', parsedTicketId),
       sourceRole: 'live_state',
       status: ticket.status,
       details: {
@@ -8222,7 +7488,7 @@ async function buildTicketTimeline(ticketId) {
     title: 'Current ticket state',
     summary: `Status ${ticket.status || 'unknown'}; assigned to ${ticket.assignmentTargetType || 'target'} ${ticket.assignmentTargetId || 'unassigned'}`,
     sourceType: 'ticket',
-    sourceRef: `tickets.json:${parsedTicketId}`,
+    sourceRef: runtimeAuthoritySourceRef('ticket', parsedTicketId),
     sourceRole: 'live_state',
     status: ticket.status,
     details: {
@@ -8235,7 +7501,10 @@ async function buildTicketTimeline(ticketId) {
   });
 
   if (ticket.source && ticket.source.type === 'process_template') {
-    const versionLabel = ticket.source.templateVersion ? `v${ticket.source.templateVersion}` : 'legacy unversioned';
+    if (!Number.isSafeInteger(ticket.source.templateVersion) || ticket.source.templateVersion <= 0) {
+      throw dataIntegrityError('tickets', `ticket ${parsedTicketId} process-template source is missing its current-format templateVersion`);
+    }
+    const versionLabel = `v${ticket.source.templateVersion}`;
     addEntry({
       id: `ticket:${parsedTicketId}:provenance`,
       timestamp: timelineTimestamp(trigger && (trigger.triggeredAt || trigger.createdAt), ticket.createdAt),
@@ -8244,15 +7513,14 @@ async function buildTicketTimeline(ticketId) {
       summary: `${ticket.source.templateName || `Template #${ticket.source.templateId}`} ${versionLabel} via ${ticket.source.triggerType || 'unknown'} trigger`,
       sourceType: 'process_template',
       sourceRef: trigger && trigger.id != null
-        ? `process-template-triggers.json:${trigger.id}`
-        : `tickets.json:${parsedTicketId}.source`,
+        ? runtimeAuthoritySourceRef('process_template_trigger', trigger.id)
+        : runtimeAuthoritySourceRef('ticket', parsedTicketId, '.source'),
       sourceRole: 'provenance',
       status: ticket.source.triggerType || null,
       details: {
         templateId: ticket.source.templateId || null,
         templateName: ticket.source.templateName || null,
-        templateVersion: ticket.source.templateVersion || null,
-        legacyUnversioned: !ticket.source.templateVersion,
+        templateVersion: ticket.source.templateVersion,
         triggerType: ticket.source.triggerType || null,
         triggerToken: ticket.source.triggerToken || null,
         triggeredBy: ticket.source.triggeredBy || null,
@@ -8272,7 +7540,7 @@ async function buildTicketTimeline(ticketId) {
       title: 'Created from handoff',
       summary: `Handoff from ticket #${h.fromTicketId || '?'}${h.fromRunId ? ` run #${h.fromRunId}` : ''} by ${h.createdBy || h.fromActor || 'unknown'}`,
       sourceType: 'handoff',
-      sourceRef: `tickets.json:${parsedTicketId}.source`,
+      sourceRef: runtimeAuthoritySourceRef('ticket', parsedTicketId, '.source'),
       sourceRole: 'provenance',
       status: h.status || 'created',
       details: {
@@ -8302,7 +7570,7 @@ async function buildTicketTimeline(ticketId) {
       title: 'Created from watcher proposal',
       summary: `Approved watcher #${w.watcherId || '?'} proposal #${w.proposalId || '?'} by ${w.createdBy || w.fromActor || 'unknown'}`,
       sourceType: 'watcher_proposal',
-      sourceRef: `tickets.json:${parsedTicketId}.source`,
+      sourceRef: runtimeAuthoritySourceRef('ticket', parsedTicketId, '.source'),
       sourceRole: 'provenance',
       status: w.status || 'created',
       details: {
@@ -8331,7 +7599,7 @@ async function buildTicketTimeline(ticketId) {
         title: `Run #${run.id} created`,
         summary: `Attempt ${runAttemptById.get(run.id)} created for ${run.agentName || `agent #${run.agentId}`}`,
         sourceType: 'run',
-        sourceRef: `runs.json:${run.id}`,
+        sourceRef: runtimeAuthoritySourceRef('run', run.id),
         sourceRole: 'live_state',
         runId: run.id,
         status: 'pending',
@@ -8346,7 +7614,7 @@ async function buildTicketTimeline(ticketId) {
       title: `Run #${run.id} current state`,
       summary: run.error ? `${run.status}: ${timelineText(run.error)}` : `Status ${run.status || 'unknown'}`,
       sourceType: 'run',
-      sourceRef: `runs.json:${run.id}`,
+      sourceRef: runtimeAuthoritySourceRef('run', run.id),
       sourceRole: 'live_state',
       runId: run.id,
       status: run.status,
@@ -8364,7 +7632,10 @@ async function buildTicketTimeline(ticketId) {
     // Work Receipt summary (r1.23) for a terminal run — derived live from existing evidence;
     // refs/counts only, no file contents or provider bodies.
     if (['completed', 'failed', 'interrupted'].includes(run.status)) {
-      const workReceipt = buildWorkReceipt(run, ticket);
+      const workReceipt = buildWorkReceipt(run, ticket, {
+        operations: history.filter(record => record.runId === run.id),
+        events: events.filter(event => event.runId === run.id)
+      });
       addEntry({
         id: `run:${run.id}:work-receipt`,
         timestamp: timelineTimestamp(run.completedAt, run.updatedAt, run.startedAt, run.createdAt),
@@ -8372,7 +7643,7 @@ async function buildTicketTimeline(ticketId) {
         title: `Run #${run.id} work receipt`,
         summary: `${workReceipt.status}: ${workReceipt.targetOperationsPerformed.length} target op(s), verification ${workReceipt.verification.result}, next: ${workReceipt.nextRecommendedAction}`,
         sourceType: 'run',
-        sourceRef: `runs.json:${run.id}`,
+        sourceRef: runtimeAuthoritySourceRef('run', run.id),
         sourceRole: 'live_state',
         runId: run.id,
         status: run.status,
@@ -8389,7 +7660,7 @@ async function buildTicketTimeline(ticketId) {
         title: `Run #${run.id} routing decision`,
         summary: `${rs.selectedProvider || 'agent default'}${rs.selectedModel ? ' / ' + rs.selectedModel : ''} (${rs.reason}${rs.fallbackUsed ? ', fallback' : ''})`,
         sourceType: 'run',
-        sourceRef: `runs.json:${run.id}.routingSnapshot`,
+        sourceRef: runtimeAuthoritySourceRef('run', run.id, '.routingSnapshot'),
         sourceRole: 'live_state',
         runId: run.id,
         status: rs.reason || null,
@@ -8413,7 +7684,7 @@ async function buildTicketTimeline(ticketId) {
         ? `Verification contract captured for run #${run.id}`
         : `No declared verification contract for run #${run.id}`,
       sourceType: 'run',
-      sourceRef: `runs.json:${run.id}.verificationContractSnapshot`,
+      sourceRef: runtimeAuthoritySourceRef('run', run.id, '.verificationContractSnapshot'),
       sourceRole: 'live_state',
       runId: run.id,
       status: isRunVerificationRequired(run) ? 'required' : 'not_required',
@@ -8471,7 +7742,7 @@ async function buildTicketTimeline(ticketId) {
           targetKind: candidatePayload.targetKind || null,
           targetScope: candidatePayload.targetScope ? sanitizeSnapshotValue(candidatePayload.targetScope) : null,
           mutationReceipt: timelineReceiptDetails(candidatePayload.mutationReceipt),
-          supportingSourceRefs: [`events.jsonl:${candidate.id}`]
+          supportingSourceRefs: [runtimeAuthoritySourceRef('event', candidate.id)]
         });
         break;
       }
@@ -8480,7 +7751,10 @@ async function buildTicketTimeline(ticketId) {
 
   for (const event of events) {
     const payload = event.payload || {};
-    const sourceRef = `events.jsonl:${event.id || `${event.runId || 'ticket'}:${event.seq ?? event.ts}`}`;
+    const sourceRef = runtimeAuthoritySourceRef(
+      'event',
+      event.id || `${event.runId || 'ticket'}:${event.seq ?? event.ts}`
+    );
     if (lifecycleTitles[event.type]) {
       addEntry({
         id: `event:${event.id || `${event.type}:${event.ts}`}`,
@@ -8608,6 +7882,34 @@ async function buildTicketTimeline(ticketId) {
       continue;
     }
 
+    if (event.type === 'ticket.triage_resolved' || event.type === 'run.triage_resolved') {
+      const triage = payload.triage || {};
+      const ownerType = event.type.startsWith('ticket.') ? 'ticket' : 'run';
+      const ownerId = ownerType === 'ticket' ? parsedTicketId : event.runId;
+      addEntry({
+        id: `event:${event.id || `${event.type}:${event.ts}`}`,
+        timestamp: event.ts || triage.resolvedAt || null,
+        type: 'triage.resolved',
+        title: `${ownerType === 'ticket' ? 'Ticket' : 'Run'} triage resolved`,
+        summary: triage.resolution || payload.resolution || 'Operator resolved triage',
+        sourceType: 'event',
+        sourceRef,
+        sourceRole: 'append_only_event',
+        runId: event.runId,
+        status: 'resolved',
+        dedupeKey: `${ownerType}:${ownerId}:triage:resolved`,
+        details: {
+          reasonCode: triage.reasonCode || null,
+          requiredDecision: triage.requiredDecision || null,
+          resolvedAt: triage.resolvedAt || payload.resolvedAt || null,
+          resolvedBy: triage.resolvedBy || payload.resolvedBy || null,
+          resolution: timelineText(triage.resolution || payload.resolution),
+          statusUnchangedByResolution: true
+        }
+      });
+      continue;
+    }
+
     if (event.type === 'run.triage_created') {
       const triage = payload.triage || {};
       addEntry({
@@ -8696,25 +7998,28 @@ async function buildTicketTimeline(ticketId) {
       if (event.type !== 'workspace.operation') return;
       const payload = event.payload || {};
       const eventHistoryId = payload.historyId || (payload.result && payload.result.historyId) || (payload.mutationReceipt && payload.mutationReceipt.operationId) || null;
-      if (eventHistoryId === record.id) duplicateSourceRefs.push(`events.jsonl:${event.id}`);
+      if (eventHistoryId === record.id) duplicateSourceRefs.push(runtimeAuthoritySourceRef('event', event.id));
     });
     for (const [snapshotRunId, snapshot] of snapshots.entries()) {
       (Array.isArray(snapshot.workspaceOperations) ? snapshot.workspaceOperations : []).forEach((item, index) => {
         const replayHistoryId = item.historyId || (item.result && item.result.historyId) || (item.mutationReceipt && item.mutationReceipt.operationId) || null;
         if (replayHistoryId === record.id) {
           const replayRun = runs.find(run => run.id === snapshotRunId);
-          duplicateSourceRefs.push(`${replayRun && replayRun.replaySnapshotPath ? replayRun.replaySnapshotPath : `replay-snapshots/run-${snapshotRunId}.json`}:workspaceOperations[${index}]`);
+          duplicateSourceRefs.push(runReplaySourceRef(
+            replayRun || { id: snapshotRunId },
+            `:workspaceOperations[${index}]`
+          ));
         }
       });
     }
     addEntry({
-      id: `operation-history:${record.id}`,
+      id: `operation-receipt:${record.id}`,
       timestamp: record.timestamp || null,
       type: committed ? 'target.mutation_committed' : 'target.mutation_failed',
       title: committed ? 'Target mutation committed' : 'Target mutation failed',
       summary: `${record.operation} ${(record.args && record.args.path) || record.targetPath || ''}${record.args && record.args.nextPath ? ` -> ${record.args.nextPath}` : ''}`,
       sourceType: 'operation_history',
-      sourceRef: `operation-history.json:${record.id}`,
+      sourceRef: runtimeAuthoritySourceRef('operation', record.id),
       sourceRole: 'operation_history',
       runId: record.runId,
       status: committed ? (record.result && record.result.status) || 'committed' : 'failed',
@@ -8760,7 +8065,7 @@ async function buildTicketTimeline(ticketId) {
           title: operationInfo.operation === 'readFile' ? 'Target file read' : 'Target directory listed',
           summary: `${operationInfo.operation} ${operationInfo.path || '.'}`,
           sourceType: 'replay_read_receipt',
-          sourceRef: `${run.replaySnapshotPath || `replay-snapshots/run-${run.id}.json`}:workspaceOperations[${index}]`,
+          sourceRef: runReplaySourceRef(run, `:workspaceOperations[${index}]`),
           sourceRole: receipt ? 'embedded_receipt' : 'replay_snapshot',
           runId: run.id,
           status: item.error ? 'failed' : 'observed',
@@ -8783,7 +8088,7 @@ async function buildTicketTimeline(ticketId) {
           title: 'Target mutation attempted but not committed',
           summary: `${operationInfo.operation} ${operationInfo.path || ''}: ${timelineText(item.error || item.reason || 'blocked')}`,
           sourceType: 'replay_workspace_operation',
-          sourceRef: `${run.replaySnapshotPath || `replay-snapshots/run-${run.id}.json`}:workspaceOperations[${index}]`,
+          sourceRef: runReplaySourceRef(run, `:workspaceOperations[${index}]`),
           sourceRole: 'replay_snapshot',
           runId: run.id,
           status: item.blocked ? 'denied' : 'failed',
@@ -8814,7 +8119,7 @@ async function buildTicketTimeline(ticketId) {
       title: `${ownerType === 'ticket' ? 'Ticket' : 'Run'} triage ${resolved ? 'resolved' : 'required'}`,
       summary: triage.summary || (resolved ? 'Operator acknowledged triage' : 'Operator action required'),
       sourceType: ownerType,
-      sourceRef: `${ownerType === 'ticket' ? 'tickets' : 'runs'}.json:${ownerId}.triage`,
+      sourceRef: runtimeAuthoritySourceRef(ownerType, ownerId, '.triage'),
       sourceRole: 'live_state',
       runId,
       status: resolved ? 'resolved' : 'required',
@@ -8843,7 +8148,7 @@ async function buildTicketTimeline(ticketId) {
         title: 'Run evaluation recorded',
         summary: `Effectiveness ${(run.runEvaluation.effectiveness && run.runEvaluation.effectiveness.status) || 'unknown'}`,
         sourceType: 'run',
-        sourceRef: `runs.json:${run.id}.runEvaluation`,
+        sourceRef: runtimeAuthoritySourceRef('evaluation', run.id, '.runEvaluation'),
         sourceRole: 'live_state',
         runId: run.id,
         details: { evaluation: summarizeTimelineEvaluation(run.runEvaluation) }
@@ -8858,7 +8163,7 @@ async function buildTicketTimeline(ticketId) {
         title: 'Run consequence recorded',
         summary: consequence ? `${consequence.mutations} mutation consequence${consequence.mutations === 1 ? '' : 's'}` : 'Run consequence persisted',
         sourceType: 'run',
-        sourceRef: `runs.json:${run.id}.runConsequence`,
+        sourceRef: runtimeAuthoritySourceRef('consequence', run.id, '.runConsequence'),
         sourceRole: 'live_state',
         runId: run.id,
         details: { consequence }
@@ -8876,7 +8181,7 @@ async function buildTicketTimeline(ticketId) {
         title: 'Ticket status changed',
         summary: `${log.fromStatus || 'unknown'} → ${log.toStatus || 'unknown'}${log.changedBy ? ' by ' + log.changedBy : ''}`,
         sourceType: 'log',
-        sourceRef: `logs.json:${log.id}`,
+        sourceRef: runtimeAuthoritySourceRef('diagnostic_log', log.id),
         sourceRole: 'diagnostic_log',
         runId: log.runId || log.contextRunId || null,
         status: log.toStatus || null,
@@ -8886,7 +8191,7 @@ async function buildTicketTimeline(ticketId) {
           changedAt: log.changedAt || null,
           fromStatus: log.fromStatus || null,
           toStatus: log.toStatus || null,
-          authoritativeStateSource: `tickets.json:${parsedTicketId}`
+          authoritativeStateSource: runtimeAuthoritySourceRef('ticket', parsedTicketId)
         }
       });
       continue;
@@ -8898,7 +8203,7 @@ async function buildTicketTimeline(ticketId) {
       title: log.type === 'ticket:triage_resolve' ? 'Ticket triage resolution recorded' : 'Run triage resolution recorded',
       summary: log.message,
       sourceType: 'log',
-      sourceRef: `logs.json:${log.id}`,
+      sourceRef: runtimeAuthoritySourceRef('diagnostic_log', log.id),
       sourceRole: 'diagnostic_log',
       runId: log.runId || log.contextRunId || null,
       status: 'diagnostic',
@@ -8908,8 +8213,8 @@ async function buildTicketTimeline(ticketId) {
         reasonCode: log.reasonCode || null,
         resolution: timelineText(log.resolution),
         authoritativeStateSource: log.type === 'ticket:triage_resolve'
-          ? `tickets.json:${parsedTicketId}.triage`
-          : `runs.json:${log.contextRunId || log.runId}.triage`
+          ? runtimeAuthoritySourceRef('ticket', parsedTicketId, '.triage')
+          : runtimeAuthoritySourceRef('run', log.contextRunId || log.runId, '.triage')
       }
     });
   }
@@ -8985,7 +8290,7 @@ function buildArtifactComparisonItem(type, artifact, details = {}) {
   };
 }
 
-function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = [], snapshot = null) {
+function buildRunActualArtifactEvidence(run, operationHistory = [], snapshot = null) {
   if (!run || run.id == null) return [];
   const actual = [];
 
@@ -8997,7 +8302,7 @@ function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = 
     if (record.operation === 'writeFile') {
       actual.push(buildArtifactComparisonItem('file', result.path || args.path, {
         operation: 'writeFile',
-        source: record.id != null ? 'Operation #' + record.id : 'operation-history'
+        source: record.id != null ? 'Operation #' + record.id : 'PostgreSQL operation receipt'
       }));
       return;
     }
@@ -9008,7 +8313,7 @@ function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = 
     )) {
       actual.push(buildArtifactComparisonItem('folder', result.path || args.path, {
         operation: 'createFolder',
-        source: record.id != null ? 'Operation #' + record.id : 'operation-history'
+        source: record.id != null ? 'Operation #' + record.id : 'PostgreSQL operation receipt'
       }));
       return;
     }
@@ -9016,7 +8321,7 @@ function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = 
     if (record.operation === 'renamePath') {
       actual.push(buildArtifactComparisonItem('renamed', result.path || args.nextPath, {
         operation: 'renamePath',
-        source: record.id != null ? 'Operation #' + record.id : 'operation-history'
+        source: record.id != null ? 'Operation #' + record.id : 'PostgreSQL operation receipt'
       }));
       return;
     }
@@ -9024,7 +8329,7 @@ function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = 
     if (record.operation === 'deletePath' && result.status === 'deleted') {
       actual.push(buildArtifactComparisonItem('deleted', result.path || args.path, {
         operation: 'deletePath',
-        source: record.id != null ? 'Operation #' + record.id : 'operation-history'
+        source: record.id != null ? 'Operation #' + record.id : 'PostgreSQL operation receipt'
       }));
     }
   });
@@ -9033,8 +8338,7 @@ function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = 
   workflowDrafts.forEach(draft => {
     if (!draft) return;
     const workflowId = draft.workflowId || draft.id;
-    const workflow = workflowId ? workflows.find(item => item && item.id === workflowId) : null;
-    actual.push(buildArtifactComparisonItem('workflowDraft', workflowId || draft.name || (workflow && workflow.name), {
+    actual.push(buildArtifactComparisonItem('workflowDraft', workflowId || draft.name, {
       operation: 'workflowDraft',
       source: 'Workflow draft'
     }));
@@ -9056,7 +8360,7 @@ function buildRunActualArtifactEvidence(run, operationHistory = [], workflows = 
   return actual.filter(item => item.artifact && item.artifact !== '-');
 }
 
-function buildArtifactPredictionComparison(run, snapshot, operationHistory = [], workflows = []) {
+function buildArtifactPredictionComparison(run, snapshot, operationHistory = []) {
   const prediction = snapshot && snapshot.artifactPrediction ? snapshot.artifactPrediction : null;
   const predicted = prediction && Array.isArray(prediction.artifacts)
     ? prediction.artifacts.map(item => buildArtifactComparisonItem(item.type, item.artifact, {
@@ -9066,7 +8370,7 @@ function buildArtifactPredictionComparison(run, snapshot, operationHistory = [],
       actionIndex: item.actionIndex
     })).filter(item => item.artifact && item.artifact !== '-')
     : [];
-  const actual = buildRunActualArtifactEvidence(run, operationHistory, workflows, snapshot);
+  const actual = buildRunActualArtifactEvidence(run, operationHistory, snapshot);
   const predictedKeys = new Set(predicted.map(item => item.key));
   const actualKeys = new Set(actual.map(item => item.key));
 
@@ -9117,9 +8421,7 @@ function isRunVerificationRequired(run) {
   if (executionPolicy.requireVerification !== 'when_declared') return false;
   if (!run || run.executionMode !== 'workflow' || !run.workflowId) return false;
   const capturedContract = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
-  if (capturedContract) return capturedContract.postconditions.length > 0;
-  const workflow = getWorkflowById(run.workflowId);
-  return Boolean(workflow && Array.isArray(workflow.postconditions) && workflow.postconditions.length > 0);
+  return Boolean(capturedContract && capturedContract.postconditions.length > 0);
 }
 
 function buildObjectiveSuccess(run) {
@@ -9378,9 +8680,6 @@ function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns 
   return artifacts.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
 }
 
-function findOperationHistoryRecord(recordId) {
-  return readOperationHistory().find(record => record.id === recordId) || null;
-}
 
 function isActualWorkspaceMutation(record) {
   if (record.error) return false;
@@ -9405,7 +8704,8 @@ function isActualWorkspaceMutation(record) {
   return false;
 }
 
-function countRunMutatingOperations(runId, history = readOperationHistory()) {
+function countRunMutatingOperations(runId, history = null) {
+  history = Array.isArray(history) ? history : [];
   return history.filter(record =>
     record.runId === runId && isActualWorkspaceMutation(record)
   ).length;
@@ -9472,12 +8772,6 @@ function classifyOperationRecoverability(record, recoveredIds = null) {
 
   if (recoveredIds && recoveredIds.has(record.id)) {
     return { status: 'recovery_available', reason: 'Already recovered' };
-  }
-
-  const histories = readOperationHistory();
-  const existingRecovery = histories.find(h => h.recoveredHistoryId === record.id);
-  if (existingRecovery) {
-    return { status: 'recovery_available', reason: `Recovered in history #${existingRecovery.id}` };
   }
 
   if (record.operation === 'writeFile') {
@@ -9577,7 +8871,16 @@ function buildRecoveryAction(record) {
   return null;
 }
 
-function previewRecovery(record) {
+function previewRecovery(record, existingRecovery = null) {
+  if (existingRecovery) {
+    return {
+      status: 'recovery_available',
+      reason: `Recovered in history #${existingRecovery.id}`,
+      canProceed: false,
+      proposedAction: null,
+      validation: null
+    };
+  }
   const classification = classifyOperationRecoverability(record);
 
   if (classification.status !== 'recoverable') {
@@ -9599,103 +8902,257 @@ function previewRecovery(record) {
   };
 }
 
-function persistRecoveryOperationHistory(originalRecord, recoveryAction, preState, postState, result, error) {
-  const histories = readOperationHistory();
-  const newId = nextId(histories);
-  const record = {
-    id: newId,
-    timestamp: createLogTimestamp(),
-    ticketId: originalRecord.ticketId,
-    allocationPlanId: originalRecord.allocationPlanId || null,
-    allocationItemId: originalRecord.allocationItemId || null,
-    runId: originalRecord.runId,
-    step: originalRecord.step,
-    operation: recoveryAction.operation,
-    args: sanitizeSnapshotValue(recoveryAction.args),
-    preState,
-    postState,
-    result: error ? null : sanitizeSnapshotValue(result),
-    error: error ? (error.message || String(error)) : null,
-    isRecovery: true,
-    recoveredHistoryId: originalRecord.id
-  };
-  histories.push(record);
-  writeOperationHistory(histories);
-  return record;
+function buildOperatorRecoveryKey(originalHistoryId) {
+  return `operator-recovery:operation:${originalHistoryId}`;
 }
 
-function executeRecovery(record, confirmed = false) {
-  const preview = previewRecovery(record);
+function buildOperatorRecoveryTarget(record, recoveryAction) {
+  const targetPath = recoveryAction && recoveryAction.args ? recoveryAction.args.path : null;
+  return {
+    targetId: record.targetId || (record.mutationReceipt && record.mutationReceipt.targetId) || workspaceProvider.id,
+    targetKind: record.targetKind || (record.mutationReceipt && record.mutationReceipt.targetKind) || workspaceProvider.kind,
+    targetScope: record.targetScope || (record.mutationReceipt && record.mutationReceipt.targetScope) || workspaceProvider.scope,
+    targetPath,
+    targetResourceId: targetPath
+  };
+}
 
-  if (!preview.canProceed) {
-    const reason = preview.validation && preview.validation.reason ? preview.validation.reason : 'Recovery not possible';
-    throw new Error(reason);
-  }
-
-  if (!confirmed) {
-    throw new Error('Recovery requires explicit confirmation');
-  }
-
-  const recoveryAction = preview.proposedAction;
-
-  if (recoveryAction.operation === 'deletePath') {
-    const preState = { existed: true, type: 'file', contentHash: getCurrentWorkspacePathInfo(recoveryAction.args.path).contentHash || undefined };
-    let result = null;
-    let error = null;
-    try {
-      result = workspaceProvider.delete(recoveryAction.args.path);
-    } catch (e) {
-      error = e;
-    }
-    const postState = { existed: false };
-    const recoveryRecord = persistRecoveryOperationHistory(record, recoveryAction, preState, postState, result, error);
-    if (error) throw error;
-    return recoveryRecord;
-  }
-
+function performOperatorRecoveryEffect(recoveryAction) {
+  if (recoveryAction.operation === 'deletePath') return workspaceProvider.delete(recoveryAction.args.path);
   if (recoveryAction.operation === 'writeFile') {
-    const preInfo = getCurrentWorkspacePathInfo(recoveryAction.args.path);
-    const preState = { existed: preInfo.exists, type: preInfo.type || undefined, contentHash: preInfo.contentHash || undefined };
-    let result = null;
-    let error = null;
-    try {
-      result = workspaceProvider.writeFile(recoveryAction.args.path, recoveryAction.args.content);
-    } catch (e) {
-      error = e;
-    }
-    const postInfo = getCurrentWorkspacePathInfo(recoveryAction.args.path);
-    const postState = { existed: postInfo.exists, type: postInfo.type || undefined, contentHash: postInfo.contentHash || undefined };
-    const recoveryRecord = persistRecoveryOperationHistory(record, recoveryAction, preState, postState, result, error);
-    if (error) throw error;
-    return recoveryRecord;
+    return workspaceProvider.writeFile(recoveryAction.args.path, recoveryAction.args.content);
   }
-
   if (recoveryAction.operation === 'renamePath') {
-    const sourceInfo = getCurrentWorkspacePathInfo(recoveryAction.args.path);
-    const destInfo = getCurrentWorkspacePathInfo(recoveryAction.args.nextPath);
-    const preState = {
-      source: { existed: sourceInfo.exists, type: sourceInfo.type || undefined, contentHash: sourceInfo.contentHash || undefined },
-      destination: { existed: destInfo.exists, type: destInfo.type || undefined }
-    };
-    let result = null;
-    let error = null;
-    try {
-      result = workspaceProvider.rename(recoveryAction.args.path, recoveryAction.args.nextPath);
-    } catch (e) {
-      error = e;
-    }
-    const postSourceInfo = getCurrentWorkspacePathInfo(recoveryAction.args.path);
-    const postDestInfo = getCurrentWorkspacePathInfo(recoveryAction.args.nextPath);
-    const postState = {
-      source: { existed: postSourceInfo.exists, type: postSourceInfo.type || undefined },
-      destination: { existed: postDestInfo.exists, type: postDestInfo.type || undefined, contentHash: postDestInfo.contentHash || undefined }
-    };
-    const recoveryRecord = persistRecoveryOperationHistory(record, recoveryAction, preState, postState, result, error);
-    if (error) throw error;
-    return recoveryRecord;
+    return workspaceProvider.rename(recoveryAction.args.path, recoveryAction.args.nextPath);
   }
-
   throw new Error('Unsupported recovery action');
+}
+
+function createOperatorRecoveryReconciliationError(recoveryKey, intent, current) {
+  const error = new Error(`Operator recovery ${recoveryKey} has an uncertain external effect and requires explicit reconciliation`);
+  error.code = 'OPERATOR_RECOVERY_RECONCILIATION_REQUIRED';
+  error.recoveryKey = recoveryKey;
+  error.intent = sanitizeSnapshotValue(intent);
+  error.currentState = sanitizeSnapshotValue(current);
+  return error;
+}
+
+async function completeOperatorRecoveryEvidence({
+  state,
+  recoveryKey,
+  intent,
+  completedBy,
+  preState,
+  postState,
+  result,
+  error = null,
+  reconciliation
+}) {
+  const original = state.original;
+  const recoveryAction = { operation: intent.operation, args: intent.args || {} };
+  const target = intent.target || buildOperatorRecoveryTarget(original, recoveryAction);
+  const timestamp = intent.attemptStartedAt || new Date().toISOString();
+  const errorDocument = error ? {
+    message: error.message || String(error),
+    code: error.code || null,
+    failureKind: error.failureKind || 'workspace_error'
+  } : null;
+  const mutationReceipt = {
+    ...target,
+    operation: recoveryAction.operation,
+    timestamp,
+    before: sanitizeSnapshotValue(preState),
+    after: sanitizeSnapshotValue(postState),
+    providerResponse: error ? null : sanitizeSnapshotValue(result),
+    error: errorDocument,
+    authorityDecision: {
+      allowed: true,
+      actorType: 'operator',
+      requestedBy: intent.requestedBy,
+      completedBy
+    },
+    recovery: {
+      originalHistoryId: original.id,
+      requestedBy: intent.requestedBy,
+      completedBy,
+      reconciliation
+    }
+  };
+  return getOperatorRecoveryRepository().completeOperatorRecovery({
+    originalHistoryId: original.id,
+    recoveryKey,
+    historyRecord: {
+      allocationPlanId: original.allocationPlanId || null,
+      allocationItemId: original.allocationItemId || null,
+      operation: recoveryAction.operation,
+      args: sanitizeSnapshotValue(recoveryAction.args),
+      preState: sanitizeSnapshotValue(preState),
+      postState: sanitizeSnapshotValue(postState),
+      result: error ? null : sanitizeSnapshotValue(result),
+      error: errorDocument ? errorDocument.message : null,
+      errorCode: errorDocument ? errorDocument.code : null,
+      failureKind: errorDocument ? errorDocument.failureKind : null,
+      outcome: error ? 'failed' : 'succeeded',
+      recoveredBy: completedBy,
+      ...target
+    },
+    receipt: mutationReceipt,
+    replayItem: {
+      operation: sanitizeSnapshotValue(recoveryAction),
+      ...(error ? { error: errorDocument.message } : { result: sanitizeSnapshotValue(result) }),
+      startedAt: timestamp,
+      workspaceRoot: workspaceProvider.root,
+      isRecovery: true,
+      recoveredHistoryId: original.id,
+      requestedBy: intent.requestedBy,
+      completedBy,
+      reconciliation,
+      ...target
+    },
+    event: {
+      type: 'workspace.recovery_completed',
+      stepId: original.step === null || original.step === undefined ? null : String(original.step),
+      payload: {
+        operation: recoveryAction.operation,
+        path: recoveryAction.args.path || null,
+        nextPath: recoveryAction.args.nextPath || null,
+        mutating: true,
+        input: sanitizeSnapshotValue(recoveryAction.args),
+        ...(error ? { error: errorDocument.message } : { result: sanitizeSnapshotValue(result) }),
+        isRecovery: true,
+        requestedBy: intent.requestedBy,
+        completedBy,
+        reconciliation,
+        ...target
+      }
+    }
+  });
+}
+
+async function repairOperatorRecoveryCompletion(state, recoveryKey, changedBy) {
+  if (!state.intent || !state.receipt) {
+    throw new Error(`Operator recovery ${recoveryKey} has incomplete prepared evidence`);
+  }
+  const mutationReceipt = state.receipt.mutationReceipt || {};
+  const recovery = mutationReceipt.recovery || {};
+  const errorDocument = mutationReceipt.error && typeof mutationReceipt.error === 'object'
+    ? mutationReceipt.error
+    : null;
+  const storedError = errorDocument ? Object.assign(new Error(errorDocument.message || state.receipt.error || 'Recovery failed'), {
+    code: errorDocument.code || state.receipt.errorCode || null,
+    failureKind: errorDocument.failureKind || state.receipt.failureKind || 'workspace_error'
+  }) : null;
+  const completion = await completeOperatorRecoveryEvidence({
+    state,
+    recoveryKey,
+    intent: state.intent,
+    completedBy: recovery.completedBy || state.receipt.recoveredBy || changedBy,
+    preState: state.receipt.preState,
+    postState: state.receipt.postState,
+    result: state.receipt.result,
+    error: storedError,
+    reconciliation: recovery.reconciliation || 'executed'
+  });
+  return { ...completion, reconciled: recovery.reconciliation === 'applied_effect_confirmed' };
+}
+
+async function executeRecovery(originalHistoryId, confirmed = false, changedBy = 'unknown') {
+  if (!confirmed) throw new Error('Recovery requires explicit confirmation');
+  const recoveryKey = buildOperatorRecoveryKey(originalHistoryId);
+  const initial = await getOperatorRecoveryRepository().getOperatorRecovery(originalHistoryId);
+  if (!initial.original) throw new Error('Operation history record not found');
+  if (initial.receipt && initial.completionEvent) {
+    return { record: initial.receipt, inserted: false, reconciled: false };
+  }
+  const initialAction = initial.intent
+    ? { operation: initial.intent.operation, args: initial.intent.args || {} }
+    : buildRecoveryAction(initial.original);
+  if (!initialAction) throw new Error('Recovery not possible');
+  const run = await getRuntimeStateReadRepository().getRun(initial.original.runId);
+  if (!run) throw new Error(`Run ${initial.original.runId} was not found`);
+  const target = initial.intent && initial.intent.target
+    ? initial.intent.target
+    : buildOperatorRecoveryTarget(initial.original, initialAction);
+
+  return getOperatorRecoveryRepository().withOperatorRecoveryLock({
+    run,
+    targetId: target.targetId,
+    paths: [initialAction.args.path, initialAction.args.nextPath].filter(value => typeof value === 'string'),
+    operation: initialAction.operation,
+    args: initialAction.args
+  }, async () => {
+    let state = await getOperatorRecoveryRepository().getOperatorRecovery(originalHistoryId);
+    if (!state.original) throw new Error('Operation history record not found');
+    if (state.receipt) {
+      if (state.completionEvent) return { record: state.receipt, inserted: false, reconciled: false };
+      return repairOperatorRecoveryCompletion(state, recoveryKey, changedBy);
+    }
+
+    let intent = state.intent;
+    if (!intent) {
+      const preview = previewRecovery(state.original);
+      if (!preview.canProceed) {
+        const reason = preview.validation && preview.validation.reason
+          ? preview.validation.reason
+          : 'Recovery not possible';
+        throw new Error(reason);
+      }
+      const recoveryAction = preview.proposedAction;
+      const preState = captureWorkspacePreState(workspaceProvider, recoveryAction.operation, recoveryAction.args);
+      const prepared = await getOperatorRecoveryRepository().prepareOperatorRecovery({
+        originalHistoryId,
+        recoveryKey,
+        intent: {
+          originalHistoryId,
+          requestedBy: changedBy,
+          operation: recoveryAction.operation,
+          args: sanitizeSnapshotValue(recoveryAction.args),
+          preState: sanitizeSnapshotValue(preState),
+          target: buildOperatorRecoveryTarget(state.original, recoveryAction),
+          attemptStartedAt: new Date().toISOString()
+        }
+      });
+      intent = prepared.intent;
+      state = { ...state, intent, preparedEvent: prepared.preparedEvent || state.preparedEvent };
+    }
+
+    const reconciliation = classifyPreparedWorkspaceMutation(workspaceProvider, intent);
+    if (reconciliation.status === 'uncertain') {
+      throw createOperatorRecoveryReconciliationError(recoveryKey, intent, reconciliation.current);
+    }
+
+    let result;
+    let effectError = null;
+    let reconciliationMode;
+    if (reconciliation.status === 'applied') {
+      result = buildReconciledWorkspaceResult(intent.operation, intent.args || {}, intent.preState);
+      reconciliationMode = 'applied_effect_confirmed';
+    } else {
+      try {
+        result = performOperatorRecoveryEffect({ operation: intent.operation, args: intent.args || {} });
+      } catch (error) {
+        effectError = error;
+      }
+      reconciliationMode = 'executed';
+    }
+    const postState = captureWorkspacePostState(workspaceProvider, intent.operation, intent.args || {});
+    if (!effectError && reconciliation.status === 'not_applied') {
+      maybeInterruptAfterOperatorRecoveryEffect();
+    }
+    const completion = await completeOperatorRecoveryEvidence({
+      state,
+      recoveryKey,
+      intent,
+      completedBy: changedBy,
+      preState: intent.preState,
+      postState,
+      result,
+      error: effectError,
+      reconciliation: reconciliationMode
+    });
+    if (effectError) throw effectError;
+    return { ...completion, reconciled: reconciliation.status === 'applied' };
+  });
 }
 
 function enrichOperationHistoryForDisplay(history) {
@@ -9721,13 +9178,15 @@ function usageTokenTotal(usage) {
   return total > 0 ? total : null;
 }
 
-function buildRunMetrics(run, runLogs) {
+function buildRunMetrics(run, runLogEvidence) {
   const startedAt = run.startedAt || null;
   const completedAt = run.completedAt || null;
   const durationMs = startedAt && completedAt
     ? Math.max(0, new Date(completedAt) - new Date(startedAt))
     : null;
-  const totalTokens = runLogs.reduce((total, log) => {
+  const runLogs = Array.isArray(runLogEvidence) ? runLogEvidence : [];
+  const aggregate = !Array.isArray(runLogEvidence) && runLogEvidence ? runLogEvidence : null;
+  const totalTokens = aggregate ? aggregate.totalTokensUsed : runLogs.reduce((total, log) => {
     const tokenTotal = usageTokenTotal(log.usage);
     return tokenTotal === null ? total : total + tokenTotal;
   }, 0);
@@ -9740,14 +9199,14 @@ function buildRunMetrics(run, runLogs) {
     completedAt,
     durationMs,
     status: run.status,
-    totalModelRequests: runLogs.filter(log => log.type === 'model:request').length,
-    totalModelResponses: runLogs.filter(log => log.type === 'model:response').length,
-    totalWorkspaceReads: runLogs.filter(log => log.type === 'workspace:read').length,
-    totalWorkspaceWrites: runLogs.filter(log => log.type === 'workspace:write').length,
+    totalModelRequests: aggregate ? aggregate.totalModelRequests : runLogs.filter(log => log.type === 'model:request').length,
+    totalModelResponses: aggregate ? aggregate.totalModelResponses : runLogs.filter(log => log.type === 'model:response').length,
+    totalWorkspaceReads: aggregate ? aggregate.totalWorkspaceReads : runLogs.filter(log => log.type === 'workspace:read').length,
+    totalWorkspaceWrites: aggregate ? aggregate.totalWorkspaceWrites : runLogs.filter(log => log.type === 'workspace:write').length,
     // This guard relies on createFolder logs setting workspaceAction.kind to 'folder'.
-    totalFilesCreated: runLogs.filter(log => log.type === 'workspace:create' && (!log.workspaceAction || log.workspaceAction.kind !== 'folder')).length,
-    totalFilesModified: runLogs.filter(log => log.type === 'workspace:write').length,
-    totalFilesDeleted: runLogs.filter(log => log.type === 'workspace:delete').length,
+    totalFilesCreated: aggregate ? aggregate.totalFilesCreated : runLogs.filter(log => log.type === 'workspace:create' && (!log.workspaceAction || log.workspaceAction.kind !== 'folder')).length,
+    totalFilesModified: aggregate ? aggregate.totalFilesModified : runLogs.filter(log => log.type === 'workspace:write').length,
+    totalFilesDeleted: aggregate ? aggregate.totalFilesDeleted : runLogs.filter(log => log.type === 'workspace:delete').length,
     totalTokensUsed: totalTokens > 0 ? totalTokens : null,
     totalEstimatedCost: null
   };
@@ -9763,17 +9222,16 @@ function isTerminalRun(run) {
   return Boolean(run && ['completed', 'failed', 'interrupted'].includes(run.status));
 }
 
-function getRunModelName(run, snapshot, agentsById = new Map()) {
+function getRunModelName(run, snapshot) {
   if (snapshot && typeof snapshot.model === 'string' && snapshot.model.trim()) return snapshot.model.trim();
+  if (run && run.routingSnapshot && typeof run.routingSnapshot.selectedModel === 'string' && run.routingSnapshot.selectedModel.trim()) return run.routingSnapshot.selectedModel.trim();
   if (run && run.replaySummary && typeof run.replaySummary.model === 'string' && run.replaySummary.model.trim()) return run.replaySummary.model.trim();
-  const agent = run ? agentsById.get(run.agentId) : null;
-  if (agent && typeof agent.model === 'string' && agent.model.trim()) return agent.model.trim();
   return 'unknown';
 }
 
-function buildRunQualityMetrics(run, ticket, operationHistory = [], workflows = []) {
+function buildRunQualityMetrics(run, ticket, operationHistory = []) {
   const snapshot = run.replaySnapshot || {};
-  const comparison = buildArtifactPredictionComparison(run, snapshot, operationHistory, workflows);
+  const comparison = buildArtifactPredictionComparison(run, snapshot, operationHistory);
   return {
     artifactAccuracy: buildArtifactAccuracy(snapshot, comparison),
     objectiveSuccess: buildObjectiveSuccess(run),
@@ -9795,151 +9253,156 @@ function buildEmptyQualityAggregation() {
   };
 }
 
-function aggregateQualityMetrics(runQualityItems = []) {
-  const aggregation = buildEmptyQualityAggregation();
-  aggregation.runs = runQualityItems.length;
+function createQualityAccumulator() {
+  return {
+    aggregation: buildEmptyQualityAggregation(),
+    artifact: { total: 0, count: 0 },
+    success: { total: 0, count: 0 },
+    coverage: { total: 0, count: 0 }
+  };
+}
 
-  const artifactValues = [];
-  const successValues = [];
-  const coverageValues = [];
+function addQualityMetrics(accumulator, item) {
+  const artifact = item && item.artifactAccuracy;
+  const success = item && item.objectiveSuccess;
+  const coverage = item && item.objectivePathCoverage;
+  accumulator.aggregation.runs += 1;
 
-  runQualityItems.forEach(item => {
-    const artifact = item && item.artifactAccuracy;
-    const success = item && item.objectiveSuccess;
-    const coverage = item && item.objectivePathCoverage;
+  if (artifact && artifact.scored && typeof artifact.percent === 'number' && Number.isFinite(artifact.percent)) {
+    accumulator.artifact.total += artifact.percent;
+    accumulator.artifact.count += 1;
+  }
+  if (success && success.scored && typeof success.percent === 'number' && Number.isFinite(success.percent)) {
+    accumulator.success.total += success.percent;
+    accumulator.success.count += 1;
+  }
+  if (coverage && coverage.scored && typeof coverage.percent === 'number' && Number.isFinite(coverage.percent)) {
+    accumulator.coverage.total += coverage.percent;
+    accumulator.coverage.count += 1;
+  }
+  if (artifact && artifact.scored && success && success.scored && artifact.percent !== success.percent) {
+    accumulator.aggregation.disagreements.accuracyVsSuccess += 1;
+  }
+  if (success && success.scored && coverage && coverage.scored && success.percent !== coverage.percent) {
+    accumulator.aggregation.disagreements.successVsCoverage += 1;
+  }
+  if (artifact && artifact.scored && coverage && coverage.scored && artifact.percent !== coverage.percent) {
+    accumulator.aggregation.disagreements.accuracyVsCoverage += 1;
+  }
+}
 
-    if (artifact && artifact.scored && typeof artifact.percent === 'number' && Number.isFinite(artifact.percent)) {
-      artifactValues.push(artifact.percent);
-    }
-    if (success && success.scored && typeof success.percent === 'number' && Number.isFinite(success.percent)) {
-      successValues.push(success.percent);
-    }
-    if (coverage && coverage.scored && typeof coverage.percent === 'number' && Number.isFinite(coverage.percent)) {
-      coverageValues.push(coverage.percent);
-    }
-
-    if (artifact && artifact.scored && success && success.scored && artifact.percent !== success.percent) {
-      aggregation.disagreements.accuracyVsSuccess += 1;
-    }
-    if (success && success.scored && coverage && coverage.scored && success.percent !== coverage.percent) {
-      aggregation.disagreements.successVsCoverage += 1;
-    }
-    if (artifact && artifact.scored && coverage && coverage.scored && artifact.percent !== coverage.percent) {
-      aggregation.disagreements.accuracyVsCoverage += 1;
-    }
-  });
-
-  aggregation.artifactAccuracyAvg = artifactValues.length > 0 ? Math.round(average(artifactValues)) : null;
-  aggregation.objectiveSuccessRate = successValues.length > 0 ? Math.round(average(successValues)) : null;
-  aggregation.objectivePathCoverageAvg = coverageValues.length > 0 ? Math.round(average(coverageValues)) : null;
+function finishQualityMetrics(accumulator) {
+  const aggregation = accumulator.aggregation;
+  aggregation.artifactAccuracyAvg = accumulator.artifact.count > 0
+    ? Math.round(accumulator.artifact.total / accumulator.artifact.count) : null;
+  aggregation.objectiveSuccessRate = accumulator.success.count > 0
+    ? Math.round(accumulator.success.total / accumulator.success.count) : null;
+  aggregation.objectivePathCoverageAvg = accumulator.coverage.count > 0
+    ? Math.round(accumulator.coverage.total / accumulator.coverage.count) : null;
   return aggregation;
 }
 
-async function getAgentPerformanceMetrics() {
-  const runs = await hydrateRunReplaySnapshots(readRuns());
-  const logs = readLogs();
-  const ticketsById = new Map(readTickets().map(ticket => [ticket.id, ticket]));
-  const workflows = readWorkflows();
-  const operationHistory = readOperationHistory();
-  const runsByAgentId = groupBy(runs, run => run.agentId);
-  const logsByRunId = groupBy(logs, log => log.runId);
-  const workspaceActionTypes = new Set([
-    'workspace:list',
-    'workspace:read',
-    'workspace:write',
-    'workspace:create',
-    'workspace:rename',
-    'workspace:delete'
-  ]);
+function createAgentPerformanceAccumulator(agent) {
+  return {
+    agent,
+    totalRuns: 0,
+    successfulRuns: 0,
+    failedRuns: 0,
+    activeRuns: 0,
+    durationTotal: 0,
+    durationCount: 0,
+    tokenTotal: 0,
+    tokenCount: 0,
+    totalWorkspaceActions: 0,
+    lastRunSortAt: -Infinity,
+    lastRunTimestamp: null,
+    quality: createQualityAccumulator()
+  };
+}
 
-  return readAgents().map(agent => {
-    const agentRuns = runsByAgentId.get(agent.id) || [];
-    const terminalRuns = agentRuns.filter(isTerminalRun);
-    const runMetrics = agentRuns.map(run => buildRunMetrics(run, logsByRunId.get(run.id) || []));
-    const completedRuns = runMetrics.filter(run => run.status === 'completed');
-    const failedRuns = runMetrics.filter(run => run.status === 'failed');
-    const activeRuns = runMetrics.filter(run => ['pending', 'running'].includes(run.status));
-    const qualityAggregation = aggregateQualityMetrics(terminalRuns.map(run =>
-      buildRunQualityMetrics(run, ticketsById.get(run.ticketId), operationHistory, workflows)
-    ));
-    const totalWorkspaceActions = agentRuns.reduce((total, run) => {
-      return total + (logsByRunId.get(run.id) || []).filter(log => workspaceActionTypes.has(log.type)).length;
-    }, 0);
-    const lastRun = agentRuns
-      .slice()
-      .sort((a, b) => new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0))[0];
+function addAgentRunMetrics(accumulator, run, logMetrics, qualityMetrics) {
+  const metric = buildRunMetrics(run, logMetrics || null);
+  accumulator.totalRuns += 1;
+  if (metric.status === 'completed') accumulator.successfulRuns += 1;
+  if (metric.status === 'failed') accumulator.failedRuns += 1;
+  if (metric.status === 'pending' || metric.status === 'running') accumulator.activeRuns += 1;
+  if (typeof metric.durationMs === 'number' && Number.isFinite(metric.durationMs)) {
+    accumulator.durationTotal += metric.durationMs;
+    accumulator.durationCount += 1;
+  }
+  if (typeof metric.totalTokensUsed === 'number' && Number.isFinite(metric.totalTokensUsed)) {
+    accumulator.tokenTotal += metric.totalTokensUsed;
+    accumulator.tokenCount += 1;
+  }
+  accumulator.totalWorkspaceActions += (logMetrics && logMetrics.totalWorkspaceActions) || 0;
+  const sortTimestamp = run.updatedAt || run.completedAt || run.startedAt || run.createdAt || null;
+  const sortAt = sortTimestamp ? Date.parse(sortTimestamp) : 0;
+  if (Number.isFinite(sortAt) && sortAt > accumulator.lastRunSortAt) {
+    accumulator.lastRunSortAt = sortAt;
+    accumulator.lastRunTimestamp = run.completedAt || run.startedAt || run.createdAt || null;
+  }
+  if (qualityMetrics) addQualityMetrics(accumulator.quality, qualityMetrics);
+}
 
-    return {
-      agent,
-      runMetrics,
-      totalRuns: runMetrics.length,
-      successfulRuns: completedRuns.length,
-      failedRuns: failedRuns.length,
-      activeRuns: activeRuns.length,
-      averageDurationMs: average(runMetrics.map(run => run.durationMs)),
-      averageTokenUsage: average(runMetrics.map(run => run.totalTokensUsed)),
-      averageEstimatedCost: null,
-      totalWorkspaceActions,
-      lastRunTimestamp: lastRun ? (lastRun.completedAt || lastRun.startedAt || lastRun.createdAt || null) : null,
-      quality: qualityAggregation
-    };
+function finishAgentPerformanceMetrics(accumulator) {
+  return {
+    agent: accumulator.agent,
+    totalRuns: accumulator.totalRuns,
+    successfulRuns: accumulator.successfulRuns,
+    failedRuns: accumulator.failedRuns,
+    activeRuns: accumulator.activeRuns,
+    averageDurationMs: accumulator.durationCount > 0 ? accumulator.durationTotal / accumulator.durationCount : null,
+    averageTokenUsage: accumulator.tokenCount > 0 ? accumulator.tokenTotal / accumulator.tokenCount : null,
+    averageEstimatedCost: null,
+    totalWorkspaceActions: accumulator.totalWorkspaceActions,
+    lastRunTimestamp: accumulator.lastRunTimestamp,
+    quality: finishQualityMetrics(accumulator.quality)
+  };
+}
+
+async function getPerformanceMetrics(configuredAgents = null) {
+  configuredAgents = configuredAgents || await listConfiguredAgentOptions();
+  const agentAccumulators = new Map(configuredAgents.map(agent => [agent.id, createAgentPerformanceAccumulator(agent)]));
+  const modelAccumulators = new Map();
+
+  await visitPerformanceRunEvidencePages(evidence => {
+    for (const item of evidence) {
+      const run = item.replaySnapshot ? { ...item.run, replaySnapshot: item.replaySnapshot } : { ...item.run };
+      const qualityMetrics = isTerminalRun(run)
+        ? buildRunQualityMetrics(run, item.ticket, item.operationHistory)
+        : null;
+      const agentAccumulator = agentAccumulators.get(run.agentId);
+      if (agentAccumulator) addAgentRunMetrics(agentAccumulator, run, item.logMetrics, qualityMetrics);
+      if (qualityMetrics) {
+        const model = getRunModelName(run, run.replaySnapshot || {});
+        if (!modelAccumulators.has(model)) modelAccumulators.set(model, createQualityAccumulator());
+        addQualityMetrics(modelAccumulators.get(model), qualityMetrics);
+      }
+    }
   });
+
+  return {
+    agentMetrics: configuredAgents.map(agent => finishAgentPerformanceMetrics(agentAccumulators.get(agent.id))),
+    modelMetrics: Array.from(modelAccumulators.entries())
+      .map(([model, accumulator]) => ({ model, ...finishQualityMetrics(accumulator) }))
+      .sort((left, right) => right.runs - left.runs || left.model.localeCompare(right.model))
+  };
 }
 
-async function getModelPerformanceMetrics() {
-  const runs = await hydrateRunReplaySnapshots(readRuns());
-  const ticketsById = new Map(readTickets().map(ticket => [ticket.id, ticket]));
-  const workflows = readWorkflows();
-  const operationHistory = readOperationHistory();
-  const agentsById = new Map(readAgents().map(agent => [agent.id, agent]));
-  const models = new Map();
-
-  runs.filter(isTerminalRun).forEach(run => {
-    const snapshot = run.replaySnapshot || {};
-    const model = getRunModelName(run, snapshot, agentsById);
-    if (!models.has(model)) models.set(model, []);
-    models.get(model).push(buildRunQualityMetrics(run, ticketsById.get(run.ticketId), operationHistory, workflows));
-  });
-
-  return Array.from(models.entries())
-    .map(([model, qualityItems]) => ({
-      model,
-      ...aggregateQualityMetrics(qualityItems)
-    }))
-    .sort((a, b) => b.runs - a.runs || a.model.localeCompare(b.model));
+async function getTicketAssignableGroups() {
+  return listAccessGroups({ canReceiveTickets: true });
 }
 
-function getTicketAssignableGroups() {
-  return readGroups().filter(group => group.canReceiveTickets === true);
-}
-
-function getMembershipGroups() {
-  return readGroups();
-}
-
-function getPrincipalGroupIds(principalType, principalId) {
-  return readMemberships()
-    .filter(membership => membership.principalType === principalType && membership.principalId === principalId)
-    .map(membership => membership.groupId);
-}
-
-function getGroupPermissionNames(groupId) {
-  const group = readGroups().find(item => item.id === groupId);
-  return group && Array.isArray(group.permissions) ? group.permissions : [];
-}
-
-function renderAdminUserForm(reply, request, options = {}) {
+async function renderAdminUserForm(reply, request, options = {}) {
   const accountType = options.accountType === 'agent' ? 'agent' : 'user';
   const editAccount = options.editAccount || null;
-  const userGroups = options.userGroups ?? (
-    editAccount ? getPrincipalGroupIds(accountType, editAccount.id) : []
-  );
+  const userGroups = options.userGroups ?? (editAccount ? editAccount.groupIds || [] : []);
 
   return reply.view('admin/user-form.ejs', viewData({
     user: request.user,
     editAccount,
     accountType,
-    groups: getMembershipGroups(),
+    groups: await listAccessGroups(),
     userGroups,
     providers: PROVIDERS,
     models: MODELS,
@@ -9950,14 +9413,14 @@ function renderAdminUserForm(reply, request, options = {}) {
   }, request.session.userId));
 }
 
-function renderAdminGroupForm(reply, request, options = {}) {
+async function renderAdminGroupForm(reply, request, options = {}) {
   const editGroup = options.editGroup || null;
-  const groupPermissions = options.groupPermissions ?? (editGroup ? getGroupPermissionNames(editGroup.id) : []);
+  const groupPermissions = options.groupPermissions ?? (editGroup ? editGroup.permissions || [] : []);
 
   return reply.view('admin/group-form.ejs', viewData({
     user: request.user,
     editGroup,
-    allPermissions: readPermissions(),
+    allPermissions: await listAccessPermissions(),
     groupPermissions,
     error: options.error || null
   }, request.session.userId));
@@ -9966,17 +9429,13 @@ function renderAdminGroupForm(reply, request, options = {}) {
 // ==================== PERMISSION SYSTEM ====================
 
 function getUserPermissions(userId) {
-  const userGroupIds = getPrincipalGroupIds('user', userId);
-  const groups = readGroups();
-  const permissions = new Set();
-  
-  groups.forEach(group => {
-    if (userGroupIds.includes(group.id)) {
-      group.permissions.forEach(permission => permissions.add(permission));
-    }
-  });
-  
-  return Array.from(permissions);
+  if (userId === null || userId === undefined) return [];
+  const context = requestAuthorizationContext.getStore();
+  const normalizedUserId = parseInt(userId, 10);
+  if (!context || context.userId !== normalizedUserId) {
+    throw new Error('User permission evaluation requires a loaded request authorization context');
+  }
+  return [...context.permissions];
 }
 
 function hasPermission(userId, permission) {
@@ -9984,26 +9443,12 @@ function hasPermission(userId, permission) {
   return userPermissions.includes(permission);
 }
 
-// ==================== AGENT RUNS ====================
-
-function updateRunStatus(runId, status, error = null) {
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
-
-  if (!run) return null;
-  if (run.status === 'interrupted' && status !== 'interrupted') return run;
-  if (run.status === status && !error) return run;
-
-  run.status = status;
-  run.updatedAt = new Date().toISOString();
-  if (status === 'running') run.startedAt = run.startedAt || run.updatedAt;
-  if (status === 'completed' || status === 'failed' || status === 'interrupted') run.completedAt = run.updatedAt;
-  if (error) run.error = sanitizeLogMessage(error);
-  writeRuns(runs);
-  updateAllocationItemStatus(run, status);
-  broadcastEvent('run:status-changed', { runId: run.id, ticketId: run.ticketId, status, error: error || null });
-  return run;
+async function userHasPermission(userId, permission) {
+  const authorization = await getAccessCatalogRepository().getUserAuthorization(userId);
+  return Boolean(authorization && authorization.permissions.includes(permission));
 }
+
+// ==================== AGENT RUNS ====================
 
 async function updateRunReplaySnapshot(runId, updater, { allowFinalizedAppend = false } = {}) {
   const result = await getRunReplayRepository().updateRunReplay({
@@ -10219,39 +9664,13 @@ function emptyRuntimeLimitsConfig() {
     maxRuntimeDurationMs: null,
     maxActiveRuns: null,
     localModelConcurrency: null,
+    revision: 1,
     updatedBy: null,
     updatedAt: null
   };
 }
 
-function readRuntimeLimitsConfig() {
-  if (!fs.existsSync(RUNTIME_LIMITS_FILE)) {
-    throw dataIntegrityError('runtime-limits.json', 'file is missing');
-  }
-  try {
-    const value = JSON.parse(fs.readFileSync(RUNTIME_LIMITS_FILE, 'utf8'));
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw dataIntegrityError('runtime-limits.json', 'root value must be an object');
-    }
-    [...RUNTIME_LIMIT_CONFIG_KEYS, ...RUNTIME_SYSTEM_CONFIG_KEYS].forEach(key => {
-      if (value[key] !== undefined && value[key] !== null && (!Number.isInteger(value[key]) || value[key] <= 0)) {
-        throw dataIntegrityError('runtime-limits.json', `${key} must be a positive integer or null`);
-      }
-    });
-    return {
-      ...emptyRuntimeLimitsConfig(),
-      ...Object.fromEntries(RUNTIME_LIMIT_CONFIG_KEYS.map(key => [key, value[key] ?? null])),
-      ...Object.fromEntries(RUNTIME_SYSTEM_CONFIG_KEYS.map(key => [key, value[key] ?? null])),
-      updatedBy: typeof value.updatedBy === 'string' && value.updatedBy.trim() ? value.updatedBy : null,
-      updatedAt: typeof value.updatedAt === 'string' && isValidIsoTimestamp(value.updatedAt) ? value.updatedAt : null
-    };
-  } catch (error) {
-    if (error && error.code === 'DATA_INTEGRITY_ERROR') throw error;
-    throw dataIntegrityError('runtime-limits.json', `unable to parse file: ${error && error.message ? error.message : 'unknown error'}`);
-  }
-}
-
-function getDeploymentRuntimeLimits() {
+function getDeploymentRuntimeDefaults() {
   return {
     maxExecutionSteps: getPositiveIntegerEnv('AGENT_MAX_EXECUTION_STEPS', DEFAULT_AGENT_RUNTIME_LIMITS.maxExecutionSteps),
     maxWorkspaceOperationsPerRun: getPositiveIntegerEnv('AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxWorkspaceOperationsPerRun),
@@ -10262,7 +9681,7 @@ function getDeploymentRuntimeLimits() {
   };
 }
 
-// Hard ceilings for system-wide config keys. Unlike the limit-key deployment caps, a system key's
+// Hard ceilings for process-enforced config keys. Unlike per-run deployment defaults, a system key's
 // ceiling is independent of its inherited default value, so the UI can raise it above that default.
 function getRuntimeSystemMaximums() {
   return {
@@ -10291,18 +9710,17 @@ function getWorkflowSpecificLimits() {
   };
 }
 
-function resolveAgentRuntimeLimits(objective = null, options = {}) {
-  const deployment = getDeploymentRuntimeLimits();
-  const config = options.config || readRuntimeLimitsConfig();
+function resolveAgentRuntimeLimitsFromConfig(objective, config, options = {}) {
+  const deploymentDefaults = getDeploymentRuntimeDefaults();
   const uiConfiguredKeys = [];
   const base = {};
   for (const key of RUNTIME_LIMIT_CONFIG_KEYS) {
     const configured = config[key];
     if (Number.isInteger(configured) && configured >= RUNTIME_LIMIT_MINIMUMS[key]) {
       uiConfiguredKeys.push(key);
-      base[key] = Math.min(configured, deployment[key]);
+      base[key] = configured;
     } else {
-      base[key] = deployment[key];
+      base[key] = deploymentDefaults[key];
     }
   }
   const profile = detectWorkloadProfile(objective);
@@ -10319,14 +9737,18 @@ function resolveAgentRuntimeLimits(objective = null, options = {}) {
       source: {
         uiConfigured: uiConfiguredKeys.length > 0,
         uiConfiguredKeys,
-        deploymentCapped: true,
         workloadProfile: profile || null,
         workflowLimits: options.workflow ? getWorkflowSpecificLimits() : null
       }
     },
-    deployment,
+    deploymentDefaults,
     config
   };
+}
+
+async function resolveAgentRuntimeLimits(objective = null, options = {}) {
+  const config = options.config || await getRuntimeLimitsRepository().getRuntimeLimitsConfig();
+  return resolveAgentRuntimeLimitsFromConfig(objective, config, options);
 }
 
 function normalizeRuntimeLimitsSnapshot(snapshot) {
@@ -10342,24 +9764,23 @@ function normalizeRuntimeLimitsSnapshot(snapshot) {
   };
 }
 
-function getAgentRuntimeLimits(objective = null) {
-  return resolveAgentRuntimeLimits(objective).limits;
+async function getAgentRuntimeLimits(objective = null) {
+  return (await resolveAgentRuntimeLimits(objective)).limits;
 }
 
 function getRunRuntimeLimitsSnapshot(run) {
   const persisted = normalizeRuntimeLimitsSnapshot(run && run.runtimeLimitsSnapshot);
   if (persisted) return persisted;
-  throw dataIntegrityError('runs.json', `run ${run && run.id != null ? run.id : 'unknown'} is missing its required runtimeLimitsSnapshot`);
+  throw dataIntegrityError('runs', `run ${run && run.id != null ? run.id : 'unknown'} is missing its required runtimeLimitsSnapshot`);
 }
 
 const ALL_RUNTIME_CONFIG_KEYS = Object.freeze([...RUNTIME_LIMIT_CONFIG_KEYS, ...RUNTIME_SYSTEM_CONFIG_KEYS]);
 const ALL_RUNTIME_MINIMUMS = Object.freeze({ ...RUNTIME_LIMIT_MINIMUMS, ...RUNTIME_SYSTEM_MINIMUMS });
 
-function validateRuntimeLimitsConfigInput(input, existing = readRuntimeLimitsConfig()) {
+function validateRuntimeLimitsConfigInput(input, existing) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return { ok: false, error: 'Runtime limits payload must be an object' };
   }
-  const deployment = getDeploymentRuntimeLimits();
   const systemMaximums = getRuntimeSystemMaximums();
   const value = { ...existing };
   for (const key of Object.keys(input)) {
@@ -10376,49 +9797,26 @@ function validateRuntimeLimitsConfigInput(input, existing = readRuntimeLimitsCon
     if (candidate < ALL_RUNTIME_MINIMUMS[key]) {
       return { ok: false, error: `${key} must be at least ${ALL_RUNTIME_MINIMUMS[key]}` };
     }
-    if (RUNTIME_LIMIT_CONFIG_KEYS.includes(key)) {
-      if (candidate > deployment[key]) {
-        return { ok: false, error: `${key} cannot exceed the deployment cap of ${deployment[key]}` };
-      }
-    } else if (candidate > systemMaximums[key]) {
+    if (!RUNTIME_LIMIT_CONFIG_KEYS.includes(key) && candidate > systemMaximums[key]) {
       return { ok: false, error: `${key} cannot exceed the maximum of ${systemMaximums[key]}` };
     }
     value[key] = candidate;
   }
-  return { ok: true, value: { ...emptyRuntimeLimitsConfig(), ...pickRuntimeLimitValues(value), ...pickRuntimeSystemValues(value) }, deployment };
-}
-
-function writeRuntimeLimitsConfig(config, actor) {
-  const now = new Date().toISOString();
-  const value = {
-    ...emptyRuntimeLimitsConfig(),
-    ...pickRuntimeLimitValues(config),
-    ...Object.fromEntries(RUNTIME_SYSTEM_CONFIG_KEYS.map(key => [key, config[key] ?? null])),
-    updatedBy: actor,
-    updatedAt: now
-  };
-  writeFileAtomic(RUNTIME_LIMITS_FILE, JSON.stringify(value, null, 2));
-  return value;
+  return { ok: true, value: { ...emptyRuntimeLimitsConfig(), ...pickRuntimeLimitValues(value), ...pickRuntimeSystemValues(value) }, deploymentDefaults: getDeploymentRuntimeDefaults() };
 }
 
 function pickRuntimeSystemValues(source) {
   return Object.fromEntries(RUNTIME_SYSTEM_CONFIG_KEYS.map(key => [key, source[key]]));
 }
 
-async function persistRuntimeLimitsUpdate(parsedValue, request) {
-  const previous = readRuntimeLimitsConfig();
+async function persistRuntimeLimitsUpdate(parsedValue, request, expectedRevision) {
   const actor = request.user ? request.user.username : String(request.session.userId);
-  const next = writeRuntimeLimitsConfig(parsedValue, actor);
-  const timestamp = next.updatedAt;
-  const auditPayload = {
-    actor,
-    timestamp,
-    oldValues: { ...pickRuntimeLimitValues(previous), ...pickRuntimeSystemValues(previous) },
-    newValues: { ...pickRuntimeLimitValues(next), ...pickRuntimeSystemValues(next) }
-  };
-  await appendEvent({ type: 'runtime_limits.updated', payload: auditPayload });
-  appendSystemLog('runtime_limits.updated', `Runtime limits updated by ${actor}`, null, auditPayload);
-  return next;
+  const result = await getRuntimeLimitsRepository().updateRuntimeLimitsConfig({
+    expectedRevision,
+    value: { ...pickRuntimeLimitValues(parsedValue), ...pickRuntimeSystemValues(parsedValue) },
+    changedBy: actor
+  });
+  return result.config;
 }
 
 const RUNTIME_LIMIT_DISPLAY = Object.freeze({
@@ -10428,33 +9826,33 @@ const RUNTIME_LIMIT_DISPLAY = Object.freeze({
   maxRuntimeDurationMs: { label: 'Max runtime duration (ms)', help: 'Wall-clock timeout for one run. Minimum 5000 ms.' }
 });
 
-function buildRuntimeLimitsAdminState(formValues = null) {
-  const config = readRuntimeLimitsConfig();
-  const resolved = resolveAgentRuntimeLimits(null, { config });
-  const deployment = getDeploymentRuntimeLimits();
+async function buildRuntimeLimitsAdminState(formValues = null) {
+  const config = await getRuntimeLimitsRepository().getRuntimeLimitsConfig();
+  const resolved = resolveAgentRuntimeLimitsFromConfig(null, config);
+  const deploymentDefaults = getDeploymentRuntimeDefaults();
   const systemMaximums = getRuntimeSystemMaximums();
   const systemRows = RUNTIME_SYSTEM_CONFIG_KEYS.map(key => ({
     key,
     label: RUNTIME_SYSTEM_DISPLAY[key].label,
     help: RUNTIME_SYSTEM_DISPLAY[key].help,
     minimum: RUNTIME_SYSTEM_MINIMUMS[key],
-    deploymentCap: systemMaximums[key],
+    configuredMaximum: systemMaximums[key],
     configuredValue: config[key],
-    effectiveValue: config[key] ?? deployment[key],
+    effectiveValue: config[key] ?? deploymentDefaults[key],
     inputValue: formValues && Object.prototype.hasOwnProperty.call(formValues, key)
       ? formValues[key]
       : config[key]
   }));
   return {
     config,
-    deploymentCaps: resolved.deployment,
+    deploymentDefaults: resolved.deploymentDefaults,
     effectiveLimits: pickRuntimeLimitValues(resolved.limits),
     rows: RUNTIME_LIMIT_CONFIG_KEYS.map(key => ({
       key,
       label: RUNTIME_LIMIT_DISPLAY[key].label,
       help: RUNTIME_LIMIT_DISPLAY[key].help,
       minimum: RUNTIME_LIMIT_MINIMUMS[key],
-      deploymentCap: resolved.deployment[key],
+      inheritedDefault: resolved.deploymentDefaults[key],
       configuredValue: config[key],
       effectiveValue: resolved.limits[key],
       inputValue: formValues && Object.prototype.hasOwnProperty.call(formValues, key)
@@ -10525,8 +9923,21 @@ async function callModelProviderWithRunTimeout(run, agent, input, startedAtMs, l
     });
   }
 
+  const MAX_SET_TIMEOUT_DELAY = 2147483647;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), remainingMs);
+  let timerId;
+  const scheduleAbort = (ms) => {
+    if (ms <= 0) { controller.abort(); return; }
+    const delay = Math.min(ms, MAX_SET_TIMEOUT_DELAY);
+    timerId = setTimeout(() => {
+      if (Date.now() - startedAtMs >= limits.maxRuntimeDurationMs) {
+        controller.abort();
+      } else {
+        scheduleAbort(ms - delay);
+      }
+    }, delay);
+  };
+  scheduleAbort(remainingMs);
 
   try {
     return await callModelProvider(agent, input, {
@@ -10543,7 +9954,7 @@ async function callModelProviderWithRunTimeout(run, agent, input, startedAtMs, l
 
     throw error;
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timerId);
   }
 }
 
@@ -10744,6 +10155,8 @@ async function assertRunWorkspaceOperationAllowed(run, currentCount, incomingCou
 }
 
 // Count mutations still required to satisfy a deterministic objective contract,
+// using the initial workspace snapshot. Returns a structured disposition object:
+// { disposition: string, requiredMutations: number|null, requiredSteps: number|null }
 // using the initial workspace snapshot. Returns null for unrecognized / model-driven
 // objectives so the normal model path decides feasibility.
 function countRequiredContractMutations(contract, initialWorkspaceSnapshot) {
@@ -11004,7 +10417,7 @@ function findObjectiveContractMutationMismatches(contract, actions) {
     .filter(proposed => !proposed.key || !allowed.has(proposed.key));
 }
 
-function checkPostconditionCompletion(run, actions, actionResults, step) {
+async function checkPostconditionCompletion(run, actions, actionResults, step) {
   if (!actions || actions.length === 0) return null;
 
   const mutatingIndices = actions
@@ -11020,7 +10433,10 @@ function checkPostconditionCompletion(run, actions, actionResults, step) {
   );
   if (hasNonMutating) return null;
 
-  const histories = readOperationHistory();
+  const historyIds = mutatingIndices
+    .map(({ i }) => actionResults[i] && actionResults[i].result && actionResults[i].result.historyId)
+    .filter(id => Number.isSafeInteger(id) && id > 0);
+  const histories = await Promise.all(historyIds.map(id => postgresRuntimeStore.getOperation(id)));
 
   for (const { action, i } of mutatingIndices) {
     const ar = actionResults[i];
@@ -11266,18 +10682,22 @@ function buildFailureMetadata(error, status, failureReason = null, detail = {}) 
   return null;
 }
 
-function buildRunTriage(run, {
+async function buildRunTriage(run, {
   error = null,
   failure = null,
   status = null,
   summary = null,
-  reasonCode = null
+  reasonCode = null,
+  events: suppliedEvents = null,
+  operations: suppliedOperations = null
 } = {}) {
   const effectiveStatus = status || (run && run.status) || 'failed';
   const failureCode = (failure && failure.code) || (error && error.code) || null;
   const failureKind = (failure && failure.kind) || (error && error.failureKind) || null;
   const message = sanitizeLogMessage(summary || (error && error.message) || (run && run.error) || 'Run stopped without a structured failure reason.');
-  const authorityDenied = run ? getRunEvents(run.id).some(event => event.type === 'authority.denied') : false;
+  const authorityDenied = run
+    ? (Array.isArray(suppliedEvents) ? suppliedEvents : []).some(event => event.type === 'authority.denied')
+    : false;
   let mappedReason = reasonCode;
 
   if (!mappedReason && effectiveStatus === 'interrupted') mappedReason = 'stopped';
@@ -11294,7 +10714,11 @@ function buildRunTriage(run, {
   if (!mappedReason && effectiveStatus === 'failed') mappedReason = 'runtime_failed';
   if (!mappedReason) mappedReason = 'unknown';
 
-  const mutationCount = run ? countRunMutatingOperations(run.id) : 0;
+  const mutationCount = run
+    ? (Array.isArray(suppliedOperations)
+        ? countRunMutatingOperations(run.id, suppliedOperations)
+        : ((await getRuntimeStateReadRepository().countRunMutations({ runIds: [run.id] }))[0] || { count: 0 }).count)
+    : 0;
   const mapping = {
     verification_failed: {
       requiredDecision: 'review_failure',
@@ -11357,23 +10781,10 @@ function buildRunTriage(run, {
 }
 
 async function persistRunTriage(runId, triage) {
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
-  if (!run) return null;
-  if (run.triage) return run.triage;
-
   const normalized = normalizeTriage(triage);
   if (!normalized) return null;
-  run.triage = normalized;
-  writeRuns(runs);
-  await updateRunReplaySnapshot(runId, snapshot => snapshot ? { ...snapshot, triage: normalized } : snapshot);
-  await appendEvent({
-    type: 'run.triage_created',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: { triage: normalized }
-  });
-  return normalized;
+  const result = await getTriageRepository().createRunTriage({ runId, triage: normalized });
+  return result ? result.triage : null;
 }
 
 async function buildFinalizedRunReplayState(run, status, failureReason = null, mutationCount = null, failure = null, finalizedAt = null) {
@@ -11400,40 +10811,6 @@ async function buildFinalizedRunReplayState(run, status, failureReason = null, m
     mutationCount: effectiveMutationCount,
     finalizedAt: effectiveFinalizedAt
   };
-}
-
-// Current JSON crash-reconciliation path. Normal run completion uses the
-// terminalization repository below so the PostgreSQL implementation can commit
-// this state with evaluation, consequence, and terminal events in one transaction.
-async function finalizeRunReplaySnapshot(run, status, failureReason = null, mutationCount = null, failure = null) {
-  await maybeTestInterrupt(run, 'before_run.snapshot_finalized');
-  const finalized = await buildFinalizedRunReplayState(run, status, failureReason, mutationCount, failure);
-  await writeRunReplaySnapshot(run.id, finalized.snapshot);
-
-  // Persist browserReport on the run record for direct query access.
-  // The snapshot already carries it for replay/diagnostic evidence.
-  persistBrowserReportOnRun(run.id, finalized.browserReport);
-
-  await appendEvent({
-    type: 'run.snapshot_finalized',
-    ticketId: run.ticketId,
-    runId: run.id,
-    payload: {
-      status,
-      failureReason: failureReason ? sanitizeLogMessage(failureReason) : null,
-      mutationCount: finalized.mutationCount,
-      finalizedAt: finalized.finalizedAt
-    }
-  });
-  await maybeTestInterrupt(run, 'after_run.snapshot_finalized');
-}
-
-function persistBrowserReportOnRun(runId, browserReport) {
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
-  if (!run) return;
-  run.browserReport = browserReport;
-  writeRuns(runs);
 }
 
 function buildTerminalViolationEvents(run, snapshot, existingEvents) {
@@ -11477,7 +10854,7 @@ async function commitRunTerminalization(run, {
   );
   if (triage) finalized.snapshot.triage = sanitizeSnapshotValue(triage);
 
-  const existingEvents = getRunEvents(run.id);
+  const existingEvents = (await getRunEvents(run.id));
   const violationEvents = buildTerminalViolationEvents(run, finalized.snapshot, existingEvents);
   const terminalPayload = {
     status,
@@ -11503,6 +10880,15 @@ async function commitRunTerminalization(run, {
     triage: triage || null,
     browserReport: finalized.browserReport,
     ...(error ? { error: sanitizeLogMessage(error) } : {})
+  };
+  const sourcePhase = EXECUTION_PHASES.includes(run.currentPhase) ? run.currentPhase : 'planning';
+  const terminalPhaseEvent = sourcePhase === 'terminalization' ? null : {
+    type: 'execution.phase_transition',
+    payload: {
+      fromPhase: sourcePhase,
+      toPhase: 'terminalization',
+      reason: 'Run entered terminalization'
+    }
   };
 
   // The old interruption points now sit before the repository boundary. They
@@ -11568,7 +10954,10 @@ async function commitRunTerminalization(run, {
       type: 'run.execution_completed',
       payload: executionPayload
     },
-    beforeReplayEvents: beforeReplayEvents.map(projectedEvent),
+    beforeReplayEvents: [
+      ...(terminalPhaseEvent ? [terminalPhaseEvent] : []),
+      ...beforeReplayEvents
+    ].map(projectedEvent),
     replayEvent: {
       type: 'run.snapshot_finalized',
       payload: {
@@ -11588,7 +10977,7 @@ async function commitRunTerminalization(run, {
     runEvaluation: result.evaluation,
     runConsequence: result.consequence
   };
-  updateAllocationItemStatus(terminalRun, status);
+  await updateAllocationItemStatus(terminalRun, status);
   broadcastEvent('run:status-changed', {
     runId: terminalRun.id,
     ticketId: terminalRun.ticketId,
@@ -11600,9 +10989,9 @@ async function commitRunTerminalization(run, {
 }
 
 async function classifyInterruptionPhase(run) {
-  const latestRun = readRuns().find(item => item.id === run.id) || run;
+  const latestRun = await getRunById(run.id) || run;
   const snapshot = await readRunReplaySnapshot(latestRun) || latestRun.replaySnapshot || {};
-  const logs = readLogs().filter(log => log.runId === run.id);
+  const logs = await collectDiagnosticLogPages({ runId: run.id });
   const providerRequestLogs = logs.filter(log => log.type === 'model:request').length;
   const providerResponseLogs = logs.filter(log => log.type === 'model:response').length;
   const providerRequests = Array.isArray(snapshot.providerRequests) ? snapshot.providerRequests.length : 0;
@@ -11620,8 +11009,8 @@ async function classifyInterruptionPhase(run) {
 }
 
 async function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
-  const ticket = readTickets().find(item => item.id === run.ticketId) || null;
-  const agent = readAgents().find(item => item.id === run.agentId) || null;
+  const ticket = await getTicketById(run.ticketId) || null;
+  const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
 
   await getRunReplayRepository().initializeRunReplay({
     runId: run.id,
@@ -11645,8 +11034,8 @@ async function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
 }
 
 async function ensureFailedRunReplaySnapshot(run, reason) {
-  const ticket = readTickets().find(item => item.id === run.ticketId) || null;
-  const agent = readAgents().find(item => item.id === run.agentId) || null;
+  const ticket = await getTicketById(run.ticketId) || null;
+  const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
 
   await getRunReplayRepository().initializeRunReplay({
     runId: run.id,
@@ -11676,73 +11065,58 @@ function isLocalModelAgent(agent) {
   return agent && agent.provider === 'ollama';
 }
 
-function getLocalModelConcurrencyLimit() {
-  const configured = readRuntimeLimitsConfig().localModelConcurrency;
+function getLocalModelConcurrencyLimit(config) {
+  const configured = config && config.localModelConcurrency;
   if (Number.isInteger(configured) && configured >= 1) return configured;
   return getPositiveIntegerEnv('LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY);
 }
 
-function getMaxActiveRunsLimit() {
-  const configured = readRuntimeLimitsConfig().maxActiveRuns;
+function getMaxActiveRunsLimit(config) {
+  const configured = config && config.maxActiveRuns;
   if (Number.isInteger(configured) && configured >= 1) return configured;
   return getPositiveIntegerEnv('MAX_ACTIVE_RUNS', DEFAULT_MAX_ACTIVE_RUNS);
 }
 
-function activeRunIdSet() {
-  const ids = new Set(
-    readRuns()
-      .filter(run => run.status === 'running')
-      .map(run => run.id)
-  );
-  admittedRunIds.forEach(runId => ids.add(runId));
-  startingRunIds.forEach(runId => ids.add(runId));
-  return ids;
-}
-
-function countActiveLocalModelRuns() {
-  const localAgentIds = new Set(readAgents().filter(isLocalModelAgent).map(agent => agent.id));
-  const ids = new Set(readRuns().filter(run =>
-    run.status === 'running' && localAgentIds.has(run.agentId)
-  ).map(run => run.id));
-  admittedLocalModelRunIds.forEach(runId => ids.add(runId));
-  startingLocalModelRunIds.forEach(runId => ids.add(runId));
-  return ids.size;
-}
-
-function getRunStartBlockReason(run) {
-  if (activeRunIdSet().size >= getMaxActiveRunsLimit()) return 'process_concurrency_limit';
-  const agent = readAgents().find(item => item.id === run.agentId);
-  if (isLocalModelAgent(agent) && countActiveLocalModelRuns() >= getLocalModelConcurrencyLimit()) {
-    return 'local_model_concurrency_limit';
+async function prepareRunStartContext(pendingRuns) {
+  const agentIds = [...new Set(pendingRuns.map(run => run.agentId))];
+  if (agentIds.length > getRuntimeSchedulerCandidateLimit()) {
+    const error = new Error('Scheduler agent lookup exceeds the configured bounded page capacity');
+    error.code = 'SCHEDULER_AGENT_LOOKUP_TRUNCATED';
+    throw error;
   }
-  return null;
+  const agents = agentIds.length > 0
+    ? await getConfiguredAgentRepository().getConfiguredAgentsByIds({ agentIds })
+    : [];
+  return { agentById: new Map(agents.map(agent => [agent.id, agent])) };
 }
 
-function canStartRunNow(run) {
-  return getRunStartBlockReason(run) === null;
+async function isRunInterrupted(runId) {
+  const run = await getRunLeaseRepository().getRun(runId);
+  return Boolean(run && run.status === 'interrupted');
 }
 
-function isRunInterrupted(runId) {
-  return readRuns().some(run => run.id === runId && run.status === 'interrupted');
+async function getAgentsInGroup(groupId) {
+  const page = await getConfiguredAgentRepository().listConfiguredAgentsByGroup({
+    groupId,
+    afterId: 0,
+    limit: getRuntimeSchedulerCandidateLimit()
+  });
+  if (page.nextAfterId !== null) {
+    const error = new Error(`Agent group ${groupId} exceeds the configured execution capacity`);
+    error.code = 'AGENT_GROUP_TRUNCATED';
+    throw error;
+  }
+  return page.agents;
 }
 
-function getAgentsInGroup(groupId) {
-  const agentIds = new Set(readMemberships()
-    .filter(membership => membership.principalType === 'agent' && membership.groupId === groupId)
-    .map(membership => membership.principalId));
-
-  return readAgents().filter(agent => agentIds.has(agent.id));
-}
-
-function getAgentGroupMembers() {
-  const memberships = readMemberships().filter(m => m.principalType === 'agent');
-  const agents = readAgents();
+async function getAgentGroupMembers() {
+  const [memberships, agents] = await Promise.all([listAgentGroupMembershipOptions(), listConfiguredAgentOptions()]);
   const agentMap = Object.fromEntries(agents.map(a => [a.id, a]));
   const groupMap = {};
 
   for (const m of memberships) {
     if (!groupMap[m.groupId]) groupMap[m.groupId] = [];
-    const agent = agentMap[m.principalId];
+    const agent = agentMap[m.agentId];
     if (agent) {
       groupMap[m.groupId].push({ id: agent.id, name: agent.name });
     }
@@ -11914,7 +11288,7 @@ function buildTargetMutationReceipt(run, operationId, operation, args, preState,
   };
 }
 
-function buildWorkspaceOperationTargetEvidence(run, operation, args, result = null, error = null) {
+async function buildWorkspaceOperationTargetEvidence(run, operation, args, result = null, error = null) {
   const evidence = buildTargetEvidenceMetadata(run, operation, args);
 
   if (operation === 'listDirectory' || operation === 'readFile') {
@@ -11923,9 +11297,8 @@ function buildWorkspaceOperationTargetEvidence(run, operation, args, result = nu
   }
 
   const historyId = result && result.historyId ? result.historyId : error && error.historyId ? error.historyId : null;
-  const historyRecord = historyId
-    ? readOperationHistory().find(record => record.id === historyId)
-    : null;
+  const historyState = historyId ? await getOperatorRecoveryRepository().getOperatorRecovery(historyId) : null;
+  const historyRecord = historyState ? historyState.original : null;
 
   evidence.mutationReceipt = historyRecord && historyRecord.mutationReceipt
     ? historyRecord.mutationReceipt
@@ -12144,9 +11517,8 @@ function getAgentEffectiveRuntimeConfig(agent) {
 
 function buildEffectiveRuntimeConfigSnapshot(agent, runtimeLimitsSnapshot = null) {
   const effectiveConfig = getAgentEffectiveRuntimeConfig(agent);
-  const runtimeLimits = runtimeLimitsSnapshot
-    ? pickRuntimeLimitValues(runtimeLimitsSnapshot)
-    : getAgentRuntimeLimits();
+  if (!runtimeLimitsSnapshot) throw new TypeError('runtimeLimitsSnapshot is required');
+  const runtimeLimits = pickRuntimeLimitValues(runtimeLimitsSnapshot);
   const KEYS = ['allowHandoffTask', 'allowWorkflowDraftIntent', 'allowCanonicalWorkflowDraft'];
 
   const configSources = {};
@@ -12322,7 +11694,7 @@ function buildTicketFeasibilityTriage(error, createdAt = new Date().toISOString(
 }
 
 async function blockTicketForFeasibility(ticket, error, context = {}) {
-  const persistedTicket = readTickets().find(item => item.id === ticket.id);
+  const persistedTicket = await getTicketById(ticket.id);
   if (!persistedTicket) return null;
 
   const now = new Date().toISOString();
@@ -12365,7 +11737,7 @@ async function blockTicketForFeasibility(ticket, error, context = {}) {
 }
 
 async function blockTicketForObjectiveAmbiguity(ticket, gateResult, context = {}) {
-  const persistedTicket = readTickets().find(item => item.id === ticket.id);
+  const persistedTicket = await getTicketById(ticket.id);
   if (!persistedTicket) return null;
 
   const now = new Date().toISOString();
@@ -12455,58 +11827,34 @@ function buildAllocatedOwnershipPlan(ticket, agents) {
   };
 }
 
-function createAllocationPlan(ticket, agents) {
-  const plans = readAllocationPlans();
+async function createAllocationPlan(ticket, agents) {
   const planDraft = buildAllocatedOwnershipPlan(ticket, agents);
   assertAllocatedOwnedPathsExist(planDraft.items);
-  const now = new Date().toISOString();
-  const nextPlanId = nextId(plans);
-  const maxItemId = plans.flatMap(plan => plan.items || []).reduce((maxId, item) => {
-    return Math.max(maxId, parseInt(item.allocationItemId, 10) || 0);
-  }, 0);
-  const plan = {
-    id: nextPlanId,
-    ticketId: ticket.id,
-    ticketOpenedAt: ticket.updatedAt,
-    mode: planDraft.mode,
-    status: 'pending',
-    createdAt: now,
-    items: planDraft.items.map((item, index) => ({
-      allocationItemId: maxItemId + index + 1,
-      allocationSubtask: item.allocationSubtask,
-      ownedOutputPaths: item.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath),
-      assignedAgentId: item.assignedAgentId,
-      status: 'pending',
-      createdAt: now
-    }))
-  };
-
-  writeAllocationPlans([...plans, plan]);
-  return plan;
+  return postgresRuntimeStore.createAllocationPlan({ plan: planDraft });
 }
 
-function findAllocationPlan(planId) {
-  return readAllocationPlans().find(plan => plan.id === planId) || null;
+async function findAllocationPlan(planId) {
+  return postgresRuntimeStore.getAllocationPlan(planId);
 }
 
-function findAllocationItem(planId, itemId) {
-  const plan = findAllocationPlan(planId);
+async function findAllocationItem(planId, itemId) {
+  const plan = await findAllocationPlan(planId);
   if (!plan) return null;
   return (plan.items || []).find(item => item.allocationItemId === itemId) || null;
 }
 
 function getRunAllocationItem(run) {
   if (!run || !run.allocationPlanId || !run.allocationItemId) return null;
-  return findAllocationItem(run.allocationPlanId, run.allocationItemId);
+  return {
+    allocationItemId: run.allocationItemId,
+    allocationSubtask: run.allocationSubtask || null,
+    ownedOutputPaths: Array.isArray(run.ownedOutputPaths) ? [...run.ownedOutputPaths] : [],
+    assignedAgentId: run.agentId
+  };
 }
 
 function getRunOwnedOutputPaths(run) {
-  const allocationItem = getRunAllocationItem(run);
-  if (allocationItem && Array.isArray(allocationItem.ownedOutputPaths)) {
-    return allocationItem.ownedOutputPaths;
-  }
-
-  return run.ownedOutputPaths || [];
+  return run && Array.isArray(run.ownedOutputPaths) ? [...run.ownedOutputPaths] : [];
 }
 
 // Display-only: returns the most specific owned root (e.g. "Q1/") that contains
@@ -12528,119 +11876,106 @@ function matchedOwnedRootForEntry(entryPath, ownedPaths) {
   return best;
 }
 
-// Display-only: active (pending/running) runs that carry scoped owned output
-// paths. Runs without owned paths are unscoped (full workspace) and intentionally
-// excluded so the whole workspace is not falsely tagged.
-function buildActiveOwnershipRecords() {
-  return readRuns()
-    .filter(run => ['pending', 'running'].includes(run.status))
-    .map(run => {
-      const ownedPaths = getRunOwnedOutputPaths(run);
-      if (!Array.isArray(ownedPaths) || ownedPaths.length === 0) return null;
-      return { runId: run.id, ticketId: run.ticketId, agentId: run.agentId, agentName: run.agentName, ownedPaths };
-    })
-    .filter(Boolean);
-}
-
 // Display-only: annotate each workspace listing entry with ownership metadata
-// when its path falls inside an active run's owned output path. Does not change
-// permissions, enforcement, or workspace mutation behavior.
-function annotateWorkspaceListingWithOwnership(listing) {
-  if (!listing || !Array.isArray(listing.entries)) return listing;
-  const records = buildActiveOwnershipRecords();
-  if (records.length === 0) return listing;
+// when its path falls inside an active run's owned output path. Active runs are
+// consumed in bounded PostgreSQL cursor pages so a pending backlog is never
+// accumulated in process memory. This does not change enforcement authority.
+async function annotateWorkspaceListingWithOwnership(listing) {
+  if (!listing || !Array.isArray(listing.entries) || listing.entries.length === 0) return listing;
+  const matchesByEntry = listing.entries.map(() => []);
+  let afterId = 0;
+  const limit = getRuntimeSchedulerCandidateLimit();
 
-  const entries = listing.entries.map(entry => {
-    const matches = [];
-    for (const record of records) {
-      const ownedPath = matchedOwnedRootForEntry(entry.path, record.ownedPaths);
-      if (ownedPath) {
-        matches.push({ agentId: record.agentId, agentName: record.agentName, ticketId: record.ticketId, runId: record.runId, ownedPath });
-      }
+  while (true) {
+    const page = await getRuntimeStateReadRepository().listRuns({
+      statuses: ['pending', 'running'],
+      afterId,
+      limit
+    });
+    for (const run of page.runs) {
+      const ownedPaths = getRunOwnedOutputPaths(run);
+      if (ownedPaths.length === 0) continue;
+      listing.entries.forEach((entry, index) => {
+        const ownedPath = matchedOwnedRootForEntry(entry.path, ownedPaths);
+        if (!ownedPath) return;
+        matchesByEntry[index].push({
+          agentId: run.agentId,
+          agentName: run.agentName,
+          ticketId: run.ticketId,
+          runId: run.id,
+          ownedPath
+        });
+      });
     }
-    if (matches.length === 0) return entry;
+    if (page.nextAfterId === null) break;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) {
+      throw new Error('listRuns returned a non-advancing ownership cursor');
+    }
+    afterId = page.nextAfterId;
+  }
 
-    // Most-specific (deepest) owned path wins when deterministic. Only fall back
-    // to a neutral "multiple active owners" label when distinct active runs tie
-    // at the same deepest specificity. Never silently pick one of a tie.
+  const entries = listing.entries.map((entry, index) => {
+    const matches = matchesByEntry[index];
+    if (matches.length === 0) return entry;
     const maxSpecificity = Math.max(...matches.map(match => match.ownedPath.length));
     const deepestMatches = matches.filter(match => match.ownedPath.length === maxSpecificity);
     const distinctRuns = new Set(deepestMatches.map(match => match.runId));
-    if (distinctRuns.size === 1) {
-      return { ...entry, ownership: deepestMatches[0] };
-    }
+    if (distinctRuns.size === 1) return { ...entry, ownership: deepestMatches[0] };
     return { ...entry, ownership: { multiple: true, owners: deepestMatches } };
   });
-
   return { ...listing, entries };
 }
 
-function getTicketAllocationPlan(ticketId) {
-  return readAllocationPlans().find(plan => plan.ticketId === ticketId) || null;
+
+async function getTicketAllocationPlan(ticketId) {
+  return postgresRuntimeStore.getAllocationPlanForTicket(ticketId);
 }
 
-function getTicketRuns(ticketId, history = readOperationHistory()) {
-  const runs = readRuns().filter(run => run.ticketId === ticketId);
-  const agents = readAgents();
+function enrichTicketRuns(runs, history, agents) {
   const mutationCountByRunId = buildMutationCountByRunId(history);
-  return runs.map(run => {
+  return (runs || []).map(run => {
     const partialMutationCount = mutationCountByRunId.get(run.id) || 0;
+    const projectedRun = { ...run, mutationCount: partialMutationCount };
     return {
-      ...run,
+      ...projectedRun,
       agentName: agents.find(agent => agent.id === run.agentId)?.name || `Agent ${run.agentId}`,
       partialMutationCount,
-      operationalOutcome: classifyRunOperationalOutcome(run)
+      operationalOutcome: classifyRunOperationalOutcome(projectedRun)
     };
   });
 }
 
-function getRecentLogsForTicket(ticketId, limit = 5) {
-  const logs = readLogs();
-  const recentLogs = [];
-
-  for (let index = logs.length - 1; index >= 0 && recentLogs.length < limit; index -= 1) {
-    if (logs[index].ticketId === ticketId) recentLogs.push(logs[index]);
-  }
-
-  return sanitizeWorkspaceDisplayValue(recentLogs.reverse()).map(log => ({
+async function getRecentLogsForTicket(ticketId, limit = 5) {
+  const page = await getDiagnosticLogRepository().listLogs({ ticketId, limit, order: 'desc' });
+  return sanitizeWorkspaceDisplayValue(page.logs.reverse()).map(log => ({
     ...log,
     displayType: displayLogType(log.type),
     displayMessage: displayLogMessage(log)
   }));
 }
 
-function getRecentLogsForRun(runId, limit = 5) {
-  const logs = readLogs();
-  const recentLogs = [];
-
-  for (let index = logs.length - 1; index >= 0 && recentLogs.length < limit; index -= 1) {
-    if (logs[index].runId === runId && logs[index].type !== 'run:runtime') recentLogs.push(logs[index]);
-  }
-
-  return sanitizeWorkspaceDisplayValue(recentLogs.reverse()).map(log => ({
+async function getRecentLogsForRun(runId, limit = 5) {
+  const page = await getDiagnosticLogRepository().listLogs({
+    runId,
+    excludeTypes: ['run:runtime'],
+    limit,
+    order: 'desc'
+  });
+  return sanitizeWorkspaceDisplayValue(page.logs.reverse()).map(log => ({
     ...log,
     displayType: displayLogType(log.type),
     displayMessage: displayLogMessage(log)
   }));
 }
 
-function updateAllocationItemStatus(run, status) {
+async function updateAllocationItemStatus(run, status) {
   if (!run || !run.allocationPlanId || !run.allocationItemId) return null;
-
-  const plans = readAllocationPlans();
-  const plan = plans.find(item => item.id === run.allocationPlanId);
-  if (!plan) return null;
-  const allocationItem = (plan.items || []).find(item => item.allocationItemId === run.allocationItemId);
-  if (!allocationItem) return null;
-
-  allocationItem.status = status;
-  plan.status = plan.items.some(item => item.status === 'failed') ? 'failed'
-    : plan.items.some(item => item.status === 'interrupted') ? 'interrupted'
-      : plan.items.every(item => item.status === 'completed') ? 'completed'
-        : plan.items.some(item => item.status === 'running') ? 'running'
-          : 'pending';
-  writeAllocationPlans(plans);
-  return allocationItem;
+  const result = await postgresRuntimeStore.updateAllocationItemStatus({
+    planId: run.allocationPlanId,
+    allocationItemId: run.allocationItemId,
+    status
+  });
+  return result ? result.item : null;
 }
 
 async function finalizeTicketForRun(run, terminalStatus) {
@@ -12656,9 +11991,7 @@ async function validateManualTicketCompletion(ticket) {
     return { allowed: false, reason: 'Ticket cannot be completed while ticket-level triage is required.' };
   }
 
-  const latestStoredRun = readRuns()
-    .filter(run => run.ticketId === ticket.id)
-    .sort(compareRunsNewestFirst)[0] || null;
+  const latestStoredRun = (await readLatestRunsForTickets([ticket.id]))[0] || null;
   const latestRun = await hydrateRunReplaySnapshot(latestStoredRun);
   if (!latestRun) {
     return { allowed: false, reason: 'Ticket cannot be completed without supporting runtime evidence.' };
@@ -12714,25 +12047,57 @@ async function reconcileTerminalRun(run) {
   return withTicketTransitionLock(run && run.ticketId, () => reconcileTerminalRunUnlocked(run));
 }
 
+function mergeRunEvidenceEvents(...groups) {
+  const merged = [];
+  const seen = new Set();
+  for (const events of groups) {
+    for (const event of Array.isArray(events) ? events : []) {
+      if (!event || typeof event !== 'object') continue;
+      const key = event.id
+        ? `id:${event.id}`
+        : `value:${canonicalOperationJson({
+            type: event.type || null,
+            ticketId: event.ticketId || null,
+            runId: event.runId || null,
+            stepId: event.stepId || null,
+            payload: event.payload || {}
+          })}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(event);
+    }
+  }
+  return merged;
+}
+
 async function reconcileTerminalRunUnlocked(run) {
-  // Idempotent reconciliation for current runs that have run.execution_completed
-  // but not yet run.terminalized.
-  // Call only when safeToReconcileTerminalState is true.
   const runId = run.id;
-  const events = getRunEvents(runId);
+  const [events, operations] = await Promise.all([
+    readAllRunScopedEvents(runId),
+    readAllRunOperations(runId)
+  ]);
   const existingTypes = new Set(events.map(e => e.type));
 
-  // Already fully terminalized — no-op
   if (existingTypes.has('run.terminalized')) return;
 
-  const execCompletedEvent = events.find(e => e.type === 'run.execution_completed');
+  const execCompletedEvent = events.find(e =>
+    e.type === 'run.execution_completed' || e.type === 'run.execution_failed');
   if (!execCompletedEvent) throw new Error(`Run ${runId} cannot be reconciled without run.execution_completed`);
+
+  const replayRecord = await getRunReplayRepository().readRunReplay(runId);
+  run = {
+    ...run,
+    ...(replayRecord ? {
+      replaySnapshot: replayRecord.snapshot,
+      replaySummary: extractReplaySummary(replayRecord.snapshot)
+    } : {})
+  };
 
   let targetStatus = (execCompletedEvent.payload && execCompletedEvent.payload.status) || 'completed';
   let verificationFailureReason = null;
   let verificationFailure = null;
-
   const terminalPayload = execCompletedEvent.payload || {};
+  const beforeReplayEvents = [];
 
   appendRunLog(run, 'run:reconciliation_started', `Reconciling run at terminal state ${targetStatus}`, {
     existingEvents: events.length,
@@ -12741,18 +12106,17 @@ async function reconcileTerminalRunUnlocked(run) {
     hasConsequence: existingTypes.has('run.consequence_recorded')
   });
 
-  // 1. Required verification gates completion.
   if (targetStatus === 'completed' && run.executionMode === 'workflow' && run.workflowId) {
-    const failedPostconditions = await completeRunPostconditionCheck(runId);
+    const postconditionPlan = buildRunPostconditionEvidence(run, events);
+    const failedPostconditions = postconditionPlan ? postconditionPlan.failedResults : null;
+    if (postconditionPlan) beforeReplayEvents.push(...postconditionPlan.events);
     if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
       targetStatus = 'failed';
       verificationFailureReason = buildVerificationFailureReason(failedPostconditions);
       verificationFailure = buildVerificationFailure(failedPostconditions);
       if (!existingTypes.has('run.verification_failed')) {
-        await appendEvent({
+        beforeReplayEvents.push({
           type: 'run.verification_failed',
-          ticketId: run.ticketId,
-          runId: run.id,
           payload: {
             status: 'failed',
             error: verificationFailureReason,
@@ -12761,10 +12125,8 @@ async function reconcileTerminalRunUnlocked(run) {
         });
       }
     } else if (isRunVerificationRequired(run) && !existingTypes.has('run.verification_passed')) {
-      await appendEvent({
+      beforeReplayEvents.push({
         type: 'run.verification_passed',
-        ticketId: run.ticketId,
-        runId: run.id,
         payload: {
           status: 'passed',
           contractSource: 'run_snapshot'
@@ -12773,90 +12135,170 @@ async function reconcileTerminalRunUnlocked(run) {
     }
   }
 
+  const existingTriageEvent = events.find(event => event.type === 'run.triage_created');
+  let triage = run.triage ||
+    (existingTriageEvent && existingTriageEvent.payload && existingTriageEvent.payload.triage) ||
+    null;
   if ((targetStatus === 'failed' || targetStatus === 'interrupted') && !run.triage) {
     const triageSummary = verificationFailureReason || terminalPayload.error || run.error || `Run reconciled to ${targetStatus}`;
-    if (targetStatus === 'failed') await ensureFailedRunReplaySnapshot(run, triageSummary);
-    run.triage = await persistRunTriage(runId, buildRunTriage(run, {
+    triage = await buildRunTriage(run, {
       failure: verificationFailure || terminalPayload.failure || null,
       status: targetStatus,
       summary: triageSummary,
-      reasonCode: verificationFailure ? 'verification_failed' : null
-    }));
+      reasonCode: verificationFailure ? 'verification_failed' : null,
+      events,
+      operations
+    });
+    if (triage && !existingTypes.has('run.triage_created')) {
+      beforeReplayEvents.push({
+        type: 'run.triage_created',
+        payload: { triage }
+      });
+    }
   }
 
-  // 2. Finalize replay snapshot if not already done
-  let didFinalize = false;
   const snapshotDone = existingTypes.has('replay.snapshot.finalized') || existingTypes.has('run.snapshot_finalized');
-  if (!snapshotDone || verificationFailure) {
-    await maybeTestInterrupt(run, 'before_run.snapshot_finalized');
-    let failure = verificationFailure;
-    if (!failure && (targetStatus === 'failed' || targetStatus === 'interrupted')) {
-      failure = buildFailureMetadata(null, targetStatus, run.error || 'Run reconciled to terminal state');
-    }
-    await finalizeRunReplaySnapshot(run, targetStatus, verificationFailureReason || run.error || null, null, failure);
-    didFinalize = true;
-    await maybeTestInterrupt(run, 'after_run.snapshot_finalized');
+  if (snapshotDone && run.replaySnapshot && run.replaySnapshot.terminalStatus &&
+      run.replaySnapshot.terminalStatus !== targetStatus) {
+    const error = new Error(
+      `Run ${runId} finalized replay status ${run.replaySnapshot.terminalStatus} conflicts with repair target ${targetStatus}`
+    );
+    error.code = 'TERMINAL_REPAIR_INTEGRITY_FAILURE';
+    throw error;
   }
-
-  // 3. Violation check (idempotent internally)
-  await completeRunViolationCheck(runId);
-
-  // 4. Evaluation (guard against double-emission)
-  let didEvaluate = false;
-  if (!existingTypes.has('run.evaluation_completed')) {
-    await persistRunEvaluation(runId);
-    didEvaluate = true;
-  }
-
-  // 5. Consequence (guard against double-emission)
-  let didConsequence = false;
-  if (!existingTypes.has('run.consequence_recorded')) {
-    await persistRunConsequence(runId);
-    didConsequence = true;
-  }
-
-  // 6. Normalize run status if still in a non-terminal state
-  const runs = readRuns();
-  const r = runs.find(item => item.id === runId);
-  if (r) {
-    if (!['completed', 'failed', 'interrupted'].includes(r.status) || r.status !== targetStatus) {
-      r.status = targetStatus;
-      r.completedAt = r.completedAt || terminalPayload.completedAt || new Date().toISOString();
-      r.updatedAt = new Date().toISOString();
-      if (verificationFailureReason) r.error = verificationFailureReason;
-      writeRuns(runs);
-    }
-    // 7. Clean up stale lease
-    if (r.leaseOwner || r.leaseExpiresAt) {
-      r.leaseOwner = null;
-      r.leaseExpiresAt = null;
-      writeRuns(runs);
-    }
-  }
-
-  // 8. Emit the current terminal lifecycle event.
-  if (!existingTypes.has('run.terminalized')) {
-    await appendEvent({
-      type: 'run.terminalized',
-      ticketId: run.ticketId,
-      runId: run.id,
-      payload: { status: targetStatus }
+  if (!run.replaySnapshot) {
+    const ticket = await getRuntimeStateReadRepository().getTicket(run.ticketId);
+    const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
+    run.replaySnapshot = createReplaySnapshotBase(run, {
+      agentNameSnapshot: run.agentName || (agent ? agent.name : 'Unknown agent'),
+      provider: agent ? (agent.provider || 'openai') : null,
+      model: agent ? (agent.model || null) : null,
+      ticketObjectiveSnapshot: ticket ? ticket.objective : null,
+      note: 'Run terminal evidence was repaired after execution completion'
     });
   }
+  let failure = verificationFailure;
+  if (!failure && (targetStatus === 'failed' || targetStatus === 'interrupted')) {
+    failure = buildFailureMetadata(null, targetStatus, run.error || 'Run reconciled to terminal state');
+  }
+  const completedAt = run.completedAt || terminalPayload.completedAt || new Date().toISOString();
+  const finalized = await buildFinalizedRunReplayState(
+    run,
+    targetStatus,
+    verificationFailureReason || run.error || null,
+    countRunMutatingOperations(runId, operations),
+    failure,
+    completedAt
+  );
+  if (triage) finalized.snapshot.triage = sanitizeSnapshotValue(triage);
+  const projectedBeforeReplayEvents = beforeReplayEvents.map(event => ({
+    type: event.type,
+    ticketId: run.ticketId,
+    runId: run.id,
+    ...(event.stepId === undefined ? {} : { stepId: event.stepId }),
+    payload: event.payload || {}
+  }));
+  const projectedEventsBeforeEvaluation = [...events, ...projectedBeforeReplayEvents];
+  const violationEvents = buildTerminalViolationEvents(run, finalized.snapshot, projectedEventsBeforeEvaluation);
+  const terminalEvent = {
+    type: 'run.terminalized',
+    payload: {
+      status: targetStatus,
+      ...(verificationFailureReason ? { error: sanitizeLogMessage(verificationFailureReason) } : {})
+    }
+  };
+  const patch = {
+    currentPhase: 'terminalization',
+    triage,
+    browserReport: finalized.browserReport,
+    ...(verificationFailureReason ? { error: sanitizeLogMessage(verificationFailureReason) } : {})
+  };
 
-  // 9. Finalize ticket
-  await finalizeTicketForRun(run, targetStatus);
+  await maybeTestInterrupt(run, 'before_run.snapshot_finalized');
+  await maybeTestInterrupt(run, 'before_run.consequence_recorded');
+  const result = await getRunTerminalizationRepository().repairRunTerminalization({
+    runId,
+    status: targetStatus,
+    recoveryOwner: run.leaseOwner === RUN_LEASE_OWNER ? RUN_LEASE_OWNER : null,
+    completedAt,
+    patch,
+    replaySnapshot: finalized.snapshot,
+    beforeReplayEvents,
+    replayEvent: {
+      type: 'run.snapshot_finalized',
+      payload: {
+        status: targetStatus,
+        failureReason: verificationFailureReason || run.error || null,
+        mutationCount: finalized.mutationCount,
+        finalizedAt: finalized.finalizedAt
+      }
+    },
+    beforeEvaluationEvents: violationEvents,
+    evaluation: context => {
+      const evaluationEvents = mergeRunEvidenceEvents(events, context.events);
+      return buildRunEvaluation({
+        ...run,
+        ...context.run,
+        ...patch,
+        status: targetStatus,
+        completedAt,
+        replaySnapshot: context.replaySnapshot
+      }, {
+        snapshot: context.replaySnapshot,
+        events: evaluationEvents,
+        logs: []
+      });
+    },
+    consequence: context => {
+      const consequenceEvents = mergeRunEvidenceEvents(events, context.events);
+      return buildRunConsequence({
+        ...run,
+        ...context.run,
+        ...patch,
+        status: targetStatus,
+        completedAt,
+        replaySnapshot: context.replaySnapshot,
+        runEvaluation: context.evaluation
+      }, {
+        snapshot: context.replaySnapshot,
+        evaluation: context.evaluation,
+        events: consequenceEvents,
+        operations
+      });
+    },
+    terminalEvent
+  });
+  if (!result) {
+    const error = new Error(`Run ${runId} lost terminal repair authority`);
+    error.code = 'TERMINAL_REPAIR_AUTHORITY_CONFLICT';
+    throw error;
+  }
 
-  // 10. Running-run cleanup
+  const repairedRun = {
+    ...result.run,
+    runEvaluation: result.evaluation,
+    runConsequence: result.consequence
+  };
+  await finalizeTicketForRun(repairedRun, targetStatus);
+
   runningRunKeys.delete(runExecutionKey(run));
   startingRunIds.delete(runId);
   startingLocalModelRunIds.delete(runId);
 
+  await updateAllocationItemStatus(repairedRun, targetStatus);
+  broadcastEvent('run:status-changed', {
+    runId: repairedRun.id,
+    ticketId: repairedRun.ticketId,
+    status: targetStatus,
+    error: verificationFailureReason || null
+  });
+  await maybeTestInterrupt(repairedRun, 'after_run.snapshot_finalized');
+
   appendRunLog(run, 'run:reconciled', `Run reconciled to terminal state after restart (${targetStatus})`, {
     events,
-    didFinalize,
-    didEvaluate,
-    didConsequence
+    didFinalize: !snapshotDone,
+    didEvaluate: !existingTypes.has('run.evaluation_completed'),
+    didConsequence: !existingTypes.has('run.consequence_recorded')
   });
 }
 
@@ -12877,7 +12319,6 @@ async function interruptAgentRun(run, reason, options = {}) {
 }
 
 async function interruptAgentRunUnlocked(run, reason, options = {}) {
-  advanceRunPhase(run, 'terminalization');
   const phase = await classifyInterruptionPhase(run);
   await ensureInterruptedRunReplaySnapshot(run, reason, phase);
   const projectedInterruptedRun = {
@@ -12889,7 +12330,7 @@ async function interruptAgentRunUnlocked(run, reason, options = {}) {
   };
 
   const failure = buildFailureMetadata(null, 'interrupted', reason, { phase });
-  const triage = buildRunTriage(projectedInterruptedRun, {
+  const triage = await buildRunTriage(projectedInterruptedRun, {
     failure,
     status: 'interrupted',
     summary: reason
@@ -12948,7 +12389,7 @@ async function forceTicketOpenForRerun(ticketId, rerunMode = null) {
 // from existing runs (no persisted counter, no fabricated attempts). maxAttempts
 // that is null/non-finite preserves today's behavior (allow). This is NOT automatic
 // retry — nothing here schedules, backs off, or retries on failure.
-function validateManualRerun(ticket) {
+async function validateManualRerun(ticket) {
   if (!ticket) return { allowed: false, reason: 'Ticket not found' };
 
   // Preserve the blocked-by-default invariant for parent-spawned child tickets.
@@ -12967,7 +12408,7 @@ function validateManualRerun(ticket) {
     : null;
   if (maxAttempts === null) return { allowed: true, attemptCount: null, maxAttempts: null };
 
-  const attemptCount = readRuns().filter(run => run.ticketId === ticket.id).length;
+  const attemptCount = await getRuntimeStateReadRepository().countRunsForTicket(ticket.id);
   if (attemptCount >= maxAttempts) {
     return {
       allowed: false,
@@ -12995,9 +12436,9 @@ function isAutoRetryableReason(prospectiveReasonCode, mutationCount) {
 // Decide retry eligibility without mutating ticket/run state. The failed run is
 // terminalized before retry creation so a new run can never precede its durable
 // predecessor state.
-function assessAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCount) {
+async function assessAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCount) {
   if (!failedRun) return { eligible: false, reason: 'no_run' };
-  const ticket = readTickets().find(item => item.id === failedRun.ticketId);
+  const ticket = await getTicketById(failedRun.ticketId);
   if (!ticket) return { eligible: false, reason: 'ticket_missing' };
 
   const policy = ticket.executionPolicy || {};
@@ -13011,14 +12452,14 @@ function assessAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationC
   }
 
   // Classify exactly as triage would; only runtime_failed (no mutations) is retryable.
-  const prospectiveTriage = buildRunTriage(failedRun, { failure, status: 'failed', summary: failedRun.error || 'Run failed' });
+  const prospectiveTriage = await buildRunTriage(failedRun, { failure, status: 'failed', summary: failedRun.error || 'Run failed' });
   const prospectiveReasonCode = prospectiveTriage ? prospectiveTriage.reasonCode : 'unknown';
   if (!isAutoRetryableReason(prospectiveReasonCode, mutationCount)) {
     return { eligible: false, reason: `non_retryable:${prospectiveReasonCode}` };
   }
 
   // The just-failed run is already counted; require room under the ceiling.
-  const attemptCount = readRuns().filter(run => run.ticketId === ticket.id).length;
+  const attemptCount = await getRuntimeStateReadRepository().countRunsForTicket(ticket.id);
   if (attemptCount >= maxAttempts) return { eligible: false, reason: 'max_attempts_exhausted' };
   return { eligible: true, ticketId: ticket.id, attemptCount, maxAttempts, reasonCode: prospectiveReasonCode };
 }
@@ -13032,9 +12473,9 @@ async function runAutoRetryAfterFailureIfPolicyAllows(failedRun, assessment) {
   }
   let newRun = null;
   try {
-    const ticket = readTickets().find(item => item.id === assessment.ticketId);
+    const ticket = await getTicketById(assessment.ticketId);
     const agent = ticket
-      ? readAgents().find(item => item.id === ticket.assignmentTargetId)
+      ? await getConfiguredAgentRepository().getConfiguredAgentById(ticket.assignmentTargetId)
       : null;
     if (!ticket || !agent) return { retried: false, reason: 'retry_target_missing' };
     const prepared = await prepareAgentRunDraft(
@@ -13051,7 +12492,7 @@ async function runAutoRetryAfterFailureIfPolicyAllows(failedRun, assessment) {
       predecessorRunId: failedRun.id,
       runDraft: prepared.run,
       runEventPayload: buildRunCreatedEventPayload
-    });
+    }, options.persistence || options);
     newRun = created && Array.isArray(created.runs) ? created.runs[0] || null : null;
     if (newRun) {
       broadcastTicketChange();
@@ -13062,9 +12503,6 @@ async function runAutoRetryAfterFailureIfPolicyAllows(failedRun, assessment) {
       await maybeTestInterrupt(newRun, 'after_run.created');
     }
   } catch (error) {
-    if (error && error.code === 'EVENT_RECORD_TOO_LARGE') {
-      await failRunsAfterOversizedCreationEvent(error);
-    }
     return { retried: false, reason: 'retry_creation_failed' };
   }
   if (!newRun || newRun.id === failedRun.id) return { retried: false, reason: 'no_run_created' };
@@ -13090,7 +12528,7 @@ async function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode =
 }
 
 async function rerunTicketFromBeginningUnlocked(ticketId, changedBy = 'operator', mode = 'retry', delegated = null) {
-  const ticket = readTickets().find(item => item.id === ticketId);
+  const ticket = await getTicketById(ticketId);
 
   if (!ticket) return null;
 
@@ -13099,11 +12537,13 @@ async function rerunTicketFromBeginningUnlocked(ticketId, changedBy = 'operator'
       ...ticket,
       status: 'open',
       updatedAt: new Date().toISOString()
-    }, getAgentsInGroup(ticket.assignmentTargetId));
+    }, await getAgentsInGroup(ticket.assignmentTargetId));
   }
 
-  const activeRuns = readRuns()
-    .filter(run => run.ticketId === ticketId && ['pending', 'running'].includes(run.status));
+  const activeRuns = await collectRuntimeStatePages('listRunsForTickets', 'runs', {
+    ticketIds: [ticketId],
+    statuses: ['pending', 'running']
+  });
   for (const run of activeRuns) {
     await interruptAgentRunUnlocked(run, `${changedBy} rerun requested`);
   }
@@ -13119,79 +12559,73 @@ async function rerunTicketFromBeginningUnlocked(ticketId, changedBy = 'operator'
   return reopenedTicket;
 }
 
-function hasIncompleteTerminalEvidence(run) {
-  if (!run || !['completed', 'failed', 'interrupted'].includes(run.status)) return false;
-  const events = getRunEvents(run.id);
-  const hasExecutionCompleted = events.some(event => event.type === 'run.execution_completed' || event.type === 'run.execution_failed');
-  if (!hasExecutionCompleted) return false;
-  const hasSnapshotFinalized = events.some(event => event.type === 'run.snapshot_finalized' || event.type === 'replay.snapshot.finalized');
-  const hasTerminalized = events.some(event => event.type === 'run.terminalized');
-  return !hasSnapshotFinalized || !hasTerminalized;
-}
-
 async function interruptStaleRunsOnStartup() {
-  const allRuns = readRuns();
-  const staleRuns = allRuns.filter(run => ['pending', 'running'].includes(run.status));
-  const terminalRunsNeedingReconciliation = allRuns.filter(hasIncompleteTerminalEvidence);
+  const [staleRuns, terminalRunsNeedingReconciliation] = await Promise.all([
+    readAllRecoverableRuns('process_restart'),
+    readRunsNeedingTerminalReconciliation()
+  ]);
   let interruptedCount = 0;
   let resumedCount = 0;
   let reconciledCount = 0;
 
-  if (staleRuns.length > 0) {
-  }
-
   for (const run of terminalRunsNeedingReconciliation) {
-    const resumeState = reconstructResumableState(run);
+    const runEvents = await readAllRunScopedEvents(run.id);
+    const resumeState = reconstructResumableState(run, runEvents);
     if (resumeState && resumeState.safeToReconcileTerminalState) {
       await reconcileTerminalRun(run);
       reconciledCount++;
     }
   }
 
-  for (const run of staleRuns) {
-    const targetReconciliation = await reconcilePreparedTargetOperations(run);
-    if (targetReconciliation.uncertain > 0) {
-      // The DATA_DIR writer lock proved the former process is gone. Revoke its
-      // unexpired process lease before terminalizing the uncertain run; this is
-      // startup recovery authority, not a competing worker stealing a live run.
-      const runs = readRuns();
-      const staleRun = runs.find(item => item.id === run.id);
-      if (staleRun) {
-        staleRun.leaseOwner = null;
-        staleRun.leaseExpiresAt = null;
-        staleRun.lastHeartbeatAt = null;
-        writeRuns(runs);
-        run.leaseOwner = null;
-        run.leaseExpiresAt = null;
-        run.lastHeartbeatAt = null;
+  for (const discoveredRun of staleRuns) {
+    const recovery = await getRunRecoveryRepository().claimRunRecovery({
+      runId: discoveredRun.id,
+      recoveryOwner: RUN_LEASE_OWNER,
+      leaseDurationMs: getRunLeaseDurationMs(),
+      mode: 'process_restart',
+      eventPayload: { reason: 'process restart recovery' }
+    });
+    if (!recovery) continue;
+    const run = recovery.run;
+    let runEvents = await readAllRunScopedEvents(run.id);
+    const claimedState = reconstructResumableState(run, runEvents);
+    if (claimedState && claimedState.isTerminal) {
+      const terminalEvent = runEvents.find(event => event.type === 'run.terminalized');
+      const status = (terminalEvent.payload && terminalEvent.payload.status) || 'completed';
+      const repaired = await getRunRecoveryRepository().repairRecoveredRunTerminalProjection({
+        runId: run.id,
+        recoveryOwner: RUN_LEASE_OWNER,
+        status,
+        eventPayload: {
+          reason: 'terminal event already committed before projection update',
+          terminalEventId: terminalEvent.id || null
+        }
+      });
+      if (repaired) {
+        appendRunLog(repaired.run, 'run:terminalized', `Startup: terminal run ${run.id} had stale status '${run.status}', fixed to '${status}'`);
       }
-      await interruptAgentRun(run, 'target operation effect requires explicit reconciliation', { allowStaleLease: true });
+      continue;
+    }
+    const targetReconciliation = await reconcilePreparedTargetOperations(run, runEvents);
+    if (targetReconciliation.uncertain > 0) {
+      await interruptAgentRun(run, 'target operation effect requires explicit reconciliation');
       interruptedCount++;
       continue;
     }
-    const runEvents = readRunScopedEvents(run.id);
-    const resumeState = reconstructResumableState(run);
+    runEvents = await readAllRunScopedEvents(run.id);
+    const resumeState = reconstructResumableState(run, runEvents);
     if (resumeState && resumeState.safeToResumeExecution) {
-      // Safe to resume: clear stale lease and return to pending
-      const runs = readRuns();
-      const r = runs.find(item => item.id === run.id);
-      if (r) {
-        r.status = 'pending';
-        r.leaseOwner = null;
-        r.leaseExpiresAt = null;
-        delete r.startedAt;
-        writeRuns(runs);
-        await appendEvent({
-          type: 'run.resumed',
-          ticketId: run.ticketId,
-          runId: run.id,
-          payload: {
-            reason: 'startup resumption, safe to resume',
-            priorEvents: resumeState.priorEvents,
-            expectedNextPhase: resumeState.expectedNextPhase
-          }
-        });
-        appendRunLog(run, 'run:resumed', `Startup resumption: ${resumeState.priorEvents} prior events, next phase ${resumeState.expectedNextPhase}`);
+      const resumed = await getRunRecoveryRepository().resumeRecoveredRun({
+        runId: run.id,
+        recoveryOwner: RUN_LEASE_OWNER,
+        eventPayload: {
+          reason: 'startup resumption, safe to resume',
+          priorEvents: resumeState.priorEvents,
+          expectedNextPhase: resumeState.expectedNextPhase
+        }
+      });
+      if (resumed) {
+        appendRunLog(resumed.run, 'run:resumed', `Startup resumption: ${resumeState.priorEvents} prior events, next phase ${resumeState.expectedNextPhase}`);
         resumedCount++;
       }
       continue;
@@ -13201,23 +12635,6 @@ async function interruptStaleRunsOnStartup() {
     if (resumeState && resumeState.safeToReconcileTerminalState) {
       await reconcileTerminalRun(run);
       reconciledCount++;
-      continue;
-    }
-
-    // Already terminalized — just fix the status to match the events
-    if (resumeState && resumeState.isTerminal) {
-      const runs = readRuns();
-      const r = runs.find(item => item.id === run.id);
-      if (r) {
-        // Determine terminal status from events
-        const terminalEvent = runEvents.find(e => e.type === 'run.terminalized');
-        const status = (terminalEvent.payload && terminalEvent.payload.status) || 'completed';
-        r.status = status;
-        r.leaseOwner = null;
-        r.leaseExpiresAt = null;
-        writeRuns(runs);
-        appendRunLog(run, 'run:terminalized', `Startup: terminal run ${run.id} had stale status '${run.status}', fixed to '${status}'`);
-      }
       continue;
     }
 
@@ -13245,13 +12662,11 @@ async function interruptStaleRunsOnStartup() {
 // incomplete-terminal-evidence reconcilers, so converge the ticket here. Runs
 // after those reconcilers so resumed/reconciled runs are settled first.
 async function reconcileUnfinalizedTicketsOnStartup() {
-  const tickets = readTickets();
-  const runs = readRuns();
+  const tickets = await readAllRuntimeTickets({ statuses: ['in_progress'] });
   let finalizedCount = 0;
 
   for (const ticket of tickets) {
-    if (ticket.status !== 'in_progress') continue;
-    const ticketRuns = runs.filter(run => run.ticketId === ticket.id);
+    const ticketRuns = await readAllRunsForTicket(ticket.id);
     if (ticketRuns.length === 0) continue;
     // Never finalize while execution could still be in flight.
     if (ticketRuns.some(run => ['pending', 'running'].includes(run.status))) continue;
@@ -13260,7 +12675,7 @@ async function reconcileUnfinalizedTicketsOnStartup() {
     if (!latestRun) continue;
     // Only heal genuinely terminalized runs — run.terminalized is emitted after
     // verification has already passed/failed, so latestRun.status is trustworthy.
-    const events = getRunEvents(latestRun.id);
+    const events = await readAllRunScopedEvents(latestRun.id);
     if (!events.some(event => event.type === 'run.terminalized')) continue;
 
     let updated = null;
@@ -13285,7 +12700,7 @@ async function reconcileUnfinalizedTicketsOnStartup() {
 }
 
 async function failAgentRun(run, error, workspaceAction = null) {
-  return runWithRequiredEventJournalAdmission({
+  return runWithRequiredMutationAdmission({
     source: 'run_terminalization',
     outcome: 'failed',
     runId: run && run.id ? run.id : null,
@@ -13295,7 +12710,6 @@ async function failAgentRun(run, error, workspaceAction = null) {
 
 async function failAgentRunUnlocked(run, error, workspaceAction = null) {
   if (error && error.replayEvidencePromise) await error.replayEvidencePromise;
-  advanceRunPhase(run, 'terminalization');
   let message = error && error.message ? error.message : String(error || 'Agent run failed');
   const failure = buildFailureMetadata(error, 'failed', message);
 
@@ -13321,10 +12735,10 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
   // Decide retry eligibility before the terminal bundle, but create a retry only
   // after this run is terminal. That ordering keeps one authoritative predecessor
   // and prevents run creation from returning the still-running predecessor.
-  const autoRetryAssessment = assessAutoRetryAfterFailureIfPolicyAllows(projectedFailedRun, failure, mutationCount);
+  const autoRetryAssessment = await assessAutoRetryAfterFailureIfPolicyAllows(projectedFailedRun, failure, mutationCount);
   let triage = autoRetryAssessment.eligible
     ? null
-    : buildRunTriage(projectedFailedRun, {
+    : await buildRunTriage(projectedFailedRun, {
         error,
         failure,
         status: 'failed',
@@ -13343,7 +12757,7 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
   });
   const autoRetry = await runAutoRetryAfterFailureIfPolicyAllows(failedRun, autoRetryAssessment);
   if (autoRetryAssessment.eligible && !autoRetry.retried) {
-    triage = buildRunTriage(failedRun, {
+    triage = await buildRunTriage(failedRun, {
       error,
       failure,
       status: 'failed',
@@ -13367,7 +12781,7 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
 }
 
 async function completeAgentRun(run) {
-  return runWithRequiredEventJournalAdmission({
+  return runWithRequiredMutationAdmission({
     source: 'run_terminalization',
     outcome: 'completed',
     runId: run && run.id ? run.id : null,
@@ -13376,7 +12790,6 @@ async function completeAgentRun(run) {
 }
 
 async function completeAgentRunUnlocked(run) {
-  advanceRunPhase(run, 'terminalization');
   const failedPostconditions = await completeRunPostconditionCheck(run.id);
   if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
     const message = buildVerificationFailureReason(failedPostconditions);
@@ -13389,7 +12802,7 @@ async function completeAgentRunUnlocked(run) {
       completedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    const triage = buildRunTriage(projectedFailedRun, {
+    const triage = await buildRunTriage(projectedFailedRun, {
       failure,
       status: 'failed',
       summary: message,
@@ -13445,11 +12858,7 @@ async function completeAgentRunUnlocked(run) {
 // ---- Model/provider routing: policy store + dispatch decision (r1.28) ----
 const MODEL_ROUTING_STATUSES = ['active', 'archived'];
 
-function readModelRoutingPolicies() { return readJsonArrayCached(MODEL_ROUTING_POLICIES_FILE); }
-function writeModelRoutingPolicies(list) { writeFileAtomic(MODEL_ROUTING_POLICIES_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
-function getModelRoutingPolicyById(id) { const n = parseInt(id, 10); return Number.isNaN(n) ? null : readModelRoutingPolicies().find(p => p && p.id === n) || null; }
-
-function validateModelRoutingPolicyInput(body, existing = null) {
+async function validateModelRoutingPolicyInput(body, existing = null) {
   const b = body && typeof body === 'object' ? body : {};
   const name = typeof b.name === 'string' ? b.name.trim() : (existing ? existing.name : '');
   if (!name) return { ok: false, error: 'Routing policy name is required' };
@@ -13466,7 +12875,7 @@ function validateModelRoutingPolicyInput(body, existing = null) {
   let workContextId = b.workContextId !== undefined ? b.workContextId : (existing ? existing.workContextId : null);
   if (workContextId != null && workContextId !== '') {
     const n = parseInt(workContextId, 10);
-    if (!Number.isInteger(n) || !getWorkContextById(n)) return { ok: false, error: 'workContextId must reference an existing Work Context or be null' };
+    if (!Number.isInteger(n) || !(await getWorkContextById(n))) return { ok: false, error: 'workContextId must reference an existing Work Context or be null' };
     workContextId = n;
   } else workContextId = null;
   return {
@@ -13490,30 +12899,19 @@ function validateModelRoutingPolicyInput(body, existing = null) {
 // Deterministically choose the routing policy for a run and validate the agent's provider against
 // it. This NEVER changes which provider executes (the agent's own provider/model stays the
 // backend); it records the decision. Returns { ok, routingSnapshot } or { ok:false, reason }.
-function resolveModelRouteForRun({ ticket, agent, capabilityId, workContextId, explicitPolicyId }) {
+async function resolveModelRouteForRun({ ticket, agent, capabilityId, workContextId, explicitPolicyId }) {
   const now = new Date().toISOString();
   const agentProvider = agent && agent.provider ? agent.provider : null;
   const agentModel = agent && agent.model ? agent.model : null;
   const base = { policyId: null, selectedProvider: agentProvider, selectedModel: agentModel, reason: 'no_policy', capabilityId: capabilityId || null, workContextId: workContextId != null ? workContextId : null, fallbackUsed: false, rejectedProviders: [], constraints: {}, decidedAt: now };
 
-  const active = readModelRoutingPolicies().filter(p => p && p.status === 'active');
-  // Deterministic selection order; ties broken by lowest id.
-  const byId = (a, b) => a.id - b.id;
-  let policy = null;
-  let reason = 'no_policy';
-  if (explicitPolicyId != null) {
-    const explicit = active.find(p => p.id === parseInt(explicitPolicyId, 10));
-    if (explicit) { policy = explicit; reason = 'explicit_override'; }
-  }
-  if (!policy) {
-    const tiers = [
-      active.filter(p => p.workContextId === workContextId && p.capabilityId === capabilityId && p.workContextId != null && p.capabilityId != null),
-      active.filter(p => p.workContextId === workContextId && p.workContextId != null && (p.capabilityId == null)),
-      active.filter(p => p.workContextId == null && p.capabilityId === capabilityId && p.capabilityId != null),
-      active.filter(p => p.workContextId == null && p.capabilityId == null)
-    ];
-    for (const tier of tiers) { if (tier.length) { policy = tier.slice().sort(byId)[0]; reason = 'policy_preferred'; break; } }
-  }
+  const resolvedPolicy = await getModelRoutingPolicyRepository().findApplicableModelRoutingPolicy({
+    explicitPolicyId,
+    workContextId,
+    capabilityId
+  });
+  const policy = resolvedPolicy.policy;
+  const reason = resolvedPolicy.reason;
 
   if (!policy) return { ok: true, routingSnapshot: base };
 
@@ -13534,13 +12932,13 @@ function resolveModelRouteForRun({ ticket, agent, capabilityId, workContextId, e
 
 // Block a ticket when routing finds no permitted provider — reuses the existing triage mechanism.
 async function blockTicketForNoModelRoute(ticket, decision) {
-  const persisted = readTickets().find(item => item.id === ticket.id);
+  const persisted = await getTicketById(ticket.id);
   if (!persisted) return null;
   const now = new Date().toISOString();
   const summary = `No permitted model provider for this run (rejected: ${(decision.rejectedProviders || []).join(', ') || 'none'}). Edit the routing policy or reassign the ticket.`;
   // Reuse the existing triage vocabulary (authority_blocked / change_scope) — routing introduces no
   // new triage semantics. The routing-specific signal lives in the summary, evidenceRefs, the
-  // ticket.blocked event (reasonCode no_model_route), and the system log.
+  // ticket.blocked event (reasonCode no_model_route), and the diagnostic log.
   const triage = normalizeTriage({
     required: true, reasonCode: 'authority_blocked', summary, requiredDecision: 'change_scope',
     evidenceRefs: ['model-routing:policy:' + (decision.policyId != null ? decision.policyId : 'none'), 'model-routing:no_route'],
@@ -13560,27 +12958,19 @@ async function blockTicketForNoModelRoute(ticket, decision) {
   return transitioned.ticket;
 }
 
-// ---- Local/mock connector contract (r1.30) ----
-// A connector is a bounded source/target adapter scoped to one Work Context. r1.30 ships ONLY a
-// local_mock kind that reads from a local fixture object store and refuses writes. It never calls
-// an external system, holds no plaintext secret (credentialRef only), creates no ticket/run, and
-// mutates no workspace. Every read/write produces a receipt carrying metadata/hash — never full
-// sensitive content.
+// ---- Current local/mock connector contract ----
+// The implemented local_mock adapter reads from a local fixture object store and refuses writes.
+// It calls no external system, holds no plaintext secret (credentialRef only), creates no ticket/run,
+// and mutates no workspace. Every admitted read/write operation commits a metadata-only receipt;
+// the catalog and receipt authority live behind the selected repository.
 const CONNECTOR_STATUSES = ['active', 'paused', 'archived'];
 const CONNECTOR_KINDS = ['local_mock'];
 const CONNECTOR_SCOPES = ['read', 'write'];
 const CONNECTOR_RECEIPT_LIMIT = 25;
 
-function readConnectors() { return readJsonArrayCached(CONNECTORS_FILE); }
-function writeConnectors(list) { writeFileAtomic(CONNECTORS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
-function getConnectorById(id) { const n = parseInt(id, 10); return Number.isNaN(n) ? null : readConnectors().find(c => c && c.id === n) || null; }
-function readConnectorReceipts() { return readJsonArrayCached(CONNECTOR_RECEIPTS_FILE); }
-function writeConnectorReceipts(list) { writeFileAtomic(CONNECTOR_RECEIPTS_FILE, JSON.stringify(Array.isArray(list) ? list : [], null, 2)); }
-function readLocalConnectorObjects() { return readJsonArrayCached(LOCAL_CONNECTOR_OBJECTS_FILE); }
-
 // Validate a connector create/update payload. A new ACTIVE connector requires an ACTIVE Work
-// Context. r1.30 enforces kind=local_mock and never accepts a plaintext secret field.
-function validateConnectorInput(body, existing = null) {
+// Context. The current adapter enforces kind=local_mock and never accepts a plaintext secret field.
+async function validateConnectorInput(body, existing = null) {
   const b = body && typeof body === 'object' ? body : {};
   // Hard refusal: a plaintext secret must never enter the connector record.
   for (const k of ['credential', 'secret', 'apiKey', 'token', 'password']) {
@@ -13591,12 +12981,12 @@ function validateConnectorInput(body, existing = null) {
   const status = b.status !== undefined ? b.status : (existing ? existing.status : 'active');
   if (!CONNECTOR_STATUSES.includes(status)) return { ok: false, error: `status must be one of ${CONNECTOR_STATUSES.join(', ')}` };
   const kind = b.kind !== undefined ? b.kind : (existing ? existing.kind : 'local_mock');
-  if (!CONNECTOR_KINDS.includes(kind)) return { ok: false, error: `kind must be one of ${CONNECTOR_KINDS.join(', ')} (r1.30 is local-only)` };
+  if (!CONNECTOR_KINDS.includes(kind)) return { ok: false, error: `kind must be one of ${CONNECTOR_KINDS.join(', ')} (the current adapter is local-only)` };
 
   const wcRaw = b.workContextId !== undefined ? b.workContextId : (existing ? existing.workContextId : null);
   const wcId = wcRaw != null ? parseInt(wcRaw, 10) : null;
   if (!Number.isInteger(wcId)) return { ok: false, error: 'workContextId is required' };
-  const ctx = getWorkContextById(wcId);
+  const ctx = await getWorkContextById(wcId);
   if (!ctx) return { ok: false, error: 'Work Context not found' };
   if (status === 'active' && ctx.status !== 'active') return { ok: false, error: 'An active connector requires an active Work Context' };
 
@@ -13635,89 +13025,44 @@ function connectorObjectUnderRoots(objectId, roots) {
   return ok ? norm : null;
 }
 
-function appendConnectorReceipt(record) {
-  const list = readConnectorReceipts();
-  const rec = { id: nextId_(list), ...record };
-  list.push(rec);
-  writeConnectorReceipts(list);
-  return rec;
-}
-
 // ---- Operational transparency summary (r1.31) ----
 // A READ-ONLY, bounded, deterministic projection over every existing store. It writes nothing
 // (no ticket/run/log/event/receipt/summary file) and creates no new source of truth — every field
 // is derived live. See docs/OPERATIONAL_TRANSPARENCY.md.
 const OPS_SUMMARY_LIMIT = 10;
 
-function buildOperationalSummary(options = {}) {
+async function buildOperationalSummary(options = {}) {
   const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : OPS_SUMMARY_LIMIT;
-  const tickets = readTickets();
-  const runs = readRuns();
-  const workContexts = readWorkContexts();
-  const watchers = readWatchers();
-  const observations = readWatcherObservations();
-  const connectors = readConnectors();
-  const receipts = readConnectorReceipts();
-  const policies = readModelRoutingPolicies();
-  const templates = readProcessTemplates();
-  const logs = readLogs();
-  const eventJournalMetrics = eventJournal.getMetrics();
-
-  const countBy = (list, pred) => list.filter(pred).length;
-  const byIdDesc = (a, b) => (b.id || 0) - (a.id || 0);
-
-  const ticketCounts = {
-    total: tickets.length,
-    open: countBy(tickets, t => t.status === 'open' || t.status === 'in_progress'),
-    blocked: countBy(tickets, t => t.status === 'blocked'),
-    completed: countBy(tickets, t => t.status === 'completed'),
-    failed: countBy(tickets, t => t.status === 'failed')
-  };
+  const admissionMetrics = mutationAdmission.getMetrics();
+  const denialLogTypes = ['ticket:no_model_route', 'connector:write_refused', 'process_template:version_consistency_unresolved'];
+  const [runtimeSummary, triageSummary, recentDenialPage, versionInconsistencyPage, workContextCounts, templateCounts, routingCounts, connectorSummary, watcherSummary] = await Promise.all([
+    getOperationalStatusRepository().getRuntimeOperationalSummary({ limit }),
+    getTriageRepository().getUnresolvedTriageSummary({ limit }),
+    getDiagnosticLogRepository().listLogs({ types: denialLogTypes, limit, order: 'desc' }),
+    getDiagnosticLogRepository().listLogs({ types: ['process_template:version_consistency_unresolved'], limit: 1, order: 'desc' }),
+    getWorkContextRepository().getWorkContextCounts(),
+    getProcessTemplateProjectionRepository().getProcessTemplateCounts(),
+    getModelRoutingPolicyRepository().getModelRoutingPolicyCounts(),
+    getConnectorAuthorityRepository().getConnectorOperationalSummary({ limit }),
+    getWatcherAuthorityRepository().getWatcherOperationalSummary({ limit })
+  ]);
+  const ticketCounts = runtimeSummary.tickets;
   const runCounts = {
-    total: runs.length,
-    running: countBy(runs, r => r.status === 'running' || r.status === 'pending'),
-    completed: countBy(runs, r => r.status === 'completed'),
-    failed: countBy(runs, r => r.status === 'failed'),
-    interrupted: countBy(runs, r => r.status === 'interrupted')
-  };
-  const ticketTriage = tickets.filter(t => t.triage && t.triage.required === true);
-  const runTriage = runs.filter(r => r.triage && r.triage.required === true);
-
-  const watcherCounts = {
-    active: countBy(watchers, w => w.status === 'active'),
-    paused: countBy(watchers, w => w.status === 'paused'),
-    archived: countBy(watchers, w => w.status === 'archived')
-  };
-  const watcherFailures = observations.filter(o => o && (o.status === 'failed' || o.status === 'refused'));
-
-  const connectorCounts = {
-    active: countBy(connectors, c => c.status === 'active'),
-    paused: countBy(connectors, c => c.status === 'paused'),
-    archived: countBy(connectors, c => c.status === 'archived')
-  };
-  const connectorRefusals = receipts.filter(r => r && (r.operation === 'read_refused' || r.operation === 'write_refused' || (r.result && r.result.status === 'failed')));
-
-  const routingCounts = {
-    active: countBy(policies, p => p.status === 'active'),
-    archived: countBy(policies, p => p.status === 'archived')
+    total: runtimeSummary.runs.total,
+    running: runtimeSummary.runs.active,
+    completed: runtimeSummary.runs.completed,
+    failed: runtimeSummary.runs.failed,
+    interrupted: runtimeSummary.runs.interrupted
   };
 
-  const enabledTemplates = countBy(templates, t => t.enabled !== false);
-  const templateCounts = {
-    total: templates.length,
-    enabled: enabledTemplates,
-    disabled: templates.length - enabledTemplates,
-    scheduled: countBy(templates, t => t.schedule && t.schedule.enabled === true),
-    pausedSchedule: countBy(templates, t => t.schedule && t.schedule.enabled === false)
-  };
+
   const scheduleCounts = {
-    enabled: countBy(templates, t => t.schedule && t.schedule.enabled === true),
-    disabled: countBy(templates, t => t.schedule && t.schedule.enabled !== true)
+    enabled: templateCounts.scheduled,
+    disabled: templateCounts.total - templateCounts.scheduled
   };
 
-  const versionConsistencyUnresolved = logs.some(l => l && l.type === 'process_template:version_consistency_unresolved');
-  const denialLogTypes = new Set(['ticket:no_model_route', 'connector:write_refused', 'process_template:version_consistency_unresolved']);
-  const recentAuthorityDenials = logs.filter(l => l && denialLogTypes.has(l.type)).slice().sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, limit)
+  const versionConsistencyUnresolved = versionInconsistencyPage.logs.length > 0;
+  const recentAuthorityDenials = recentDenialPage.logs
     .map(l => ({ id: l.id || null, type: l.type, message: l.message || null, timestamp: l.timestamp || null }));
 
   return {
@@ -13725,43 +13070,38 @@ function buildOperationalSummary(options = {}) {
     tickets: ticketCounts,
     runs: runCounts,
     triage: {
-      unresolvedTicketCount: ticketTriage.length,
-      unresolvedRunCount: runTriage.length,
-      recent: ticketTriage.slice().sort(byIdDesc).slice(0, limit).map(t => ({ ticketId: t.id, reasonCode: t.triage.reasonCode || null }))
+      unresolvedTicketCount: triageSummary.unresolvedTicketCount,
+      unresolvedRunCount: triageSummary.unresolvedRunCount,
+      recent: triageSummary.recentTickets
     },
-    workContexts: {
-      active: countBy(workContexts, c => c.status === 'active'),
-      archived: countBy(workContexts, c => c.status === 'archived'),
-      total: workContexts.length
-    },
-    watchers: { ...watcherCounts, recentFailures: watcherFailures.slice().sort(byIdDesc).slice(0, limit).map(o => ({ id: o.id, watcherId: o.watcherId, status: o.status, error: o.error || null })) },
-    connectors: { ...connectorCounts, total: connectors.length, recentRefusals: connectorRefusals.slice().sort(byIdDesc).slice(0, limit).map(r => ({ id: r.id, connectorId: r.connectorId, operation: r.operation, reason: (r.result && r.result.reason) || r.error || null })) },
-    modelRoutingPolicies: { ...routingCounts, total: policies.length },
+    workContexts: workContextCounts,
+    watchers: { active: watcherSummary.active, paused: watcherSummary.paused, archived: watcherSummary.archived, total: watcherSummary.total, recentFailures: watcherSummary.recentFailures.map(o => ({ id: o.id, watcherId: o.watcherId, status: o.status, error: o.error || null })) },
+    connectors: { active: connectorSummary.active, paused: connectorSummary.paused, archived: connectorSummary.archived, total: connectorSummary.total, recentRefusals: connectorSummary.recentRefusals.map(r => ({ id: r.id, connectorId: r.connectorId, operation: r.operation, reason: (r.result && r.result.reason) || r.error || null })) },
+    modelRoutingPolicies: routingCounts,
     processTemplates: templateCounts,
     schedules: scheduleCounts,
-    eventJournal: eventJournalMetrics,
-    recentFailedRuns: runs.filter(r => r.status === 'failed').slice().sort(byIdDesc).slice(0, limit).map(r => ({ runId: r.id, ticketId: r.ticketId })),
-    recentConnectorReceipts: receipts.slice().sort(byIdDesc).slice(0, limit).map(r => ({ id: r.id, connectorId: r.connectorId, operation: r.operation, status: r.result ? r.result.status : null })),
+    mutationAdmission: admissionMetrics,
+    recentFailedRuns: runtimeSummary.recentFailedRuns,
+    recentConnectorReceipts: connectorSummary.recentReceipts.map(r => ({ id: r.id, connectorId: r.connectorId, operation: r.operation, status: r.result ? r.result.status : null })),
     recentAuthorityDenials,
     warnings: {
-      unresolvedTriageExists: ticketTriage.length + runTriage.length > 0,
+      unresolvedTriageExists: triageSummary.unresolvedTicketCount + triageSummary.unresolvedRunCount > 0,
       blockedTicketsExist: ticketCounts.blocked > 0,
       failedRunsExist: runCounts.failed > 0,
-      connectorReadRefusalsExist: receipts.some(r => r && r.operation === 'read_refused'),
-      watcherFailedOrRefusedExist: watcherFailures.length > 0,
-      noActiveWorkContexts: countBy(workContexts, c => c.status === 'active') === 0,
-      noRoutingPolicies: policies.length === 0,
-      noConnectors: connectors.length === 0,
-      eventJournalPressureExists: eventJournalMetrics.status === 'failed' ||
-        eventJournalMetrics.current.backpressured ||
-        eventJournalMetrics.current.utilization >= 0.8,
+      connectorReadRefusalsExist: connectorSummary.hasReadRefusals,
+      watcherFailedOrRefusedExist: watcherSummary.hasFailures,
+      noActiveWorkContexts: workContextCounts.active === 0,
+      noRoutingPolicies: routingCounts.total === 0,
+      noConnectors: connectorSummary.total === 0,
+      mutationAdmissionPressureExists: admissionMetrics.current.backpressured ||
+        admissionMetrics.current.utilization >= 0.8,
       versionConsistencyUnresolved
     }
   };
 }
 
 async function prepareAgentRunDraft(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null, options = {}) {
-  const runs = readRuns();
+  const runs = await readAllRunsForTicket(ticket.id);
   const activeRun = runs.find(run =>
     run.ticketId === ticket.id &&
     run.agentId === agent.id &&
@@ -13787,19 +13127,19 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
   const isRerun = runs.some(run => run.ticketId === ticket.id);
   const usesOwnedScope = usesOwnedScopeAllocation(ticket);
   const ownedOutputPaths = allocationItem ? allocationItem.ownedOutputPaths.map(normalizeWorkspaceOwnershipPath) : [];
-  const workflow = ticket.executionMode === 'workflow' ? getWorkflowById(ticket.workflowId) : null;
+  const workflow = ticket.executionMode === 'workflow' ? await getWorkflowById(ticket.workflowId) : null;
   const browserTarget = ticket.targetRef && ticket.targetRef.kind === 'browser'
-    ? getBrowserTargetById(ticket.targetRef.browserTargetId)
+    ? (await getBrowserTargetById(ticket.targetRef.browserTargetId))
     : null;
-  const runtimeLimitsSnapshot = resolveAgentRuntimeLimits(
+  const runtimeLimitsSnapshot = (await resolveAgentRuntimeLimits(
     ticket.executionMode === 'workflow' ? null : ticket.objective,
     { workflow: Boolean(workflow) }
-  ).snapshot;
+  )).snapshot;
   // Routing decision (r1.28): dispatch-policy + immutable snapshot. With no applicable policy this
   // is a no-op recording the agent's own provider/model (execution behavior unchanged). If a policy
   // permits no provider, refuse via triage rather than guessing — no run is created.
   const routeCapabilityId = ticket.executionMode === 'workflow' ? ticket.workflowId : 'agent-selected-actions';
-  const routeDecision = resolveModelRouteForRun({
+  const routeDecision = await resolveModelRouteForRun({
     ticket, agent, capabilityId: routeCapabilityId,
     workContextId: ticket.workContextId != null ? ticket.workContextId : null,
     explicitPolicyId: ticket.routingPolicyId != null ? ticket.routingPolicyId : null
@@ -13873,98 +13213,6 @@ function buildRunCreatedEventPayload(run) {
   };
 }
 
-async function failRunsAfterOversizedCreationEvent(error) {
-  const createdRuns = Array.isArray(error && error.lifecycleRuns) ? error.lifecycleRuns : [];
-  if (createdRuns.length === 0) return;
-  const failedAt = new Date().toISOString();
-  const runs = readRuns();
-  const failedRuns = [];
-  for (const createdRun of createdRuns) {
-    const run = runs.find(item => item.id === createdRun.id);
-    if (!run) continue;
-    run.status = 'failed';
-    run.error = error.message;
-    run.completedAt = failedAt;
-    run.updatedAt = failedAt;
-    run.leaseOwner = null;
-    run.leaseExpiresAt = null;
-    run.runEvaluation = {
-      effectiveness: {
-        status: 'failed',
-        postconditionsPassed: 0,
-        postconditionsFailed: 0,
-        errors: [error.message]
-      },
-      efficiency: {
-        durationMs: 0,
-        workflowSteps: 0,
-        providerRequests: 0,
-        modelResponses: 0,
-        workspaceOperations: 0,
-        mutationCount: 0,
-        retryCount: countRunRetryAttempts(run)
-      },
-      violations: { status: 'unknown', items: [] },
-      effectiveRuntimeConfig: null,
-      browserEvidence: { status: 'not_applicable', detail: null }
-    };
-    run.runConsequence = {
-      mutations: [],
-      created: [],
-      updated: [],
-      deleted: [],
-      renamed: [],
-      notifications: [],
-      externalEffects: [],
-      verification: { postconditionsStatus: 'failed', violationsStatus: 'unknown' }
-    };
-    failedRuns.push(run);
-  }
-  writeRuns(runs);
-
-  const tickets = readTickets();
-  const ticket = tickets.find(item => item.id === createdRuns[0].ticketId);
-  if (ticket && !['completed', 'closed'].includes(ticket.status)) {
-    ticket.status = 'failed';
-    ticket.blockedReason = error.message;
-    ticket.updatedAt = failedAt;
-    ticket.changedAt = failedAt;
-    writeTickets(tickets);
-  }
-
-  for (const run of failedRuns) {
-    appendRunLog(run, 'run:failed', error.message, null, {
-      code: error.code,
-      requestedType: error.requestedType,
-      requestedRecordBytes: error.requestedRecordBytes,
-      maxRecordBytes: error.maxRecordBytes
-    });
-    await appendEvent({
-      type: 'run.evaluation_completed',
-      ticketId: run.ticketId,
-      runId: run.id,
-      payload: { evaluation: run.runEvaluation }
-    });
-    await appendEvent({
-      type: 'run.consequence_recorded',
-      ticketId: run.ticketId,
-      runId: run.id,
-      payload: { consequence: run.runConsequence }
-    });
-    await appendEvent({
-      type: 'run.terminalized',
-      ticketId: run.ticketId,
-      runId: run.id,
-      payload: {
-        status: 'failed',
-        reasonCode: 'event_record_too_large',
-        rejectedEventType: error.requestedType
-      }
-    });
-  }
-  broadcastTicketChange();
-}
-
 async function persistPreparedAgentRuns(ticket, preparedRuns, options = {}) {
   if (!Array.isArray(preparedRuns) || preparedRuns.length === 0) return [];
   let result;
@@ -13976,9 +13224,6 @@ async function persistPreparedAgentRuns(ticket, preparedRuns, options = {}) {
       runEventPayload: buildRunCreatedEventPayload
     });
   } catch (error) {
-    if (error && error.code === 'EVENT_RECORD_TOO_LARGE') {
-      await failRunsAfterOversizedCreationEvent(error);
-    }
     throw error;
   }
 
@@ -14003,7 +13248,7 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
 }
 
 async function createRunsForTicket(ticket, delegated = null, options = {}) {
-  return runWithRequiredEventJournalAdmission({
+  return runWithRequiredMutationAdmission({
     source: 'ticket_run_creation',
     ticketId: ticket && ticket.id ? ticket.id : null
   }, () => createRunsForTicketAdmitted(ticket, delegated, options));
@@ -14023,14 +13268,14 @@ async function createRunsForTicketAdmitted(ticket, delegated = null, options = {
   }
 
   if (ticket.assignmentTargetType === 'agent') {
-    const agent = readAgents().find(item => item.id === ticket.assignmentTargetId);
+    const agent = await getConfiguredAgentRepository().getConfiguredAgentById(ticket.assignmentTargetId);
     if (!agent) return [];
     const run = await createAgentRun(ticket, agent, null, null, delegated, options);
     return run ? [run] : [];
   }
 
   if (usesOwnedScopeAllocation(ticket)) {
-    const agents = getAgentsInGroup(ticket.assignmentTargetId);
+    const agents = await getAgentsInGroup(ticket.assignmentTargetId);
     try {
       assertTicketObjectiveWithinGrantedWritableRoots(ticket, agents);
     } catch (error) {
@@ -14038,7 +13283,10 @@ async function createRunsForTicketAdmitted(ticket, delegated = null, options = {
       return [];
     }
 
-    const existingRuns = readRuns();
+    const existingRuns = await collectRuntimeStatePages('listRunsForTickets', 'runs', {
+      ticketIds: [ticket.id],
+      statuses: ['pending', 'running']
+    });
     const agentsToRun = agents.filter(agent => {
       const pendingRunKey = `${ticket.id}:${agent.id}`;
       return !runningRunKeys.has(pendingRunKey) && !existingRuns.some(run =>
@@ -14050,7 +13298,7 @@ async function createRunsForTicketAdmitted(ticket, delegated = null, options = {
 
     if (agentsToRun.length === 0) return [];
 
-    const allocationPlan = createAllocationPlan(ticket, agentsToRun);
+    const allocationPlan = await createAllocationPlan(ticket, agentsToRun);
 
     const preparedRuns = [];
     for (const agent of agentsToRun) {
@@ -14145,7 +13393,7 @@ function formatDateTimeForTimezone(date, timeZone) {
   return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}${offsetSign}${offsetHours}:${offsetRemainder}`;
 }
 
-function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLimits = null) {
+async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLimits = null) {
   const timezone = getRuntimeTimezone();
   const workspaceRoot = run.workspaceRoot || workspaceProvider.root;
   const limits = resolvedLimits || getRunRuntimeLimitsSnapshot(run, objective);
@@ -14178,7 +13426,7 @@ function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLimits = 
     allowCanonicalWorkflowDraft: 'createWorkflowDraft'
   };
 
-  const agent = readAgents().find(item => item.id === run.agentId);
+  const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
   const effectiveConfig = agent ? getAgentEffectiveRuntimeConfig(agent) : {};
   const filteredOps = AGENT_DIRECT_OPERATIONS.filter(op => {
     for (const [configKey, operationName] of Object.entries(disabledConfigToOps)) {
@@ -14213,10 +13461,10 @@ function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLimits = 
   };
 }
 
-function buildSimulationRuntimeEnvelope(ticket, agent) {
+async function buildSimulationRuntimeEnvelope(ticket, agent) {
   const timezone = getRuntimeTimezone();
   const workspaceRoot = workspaceProvider.root;
-  const limits = getAgentRuntimeLimits(ticket.objective);
+  const limits = await getAgentRuntimeLimits(ticket.objective);
 
   const disabledConfigToOps = {
     allowHandoffTask: 'createHandoffTask',
@@ -14326,12 +13574,12 @@ function parseTicketShapeSuggestion(text) {
   }
 }
 
-function getTicketShapeAgent(body = {}) {
+async function getTicketShapeAgent(body = {}) {
   const assignmentTargetType = body.assignmentTargetType === 'agent' ? 'agent' : null;
   const assignmentTargetId = parseInt(body.assignmentTargetId, 10);
 
   if (assignmentTargetType === 'agent' && !Number.isNaN(assignmentTargetId)) {
-    const selectedAgent = readAgents().find(agent => agent.id === assignmentTargetId);
+    const selectedAgent = await getConfiguredAgentRepository().getConfiguredAgentById(assignmentTargetId);
     if (selectedAgent) return selectedAgent;
   }
 
@@ -14352,7 +13600,7 @@ async function suggestBoundedTicketObjective(body = {}) {
     throw error;
   }
 
-  const agent = getTicketShapeAgent(body);
+  const agent = await getTicketShapeAgent(body);
   const input = [
     {
       role: 'system',
@@ -15785,15 +15033,6 @@ async function createWorkflowDraftFromAgent(run, workflowInput, step = 0, option
     error.details = { validationErrors };
     throw error;
   }
-  if (getWorkflowById(draft.id)) {
-    const error = new Error(`Workflow draft id already exists: ${draft.id}`);
-    error.code = 'WORKFLOW_DRAFT_DUPLICATE';
-    throw error;
-  }
-
-  const workflows = readWorkflows();
-  workflows.push(draft);
-  writeWorkflows(workflows);
   const draftEvidence = {
     workflowId: draft.id,
     name: draft.name,
@@ -15802,7 +15041,7 @@ async function createWorkflowDraftFromAgent(run, workflowInput, step = 0, option
     createdByRunId: run.id,
     step
   };
-  await recordNonTerminalRunEvidence(run, {
+  const evidence = buildNonTerminalRunEvidenceInput(run, {
     category: 'workflow-draft',
     slot: `${options.slot || `agent:${step}`}:workflow-draft:${draft.id}`,
     replayKey: 'workflowDrafts',
@@ -15820,6 +15059,21 @@ async function createWorkflowDraftFromAgent(run, workflowInput, step = 0, option
     },
     capturedAt: now
   });
+  try {
+    await getWorkflowCatalogRepository().createWorkflowWithEvidence({
+      value: draft,
+      changedBy: `agent:${run.agentId}`,
+      evidence
+    });
+  } catch (error) {
+    if (!(error instanceof WorkflowCatalogIdConflictError)) {
+      error.nonTerminalEvidencePersistenceFailure = true;
+      throw error;
+    }
+    const duplicate = new Error(`Workflow draft id already exists: ${draft.id}`);
+    duplicate.code = 'WORKFLOW_DRAFT_DUPLICATE';
+    throw duplicate;
+  }
   appendRunLog(run, 'workflow:draft_created', `Workflow draft created: ${draft.name}`, null, {
     workflowId: draft.id,
     enabled: false
@@ -15856,13 +15110,13 @@ function createHandoffTaskError(message, code = 'HANDOFF_TASK_INVALID') {
   return error;
 }
 
-function resolveHandoffExecutor(value) {
+async function resolveHandoffExecutor(value) {
   const executorValue = typeof value === 'string' ? value.trim() : value;
   if (executorValue === null || executorValue === undefined || executorValue === '') {
     throw createHandoffTaskError('createHandoffTask executor is required');
   }
 
-  const agents = readAgents();
+  const agents = await listConfiguredAgentOptions();
   const numericId = Number(executorValue);
   const executor = Number.isInteger(numericId)
     ? agents.find(agent => agent.id === numericId)
@@ -15890,13 +15144,13 @@ function normalizeHandoffWritePath(value) {
   return normalized;
 }
 
-function validateHandoffTaskInput(input) {
+async function validateHandoffTaskInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw createHandoffTaskError('createHandoffTask args must be an object');
   }
 
   assertOnlyKeys(input, ['executor', 'operation', 'args'], 'createHandoffTask args');
-  const executor = resolveHandoffExecutor(input.executor);
+  const executor = await resolveHandoffExecutor(input.executor);
   if (input.operation !== 'writeFile') {
     throw createHandoffTaskError('createHandoffTask operation must be writeFile', 'HANDOFF_OPERATION_UNSUPPORTED');
   }
@@ -15916,8 +15170,8 @@ function validateHandoffTaskInput(input) {
 }
 
 async function executeHandoffTask(run, handoffInput, step = 0, options = {}) {
-  const validated = validateHandoffTaskInput(handoffInput);
-  const planner = readAgents().find(agent => agent.id === run.agentId) || null;
+  const validated = await validateHandoffTaskInput(handoffInput);
+  const planner = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
   const executorRun = {
     ...run,
     agentId: validated.executor.id,
@@ -16186,11 +15440,11 @@ function buildProfileGuidance(objective) {
   ];
 }
 
-function hasViolationEvidence(runId) {
-  return getRunEvents(runId).some(event => event.type === 'run.violation_detected' || event.type === 'authority.denied');
+async function hasViolationEvidence(runId) {
+  return (await getRunEvents(runId)).some(event => event.type === 'run.violation_detected' || event.type === 'authority.denied');
 }
 
-function hasSuccessfulObjectiveMutationEvidence(run, actionResults, objectivePaths) {
+async function hasSuccessfulObjectiveMutationEvidence(run, actionResults, objectivePaths) {
   const objectivePathSet = new Set((objectivePaths || []).map(normalizeObjectivePathToken).filter(Boolean));
   if (objectivePathSet.size === 0) return false;
   const successfulMutations = (actionResults || []).filter(item => {
@@ -16205,7 +15459,7 @@ function hasSuccessfulObjectiveMutationEvidence(run, actionResults, objectivePat
 
   if (successfulMutations.length === 0) return false;
 
-  const historyRecords = getOperationHistoryForRun(run.id).filter(record =>
+  const historyRecords = (await getOperationHistoryForRun(run.id)).filter(record =>
     record &&
     ['createFolder', 'writeFile', 'renamePath'].includes(record.operation) &&
     !record.error &&
@@ -16224,10 +15478,10 @@ function hasSuccessfulObjectiveMutationEvidence(run, actionResults, objectivePat
   });
 }
 
-function isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults) {
+async function isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults) {
   if (!run || !ticket) return false;
   if (!isDirectWorkspaceWriteObjective(ticket.objective)) return false;
-  if (hasViolationEvidence(run.id)) return false;
+  if (await hasViolationEvidence(run.id)) return false;
   return hasSuccessfulObjectiveMutationEvidence(run, actionResults, extractObjectivePathTokens(ticket.objective));
 }
 
@@ -16261,7 +15515,7 @@ function sanitizeOperationArgs(operation, args) {
 async function completeWorkspaceReadEvidence(run, step, operation, args, result, error, operationContext) {
   const startedAt = operationContext.startedAt || Date.now();
   const operationKey = operationContext.operationKey;
-  const targetEvidence = buildWorkspaceOperationTargetEvidence(run, operation, args, result, error);
+  const targetEvidence = await buildWorkspaceOperationTargetEvidence(run, operation, args, result, error);
   const blocked = Boolean(error && (
     error.failureKind === 'protected_path' ||
     ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code)
@@ -16358,7 +15612,7 @@ async function executeWorkspaceOperation(run, action, step = 0, options = {}) {
     operation: parsed.operation,
     args: sanitized
   }, async () => {
-    if (run && isRunInterrupted(run.id)) {
+    if (run && await isRunInterrupted(run.id)) {
       const error = new Error('Run interrupted');
       error.code = 'RUN_INTERRUPTED';
       throw error;
@@ -16373,8 +15627,8 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0, operatio
   const runWorkspaceProvider = getRunWorkspaceProvider(run);
   const operationKey = operationContext.operationKey || null;
 
-  if (AGENT_MUTATING_OPERATIONS.includes(operation) && eventAppendFailure) {
-    const error = new Error(`Workspace mutations are disabled because event persistence failed: ${eventAppendFailure.message}`);
+  if (AGENT_MUTATING_OPERATIONS.includes(operation) && evidencePersistenceFailure) {
+    const error = new Error(`Workspace mutations are disabled because event persistence failed: ${evidencePersistenceFailure.message}`);
     error.code = 'EVENT_PERSISTENCE_UNAVAILABLE';
     error.failureKind = 'runtime_failed';
     throw error;
@@ -16448,34 +15702,16 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0, operatio
     assertAgentWorkspacePathAllowed(pathValue);
 
     // Reject if a different mutation already committed on the same path
-    const conflict = findConflictingMutation(run.id, operation, args);
+    const conflict = await findPersistedMutationConflict(run, operation, args, runWorkspaceProvider);
     if (conflict) {
       const error = new Error(`Conflicting mutation already committed on ${pathValue}: ${conflict.operation} (historyId: ${conflict.id})`);
       error.code = 'MUTATION_CONFLICT';
       throw error;
     }
 
-    const priorOwner = findPriorSuccessfulArtifactOwner(readOperationHistory(), run, pathValue);
+    const priorOwner = await findLiveWorkspaceArtifactOwner(run, runWorkspaceProvider, operation, pathValue, false);
     if (priorOwner) {
-      const ownerPath = getSuccessfulArtifactOwnershipPath(priorOwner);
-      const stale = (() => {
-        if (!ownerPath || !runWorkspaceProvider.exists(ownerPath)) return true;
-        const info = runWorkspaceProvider.getPathInfo(ownerPath);
-        if (info.exists && info.type === 'directory') {
-          const dirContents = runWorkspaceProvider.list(ownerPath);
-          if (dirContents.entries.length === 0) return true;
-          return !ticketHasOwnedContentInDirectory(runWorkspaceProvider, priorOwner.ticketId, ownerPath);
-        }
-        return false;
-      })();
-      if (stale) {
-        appendRunLog(run, 'workspace:stale_ownership',
-          `Skipping prior-artifact-owner check for ${pathValue}: owner path ${ownerPath} (ticket ${priorOwner.ticketId}, run ${priorOwner.runId}) no longer contains any owned content on disk.`,
-          { operation, path: pathValue, ownerPath, ownerTicketId: priorOwner.ticketId, ownerRunId: priorOwner.runId }
-        );
-      } else {
-        throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue }, pathValue, priorOwner);
-      }
+      throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue }, pathValue, priorOwner);
     }
     await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
@@ -16528,34 +15764,16 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0, operatio
     assertAgentWorkspacePathAllowed(pathValue);
 
     // Reject if a different mutation already committed on the same path
-    const conflict = findConflictingMutation(run.id, operation, args);
+    const conflict = await findPersistedMutationConflict(run, operation, args, runWorkspaceProvider);
     if (conflict) {
       const error = new Error(`Conflicting mutation already committed on ${pathValue}: ${conflict.operation} (historyId: ${conflict.id})`);
       error.code = 'MUTATION_CONFLICT';
       throw error;
     }
 
-    const priorOwner = findPriorSuccessfulArtifactOwner(readOperationHistory(), run, pathValue);
+    const priorOwner = await findLiveWorkspaceArtifactOwner(run, runWorkspaceProvider, operation, pathValue, false);
     if (priorOwner) {
-      const ownerPath = getSuccessfulArtifactOwnershipPath(priorOwner);
-      const stale = (() => {
-        if (!ownerPath || !runWorkspaceProvider.exists(ownerPath)) return true;
-        const info = runWorkspaceProvider.getPathInfo(ownerPath);
-        if (info.exists && info.type === 'directory') {
-          const dirContents = runWorkspaceProvider.list(ownerPath);
-          if (dirContents.entries.length === 0) return true;
-          return !ticketHasOwnedContentInDirectory(runWorkspaceProvider, priorOwner.ticketId, ownerPath);
-        }
-        return false;
-      })();
-      if (stale) {
-        appendRunLog(run, 'workspace:stale_ownership',
-          `Skipping prior-artifact-owner check for ${pathValue}: owner path ${ownerPath} (ticket ${priorOwner.ticketId}, run ${priorOwner.runId}) no longer contains any owned content on disk.`,
-          { operation, path: pathValue, ownerPath, ownerTicketId: priorOwner.ticketId, ownerRunId: priorOwner.runId }
-        );
-      } else {
-        throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue, content }, pathValue, priorOwner);
-      }
+      throw buildPriorArtifactOwnerConflictError(operation, { path: pathValue, content }, pathValue, priorOwner);
     }
     await assertNoCrossTicketOverlap(run, runWorkspaceProvider, operation, { path: pathValue }, pathValue);
 
@@ -16609,7 +15827,7 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0, operatio
     assertAgentWorkspacePathAllowed(nextPath);
 
     // Reject if a different mutation already committed on the same path
-    const conflict = findConflictingMutation(run.id, operation, args);
+    const conflict = await findPersistedMutationConflict(run, operation, args, runWorkspaceProvider);
     if (conflict) {
       const error = new Error(`Conflicting mutation already committed on ${pathValue}: ${conflict.operation} (historyId: ${conflict.id})`);
       error.code = 'MUTATION_CONFLICT';
@@ -16663,7 +15881,7 @@ async function executeWorkspaceOperationUnlocked(run, action, step = 0, operatio
     assertAgentWorkspacePathAllowed(pathValue);
 
     // Reject if a different mutation already committed on the same path
-    const conflict = findConflictingMutation(run.id, operation, args);
+    const conflict = await findPersistedMutationConflict(run, operation, args, runWorkspaceProvider);
     if (conflict) {
       const error = new Error(`Conflicting mutation already committed on ${pathValue}: ${conflict.operation} (historyId: ${conflict.id})`);
       error.code = 'MUTATION_CONFLICT';
@@ -17000,13 +16218,13 @@ async function executeBrowserOperation(run, action, step = 0, options = {}) {
     } else if (operation === 'screenshot') {
       entry.screenshots += 1;
       entry.artifactSequence += 1;
-      const artifactDir = path.join(DATA_DIR, 'browser-artifacts', `run-${run.id}`);
+      const artifactDir = path.join(BROWSER_ARTIFACTS_DIR, `run-${run.id}`);
       fs.mkdirSync(artifactDir, { recursive: true });
       const artifactName = `step-${step}-${entry.artifactSequence}.png`;
       const artifactPath = path.join(artifactDir, artifactName);
       result = await entry.session.screenshot(artifactPath);
       const bytes = fs.readFileSync(artifactPath);
-      const relativeArtifactPath = path.relative(DATA_DIR, artifactPath);
+      const relativeArtifactPath = path.relative(ARTIFACT_ROOT, artifactPath);
       receipt.resourceUrl = redactBrowserUrl(result.url);
       receipt.targetResourceId = receipt.resourceUrl;
       receipt.metadata = {
@@ -17081,8 +16299,9 @@ async function verifyBatchOperation(run, action, result) {
       // ContentHash is only evaluated when type matches, because contentHash comparison
       // is undefined for non-file destinations (getPathInfo returns undefined contentHash
       // for directories, and comparing undefined to a hash string would be a false positive).
-      const histories = readOperationHistory();
-      const record = histories.find(h => h.id === result.historyId);
+      const record = Number.isSafeInteger(result.historyId)
+        ? await postgresRuntimeStore.getOperation(result.historyId)
+        : null;
       if (record && record.preState && record.preState.source && record.postState && record.postState.destination) {
         const destInfo = runWorkspaceProvider.getPathInfo(args.nextPath);
         if (record.preState.source.type && destInfo.type !== record.preState.source.type) {
@@ -17348,7 +16567,7 @@ async function appendWorkflowPlanWorkspaceEvidence(run, workflow, step, action, 
     counters.mutations += 1;
     return;
   }
-  const targetEvidence = buildWorkspaceOperationTargetEvidence(run, action.operation, action.args, result);
+  const targetEvidence = await buildWorkspaceOperationTargetEvidence(run, action.operation, action.args, result);
   const replayItem = {
     operation: { operation: action.operation, args: action.args, reason: action.reason || null },
     result,
@@ -17506,7 +16725,7 @@ function workflowContainsTicketPlanAction(workflow) {
   return Boolean(workflow && Array.isArray(workflow.actions) && workflow.actions.some(step => step && step.action === 'executeTicketPlan'));
 }
 
-function validateTicketPlanInput(run, input) {
+async function validateTicketPlanInput(run, input) {
   const tickets = Array.isArray(input.tickets) ? input.tickets : [];
   const allowedWorkflowIds = Array.isArray(input.allowedWorkflowIds)
     ? input.allowedWorkflowIds.filter(item => typeof item === 'string')
@@ -17536,14 +16755,25 @@ function validateTicketPlanInput(run, input) {
     };
   }
 
-  const existingTickets = readTickets();
+  const proposedIdempotencyKeys = proposedTickets.map(ticket => buildTicketPlanIdempotencyKey(run, ticket));
+  const requestedWorkflowIds = [...new Set(proposedTickets.map(item => item.workflowId).filter(Boolean))];
+  const [existingTickets, workflows] = await Promise.all([
+    proposedIdempotencyKeys.length > 0
+      ? getRuntimeStateReadRepository().getTicketsBySpawnIdempotencyKeys({ spawnIdempotencyKeys: proposedIdempotencyKeys })
+      : [],
+    requestedWorkflowIds.length > 0
+      ? getWorkflowCatalogRepository().getWorkflowsByIds({ workflowIds: requestedWorkflowIds })
+      : []
+  ]);
+  const existingIdempotencyKeys = new Set(existingTickets.map(ticket => ticket.spawnIdempotencyKey));
+  const workflowsById = new Map(workflows.map(workflow => [workflow.id, workflow]));
   const seenKeys = new Set();
 
   tickets.forEach((ticket, index) => {
     const reasons = [];
     const proposed = normalizeProposedTicketPlanItem(ticket, index);
     const workflowId = proposed.workflowId;
-    const workflow = workflowId ? getWorkflowById(workflowId) : null;
+    const workflow = workflowId ? workflowsById.get(workflowId) || null : null;
     const objective = typeof proposed.objective === 'string' ? proposed.objective.trim() : '';
     const workflowInput = proposed.workflowInput;
 
@@ -17561,7 +16791,7 @@ function validateTicketPlanInput(run, input) {
 
     const idempotencyKey = buildTicketPlanIdempotencyKey(run, proposed);
     if (seenKeys.has(idempotencyKey)) reasons.push('duplicate ticket plan item: ' + idempotencyKey);
-    if (existingTickets.some(item => item && item.spawnIdempotencyKey === idempotencyKey)) reasons.push('duplicate child ticket already exists: ' + idempotencyKey);
+    if (existingIdempotencyKeys.has(idempotencyKey)) reasons.push('duplicate child ticket already exists: ' + idempotencyKey);
 
     if (reasons.length > 0) {
       rejectedTickets.push({ ...proposed, idempotencyKey, validationReasons: reasons });
@@ -17576,7 +16806,7 @@ function validateTicketPlanInput(run, input) {
 }
 
 async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket, spawnPlanId) {
-  const existing = readTickets().find(ticket => ticket && ticket.spawnIdempotencyKey === planTicket.idempotencyKey);
+  const existing = await getRuntimeStateReadRepository().getTicketBySpawnIdempotencyKey(planTicket.idempotencyKey);
   if (existing) return existing;
 
   const now = new Date().toISOString();
@@ -17632,7 +16862,7 @@ async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket
 async function executeTicketPlanWorkflowAction(run, workflow, step, input, transitionIndex) {
   const startedAt = Date.now();
   const spawnPlanId = [run.id, workflow.id, step.id, 'transition', transitionIndex].join(':');
-  const validation = validateTicketPlanInput(run, input);
+  const validation = await validateTicketPlanInput(run, input);
   const createdTickets = [];
 
   for (const ticket of validation.acceptedTickets) {
@@ -17700,7 +16930,7 @@ async function executeWorkflowAction(run, workflow, step, input, context, counte
     step.action === 'executeActionPlan' ||
     step.action === 'executeTicketPlan';
   if (!requiresMutationAdmission) return operation();
-  return runWithRequiredEventJournalAdmission({
+  return runWithRequiredMutationAdmission({
     source: 'workflow_action',
     runId: run.id,
     ticketId: run.ticketId,
@@ -17751,7 +16981,7 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
       counters.workspaceOperations += 1;
       if (contract.mutating) counters.mutations += 1;
       if (!result._operationEvidenceRecorded) {
-        const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, result);
+        const targetEvidence = await buildWorkspaceOperationTargetEvidence(run, step.action, input, result);
         const workspaceEvidence = {
           operation: { operation: step.action, args: input },
           result,
@@ -17849,7 +17079,7 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
   } catch (error) {
     if (error.nonTerminalEvidencePersistenceFailure || error.providerEvidencePersistenceFailure) throw error;
     if (contract && contract.type === 'workspaceAction' && !error._operationEvidenceRecorded) {
-      const targetEvidence = buildWorkspaceOperationTargetEvidence(run, step.action, input, null, error);
+      const targetEvidence = await buildWorkspaceOperationTargetEvidence(run, step.action, input, null, error);
       const workspaceErrorEvidence = {
         operation: error.workspaceAction || { operation: step.action, args: input },
         error: error.message,
@@ -18059,8 +17289,8 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
   return { status: 'completed', result: context, counters };
 }
 
-function buildPriorFailureContext(ticketId, currentRunId) {
-  const runs = readRuns().filter(r => r.ticketId === ticketId && r.id !== currentRunId);
+async function buildPriorFailureContext(ticketId, currentRunId) {
+  const runs = (await readAllRunsForTicket(ticketId)).filter(r => r.id !== currentRunId);
   const terminalRuns = runs.filter(r => ['completed', 'failed', 'interrupted'].includes(r.status));
   if (terminalRuns.length === 0) return null;
 
@@ -18073,7 +17303,7 @@ function buildPriorFailureContext(ticketId, currentRunId) {
 
   if (!priorRun || priorRun.status === 'completed') return null;
 
-  const events = getRunEvents(priorRun.id);
+  const events = (await getRunEvents(priorRun.id));
   const workspaceOps = events.filter(e => e.type === 'workspace.operation');
   const lastAction = workspaceOps.length > 0 ? workspaceOps[workspaceOps.length - 1].payload?.operation : null;
   const inspectedFiles = events
@@ -18233,7 +17463,7 @@ function captureRunWorkspaceRootSnapshot(run) {
   }
 }
 
-function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null, workspaceContext = null) {
+async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null, workspaceContext = null) {
   if (runtimeEnvelope && runtimeEnvelope.targetKind === 'browser') {
     return [
       {
@@ -18374,7 +17604,7 @@ function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode
         ticket.objective,
         actionResults,
         actionResults.length === 0 && rerunMode === 'reassess'
-          ? buildPriorFailureContext(ticket.id, runtimeEnvelope.runId)
+          ? await buildPriorFailureContext(ticket.id, runtimeEnvelope.runId)
           : null,
         workspaceContext,
         ticket.acceptanceCriteria
@@ -18402,39 +17632,45 @@ async function runAgentTicket(runId) {
     return;
   }
 
-  let run = await runWithRequiredEventJournalAdmission({
+  let run = await runWithRequiredMutationAdmission({
     source: 'run_start',
     runId,
     ticketId: leasedRun.ticketId
   }, async () => {
-    const startedRun = updateRunStatus(runId, 'running');
-    if (!startedRun || startedRun.status !== 'running') return startedRun;
-    await heartbeatRunLease(startedRun.id, { phase: 'run_started' });
-    runningRunKeys.add(runExecutionKey(startedRun));
-    await appendEvent({
-      type: 'run.started',
-      ticketId: startedRun.ticketId,
-      runId: startedRun.id,
-      payload: {
-        status: 'running',
+    const started = await getRunLeaseRepository().startClaimedRun({
+      runId,
+      leaseOwner: RUN_LEASE_OWNER,
+      leaseDurationMs: getRunLeaseDurationMs(),
+      eventPayload: startedRun => ({
         agentId: startedRun.agentId,
-        agentName: startedRun.agentName,
-        startedAt: startedRun.startedAt || startedRun.updatedAt
-      }
+        agentName: startedRun.agentName
+      })
     });
-    appendRunLog(startedRun, 'run:started', `Agent run started${allocationLogSuffix(startedRun)}`, null, {
-      allocationPlanId: startedRun.allocationPlanId || null,
-      allocationItemId: startedRun.allocationItemId || null
-    });
+    const startedRun = started ? started.run : null;
+    if (!startedRun || startedRun.status !== 'running') return startedRun;
     return startedRun;
   });
   if (!run || run.status !== 'running') return;
-  await maybeTestInterrupt(run, 'after_run.started');
+  const startedEvents = await readAllRunScopedEvents(run.id);
+  runExecutionEvidenceAttempts.set(
+    run.id,
+    Math.max(1, startedEvents.filter(event => event && event.type === 'run.started').length)
+  );
   let providerConfig = null;
 
   try {
-    const ticket = readTickets().find(item => item.id === run.ticketId);
-    const agent = readAgents().find(item => item.id === run.agentId);
+    runningRunKeys.add(runExecutionKey(run));
+    await updateAllocationItemStatus(run, 'running');
+    broadcastEvent('run:status-changed', {
+      runId: run.id, ticketId: run.ticketId, status: 'running', error: null
+    });
+    await appendRunLog(run, 'run:started', `Agent run started${allocationLogSuffix(run)}`, null, {
+      allocationPlanId: run.allocationPlanId || null,
+      allocationItemId: run.allocationItemId || null
+    });
+    await maybeTestInterrupt(run, 'after_run.started');
+    const ticket = await getTicketById(run.ticketId);
+    const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
 
     if (!ticket) throw new Error('Ticket not found');
     if (!agent) throw new Error('Agent not found');
@@ -18449,14 +17685,14 @@ async function runAgentTicket(runId) {
       { workflow: run.executionMode === 'workflow' }
     );
     const limits = runtimeLimitsForExecution(runtimeLimitsSnapshot);
-    const runtimeEnvelope = buildRuntimeEnvelope(run, 0, ticket.objective, limits);
-    const initialInput = buildAgentPrompt(promptTicket, runtimeEnvelope, [], run.rerunMode);
+    const runtimeEnvelope = await buildRuntimeEnvelope(run, 0, ticket.objective, limits);
+    const initialInput = await buildAgentPrompt(promptTicket, runtimeEnvelope, [], run.rerunMode);
     await createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
     appendRunLog(run, 'run:runtime', JSON.stringify(runtimeEnvelope));
 
     if (ticket.executionMode === 'workflow' || run.executionMode === 'workflow') {
       const workflowId = run.workflowId || ticket.workflowId;
-      const workflow = getWorkflowById(workflowId);
+      const workflow = await getWorkflowById(workflowId);
       if (!workflow || workflow.enabled === false) {
         const error = new Error(`Workflow not found or disabled: ${workflowId || 'none'}`);
         error.code = 'WORKFLOW_NOT_AVAILABLE';
@@ -18568,8 +17804,8 @@ async function runAgentTicket(runId) {
     const mutationsByThisRun = [];
 
     // ── Resumable execution check ─────────────────────────────────
-    const resumeEvents = readRunScopedEvents(run.id);
-    const resumeState = reconstructResumableState(run);
+    const resumeEvents = await readAllRunScopedEvents(run.id);
+    const resumeState = reconstructResumableState(run, resumeEvents);
     if (resumeState) {
       appendRunLog(run, 'run:resume_check', `Resumable state detected: ${resumeState.priorEvents} prior events, execution=${resumeState.safeToResumeExecution}, reconcile=${resumeState.safeToReconcileTerminalState}, unsafe=${resumeState.unsafeToContinue}, nextPhase=${resumeState.expectedNextPhase}`);
       if (resumeState.unsafeToContinue) {
@@ -18624,7 +17860,7 @@ async function runAgentTicket(runId) {
           run,
           replaySnapshot: executionRecoverySnapshot,
           events: resumeEvents,
-          operationHistory: readOperationHistory(),
+          operationHistory: await readAllRunOperations(run.id),
           mutatingOperations: AGENT_MUTATING_OPERATIONS
         });
         pendingRecoveredProviderCall = resolveExecutionTurnProviderCall({
@@ -18677,10 +17913,10 @@ async function runAgentTicket(runId) {
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       assertRunStepAllowed(run, step, limits);
 
-      try { 
-        const wsRoot = typeof workspaceProvider.root === 'string' ? workspaceProvider.root : String(workspaceProvider.root); 
+      try {
+        const wsRoot = typeof workspaceProvider.root === 'string' ? workspaceProvider.root : String(workspaceProvider.root);
         const fs2 = require('fs');
-      } catch(e) { 
+      } catch(e) {
       }
       if (!isBrowserRun(run) && !resumedFromPersistedState) {
         const obviousPostcondition = compiledContract
@@ -18712,7 +17948,7 @@ async function runAgentTicket(runId) {
         }
       }
 
-      const currentEnvelope = buildRuntimeEnvelope(run, step, ticket.objective, limits);
+      const currentEnvelope = await buildRuntimeEnvelope(run, step, ticket.objective, limits);
       const workspaceContext = {
         initialWorkspaceSnapshot,
         currentWorkspaceSnapshot: isBrowserRun(run)
@@ -18720,7 +17956,7 @@ async function runAgentTicket(runId) {
           : captureRunWorkspaceRootSnapshot(run),
         mutationsByThisRun
       };
-      const input = buildAgentPrompt(promptTicket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
+      const input = await buildAgentPrompt(promptTicket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
 
       const modelCallKey = `agent:${step}:provider`;
       let providerCall;
@@ -18845,7 +18081,7 @@ async function runAgentTicket(runId) {
       // actions were never applied.
       let completionBlockedByActionTruncation = false;
 
-      if (isRunInterrupted(run.id)) {
+      if (await isRunInterrupted(run.id)) {
         const error = new Error('Run interrupted');
         error.code = 'RUN_INTERRUPTED';
         throw error;
@@ -19045,17 +18281,9 @@ async function runAgentTicket(runId) {
       }
       // Advance phase if transitioned
       if (phaseCheck.inferredPhase && phaseCheck.inferredPhase !== run.currentPhase) {
-        advanceRunPhase(run, phaseCheck.inferredPhase);
-        await appendEvent({
-          type: 'execution.phase_transition',
-          ticketId: run.ticketId,
-          runId: run.id,
+        await advanceRunPhase(run, phaseCheck.inferredPhase, {
           stepId: String(step),
-          payload: {
-            fromPhase: phaseCheck.currentPhase,
-            toPhase: phaseCheck.inferredPhase,
-            reason: 'Inferred from model response actions'
-          }
+          reason: 'Inferred from model response actions'
         });
       }
 
@@ -19207,11 +18435,11 @@ async function runAgentTicket(runId) {
         let operation = null;
         const actionStartedAt = Date.now();
         const proposedOperation = action && typeof action.operation === 'string' ? action.operation : null;
-        const requiresMutationAdmission = (isBrowserRun(run) && BROWSER_OPERATIONS_REQUIRING_EVENT_ADMISSION.has(proposedOperation)) ||
+        const requiresMutationAdmission = (isBrowserRun(run) && BROWSER_OPERATIONS_REQUIRING_MUTATION_ADMISSION.has(proposedOperation)) ||
           AGENT_MUTATING_OPERATIONS.includes(proposedOperation) ||
           ['createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask'].includes(proposedOperation);
         const leaveActionAdmission = requiresMutationAdmission
-          ? await enterRequiredEventJournalAdmission({
+          ? await enterRequiredMutationAdmission({
               source: 'run_action',
               runId: run.id,
               ticketId: run.ticketId,
@@ -19219,13 +18447,13 @@ async function runAgentTicket(runId) {
             })
           : () => {};
         try {
-          if (isRunInterrupted(run.id)) {
+          if (await isRunInterrupted(run.id)) {
             const error = new Error('Run interrupted');
             error.code = 'RUN_INTERRUPTED';
             throw error;
           }
 
-          // Admission can wait while the journal drains. Revalidate ownership
+          // Admission can wait while the admission pressure clears. Revalidate ownership
           // immediately before parsing and executing each proposed action so a
           // stale worker cannot begin another target operation.
           await assertLiveRunLease(run.id);
@@ -19305,7 +18533,7 @@ async function runAgentTicket(runId) {
           // item.operation.operation and item.result — any shape change
           // here must be mirrored in the error entry and all consumers.
           if (!isResumeSkipped && AGENT_ALLOWED_OPERATIONS.includes(operation.operation) && !result._operationEvidenceRecorded) {
-            const targetEvidence = buildWorkspaceOperationTargetEvidence(
+            const targetEvidence = await buildWorkspaceOperationTargetEvidence(
               run,
               operation.operation,
               operation.args || {},
@@ -19350,7 +18578,7 @@ async function runAgentTicket(runId) {
               operation: result.operation,
               args: result.args
             };
-            const targetEvidence = buildWorkspaceOperationTargetEvidence(
+            const targetEvidence = await buildWorkspaceOperationTargetEvidence(
               run,
               result.operation,
               result.args || {},
@@ -19437,7 +18665,7 @@ async function runAgentTicket(runId) {
             // success entry and all consumers.
             const eventOperation = error.workspaceAction || operation;
             const eventArgs = eventOperation && eventOperation.args ? eventOperation.args : {};
-            const targetEvidence = buildWorkspaceOperationTargetEvidence(
+            const targetEvidence = await buildWorkspaceOperationTargetEvidence(
               run,
               eventOperation ? eventOperation.operation : null,
               eventArgs,
@@ -19523,7 +18751,7 @@ async function runAgentTicket(runId) {
         break;
       }
 
-      if (!isBrowserRun(run) && !resumedFromPersistedState && !modelPlan.complete && isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
+      if (!isBrowserRun(run) && !resumedFromPersistedState && !modelPlan.complete && await isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
         await recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
           step,
           source: 'successful_workspace_mutation',
@@ -19584,7 +18812,7 @@ async function runAgentTicket(runId) {
       }
 
       const compiledPostcondition = isBrowserRun(run) ? null : checkObjectiveContractPostcondition(compiledContract);
-      const postcondition = compiledPostcondition || (isBrowserRun(run) ? null : checkPostconditionCompletion(run, actions, actionResults, step));
+      const postcondition = compiledPostcondition || (isBrowserRun(run) ? null : await checkPostconditionCompletion(run, actions, actionResults, step));
       if (postcondition) {
         await recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
           step,
@@ -20011,25 +19239,18 @@ function applyWorkspaceFixture(fixtureId) {
 
 async function resetDebugData(changedBy = 'system') {
   await resetDebugEventState();
-  writeFileAtomic(DATA_FILE, '[]');
-  writeFileAtomic(RUNS_FILE, '[]');
-  writeFileAtomic(LOGS_FILE, '[]');
-  writeFileAtomic(ALLOCATION_PLANS_FILE, '[]');
-  writeFileAtomic(OPERATION_HISTORY_FILE, '[]');
-  clearReplaySnapshotFiles();
-  refreshDataDirWriterLockForDebugReset();
-
+  const result = await postgresRuntimeStore.resetDevelopmentState({ changedBy });
   clearWorkspaceRoot();
   runningRunKeys.clear();
   startingRunIds.clear();
   startingLocalModelRunIds.clear();
   admittedRunIds.clear();
   admittedLocalModelRunIds.clear();
-
-  appendSystemLog('system:reset', `Debug data reset completed by ${changedBy}`, null, {
-    changedBy,
-    changedAt: new Date().toISOString()
-  });
+  dataVersion += 1;
+  pageRenderCache.clear();
+  pageRenderInFlight.clear();
+  if (result.log) broadcastLogEntry(result.log);
+  broadcastTicketChange();
 }
 
 function formatPostconditionAssertion(pc) {
@@ -20079,11 +19300,30 @@ fastify.decorate('requireAuth', async function(request, reply) {
 
 // ==================== HOOKS ====================
 
+fastify.addHook('onRequest', (request, reply, done) => {
+  requestAuthorizationContext.run({ userId: null, permissions: [] }, done);
+});
+
 fastify.addHook('preHandler', async (request, reply) => {
+  request.user = null;
+  request.userPermissions = [];
   if (request.session.userId) {
-    const users = readUsers();
-    const user = users.find(u => u.id === request.session.userId);
-    request.user = user || null;
+    const context = requestAuthorizationContext.getStore();
+    if (!context) throw new Error('Request authorization context was not initialized');
+    const userId = parseInt(request.session.userId, 10);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      request.session.userId = null;
+      return;
+    }
+    context.userId = userId;
+    const authorization = await getAccessCatalogRepository().getUserAuthorization(userId);
+    if (!authorization) {
+      request.session.userId = null;
+      return;
+    }
+    request.user = authorization.user;
+    request.userPermissions = authorization.permissions;
+    context.permissions = [...authorization.permissions];
   }
 });
 
@@ -20157,8 +19397,7 @@ fastify.post('/login', async (request, reply) => {
     return reply.view('login.ejs', viewData({ error: 'Too many failed login attempts. Try again later.', user: null }));
   }
 
-  const users = readUsers();
-  const user = users.find(u => u.username === username);
+  const user = await getAccessCatalogRepository().getUserByUsername(username);
   let validPassword = false;
   try {
     validPassword = await argon2.verify(user && user.passwordHash ? user.passwordHash : DUMMY_PASSWORD_HASH, password);
@@ -20190,12 +19429,12 @@ fastify.get('/', { preHandler: fastify.requireAuth }, async (request, reply) => 
 
   return reply.view('index.ejs', viewData({
     user: request.user,
-    agents: readAgents(),
-    agentGroups: getTicketAssignableGroups(),
-    agentGroupMembers: getAgentGroupMembers(),
-    workflows: getEnabledWorkflows(),
-    browserTargets: readBrowserTargets().filter(target => target && target.status === 'active'),
-    workTypes: readWorkTypes().filter(workType => workType.status === 'active'),
+    agents: await listConfiguredAgentOptions(),
+    agentGroups: await getTicketAssignableGroups(),
+    agentGroupMembers: await getAgentGroupMembers(),
+    workflows: await getEnabledWorkflows(),
+    browserTargets: (await readBrowserTargets()).filter(target => target && target.status === 'active'),
+    workTypes: (await readWorkTypes()).filter(workType => workType.status === 'active'),
     error: null
   }, request.session.userId));
 });
@@ -20225,10 +19464,10 @@ async function createTicketFromInput(input, actor, options = {}) {
   if (assignmentTargetType === 'group' && !['allocated', 'dynamic'].includes(resolvedAssignmentMode)) {
     return { ok: false, error: 'Group assignments require allocated or dynamic mode' };
   }
-  if (assignmentTargetType === 'agent' && !readAgents().some(agent => agent.id === parsedAssignmentTargetId)) {
+  if (assignmentTargetType === 'agent' && !await getConfiguredAgentRepository().getConfiguredAgentById(parsedAssignmentTargetId)) {
     return { ok: false, error: 'Selected agent does not exist' };
   }
-  if (assignmentTargetType === 'group' && !getTicketAssignableGroups().some(group => group.id === parsedAssignmentTargetId)) {
+  if (assignmentTargetType === 'group' && !(await getTicketAssignableGroups()).some(group => group.id === parsedAssignmentTargetId)) {
     return { ok: false, error: 'Selected ticket-capable group does not exist' };
   }
 
@@ -20244,7 +19483,7 @@ async function createTicketFromInput(input, actor, options = {}) {
     if (resolvedExecutionMode === 'workflow') {
       return { ok: false, error: 'Workflow tickets cannot use browser targets' };
     }
-    const browserTarget = getBrowserTargetById(input.targetRef.browserTargetId);
+    const browserTarget = (await getBrowserTargetById(input.targetRef.browserTargetId));
     if (!browserTarget || browserTarget.status !== 'active') {
       return { ok: false, error: 'Selected browser target does not exist or is inactive' };
     }
@@ -20254,7 +19493,7 @@ async function createTicketFromInput(input, actor, options = {}) {
   const requestedWorkTypeId = typeof input.workTypeId === 'string' ? input.workTypeId.trim() : '';
   let selectedWorkType = null;
   if (requestedWorkTypeId) {
-    selectedWorkType = getWorkTypeById(requestedWorkTypeId);
+    selectedWorkType = (await getWorkTypeById(requestedWorkTypeId));
     if (!selectedWorkType) {
       return { ok: false, error: 'Selected Work Type does not exist' };
     }
@@ -20272,7 +19511,7 @@ async function createTicketFromInput(input, actor, options = {}) {
     if (assignmentTargetType !== 'agent') {
       return { ok: false, error: 'Workflow tickets must be assigned to one agent' };
     }
-    selectedWorkflow = getWorkflowById(input.workflowId);
+    selectedWorkflow = await getWorkflowById(input.workflowId);
     if (!selectedWorkflow || selectedWorkflow.enabled === false) {
       return { ok: false, error: 'Selected workflow does not exist or is disabled' };
     }
@@ -20294,7 +19533,7 @@ async function createTicketFromInput(input, actor, options = {}) {
   // active status, allow-lists). This narrows — never widens — authority, and only labels the
   // ticket; the runtime never reads it. A null/absent context is always valid.
   const resolvedCapabilityIdForContext = selectedWorkflow ? selectedWorkflow.id : 'agent-selected-actions';
-  const contextCheck = validateWorkContextAssignment(input.workContextId, { capabilityId: resolvedCapabilityIdForContext, targetId: input.workContextTargetId });
+  const contextCheck = await validateWorkContextAssignment(input.workContextId, { capabilityId: resolvedCapabilityIdForContext, targetId: input.workContextTargetId });
   if (!contextCheck.ok) return { ok: false, error: contextCheck.error };
 
   const now = new Date().toISOString();
@@ -20332,6 +19571,9 @@ async function createTicketFromInput(input, actor, options = {}) {
   if (options.source && typeof options.source === 'object') {
     newTicket.source = options.source;
   }
+  if (typeof options.spawnIdempotencyKey === 'string' && options.spawnIdempotencyKey.trim()) {
+    newTicket.spawnIdempotencyKey = options.spawnIdempotencyKey.trim();
+  }
   // Optional Work Context grouping label + immutable snapshot (r1.20). Grouping/visibility
   // only — never read by the runtime. Contextless tickets simply omit these.
   if (contextCheck.context) {
@@ -20341,7 +19583,7 @@ async function createTicketFromInput(input, actor, options = {}) {
 
   if (newTicket.assignmentMode === 'dynamic') {
     try {
-      const agents = getAgentsInGroup(newTicket.assignmentTargetId);
+      const agents = await getAgentsInGroup(newTicket.assignmentTargetId);
       newTicket.ownedOutputPaths = deriveDynamicOwnedPaths(agents);
     } catch (error) {
       appendSystemLog('allocation:setup_failed', error.message, null, {
@@ -20356,7 +19598,7 @@ async function createTicketFromInput(input, actor, options = {}) {
 
   if (usesOwnedScopeAllocation(newTicket)) {
     try {
-      assertAllocatedTicketCanStart(newTicket, getAgentsInGroup(newTicket.assignmentTargetId));
+      assertAllocatedTicketCanStart(newTicket, await getAgentsInGroup(newTicket.assignmentTargetId));
     } catch (error) {
       appendSystemLog('allocation:setup_failed', error.message, null, {
         code: error.code || 'VALIDATION_ERROR',
@@ -20388,51 +19630,24 @@ async function createTicketFromInput(input, actor, options = {}) {
         createdBy: newTicket.createdBy,
         ...(newTicket.source ? { source: newTicket.source.type } : {})
       }
-    });
+    }, options.persistence || {});
     newTicket = created.ticket;
+    options.ticketCreated = created.created !== false;
   } catch (error) {
-    if (error && error.code === 'EVENT_RECORD_TOO_LARGE') {
-      newTicket = error.lifecycleTicket || newTicket;
-      const failedAt = new Date().toISOString();
-      const tickets = readTickets();
-      const persistedTicket = tickets.find(item => item.id === newTicket.id);
-      if (persistedTicket) {
-        persistedTicket.status = 'failed';
-        persistedTicket.blockedReason = error.message;
-        persistedTicket.updatedAt = failedAt;
-        persistedTicket.changedAt = failedAt;
-        writeTickets(tickets);
-        newTicket = persistedTicket;
-      }
-      appendSystemLog('ticket:event_record_rejected', error.message, null, {
-        ticketId: newTicket.id,
-        code: error.code,
-        requestedType: error.requestedType,
-        requestedRecordBytes: error.requestedRecordBytes,
-        maxRecordBytes: error.maxRecordBytes
-      });
-      await appendEvent({
-        type: 'ticket.failed',
-        ticketId: newTicket.id,
-        payload: {
-          status: 'failed',
-          reasonCode: 'event_record_too_large',
-          rejectedEventType: error.requestedType
-        }
-      });
-      broadcastTicketChange();
-    }
+    // Ticket creation and its required evidence are one PostgreSQL transaction.
+    // A rejected event therefore leaves no partial ticket to compensate.
     throw error;
   }
   broadcastTicketChange();
-  const runs = await createRunsForTicket(newTicket, options.delegated || null);
+  const runs = options.deferRunCreation === true
+    ? [] : await createRunsForTicket(newTicket, options.delegated || null, options.persistence || {});
 
-  return { ok: true, ticket: newTicket, runs };
+  return { ok: true, ticket: newTicket, runs, created: options.ticketCreated !== false };
 }
 
 fastify.post('/tickets', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) {
     reply.code(403);
@@ -20441,16 +19656,16 @@ fastify.post('/tickets', {
 
   const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy, executionTargetKind, browserTargetId, workTypeId, acceptanceCriteria } = request.body;
 
-  function renderTicketForm(error) {
+  async function renderTicketForm(error) {
     reply.code(400);
     return reply.view('index.ejs', viewData({
       user: request.user,
-      agents: readAgents(),
-      agentGroups: getTicketAssignableGroups(),
-      agentGroupMembers: getAgentGroupMembers(),
-      workflows: getEnabledWorkflows(),
-      browserTargets: readBrowserTargets().filter(target => target && target.status === 'active'),
-      workTypes: readWorkTypes().filter(workType => workType.status === 'active'),
+      agents: await listConfiguredAgentOptions(),
+      agentGroups: await getTicketAssignableGroups(),
+      agentGroupMembers: await getAgentGroupMembers(),
+      workflows: await getEnabledWorkflows(),
+      browserTargets: (await readBrowserTargets()).filter(target => target && target.status === 'active'),
+      workTypes: (await readWorkTypes()).filter(workType => workType.status === 'active'),
       error
     }, request.session.userId));
   }
@@ -20463,10 +19678,10 @@ fastify.post('/tickets', {
     try {
       parsedWorkflowInput = workflowInput && workflowInput.trim() ? JSON.parse(workflowInput) : {};
     } catch (error) {
-      return renderTicketForm('Workflow input must be valid JSON');
+      return await renderTicketForm('Workflow input must be valid JSON');
     }
     if (!parsedWorkflowInput || typeof parsedWorkflowInput !== 'object' || Array.isArray(parsedWorkflowInput)) {
-      return renderTicketForm('Workflow input must be a JSON object');
+      return await renderTicketForm('Workflow input must be a JSON object');
     }
   }
 
@@ -20475,7 +19690,7 @@ fastify.post('/tickets', {
     try {
       parsedOwnedPaths = JSON.parse(request.body.ownedOutputPaths);
     } catch (e) {
-      return renderTicketForm('Owned output paths must be valid JSON');
+      return await renderTicketForm('Owned output paths must be valid JSON');
     }
   }
 
@@ -20484,22 +19699,22 @@ fastify.post('/tickets', {
     try {
       parsedExecutionPolicy = JSON.parse(executionPolicy);
     } catch (error) {
-      return renderTicketForm('Execution policy must be valid JSON');
+      return await renderTicketForm('Execution policy must be valid JSON');
     }
   }
   if (parsedExecutionPolicy !== undefined && parsedExecutionPolicy !== null &&
       (typeof parsedExecutionPolicy !== 'object' || Array.isArray(parsedExecutionPolicy))) {
-    return renderTicketForm('Execution policy must be a JSON object');
+    return await renderTicketForm('Execution policy must be a JSON object');
   }
 
   let parsedTargetRef = null;
   if (executionTargetKind === 'browser') {
     if (typeof browserTargetId !== 'string' || !browserTargetId.trim()) {
-      return renderTicketForm('Select an active browser target');
+      return await renderTicketForm('Select an active browser target');
     }
     parsedTargetRef = { kind: 'browser', browserTargetId: browserTargetId.trim() };
   } else if (executionTargetKind && executionTargetKind !== 'workspace') {
-    return renderTicketForm('Execution target type must be workspace/filesystem or browser');
+    return await renderTicketForm('Execution target type must be workspace/filesystem or browser');
   } else {
     parsedTargetRef = request.body.targetRef;
   }
@@ -20507,7 +19722,7 @@ fastify.post('/tickets', {
     try {
       parsedTargetRef = JSON.parse(parsedTargetRef);
     } catch (error) {
-      return renderTicketForm('Browser target reference must be valid JSON');
+      return await renderTicketForm('Browser target reference must be valid JSON');
     }
   }
 
@@ -20530,7 +19745,7 @@ fastify.post('/tickets', {
   }, actorFromRequest(request), { delegated: delegatedFromRequest(request, 'created_from_ticket') });
 
   if (!result.ok) {
-    return renderTicketForm(result.error);
+    return await renderTicketForm(result.error);
   }
 
   return reply.redirect('/tickets');
@@ -20548,49 +19763,63 @@ function workContextManageGuard(request, reply) {
   return true;
 }
 
+function parseWorkContextPageOptions(query = {}) {
+  const rawAfterId = query.afterId === undefined || query.afterId === '' ? 0 : Number(query.afterId);
+  const rawLimit = query.limit === undefined || query.limit === '' ? 100 : Number(query.limit);
+  if (!Number.isSafeInteger(rawAfterId) || rawAfterId < 0) return null;
+  if (!Number.isSafeInteger(rawLimit) || rawLimit <= 0 || rawLimit > getRuntimeSchedulerCandidateLimit()) return null;
+  return { afterId: rawAfterId, limit: rawLimit };
+}
+
 fastify.get('/api/work-contexts', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!workContextManageGuard(request, reply)) return { error: 'Permission denied' };
-  return { ok: true, workContexts: readWorkContexts() };
+  const options = parseWorkContextPageOptions(request.query || {});
+  if (!options) { reply.code(400); return { error: 'afterId and limit must define a valid bounded page' }; }
+  const page = await getWorkContextRepository().listWorkContexts(options);
+  return { ok: true, ...page };
 });
 
 fastify.post('/api/work-contexts', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!workContextManageGuard(request, reply)) return { error: 'Permission denied' };
   const parsed = validateWorkContextInput(request.body || {}, null);
   if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
-  const contexts = readWorkContexts();
-  const now = new Date().toISOString();
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const record = { id: nextId(contexts), ...parsed.value, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now };
-  contexts.push(record);
-  writeWorkContexts(contexts);
-  appendSystemLog('work_context:created', `Work Context "${record.name}" created`, null, { workContextId: record.id, name: record.name, status: record.status, changedBy });
-  return { ok: true, workContext: record };
+  const result = await getWorkContextRepository().createWorkContext({ value: parsed.value, changedBy });
+  return { ok: true, workContext: result.workContext };
 });
 
 fastify.post('/api/work-contexts/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!workContextManageGuard(request, reply)) return { error: 'Permission denied' };
-  const contexts = readWorkContexts();
-  const existing = contexts.find(ctx => ctx && ctx.id === parseInt(request.params.id, 10));
+  const existing = await getWorkContextById(request.params.id);
   if (!existing) { reply.code(404); return { error: 'Work Context not found' }; }
   const parsed = validateWorkContextInput(request.body || {}, existing);
   if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
-  const now = new Date().toISOString();
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const prevStatus = existing.status;
-  Object.assign(existing, parsed.value, { updatedBy: changedBy, updatedAt: now });
-  writeWorkContexts(contexts);
-  const type = prevStatus !== existing.status && existing.status === 'archived' ? 'work_context:archived' : 'work_context:updated';
-  appendSystemLog(type, `Work Context "${existing.name}" ${type === 'work_context:archived' ? 'archived' : 'updated'}`, null, { workContextId: existing.id, name: existing.name, status: existing.status, changedBy });
-  return { ok: true, workContext: existing };
+  try {
+    const result = await getWorkContextRepository().updateWorkContext({
+      workContextId: existing.id,
+      expectedRevision: existing.revision,
+      value: parsed.value,
+      changedBy
+    });
+    if (!result) { reply.code(404); return { error: 'Work Context not found' }; }
+    return { ok: true, workContext: result.workContext };
+  } catch (error) {
+    if (error && error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
+      reply.code(409);
+      return { error: 'Work Context changed concurrently; reload and retry' };
+    }
+    throw error;
+  }
 });
 
 // Read-only visibility summary (r1.21) for one Work Context: bounded, deterministic, derived
 // live from existing stores. It writes nothing and creates no new source of truth.
 fastify.get('/api/work-contexts/:id/summary', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!workContextManageGuard(request, reply)) return { error: 'Permission denied' };
-  const ctx = getWorkContextById(request.params.id);
+  const ctx = await getWorkContextById(request.params.id);
   if (!ctx) { reply.code(404); return { error: 'Work Context not found' }; }
-  return { ok: true, ...buildWorkContextSummary(ctx) };
+  return { ok: true, ...await buildWorkContextSummary(ctx) };
 });
 
 fastify.get('/work-contexts', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -20598,26 +19827,43 @@ fastify.get('/work-contexts', { preHandler: fastify.requireAuth }, async (reques
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  // Cheap per-context counts for the list (single read of tickets/templates).
-  const allTickets = readTickets();
-  const allTemplates = readProcessTemplates();
-  const workContexts = readWorkContexts().map(ctx => {
-    const t = allTickets.filter(tk => tk && tk.workContextId === ctx.id);
+  const options = parseWorkContextPageOptions(request.query || {});
+  if (!options) {
+    reply.code(400);
+    return reply.view('error.ejs', viewData({ message: 'Invalid Work Context page cursor or limit', user: request.user }, request.session.userId));
+  }
+  const page = await getWorkContextRepository().listWorkContexts(options);
+  const workContextIds = page.workContexts.map(ctx => ctx.id);
+  const [ticketCountRows, templateCountRows] = workContextIds.length > 0
+    ? await Promise.all([
+      getRuntimeStateReadRepository().getWorkContextTicketCountsByIds({ workContextIds }),
+      getProcessTemplateProjectionRepository().getProcessTemplateCountsByWorkContextIds({ workContextIds })
+    ])
+    : [[], []];
+  const ticketCountByContext = new Map(ticketCountRows.map(row => [row.workContextId, row]));
+  const templateCountByContext = new Map(templateCountRows.map(row => [row.workContextId, row]));
+  const workContexts = page.workContexts.map(ctx => {
+    const ticketCounts = ticketCountByContext.get(ctx.id) || {
+      ticketCount: 0,
+      openTicketCount: 0,
+      blockedTicketCount: 0,
+      unresolvedTriageCount: 0
+    };
+    const templateCounts = templateCountByContext.get(ctx.id) || { processTemplateCount: 0 };
     return {
       ...ctx,
       counts: {
-        ticketCount: t.length,
-        openTicketCount: t.filter(tk => tk.status === 'open' || tk.status === 'in_progress').length,
-        blockedTicketCount: t.filter(tk => tk.status === 'blocked').length,
-        unresolvedTriageCount: t.filter(tk => tk.triage && tk.triage.required === true).length,
-        processTemplateCount: allTemplates.filter(tp => tp && tp.workContextId === ctx.id).length
+        ...ticketCounts,
+        processTemplateCount: templateCounts.processTemplateCount
       }
     };
   });
   return reply.view('work-contexts.ejs', viewData({
     user: request.user,
     workContexts,
-    canManage: true
+    canManage: true,
+    nextAfterId: page.nextAfterId,
+    pageLimit: options.limit
   }, request.session.userId));
 });
 
@@ -20628,165 +19874,244 @@ fastify.get('/work-contexts/:id', { preHandler: fastify.requireAuth }, async (re
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  const ctx = getWorkContextById(request.params.id);
+  const ctx = await getWorkContextById(request.params.id);
   if (!ctx) {
     reply.code(404);
     return reply.view('error.ejs', viewData({ message: 'Work Context not found', user: request.user }, request.session.userId));
   }
   return reply.view('work-context-detail.ejs', viewData({
     user: request.user,
-    summary: buildWorkContextSummary(ctx)
+    summary: await buildWorkContextSummary(ctx)
   }, request.session.userId));
 });
 
-// ==================== BOUNDED WATCHER ROUTES (r1.26) ====================
-// Manual observer/proposer ONLY. Management gated by watcher:manage. Observe reads only the
-// bounded source and writes a receipt — no ticket/run/workspace mutation, no agent wake-up, no
-// template run. A proposal is a draft; only an explicit approval (ticket:create) creates a normal
-// ticket through createTicketFromInput. There is no background daemon and no automatic polling.
+// ==================== BOUNDED WATCHER ROUTES ====================
+// Manual observer/proposer only. There is no polling daemon, automatic execution, target mutation,
+// agent wake-up, template trigger, or hidden ticket creation.
 function watcherManageGuard(request, reply) {
   if (!hasPermission(request.session.userId, 'watcher:manage')) { reply.code(403); return false; }
   return true;
 }
 
+function watcherRequestError(reply, error) {
+  if (error instanceof WatcherConflictError || error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
+    reply.code(409);
+    return { error: 'Watcher changed concurrently; reload current state before retrying', current: error.current || null };
+  }
+  if (error instanceof WatcherStateConflictError) {
+    reply.code(409);
+    return { error: error.message, current: error.current || null };
+  }
+  if (error instanceof WatcherReferenceError || error instanceof TypeError || error instanceof RangeError) {
+    reply.code(error.code === 'WORK_CONTEXT_NOT_ACTIVE' ? 409 : 400);
+    return { error: error.message };
+  }
+  throw error;
+}
+
 fastify.get('/api/watchers', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
-  return { ok: true, watchers: readWatchers() };
+  const afterId = request.query.afterId === undefined ? 0 : Number(request.query.afterId);
+  const limit = request.query.limit === undefined ? Math.min(100, getRuntimeSchedulerCandidateLimit()) : Number(request.query.limit);
+  const statuses = request.query.status ? [request.query.status] : null;
+  const workContextId = request.query.workContextId === undefined ? null : Number(request.query.workContextId);
+  if (!Number.isSafeInteger(afterId) || afterId < 0 || !Number.isSafeInteger(limit) || limit <= 0 ||
+      (workContextId !== null && (!Number.isSafeInteger(workContextId) || workContextId <= 0))) {
+    reply.code(400);
+    return { error: 'afterId must be non-negative; limit and workContextId must be positive integers' };
+  }
+  try {
+    const page = await getWatcherAuthorityRepository().listWatchers({ afterId, statuses, workContextId, limit });
+    return { ok: true, watchers: page.watchers, nextAfterId: page.nextAfterId };
+  } catch (error) {
+    return watcherRequestError(reply, error);
+  }
 });
 
 fastify.post('/api/watchers', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
-  const parsed = validateWatcherInput(request.body || {}, null);
+  const parsed = await validateWatcherInput(request.body || {}, null);
   if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
-  const list = readWatchers();
-  const now = new Date().toISOString();
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const record = { id: nextId_(list), ...parsed.value, lastObservedAt: null, lastObservationHash: null, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now };
-  list.push(record);
-  writeWatchers(list);
-  appendSystemLog('watcher:created', `Watcher "${record.name}" created`, null, { watcherId: record.id, workContextId: record.workContextId, changedBy });
-  return { ok: true, watcher: record };
+  try {
+    const result = await getWatcherAuthorityRepository().createWatcher({
+      value: parsed.value,
+      changedBy,
+      audit: { type: 'watcher:created', message: `Watcher "${parsed.value.name}" created`, metadata: { changedBy } }
+    });
+    return { ok: true, watcher: result.watcher };
+  } catch (error) {
+    return watcherRequestError(reply, error);
+  }
 });
 
 fastify.post('/api/watchers/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
-  const list = readWatchers();
-  const existing = list.find(w => w && w.id === parseInt(request.params.id, 10));
+  const watcherId = Number(request.params.id);
+  if (!Number.isSafeInteger(watcherId) || watcherId <= 0) { reply.code(404); return { error: 'Watcher not found' }; }
+  const existing = await getWatcherAuthorityRepository().getWatcherById(watcherId);
   if (!existing) { reply.code(404); return { error: 'Watcher not found' }; }
-  const parsed = validateWatcherInput(request.body || {}, existing);
+  const parsed = await validateWatcherInput(request.body || {}, existing);
   if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
-  const now = new Date().toISOString();
+  const expectedRevision = Number(request.body && (request.body.expectedRevision ?? request.body.revision));
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+    reply.code(400);
+    return { error: 'Watcher revision is required; reload and retry' };
+  }
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  Object.assign(existing, parsed.value, { updatedBy: changedBy, updatedAt: now });
-  writeWatchers(list);
-  appendSystemLog('watcher:updated', `Watcher "${existing.name}" updated`, null, { watcherId: existing.id, status: existing.status, changedBy });
-  return { ok: true, watcher: existing };
+  try {
+    const result = await getWatcherAuthorityRepository().updateWatcher({
+      watcherId,
+      expectedRevision,
+      value: parsed.value,
+      changedBy,
+      audit: { type: 'watcher:updated', message: `Watcher "${parsed.value.name}" updated`, metadata: { status: parsed.value.status, changedBy } }
+    });
+    if (!result) { reply.code(404); return { error: 'Watcher not found' }; }
+    return { ok: true, watcher: result.watcher };
+  } catch (error) {
+    return watcherRequestError(reply, error);
+  }
 });
 
 fastify.get('/api/watchers/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
-  const watcher = getWatcherById(request.params.id);
+  const watcherId = Number(request.params.id);
+  const watcher = Number.isSafeInteger(watcherId) && watcherId > 0
+    ? await getWatcherAuthorityRepository().getWatcherById(watcherId)
+    : null;
   if (!watcher) { reply.code(404); return { error: 'Watcher not found' }; }
-  const observations = readWatcherObservations().filter(o => o && o.watcherId === watcher.id).sort((a, b) => b.id - a.id).slice(0, WATCHER_OBSERVATION_LIMIT);
-  const proposals = readWatcherProposals().filter(p => p && p.watcherId === watcher.id).sort((a, b) => b.id - a.id);
-  return { ok: true, watcher, observations, proposals };
+  const beforeObservationId = request.query.beforeObservationId === undefined ? null : Number(request.query.beforeObservationId);
+  const beforeProposalId = request.query.beforeProposalId === undefined ? null : Number(request.query.beforeProposalId);
+  if ((beforeObservationId !== null && (!Number.isSafeInteger(beforeObservationId) || beforeObservationId <= 0)) ||
+      (beforeProposalId !== null && (!Number.isSafeInteger(beforeProposalId) || beforeProposalId <= 0))) {
+    reply.code(400);
+    return { error: 'observation and proposal cursors must be positive integers' };
+  }
+  const limit = Math.min(WATCHER_OBSERVATION_LIMIT, getRuntimeSchedulerCandidateLimit());
+  const [observationPage, proposalPage] = await Promise.all([
+    getWatcherAuthorityRepository().listWatcherObservations({ watcherId, beforeId: beforeObservationId, limit }),
+    getWatcherAuthorityRepository().listWatcherProposals({ watcherId, beforeId: beforeProposalId, limit })
+  ]);
+  return {
+    ok: true,
+    watcher,
+    observations: observationPage.observations,
+    proposals: proposalPage.proposals,
+    nextObservationBeforeId: observationPage.nextBeforeId,
+    nextProposalBeforeId: proposalPage.nextBeforeId
+  };
 });
 
-// Manual observe — the only way a watcher ever "runs". Reads the bounded source, writes a receipt.
 fastify.post('/api/watchers/:id/observe', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
-  const watcher = getWatcherById(request.params.id);
+  const watcherId = Number(request.params.id);
+  const watcher = Number.isSafeInteger(watcherId) && watcherId > 0
+    ? await getWatcherAuthorityRepository().getWatcherById(watcherId)
+    : null;
   if (!watcher) { reply.code(404); return { error: 'Watcher not found' }; }
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const observation = performWatcherObservation(watcher, changedBy);
-  appendSystemLog('watcher:observed', `Watcher "${watcher.name}" observation ${observation.status}`, null, { watcherId: watcher.id, observationId: observation.id, status: observation.status, changedBy });
-  return { ok: true, observation };
+  try {
+    const result = await performWatcherObservation(watcher, changedBy);
+    return { ok: true, observation: result.observation, watcher: result.watcher };
+  } catch (error) {
+    return watcherRequestError(reply, error);
+  }
 });
 
-// Draft a ticket proposal (NOT a ticket, NOT execution).
+// Draft a ticket proposal. This commits no ticket, run, workspace mutation, or execution request.
 fastify.post('/api/watchers/:id/proposals', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
-  const watcher = getWatcherById(request.params.id);
+  const watcherId = Number(request.params.id);
+  const watcher = Number.isSafeInteger(watcherId) && watcherId > 0
+    ? await getWatcherAuthorityRepository().getWatcherById(watcherId)
+    : null;
   if (!watcher) { reply.code(404); return { error: 'Watcher not found' }; }
-  const ctx = getWorkContextById(watcher.workContextId);
-  if (!ctx || ctx.status !== 'active') { reply.code(409); return { error: 'Work Context is not active; proposals are blocked' }; }
   const body = request.body || {};
   const objective = typeof body.objective === 'string' ? body.objective.trim() : '';
   if (!objective) { reply.code(400); return { error: 'Proposal objective is required' }; }
-  const list = readWatcherProposals();
-  const now = new Date().toISOString();
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const record = {
-    id: nextId_(list), watcherId: watcher.id, workContextId: watcher.workContextId,
-    observationId: body.observationId != null ? parseInt(body.observationId, 10) : null,
-    status: 'proposed', objective,
-    sourceRefs: Array.isArray(body.sourceRefs) ? body.sourceRefs : (watcher.sourceRefs || []),
-    evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : [],
-    constraints: body.constraints != null ? body.constraints : null,
-    authorityLimits: body.authorityLimits != null ? body.authorityLimits : null,
-    stopCondition: body.stopCondition != null ? body.stopCondition : null,
-    receiptExpectation: body.receiptExpectation != null ? body.receiptExpectation : 'work_receipt',
-    createdTicketId: null, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now
-  };
-  list.push(record);
-  writeWatcherProposals(list);
-  appendSystemLog('watcher:proposal_created', `Watcher "${watcher.name}" drafted ticket proposal #${record.id}`, null, { watcherId: watcher.id, proposalId: record.id, changedBy });
-  return { ok: true, proposal: record };
+  try {
+    const result = await getWatcherAuthorityRepository().createWatcherProposal({
+      watcherId,
+      value: {
+        watcherId,
+        workContextId: watcher.workContextId,
+        observationId: body.observationId == null ? null : Number(body.observationId),
+        objective,
+        sourceRefs: watcher.sourceRefs,
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : [],
+        constraints: body.constraints ?? null,
+        authorityLimits: body.authorityLimits ?? null,
+        stopCondition: body.stopCondition ?? null,
+        receiptExpectation: body.receiptExpectation || 'work_receipt'
+      },
+      changedBy,
+      audit: { type: 'watcher:proposal_created', message: `Watcher "${watcher.name}" drafted a ticket proposal`, metadata: { changedBy } }
+    });
+    if (!result) { reply.code(404); return { error: 'Watcher not found' }; }
+    return { ok: true, proposal: result.proposal };
+  } catch (error) {
+    return watcherRequestError(reply, error);
+  }
 });
 
-// Approve a proposal → create a NORMAL ticket through the authorized path (ticket:create).
+// Approval locks and disposes the proposal together with normal ticket/event admission in
+// PostgreSQL. Run creation follows the same post-admission path as other ticket creation surfaces.
 fastify.post('/api/watcher-proposals/:id/approve', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) { reply.code(403); return { error: 'Approving a proposal into a ticket requires ticket:create' }; }
-  const list = readWatcherProposals();
-  const proposal = list.find(p => p && p.id === parseInt(request.params.id, 10));
-  if (!proposal) { reply.code(404); return { error: 'Proposal not found' }; }
-  if (proposal.status !== 'proposed') { reply.code(409); return { error: 'Only a proposed proposal can be approved' }; }
+  const proposalId = Number(request.params.id);
+  if (!Number.isSafeInteger(proposalId) || proposalId <= 0) { reply.code(404); return { error: 'Proposal not found' }; }
   const body = request.body || {};
-  const toType = body.assignmentTargetType || 'agent';
-  const toId = body.assignmentTargetId;
-  if (toId == null) { reply.code(400); return { error: 'assignmentTargetId is required to create the ticket' }; }
+  const assignmentTargetType = body.assignmentTargetType || 'agent';
+  if (body.assignmentTargetId == null) { reply.code(400); return { error: 'assignmentTargetId is required to create the ticket' }; }
   const actor = actorFromRequest(request);
   const actorName = actor.username || String(request.session.userId);
-  const now = new Date().toISOString();
-  const source = {
-    type: 'watcher_proposal', watcherId: proposal.watcherId, workContextId: proposal.workContextId,
-    observationId: proposal.observationId, proposalId: proposal.id, fromActor: actorName,
-    sourceRefs: proposal.sourceRefs, evidenceRefs: proposal.evidenceRefs, constraints: proposal.constraints,
-    authorityLimits: proposal.authorityLimits, stopCondition: proposal.stopCondition, receiptExpectation: proposal.receiptExpectation,
-    createdAt: now, createdBy: actorName, status: 'created'
-  };
-  const result = await createTicketFromInput({
-    objective: proposal.objective, assignmentTargetType: toType, assignmentTargetId: toId,
-    assignmentMode: toType === 'group' ? (body.assignmentMode || 'dynamic') : undefined,
-    workContextId: proposal.workContextId
-  }, actor, { source, delegated: delegatedFromRequest(request, 'created_from_watcher_proposal') });
-  if (!result.ok) { reply.code(400); return { error: result.error }; }
-  proposal.status = 'approved';
-  proposal.createdTicketId = result.ticket.id;
-  proposal.updatedBy = actorName;
-  proposal.updatedAt = now;
-  writeWatcherProposals(list);
-  await appendEvent({ type: 'watcher.proposal_approved', ticketId: result.ticket.id, payload: { watcherId: proposal.watcherId, proposalId: proposal.id, createdTicketId: result.ticket.id, createdBy: actorName } });
-  appendSystemLog('watcher:proposal_approved', `Watcher proposal #${proposal.id} approved → ticket #${result.ticket.id}`, null, { proposalId: proposal.id, createdTicketId: result.ticket.id, changedBy: actorName });
-  return { ok: true, createdTicketId: result.ticket.id, proposal };
+  try {
+    const result = await getWatcherAuthorityRepository().approveWatcherProposal({
+      proposalId,
+      changedBy: actorName,
+      createTicket: ({ proposal, source, persistence = {} }) => createTicketFromInput({
+        objective: proposal.objective,
+        assignmentTargetType,
+        assignmentTargetId: body.assignmentTargetId,
+        assignmentMode: assignmentTargetType === 'group' ? (body.assignmentMode || 'dynamic') : undefined,
+        workContextId: proposal.workContextId
+      }, actor, {
+        source,
+        delegated: delegatedFromRequest(request, 'created_from_watcher_proposal'),
+        deferRunCreation: true,
+        persistence
+      })
+    });
+    if (!result) { reply.code(404); return { error: 'Proposal not found' }; }
+    if (result.ok !== true || !result.ticket) { reply.code(400); return { error: result.error || 'Ticket creation failed' }; }
+    await createRunsForTicket(result.ticket, delegatedFromRequest(request, 'created_from_watcher_proposal'));
+    return { ok: true, createdTicketId: result.ticket.id, proposal: result.proposal };
+  } catch (error) {
+    return watcherRequestError(reply, error);
+  }
 });
 
 fastify.post('/api/watcher-proposals/:id/reject', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!watcherManageGuard(request, reply)) return { error: 'Permission denied' };
-  const list = readWatcherProposals();
-  const proposal = list.find(p => p && p.id === parseInt(request.params.id, 10));
-  if (!proposal) { reply.code(404); return { error: 'Proposal not found' }; }
-  if (proposal.status !== 'proposed') { reply.code(409); return { error: 'Only a proposed proposal can be rejected' }; }
+  const proposalId = Number(request.params.id);
+  if (!Number.isSafeInteger(proposalId) || proposalId <= 0) { reply.code(404); return { error: 'Proposal not found' }; }
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  proposal.status = 'rejected';
-  proposal.updatedBy = changedBy;
-  proposal.updatedAt = new Date().toISOString();
-  writeWatcherProposals(list);
-  appendSystemLog('watcher:proposal_rejected', `Watcher proposal #${proposal.id} rejected`, null, { proposalId: proposal.id, changedBy });
-  return { ok: true, proposal };
+  try {
+    const result = await getWatcherAuthorityRepository().rejectWatcherProposal({
+      proposalId,
+      changedBy,
+      audit: { type: 'watcher:proposal_rejected', message: `Watcher proposal #${proposalId} rejected`, metadata: { changedBy } }
+    });
+    if (!result) { reply.code(404); return { error: 'Proposal not found' }; }
+    return { ok: true, proposal: result.proposal };
+  } catch (error) {
+    return watcherRequestError(reply, error);
+  }
 });
 
 fastify.get('/watchers', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -20794,7 +20119,13 @@ fastify.get('/watchers', { preHandler: fastify.requireAuth }, async (request, re
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  return reply.view('watchers.ejs', viewData({ user: request.user, watchers: readWatchers(), workContexts: readWorkContexts() }, request.session.userId));
+  const page = await getWatcherAuthorityRepository().listWatchers({ limit: Math.min(100, getRuntimeSchedulerCandidateLimit()) });
+  return reply.view('watchers.ejs', viewData({
+    user: request.user,
+    watchers: page.watchers,
+    nextAfterId: page.nextAfterId,
+    workContexts: await listWorkContextOptions()
+  }, request.session.userId));
 });
 
 fastify.get('/watchers/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -20802,11 +20133,25 @@ fastify.get('/watchers/:id', { preHandler: fastify.requireAuth }, async (request
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  const watcher = getWatcherById(request.params.id);
+  const watcherId = Number(request.params.id);
+  const watcher = Number.isSafeInteger(watcherId) && watcherId > 0
+    ? await getWatcherAuthorityRepository().getWatcherById(watcherId)
+    : null;
   if (!watcher) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Watcher not found', user: request.user }, request.session.userId)); }
-  const observations = readWatcherObservations().filter(o => o && o.watcherId === watcher.id).sort((a, b) => b.id - a.id).slice(0, WATCHER_OBSERVATION_LIMIT);
-  const proposals = readWatcherProposals().filter(p => p && p.watcherId === watcher.id).sort((a, b) => b.id - a.id);
-  return reply.view('watcher-detail.ejs', viewData({ user: request.user, watcher, observations, proposals, workContexts: readWorkContexts() }, request.session.userId));
+  const limit = Math.min(WATCHER_OBSERVATION_LIMIT, getRuntimeSchedulerCandidateLimit());
+  const [observationPage, proposalPage] = await Promise.all([
+    getWatcherAuthorityRepository().listWatcherObservations({ watcherId, limit }),
+    getWatcherAuthorityRepository().listWatcherProposals({ watcherId, limit })
+  ]);
+  return reply.view('watcher-detail.ejs', viewData({
+    user: request.user,
+    watcher,
+    observations: observationPage.observations,
+    proposals: proposalPage.proposals,
+    nextObservationBeforeId: observationPage.nextBeforeId,
+    nextProposalBeforeId: proposalPage.nextBeforeId,
+    workContexts: await listWorkContextOptions()
+  }, request.session.userId));
 });
 
 // ==================== MODEL ROUTING ROUTES (r1.28) ====================
@@ -20820,41 +20165,83 @@ function modelRoutingManageGuard(request, reply) {
 
 fastify.get('/api/model-routing-policies', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!modelRoutingManageGuard(request, reply)) return { error: 'Permission denied' };
-  return { ok: true, policies: readModelRoutingPolicies() };
+  const afterId = request.query.afterId === undefined ? 0 : Number(request.query.afterId);
+  const limit = request.query.limit === undefined ? 100 : Number(request.query.limit);
+  const statuses = request.query.status ? [request.query.status] : null;
+  if (!Number.isSafeInteger(afterId) || afterId < 0 || !Number.isSafeInteger(limit) || limit <= 0) {
+    reply.code(400);
+    return { error: 'afterId must be a non-negative integer and limit must be a positive integer' };
+  }
+  try {
+    const page = await getModelRoutingPolicyRepository().listModelRoutingPolicies({ afterId, statuses, limit });
+    return { ok: true, policies: page.policies, nextAfterId: page.nextAfterId };
+  } catch (error) {
+    if (!(error instanceof TypeError) && !(error instanceof RangeError)) throw error;
+    reply.code(400);
+    return { error: error.message };
+  }
 });
 
 fastify.post('/api/model-routing-policies', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!modelRoutingManageGuard(request, reply)) return { error: 'Permission denied' };
-  const parsed = validateModelRoutingPolicyInput(request.body || {}, null);
+  const parsed = await validateModelRoutingPolicyInput(request.body || {}, null);
   if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
-  const list = readModelRoutingPolicies();
-  const now = new Date().toISOString();
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const record = { id: nextId_(list), ...parsed.value, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now };
-  list.push(record);
-  writeModelRoutingPolicies(list);
-  appendSystemLog('model_routing:policy_created', `Routing policy "${record.name}" created`, null, { policyId: record.id, changedBy });
-  return { ok: true, policy: record };
+  const result = await getModelRoutingPolicyRepository().createModelRoutingPolicy({
+    value: parsed.value,
+    changedBy,
+    audit: {
+      type: 'model_routing:policy_created',
+      message: `Routing policy "${parsed.value.name}" created`,
+      metadata: { changedBy }
+    }
+  });
+  return { ok: true, policy: result.policy };
 });
 
 fastify.post('/api/model-routing-policies/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!modelRoutingManageGuard(request, reply)) return { error: 'Permission denied' };
-  const list = readModelRoutingPolicies();
-  const existing = list.find(p => p && p.id === parseInt(request.params.id, 10));
+  const policyId = Number(request.params.id);
+  if (!Number.isSafeInteger(policyId) || policyId <= 0) { reply.code(404); return { error: 'Routing policy not found' }; }
+  const existing = await getModelRoutingPolicyRepository().getModelRoutingPolicyById(policyId);
   if (!existing) { reply.code(404); return { error: 'Routing policy not found' }; }
-  const parsed = validateModelRoutingPolicyInput(request.body || {}, existing);
+  const parsed = await validateModelRoutingPolicyInput(request.body || {}, existing);
   if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
-  const now = new Date().toISOString();
+  const expectedRevision = Number(request.body && (request.body.expectedRevision ?? request.body.revision));
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+    reply.code(400);
+    return { error: 'Routing policy revision is required; reload and retry' };
+  }
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  Object.assign(existing, parsed.value, { updatedBy: changedBy, updatedAt: now });
-  writeModelRoutingPolicies(list);
-  appendSystemLog('model_routing:policy_updated', `Routing policy "${existing.name}" updated`, null, { policyId: existing.id, status: existing.status, changedBy });
-  return { ok: true, policy: existing };
+  try {
+    const result = await getModelRoutingPolicyRepository().updateModelRoutingPolicy({
+      policyId,
+      expectedRevision,
+      value: parsed.value,
+      changedBy,
+      audit: {
+        type: 'model_routing:policy_updated',
+        message: `Routing policy "${parsed.value.name}" updated`,
+        metadata: { status: parsed.value.status, changedBy }
+      }
+    });
+    if (!result) { reply.code(404); return { error: 'Routing policy not found' }; }
+    return { ok: true, policy: result.policy };
+  } catch (error) {
+    if (!(error instanceof ModelRoutingPolicyConflictError) && error.code !== 'OPTIMISTIC_CONCURRENCY_CONFLICT') throw error;
+    reply.code(409);
+    return {
+      error: 'Routing policy changed concurrently; reload the current policy before retrying',
+      current: error.current || null
+    };
+  }
 });
 
 fastify.get('/api/model-routing-policies/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!modelRoutingManageGuard(request, reply)) return { error: 'Permission denied' };
-  const policy = getModelRoutingPolicyById(request.params.id);
+  const policyId = Number(request.params.id);
+  if (!Number.isSafeInteger(policyId) || policyId <= 0) { reply.code(404); return { error: 'Routing policy not found' }; }
+  const policy = await getModelRoutingPolicyRepository().getModelRoutingPolicyById(policyId);
   if (!policy) { reply.code(404); return { error: 'Routing policy not found' }; }
   return { ok: true, policy };
 });
@@ -20864,7 +20251,21 @@ fastify.get('/model-routing-policies', { preHandler: fastify.requireAuth }, asyn
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  return reply.view('model-routing-policies.ejs', viewData({ user: request.user, policies: readModelRoutingPolicies(), workContexts: readWorkContexts() }, request.session.userId));
+  const afterId = request.query.afterId === undefined ? 0 : Number(request.query.afterId);
+  if (!Number.isSafeInteger(afterId) || afterId < 0) {
+    reply.code(400);
+    return reply.view('error.ejs', viewData({ message: 'Invalid routing policy cursor', user: request.user }, request.session.userId));
+  }
+  const page = await getModelRoutingPolicyRepository().listModelRoutingPolicies({
+    afterId,
+    limit: Math.min(100, getRuntimeSchedulerCandidateLimit())
+  });
+  return reply.view('model-routing-policies.ejs', viewData({
+    user: request.user,
+    policies: page.policies,
+    nextAfterId: page.nextAfterId,
+    workContexts: await listWorkContextOptions()
+  }, request.session.userId));
 });
 
 fastify.get('/model-routing-policies/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -20872,15 +20273,17 @@ fastify.get('/model-routing-policies/:id', { preHandler: fastify.requireAuth }, 
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  const policy = getModelRoutingPolicyById(request.params.id);
+  const policyId = Number(request.params.id);
+  const policy = Number.isSafeInteger(policyId) && policyId > 0
+    ? await getModelRoutingPolicyRepository().getModelRoutingPolicyById(policyId)
+    : null;
   if (!policy) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Routing policy not found', user: request.user }, request.session.userId)); }
-  return reply.view('model-routing-policy-detail.ejs', viewData({ user: request.user, policy, workContexts: readWorkContexts() }, request.session.userId));
+  return reply.view('model-routing-policy-detail.ejs', viewData({ user: request.user, policy, workContexts: await listWorkContextOptions() }, request.session.userId));
 });
 
-// ==================== LOCAL CONNECTOR ROUTES (r1.30) ====================
-// Local/mock connector contract ONLY. CRUD gated by connector:manage; read by connector:read;
-// write by connector:write (but writes are refused in r1.30). No external system, no OAuth, no
-// secret storage, no ticket/run creation, no workspace mutation, no background sync.
+// ==================== LOCAL CONNECTOR ROUTES ====================
+// Local/mock connector contract only. Persistence moves behind a repository; this does not add an
+// external connector, credential storage, background sync, write authority, or hidden work.
 function connectorManageGuard(request, reply) {
   if (!hasPermission(request.session.userId, 'connector:manage')) { reply.code(403); return false; }
   return true;
@@ -20888,98 +20291,222 @@ function connectorManageGuard(request, reply) {
 
 fastify.get('/api/connectors', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!connectorManageGuard(request, reply)) return { error: 'Permission denied' };
-  return { ok: true, connectors: readConnectors() };
+  const afterId = request.query.afterId === undefined ? 0 : Number(request.query.afterId);
+  const limit = request.query.limit === undefined ? Math.min(100, getRuntimeSchedulerCandidateLimit()) : Number(request.query.limit);
+  const statuses = request.query.status ? [request.query.status] : null;
+  const workContextId = request.query.workContextId === undefined ? null : Number(request.query.workContextId);
+  if (!Number.isSafeInteger(afterId) || afterId < 0 || !Number.isSafeInteger(limit) || limit <= 0 ||
+      (workContextId !== null && (!Number.isSafeInteger(workContextId) || workContextId <= 0))) {
+    reply.code(400);
+    return { error: 'afterId must be non-negative; limit and workContextId must be positive integers' };
+  }
+  try {
+    const page = await getConnectorAuthorityRepository().listConnectors({ afterId, statuses, workContextId, limit });
+    return { ok: true, connectors: page.connectors, nextAfterId: page.nextAfterId };
+  } catch (error) {
+    if (!(error instanceof TypeError) && !(error instanceof RangeError)) throw error;
+    reply.code(400);
+    return { error: error.message };
+  }
 });
 
 fastify.post('/api/connectors', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!connectorManageGuard(request, reply)) return { error: 'Permission denied' };
-  const parsed = validateConnectorInput(request.body || {}, null);
+  const parsed = await validateConnectorInput(request.body || {}, null);
   if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
-  const list = readConnectors();
-  const now = new Date().toISOString();
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const record = { id: nextId_(list), ...parsed.value, createdBy: changedBy, createdAt: now, updatedBy: changedBy, updatedAt: now };
-  list.push(record);
-  writeConnectors(list);
-  appendSystemLog('connector:created', `Connector "${record.name}" created`, null, { connectorId: record.id, workContextId: record.workContextId, changedBy });
-  return { ok: true, connector: record };
+  try {
+    const result = await getConnectorAuthorityRepository().createConnector({
+      value: parsed.value,
+      changedBy,
+      audit: {
+        type: 'connector:created',
+        message: `Connector "${parsed.value.name}" created`,
+        metadata: { changedBy }
+      }
+    });
+    return { ok: true, connector: result.connector };
+  } catch (error) {
+    if (!(error instanceof ConnectorReferenceError) && !(error instanceof TypeError)) throw error;
+    reply.code(400);
+    return { error: error.message };
+  }
 });
 
 fastify.post('/api/connectors/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!connectorManageGuard(request, reply)) return { error: 'Permission denied' };
-  const list = readConnectors();
-  const existing = list.find(c => c && c.id === parseInt(request.params.id, 10));
+  const connectorId = Number(request.params.id);
+  if (!Number.isSafeInteger(connectorId) || connectorId <= 0) { reply.code(404); return { error: 'Connector not found' }; }
+  const existing = await getConnectorAuthorityRepository().getConnectorById(connectorId);
   if (!existing) { reply.code(404); return { error: 'Connector not found' }; }
-  const parsed = validateConnectorInput(request.body || {}, existing);
+  const parsed = await validateConnectorInput(request.body || {}, existing);
   if (!parsed.ok) { reply.code(400); return { error: parsed.error }; }
-  const now = new Date().toISOString();
+  const expectedRevision = Number(request.body && (request.body.expectedRevision ?? request.body.revision));
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+    reply.code(400);
+    return { error: 'Connector revision is required; reload and retry' };
+  }
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  Object.assign(existing, parsed.value, { updatedBy: changedBy, updatedAt: now });
-  writeConnectors(list);
-  appendSystemLog('connector:updated', `Connector "${existing.name}" updated`, null, { connectorId: existing.id, status: existing.status, changedBy });
-  return { ok: true, connector: existing };
+  try {
+    const result = await getConnectorAuthorityRepository().updateConnector({
+      connectorId,
+      expectedRevision,
+      value: parsed.value,
+      changedBy,
+      audit: {
+        type: 'connector:updated',
+        message: `Connector "${parsed.value.name}" updated`,
+        metadata: { status: parsed.value.status, changedBy }
+      }
+    });
+    if (!result) { reply.code(404); return { error: 'Connector not found' }; }
+    return { ok: true, connector: result.connector };
+  } catch (error) {
+    if (error instanceof ConnectorConflictError || error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
+      reply.code(409);
+      return { error: 'Connector changed concurrently; reload the current connector before retrying', current: error.current || null };
+    }
+    if (!(error instanceof ConnectorReferenceError) && !(error instanceof TypeError)) throw error;
+    reply.code(400);
+    return { error: error.message };
+  }
 });
 
 fastify.get('/api/connectors/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!connectorManageGuard(request, reply)) return { error: 'Permission denied' };
-  const connector = getConnectorById(request.params.id);
+  const connectorId = Number(request.params.id);
+  const connector = Number.isSafeInteger(connectorId) && connectorId > 0
+    ? await getConnectorAuthorityRepository().getConnectorById(connectorId)
+    : null;
   if (!connector) { reply.code(404); return { error: 'Connector not found' }; }
-  const receipts = readConnectorReceipts().filter(r => r && r.connectorId === connector.id).sort((a, b) => b.id - a.id).slice(0, CONNECTOR_RECEIPT_LIMIT);
-  return { ok: true, connector, receipts };
+  const beforeId = request.query.beforeId === undefined ? null : Number(request.query.beforeId);
+  if (beforeId !== null && (!Number.isSafeInteger(beforeId) || beforeId <= 0)) {
+    reply.code(400);
+    return { error: 'beforeId must be a positive integer' };
+  }
+  const page = await getConnectorAuthorityRepository().listConnectorReceipts({
+    connectorId,
+    beforeId,
+    limit: Math.min(CONNECTOR_RECEIPT_LIMIT, getRuntimeSchedulerCandidateLimit())
+  });
+  return { ok: true, connector, receipts: page.receipts, nextBeforeId: page.nextBeforeId };
 });
 
-// Read a bounded object through the local connector. Returns bounded content in the API response;
-// the persisted receipt stores only metadata + hash (never full content).
+// Read a bounded object through the local connector. Returned content is never persisted in the
+// receipt. The required receipt commits before the response is returned.
 fastify.post('/api/connectors/:id/read', {
   preHandler: fastify.requireAuth
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'connector:read')) { reply.code(403); return { error: 'connector:read required' }; }
-  const connector = getConnectorById(request.params.id);
+  const connectorId = Number(request.params.id);
+  const connector = Number.isSafeInteger(connectorId) && connectorId > 0
+    ? await getConnectorAuthorityRepository().getConnectorById(connectorId)
+    : null;
   if (!connector) { reply.code(404); return { error: 'Connector not found' }; }
   const actor = actorFromRequest(request).username || String(request.session.userId);
-  const ctx = getWorkContextById(connector.workContextId);
+  const ctx = await getWorkContextById(connector.workContextId);
   const objectId = request.body && typeof request.body.objectId === 'string' ? request.body.objectId : '';
-  const receiptBase = { connectorId: connector.id, workContextId: connector.workContextId, operation: 'read', sourceRef: objectId || null, targetRef: null, externalObjectId: objectId || null, ticketId: null, runId: null, actor, timestamp: new Date().toISOString(), request: { bounded: true } };
-  const refuse = (reason, code) => { const receipt = appendConnectorReceipt({ ...receiptBase, operation: 'read_refused', result: { status: 'refused', reason }, error: reason }); reply.code(code || 409); return { error: reason, receipt }; };
+  const receiptBase = {
+    connectorId: connector.id,
+    workContextId: connector.workContextId,
+    operation: 'read',
+    sourceRef: objectId || null,
+    targetRef: null,
+    externalObjectId: objectId || null,
+    ticketId: null,
+    runId: null,
+    actor,
+    request: { bounded: true }
+  };
+  const refuse = async (reason, code) => {
+    const result = await getConnectorAuthorityRepository().appendConnectorReceipt({
+      value: { ...receiptBase, operation: 'read_refused', result: { status: 'refused', reason }, error: reason }
+    });
+    reply.code(code || 409);
+    return { error: reason, receipt: result.receipt };
+  };
 
   if (connector.status !== 'active') return refuse('connector is not active', 409);
   if (!ctx || ctx.status !== 'active') return refuse('Work Context is not active', 409);
-  if (connector.kind !== 'local_mock') return refuse('only local_mock connectors are supported in r1.30', 409);
-  if (!Array.isArray(connector.allowedScopes) || !connector.allowedScopes.includes('read')) return refuse('connector does not allow read scope', 403);
+  if (connector.kind !== 'local_mock') return refuse('only local_mock connectors are supported', 409);
+  if (!Array.isArray(connector.allowedScopes) || !connector.allowedScopes.includes('read')) {
+    return refuse('connector does not allow read scope', 403);
+  }
   const bounded = connectorObjectUnderRoots(objectId, connector.sourceRoots);
   if (!bounded) return refuse('object is not within the connector sourceRoots', 403);
 
-  // The object must belong to the SAME Work Context — no cross-context read.
-  const obj = readLocalConnectorObjects().find(o => o && o.id === bounded);
-  if (!obj) { const receipt = appendConnectorReceipt({ ...receiptBase, operation: 'read', result: { status: 'failed', reason: 'object not found' }, error: 'object not found' }); reply.code(404); return { error: 'object not found', receipt }; }
-  if (obj.workContextId !== connector.workContextId) return refuse('object belongs to a different Work Context', 403);
+  const obj = await postgresRuntimeStore.getLocalConnectorObject(bounded);
+  if (!obj) {
+    const result = await getConnectorAuthorityRepository().appendConnectorReceipt({
+      value: { ...receiptBase, operation: 'read', result: { status: 'failed', reason: 'object not found' }, error: 'object not found' }
+    });
+    reply.code(404);
+    return { error: 'object not found', receipt: result.receipt };
+  }
+  if (obj.workContextId !== connector.workContextId) {
+    return refuse('object belongs to a different Work Context', 403);
+  }
 
   const content = typeof obj.content === 'string' ? obj.content : '';
   const hash = crypto.createHash('sha256').update(content).digest('hex');
-  const receipt = appendConnectorReceipt({ ...receiptBase, externalObjectId: bounded, sourceRef: bounded, result: { status: 'ok', bytes: Buffer.byteLength(content, 'utf8'), hash }, error: null });
-  appendSystemLog('connector:read', `Connector "${connector.name}" read ${bounded}`, null, { connectorId: connector.id, objectId: bounded, receiptId: receipt.id, changedBy: actor });
-  // Bounded content returned in the response only; not persisted in the receipt.
-  return { ok: true, content, metadata: { bytes: receipt.result.bytes, hash }, receipt };
+  const result = await getConnectorAuthorityRepository().appendConnectorReceipt({
+    value: {
+      ...receiptBase,
+      externalObjectId: bounded,
+      sourceRef: bounded,
+      result: { status: 'ok', bytes: Buffer.byteLength(content, 'utf8'), hash },
+      error: null
+    },
+    audit: {
+      type: 'connector:read',
+      message: `Connector "${connector.name}" read ${bounded}`,
+      metadata: { objectId: bounded, changedBy: actor }
+    }
+  });
+  return {
+    ok: true,
+    content,
+    metadata: { bytes: result.receipt.result.bytes, hash },
+    receipt: result.receipt
+  };
 });
 
-// Write is REFUSED in r1.30 — connector availability is not write authority.
+// Connector availability is not write authority. The current local/mock connector always refuses.
 fastify.post('/api/connectors/:id/write', {
   preHandler: fastify.requireAuth
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'connector:write')) { reply.code(403); return { error: 'connector:write required' }; }
-  const connector = getConnectorById(request.params.id);
+  const connectorId = Number(request.params.id);
+  const connector = Number.isSafeInteger(connectorId) && connectorId > 0
+    ? await getConnectorAuthorityRepository().getConnectorById(connectorId)
+    : null;
   if (!connector) { reply.code(404); return { error: 'Connector not found' }; }
   const actor = actorFromRequest(request).username || String(request.session.userId);
   const targetRef = request.body && typeof request.body.objectId === 'string' ? request.body.objectId : null;
-  const reason = 'write_disabled_in_r1.30';
-  const receipt = appendConnectorReceipt({
-    connectorId: connector.id, workContextId: connector.workContextId, operation: 'write_refused',
-    sourceRef: null, targetRef, externalObjectId: targetRef, ticketId: null, runId: null, actor,
-    timestamp: new Date().toISOString(), request: { bounded: true }, result: { status: 'refused', reason }, error: reason
+  const reason = 'connector_write_disabled';
+  const result = await getConnectorAuthorityRepository().appendConnectorReceipt({
+    value: {
+      connectorId: connector.id,
+      workContextId: connector.workContextId,
+      operation: 'write_refused',
+      sourceRef: null,
+      targetRef,
+      externalObjectId: targetRef,
+      ticketId: null,
+      runId: null,
+      actor,
+      request: { bounded: true },
+      result: { status: 'refused', reason },
+      error: reason
+    },
+    audit: {
+      type: 'connector:write_refused',
+      message: `Connector "${connector.name}" write refused (${reason})`,
+      metadata: { changedBy: actor }
+    }
   });
-  appendSystemLog('connector:write_refused', `Connector "${connector.name}" write refused (${reason})`, null, { connectorId: connector.id, receiptId: receipt.id, changedBy: actor });
   reply.code(409);
-  return { error: 'Connector writes are refused in r1.30 (availability is not write authority)', reason, receipt };
+  return { error: 'Connector writes are refused (availability is not write authority)', reason, receipt: result.receipt };
 });
 
 fastify.get('/connectors', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -20987,7 +20514,21 @@ fastify.get('/connectors', { preHandler: fastify.requireAuth }, async (request, 
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  return reply.view('connectors.ejs', viewData({ user: request.user, connectors: readConnectors(), workContexts: readWorkContexts() }, request.session.userId));
+  const afterId = request.query.afterId === undefined ? 0 : Number(request.query.afterId);
+  if (!Number.isSafeInteger(afterId) || afterId < 0) {
+    reply.code(400);
+    return reply.view('error.ejs', viewData({ message: 'Invalid connector cursor', user: request.user }, request.session.userId));
+  }
+  const page = await getConnectorAuthorityRepository().listConnectors({
+    afterId,
+    limit: Math.min(100, getRuntimeSchedulerCandidateLimit())
+  });
+  return reply.view('connectors.ejs', viewData({
+    user: request.user,
+    connectors: page.connectors,
+    nextAfterId: page.nextAfterId,
+    workContexts: await listWorkContextOptions()
+  }, request.session.userId));
 });
 
 fastify.get('/connectors/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -20995,10 +20536,31 @@ fastify.get('/connectors/:id', { preHandler: fastify.requireAuth }, async (reque
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  const connector = getConnectorById(request.params.id);
-  if (!connector) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Connector not found', user: request.user }, request.session.userId)); }
-  const receipts = readConnectorReceipts().filter(r => r && r.connectorId === connector.id).sort((a, b) => b.id - a.id).slice(0, CONNECTOR_RECEIPT_LIMIT);
-  return reply.view('connector-detail.ejs', viewData({ user: request.user, connector, receipts, workContexts: readWorkContexts() }, request.session.userId));
+  const connectorId = Number(request.params.id);
+  const connector = Number.isSafeInteger(connectorId) && connectorId > 0
+    ? await getConnectorAuthorityRepository().getConnectorById(connectorId)
+    : null;
+  if (!connector) {
+    reply.code(404);
+    return reply.view('error.ejs', viewData({ message: 'Connector not found', user: request.user }, request.session.userId));
+  }
+  const beforeId = request.query.beforeId === undefined ? null : Number(request.query.beforeId);
+  if (beforeId !== null && (!Number.isSafeInteger(beforeId) || beforeId <= 0)) {
+    reply.code(400);
+    return reply.view('error.ejs', viewData({ message: 'Invalid connector receipt cursor', user: request.user }, request.session.userId));
+  }
+  const receiptPage = await getConnectorAuthorityRepository().listConnectorReceipts({
+    connectorId,
+    beforeId,
+    limit: Math.min(CONNECTOR_RECEIPT_LIMIT, getRuntimeSchedulerCandidateLimit())
+  });
+  return reply.view('connector-detail.ejs', viewData({
+    user: request.user,
+    connector,
+    receipts: receiptPage.receipts,
+    nextBeforeId: receiptPage.nextBeforeId,
+    workContexts: await listWorkContextOptions()
+  }, request.session.userId));
 });
 
 // ==================== OPERATIONAL TRANSPARENCY (r1.31) ====================
@@ -21006,7 +20568,7 @@ fastify.get('/connectors/:id', { preHandler: fastify.requireAuth }, async (reque
 // nothing and creates no new source of truth.
 fastify.get('/api/ops/summary', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ops:read')) { reply.code(403); return { error: 'Permission denied' }; }
-  return { ok: true, summary: buildOperationalSummary() };
+  return { ok: true, summary: await buildOperationalSummary() };
 });
 
 fastify.get('/ops', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -21018,46 +20580,29 @@ fastify.get('/ops', { preHandler: fastify.requireAuth }, async (request, reply) 
 });
 
 // ==================== EVENT JOURNAL BROWSER ====================
-// Read-only window over the append-only local event journal (events.jsonl).
-// Visibility only, like /ops: no mutation, no remediation, no auto-refresh.
-// Reads are bounded-memory via runtime/event-reader (backward tail read for
-// the unfiltered view; needle-prefiltered streaming scan for filtered views).
+// Read-only window over the append-only PostgreSQL event journal. Visibility
+// only, like /ops: no mutation, no remediation, no auto-refresh. Queries are
+// bounded and use indexed type, ticket, run, and position filters.
 
 const EVENT_JOURNAL_DEFAULT_LIMIT = 200;
 const EVENT_JOURNAL_MAX_LIMIT = 1000;
 
-function queryEventJournal(query = {}) {
+async function queryEventJournal(query = {}) {
   const limitRaw = parseInt(query.limit || String(EVENT_JOURNAL_DEFAULT_LIMIT), 10);
   const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, EVENT_JOURNAL_MAX_LIMIT) : EVENT_JOURNAL_DEFAULT_LIMIT;
   const typeFilter = typeof query.type === 'string' && query.type.trim() ? query.type.trim() : null;
   const ticketFilter = query.ticketId !== undefined && query.ticketId !== '' ? parseInt(query.ticketId, 10) : null;
   const runFilter = query.runId !== undefined && query.runId !== '' ? parseInt(query.runId, 10) : null;
-  const filtered = Boolean(typeFilter || Number.isInteger(ticketFilter) || Number.isInteger(runFilter));
-
-  let events;
-  let truncated = false;
-  if (!filtered) {
-    events = readRecentEvents(EVENTS_FILE, limit);
-  } else {
-    const needles = [];
-    if (Number.isInteger(ticketFilter)) needles.push(Buffer.from(`"ticketId":${ticketFilter}`));
-    else if (Number.isInteger(runFilter)) needles.push(Buffer.from(`"runId":${runFilter}`));
-    else if (typeFilter) needles.push(Buffer.from(`"type":"${typeFilter}`));
-    const matches = readMatchingEvents(EVENTS_FILE, {
-      needles,
-      predicate: event =>
-        (typeFilter === null || String(event.type || '').startsWith(typeFilter)) &&
-        (!Number.isInteger(ticketFilter) || event.ticketId === ticketFilter) &&
-        (!Number.isInteger(runFilter) || event.runId === runFilter)
-    });
-    truncated = matches.length > limit;
-    events = matches.slice(-limit);
-  }
-
+  const page = await postgresRuntimeStore.listEventJournal({
+    limit,
+    typePrefix: typeFilter,
+    ticketId: Number.isInteger(ticketFilter) ? ticketFilter : null,
+    runId: Number.isInteger(runFilter) ? runFilter : null
+  });
   return {
-    events,
+    events: page.events,
     filters: { limit, type: typeFilter, ticketId: Number.isInteger(ticketFilter) ? ticketFilter : null, runId: Number.isInteger(runFilter) ? runFilter : null },
-    truncated
+    truncated: page.truncated
   };
 }
 
@@ -21066,7 +20611,7 @@ fastify.get('/event-journal', { preHandler: fastify.requireAuth }, async (reques
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  const page = queryEventJournal(request.query || {});
+  const page = await queryEventJournal(request.query || {});
   return reply.view('event-journal.ejs', viewData({
     user: request.user,
     journalEvents: page.events,
@@ -21080,7 +20625,7 @@ fastify.get('/api/event-journal', { preHandler: fastify.requireAuth }, async (re
     reply.code(403);
     return { error: 'Permission denied' };
   }
-  return queryEventJournal(request.query || {});
+  return await queryEventJournal(request.query || {});
 });
 
 // ==================== RUN DECISION MAP ====================
@@ -21089,14 +20634,14 @@ fastify.get('/api/event-journal', { preHandler: fastify.requireAuth }, async (re
 // Visibility only: derives from replay/events/history, writes nothing.
 
 async function buildRunDecisionGraphForRequest(runId) {
-  const storedRun = readRuns().find(item => item.id === runId);
+  const storedRun = await getRunById(runId);
   if (!storedRun) return null;
   const run = await hydrateRunReplaySnapshot(storedRun);
   return buildRunDecisionGraph(
     run,
     run.replaySnapshot || null,
-    getRunEvents(runId),
-    getOperationHistoryForRun(runId)
+    (await getRunEvents(runId)),
+    (await getOperationHistoryForRun(runId))
   );
 }
 
@@ -21111,7 +20656,7 @@ fastify.get('/runs/:id/map', { preHandler: fastify.requireAuth }, async (request
     reply.code(404);
     return reply.view('error.ejs', viewData({ message: 'Run not found', user: request.user }, request.session.userId));
   }
-  const run = readRuns().find(item => item.id === runId);
+  const run = await getRunById(runId);
   return reply.view('run-map.ejs', viewData({
     user: request.user,
     run: { id: run.id, ticketId: run.ticketId, agentName: run.agentName, status: run.status },
@@ -21150,502 +20695,209 @@ fastify.get('/api/process-templates', { preHandler: fastify.requireAuth }, async
     reply.code(403);
     return { error: 'Permission denied' };
   }
-  return { templates: readProcessTemplates() };
+  const pageCapacity = getRuntimeSchedulerCandidateLimit();
+  const afterId = request.query.afterId === undefined || request.query.afterId === '' ? 0 : Number(request.query.afterId);
+  const limit = request.query.limit === undefined || request.query.limit === ''
+    ? Math.min(100, pageCapacity)
+    : Number(request.query.limit);
+  const workContextId = request.query.workContextId === undefined || request.query.workContextId === ''
+    ? null
+    : Number(request.query.workContextId);
+  if (!Number.isSafeInteger(afterId) || afterId < 0 ||
+      !Number.isSafeInteger(limit) || limit <= 0 || limit > pageCapacity ||
+      (workContextId !== null && (!Number.isSafeInteger(workContextId) || workContextId <= 0))) {
+    reply.code(400);
+    return { error: 'Invalid process-template page cursor, limit, or Work Context filter' };
+  }
+  const page = await getProcessTemplateProjectionRepository().listProcessTemplateStates({
+    afterId,
+    workContextId,
+    limit,
+    now: Date.now()
+  });
+  return { templates: page.processTemplates, nextAfterId: page.nextAfterId };
 });
+
+function processTemplateMutationError(reply, error) {
+  if (error instanceof ProcessTemplateConflictError) {
+    const badRequest = error.code === 'PROCESS_TEMPLATE_SCHEDULE_MISSING';
+    reply.code(badRequest ? 400 : 409);
+    return { error: error.message };
+  }
+  if (error instanceof TypeError || error instanceof RangeError) {
+    reply.code(400);
+    return { error: error.message };
+  }
+  throw error;
+}
 
 fastify.post('/api/process-templates', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
     reply.code(403);
     return { error: 'Permission denied' };
   }
-  const { name, tt } = normalizeProcessTemplateInput(request.body || {});
-  if (!name) {
-    reply.code(400);
-    return { error: 'Template name is required' };
-  }
-  if (!tt) {
-    reply.code(400);
-    return { error: 'ticketTemplate object is required' };
-  }
-
-  const templates = readProcessTemplates();
-  const now = new Date().toISOString();
+  const body = request.body || {};
+  const { name, tt } = normalizeProcessTemplateInput(body);
+  if (!name) { reply.code(400); return { error: 'Template name is required' }; }
+  if (!tt) { reply.code(400); return { error: 'ticketTemplate object is required' }; }
   const actor = actorFromRequest(request);
-  const createdBy = actor.username || (actor.userId != null ? String(actor.userId) : 'system');
-  const template = {
-    id: nextId(templates),
-    name,
-    version: 1,
-    currentVersion: 1,
-    enabled: request.body.enabled === false || request.body.enabled === 'false' ? false : true,
-    triggerType: 'manual',
-    schedule: null,
-    // ticketTemplate is RAW reusable ticket input. executionPolicy is stored as
-    // provided and is normalized ONLY at trigger time (createTicketFromInput).
-    ticketTemplate: {
-      objective: typeof tt.objective === 'string' ? tt.objective : '',
-      assignmentTargetType: tt.assignmentTargetType,
-      assignmentTargetId: tt.assignmentTargetId,
-      assignmentMode: tt.assignmentMode || null,
-      capabilityType: tt.capabilityType === 'workflow' ? 'workflow' : 'directAction',
-      capabilityId: tt.capabilityId || (tt.capabilityType === 'workflow' ? (tt.workflowId || null) : 'agent-selected-actions'),
-      workflowId: tt.workflowId || null,
-      workflowInput: tt.workflowInput && typeof tt.workflowInput === 'object' && !Array.isArray(tt.workflowInput) ? tt.workflowInput : null,
-      ownedOutputPaths: tt.ownedOutputPaths && typeof tt.ownedOutputPaths === 'object' && !Array.isArray(tt.ownedOutputPaths) ? tt.ownedOutputPaths : null,
-      executionPolicy: tt.executionPolicy && typeof tt.executionPolicy === 'object' && !Array.isArray(tt.executionPolicy) ? tt.executionPolicy : null
-    },
-    createdBy,
-    createdAt: now,
-    updatedAt: now,
-    lastTriggeredAt: null
-  };
-  templates.push(template);
-  writeProcessTemplates(templates);
-  appendSystemLog('process_template:created', `Process template "${name}" created`, null, {
-    templateId: template.id,
-    templateName: name,
-    createdBy
-  });
-  return { ok: true, template };
+  const changedBy = actor.username || (actor.userId != null ? String(actor.userId) : 'system');
+  try {
+    const result = await getProcessTemplateAuthorityRepository().createProcessTemplate({
+      changedBy,
+      value: {
+        name,
+        enabled: !(body.enabled === false || body.enabled === 'false'),
+        ticketTemplate: {
+          objective: typeof tt.objective === 'string' ? tt.objective : '',
+          assignmentTargetType: tt.assignmentTargetType,
+          assignmentTargetId: tt.assignmentTargetId,
+          assignmentMode: tt.assignmentMode || null,
+          capabilityType: tt.capabilityType === 'workflow' ? 'workflow' : 'directAction',
+          capabilityId: tt.capabilityId || (tt.capabilityType === 'workflow' ? (tt.workflowId || null) : 'agent-selected-actions'),
+          workflowId: tt.workflowId || null,
+          workflowInput: tt.workflowInput && typeof tt.workflowInput === 'object' && !Array.isArray(tt.workflowInput) ? tt.workflowInput : null,
+          ownedOutputPaths: tt.ownedOutputPaths && typeof tt.ownedOutputPaths === 'object' && !Array.isArray(tt.ownedOutputPaths) ? tt.ownedOutputPaths : null,
+          executionPolicy: tt.executionPolicy && typeof tt.executionPolicy === 'object' && !Array.isArray(tt.executionPolicy) ? tt.executionPolicy : null
+        }
+      }
+    });
+    return { ok: true, template: result.template };
+  } catch (error) {
+    return processTemplateMutationError(reply, error);
+  }
 });
 
 fastify.post('/api/process-templates/:id/trigger', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) {
     reply.code(403);
     return { error: 'Permission denied' };
   }
-  const template = getProcessTemplateById(request.params.id);
-  if (!template) {
-    reply.code(404);
-    return { error: 'Process template not found' };
-  }
-  if (template.enabled !== true) {
-    reply.code(409);
-    return { error: 'Process template is disabled' };
-  }
-
+  const template = await getProcessTemplateAuthorityRepository().getProcessTemplateById(request.params.id);
+  if (!template) { reply.code(404); return { error: 'Process template not found' }; }
   const body = request.body || {};
-  const triggerToken = (typeof body.triggerToken === 'string' && body.triggerToken.trim())
-    ? body.triggerToken.trim()
-    : crypto.randomUUID();
-
-  // Manual trigger delegates to the shared helper (same logic the scheduler uses).
-  // Await the complete trigger-log append so sequential double-submits cannot
-  // interleave; a repeated token dedupes.
-  const result = await triggerProcessTemplate(template, actorFromRequest(request), {
-    triggerType: 'manual',
-    triggerToken
-  });
-
-  if (!result.ok) {
-    reply.code(400);
-    return { error: result.error };
+  const triggerToken = typeof body.triggerToken === 'string' && body.triggerToken.trim()
+    ? body.triggerToken.trim() : crypto.randomUUID();
+  try {
+    const result = await triggerProcessTemplate(template, actorFromRequest(request), {
+      triggerType: 'manual', triggerToken
+    });
+    if (!result || !result.ok) { reply.code(400); return { error: result && result.error || 'Template trigger failed' }; }
+    return {
+      ok: true, deduped: result.deduped, ticketId: result.ticketId,
+      templateId: template.id, triggerToken,
+      ...(result.source ? { source: result.source } : {})
+    };
+  } catch (error) {
+    return processTemplateMutationError(reply, error);
   }
-
-  return {
-    ok: true,
-    deduped: result.deduped,
-    ticketId: result.ticketId,
-    templateId: template.id,
-    triggerToken,
-    ...(result.source ? { source: result.source } : {})
-  };
 });
 
-// Set or clear an interval schedule for a template (the only schedule mode in v1).
-// Management requires processTemplate:manage; ENABLING additionally requires
-// ticket:create (the schedule will create ordinary tickets as a system actor, so the
-// operator setting it must themselves be allowed to create tickets). No cron/RRULE/
-// natural-language/daily/timezone parsing — interval seconds in UTC only.
 fastify.post('/api/process-templates/:id/schedule', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
-    reply.code(403);
-    return { error: 'Permission denied' };
-  }
-  const template = getProcessTemplateById(request.params.id);
-  if (!template) {
-    reply.code(404);
-    return { error: 'Process template not found' };
-  }
-
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) { reply.code(403); return { error: 'Permission denied' }; }
+  const repository = getProcessTemplateAuthorityRepository();
+  const template = await repository.getProcessTemplateById(request.params.id);
+  if (!template) { reply.code(404); return { error: 'Process template not found' }; }
   const body = request.body || {};
-  const now = new Date().toISOString();
-  const templates = readProcessTemplates();
-  const persisted = templates.find(item => item.id === template.id);
-  if (!persisted) {
-    reply.code(404);
-    return { error: 'Process template not found' };
-  }
-
-  const wantEnabled = !(body.enabled === false || body.enabled === 'false');
-
-  if (!wantEnabled) {
-    // Disable: stop future scheduled triggers, keep prior trigger history intact.
-    persisted.schedule = (persisted.schedule && persisted.schedule.kind === 'interval')
-      ? { ...persisted.schedule, enabled: false, nextRunAt: null }
-      : null;
-    persisted.updatedAt = now;
-    writeProcessTemplates(templates);
-    appendSystemLog('process_template:schedule_disabled', `Process template "${persisted.name}" schedule disabled`, null, {
-      templateId: persisted.id, templateName: persisted.name, changedBy: actorFromRequest(request).username || 'system'
-    });
-    return { ok: true, schedule: persisted.schedule };
-  }
-
-  // Enabling additionally requires ticket:create.
-  if (!hasPermission(request.session.userId, 'ticket:create')) {
-    reply.code(403);
-    return { error: 'Enabling a schedule requires ticket:create' };
-  }
-  const kind = body.kind || 'interval';
-  if (kind !== 'interval') {
-    reply.code(400);
-    return { error: 'Only interval schedules are supported' };
-  }
-  const everySeconds = parseInt(body.everySeconds, 10);
-  if (!Number.isInteger(everySeconds) || everySeconds < MIN_SCHEDULE_EVERY_SECONDS) {
+  const enabled = !(body.enabled === false || body.enabled === 'false');
+  if (enabled && !hasPermission(request.session.userId, 'ticket:create')) { reply.code(403); return { error: 'Enabling a schedule requires ticket:create' }; }
+  if (enabled && (body.kind || 'interval') !== 'interval') { reply.code(400); return { error: 'Only interval schedules are supported' }; }
+  const everySeconds = enabled ? parseInt(body.everySeconds, 10) : null;
+  if (enabled && (!Number.isInteger(everySeconds) || everySeconds < MIN_SCHEDULE_EVERY_SECONDS)) {
     reply.code(400);
     return { error: `everySeconds must be an integer >= ${MIN_SCHEDULE_EVERY_SECONDS}` };
   }
-
-  const scheduledBy = actorFromRequest(request).username || String(request.session.userId);
-  // Re-enabling recomputes nextRunAt FORWARD FROM NOW (anchor = now) so a stale old
-  // slot never fires immediately on enable.
-  persisted.schedule = {
-    enabled: true,
-    kind: 'interval',
-    everySeconds,
-    anchor: now,
-    nextRunAt: computeNextRunAt({ everySeconds }, now),
-    lastScheduledTriggerAt: null,
-    timezone: 'UTC',
-    scheduledBy
-  };
-  persisted.updatedAt = now;
-  writeProcessTemplates(templates);
-  appendSystemLog('process_template:schedule_set', `Process template "${persisted.name}" scheduled every ${everySeconds}s (UTC) by ${scheduledBy}`, null, {
-    templateId: persisted.id, templateName: persisted.name, everySeconds, scheduledBy
-  });
-  return { ok: true, schedule: persisted.schedule };
+  try {
+    const changedBy = actorFromRequest(request).username || String(request.session.userId);
+    const result = await repository.setProcessTemplateSchedule({ templateId: template.id, enabled, everySeconds, changedBy });
+    return { ok: true, schedule: result.template.schedule };
+  } catch (error) {
+    return processTemplateMutationError(reply, error);
+  }
 });
 
-// Template disable/enable + schedule pause/resume (r1.9). These are thin operator
-// controls over the EXISTING enabled gates — they add no new durable state and change
-// no scheduler behavior. Disabling a template makes the manual route's existing 409
-// and the scheduler's existing `template.enabled` skip reachable; pausing a schedule
-// is `schedule.enabled = false` (already skipped by the due filter). None of these
-// touch tickets, runs, the trigger ledger, triage, verification, or provenance — they
-// only affect FUTURE template-created tickets.
-function scheduleHasReusableInterval(schedule) {
-  return Boolean(schedule && schedule.kind === 'interval' && Number.isInteger(schedule.everySeconds) && schedule.everySeconds > 0);
+for (const [pathSuffix, enabled] of [['disable', false], ['enable', true]]) {
+  fastify.post(`/api/process-templates/:id/${pathSuffix}`, { preHandler: fastify.requireAuth }, async (request, reply) => {
+    if (!hasPermission(request.session.userId, 'processTemplate:manage')) { reply.code(403); return { error: 'Permission denied' }; }
+    if (enabled && !hasPermission(request.session.userId, 'ticket:create')) { reply.code(403); return { error: 'Enabling a template requires ticket:create' }; }
+    const repository = getProcessTemplateAuthorityRepository();
+    const changedBy = actorFromRequest(request).username || String(request.session.userId);
+    try {
+      const result = await repository.setProcessTemplateEnabled({ templateId: request.params.id, enabled, changedBy });
+      if (!result) { reply.code(404); return { error: 'Process template not found' }; }
+      return { ok: true, enabled: result.template.enabled };
+    } catch (error) {
+      return processTemplateMutationError(reply, error);
+    }
+  });
 }
 
-fastify.post('/api/process-templates/:id/disable', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
-    reply.code(403);
-    return { error: 'Permission denied' };
-  }
-  const template = getProcessTemplateById(request.params.id);
-  if (!template) {
-    reply.code(404);
-    return { error: 'Process template not found' };
-  }
-  const now = new Date().toISOString();
-  const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const templates = readProcessTemplates();
-  const persisted = templates.find(item => item.id === template.id);
-  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
-  persisted.enabled = false; // idempotent if already false
-  persisted.updatedAt = now;
-  writeProcessTemplates(templates);
-  appendSystemLog('process_template:disabled', `Process template "${persisted.name}" disabled`, null, {
-    templateId: persisted.id, templateName: persisted.name, changedBy
+for (const action of ['pause', 'resume']) {
+  fastify.post(`/api/process-templates/:id/schedule/${action}`, { preHandler: fastify.requireAuth }, async (request, reply) => {
+    if (!hasPermission(request.session.userId, 'processTemplate:manage')) { reply.code(403); return { error: 'Permission denied' }; }
+    if (action === 'resume' && !hasPermission(request.session.userId, 'ticket:create')) { reply.code(403); return { error: 'Resuming a schedule requires ticket:create' }; }
+    const repository = getProcessTemplateAuthorityRepository();
+    const changedBy = actorFromRequest(request).username || String(request.session.userId);
+    try {
+      const result = action === 'pause'
+        ? await repository.pauseProcessTemplateSchedule({ templateId: request.params.id, changedBy })
+        : await repository.resumeProcessTemplateSchedule({ templateId: request.params.id, changedBy });
+      if (!result) { reply.code(404); return { error: 'Process template not found' }; }
+      return { ok: true, schedule: result.template.schedule };
+    } catch (error) {
+      return processTemplateMutationError(reply, error);
+    }
   });
-  return { ok: true, enabled: false };
-});
-
-fastify.post('/api/process-templates/:id/enable', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
-    reply.code(403);
-    return { error: 'Permission denied' };
-  }
-  // Enabling re-allows manual ticket creation, so it additionally requires ticket:create.
-  if (!hasPermission(request.session.userId, 'ticket:create')) {
-    reply.code(403);
-    return { error: 'Enabling a template requires ticket:create' };
-  }
-  const template = getProcessTemplateById(request.params.id);
-  if (!template) {
-    reply.code(404);
-    return { error: 'Process template not found' };
-  }
-  const now = new Date().toISOString();
-  const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const templates = readProcessTemplates();
-  const persisted = templates.find(item => item.id === template.id);
-  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
-  persisted.enabled = true; // idempotent if already true; does NOT create a ticket or change schedule
-  persisted.updatedAt = now;
-  writeProcessTemplates(templates);
-  appendSystemLog('process_template:enabled', `Process template "${persisted.name}" enabled`, null, {
-    templateId: persisted.id, templateName: persisted.name, changedBy
-  });
-  return { ok: true, enabled: true };
-});
-
-fastify.post('/api/process-templates/:id/schedule/pause', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
-    reply.code(403);
-    return { error: 'Permission denied' };
-  }
-  const template = getProcessTemplateById(request.params.id);
-  if (!template) {
-    reply.code(404);
-    return { error: 'Process template not found' };
-  }
-  if (!scheduleHasReusableInterval(template.schedule)) {
-    reply.code(400);
-    return { error: 'No reusable interval schedule to pause' };
-  }
-  const now = new Date().toISOString();
-  const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const templates = readProcessTemplates();
-  const persisted = templates.find(item => item.id === template.id);
-  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
-  // Pause = schedule.enabled false, nextRunAt null. Interval config is preserved so
-  // Resume can restore it without re-entering everySeconds. Idempotent if already paused.
-  persisted.schedule = { ...persisted.schedule, enabled: false, nextRunAt: null };
-  persisted.updatedAt = now;
-  writeProcessTemplates(templates);
-  appendSystemLog('process_template:schedule_paused', `Process template "${persisted.name}" schedule paused`, null, {
-    templateId: persisted.id, templateName: persisted.name, changedBy
-  });
-  return { ok: true, schedule: persisted.schedule };
-});
-
-fastify.post('/api/process-templates/:id/schedule/resume', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
-    reply.code(403);
-    return { error: 'Permission denied' };
-  }
-  // Resuming re-enables future scheduled ticket creation, so it additionally requires ticket:create.
-  if (!hasPermission(request.session.userId, 'ticket:create')) {
-    reply.code(403);
-    return { error: 'Resuming a schedule requires ticket:create' };
-  }
-  const template = getProcessTemplateById(request.params.id);
-  if (!template) {
-    reply.code(404);
-    return { error: 'Process template not found' };
-  }
-  if (!scheduleHasReusableInterval(template.schedule)) {
-    reply.code(400);
-    return { error: 'No reusable interval schedule to resume' };
-  }
-  const now = new Date().toISOString();
-  const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const templates = readProcessTemplates();
-  const persisted = templates.find(item => item.id === template.id);
-  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
-  // Resume = enable + recompute nextRunAt FORWARD FROM NOW (no catch-up, no stale slot,
-  // no immediate ticket — the next scan one interval later creates the first ticket).
-  // Reuses stored kind/everySeconds/timezone/scheduledBy/lastScheduledTriggerAt.
-  persisted.schedule = {
-    ...persisted.schedule,
-    enabled: true,
-    nextRunAt: computeNextRunAt(persisted.schedule, now)
-  };
-  persisted.updatedAt = now;
-  writeProcessTemplates(templates);
-  appendSystemLog('process_template:schedule_resumed', `Process template "${persisted.name}" schedule resumed`, null, {
-    templateId: persisted.id, templateName: persisted.name, changedBy
-  });
-  return { ok: true, schedule: persisted.schedule };
-});
-
-// Append-only template versioning (r1.12): draft creation + activation. Editing never
-// happens in place — a draft is a new immutable version record; activation supersedes
-// the prior active version and re-points the root's active content. Activation changes
-// FUTURE generated tickets only: it never creates a ticket/run, never mutates the
-// workspace, never touches the schedule cursor, and never triggers the scheduler.
-
-// Capture the template's current active ticket-generating content as an immutable
-// version record (deep-cloned via JSON round-trip so later root edits can't mutate it).
-function buildProcessTemplateVersionContent(template) {
-  const tt = template.ticketTemplate || {};
-  return {
-    name: template.name,
-    ticketTemplate: JSON.parse(JSON.stringify(tt)),
-    executionPolicy: JSON.parse(JSON.stringify(tt.executionPolicy || null))
-  };
-}
-
-// Lazily materialize the current root definition as an immutable active version record
-// the first time a template is versioned. Never rewrites old tickets/ledger; only
-// records "what the active definition is" so a later draft has a parent to supersede.
-function ensureMaterializedActiveVersion(persisted, versions, now) {
-  const existing = versions.filter(v => v && v.templateId === persisted.id);
-  if (existing.length > 0) return existing.find(v => v.status === 'active') || existing[existing.length - 1];
-  const activeNum = activeVersionNumber(persisted);
-  const content = buildProcessTemplateVersionContent(persisted);
-  const record = {
-    id: processTemplateVersionId(persisted.id, activeNum),
-    templateId: persisted.id,
-    version: activeNum,
-    status: 'active',
-    name: content.name,
-    ticketTemplate: content.ticketTemplate,
-    executionPolicy: content.executionPolicy,
-    createdBy: persisted.createdBy || 'system',
-    createdAt: persisted.createdAt || now,
-    activatedBy: persisted.createdBy || 'system',
-    activatedAt: persisted.createdAt || now,
-    supersedesVersionId: null,
-    changeSummary: null
-  };
-  versions.push(record);
-  // Record the active pointer on the root (operator-initiated action on this template).
-  persisted.currentVersion = activeNum;
-  persisted.currentVersionId = record.id;
-  if (!Number.isInteger(persisted.version) || persisted.version <= 0) persisted.version = activeNum;
-  return record;
 }
 
 fastify.post('/api/process-templates/:id/versions/draft', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
-    reply.code(403);
-    return { error: 'Permission denied' };
-  }
-  const template = getProcessTemplateById(request.params.id);
-  if (!template) {
-    reply.code(404);
-    return { error: 'Process template not found' };
-  }
-  const versions = readProcessTemplateVersions();
-  if (versions.some(v => v && v.templateId === template.id && v.status === 'draft')) {
-    reply.code(409);
-    return { error: 'A draft version already exists for this template' };
-  }
-
-  const now = new Date().toISOString();
-  const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const templates = readProcessTemplates();
-  const persisted = templates.find(item => item.id === template.id);
-  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
-
-  // Lazily preserve the current active definition before drafting a successor.
-  const active = ensureMaterializedActiveVersion(persisted, versions, now);
-  const draftNum = active.version + 1;
-
-  // The draft is a COMPLETE definition: start from the active content and overlay only
-  // the provided versioned fields. It never activates and never affects future tickets.
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) { reply.code(403); return { error: 'Permission denied' }; }
+  const repository = getProcessTemplateAuthorityRepository();
+  const template = await repository.getProcessTemplateById(request.params.id);
+  if (!template) { reply.code(404); return { error: 'Process template not found' }; }
   const body = request.body || {};
-  const baseTt = active.ticketTemplate || {};
-  const overlayTt = body.ticketTemplate && typeof body.ticketTemplate === 'object' && !Array.isArray(body.ticketTemplate) ? body.ticketTemplate : {};
-  const draftTicketTemplate = { ...baseTt, ...overlayTt };
-  const draft = {
-    id: processTemplateVersionId(persisted.id, draftNum),
-    templateId: persisted.id,
-    version: draftNum,
-    status: 'draft',
-    name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : active.name,
-    ticketTemplate: draftTicketTemplate,
-    executionPolicy: draftTicketTemplate.executionPolicy || null,
-    createdBy: changedBy,
-    createdAt: now,
-    activatedBy: null,
-    activatedAt: null,
-    supersedesVersionId: null,
-    changeSummary: typeof body.changeSummary === 'string' ? body.changeSummary : null
-  };
-  versions.push(draft);
-  writeProcessTemplateVersions(versions);
-  // Persist the (possibly newly materialized) active pointer on the root. No content,
-  // schedule cursor, enabled, or trigger behavior changes here.
-  persisted.updatedBy = changedBy;
-  persisted.updatedAt = now;
-  writeProcessTemplates(templates);
-
-  appendSystemLog('process_template:version_draft_created', `Process template "${persisted.name}" draft v${draftNum} created`, null, {
-    templateId: persisted.id, templateName: persisted.name, fromVersion: active.version, toVersion: draftNum, draftVersionId: draft.id, changedBy
-  });
-  return { ok: true, draft, activeVersion: active.version };
+  const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  try {
+    const result = await repository.createProcessTemplateDraft({
+      templateId: template.id,
+      name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : null,
+      ticketTemplate: body.ticketTemplate && typeof body.ticketTemplate === 'object' && !Array.isArray(body.ticketTemplate) ? body.ticketTemplate : null,
+      changeSummary: typeof body.changeSummary === 'string' ? body.changeSummary : null,
+      changedBy
+    });
+    return { ok: true, draft: result.draft, activeVersion: result.activeVersion };
+  } catch (error) {
+    return processTemplateMutationError(reply, error);
+  }
 });
 
 fastify.post('/api/process-templates/:id/versions/:versionId/activate', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
-    reply.code(403);
-    return { error: 'Permission denied' };
-  }
-  const template = getProcessTemplateById(request.params.id);
-  if (!template) {
-    reply.code(404);
-    return { error: 'Process template not found' };
-  }
-  const versions = readProcessTemplateVersions();
-  const draft = versions.find(v => v && v.templateId === template.id && v.id === request.params.versionId);
-  if (!draft) {
-    reply.code(404);
-    return { error: 'Version not found' };
-  }
-  if (draft.status !== 'draft') {
-    reply.code(409);
-    return { error: 'Only a draft version can be activated' };
-  }
-  // Activation changes future ticket creation, so it requires ticket:create when the
-  // template can generate tickets (enabled, or scheduled).
+  if (!hasPermission(request.session.userId, 'processTemplate:manage')) { reply.code(403); return { error: 'Permission denied' }; }
+  const repository = getProcessTemplateAuthorityRepository();
+  const template = await repository.getProcessTemplateById(request.params.id);
+  if (!template) { reply.code(404); return { error: 'Process template not found' }; }
   const scheduleEnabled = Boolean(template.schedule && template.schedule.enabled === true);
   if ((template.enabled === true || scheduleEnabled) && !hasPermission(request.session.userId, 'ticket:create')) {
     reply.code(403);
     return { error: 'Activating a version that can generate tickets requires ticket:create' };
   }
-  // High-risk guard: never silently change a live schedule's future output. Pause first.
-  if (scheduleEnabled) {
-    appendSystemLog('process_template:version_activation_blocked', `Process template "${template.name}" version activation blocked: schedule is enabled`, null, {
-      templateId: template.id, templateName: template.name, draftVersionId: draft.id, reason: 'schedule_enabled',
-      changedBy: actorFromRequest(request).username || String(request.session.userId)
-    });
-    reply.code(409);
-    return { error: 'Pause the schedule before activating a new version' };
-  }
-
-  const now = new Date().toISOString();
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  const templates = readProcessTemplates();
-  const persisted = templates.find(item => item.id === template.id);
-  if (!persisted) { reply.code(404); return { error: 'Process template not found' }; }
-
-  // Supersede the prior active version(s); activate the draft.
-  const priorActive = versions.find(v => v && v.templateId === persisted.id && v.status === 'active') || null;
-  versions.forEach(v => { if (v && v.templateId === persisted.id && v.status === 'active') v.status = 'superseded'; });
-  const draftRecord = versions.find(v => v && v.id === draft.id);
-  draftRecord.status = 'active';
-  draftRecord.activatedBy = changedBy;
-  draftRecord.activatedAt = now;
-  draftRecord.supersedesVersionId = priorActive ? priorActive.id : null;
-  writeProcessTemplateVersions(versions);
-
-  // Re-point the root's ACTIVE content + version. The schedule cursor (nextRunAt /
-  // lastScheduledTriggerAt) and enabled flag are deliberately untouched — activation
-  // creates no ticket, no run, no scheduler tick, and no catch-up.
-  persisted.name = draftRecord.name;
-  persisted.ticketTemplate = JSON.parse(JSON.stringify(draftRecord.ticketTemplate));
-  persisted.currentVersion = draftRecord.version;
-  persisted.currentVersionId = draftRecord.id;
-  persisted.version = draftRecord.version; // keep r1.10 root `version` in sync for stamping
-  persisted.updatedBy = changedBy;
-  persisted.updatedAt = now;
-  writeProcessTemplates(templates);
-
-  appendSystemLog('process_template:version_activated', `Process template "${persisted.name}" activated v${draftRecord.version}`, null, {
-    templateId: persisted.id, templateName: persisted.name,
-    fromVersion: priorActive ? priorActive.version : null, toVersion: draftRecord.version,
-    activatedVersionId: draftRecord.id, supersedesVersionId: draftRecord.supersedesVersionId, changedBy
-  });
-  return { ok: true, activeVersion: draftRecord.version, activeVersionId: draftRecord.id };
+  try {
+    const result = await repository.activateProcessTemplateVersion({ templateId: template.id, versionId: request.params.versionId, changedBy });
+    if (!result.version) { reply.code(404); return { error: 'Version not found' }; }
+    return { ok: true, activeVersion: result.version.version, activeVersionId: result.version.id };
+  } catch (error) {
+    if (error instanceof ProcessTemplateConflictError && error.code === 'PROCESS_TEMPLATE_SCHEDULE_ACTIVE') {
+      appendSystemLog('process_template:version_activation_blocked', `Process template "${template.name}" version activation blocked: schedule is enabled`, null, {
+        templateId: template.id, templateName: template.name, draftVersionId: request.params.versionId,
+        reason: 'schedule_enabled', changedBy
+      });
+    }
+    return processTemplateMutationError(reply, error);
+  }
 });
 
 // Run one scheduled-template scan now. Same bounded due-scan the interval scheduler
@@ -21654,7 +20906,7 @@ fastify.post('/api/process-templates/:id/versions/:versionId/activate', { preHan
 // execution primitive — it only creates tickets through triggerProcessTemplate.
 fastify.post('/api/process-templates/scheduler/tick', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'processTemplate:manage')) {
     reply.code(403);
@@ -21675,25 +20927,43 @@ fastify.get('/process-templates', { preHandler: fastify.requireAuth }, async (re
 
   // Pure read: derive operator-facing state from existing stores. Nothing here
   // triggers a schedule, creates a ticket/run, mutates the workspace, or writes logs.
-  const allTemplates = readProcessTemplates();
-  const triggers = readProcessTemplateTriggers();
-  const tickets = readTickets();
-  const derivedById = new Map(
-    deriveProcessTemplateState(allTemplates, triggers, tickets, Date.now()).map(row => [row.templateId, row])
-  );
   // Optional Work Context filter (r1.20) — read-only projection over existing templates.
-  const wcFilter = request.query && request.query.workContextId !== undefined && request.query.workContextId !== '' ? parseInt(request.query.workContextId, 10) : null;
-  const templates = wcFilter === null ? allTemplates : allTemplates.filter(t => t && t.workContextId === wcFilter);
+  const pageCapacity = getRuntimeSchedulerCandidateLimit();
+  const afterId = request.query && request.query.afterId !== undefined && request.query.afterId !== ''
+    ? Number(request.query.afterId)
+    : 0;
+  const pageLimit = request.query && request.query.limit !== undefined && request.query.limit !== ''
+    ? Number(request.query.limit)
+    : Math.min(100, pageCapacity);
+  const wcFilter = request.query && request.query.workContextId !== undefined && request.query.workContextId !== ''
+    ? Number(request.query.workContextId)
+    : null;
+  if (!Number.isSafeInteger(afterId) || afterId < 0 ||
+      !Number.isSafeInteger(pageLimit) || pageLimit <= 0 || pageLimit > pageCapacity ||
+      (wcFilter !== null && (!Number.isSafeInteger(wcFilter) || wcFilter <= 0))) {
+    reply.code(400);
+    return reply.view('error.ejs', viewData({
+      message: 'Invalid process-template page cursor, limit, or Work Context filter',
+      user: request.user
+    }, request.session.userId));
+  }
+  const page = await getProcessTemplateProjectionRepository().listProcessTemplateStates({
+    afterId,
+    workContextId: wcFilter,
+    limit: pageLimit,
+    now: Date.now()
+  });
 
   return reply.view('process-templates.ejs', viewData({
     user: request.user,
-    templates: templates.map(template => ({
-      ...template,
-      ...(derivedById.get(template.id) || {})
-    })),
+    templates: page.processTemplates,
+    nextAfterId: page.nextAfterId,
+    pageAfterId: afterId,
+    pageLimit,
+    workContextId: wcFilter,
     canTrigger: hasPermission(request.session.userId, 'ticket:create'),
-    agents: readAgents().map(agent => ({ id: agent.id, name: agent.name })),
-    groups: readGroups().map(group => ({ id: group.id, name: group.name }))
+    agents: (await listConfiguredAgentOptions()).map(agent => ({ id: agent.id, name: agent.name })),
+    groups: (await listAccessGroups()).map(group => ({ id: group.id, name: group.name }))
   }, request.session.userId));
 });
 
@@ -21702,14 +20972,14 @@ fastify.get('/process-templates/:id', { preHandler: fastify.requireAuth }, async
     reply.code(403);
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  const template = getProcessTemplateById(request.params.id);
+  const template = await getProcessTemplateProjectionRepository().getProcessTemplateStateById(request.params.id);
   if (!template) { reply.code(404); return reply.view('error.ejs', viewData({ message: 'Process template not found', user: request.user }, request.session.userId)); }
   return reply.view('process-template-detail.ejs', viewData({
     user: request.user,
     template,
-    agents: readAgents().map(agent => ({ id: agent.id, name: agent.name })),
-    groups: readGroups().map(group => ({ id: group.id, name: group.name })),
-    workContexts: readWorkContexts()
+    agents: (await listConfiguredAgentOptions()).map(agent => ({ id: agent.id, name: agent.name })),
+    groups: (await listAccessGroups()).map(group => ({ id: group.id, name: group.name })),
+    workContexts: await listWorkContextOptions()
   }, request.session.userId));
 });
 
@@ -21718,26 +20988,27 @@ fastify.get('/process-templates/:id', { preHandler: fastify.requireAuth }, async
 // processTemplate:manage; a non-null context must be active and allow this template.
 fastify.post('/api/process-templates/:id/work-context', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'processTemplate:manage')) { reply.code(403); return { error: 'Permission denied' }; }
-  const templates = readProcessTemplates();
-  const template = templates.find(t => t && t.id === parseInt(request.params.id, 10));
+  const repository = getProcessTemplateAuthorityRepository();
+  const template = await repository.getProcessTemplateById(request.params.id);
   if (!template) { reply.code(404); return { error: 'Process template not found' }; }
   const raw = request.body && request.body.workContextId !== undefined ? request.body.workContextId : null;
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  if (raw === null || raw === '') {
-    delete template.workContextId;
-    delete template.workContextSnapshot;
-  } else {
-    const check = validateWorkContextAssignment(raw, { templateId: template.id });
+  let workContextId = null;
+  let workContextSnapshot = null;
+  if (raw !== null && raw !== '') {
+    const check = await validateWorkContextAssignment(raw, { templateId: template.id });
     if (!check.ok) { reply.code(check.code || 400); return { error: check.error }; }
-    template.workContextId = check.context.id;
-    template.workContextSnapshot = check.snapshot;
+    workContextId = check.context.id;
+    workContextSnapshot = check.snapshot;
   }
-  template.updatedBy = changedBy;
-  template.updatedAt = new Date().toISOString();
-  writeProcessTemplates(templates);
-  appendSystemLog('work_context:template_assigned', `Process template "${template.name}" work context ${template.workContextId ? 'set to ' + template.workContextId : 'cleared'}`, null,
-    { templateId: template.id, workContextId: template.workContextId || null, changedBy });
-  return { ok: true, templateId: template.id, workContextId: template.workContextId || null };
+  try {
+    const result = await repository.assignProcessTemplateWorkContext({
+      templateId: template.id, workContextId, workContextSnapshot, changedBy
+    });
+    return { ok: true, templateId: template.id, workContextId: result.template.workContextId || null };
+  } catch (error) {
+    return processTemplateMutationError(reply, error);
+  }
 });
 
 fastify.get('/tickets', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -21746,7 +21017,7 @@ fastify.get('/tickets', { preHandler: fastify.requireAuth }, async (request, rep
     return 'Permission denied';
   }
 
-  const ticketPage = getPaginatedTickets(request.query || {});
+  const ticketPage = await getPaginatedTickets(request.query || {});
 
   return renderCachedView(request, reply, 'tickets.ejs', viewData({
     tickets: ticketPage.tickets,
@@ -21756,7 +21027,7 @@ fastify.get('/tickets', { preHandler: fastify.requireAuth }, async (request, rep
     filterHrefs: ticketPage.filterHrefs,
     user: request.user,
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update'),
-    agents: readAgents(),
+    agents: await listConfiguredAgentOptions(),
     ticketStatuses: TICKET_STATUSES
   }, request.session.userId));
 });
@@ -21780,7 +21051,8 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     }, request.session.userId));
   }
 
-  const ticket = readTickets().find(item => item.id === ticketId);
+  const repository = getRuntimeStateReadRepository();
+  const ticket = await repository.getTicket(ticketId);
 
   if (!ticket) {
     reply.code(404);
@@ -21790,11 +21062,14 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     }, request.session.userId));
   }
 
-  const allocationPlan = getTicketAllocationPlan(ticketId);
-  const history = readOperationHistory();
-  const ticketRuns = await hydrateRunReplaySnapshots(getTicketRuns(ticketId, history));
-  const agents = readAgents();
-  const operationHistory = getOperationHistoryForTicket(ticketId, history);
+  const allocationPlan = await getTicketAllocationPlan(ticketId);
+  const agents = await listConfiguredAgentOptions();
+  const [rawTicketRuns, operationHistory, rawChildTickets] = await Promise.all([
+    readAllRunsForTicket(ticketId),
+    readAllTicketOperations(ticketId),
+    readAllChildTickets(ticketId)
+  ]);
+  const ticketRuns = await hydrateRunReplaySnapshots(enrichTicketRuns(rawTicketRuns, operationHistory, agents));
   const activeRuntimeRun = ticketRuns
     .filter(run => ['pending', 'running'].includes(run.status))
     .sort((a, b) => new Date(b.updatedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.startedAt || a.createdAt || 0))[0] || null;
@@ -21802,14 +21077,23 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     .slice()
     .sort((a, b) => new Date(b.updatedAt || b.completedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.completedAt || a.startedAt || a.createdAt || 0))[0] || null;
   const visibleRuntimeRun = activeRuntimeRun || latestRuntimeRun;
+  const visibleRuntimeLogs = visibleRuntimeRun
+    ? await getDiagnosticLogRepository().listLogsForRuns({ runIds: [visibleRuntimeRun.id], limitPerRun: 25 })
+    : [];
+  const visibleRuntimeEvents = visibleRuntimeRun ? await readAllRunTimelineEvents(visibleRuntimeRun.id) : [];
+  const visibleRuntimeEventSummary = visibleRuntimeRun
+    ? await recentEventSummary(visibleRuntimeRun.id, visibleRuntimeEvents)
+    : null;
   const runStateInconsistency = visibleRuntimeRun
     ? detectRunStateInconsistency(visibleRuntimeRun, {
-      logs: readLogs().filter(log => log.runId === visibleRuntimeRun.id),
-      replaySnapshot: visibleRuntimeRun.replaySnapshot || null
+      logs: visibleRuntimeLogs,
+      events: visibleRuntimeEvents,
+      replaySnapshot: visibleRuntimeRun.replaySnapshot || null,
+      recentEventSummary: visibleRuntimeEventSummary
     })
     : null;
 
-  const executionState = buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, readGroups());
+  const executionState = await buildTicketExecutionState(ticket, ticketRuns, allocationPlan, agents, await listAccessGroups());
   const timeline = await buildTicketTimeline(ticketId);
 
   // Review status for the latest terminal run — separates "did it finish" from
@@ -21817,7 +21101,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   let reviewStatus = { applicable: false, needsReview: false, reasons: [] };
   if (latestRuntimeRun) {
     const latestSnapshot = latestRuntimeRun.replaySnapshot || null;
-    const latestComparison = buildArtifactPredictionComparison(latestRuntimeRun, latestSnapshot, history, readWorkflows());
+    const latestComparison = buildArtifactPredictionComparison(latestRuntimeRun, latestSnapshot, operationHistory);
     reviewStatus = buildRunReviewStatus(latestRuntimeRun, {
       objectivePathCoverage: buildObjectivePathCoverage(ticket, latestSnapshot),
       artifactAccuracy: buildArtifactAccuracy(latestSnapshot, latestComparison),
@@ -21825,8 +21109,9 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     });
   }
 
-  const parentTicket = ticket.parentTicketId ? getTicketById(ticket.parentTicketId) : null;
-  const childTickets = getChildTicketSummaries(ticketId);
+  const parentTicket = ticket.parentTicketId ? await repository.getTicket(ticket.parentTicketId) : null;
+  const latestChildRuns = await readLatestRunsForTickets(rawChildTickets.map(child => child.id));
+  const childTickets = buildChildTicketSummaries(rawChildTickets, latestChildRuns);
 
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
@@ -21834,13 +21119,13 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     parentTicket,
     childTickets,
     browserTarget: ticket.targetRef && ticket.targetRef.kind === 'browser'
-      ? getBrowserTargetById(ticket.targetRef.browserTargetId)
+      ? (await getBrowserTargetById(ticket.targetRef.browserTargetId))
       : null,
     allocationPlan,
     ticketRuns,
     agents,
-    artifacts: buildTicketArtifacts(operationHistory, readWorkflows(), ticketRuns),
-    recentLogs: getRecentLogsForTicket(ticketId),
+    artifacts: buildTicketArtifacts(operationHistory, await collectWorkflowCatalogPages(), ticketRuns),
+    recentLogs: await getRecentLogsForTicket(ticketId),
     operationHistory: enrichOperationHistoryForDisplay(operationHistory),
     runStateInconsistency,
     executionState,
@@ -21855,16 +21140,16 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
 });
 
 fastify.get('/api/health', async (request, reply) => {
-  if (!serverReady || eventAppendFailure) {
+  if (!serverReady || evidencePersistenceFailure) {
     reply.code(503);
-    return { status: eventAppendFailure ? 'degraded' : 'starting', ready: false };
+    return { status: evidencePersistenceFailure ? 'degraded' : 'starting', ready: false };
   }
-  if (isEventJournalAdmissionBackpressured()) {
+  if (isMutationAdmissionBackpressured()) {
     reply.code(503);
     return {
       status: 'backpressured',
       ready: false,
-      reason: 'event_journal_capacity',
+      reason: 'mutation_admission_capacity',
       uptime: Math.floor(process.uptime())
     };
   }
@@ -21876,7 +21161,13 @@ fastify.get('/api/runtime/identity', { preHandler: fastify.requireAuth }, async 
     reply.code(403);
     return { error: 'Permission denied' };
   }
-  return { dataDir: DATA_DIR, workspaceRoot: workspaceProvider.root, port: PORT };
+  return {
+    persistenceBackend: 'postgres',
+    postgresSchema: POSTGRES_SCHEMA,
+    artifactRoot: ARTIFACT_ROOT,
+    workspaceRoot: workspaceProvider.root,
+    port: PORT
+  };
 });
 
 fastify.get('/api/runtime/status', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -21885,7 +21176,13 @@ fastify.get('/api/runtime/status', { preHandler: fastify.requireAuth }, async (r
     return { error: 'Permission denied' };
   }
 
-  return getRuntimeStatusSnapshot();
+  const parsedAfterId = parseInt(request.query && request.query.afterId || '0', 10);
+  if (!Number.isSafeInteger(parsedAfterId) || parsedAfterId < 0) {
+    reply.code(400);
+    return { error: 'afterId must be a non-negative integer' };
+  }
+  const { limit } = getPagination(request.query || {}, 50);
+  return getRuntimeStatusSnapshot({ afterId: parsedAfterId, limit });
 });
 
 function runtimeLimitsManageGuard(request, reply) {
@@ -21918,10 +21215,10 @@ function browserTargetFormValues(input = {}) {
   };
 }
 
-function renderBrowserTargetsAdminPage(request, reply, options = {}) {
+async function renderBrowserTargetsAdminPage(request, reply, options = {}) {
   return reply.view('admin/browser-targets.ejs', viewData({
     user: request.user,
-    browserTargets: readBrowserTargets(),
+    browserTargets: (await readBrowserTargets()),
     browserEngineStatus: getBrowserEngineAdminStatus(),
     browserPhaseOneOperations: BROWSER_PHASE_ONE_OPERATIONS,
     canManageBrowserTargets: hasPermission(request.session.userId, 'user:update'),
@@ -21943,7 +21240,7 @@ fastify.get('/admin/browser-targets/:id/edit', { preHandler: fastify.requireAuth
   if (!browserTargetsAdminGuard(request, reply)) {
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  const target = getBrowserTargetById(request.params.id);
+  const target = (await getBrowserTargetById(request.params.id));
   if (!target) {
     reply.code(404);
     return reply.view('error.ejs', viewData({ message: 'Browser target not found', user: request.user }, request.session.userId));
@@ -21960,16 +21257,16 @@ fastify.post('/admin/browser-targets', { preHandler: fastify.requireAuth }, asyn
     reply.code(400);
     return renderBrowserTargetsAdminPage(request, reply, { error: parsed.error, formTarget: request.body || {} });
   }
-  const targets = readBrowserTargets();
-  if (targets.some(target => target && target.id === parsed.target.id)) {
-    reply.code(409);
-    return renderBrowserTargetsAdminPage(request, reply, { error: 'Browser target id already exists', formTarget: request.body || {} });
-  }
-  writeBrowserTargets([...targets, parsed.target]);
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  appendSystemLog('browser_target.created', `Browser target "${parsed.target.name}" created by ${changedBy}`, null, {
-    browserTargetId: parsed.target.id, changedBy
-  });
+  try {
+    await postgresRuntimeStore.createBrowserTarget({ target: parsed.target, changedBy });
+  } catch (error) {
+    if (error && error.code === '23505') {
+      reply.code(409);
+      return renderBrowserTargetsAdminPage(request, reply, { error: 'Browser target id already exists', formTarget: request.body || {} });
+    }
+    throw error;
+  }
   return reply.redirect('/admin/browser-targets?saved=1');
 });
 
@@ -21977,26 +21274,22 @@ fastify.post('/admin/browser-targets/:id', { preHandler: fastify.requireAuth }, 
   if (!browserTargetsAdminGuard(request, reply, true)) {
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
-  const targets = readBrowserTargets();
-  const index = targets.findIndex(target => target && target.id === request.params.id);
-  if (index === -1) {
+  const target = await getBrowserTargetById(request.params.id);
+  if (!target) {
     reply.code(404);
     return reply.view('error.ejs', viewData({ message: 'Browser target not found', user: request.user }, request.session.userId));
   }
   const parsed = parseBrowserTargetForm(request.body || {}, request.params.id);
   if (!parsed.ok) {
     reply.code(400);
-    return renderBrowserTargetsAdminPage(request, reply, {
-      error: parsed.error,
-      editTarget: targets[index],
-      formTarget: request.body || {}
-    });
+    return renderBrowserTargetsAdminPage(request, reply, { error: parsed.error, editTarget: target, formTarget: request.body || {} });
   }
-  targets[index] = parsed.target;
-  writeBrowserTargets(targets);
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  appendSystemLog('browser_target.updated', `Browser target "${parsed.target.name}" updated by ${changedBy}`, null, {
-    browserTargetId: parsed.target.id, changedBy
+  await postgresRuntimeStore.updateBrowserTarget({
+    targetId: target.id,
+    expectedRevision: target.revision,
+    target: parsed.target,
+    changedBy
   });
   return reply.redirect('/admin/browser-targets?saved=1');
 });
@@ -22010,8 +21303,7 @@ fastify.post('/admin/browser-targets/:id/status', { preHandler: fastify.requireA
     reply.code(400);
     return renderBrowserTargetsAdminPage(request, reply, { error: 'Browser target status must be active or inactive' });
   }
-  const targets = readBrowserTargets();
-  const target = targets.find(item => item && item.id === request.params.id);
+  const target = await getBrowserTargetById(request.params.id);
   if (!target) {
     reply.code(404);
     return reply.view('error.ejs', viewData({ message: 'Browser target not found', user: request.user }, request.session.userId));
@@ -22023,49 +21315,71 @@ fastify.post('/admin/browser-targets/:id/status', { preHandler: fastify.requireA
       return renderBrowserTargetsAdminPage(request, reply, { error: `Cannot activate browser target: ${activationCheck.error}` });
     }
   }
-  target.status = nextStatus;
-  writeBrowserTargets(targets);
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
-  appendSystemLog('browser_target.status_changed', `Browser target "${target.name}" set ${nextStatus} by ${changedBy}`, null, {
-    browserTargetId: target.id, status: nextStatus, changedBy
+  await postgresRuntimeStore.updateBrowserTarget({
+    targetId: target.id,
+    expectedRevision: target.revision,
+    target: { ...target, status: nextStatus },
+    changedBy,
+    auditType: 'browser_target.status_changed'
   });
   return reply.redirect('/admin/browser-targets?saved=1');
 });
 
+function parseRuntimeLimitsExpectedRevision(value) {
+  const revision = typeof value === 'string' && /^[1-9]\d*$/.test(value) ? Number(value) : value;
+  return Number.isSafeInteger(revision) && revision > 0 ? revision : null;
+}
+
 fastify.get('/api/runtime-limits', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!runtimeLimitsManageGuard(request, reply)) return { error: 'Permission denied' };
-  const resolved = resolveAgentRuntimeLimits();
+  const resolved = await resolveAgentRuntimeLimits();
   return {
     config: resolved.config,
-    deploymentCaps: resolved.deployment,
+    deploymentDefaults: resolved.deploymentDefaults,
     effectiveLimits: pickRuntimeLimitValues(resolved.limits)
   };
 });
 
 fastify.post('/api/runtime-limits', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!runtimeLimitsManageGuard(request, reply)) return { error: 'Permission denied' };
-  const previous = readRuntimeLimitsConfig();
-  const parsed = validateRuntimeLimitsConfigInput(request.body || {}, previous);
+  const input = request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+    ? { ...request.body }
+    : request.body;
+  const expectedRevision = parseRuntimeLimitsExpectedRevision(input && input.expectedRevision);
+  if (input && typeof input === 'object' && !Array.isArray(input)) delete input.expectedRevision;
+  if (expectedRevision === null) {
+    reply.code(400);
+    return { error: 'expectedRevision must be a positive integer' };
+  }
+  const previous = await getRuntimeLimitsRepository().getRuntimeLimitsConfig();
+  const parsed = validateRuntimeLimitsConfigInput(input, previous);
   if (!parsed.ok) {
     reply.code(400);
     return { error: parsed.error };
   }
-  const next = await persistRuntimeLimitsUpdate(parsed.value, request);
-  const effective = resolveAgentRuntimeLimits(null, { config: next });
-  return {
-    config: next,
-    deploymentCaps: effective.deployment,
-    effectiveLimits: pickRuntimeLimitValues(effective.limits)
-  };
+  try {
+    const next = await persistRuntimeLimitsUpdate(parsed.value, request, expectedRevision);
+    const effective = resolveAgentRuntimeLimitsFromConfig(null, next);
+    return {
+      config: next,
+      deploymentDefaults: effective.deploymentDefaults,
+      effectiveLimits: pickRuntimeLimitValues(effective.limits)
+    };
+  } catch (error) {
+    if (!(error instanceof RuntimeLimitsConflictError) && error.code !== 'OPTIMISTIC_CONCURRENCY_CONFLICT') throw error;
+    reply.code(409);
+    return { error: 'Runtime limits changed before this update was saved', current: error.current || null };
+  }
 });
 
-function renderRuntimeLimitsAdminPage(request, reply, options = {}) {
+async function renderRuntimeLimitsAdminPage(request, reply, options = {}) {
   return reply.view('admin/runtime-limits.ejs', viewData({
     user: request.user,
-    runtimeLimitsState: buildRuntimeLimitsAdminState(options.formValues || null),
+    runtimeLimitsState: await buildRuntimeLimitsAdminState(options.formValues || null),
     error: options.error || null,
     saved: options.saved === true
   }, request.session.userId));
@@ -22080,18 +21394,33 @@ fastify.get('/admin/runtime-limits', { preHandler: fastify.requireAuth }, async 
 
 fastify.post('/admin/runtime-limits', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!runtimeLimitsManageGuard(request, reply)) {
     return reply.view('error.ejs', viewData({ message: 'Access denied', user: request.user }, request.session.userId));
   }
   const formValues = parseRuntimeLimitsForm(request.body || {});
-  const parsed = validateRuntimeLimitsConfigInput(formValues, readRuntimeLimitsConfig());
+  const expectedRevision = parseRuntimeLimitsExpectedRevision(request.body && request.body.expectedRevision);
+  if (expectedRevision === null) {
+    reply.code(400);
+    return renderRuntimeLimitsAdminPage(request, reply, { error: 'Runtime limits revision is missing or invalid', formValues });
+  }
+  const previous = await getRuntimeLimitsRepository().getRuntimeLimitsConfig();
+  const parsed = validateRuntimeLimitsConfigInput(formValues, previous);
   if (!parsed.ok) {
     reply.code(400);
     return renderRuntimeLimitsAdminPage(request, reply, { error: parsed.error, formValues });
   }
-  await persistRuntimeLimitsUpdate(parsed.value, request);
+  try {
+    await persistRuntimeLimitsUpdate(parsed.value, request, expectedRevision);
+  } catch (error) {
+    if (!(error instanceof RuntimeLimitsConflictError) && error.code !== 'OPTIMISTIC_CONCURRENCY_CONFLICT') throw error;
+    reply.code(409);
+    return renderRuntimeLimitsAdminPage(request, reply, {
+      error: 'Runtime limits changed before this form was saved. Review the current values and try again.',
+      formValues
+    });
+  }
   return reply.redirect('/admin/runtime-limits?saved=1');
 });
 
@@ -22102,9 +21431,9 @@ fastify.get('/api/tickets', { preHandler: fastify.requireAuth }, async (request,
   }
 
   return {
-    ...getPaginatedTickets(request.query || {}),
+    ...await getPaginatedTickets(request.query || {}),
     canUpdateTickets: hasPermission(request.session.userId, 'ticket:update'),
-    agents: readAgents().map(agent => ({ id: agent.id, name: agent.name })),
+    agents: (await listConfiguredAgentOptions()).map(agent => ({ id: agent.id, name: agent.name })),
     ticketStatuses: TICKET_STATUSES
   };
 });
@@ -22157,17 +21486,26 @@ fastify.get('/api/tickets/:id/timeline', { preHandler: fastify.requireAuth }, as
 // Read-only Claim Receipt derived from a run's existing lease evidence.
 fastify.get('/api/runs/:id/claim-receipt', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) { reply.code(403); return { error: 'Permission denied' }; }
-  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item && item.id === parseInt(request.params.id, 10)));
-  if (!run) { reply.code(404); return { error: 'Run not found' }; }
-  return { ok: true, claimReceipt: buildClaimReceipt(run) };
+  const runId = parseInt(request.params.id, 10);
+  const authority = Number.isSafeInteger(runId) && runId > 0 ? await readRuntimeRunAuthority(runId) : null;
+  if (!authority) { reply.code(404); return { error: 'Run not found' }; }
+  return { ok: true, claimReceipt: buildClaimReceipt(authority.run, authority.ticket) };
 });
 
 // Read-only Work Receipt derived from a run's existing evidence (refs/counts only).
 fastify.get('/api/runs/:id/work-receipt', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) { reply.code(403); return { error: 'Permission denied' }; }
-  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item && item.id === parseInt(request.params.id, 10)));
-  if (!run) { reply.code(404); return { error: 'Run not found' }; }
-  return { ok: true, workReceipt: buildWorkReceipt(run) };
+  const runId = parseInt(request.params.id, 10);
+  const authority = Number.isSafeInteger(runId) && runId > 0 ? await readRuntimeRunAuthority(runId) : null;
+  if (!authority) { reply.code(404); return { error: 'Run not found' }; }
+  const [events, operations] = await Promise.all([
+    readAllRunTimelineEvents(runId),
+    readAllRunOperations(runId)
+  ]);
+  return {
+    ok: true,
+    workReceipt: buildWorkReceipt(authority.run, authority.ticket, { events, operations })
+  };
 });
 
 // Agent/human handoff: propose a handoff that creates an ORDINARY ticket through the normal,
@@ -22177,10 +21515,10 @@ fastify.get('/api/runs/:id/work-receipt', { preHandler: fastify.requireAuth }, a
 // createTicketFromInput), and never opens a private agent-to-agent channel.
 fastify.post('/api/tickets/:id/handoff', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:create')) { reply.code(403); return { error: 'Permission denied' }; }
-  const fromTicket = readTickets().find(item => item && item.id === parseInt(request.params.id, 10));
+  const fromTicket = await getTicketById(parseInt(request.params.id, 10));
   if (!fromTicket) { reply.code(404); return { error: 'Source ticket not found' }; }
   const body = request.body || {};
   const objective = typeof body.objective === 'string' ? body.objective.trim() : '';
@@ -22189,7 +21527,7 @@ fastify.post('/api/tickets/:id/handoff', {
   const toType = body.toAssignmentTargetType || fromTicket.assignmentTargetType;
   const toId = body.toAssignmentTargetId != null ? body.toAssignmentTargetId : fromTicket.assignmentTargetId;
   const workContextId = body.workContextId !== undefined ? body.workContextId : (fromTicket.workContextId != null ? fromTicket.workContextId : null);
-  const fromRun = readRuns().filter(r => r && r.ticketId === fromTicket.id).sort((a, b) => b.id - a.id)[0] || null;
+  const fromRun = (await readLatestRunsForTickets([fromTicket.id]))[0] || null;
   const actor = actorFromRequest(request);
   const actorName = actor.username || String(request.session.userId);
   const now = new Date().toISOString();
@@ -22204,7 +21542,7 @@ fastify.post('/api/tickets/:id/handoff', {
     objective,
     sourceRefs: Array.isArray(body.sourceRefs) && body.sourceRefs.length
       ? body.sourceRefs
-      : (fromRun ? [`tickets.json:${fromTicket.id}`, `runs.json:${fromRun.id}`] : [`tickets.json:${fromTicket.id}`]),
+      : (fromRun ? [runtimeAuthoritySourceRef('ticket', fromTicket.id), runtimeAuthoritySourceRef('run', fromRun.id)] : [runtimeAuthoritySourceRef('ticket', fromTicket.id)]),
     evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : [],
     constraints: body.constraints != null ? body.constraints : null,
     authorityLimits: body.authorityLimits != null ? body.authorityLimits : null,
@@ -22254,7 +21592,7 @@ fastify.post('/api/tickets/shape-objective', {
 
 fastify.patch('/api/tickets/:id/assignment', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
@@ -22263,91 +21601,56 @@ fastify.patch('/api/tickets/:id/assignment', {
 
   const ticketId = parseInt(request.params.id, 10);
   const agentId = parseInt(request.body && request.body.agentId, 10);
-  const tickets = readTickets();
-  const ticket = tickets.find(item => item.id === ticketId);
-  const agent = readAgents().find(item => item.id === agentId);
+  let ticket = await getRuntimeStateReadRepository().getTicket(ticketId);
+  const agent = await getConfiguredAgentRepository().getConfiguredAgentById(agentId);
+  if (!ticket) { reply.code(404); return { error: 'Ticket not found' }; }
+  if (!agent) { reply.code(400); return { error: 'Agent not found' }; }
 
-  if (!ticket) {
-    reply.code(404);
-    return { error: 'Ticket not found' };
-  }
-
-  if (!agent) {
-    reply.code(400);
-    return { error: 'Agent not found' };
-  }
-
-  const assignmentChanged = (
-    ticket.assignmentTargetType !== 'agent' ||
-    ticket.assignmentTargetId !== agent.id ||
-    ticket.assignmentMode !== 'individual'
-  );
-
+  const assignmentChanged = ticket.assignmentTargetType !== 'agent' ||
+    ticket.assignmentTargetId !== agent.id || ticket.assignmentMode !== 'individual';
   if (ticket.status !== 'open' && assignmentChanged) {
     reply.code(400);
     return { error: 'Only open tickets can be assigned to an agent run' };
   }
 
-  let assignmentAudit = null;
-
   if (assignmentChanged) {
     const changedBy = request.user ? request.user.username : String(request.session.userId);
-    const changedAt = new Date().toISOString();
     const previousAssignment = {
       assignmentTargetType: ticket.assignmentTargetType,
       assignmentTargetId: ticket.assignmentTargetId,
       assignmentMode: ticket.assignmentMode
     };
-
-    ticket.assignmentTargetType = 'agent';
-    ticket.assignmentTargetId = agent.id;
-    ticket.assignmentMode = 'individual';
-    ticket.updatedAt = changedAt;
-    ticket.changedBy = changedBy;
-    ticket.changedAt = changedAt;
-    writeTickets(tickets);
-    const nextAssignment = {
-      assignmentTargetType: ticket.assignmentTargetType,
-      assignmentTargetId: ticket.assignmentTargetId,
-      assignmentMode: ticket.assignmentMode
-    };
-    assignmentAudit = { changedBy, changedAt };
-    await appendEvent({
-      type: 'ticket.updated',
-      ticketId: ticket.id,
-      payload: {
-        status: ticket.status,
-        assignmentTargetType: ticket.assignmentTargetType,
-        assignmentTargetId: ticket.assignmentTargetId,
-        assignmentMode: ticket.assignmentMode,
-        updatedAt: ticket.updatedAt,
+    const result = await getTicketRunLifecycleRepository().transitionTicketState({
+      ticketId,
+      fromStatuses: [ticket.status],
+      toStatus: ticket.status,
+      patch: {
+        assignmentTargetType: 'agent',
+        assignmentTargetId: agent.id,
+        assignmentMode: 'individual',
         changedBy,
-        changedAt
+        changedAt: new Date().toISOString()
+      },
+      eventType: 'ticket.updated',
+      eventPayload: {
+        assignmentTargetType: 'agent',
+        assignmentTargetId: agent.id,
+        assignmentMode: 'individual',
+        changedBy
       }
     });
-    appendSystemLog('ticket:assignment_change', `Ticket #${ticket.id} assignment changed by ${changedBy}`, null, {
+    ticket = result.ticket;
+    await appendSystemLog('ticket:assignment_change', `Ticket #${ticket.id} assignment changed by ${changedBy}`, null, {
       ticketId: ticket.id,
       changedBy,
-      changedAt,
+      changedAt: ticket.changedAt,
       previousAssignment,
-      nextAssignment
+      nextAssignment: { assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual' }
     });
     broadcastTicketChange();
   }
 
   await createRunsForTicket(ticket, delegatedFromRequest(request, 'assignment_change_auto_run'));
-
-  if (assignmentAudit) {
-    const updatedTickets = readTickets();
-    const updatedTicket = updatedTickets.find(item => item.id === ticket.id);
-    if (updatedTicket) {
-      updatedTicket.changedBy = assignmentAudit.changedBy;
-      updatedTicket.changedAt = assignmentAudit.changedAt;
-      updatedTicket.updatedAt = assignmentAudit.changedAt;
-      writeTickets(updatedTickets);
-    }
-  }
-
   return { ticket };
 });
 
@@ -22369,7 +21672,7 @@ fastify.get('/api/tickets/events', { preHandler: fastify.requireAuth }, async (r
 
 fastify.patch('/api/tickets/:id/status', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
@@ -22384,8 +21687,7 @@ fastify.patch('/api/tickets/:id/status', {
     return { error: 'Invalid ticket status' };
   }
 
-  const tickets = readTickets();
-  const ticket = tickets.find(item => item.id === ticketId);
+  const ticket = await getTicketById(ticketId);
 
   if (!ticket) {
     reply.code(404);
@@ -22413,7 +21715,7 @@ fastify.patch('/api/tickets/:id/status', {
         ...ticket,
         status,
         updatedAt: changedAt
-      }, getAgentsInGroup(ticket.assignmentTargetId));
+      }, await getAgentsInGroup(ticket.assignmentTargetId));
     } catch (error) {
       appendSystemLog('allocation:setup_failed', error.message, null, {
         code: error.code || 'VALIDATION_ERROR',
@@ -22441,8 +21743,10 @@ fastify.patch('/api/tickets/:id/status', {
   broadcastTicketChange();
 
   if (status === 'closed') {
-    const activeRuns = readRuns()
-      .filter(run => run.ticketId === ticketId && ['pending', 'running'].includes(run.status));
+    const activeRuns = await collectRuntimeStatePages('listRunsForTickets', 'runs', {
+      ticketIds: [ticketId],
+      statuses: ['pending', 'running']
+    });
     for (const run of activeRuns) {
       await interruptAgentRun(run, `${changedBy} closed ticket #${ticketId}`);
     }
@@ -22460,7 +21764,7 @@ fastify.patch('/api/tickets/:id/status', {
     try {
       await createRunsForTicket(updatedTicket, delegatedFromRequest(request, 'reopen_auto_run'));
     } catch (error) {
-      const currentTicket = readTickets().find(item => item.id === ticketId);
+      const currentTicket = await getTicketById(ticketId);
       if (currentTicket && currentTicket.status !== 'failed') {
         await getTicketRunLifecycleRepository().transitionTicketState({
           ticketId,
@@ -22481,7 +21785,7 @@ fastify.patch('/api/tickets/:id/status', {
 
 fastify.post('/api/tickets/:id/rerun', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
@@ -22499,19 +21803,19 @@ fastify.post('/api/tickets/:id/rerun', {
   const changedBy = request.user ? request.user.username : 'operator';
   let ticket = null;
 
-  const rerunGateTicket = readTickets().find(item => item.id === ticketId);
+  const rerunGateTicket = await getTicketById(ticketId);
   if (rerunGateTicket) {
     if (hasUnresolvedTicketTriage(rerunGateTicket)) {
       reply.code(409);
       return { error: 'Cannot rerun: unresolved ticket-level triage exists on this ticket. Resolve triage first.' };
     }
-    const rerunCheck = validateManualRerun(rerunGateTicket);
+    const rerunCheck = await validateManualRerun(rerunGateTicket);
     if (!rerunCheck.allowed) {
       reply.code(409);
       return { error: rerunCheck.reason };
     }
     if (rerunGateTicket.targetRef && rerunGateTicket.targetRef.kind === 'browser') {
-      const browserTarget = getBrowserTargetById(rerunGateTicket.targetRef.browserTargetId);
+      const browserTarget = (await getBrowserTargetById(rerunGateTicket.targetRef.browserTargetId));
       if (!browserTarget || browserTarget.status !== 'active') {
         reply.code(409);
         return { error: 'Cannot rerun: the browser target is no longer active or is unavailable. Reactivate the target or choose a valid target before rerunning.' };
@@ -22566,8 +21870,7 @@ fastify.post('/api/tickets/:id/simulate-plan', {
     return { error: 'Invalid ticket id' };
   }
 
-  const tickets = readTickets();
-  const ticket = tickets.find(item => item.id === ticketId);
+  const ticket = await getTicketById(ticketId);
   if (!ticket) {
     reply.code(404);
     return { error: 'Ticket not found' };
@@ -22595,15 +21898,15 @@ fastify.post('/api/tickets/:id/simulate-plan', {
   if (includeModelPlan) {
     let agent = null;
     if (ticket.assignmentTargetType === 'agent') {
-      agent = readAgents().find(a => a.id === ticket.assignmentTargetId);
+      agent = await getConfiguredAgentRepository().getConfiguredAgentById(ticket.assignmentTargetId);
     }
     if (!agent || !agent.provider) {
-      agent = readAgents().find(a => a && a.provider);
+      agent = (await listConfiguredAgentOptions()).find(a => a && a.provider);
     }
     if (agent && agent.provider) {
       result.simulatedAgent = agent.name;
-      const runtimeEnvelope = buildSimulationRuntimeEnvelope(ticket, agent);
-      const input = buildAgentPrompt(ticket, runtimeEnvelope, [], null, null);
+      const runtimeEnvelope = await buildSimulationRuntimeEnvelope(ticket, agent);
+      const input = await buildAgentPrompt(ticket, runtimeEnvelope, [], null, null);
 
       let modelResponse;
       try {
@@ -22660,9 +21963,12 @@ fastify.post('/api/tickets/:id/simulate-plan', {
 // recorded ceiling, which the manual rerun guard reads fresh on future rerun attempts.
 // No domain event is appended: executionPolicy is not part of the event-sourced ticket
 // projection (ticket.created payloads omit it and the rebuilder never reconstructs it),
-// so tickets.json is authoritative for policy. We persist + write a system-log audit
-// entry, consistent with how the ticket record already stores policy.
-fastify.post('/api/tickets/:id/execution-policy/max-attempts', { preHandler: fastify.requireAuth }, async (request, reply) => {
+// The PostgreSQL ticket row is authoritative for policy. The optimistic ticket update and
+// diagnostic audit remain on the normal repository path.
+fastify.post('/api/tickets/:id/execution-policy/max-attempts', {
+  preHandler: fastify.requireAuth,
+  config: { mutationAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -22696,24 +22002,32 @@ fastify.post('/api/tickets/:id/execution-policy/max-attempts', { preHandler: fas
     return { error: 'maxAttempts must be a positive integer, or empty/clear for unlimited' };
   }
 
-  const tickets = readTickets();
-  const ticket = tickets.find(item => item.id === ticketId);
-  if (!ticket) {
+  const currentTicket = await getRuntimeStateReadRepository().getTicket(ticketId);
+  if (!currentTicket) {
     reply.code(404);
     return { error: 'Ticket not found' };
   }
 
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  const previousValue = ticket.executionPolicy ? ticket.executionPolicy.maxAttempts : null;
-  // Preserve every other executionPolicy field; change only maxAttempts.
-  ticket.executionPolicy = { ...ticket.executionPolicy, maxAttempts: nextValue };
-  ticket.updatedAt = new Date().toISOString();
-  writeTickets(tickets);
+  const previousValue = currentTicket.executionPolicy ? currentTicket.executionPolicy.maxAttempts : null;
+  const result = await getTicketRunLifecycleRepository().transitionTicketState({
+    ticketId,
+    fromStatuses: [currentTicket.status],
+    toStatus: currentTicket.status,
+    patch: {
+      executionPolicy: { ...currentTicket.executionPolicy, maxAttempts: nextValue },
+      changedBy,
+      changedAt: new Date().toISOString()
+    },
+    eventType: 'ticket.execution_policy_updated',
+    eventPayload: { changedBy, fromMaxAttempts: previousValue, toMaxAttempts: nextValue }
+  });
+  const ticket = result.ticket;
   broadcastTicketChange();
-  appendSystemLog('ticket:max_attempts_change', `Ticket #${ticketId} maxAttempts changed from ${previousValue === null ? 'unlimited' : previousValue} to ${nextValue === null ? 'unlimited' : nextValue} by ${changedBy}`, null, {
+  await appendSystemLog('ticket:max_attempts_change', `Ticket #${ticketId} maxAttempts changed from ${previousValue === null ? 'unlimited' : previousValue} to ${nextValue === null ? 'unlimited' : nextValue} by ${changedBy}`, null, {
     ticketId,
     changedBy,
-    changedAt: ticket.updatedAt,
+    changedAt: ticket.changedAt,
     fromMaxAttempts: previousValue,
     toMaxAttempts: nextValue
   });
@@ -22731,12 +22045,17 @@ fastify.post('/api/tickets/:id/execution-policy/max-attempts', { preHandler: fas
 // Operator responses live in the thread; resolving a blocker thread performs
 // the same triage annotation the old per-page resolve forms did.
 
-function readMessageThreads() {
-  return readJsonArrayCached(MESSAGE_THREADS_FILE);
-}
-
-function writeMessageThreads(threads) {
-  writeFileAtomic(MESSAGE_THREADS_FILE, JSON.stringify(Array.isArray(threads) ? threads : [], null, 2));
+async function readMessageThreads(options = {}) {
+  const threads = [];
+  let afterId = 0;
+  const limit = getRuntimeSchedulerCandidateLimit();
+  while (true) {
+    const page = await postgresRuntimeStore.listMessageThreads({ ...options, afterId, limit });
+    threads.push(...page.threads);
+    if (page.nextAfterId === null) return threads;
+    if (!Number.isSafeInteger(page.nextAfterId) || page.nextAfterId <= afterId) throw new Error('listMessageThreads returned a non-advancing cursor');
+    afterId = page.nextAfterId;
+  }
 }
 
 function inboxSubjectText(text, max = 80) {
@@ -22744,9 +22063,9 @@ function inboxSubjectText(text, max = 80) {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
-function inboxAgentName(agentId) {
+async function inboxAgentName(agentId) {
   if (agentId == null) return 'System';
-  const agent = readAgents().find(item => item.id === agentId);
+  const agent = await getConfiguredAgentRepository().getConfiguredAgentById(agentId);
   return agent ? agent.name : `Agent #${agentId}`;
 }
 
@@ -22792,10 +22111,9 @@ function summarizeDeliverableConsequence(run) {
   return lines.join('\n');
 }
 
-function createInboxThread(threads, fields) {
+function createInboxThread(fields) {
   const now = new Date().toISOString();
   const thread = {
-    id: nextId(threads),
     key: fields.key,
     kind: fields.kind,
     ticketId: fields.ticketId,
@@ -22815,7 +22133,6 @@ function createInboxThread(threads, fields) {
     closedBy: null,
     messages: []
   };
-  threads.push(thread);
   return thread;
 }
 
@@ -22848,17 +22165,27 @@ async function inboxRunModelMessage(run) {
 // completed-ticket deliverables. Never mutates tickets or runs. Safe to run on
 // every inbox read; only writes when something changed.
 async function reconcileInboxThreads() {
-  const threads = readMessageThreads();
-  const byKey = new Map(threads.map(thread => [thread.key, thread]));
-  const tickets = readTickets();
+  const [existingThreads, tickets, runs] = await Promise.all([
+    readMessageThreads(),
+    readTickets(),
+    readRuns()
+  ]);
+  const byKey = new Map(existingThreads.map(thread => [thread.key, thread]));
   const ticketById = new Map(tickets.map(ticket => [ticket.id, ticket]));
-  let changed = false;
 
-  function ensureTriageThread({ key, kind, ticketId, runId, subject, triage, agentName = null, modelMessage = null }) {
-    let thread = byKey.get(key);
+  async function createThreadIfAbsent(fields, initialMessage) {
+    const draft = createInboxThread(fields);
+    const result = await postgresRuntimeStore.createMessageThreadIfAbsent({ thread: draft, initialMessage });
+    byKey.set(fields.key, result.thread);
+    return result.thread;
+  }
+
+  async function ensureTriageThread({ key, kind, ticketId, runId, subject, triage, agentName = null, modelMessage = null }) {
+    let thread = byKey.get(key) || null;
     if (!thread && triage.required === true) {
       const ticket = ticketById.get(ticketId) || null;
-      thread = createInboxThread(threads, {
+      const createdAt = triage.createdAt || new Date().toISOString();
+      thread = await createThreadIfAbsent({
         key,
         kind,
         ticketId,
@@ -22871,50 +22198,46 @@ async function reconcileInboxThreads() {
         allowedActions: triage.allowedActions,
         prohibitedActions: triage.prohibitedActions,
         evidenceRefs: triage.evidenceRefs,
-        createdAt: triage.createdAt || new Date().toISOString()
+        createdAt
+      }, modelMessage ? {
+        author: 'agent',
+        authorName: agentName || 'Agent',
+        kind: 'report',
+        body: sanitizeLogMessage(modelMessage),
+        createdAt
+      } : {
+        author: 'system',
+        authorName: 'System',
+        kind: 'report',
+        body: sanitizeLogMessage(triage.summary || 'No failure summary was recorded.'),
+        createdAt
       });
-      byKey.set(key, thread);
-      if (modelMessage) {
-        // The model's own recorded terminal message, verbatim.
-        appendInboxMessage(thread, {
-          author: 'agent',
-          authorName: agentName || 'Agent',
-          kind: 'report',
-          body: modelMessage,
-          createdAt: triage.createdAt || thread.createdAt
-        });
-      } else {
-        // No model output exists for this blocker (pre-run gate or a failure
-        // before any model response) — attribute the recorded reason to the
-        // system rather than inventing an agent message.
-        appendInboxMessage(thread, {
-          author: 'system',
-          authorName: 'System',
-          kind: 'report',
-          body: triage.summary || 'No failure summary was recorded.',
-          createdAt: triage.createdAt || thread.createdAt
-        });
-      }
-      changed = true;
     }
-    // Triage resolved outside the inbox (legacy API, scripts): mirror the
-    // resolution into the thread so both surfaces agree.
+
     if (thread && thread.status === 'open' && triage.resolvedAt && !thread.messages.some(message => message.kind === 'resolution')) {
-      appendInboxMessage(thread, {
-        author: 'operator',
-        authorName: triage.resolvedBy || 'operator',
-        kind: 'resolution',
-        body: triage.resolution || 'Resolved.',
-        createdAt: triage.resolvedAt
+      const result = await postgresRuntimeStore.resolveMessageThread({
+        threadId: thread.id,
+        closedBy: triage.resolvedBy || 'operator',
+        closedAt: triage.resolvedAt,
+        message: {
+          author: 'operator',
+          authorName: triage.resolvedBy || 'operator',
+          kind: 'resolution',
+          body: sanitizeLogMessage(triage.resolution || 'Resolved.'),
+          createdAt: triage.resolvedAt
+        }
       });
-      closeInboxThread(thread, triage.resolvedBy || 'operator', triage.resolvedAt);
-      changed = true;
+      if (result) {
+        thread = result.thread;
+        byKey.set(key, thread);
+      }
     }
+    return thread;
   }
 
-  tickets.forEach(ticket => {
-    if (!ticket.triage || !ticket.triage.createdAt) return;
-    ensureTriageThread({
+  for (const ticket of tickets) {
+    if (!ticket.triage || !ticket.triage.createdAt) continue;
+    await ensureTriageThread({
       key: `ticket:${ticket.id}:triage:${ticket.triage.createdAt}`,
       kind: 'blocker',
       ticketId: ticket.id,
@@ -22922,22 +22245,21 @@ async function reconcileInboxThreads() {
       subject: `Ticket #${ticket.id} blocked: ${inboxSubjectText(ticket.objective, 60)}`,
       triage: ticket.triage
     });
-  });
+  }
 
-  const runs = readRuns();
   for (const run of runs) {
     if (!run.triage || !run.triage.createdAt) continue;
     const key = `run:${run.id}:triage:${run.triage.createdAt}`;
     const needsThread = !byKey.has(key) && run.triage.required === true;
     const ticket = ticketById.get(run.ticketId) || null;
-    ensureTriageThread({
+    await ensureTriageThread({
       key,
       kind: 'blocker',
       ticketId: run.ticketId,
       runId: run.id,
       subject: `Run #${run.id} ${run.status === 'interrupted' ? 'interrupted' : 'blocked'}: ${inboxSubjectText(ticket ? ticket.objective : run.triage.summary, 60)}`,
       triage: run.triage,
-      agentName: inboxAgentName(run.agentId),
+      agentName: await inboxAgentName(run.agentId),
       modelMessage: needsThread ? await inboxRunModelMessage(run) : null
     });
   }
@@ -22946,11 +22268,12 @@ async function reconcileInboxThreads() {
     if (ticket.status !== 'completed') continue;
     const finalRun = runs
       .filter(run => run.ticketId === ticket.id && run.status === 'completed')
-      .reduce((latest, run) => (!latest || (run.id > latest.id) ? run : latest), null);
+      .reduce((latest, run) => (!latest || run.id > latest.id ? run : latest), null);
     const key = finalRun ? `ticket:${ticket.id}:deliverable:run:${finalRun.id}` : `ticket:${ticket.id}:deliverable:manual`;
     if (byKey.has(key)) continue;
     const createdAt = (finalRun && finalRun.updatedAt) || ticket.updatedAt || new Date().toISOString();
-    const thread = createInboxThread(threads, {
+    const modelMessage = finalRun ? await inboxRunModelMessage(finalRun) : null;
+    await createThreadIfAbsent({
       key,
       kind: 'deliverable',
       ticketId: ticket.id,
@@ -22958,78 +22281,58 @@ async function reconcileInboxThreads() {
       workContextId: ticket.workContextId,
       subject: `Deliverable: ${inboxSubjectText(ticket.objective, 64)}`,
       createdAt
+    }, modelMessage ? {
+      author: 'agent',
+      authorName: await inboxAgentName(finalRun.agentId),
+      kind: 'report',
+      body: sanitizeLogMessage(modelMessage),
+      createdAt
+    } : {
+      author: 'system',
+      authorName: 'System',
+      kind: 'report',
+      body: sanitizeLogMessage(summarizeDeliverableConsequence(finalRun)),
+      createdAt
     });
-    byKey.set(key, thread);
-    const modelMessage = finalRun ? await inboxRunModelMessage(finalRun) : null;
-    if (modelMessage) {
-      appendInboxMessage(thread, {
-        author: 'agent',
-        authorName: inboxAgentName(finalRun.agentId),
-        kind: 'report',
-        body: modelMessage,
-        createdAt
-      });
-    } else {
-      appendInboxMessage(thread, {
-        author: 'system',
-        authorName: 'System',
-        kind: 'report',
-        body: summarizeDeliverableConsequence(finalRun),
-        createdAt
-      });
-    }
-    changed = true;
   }
 
-  if (changed) writeMessageThreads(threads);
-  return threads;
+  return readMessageThreads();
 }
 
-function syncInboxThreadResolution(ownerKind, ownerId, triage, resolvedBy) {
-  const threads = readMessageThreads();
+async function syncInboxThreadResolution(ownerKind, ownerId, triage, resolvedBy) {
   const key = `${ownerKind}:${ownerId}:triage:${triage.createdAt}`;
-  const thread = threads.find(item => item.key === key);
-  if (!thread || thread.status !== 'open') return null;
-  appendInboxMessage(thread, {
-    author: 'operator',
-    authorName: resolvedBy,
-    kind: 'resolution',
-    body: triage.resolution || 'Resolved.',
-    createdAt: triage.resolvedAt
+  const result = await postgresRuntimeStore.resolveMessageThreadByKey({
+    key,
+    closedBy: resolvedBy,
+    closedAt: triage.resolvedAt,
+    message: {
+      author: 'operator',
+      authorName: resolvedBy,
+      kind: 'resolution',
+      body: sanitizeLogMessage(triage.resolution || 'Resolved.'),
+      createdAt: triage.resolvedAt
+    }
   });
-  closeInboxThread(thread, resolvedBy, triage.resolvedAt);
-  writeMessageThreads(threads);
-  return thread;
+  return result ? result.thread : null;
 }
 
-// Human triage resolution: an operator annotation that marks an existing REQUIRED
-// triage record as resolved/acknowledged. This NEVER reruns, completes, fails,
-// retries, or modifies workspace/run state — it only flips triage.required to false
-// and records who/when/why. Original reasonCode/summary/requiredDecision/
-// evidenceRefs/allowed/prohibited actions are preserved. No allowedAction is
-// performed. Replay/execution evidence is untouched (this is a triage annotation,
-// not a change to the run record's execution snapshot).
-function resolveTriageRecord(triage, resolvedBy, resolution) {
-  return {
-    ...triage,
-    required: false,
-    resolvedAt: new Date().toISOString(),
-    resolvedBy,
-    resolution
-  };
-}
-
-function applyTicketTriageResolution(ticketId, resolvedBy, resolution) {
-  const tickets = readTickets();
-  const ticket = tickets.find(item => item.id === ticketId);
-  if (!ticket) return { error: 'Ticket not found', code: 404 };
-  if (!ticket.triage || ticket.triage.required !== true) {
-    return { error: 'No required ticket-level triage to resolve', code: 409 };
+// Human triage resolution is an operator annotation only: it does not rerun,
+// complete, retry, or perform an allowed action. The repository preserves the
+// original triage facts and commits the resolved projection with its event.
+// Inbox threads remain a repairable derived overlay and are synchronized only
+// after the authoritative triage commit succeeds.
+async function applyTicketTriageResolution(ticketId, resolvedBy, resolution) {
+  let result;
+  try {
+    result = await getTriageRepository().resolveTicketTriage({ ticketId, resolvedBy, resolution });
+  } catch (error) {
+    if (error && error.code === 'TRIAGE_NOT_REQUIRED') {
+      return { error: 'No required ticket-level triage to resolve', code: 409 };
+    }
+    throw error;
   }
-
-  ticket.triage = resolveTriageRecord(ticket.triage, resolvedBy, resolution);
-  ticket.updatedAt = new Date().toISOString();
-  writeTickets(tickets);
+  if (!result) return { error: 'Ticket not found', code: 404 };
+  const { ticket } = result;
   broadcastTicketChange();
   appendSystemLog('ticket:triage_resolve', `Ticket #${ticketId} ticket-level triage resolved by ${resolvedBy}`, null, {
     ticketId,
@@ -23038,21 +22341,22 @@ function applyTicketTriageResolution(ticketId, resolvedBy, resolution) {
     reasonCode: ticket.triage.reasonCode,
     resolution
   });
-  syncInboxThreadResolution('ticket', ticketId, ticket.triage, resolvedBy);
+  await syncInboxThreadResolution('ticket', ticketId, ticket.triage, resolvedBy);
   return { ticket, triage: ticket.triage };
 }
 
-function applyRunTriageResolution(runId, resolvedBy, resolution) {
-  const runs = readRuns();
-  const run = runs.find(item => item.id === runId);
-  if (!run) return { error: 'Run not found', code: 404 };
-  if (!run.triage || run.triage.required !== true) {
-    return { error: 'No required run-level triage to resolve', code: 409 };
+async function applyRunTriageResolution(runId, resolvedBy, resolution) {
+  let result;
+  try {
+    result = await getTriageRepository().resolveRunTriage({ runId, resolvedBy, resolution });
+  } catch (error) {
+    if (error && error.code === 'TRIAGE_NOT_REQUIRED') {
+      return { error: 'No required run-level triage to resolve', code: 409 };
+    }
+    throw error;
   }
-
-  run.triage = resolveTriageRecord(run.triage, resolvedBy, resolution);
-  run.updatedAt = new Date().toISOString();
-  writeRuns(runs);
+  if (!result) return { error: 'Run not found', code: 404 };
+  const { run } = result;
   appendSystemLog('run:triage_resolve', `Run #${runId} triage resolved by ${resolvedBy}`, null, {
     runId,
     ticketId: run.ticketId,
@@ -23061,7 +22365,7 @@ function applyRunTriageResolution(runId, resolvedBy, resolution) {
     reasonCode: run.triage.reasonCode,
     resolution
   });
-  syncInboxThreadResolution('run', runId, run.triage, resolvedBy);
+  await syncInboxThreadResolution('run', runId, run.triage, resolvedBy);
   return { run: { id: run.id, ticketId: run.ticketId, status: run.status, triage: run.triage }, triage: run.triage };
 }
 
@@ -23073,7 +22377,10 @@ function readTriageResolutionInput(request) {
   return { resolution: raw.trim() };
 }
 
-fastify.post('/api/tickets/:id/triage/resolve', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/tickets/:id/triage/resolve', {
+  preHandler: fastify.requireAuth,
+  config: { mutationAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -23092,7 +22399,7 @@ fastify.post('/api/tickets/:id/triage/resolve', { preHandler: fastify.requireAut
   }
 
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  const result = applyTicketTriageResolution(ticketId, changedBy, parsed.resolution);
+  const result = await applyTicketTriageResolution(ticketId, changedBy, parsed.resolution);
   if (result.error) {
     reply.code(result.code);
     return { error: result.error };
@@ -23100,7 +22407,10 @@ fastify.post('/api/tickets/:id/triage/resolve', { preHandler: fastify.requireAut
   return { ticket: result.ticket, triage: result.triage };
 });
 
-fastify.post('/api/runs/:id/triage/resolve', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/runs/:id/triage/resolve', {
+  preHandler: fastify.requireAuth,
+  config: { mutationAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -23119,7 +22429,7 @@ fastify.post('/api/runs/:id/triage/resolve', { preHandler: fastify.requireAuth }
   }
 
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  const result = applyRunTriageResolution(runId, changedBy, parsed.resolution);
+  const result = await applyRunTriageResolution(runId, changedBy, parsed.resolution);
   if (result.error) {
     reply.code(result.code);
     return { error: result.error };
@@ -23142,15 +22452,15 @@ fastify.get('/api/operations/:id/recovery-preview', { preHandler: fastify.requir
     return { error: 'Invalid operation history id' };
   }
 
-  const record = findOperationHistoryRecord(recordId);
+  const state = await getOperatorRecoveryRepository().getOperatorRecovery(recordId);
 
-  if (!record) {
+  if (!state.original) {
     reply.code(404);
     return { error: 'Operation history record not found' };
   }
 
   try {
-    const preview = previewRecovery(record);
+    const preview = previewRecovery(state.original, state.receipt);
     return { preview };
   } catch (error) {
     reply.code(400);
@@ -23158,7 +22468,10 @@ fastify.get('/api/operations/:id/recovery-preview', { preHandler: fastify.requir
   }
 });
 
-fastify.post('/api/operations/:id/recover', { preHandler: fastify.requireAuth }, async (request, reply) => {
+fastify.post('/api/operations/:id/recover', {
+  preHandler: fastify.requireAuth,
+  config: { mutationAdmission: true }
+}, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
     return { error: 'Permission denied' };
@@ -23172,24 +22485,26 @@ fastify.post('/api/operations/:id/recover', { preHandler: fastify.requireAuth },
     return { error: 'Invalid operation history id' };
   }
 
-  const record = findOperationHistoryRecord(recordId);
+  const state = await getOperatorRecoveryRepository().getOperatorRecovery(recordId);
 
-  if (!record) {
+  if (!state.original) {
     reply.code(404);
     return { error: 'Operation history record not found' };
   }
 
   try {
-    const recoveryRecord = executeRecovery(record, confirmed === true);
     const changedBy = request.user ? request.user.username : String(request.session.userId);
-    appendSystemLog('workspace:recovery', `Recovered operation history #${recordId} as #${recoveryRecord.id} by ${changedBy}`, {
-      operation: 'recovery',
-      args: { originalHistoryId: recordId, recoveryHistoryId: recoveryRecord.id }
-    }, {
-      changedBy,
-      changedAt: new Date().toISOString()
-    });
-    return { recovery: recoveryRecord };
+    const completion = await executeRecovery(recordId, confirmed === true, changedBy);
+    if (completion.inserted) {
+      await appendSystemLog('workspace:recovery', `Recovered operation history #${recordId} as #${completion.record.id} by ${changedBy}`, {
+        operation: 'recovery',
+        args: { originalHistoryId: recordId, recoveryHistoryId: completion.record.id }
+      }, {
+        changedBy,
+        changedAt: new Date().toISOString()
+      });
+    }
+    return { recovery: completion.record, idempotent: !completion.inserted, reconciled: completion.reconciled === true };
   } catch (error) {
     reply.code(400);
     return { error: error.message || 'Recovery failed' };
@@ -23233,50 +22548,33 @@ function getPagination(query = {}, defaultLimit = 50) {
   };
 }
 
-function logsPageHref(filters, page, limit) {
+function logsPageHref(filters, page, limit, beforeId = null) {
   const params = new URLSearchParams();
   if (filters.runId !== null) params.set('runId', String(filters.runId));
   if (filters.ticketId !== null) params.set('ticketId', String(filters.ticketId));
   params.set('page', String(page));
   params.set('limit', String(limit));
+  if (beforeId !== null) params.set('beforeId', String(beforeId));
   return `/logs?${params.toString()}`;
 }
 
-function getPaginatedLogs(query = {}) {
+async function getPaginatedLogs(query = {}) {
   const filters = getLogFilters(query);
   const { page, limit } = getPagination(query);
-  const logs = readLogs();
-  const matchesFilter = log => {
-    if (filters.runId !== null && log.runId !== filters.runId) return false;
-    if (filters.ticketId !== null) {
-      const ticketMatch = log.ticketId === filters.ticketId || log.contextTicketId === filters.ticketId;
-      if (!ticketMatch) return false;
-    }
-    return true;
-  };
-  let total = 0;
-
-  for (let index = logs.length - 1; index >= 0; index -= 1) {
-    if (matchesFilter(logs[index])) total += 1;
-  }
-
-  const pageCount = Math.max(1, Math.ceil(total / limit));
-  const currentPage = Math.min(page, pageCount);
-  const offset = (currentPage - 1) * limit;
-  const pageLogs = [];
-  let matched = 0;
-
-  for (let index = logs.length - 1; index >= 0 && pageLogs.length < limit; index -= 1) {
-    const log = logs[index];
-    if (!matchesFilter(log)) continue;
-    if (matched >= offset) {
-      pageLogs.push({
-        ...log,
-        displayTimestamp: formatDisplayTimestamp(log.timestamp)
-      });
-    }
-    matched += 1;
-  }
+  const parsedBeforeId = parseInt(query.beforeId || '', 10);
+  const beforeId = Number.isSafeInteger(parsedBeforeId) && parsedBeforeId > 0 ? parsedBeforeId : null;
+  const currentPage = beforeId === null ? 1 : page;
+  const result = await getDiagnosticLogRepository().listLogs({
+    runId: filters.runId,
+    ticketId: filters.ticketId,
+    beforeId,
+    order: 'desc',
+    limit
+  });
+  const pageLogs = result.logs.map(log => ({
+    ...log,
+    displayTimestamp: formatDisplayTimestamp(log.timestamp)
+  }));
 
   return {
     logs: sanitizeWorkspaceDisplayValue(pageLogs),
@@ -23284,12 +22582,14 @@ function getPaginatedLogs(query = {}) {
     pagination: {
       page: currentPage,
       limit,
-      total,
-      pageCount,
-      start: total === 0 ? 0 : offset + 1,
-      end: Math.min(offset + pageLogs.length, total),
-      previousHref: currentPage > 1 ? logsPageHref(filters, currentPage - 1, limit) : null,
-      nextHref: currentPage < pageCount ? logsPageHref(filters, currentPage + 1, limit) : null
+      returned: pageLogs.length,
+      beforeId,
+      hasMore: result.nextBeforeId !== null,
+      nextBeforeId: result.nextBeforeId,
+      previousHref: null,
+      nextHref: result.nextBeforeId !== null
+        ? logsPageHref(filters, currentPage + 1, limit, result.nextBeforeId)
+        : null
     }
   };
 }
@@ -23303,7 +22603,7 @@ fastify.get('/logs', { preHandler: fastify.requireAuth }, async (request, reply)
     }, request.session.userId));
   }
 
-  const logPage = getPaginatedLogs(request.query || {});
+  const logPage = await getPaginatedLogs(request.query || {});
   return renderCachedView(request, reply, 'logs.ejs', viewData({
     user: request.user,
     logs: logPage.logs,
@@ -23366,19 +22666,18 @@ function readInboxReplyInput(request) {
   return { body: raw.trim() };
 }
 
-function findInboxThread(request, reply) {
+async function findInboxThread(request, reply) {
   const threadId = parseInt(request.params.id, 10);
   if (Number.isNaN(threadId)) {
     reply.code(400);
     return { error: { error: 'Invalid thread id' } };
   }
-  const threads = readMessageThreads();
-  const thread = threads.find(item => item.id === threadId);
+  const thread = await postgresRuntimeStore.getMessageThread(threadId);
   if (!thread) {
     reply.code(404);
     return { error: { error: 'Thread not found' } };
   }
-  return { threads, thread };
+  return { thread };
 }
 
 // Reply without resolving: appends an operator message to the thread record.
@@ -23394,25 +22693,28 @@ fastify.post('/api/inbox/threads/:id/reply', { preHandler: fastify.requireAuth }
     return { error: parsed.error };
   }
 
-  const found = findInboxThread(request, reply);
+  const found = await findInboxThread(request, reply);
   if (found.error) return found.error;
-  const { threads, thread } = found;
+  const { thread } = found;
 
   const author = request.user ? request.user.username : String(request.session.userId);
-  const message = appendInboxMessage(thread, {
-    author: 'operator',
-    authorName: author,
-    kind: 'reply',
-    body: parsed.body
+  const replyResult = await postgresRuntimeStore.appendMessageThreadMessage({
+    threadId: thread.id,
+    message: {
+      author: 'operator',
+      authorName: author,
+      kind: 'reply',
+      body: sanitizeLogMessage(parsed.body)
+    }
   });
-  writeMessageThreads(threads);
+  const { thread: updatedThread, message } = replyResult;
   appendSystemLog('inbox:reply', `Inbox reply on thread #${thread.id} by ${author}`, null, {
     threadId: thread.id,
     ticketId: thread.ticketId,
     contextRunId: thread.runId,
     changedBy: author
   });
-  return { thread, message };
+  return { thread: updatedThread, message };
 });
 
 // Resolve a thread: for blocker threads this performs the triage resolution
@@ -23430,9 +22732,9 @@ fastify.post('/api/inbox/threads/:id/resolve', { preHandler: fastify.requireAuth
     return { error: parsed.error };
   }
 
-  const found = findInboxThread(request, reply);
+  const found = await findInboxThread(request, reply);
   if (found.error) return found.error;
-  const { threads, thread } = found;
+  const { thread } = found;
 
   if (thread.status !== 'open') {
     reply.code(409);
@@ -23444,32 +22746,52 @@ fastify.post('/api/inbox/threads/:id/resolve', { preHandler: fastify.requireAuth
   if (thread.kind === 'blocker') {
     // applyTicketTriageResolution/applyRunTriageResolution append the
     // resolution message and close the thread via syncInboxThreadResolution.
-    const result = thread.runId
+    const result = await runWithNewMutationAdmission({
+      source: 'http_inbox_triage_resolution',
+      threadId: thread.id,
+      ticketId: thread.ticketId,
+      runId: thread.runId || null
+    }, () => thread.runId
       ? applyRunTriageResolution(thread.runId, author, parsed.body)
-      : applyTicketTriageResolution(thread.ticketId, author, parsed.body);
+      : applyTicketTriageResolution(thread.ticketId, author, parsed.body));
     if (result.error) {
       reply.code(result.code);
       return { error: result.error };
     }
-    const updated = readMessageThreads().find(item => item.id === thread.id);
+    const updated = await postgresRuntimeStore.getMessageThread(thread.id);
     return { thread: updated || thread, triage: result.triage };
   }
 
-  appendInboxMessage(thread, {
-    author: 'operator',
-    authorName: author,
-    kind: 'acknowledgement',
-    body: parsed.body
+  const acknowledged = await postgresRuntimeStore.resolveMessageThread({
+    threadId: thread.id,
+    closedBy: author,
+    message: {
+      author: 'operator',
+      authorName: author,
+      kind: 'acknowledgement',
+      body: sanitizeLogMessage(parsed.body)
+    }
   });
-  closeInboxThread(thread, author);
-  writeMessageThreads(threads);
+  const updatedThread = acknowledged.thread;
   appendSystemLog('inbox:deliverable_acknowledged', `Deliverable thread #${thread.id} acknowledged by ${author}`, null, {
     threadId: thread.id,
     ticketId: thread.ticketId,
     contextRunId: thread.runId,
     changedBy: author
   });
-  return { thread };
+  return { thread: updatedThread };
+});
+
+fastify.get('/api/work-types', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:read')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const afterId = String(request.query && request.query.afterId || '');
+  const parsedLimit = parseInt(request.query && request.query.limit, 10);
+  const limit = Number.isSafeInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 100) : 100;
+  const page = await postgresRuntimeStore.listWorkTypes({ afterId, limit });
+  return { workTypes: page.workTypes, nextAfterId: page.nextAfterId, limit };
 });
 
 fastify.get('/api/logs', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -23478,7 +22800,7 @@ fastify.get('/api/logs', { preHandler: fastify.requireAuth }, async (request, re
     return { error: 'Permission denied' };
   }
 
-  const logPage = getPaginatedLogs(request.query || {});
+  const logPage = await getPaginatedLogs(request.query || {});
   return {
     logs: logPage.logs,
     filters: logPage.filters,
@@ -23486,18 +22808,62 @@ fastify.get('/api/logs', { preHandler: fastify.requireAuth }, async (request, re
   };
 });
 
+// Bounded, domain-specific export pages for operator tooling. Full traversal is
+// possible through cursors without constructing a deployment-sized response.
 fastify.get('/api/export', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
     return { error: 'Permission denied' };
   }
-  return {
-    tickets: readTickets(),
-    runs: sanitizeWorkspaceDisplayValue(await hydrateRunReplaySnapshots(readRuns())),
-    logs: sanitizeWorkspaceDisplayValue(readLogs()),
-    history: sanitizeWorkspaceDisplayValue(readOperationHistory()),
-    plans: sanitizeWorkspaceDisplayValue(readAllocationPlans())
-  };
+  const domain = String(request.query && request.query.domain || '').trim();
+  const supported = new Set(['tickets', 'runs', 'logs', 'history', 'plans']);
+  if (!supported.has(domain)) {
+    reply.code(400);
+    return { error: 'domain must be one of tickets, runs, logs, history, or plans' };
+  }
+  const parsedLimit = parseInt(request.query && request.query.limit, 10);
+  const limit = Number.isSafeInteger(parsedLimit) && parsedLimit > 0
+    ? Math.min(parsedLimit, 100)
+    : Math.min(100, getRuntimeSchedulerCandidateLimit());
+  const rawCursor = request.query && request.query.cursor;
+
+  if (domain === 'logs') {
+    const parsedCursor = Number(rawCursor);
+    const beforeId = rawCursor === undefined || rawCursor === ''
+      ? null
+      : Number.isSafeInteger(parsedCursor) && parsedCursor > 0 ? parsedCursor : null;
+    if (rawCursor !== undefined && rawCursor !== '' && beforeId === null) {
+      reply.code(400);
+      return { error: 'cursor must be a positive integer' };
+    }
+    const page = await getDiagnosticLogRepository().listLogs({ beforeId, order: 'desc', limit });
+    return { domain, items: sanitizeWorkspaceDisplayValue(page.logs), nextCursor: page.nextBeforeId, limit };
+  }
+
+  const parsedCursor = Number(rawCursor);
+  const afterId = rawCursor === undefined || rawCursor === ''
+    ? 0
+    : Number.isSafeInteger(parsedCursor) && parsedCursor >= 0 ? parsedCursor : null;
+  if (afterId === null) {
+    reply.code(400);
+    return { error: 'cursor must be a non-negative integer' };
+  }
+  if (domain === 'tickets') {
+    const page = await getRuntimeStateReadRepository().listTickets({ afterId, limit });
+    return { domain, items: page.tickets, nextCursor: page.nextAfterId, limit };
+  }
+  if (domain === 'runs') {
+    const page = await getRuntimeStateReadRepository().listRuns({ afterId, limit });
+    const runs = await hydrateRunReplaySnapshots(page.runs);
+    return { domain, items: sanitizeWorkspaceDisplayValue(runs), nextCursor: page.nextAfterId, limit };
+  }
+  if (domain === 'history') {
+    const items = await postgresRuntimeStore.listOperations({ afterId, limit });
+    const nextCursor = items.length === limit ? items[items.length - 1].id : null;
+    return { domain, items: sanitizeWorkspaceDisplayValue(items), nextCursor, limit };
+  }
+  const page = await postgresRuntimeStore.listAllocationPlans({ afterId, limit });
+  return { domain, items: sanitizeWorkspaceDisplayValue(page.plans), nextCursor: page.nextAfterId, limit };
 });
 
 fastify.get('/api/logs/events', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -23544,12 +22910,13 @@ function formatDiagnosticWorkspaceOperation(record, index) {
 // it reads already-computed run-detail data plus a few read-only lookups, writes
 // nothing, and changes no runtime behavior. It never includes provider API keys,
 // session cookies, password hashes, auth tokens, or environment secrets.
-function buildRunDiagnosticBundle(ctx) {
+async function buildRunDiagnosticBundle(ctx) {
   const {
     run, ticket, agent, snapshot, authorityContext, failureSummary,
     operationHistory, permissionedDeleteAuditEvents, completionSummary,
     eventSummary, recentLogs, artifactPredictionComparison, artifactAccuracy,
     objectiveSuccess, operationalOutcome, partialMutationCount, runtimeLimitsDisplay,
+    permissionCatalog, delegatedAuthorization,
     generatedAt, route
   } = ctx;
 
@@ -23563,12 +22930,9 @@ function buildRunDiagnosticBundle(ctx) {
   const history = Array.isArray(operationHistory) ? operationHistory : [];
   const opPath = op => (op && (op.path != null ? op.path : (op.args && op.args.path))) || null;
 
-  // Canonical replay event list: snapshot.events is what the runtime records;
-  // snapshot.replayEvents is a legacy/empty fallback. Reporting must agree with
-  // the raw snapshot, so prefer .events.
-  const replayEvents = Array.isArray(s.events)
-    ? s.events
-    : (Array.isArray(s.replayEvents) ? s.replayEvents : []);
+  // Current-format replay events are stored on snapshot.events. Reporting reads
+  // that canonical field and does not normalize retired replay shapes.
+  const replayEvents = Array.isArray(s.events) ? s.events : [];
   const evType = e => String((e && (e.type || e.kind)) || '');
   const phaseViolationCount = replayEvents.filter(e => evType(e) === 'execution.phase_violation').length;
   const modelStallCount = replayEvents.filter(e => evType(e) === 'model:stalled').length;
@@ -23597,24 +22961,12 @@ function buildRunDiagnosticBundle(ctx) {
     : history.filter(h => h && !h.error).length;
   const runtimeAcceptedCount = workspaceOps.length;
 
-  // Delegated authority + permission resolution. Distinguish the in-code constant
-  // from the live permissions data — these can legitimately differ when a live
-  // data dir is older than the app (do not claim the live file contains it if not).
+  // Delegated authority is supplied as one repository snapshot so the diagnostic
+  // cannot combine groups and permissions observed at different times.
   const delegatedUserId = run && run.delegatedUserId != null ? run.delegatedUserId : null;
-  const permissionCatalog = (typeof readPermissions === 'function') ? readPermissions() : [];
   const permissionInLiveData = permissionCatalog.includes(CROSS_TICKET_DELETE_PERMISSION);
-  let delegatedHasPermission = false;
-  let delegatedGroups = [];
-  if (delegatedUserId != null) {
-    try {
-      delegatedHasPermission = hasPermission(delegatedUserId, CROSS_TICKET_DELETE_PERMISSION);
-      const groups = readGroups();
-      delegatedGroups = getPrincipalGroupIds('user', delegatedUserId).map(id => {
-        const g = groups.find(item => item.id === id);
-        return g ? { id: g.id, name: g.name, permissions: Array.isArray(g.permissions) ? g.permissions : [] } : { id, name: 'unavailable', permissions: [] };
-      });
-    } catch (_) { /* read-only best effort */ }
-  }
+  const delegatedHasPermission = Boolean(delegatedAuthorization && delegatedAuthorization.permissions.includes(CROSS_TICKET_DELETE_PERMISSION));
+  const delegatedGroups = delegatedAuthorization ? delegatedAuthorization.groups : [];
 
   // Cross-ticket conflict detection: prefer a recorded blocked workspace op; else
   // parse the deterministic conflict message (buildCrossTicketConflictError) from
@@ -23664,7 +23016,7 @@ function buildRunDiagnosticBundle(ctx) {
   out('## 1. Summary');
   if (blockedDelete && committedCount === 0) {
     const p = dash(opPath(blockedDelete));
-    out(`This run was blocked before mutation. The model proposed deletePath ${p}, but ${p} overlaps an artifact produced by Ticket #${dash(blockedDelete.conflictingTicketId)} / Run #${dash(blockedDelete.conflictingRunId)}. No operation-history mutation was committed for this run.`);
+    out(`This run was blocked before mutation. The model proposed deletePath ${p}, but ${p} overlaps an artifact produced by Ticket #${dash(blockedDelete.conflictingTicketId)} / Run #${dash(blockedDelete.conflictingRunId)}. No PostgreSQL operation receipt was committed for this run.`);
   }
   if (permEvents.length > 0) {
     out(`This run was allowed to delete a cross-ticket artifact because the run's delegated user had ${CROSS_TICKET_DELETE_PERMISSION}. The audit evidence records the prior owner, requesting run, delegated actor, delegated permission source, and permission used.`);
@@ -23875,7 +23227,7 @@ function buildRunDiagnosticBundle(ctx) {
       out(`- #${dash(h.id)} ${dash(h.operation)} path=${dash(opPath(h))} ${h.error ? 'ERROR=' + h.error : 'ok'}`);
     });
   } else {
-    out('- No operation-history records committed for this run.');
+    out('- No PostgreSQL operation receipts committed for this run.');
   }
   if (blockedConflict) {
     out('- Conflicting owner (from blocked op): ticket #' + dash(blockedConflict.conflictingTicketId) + ', run #' + dash(blockedConflict.conflictingRunId) + ', history id ' + dash(blockedConflict.conflictingHistoryId) + ', path ' + dash(blockedConflict.conflictingPath));
@@ -24010,7 +23362,7 @@ function buildRunDiagnosticBundle(ctx) {
     const decisionGraph = buildRunDecisionGraph(
       run,
       s,
-      typeof getRunEvents === 'function' && run && run.id != null ? getRunEvents(run.id) : [],
+      typeof getRunEvents === 'function' && run && run.id != null ? (await getRunEvents(run.id)) : [],
       Array.isArray(operationHistory) ? operationHistory : []
     );
     renderRunDecisionGraphText(decisionGraph).forEach(line => out(line));
@@ -24046,7 +23398,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }, request.session.userId));
   }
 
-  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
+  const authority = await readRuntimeRunAuthority(runId);
+  const run = authority ? authority.run : null;
 
   if (!run) {
     reply.code(404);
@@ -24056,12 +23409,18 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }, request.session.userId));
   }
 
-  const history = readOperationHistory();
-  const runPartialMutationCount = countRunMutatingOperations(runId, history);
-  const agent = readAgents().find(a => a.id === run.agentId) || null;
-  const ticket = readTickets().find(item => item.id === run.ticketId) || null;
+  const [runEvents, runOperations, ticketRuns, runLogs] = await Promise.all([
+    readAllRunTimelineEvents(runId),
+    readAllRunOperations(runId),
+    readAllRunsForTicket(run.ticketId),
+    collectDiagnosticLogPages({ runId })
+  ]);
+  const history = runOperations;
+  const runPartialMutationCount = countRunMutatingOperations(runId, runOperations);
+  const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
+  const ticket = authority.ticket;
   const snapshot = run.replaySnapshot || null;
-  const authorityContext = buildRunAuthorityContext(run, ticket, agent, snapshot);
+  const authorityContext = await buildRunAuthorityContext(run, ticket, agent, snapshot);
 
   if (authorityContext.controls.recoverable && history.some(h => h.runId === runId && h.error && h.operation !== 'recovery')) {
     authorityContext.controls.recoveryAvailable = true;
@@ -24076,24 +23435,22 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
       opErrorInfo[key] = buildOperationErrorInfo(op);
     });
   }
-  const enrichedHistory = enrichOperationHistoryForDisplay(getOperationHistoryForRun(runId, history));
+  const enrichedHistory = enrichOperationHistoryForDisplay(runOperations);
   enrichedHistory.forEach(record => {
     record.allowance = classifyOperationAllowance(record);
     record.errorInfo = buildOperationErrorInfo(record);
   });
-  const failureSummary = buildRunFailureSummary(run, snapshot, enrichedHistory, runPartialMutationCount, authorityContext.controls.recoveryAvailable);
-  const workflows = readWorkflows();
-  const artifactPredictionComparison = buildArtifactPredictionComparison(run, snapshot, history, workflows);
+  const failureSummary = buildRunFailureSummary(run, snapshot, enrichedHistory, runPartialMutationCount, authorityContext.controls.recoveryAvailable, ticket);
+  const artifactPredictionComparison = buildArtifactPredictionComparison(run, snapshot, history);
   const artifactAccuracy = buildArtifactAccuracy(snapshot, artifactPredictionComparison);
   const objectiveSuccess = buildObjectiveSuccess(run);
   const objectivePathCoverage = buildObjectivePathCoverage(ticket, snapshot);
   const reviewStatus = buildRunReviewStatus(run, { objectivePathCoverage, artifactAccuracy, comparison: artifactPredictionComparison });
   const displaySnapshot = createDisplaySnapshot(snapshot);
   const operationalOutcome = classifyRunOperationalOutcome(run);
-  const runEvents = getRunEvents(runId);
-  const eventSummary = recentEventSummary(runId, runEvents);
+  const eventSummary = (await recentEventSummary(runId, runEvents));
   const runStateInconsistency = detectRunStateInconsistency(run, {
-    logs: readLogs().filter(log => log.runId === runId),
+    logs: runLogs,
     events: runEvents,
     replaySnapshot: snapshot,
     recentEventSummary: eventSummary
@@ -24123,15 +23480,20 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }));
 
   const diagnosticsGeneratedAt = new Date().toISOString();
-  const runDetailAttemptUsage = buildRunAttemptUsage(run, readRuns().filter(item => item.ticketId === run.ticketId));
+  const runDetailAttemptUsage = buildRunAttemptUsage(run, ticketRuns, runEvents);
   const runtimeLimitsDisplay = buildRunRuntimeLimitsDisplay(run, snapshot, runDetailAttemptUsage, ticket && ticket.objective);
   const routingDisplay = buildRoutingDisplay(run, snapshot);
-  const runDiagnosticBundle = buildRunDiagnosticBundle({
+  const recentRunLogs = await getRecentLogsForRun(runId);
+  const [permissionCatalog, delegatedAuthorization] = await Promise.all([
+    listAccessPermissions(),
+    run.delegatedUserId != null ? getAccessCatalogRepository().getUserAuthorization(run.delegatedUserId) : null
+  ]);
+  const runDiagnosticBundle = await buildRunDiagnosticBundle({
     run, ticket, agent, snapshot, authorityContext, failureSummary,
     operationHistory: enrichedHistory, permissionedDeleteAuditEvents, completionSummary,
-    eventSummary, recentLogs: getRecentLogsForRun(runId), artifactPredictionComparison,
+    eventSummary, recentLogs: recentRunLogs, artifactPredictionComparison,
     artifactAccuracy, objectiveSuccess, operationalOutcome, partialMutationCount: runPartialMutationCount,
-    runtimeLimitsDisplay,
+    runtimeLimitsDisplay, permissionCatalog, delegatedAuthorization,
     generatedAt: diagnosticsGeneratedAt, route: '/runs/' + runId
   });
 
@@ -24145,7 +23507,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     opAllowance,
     opErrorInfo,
     failureSummary,
-    recentLogs: getRecentLogsForRun(runId),
+    recentLogs: recentRunLogs,
     operationHistory: enrichedHistory,
     artifactPredictionComparison,
     artifactAccuracy,
@@ -24185,17 +23547,18 @@ fastify.get('/api/runs/:id/events', { preHandler: fastify.requireAuth }, async (
     return { error: 'Invalid run id' };
   }
 
-  const run = readRuns().find(item => item.id === runId);
+  const authority = await readRuntimeRunAuthority(runId);
+  const run = authority ? authority.run : null;
 
   if (!run) {
     reply.code(404);
     return { error: 'Run not found' };
   }
 
-  const events = getRunEvents(runId);
+  const events = await readAllRunTimelineEvents(runId);
   return {
     events,
-    summary: recentEventSummary(runId, events)
+    summary: (await recentEventSummary(runId, events))
   };
 });
 
@@ -24212,14 +23575,25 @@ fastify.get('/api/runs/:id/state', { preHandler: fastify.requireAuth }, async (r
     return { error: 'Invalid run id' };
   }
 
-  const run = await hydrateRunReplaySnapshot(readRuns().find(item => item.id === runId));
+  const authority = await readRuntimeRunAuthority(runId);
+  const run = authority ? authority.run : null;
 
   if (!run) {
     reply.code(404);
     return { error: 'Run not found' };
   }
 
-  return serializeRunRuntimeState(run);
+  const [events, operations, ticketRuns] = await Promise.all([
+    readAllRunTimelineEvents(runId),
+    readAllRunOperations(runId),
+    readAllRunsForTicket(run.ticketId)
+  ]);
+  return serializeRunRuntimeState(run, null, {
+    events,
+    operations,
+    ticketRuns,
+    eventSummary: (await recentEventSummary(runId, events))
+  });
 });
 
 fastify.get('/api/runs/:id/operations', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -24235,19 +23609,19 @@ fastify.get('/api/runs/:id/operations', { preHandler: fastify.requireAuth }, asy
     return { error: 'Invalid run id' };
   }
 
-  const run = readRuns().find(item => item.id === runId);
+  const run = await getRuntimeStateReadRepository().getRun(runId);
 
   if (!run) {
     reply.code(404);
     return { error: 'Run not found' };
   }
 
-  return { operations: getOperationHistoryForRun(runId) };
+  return { operations: await readAllRunOperations(runId) };
 });
 
 fastify.post('/api/runs/:id/stop', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
@@ -24255,7 +23629,9 @@ fastify.post('/api/runs/:id/stop', {
   }
 
   const runId = parseInt(request.params.id, 10);
-  const run = readRuns().find(item => item.id === runId);
+  const run = Number.isSafeInteger(runId) && runId > 0
+    ? await getRuntimeStateReadRepository().getRun(runId)
+    : null;
 
   if (Number.isNaN(runId)) {
     reply.code(400);
@@ -24277,7 +23653,7 @@ fastify.post('/api/runs/:id/stop', {
 
 fastify.post('/api/runs/:id/retry', {
   preHandler: fastify.requireAuth,
-  config: { eventJournalAdmission: true }
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:update')) {
     reply.code(403);
@@ -24285,7 +23661,9 @@ fastify.post('/api/runs/:id/retry', {
   }
 
   const runId = parseInt(request.params.id, 10);
-  const run = readRuns().find(item => item.id === runId);
+  const run = Number.isSafeInteger(runId) && runId > 0
+    ? await getRuntimeStateReadRepository().getRun(runId)
+    : null;
 
   if (Number.isNaN(runId)) {
     reply.code(400);
@@ -24302,13 +23680,13 @@ fastify.post('/api/runs/:id/retry', {
     return { error: 'Only failed or interrupted runs can be retried' };
   }
 
-  const retryGateTicket = readTickets().find(item => item.id === run.ticketId);
+  const retryGateTicket = await getRuntimeStateReadRepository().getTicket(run.ticketId);
   if (retryGateTicket) {
     if (hasUnresolvedTicketTriage(retryGateTicket)) {
       reply.code(409);
       return { error: 'Cannot retry: unresolved ticket-level triage exists on the parent ticket. Resolve triage first.' };
     }
-    const rerunCheck = validateManualRerun(retryGateTicket);
+    const rerunCheck = await validateManualRerun(retryGateTicket);
     if (!rerunCheck.allowed) {
       reply.code(409);
       return { error: rerunCheck.reason };
@@ -24329,15 +23707,89 @@ fastify.get('/agents', { preHandler: fastify.requireAuth }, async (request, repl
     }, request.session.userId));
   }
 
-  const [agentMetrics, modelMetrics] = await Promise.all([
-    getAgentPerformanceMetrics(),
-    getModelPerformanceMetrics()
-  ]);
+  const { agentMetrics, modelMetrics } = await getPerformanceMetrics(await listConfiguredAgentOptions());
   return reply.view('agents.ejs', viewData({
     user: request.user,
     agentMetrics,
     modelMetrics
   }, request.session.userId));
+});
+
+function publicConfiguredAgent(agent) {
+  return agent ? {
+    id: agent.id,
+    name: agent.name,
+    type: 'agent',
+    provider: agent.provider,
+    model: agent.model,
+    revision: agent.revision
+  } : null;
+}
+
+function configuredAgentReadGuard(request, reply) {
+  if (!hasPermission(request.session.userId, 'ticket:read') && !hasPermission(request.session.userId, 'user:read')) {
+    reply.code(403);
+    return false;
+  }
+  return true;
+}
+
+fastify.get('/api/configured-agents', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!configuredAgentReadGuard(request, reply)) return { error: 'Permission denied' };
+  const rawAfterId = request.query.afterId === undefined || request.query.afterId === '' ? 0 : Number(request.query.afterId);
+  const rawLimit = request.query.limit === undefined || request.query.limit === '' ? 100 : Number(request.query.limit);
+  if (!Number.isSafeInteger(rawAfterId) || rawAfterId < 0 ||
+      !Number.isSafeInteger(rawLimit) || rawLimit <= 0 || rawLimit > getRuntimeSchedulerCandidateLimit()) {
+    reply.code(400);
+    return { error: 'afterId and limit must define a valid bounded page' };
+  }
+  let providers = null;
+  if (request.query.provider !== undefined && request.query.provider !== '') {
+    providers = String(request.query.provider).split(',').map(value => value.trim()).filter(Boolean);
+    if (providers.length === 0 || providers.some(provider => !PROVIDERS.includes(provider))) {
+      reply.code(400);
+      return { error: 'provider must contain supported provider names' };
+    }
+  }
+  const page = await getConfiguredAgentRepository().listConfiguredAgents({
+    afterId: rawAfterId,
+    providers,
+    limit: rawLimit
+  });
+  return { agents: page.agents.map(publicConfiguredAgent), nextAfterId: page.nextAfterId };
+});
+
+fastify.get('/api/configured-agents/resolve', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!configuredAgentReadGuard(request, reply)) return { error: 'Permission denied' };
+  const requested = String(request.query.value || '').trim();
+  if (!requested) {
+    reply.code(400);
+    return { error: 'value is required' };
+  }
+  const parsedId = Number(requested);
+  const agent = Number.isSafeInteger(parsedId) && parsedId > 0 && String(parsedId) === requested
+    ? await getConfiguredAgentRepository().getConfiguredAgentById(parsedId)
+    : await getConfiguredAgentRepository().getConfiguredAgentByName(requested, { caseInsensitive: true });
+  if (!agent) {
+    reply.code(404);
+    return { error: 'Configured agent not found' };
+  }
+  return { agent: publicConfiguredAgent(agent) };
+});
+
+fastify.get('/api/configured-agents/:id', { preHandler: fastify.requireAuth }, async (request, reply) => {
+  if (!configuredAgentReadGuard(request, reply)) return { error: 'Permission denied' };
+  const agentId = Number(request.params.id);
+  if (!Number.isSafeInteger(agentId) || agentId <= 0) {
+    reply.code(400);
+    return { error: 'Invalid configured-agent id' };
+  }
+  const agent = await getConfiguredAgentRepository().getConfiguredAgentById(agentId);
+  if (!agent) {
+    reply.code(404);
+    return { error: 'Configured agent not found' };
+  }
+  return { agent: publicConfiguredAgent(agent) };
 });
 
 // ==================== WORKSPACE ROUTES ====================
@@ -24403,7 +23855,7 @@ fastify.get('/workspace', { preHandler: fastify.requireAuth }, async (request, r
   }
 
   try {
-    const workspaceListing = annotateWorkspaceListingWithOwnership(workspaceProvider.list(request.query.path || ''));
+    const workspaceListing = await annotateWorkspaceListingWithOwnership(workspaceProvider.list(request.query.path || ''));
 
     return reply.view('workspace.ejs', viewData({
       user: request.user,
@@ -24423,7 +23875,7 @@ fastify.get('/workspace', { preHandler: fastify.requireAuth }, async (request, r
 });
 
 fastify.get('/api/workspace/list', { preHandler: fastify.requireAuth }, async (request, reply) => {
-  return workspaceApi(request, reply, 'workspace:read', () => {
+  return workspaceApi(request, reply, 'workspace:read', async () => {
     const relativePath = request.query.path || '';
     return annotateWorkspaceListingWithOwnership(workspaceProvider.list(relativePath));
   });
@@ -24513,7 +23965,7 @@ fastify.post('/api/workspace/fixture', { preHandler: fastify.requireAuth }, asyn
 // Operator-driven browser sessions mirror the run-side browser boundary: same
 // Phase 1 operations, same target-scoped origin allowlist and limits (applied
 // per operator session), and every session transition and operation lands in
-// the system log with pre/post page state — the browser counterpart of
+// the diagnostic log with pre/post page state — the browser counterpart of
 // workspace:operator_mutation.
 
 const OPERATOR_BROWSER_SESSION_IDLE_MS = 10 * 60 * 1000;
@@ -24558,7 +24010,7 @@ async function openOperatorBrowserSession(userId, requestedBy, targetId) {
     throw operatorBrowserError('BROWSER_SESSION_EXISTS', 'An operator browser session is already open; close it before opening another');
   }
 
-  const target = getBrowserTargetById(targetId);
+  const target = (await getBrowserTargetById(targetId));
   if (!target || target.status !== 'active') {
     throw operatorBrowserError('BROWSER_TARGET_UNAVAILABLE', 'Browser target is unknown or inactive');
   }
@@ -24707,12 +24159,12 @@ async function executeOperatorBrowserOperation(entry, operation, args = {}) {
   } else if (operation === 'screenshot') {
     entry.counters.screenshots += 1;
     entry.counters.artifactSequence += 1;
-    const artifactDir = path.join(DATA_DIR, 'browser-artifacts', entry.id);
+    const artifactDir = path.join(BROWSER_ARTIFACTS_DIR, entry.id);
     fs.mkdirSync(artifactDir, { recursive: true });
     const artifactPath = path.join(artifactDir, `shot-${entry.counters.artifactSequence}.png`);
     result = await entry.session.screenshot(artifactPath);
     const bytes = fs.readFileSync(artifactPath);
-    const relativeArtifactPath = path.relative(DATA_DIR, artifactPath);
+    const relativeArtifactPath = path.relative(ARTIFACT_ROOT, artifactPath);
     receipt.resourceUrl = redactBrowserUrl(result.url);
     receipt.metadata = {
       artifactPath: relativeArtifactPath,
@@ -24780,7 +24232,7 @@ fastify.get('/browser', { preHandler: fastify.requireAuth }, async (request, rep
   return reply.view('browser.ejs', viewData({
     user: request.user,
     browserEngineStatus: getEngineStatus(),
-    browserTargets: readBrowserTargets()
+    browserTargets: (await readBrowserTargets())
       .filter(target => target && target.status === 'active')
       .map(normalizeBrowserTargetSnapshot),
     browserSession: entry ? operatorBrowserSessionSummary(entry) : null,
@@ -24885,12 +24337,14 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     }, request.session.userId));
   }
 
-  const users = readUsers();
-  const agents = readAgents();
-  const groups = readGroups();
-  const memberships = readMemberships();
-  const tickets = readTickets();
-  const allPermissions = readPermissions();
+  const [users, groups, memberships, agents, agentMemberships, allPermissions] = await Promise.all([
+    listAccessUsers(),
+    listAccessGroups(),
+    listAccessUserMemberships(),
+    listConfiguredAgentOptions(),
+    listAgentGroupMembershipOptions(),
+    listAccessPermissions()
+  ]);
   const adminMutationTypes = new Set([
     'ticket:status_change',
     'ticket:rerun',
@@ -24906,22 +24360,23 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     'admin:group_delete',
     'system:reset'
   ]);
-  const recentAdminActivity = readLogs()
-    .filter(log => adminMutationTypes.has(log.type))
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-    .slice(0, 12);
+  const recentAdminActivity = (await getDiagnosticLogRepository().listLogs({
+    types: [...adminMutationTypes],
+    order: 'desc',
+    limit: 12
+  })).logs;
 
   const usersWithGroups = users.map(account => {
     const accountGroupIds = Array.from(new Set(memberships
-      .filter(membership => membership.principalType === 'user' && membership.principalId === account.id)
+      .filter(membership => membership.userId === account.id)
       .map(membership => membership.groupId)));
     const accountGroups = groups.filter(group => accountGroupIds.includes(group.id));
     return { ...account, type: 'user', groups: accountGroups };
   });
 
   const agentsWithMaskedKeys = agents.map(agent => {
-    const accountGroupIds = Array.from(new Set(memberships
-      .filter(membership => membership.principalType === 'agent' && membership.principalId === agent.id)
+    const accountGroupIds = Array.from(new Set(agentMemberships
+      .filter(membership => membership.agentId === agent.id)
       .map(membership => membership.groupId)));
     const accountGroups = groups.filter(group => accountGroupIds.includes(group.id));
     return { ...agent, type: 'agent', groups: accountGroups };
@@ -24931,10 +24386,14 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
   );
 
-  const groupsWithPermissions = groups.map(group => {
-    const permissions = getGroupPermissionNames(group.id);
-    return { ...group, permissions };
-  });
+  const groupsWithPermissions = groups;
+  let workTypeCatalog = [];
+  let workTypeCatalogError = null;
+  try {
+    workTypeCatalog = await readWorkTypes();
+  } catch (error) {
+    workTypeCatalogError = error.message || String(error);
+  }
 
   return reply.view('admin/dashboard.ejs', viewData({
     users,
@@ -24944,7 +24403,6 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     accounts,
     groupsWithPermissions,
     recentAdminActivity,
-    tickets,
     permissions: allPermissions,
     providers: PROVIDERS,
     models: MODELS,
@@ -24957,7 +24415,8 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     })(),
     sensitiveApplicationPaths: SENSITIVE_APPLICATION_PATHS,
     // A broken catalog must be visible on the dashboard, not a 500.
-    ...(() => { try { return { workTypeCatalog: readWorkTypes(), workTypeCatalogError: null }; } catch (error) { return { workTypeCatalog: [], workTypeCatalogError: error.message || String(error) }; } })(),
+    workTypeCatalog,
+    workTypeCatalogError,
     user: request.user,
     resetError: request.query.resetError || null,
     resetSuccess: request.query.resetSuccess || null
@@ -24965,7 +24424,8 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
 });
 
 fastify.post('/admin/debug-reset', {
-  preHandler: fastify.requireAuth
+  preHandler: fastify.requireAuth,
+  config: { mutationAdmission: true }
 }, async (request, reply) => {
   if (process.env.NODE_ENV === 'production') {
     reply.code(403);
@@ -25014,9 +24474,7 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
       });
     }
 
-    const agents = readAgents();
-
-    if (agents.find(a => a.name === agentName)) {
+    if (await getConfiguredAgentRepository().getConfiguredAgentByName(agentName.trim())) {
       return renderAdminUserForm(reply, request, {
         accountType: 'agent',
         error: 'Agent name already exists'
@@ -25025,44 +24483,37 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
 
     let normalizedGroupIds;
     try {
-      normalizedGroupIds = normalizeSubmittedGroupIds(groupIds);
+      normalizedGroupIds = await normalizeSubmittedGroupIdsForCatalog(groupIds);
     } catch (error) {
       return renderAdminUserForm(reply, request, {
         accountType: 'agent',
         error: error.message
       });
     }
-    if (!canAssignSubmittedGroups(request.session.userId, 'agent', null, normalizedGroupIds, { creating: true })) {
+    if (normalizedGroupIds.length > 0 && !hasPermission(request.session.userId, 'permission:assign')) {
       reply.code(403);
       return 'permission:assign is required to set group membership';
     }
 
-    const newAgent = {
-      id: nextId(agents),
-      name: agentName.trim(),
-      type: 'agent',
-      provider,
-      model: model ? model.trim() : '',
-      apiKey: apiKey ? apiKey.trim() : '',
-      createdAt: new Date().toISOString(),
-      changedBy: request.user ? request.user.username : String(request.session.userId),
-      changedAt: new Date().toISOString()
-    };
-
     const changedBy = request.user ? request.user.username : String(request.session.userId);
-    const changedAt = new Date().toISOString();
-
-    agents.push(newAgent);
-    writeAgents(agents);
-    setPrincipalGroupMemberships('agent', newAgent.id, normalizedGroupIds);
-
-    appendSystemLog('admin:agent_create', `Agent "${agentName.trim()}" created by ${changedBy}`, null, {
-      changedBy,
-      changedAt,
-      targetAgentId: newAgent.id,
-      targetAgentName: agentName.trim(),
-      provider
-    });
+    try {
+      await getConfiguredAgentRepository().createConfiguredAgent({
+        value: {
+          name: agentName.trim(),
+          type: 'agent',
+          provider,
+          model: model ? model.trim() : '',
+          apiKey: apiKey ? apiKey.trim() : ''
+        },
+        groupIds: normalizedGroupIds,
+        changedBy
+      });
+    } catch (error) {
+      if (error && error.code === 'CONFIGURED_AGENT_NAME_CONFLICT') {
+        return renderAdminUserForm(reply, request, { accountType: 'agent', error: 'Agent name already exists' });
+      }
+      throw error;
+    }
 
     return reply.redirect('/admin');
   }
@@ -25076,52 +24527,38 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
 
   let normalizedGroupIds;
   try {
-    normalizedGroupIds = normalizeSubmittedGroupIds(groupIds);
+    normalizedGroupIds = await normalizeSubmittedGroupIdsForCatalog(groupIds);
   } catch (error) {
     return renderAdminUserForm(reply, request, {
       accountType: 'user',
       error: error.message
     });
   }
-  if (!canAssignSubmittedGroups(request.session.userId, 'user', null, normalizedGroupIds, { creating: true })) {
+  if (normalizedGroupIds.length > 0 && !hasPermission(request.session.userId, 'permission:assign')) {
     reply.code(403);
     return 'permission:assign is required to set group membership';
   }
 
-  const users = readUsers();
-
-  if (users.find(u => u.username === username)) {
-    return renderAdminUserForm(reply, request, {
-      accountType: 'user',
-      error: 'Username already exists'
-    });
-  }
-
   const passwordHash = await argon2.hash(password);
-
-  const newUser = {
-    id: nextId(users),
-    username: username.trim(),
-    type: 'user',
-    passwordHash,
-    createdAt: new Date().toISOString(),
-    changedBy: request.user ? request.user.username : String(request.session.userId),
-    changedAt: new Date().toISOString()
-  };
-
-  users.push(newUser);
-  writeUsers(users);
-
-  setPrincipalGroupMemberships('user', newUser.id, normalizedGroupIds);
-
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  const changedAt = new Date().toISOString();
-  appendSystemLog('admin:user_create', `User "${username.trim()}" created by ${changedBy}`, null, {
-    changedBy,
-    changedAt,
-    userId: newUser.id,
-    username: username.trim()
-  });
+  try {
+    await getAccessCatalogRepository().createUser({
+      value: {
+        username: username.trim(),
+        passwordHash
+      },
+      groupIds: normalizedGroupIds,
+      changedBy
+    });
+  } catch (error) {
+    if (error && error.code === 'USER_NAME_CONFLICT') {
+      return renderAdminUserForm(reply, request, {
+        accountType: 'user',
+        error: 'Username already exists'
+      });
+    }
+    throw error;
+  }
 
   return reply.redirect('/admin');
 });
@@ -25129,17 +24566,18 @@ fastify.post('/admin/users', { preHandler: fastify.requireAuth }, async (request
 fastify.get('/admin/users/:id/edit', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'user:update')) {
     reply.code(403);
-    return reply.view('error.ejs', viewData({ 
+    return reply.view('error.ejs', viewData({
       message: 'Access denied',
       user: request.user
     }, request.session.userId));
   }
-  
+
   const accountId = parseInt(request.params.id);
   const accountType = request.query.type === 'agent' ? 'agent' : 'user';
-  const accounts = accountType === 'agent' ? readAgents() : readUsers();
-  const foundAccount = accounts.find(a => a.id === accountId);
-  
+  const foundAccount = accountType === 'agent'
+    ? await getConfiguredAgentRepository().getConfiguredAgentById(accountId)
+    : await getAccessCatalogRepository().getUserById(accountId);
+
   if (!foundAccount) {
     return reply.redirect('/admin');
   }
@@ -25159,20 +24597,24 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
     reply.code(403);
     return 'Permission denied';
   }
-  
+
   const accountId = parseInt(request.params.id);
-  const { accountType, username, password, groupIds, agentName, apiKey, model } = request.body;
+  const { accountType, username, password, groupIds, agentName, apiKey, model, revision } = request.body;
+  const expectedRevision = parseInt(revision, 10);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+    reply.code(400);
+    return 'Invalid account revision';
+  }
 
   if (accountType === 'agent') {
     const provider = PROVIDERS.includes(request.body.provider) ? request.body.provider : 'openai';
     const hasModel = Boolean(model && model.trim()) || hasProviderModelFallback(provider);
+    const existingAgent = await getConfiguredAgentRepository().getConfiguredAgentById(accountId);
+    if (!existingAgent) return reply.redirect('/admin');
 
     if (!agentName || !hasModel) {
-      const agents = readAgents();
-      const editAccount = agents.find(a => a.id === accountId);
-
       return renderAdminUserForm(reply, request, {
-        editAccount,
+        editAccount: existingAgent,
         accountType: 'agent',
         error: provider === 'ollama'
           ? 'Agent name and Ollama model are required unless OLLAMA_MODEL is configured'
@@ -25180,16 +24622,10 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
       });
     }
 
-    const agents = readAgents();
-    const agentIndex = agents.findIndex(a => a.id === accountId);
-
-    if (agentIndex === -1) {
-      return reply.redirect('/admin');
-    }
-
-    if (agents.find(a => a.name === agentName && a.id !== accountId)) {
+    const duplicateAgent = await getConfiguredAgentRepository().getConfiguredAgentByName(agentName.trim());
+    if (duplicateAgent && duplicateAgent.id !== accountId) {
       return renderAdminUserForm(reply, request, {
-        editAccount: agents[agentIndex],
+        editAccount: existingAgent,
         accountType: 'agent',
         error: 'Agent name already exists'
       });
@@ -25197,107 +24633,94 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
 
     let normalizedGroupIds;
     try {
-      normalizedGroupIds = normalizeSubmittedGroupIds(groupIds);
+      normalizedGroupIds = await normalizeSubmittedGroupIdsForCatalog(groupIds);
     } catch (error) {
       return renderAdminUserForm(reply, request, {
-        editAccount: agents[agentIndex],
+        editAccount: existingAgent,
         accountType: 'agent',
         error: error.message
       });
     }
-    if (!canAssignSubmittedGroups(request.session.userId, 'agent', accountId, normalizedGroupIds)) {
+    if (!sameValueSet(existingAgent.groupIds, normalizedGroupIds) && !hasPermission(request.session.userId, 'permission:assign')) {
       reply.code(403);
       return 'permission:assign is required to change group membership';
     }
 
-    agents[agentIndex].name = agentName.trim();
-    agents[agentIndex].provider = provider;
-    agents[agentIndex].model = model ? model.trim() : '';
-    agents[agentIndex].changedBy = request.user ? request.user.username : String(request.session.userId);
-    agents[agentIndex].changedAt = new Date().toISOString();
-
-    if (apiKey && apiKey.trim()) {
-      agents[agentIndex].apiKey = apiKey.trim();
+    const changedBy = request.user ? request.user.username : String(request.session.userId);
+    try {
+      await getConfiguredAgentRepository().updateConfiguredAgent({
+        agentId: accountId,
+        expectedRevision,
+        value: {
+          ...existingAgent,
+          name: agentName.trim(),
+          provider,
+          model: model ? model.trim() : '',
+          apiKey: apiKey && apiKey.trim() ? apiKey.trim() : existingAgent.apiKey
+        },
+        groupIds: normalizedGroupIds,
+        changedBy
+      });
+    } catch (error) {
+      if (error && error.code === 'CONFIGURED_AGENT_NAME_CONFLICT') {
+        return renderAdminUserForm(reply, request, { editAccount: existingAgent, accountType: 'agent', error: 'Agent name already exists' });
+      }
+      if (error && error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
+        reply.code(409);
+        return renderAdminUserForm(reply, request, { editAccount: error.current || existingAgent, accountType: 'agent', error: 'Agent changed concurrently; reload and retry' });
+      }
+      throw error;
     }
 
-    writeAgents(agents);
-    setPrincipalGroupMemberships('agent', accountId, normalizedGroupIds);
-
-    const changedBy = request.user ? request.user.username : String(request.session.userId);
-    appendSystemLog('admin:agent_edit', `Agent "${agentName.trim()}" (#${accountId}) edited by ${changedBy}`, null, {
-      changedBy,
-      changedAt: new Date().toISOString(),
-      targetAgentId: accountId,
-      targetAgentName: agentName.trim()
-    });
-
     return reply.redirect('/admin');
   }
-  
-  if (!username) {
-    const users = readUsers();
-    const editAccount = users.find(u => u.id === accountId);
 
+  const existingUser = await getAccessCatalogRepository().getUserById(accountId);
+  if (!existingUser) return reply.redirect('/admin');
+
+  if (!username) {
     return renderAdminUserForm(reply, request, {
-      editAccount: editAccount ? { ...editAccount, type: 'user' } : null,
+      editAccount: existingUser,
       accountType: 'user',
       error: 'Username is required'
-    });
-  }
-  
-  const users = readUsers();
-  const userIndex = users.findIndex(u => u.id === accountId);
-  
-  if (userIndex === -1) {
-    return reply.redirect('/admin');
-  }
-
-  if (users.find(u => u.username === username && u.id !== accountId)) {
-    const editAccount = users.find(u => u.id === accountId);
-
-    return renderAdminUserForm(reply, request, {
-      editAccount: editAccount ? { ...editAccount, type: 'user' } : null,
-      accountType: 'user',
-      error: 'Username already exists'
     });
   }
 
   let normalizedGroupIds;
   try {
-    normalizedGroupIds = normalizeSubmittedGroupIds(groupIds);
+    normalizedGroupIds = await normalizeSubmittedGroupIdsForCatalog(groupIds);
   } catch (error) {
-    const editAccount = users.find(u => u.id === accountId);
-
     return renderAdminUserForm(reply, request, {
-      editAccount: editAccount ? { ...editAccount, type: 'user' } : null,
+      editAccount: existingUser,
       accountType: 'user',
       error: error.message
     });
   }
-  if (!canAssignSubmittedGroups(request.session.userId, 'user', accountId, normalizedGroupIds)) {
+  if (!sameValueSet(existingUser.groupIds, normalizedGroupIds) && !hasPermission(request.session.userId, 'permission:assign')) {
     reply.code(403);
     return 'permission:assign is required to change group membership';
   }
 
-  users[userIndex].username = username.trim();
-  users[userIndex].type = 'user';
-  users[userIndex].changedBy = request.user ? request.user.username : String(request.session.userId);
-  users[userIndex].changedAt = new Date().toISOString();
-  
-  if (password) {
-    users[userIndex].passwordHash = await argon2.hash(password);
-  }
-	  
-  writeUsers(users);
-  setPrincipalGroupMemberships('user', accountId, normalizedGroupIds);
-
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  appendSystemLog('admin:user_edit', `User "${username.trim()}" (#${accountId}) edited by ${changedBy}`, null, {
-    changedBy,
-    changedAt: new Date().toISOString(),
-    userId: accountId,
-    username: username.trim()
-  });
+  const passwordHash = password ? await argon2.hash(password) : existingUser.passwordHash;
+  try {
+    await getAccessCatalogRepository().updateUser({
+      userId: accountId,
+      expectedRevision,
+      value: { username: username.trim(), passwordHash },
+      groupIds: normalizedGroupIds,
+      changedBy
+    });
+  } catch (error) {
+    if (error && error.code === 'USER_NAME_CONFLICT') {
+      return renderAdminUserForm(reply, request, { editAccount: existingUser, accountType: 'user', error: 'Username already exists' });
+    }
+    if (error && error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
+      reply.code(409);
+      return renderAdminUserForm(reply, request, { editAccount: error.current || existingUser, accountType: 'user', error: 'User changed concurrently; reload and retry' });
+    }
+    throw error;
+  }
 
   return reply.redirect('/admin');
 });
@@ -25308,55 +24731,40 @@ fastify.post('/admin/users/:id/delete', { preHandler: fastify.requireAuth }, asy
     return 'Permission denied';
   }
 
-  const accountId = parseInt(request.params.id);
-  const { accountType } = request.body;
+  const accountId = parseInt(request.params.id, 10);
+  const { accountType, revision } = request.body;
+  const expectedRevision = parseInt(revision, 10);
+  if (!Number.isSafeInteger(accountId) || accountId <= 0 ||
+      !Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+    reply.code(400);
+    return 'Invalid account identity or revision';
+  }
+  if (accountType !== 'agent' && accountId === request.session.userId) {
+    return reply.redirect('/admin');
+  }
 
-    const changedBy = request.user ? request.user.username : String(request.session.userId);
-    const changedAt = new Date().toISOString();
-
-	  if (accountType === 'agent') {
-	    // Delete agent
-	    let agents = readAgents();
-	    const deletedAgent = agents.find(a => a.id === accountId);
-	    agents = agents.filter(a => a.id !== accountId);
-	    writeAgents(agents);
-	    let memberships = readMemberships();
-	    memberships = memberships.filter(membership =>
-	      membership.principalType !== 'agent' || membership.principalId !== accountId
-	    );
-	    writeMemberships(memberships);
-
-      appendSystemLog('admin:agent_delete', `Agent "${deletedAgent ? deletedAgent.name : '#' + accountId}" deleted by ${changedBy}`, null, {
-        changedBy,
-        changedAt,
-        targetAgentId: accountId,
-        targetAgentName: deletedAgent ? deletedAgent.name : null
+  const changedBy = request.user ? request.user.username : String(request.session.userId);
+  try {
+    if (accountType === 'agent') {
+      await getConfiguredAgentRepository().deleteConfiguredAgent({
+        agentId: accountId,
+        expectedRevision,
+        changedBy
       });
-	  } else {
-    // Delete user
-    // Don't allow deleting yourself
-    if (accountId === request.session.userId) {
-      return reply.redirect('/admin');
+    } else {
+      await getAccessCatalogRepository().deleteUser({
+        userId: accountId,
+        expectedRevision,
+        changedBy
+      });
     }
-
-    let users = readUsers();
-    const deletedUser = users.find(u => u.id === accountId);
-    users = users.filter(u => u.id !== accountId);
-    writeUsers(users);
-
-	    let memberships = readMemberships();
-	    memberships = memberships.filter(membership =>
-	      membership.principalType !== 'user' || membership.principalId !== accountId
-	    );
-	    writeMemberships(memberships);
-
-    appendSystemLog('admin:user_delete', `User "${deletedUser ? deletedUser.username : '#' + accountId}" deleted by ${changedBy}`, null, {
-      changedBy,
-      changedAt,
-      userId: accountId,
-      username: deletedUser ? deletedUser.username : null
-    });
-	  }
+  } catch (error) {
+    if (error && error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
+      reply.code(409);
+      return 'Account changed concurrently; reload and retry';
+    }
+    throw error;
+  }
 
   return reply.redirect('/admin');
 });
@@ -25368,27 +24776,19 @@ fastify.post('/admin/groups', { preHandler: fastify.requireAuth }, async (reques
     reply.code(403);
     return 'Permission denied';
   }
-  
+
   const { name, permissions, canReceiveTickets } = request.body;
   const ticketAssignable = canReceiveTickets === 'on';
-  
+
   if (!name) {
     return renderAdminGroupForm(reply, request, {
       error: 'Group name is required'
     });
   }
-  
-  const groups = readGroups();
-  
-  if (groups.find(g => g.name === name)) {
-    return renderAdminGroupForm(reply, request, {
-      error: 'Group name already exists'
-    });
-  }
 
   let normalizedPermissions = [];
   try {
-    normalizedPermissions = normalizeSubmittedPermissions(permissions);
+    normalizedPermissions = await normalizeSubmittedPermissionsForCatalog(permissions);
   } catch (error) {
     return renderAdminGroupForm(reply, request, {
       error: error.message
@@ -25398,26 +24798,25 @@ fastify.post('/admin/groups', { preHandler: fastify.requireAuth }, async (reques
     reply.code(403);
     return 'permission:assign is required to grant group permissions';
   }
-	  
-  const newGroup = {
-    id: nextId(groups),
-    name: name.trim(),
-    permissions: normalizedPermissions,
-    canReceiveTickets: ticketAssignable,
-    changedBy: request.user ? request.user.username : String(request.session.userId),
-    changedAt: new Date().toISOString()
-  };
-  
-  groups.push(newGroup);
-  writeGroups(groups);
 
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  appendSystemLog('admin:group_create', `Group "${name.trim()}" created by ${changedBy}`, null, {
-    changedBy,
-    changedAt: new Date().toISOString(),
-    groupId: newGroup.id,
-    groupName: name.trim()
-  });
+  try {
+    await getAccessCatalogRepository().createGroup({
+      value: {
+        name: name.trim(),
+        permissions: normalizedPermissions,
+        canReceiveTickets: ticketAssignable
+      },
+      changedBy
+    });
+  } catch (error) {
+    if (error && error.code === 'GROUP_NAME_CONFLICT') {
+      return renderAdminGroupForm(reply, request, {
+        error: 'Group name already exists'
+      });
+    }
+    throw error;
+  }
 
   return reply.redirect('/admin');
 });
@@ -25425,20 +24824,19 @@ fastify.post('/admin/groups', { preHandler: fastify.requireAuth }, async (reques
 fastify.get('/admin/groups/:id/edit', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'group:update')) {
     reply.code(403);
-    return reply.view('error.ejs', viewData({ 
+    return reply.view('error.ejs', viewData({
       message: 'Access denied',
       user: request.user
     }, request.session.userId));
   }
-  
+
   const groupId = parseInt(request.params.id);
-  const groups = readGroups();
-  const editGroup = groups.find(g => g.id === groupId);
-  
+  const editGroup = await getAccessCatalogRepository().getGroupById(groupId);
+
   if (!editGroup) {
     return reply.redirect('/admin');
   }
-  
+
   return renderAdminGroupForm(reply, request, {
     editGroup
   });
@@ -25449,78 +24847,65 @@ fastify.post('/admin/groups/:id', { preHandler: fastify.requireAuth }, async (re
     reply.code(403);
     return 'Permission denied';
   }
-  
-  const groupId = parseInt(request.params.id);
-  const { name, permissions, canReceiveTickets } = request.body;
-  const ticketAssignable = canReceiveTickets === 'on';
-  
-  if (!name) {
-    const groups = readGroups();
-    const editGroup = groups.find(g => g.id === groupId);
 
+  const groupId = parseInt(request.params.id);
+  const { name, permissions, canReceiveTickets, revision } = request.body;
+  const expectedRevision = parseInt(revision, 10);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+    reply.code(400);
+    return 'Invalid group revision';
+  }
+  const ticketAssignable = canReceiveTickets === 'on';
+
+  const existingGroup = await getAccessCatalogRepository().getGroupById(groupId);
+  if (!existingGroup) return reply.redirect('/admin');
+
+  if (!name) {
     return renderAdminGroupForm(reply, request, {
-      editGroup,
+      editGroup: existingGroup,
       error: 'Group name is required'
     });
   }
-  
-  const groups = readGroups();
-  const groupIndex = groups.findIndex(g => g.id === groupId);
-  
-  if (groupIndex === -1) {
-    return reply.redirect('/admin');
-  }
 
-	  if (groups.find(g => g.name === name && g.id !== groupId)) {
-	    const editGroup = groups.find(g => g.id === groupId);
-
-    return renderAdminGroupForm(reply, request, {
-      editGroup,
-      error: 'Group name already exists'
-	    });
-	  }
-
-	  const hasGroupTickets = readTickets().some(ticket =>
-	    ticket.assignmentTargetType === 'group' && ticket.assignmentTargetId === groupId
-	  );
-
-	  if (!ticketAssignable && hasGroupTickets) {
-	    return renderAdminGroupForm(reply, request, {
-	      editGroup: groups[groupIndex],
-	      error: 'Group has assigned tickets and must remain ticket-capable'
-	    });
-	  }
-
-	  let normalizedPermissions = [];
+  let normalizedPermissions = [];
   try {
-    normalizedPermissions = normalizeSubmittedPermissions(permissions);
+    normalizedPermissions = await normalizeSubmittedPermissionsForCatalog(permissions);
   } catch (error) {
-    const editGroup = groups.find(g => g.id === groupId);
-
     return renderAdminGroupForm(reply, request, {
-      editGroup,
+      editGroup: existingGroup,
       error: error.message
     });
   }
-  if (!sameValueSet(groups[groupIndex].permissions, normalizedPermissions) && !hasPermission(request.session.userId, 'permission:assign')) {
+  if (!sameValueSet(existingGroup.permissions, normalizedPermissions) && !hasPermission(request.session.userId, 'permission:assign')) {
     reply.code(403);
     return 'permission:assign is required to change group permissions';
   }
 
-  groups[groupIndex].name = name.trim();
-  groups[groupIndex].permissions = normalizedPermissions;
-  groups[groupIndex].canReceiveTickets = ticketAssignable;
-  groups[groupIndex].changedBy = request.user ? request.user.username : String(request.session.userId);
-  groups[groupIndex].changedAt = new Date().toISOString();
-  writeGroups(groups);
-
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  appendSystemLog('admin:group_edit', `Group "${name.trim()}" (#${groupId}) edited by ${changedBy}`, null, {
-    changedBy,
-    changedAt: new Date().toISOString(),
-    groupId,
-    groupName: name.trim()
-  });
+  try {
+    await getAccessCatalogRepository().updateGroup({
+      groupId,
+      expectedRevision,
+      value: {
+        name: name.trim(),
+        permissions: normalizedPermissions,
+        canReceiveTickets: ticketAssignable
+      },
+      changedBy
+    });
+  } catch (error) {
+    if (error && error.code === 'GROUP_NAME_CONFLICT') {
+      return renderAdminGroupForm(reply, request, { editGroup: existingGroup, error: 'Group name already exists' });
+    }
+    if (error && error.code === 'GROUP_HAS_ASSIGNED_TICKETS') {
+      return renderAdminGroupForm(reply, request, { editGroup: existingGroup, error: error.message });
+    }
+    if (error && error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
+      reply.code(409);
+      return renderAdminGroupForm(reply, request, { editGroup: error.current || existingGroup, error: 'Group changed concurrently; reload and retry' });
+    }
+    throw error;
+  }
 
   return reply.redirect('/admin');
 });
@@ -25530,34 +24915,37 @@ fastify.post('/admin/groups/:id/delete', { preHandler: fastify.requireAuth }, as
     reply.code(403);
     return 'Permission denied';
   }
-  
-	  const groupId = parseInt(request.params.id);
 
-  if (readTickets().some(ticket => ticket.assignmentTargetType === 'group' && ticket.assignmentTargetId === groupId)) {
+  const groupId = parseInt(request.params.id);
+  const expectedRevision = parseInt(request.body.revision, 10);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
     reply.code(400);
-    return reply.view('error.ejs', viewData({
-      message: 'Cannot delete a group with assigned tickets',
-      user: request.user
-    }, request.session.userId));
+    return 'Invalid group revision';
   }
-	  
-  let groups = readGroups();
-  const deletedGroup = groups.find(g => g.id === groupId);
-  groups = groups.filter(g => g.id !== groupId);
-  writeGroups(groups);
-  
-  let memberships = readMemberships();
-  memberships = memberships.filter(membership => membership.groupId !== groupId);
-  writeMemberships(memberships);
-
+  const group = await getAccessCatalogRepository().getGroupById(groupId);
+  if (!group) return reply.redirect('/admin');
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  appendSystemLog('admin:group_delete', `Group "${deletedGroup ? deletedGroup.name : '#' + groupId}" deleted by ${changedBy}`, null, {
-    changedBy,
-    changedAt: new Date().toISOString(),
-    groupId,
-    groupName: deletedGroup ? deletedGroup.name : null
-  });
-  
+  try {
+    await getAccessCatalogRepository().deleteGroup({
+      groupId,
+      expectedRevision,
+      changedBy
+    });
+  } catch (error) {
+    if (error && error.code === 'GROUP_HAS_ASSIGNED_TICKETS') {
+      reply.code(400);
+      return reply.view('error.ejs', viewData({
+        message: error.message,
+        user: request.user
+      }, request.session.userId));
+    }
+    if (error && error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
+      reply.code(409);
+      return 'Group changed concurrently; reload and retry';
+    }
+    throw error;
+  }
+
   return reply.redirect('/admin');
 });
 
@@ -25576,14 +24964,23 @@ function parseWorkflowDefinitionJson(rawDefinition) {
   }
 }
 
-function renderWorkflowForm(reply, request, { workflow = null, definition = null, errors = [] } = {}) {
+function workflowDefinitionDocument(workflow) {
+  const document = { ...workflow };
+  for (const key of ["revision", "createdBy", "createdAt", "updatedBy", "updatedAt"]) delete document[key];
+  return document;
+}
+
+function renderWorkflowForm(reply, request, { workflow = null, definition = null, errors = [], statusCode = null } = {}) {
   const isEdit = Boolean(workflow);
-  reply.code(errors.length > 0 ? 400 : 200);
+  reply.code(statusCode || (errors.length > 0 ? 400 : 200));
   return reply.view('admin/workflow-form.ejs', viewData({
     user: request.user,
     isEdit,
     workflow,
-    definition: definition || JSON.stringify(workflow || createDemoWorkflowDefinition(), null, 2),
+    definition: definition === null
+      ? JSON.stringify(workflowDefinitionDocument(workflow || createDemoWorkflowDefinition()), null, 2)
+      : definition,
+    expectedRevision: workflow ? workflow.revision : null,
     errors
   }, request.session.userId));
 }
@@ -25599,7 +24996,7 @@ fastify.get('/admin/workflows', { preHandler: fastify.requireAuth }, async (requ
 
   return reply.view('admin/workflows.ejs', viewData({
     user: request.user,
-    workflows: readWorkflows()
+    workflows: await collectWorkflowCatalogPages()
   }, request.session.userId));
 });
 
@@ -25628,25 +25025,27 @@ fastify.post('/admin/workflows', { preHandler: fastify.requireAuth }, async (req
   const errors = validateWorkflowDefinition(parsed.workflow);
   if (errors.length > 0) return renderWorkflowForm(reply, request, { definition: rawDefinition, errors });
 
-  const workflows = readWorkflows();
-  if (workflows.some(workflow => workflow.id === parsed.workflow.id)) {
-    return renderWorkflowForm(reply, request, { definition: rawDefinition, errors: [`Workflow id already exists: ${parsed.workflow.id}`] });
+  const actor = request.user ? request.user.username : String(request.session.userId);
+  try {
+    await getWorkflowCatalogRepository().createWorkflow({
+      value: parsed.workflow,
+      changedBy: actor,
+      audit: {
+        type: "admin:workflow_create",
+        message: "Workflow \"" + parsed.workflow.name + "\" created",
+        metadata: { workflowId: parsed.workflow.id, changedBy: actor }
+      }
+    });
+  } catch (error) {
+    if (!(error instanceof WorkflowCatalogIdConflictError)) throw error;
+    return renderWorkflowForm(reply, request, {
+      definition: rawDefinition,
+      errors: [error.message],
+      statusCode: 409
+    });
   }
 
-  const now = new Date().toISOString();
-  workflows.push({
-    ...parsed.workflow,
-    enabled: parsed.workflow.enabled !== false,
-    createdAt: parsed.workflow.createdAt || now,
-    updatedAt: now
-  });
-  writeWorkflows(workflows);
-  appendSystemLog('admin:workflow_create', `Workflow "${parsed.workflow.name}" created`, null, {
-    workflowId: parsed.workflow.id,
-    changedBy: request.user ? request.user.username : String(request.session.userId)
-  });
-
-  return reply.redirect('/admin/workflows');
+  return reply.redirect("/admin/workflows");
 });
 
 fastify.get('/admin/workflows/:id/edit', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -25658,7 +25057,7 @@ fastify.get('/admin/workflows/:id/edit', { preHandler: fastify.requireAuth }, as
     }, request.session.userId));
   }
 
-  const workflow = getWorkflowById(request.params.id);
+  const workflow = await getWorkflowById(request.params.id);
   if (!workflow) {
     reply.code(404);
     return reply.view('error.ejs', viewData({
@@ -25676,7 +25075,7 @@ fastify.post('/admin/workflows/:id', { preHandler: fastify.requireAuth }, async 
     return 'Permission denied';
   }
 
-  const workflow = getWorkflowById(request.params.id);
+  const workflow = await getWorkflowById(request.params.id);
   if (!workflow) {
     reply.code(404);
     return reply.view('error.ejs', viewData({
@@ -25696,21 +25095,41 @@ fastify.post('/admin/workflows/:id', { preHandler: fastify.requireAuth }, async 
   const errors = validateWorkflowDefinition(parsed.workflow);
   if (errors.length > 0) return renderWorkflowForm(reply, request, { workflow, definition: rawDefinition, errors });
 
-  const workflows = readWorkflows();
-  const index = workflows.findIndex(item => item.id === workflow.id);
-  workflows[index] = {
-    ...parsed.workflow,
-    enabled: parsed.workflow.enabled !== false,
-    createdAt: workflow.createdAt || parsed.workflow.createdAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-  writeWorkflows(workflows);
-  appendSystemLog('admin:workflow_update', `Workflow "${parsed.workflow.name}" updated`, null, {
-    workflowId: parsed.workflow.id,
-    changedBy: request.user ? request.user.username : String(request.session.userId)
-  });
+  const expectedRevision = Number(request.body.expectedRevision);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+    return renderWorkflowForm(reply, request, {
+      workflow, definition: rawDefinition, errors: ["Workflow revision is required; reload and retry"]
+    });
+  }
+  const actor = request.user ? request.user.username : String(request.session.userId);
+  try {
+    const updated = await getWorkflowCatalogRepository().updateWorkflow({
+      workflowId: workflow.id,
+      expectedRevision,
+      value: parsed.workflow,
+      changedBy: actor,
+      audit: {
+        type: "admin:workflow_update",
+        message: "Workflow \"" + parsed.workflow.name + "\" updated",
+        metadata: { workflowId: parsed.workflow.id, changedBy: actor }
+      }
+    });
+    if (!updated) {
+      reply.code(404);
+      return reply.view("error.ejs", viewData({ message: "Workflow not found", user: request.user }, request.session.userId));
+    }
+  } catch (error) {
+    if (!(error instanceof WorkflowCatalogConflictError) && error.code !== "OPTIMISTIC_CONCURRENCY_CONFLICT") throw error;
+    const current = error.current || await getWorkflowById(workflow.id) || workflow;
+    return renderWorkflowForm(reply, request, {
+      workflow: current,
+      definition: rawDefinition,
+      errors: ["Workflow changed concurrently; reload the current definition before retrying"],
+      statusCode: 409
+    });
+  }
 
-  return reply.redirect('/admin/workflows');
+  return reply.redirect("/admin/workflows");
 });
 
 // ==================== ACTIONS CATALOG ====================
@@ -25739,19 +25158,23 @@ fastify.get('/admin/actions', { preHandler: fastify.requireAuth }, async (reques
 let runtimeScheduler = null;
 let runtimeTemplateScheduler = null;
 
-function markRunStarting(run) {
+async function markRunStarting(run) {
   if (!run || !run.id) return;
   startingRunIds.add(run.id);
-  const agent = readAgents().find(item => item.id === run.agentId);
+  const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
   if (isLocalModelAgent(agent)) startingLocalModelRunIds.add(run.id);
 }
 
-function tryReserveRunStart(run) {
-  if (!run || !run.id || getRunStartBlockReason(run)) return null;
+async function tryReserveRunStart(run, runStartContext = null) {
+  if (!run || !run.id || startingRunIds.has(run.id) || admittedRunIds.has(run.id)) return null;
+  const context = runStartContext || await prepareRunStartContext([run]);
+  const agent = context.agentById.get(run.agentId) || null;
   admittedRunIds.add(run.id);
-  const agent = readAgents().find(item => item.id === run.agentId);
-  if (isLocalModelAgent(agent)) admittedLocalModelRunIds.add(run.id);
-  markRunStarting(run);
+  startingRunIds.add(run.id);
+  if (isLocalModelAgent(agent)) {
+    admittedLocalModelRunIds.add(run.id);
+    startingLocalModelRunIds.add(run.id);
+  }
   return { runId: run.id };
 }
 
@@ -25776,7 +25199,7 @@ function startRuntimeScheduler() {
   if (runtimeScheduler && runtimeScheduler.isRunning()) return runtimeScheduler;
 
   const runner = createRuntimeRunner({
-    runAgentTicket: runId => eventAdmissionContext.run({ token: null }, () => runAgentTicket(runId)),
+    runAgentTicket: runId => mutationAdmissionContext.run({ token: null }, () => runAgentTicket(runId)),
     markRunStarting,
     markRunSettled: releaseRunStartReservation,
     onError: (run, error) => {
@@ -25792,26 +25215,25 @@ function startRuntimeScheduler() {
       cursor,
       scanEndCursor
     }),
-    readLogs,
+    hasRunLogType: (runId, type) => getDiagnosticLogRepository().hasRunLogType({ runId, type }),
     appendRunLog,
     appendEvent,
-    canStartRunNow,
-    getRunStartBlockReason,
     tryReserveRunStart,
     releaseRunStartReservation,
     acquireRunLease,
+    prepareRunStartContext,
     releaseRunLease,
     expireStaleRunLeases,
     isRunStarting,
     isRunActiveInMemory,
-    isAdmissionPaused: isEventJournalAdmissionBackpressured,
-    acquireRunAdmission: run => eventJournal.tryAcquireAdmission({
+    isAdmissionPaused: isMutationAdmissionBackpressured,
+    acquireRunAdmission: run => mutationAdmission.tryAcquireAdmission({
       source: 'runtime_run',
       runId: run.id,
       ticketId: run.ticketId
     }),
-    releaseRunAdmission: admission => eventJournal.releaseAdmission(admission),
-    runWithAdmission: runWithEventJournalAdmission,
+    releaseRunAdmission: admission => mutationAdmission.releaseAdmission(admission),
+    runWithAdmission: runWithMutationAdmission,
     runner
   });
   runtimeScheduler.start();
@@ -25824,7 +25246,7 @@ function startRuntimeScheduler() {
 // createTicketFromInput → createRunsForTicket only.
 function triggerDueScheduledTemplate(template, scheduledForIso) {
   const triggerToken = `schedule:${template.id}:${scheduledForIso}`;
-  return runWithNewEventJournalAdmission({
+  return runWithNewMutationAdmission({
     source: 'scheduled_template',
     templateId: template.id,
     scheduledFor: scheduledForIso
@@ -25839,9 +25261,10 @@ function startTemplateScheduler() {
   if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) return runtimeTemplateScheduler;
   runtimeTemplateScheduler = createTemplateScheduler({
     intervalMs: getPositiveIntegerEnv('PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS', 60000),
-    readProcessTemplates,
+    listDueProcessTemplates: options => getProcessTemplateAuthorityRepository().listDueProcessTemplates(options),
+    candidateLimit: getRuntimeSchedulerCandidateLimit(),
     triggerDueTemplate: triggerDueScheduledTemplate,
-    isAdmissionPaused: isEventJournalAdmissionBackpressured,
+    isAdmissionPaused: isMutationAdmissionBackpressured,
     onError: (template, error) => {
       // Invalid schedule data is skipped and surfaced; it never triggers.
       appendSystemLog('process_template:schedule_skipped', `Process template schedule skipped: ${error && error.message ? error.message : 'invalid schedule'}`, null, {
@@ -25879,270 +25302,91 @@ function validateUniqueIntegerIds(storeName, records) {
 // Startup validation is deliberately read-only. Normalization remains part of
 // explicit writes, but booting the server must never silently drop or rewrite
 // evidence just because a store is malformed or contains duplicate identities.
-function validateDataIntegrity() {
-  const users = readUsers();
-  const agents = readAgents();
-  const groups = readGroups();
-  const memberships = readMemberships();
-  const tickets = readTickets();
-  const runs = readRuns();
-  const logs = readLogs();
-  const workflows = readWorkflows();
-
-  // Every array-backed store must at least be present, parseable, and retain
-  // its array root. Domain-specific writers may normalize records on explicit
-  // mutation, but startup never hides a corrupt auxiliary store until its UI
-  // route happens to be opened.
-  [
-    ['permissions.json', PERMISSIONS_FILE],
-    ['allocation-plans.json', ALLOCATION_PLANS_FILE],
-    ['operation-history.json', OPERATION_HISTORY_FILE],
-    ['process-templates.json', PROCESS_TEMPLATES_FILE],
-    ['process-template-triggers.json', PROCESS_TEMPLATE_TRIGGERS_FILE],
-    ['process-template-versions.json', PROCESS_TEMPLATE_VERSIONS_FILE],
-    ['work-contexts.json', WORK_CONTEXTS_FILE],
-    ['watchers.json', WATCHERS_FILE],
-    ['watcher-observations.json', WATCHER_OBSERVATIONS_FILE],
-    ['watcher-ticket-proposals.json', WATCHER_TICKET_PROPOSALS_FILE],
-    ['model-routing-policies.json', MODEL_ROUTING_POLICIES_FILE],
-    ['connectors.json', CONNECTORS_FILE],
-    ['connector-receipts.json', CONNECTOR_RECEIPTS_FILE],
-    ['local-connector-objects.json', LOCAL_CONNECTOR_OBJECTS_FILE],
-    ['browser-targets.json', BROWSER_TARGETS_FILE],
-    ['work-types.json', WORK_TYPES_FILE]
-  ].forEach(([, filePath]) => readJsonArrayCached(filePath));
-  readRuntimeLimitsConfig();
-
-  const userIds = validateUniqueIntegerIds('users.json', users);
-  const agentIds = validateUniqueIntegerIds('agents.json', agents);
-  const groupIds = validateUniqueIntegerIds('groups.json', groups);
-  const ticketIds = validateUniqueIntegerIds('tickets.json', tickets);
-  const runIds = validateUniqueIntegerIds('runs.json', runs);
-  validateUniqueIntegerIds('logs.json', logs);
-
-  const membershipKeys = new Set();
-  memberships.forEach((membership, index) => {
-    if (!membership || typeof membership !== 'object' || Array.isArray(membership)) {
-      throw dataIntegrityError('memberships.json', `record ${index} must be an object`);
-    }
-    const principalType = membership.principalType === 'agent' ? 'agent' : membership.principalType === 'user' ? 'user' : null;
-    const principalId = parseInt(membership.principalId ?? membership.userId, 10);
-    const groupId = parseInt(membership.groupId, 10);
-    if (!principalType || !Number.isInteger(principalId) || !Number.isInteger(groupId)) {
-      throw dataIntegrityError('memberships.json', `record ${index} has an invalid principal or group`);
-    }
-    if (!groupIds.has(groupId) || (principalType === 'user' ? !userIds.has(principalId) : !agentIds.has(principalId))) {
-      throw dataIntegrityError('memberships.json', `record ${index} references a missing principal or group`);
-    }
-    const key = `${principalType}:${principalId}:${groupId}`;
-    if (membershipKeys.has(key)) throw dataIntegrityError('memberships.json', `duplicate membership ${key}`);
-    membershipKeys.add(key);
-  });
-
-  runs.forEach((run, index) => {
-    const ticketId = run.ticketId;
-    const agentId = run.agentId;
-    if (!Number.isSafeInteger(ticketId) || ticketId <= 0 || !Number.isSafeInteger(agentId) || agentId <= 0) {
-      throw dataIntegrityError('runs.json', `record ${index} has an invalid ticketId or agentId`);
-    }
-    if (!ticketIds.has(ticketId) || !agentIds.has(agentId)) {
-      throw dataIntegrityError('runs.json', `record ${index} references a missing ticket or agent`);
-    }
-    getRunRuntimeLimitsSnapshot(run);
-  });
-
-  logs.forEach((log, index) => {
-    const isSystemLog = log.runId === null && log.ticketId === null;
-    if (!isValidIsoTimestamp(log.timestamp)) throw dataIntegrityError('logs.json', `record ${index} has an invalid timestamp`);
-    if (isSystemLog) return;
-    const runId = parseInt(log.runId, 10);
-    const ticketId = parseInt(log.ticketId, 10);
-    const run = runs.find(item => item.id === runId);
-    if (!runIds.has(runId) || !ticketIds.has(ticketId) || !run || parseInt(run.ticketId, 10) !== ticketId) {
-      throw dataIntegrityError('logs.json', `record ${index} references an inconsistent run or ticket`);
-    }
-  });
-
-  const workflowIds = new Set();
-  workflows.forEach((workflow, index) => {
-    if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow) || typeof workflow.id !== 'string' || !workflow.id.trim()) {
-      throw dataIntegrityError('workflows.json', `record ${index} has an invalid workflow id`);
-    }
-    const id = workflow.id.trim();
-    if (workflowIds.has(id)) throw dataIntegrityError('workflows.json', `duplicate workflow id ${id}`);
-    workflowIds.add(id);
-  });
-}
-
 async function createDefaultData() {
-  seedOperationalDataDir();
-  validateDataIntegrity();
 
-  const users = readUsers();
-  let adminUser = users.find(user => user.username === 'admin');
+  const accessCatalog = getAccessCatalogRepository();
+  const existingAdmin = await accessCatalog.getUserByUsername('admin');
+  const configuredBootstrapPassword = String(process.env.ADMIN_BOOTSTRAP_PASSWORD || '');
+  if (!existingAdmin && !configuredBootstrapPassword && process.env.NODE_ENV === 'production') {
+    throw new Error('ADMIN_BOOTSTRAP_PASSWORD is required when initializing the production admin account');
+  }
+  const bootstrapPassword = configuredBootstrapPassword || 'admin123';
+  const passwordHash = existingAdmin
+    ? existingAdmin.passwordHash
+    : await argon2.hash(bootstrapPassword);
+  const accessBootstrap = await accessCatalog.ensureBootstrapAccess({
+    adminUsername: 'admin',
+    passwordHash,
+    changedBy: 'system'
+  });
 
-  if (users.length === 0) {
-    const configuredBootstrapPassword = String(process.env.ADMIN_BOOTSTRAP_PASSWORD || '');
-    const bootstrapPassword = configuredBootstrapPassword || 'admin123';
-    const passwordHash = await argon2.hash(bootstrapPassword);
-    adminUser = {
-      id: 1,
-      username: 'admin',
-      passwordHash,
-      createdAt: new Date().toISOString()
-    };
-    users.push(adminUser);
-    writeUsers(users);
+  if (!existingAdmin && accessBootstrap.adminUser) {
     console.log('Default admin user created: username=admin');
   }
 
-  const groups = readGroups();
-  let adminGroup = groups.find(group => group.name === 'Administrators');
-  let groupsChanged = false;
-
-  if (!adminGroup) {
-    adminGroup = {
-      id: nextId(groups),
-      name: 'Administrators',
-      permissions: readPermissions(),
-      canReceiveTickets: false
-    };
-    groups.push(adminGroup);
-    groupsChanged = true;
-    console.log('Created Administrators group');
-  } else {
-    const administratorPermissions = readPermissions();
-    if (!sameValueSet(adminGroup.permissions, administratorPermissions)) {
-      adminGroup.permissions = administratorPermissions;
-      groupsChanged = true;
-    }
-    if (adminGroup.canReceiveTickets !== false) {
-      adminGroup.canReceiveTickets = false;
-      groupsChanged = true;
-    }
+  const workflowBootstrap = await getWorkflowCatalogRepository().ensureDefaultWorkflows({
+    definitions: [
+      createDemoWorkflowDefinition(),
+      createLegalIntakeWorkflowDefinition(),
+      createCustomerSupportTriageWorkflowDefinition(),
+      createCustomerSupportTicketPlanWorkflowDefinition(),
+      createCustomerSupportChunkWorkflowDefinition(),
+      createCustomerSupportAggregateWorkflowDefinition(),
+      createVendorComplianceWorkflowDefinition(),
+      createVendorRemediationWorkflowDefinition(),
+      createVendorRemediationFailureHandoffWorkflowDefinition(),
+      createSharedDriveCleanupWorkflowDefinition()
+    ],
+    changedBy: "system"
+  });
+  for (const workflowId of workflowBootstrap.createdWorkflowIds) {
+    console.log("Created workflow: " + workflowId);
   }
+}
 
-  if (!groups.some(group => group.canReceiveTickets)) {
-    groups.push({
-      id: nextId(groups),
-      name: 'Agent Support',
-      permissions: [],
-      canReceiveTickets: true
+let sessionMaintenanceTimer = null;
+
+async function purgeExpiredSessions() {
+  return postgresRuntimeStore.purgeExpiredHttpSessions({ limit: SESSION_PURGE_BATCH_SIZE });
+}
+
+function startSessionMaintenance() {
+  if (sessionMaintenanceTimer) return;
+  sessionMaintenanceTimer = setInterval(() => {
+    void purgeExpiredSessions().catch(error => {
+      console.error(`Expired-session cleanup failed: ${error && error.message ? error.message : error}`);
     });
-    groupsChanged = true;
-    console.log('Created Agent Support group');
-  }
-
-  if (groupsChanged) writeGroups(groups);
-
-  if (adminUser) {
-    const memberships = readMemberships();
-    const hasAdminMembership = memberships.some(membership =>
-      membership.principalType === 'user' &&
-      membership.principalId === adminUser.id &&
-      membership.groupId === adminGroup.id
-    );
-
-    if (!hasAdminMembership) {
-      memberships.push({
-        id: nextId(memberships),
-        principalType: 'user',
-        principalId: adminUser.id,
-        groupId: adminGroup.id
-      });
-      writeMemberships(memberships);
-      console.log('Assigned admin user to Administrators group');
-    }
-  }
-
-  const workflows = readWorkflows();
-  if (!workflows.some(workflow => workflow.id === 'demo-agent-write-if-approved')) {
-    workflows.push(createDemoWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created demo workflow: demo-agent-write-if-approved');
-  }
-
-  if (!workflows.some(workflow => workflow.id === 'legal-intake')) {
-    workflows.push(createLegalIntakeWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created workflow: legal-intake');
-  }
-
-  if (!workflows.some(workflow => workflow.id === 'customer-support-triage')) {
-    workflows.push(createCustomerSupportTriageWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created workflow: customer-support-triage');
-  }
-
-  if (!workflows.some(workflow => workflow.id === 'customer-support-triage-ticket-plan')) {
-    workflows.push(createCustomerSupportTicketPlanWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created workflow: customer-support-triage-ticket-plan');
-  }
-
-  if (!workflows.some(workflow => workflow.id === 'customer-support-triage-chunk')) {
-    workflows.push(createCustomerSupportChunkWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created workflow: customer-support-triage-chunk');
-  }
-
-  if (!workflows.some(workflow => workflow.id === 'customer-support-triage-aggregate')) {
-    workflows.push(createCustomerSupportAggregateWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created workflow: customer-support-triage-aggregate');
-  }
-
-  if (!workflows.some(workflow => workflow.id === 'vendor-compliance')) {
-    workflows.push(createVendorComplianceWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created workflow: vendor-compliance');
-  }
-
-  if (!workflows.some(workflow => workflow.id === 'vendor-remediation-plan')) {
-    workflows.push(createVendorRemediationWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created workflow: vendor-remediation-plan');
-  }
-
-  if (!workflows.some(workflow => workflow.id === 'vendor-remediation-failure-handoff')) {
-    workflows.push(createVendorRemediationFailureHandoffWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created workflow: vendor-remediation-failure-handoff');
-  }
-
-  if (!workflows.some(workflow => workflow.id === 'shared-drive-cleanup')) {
-    workflows.push(createSharedDriveCleanupWorkflowDefinition());
-    writeWorkflows(workflows);
-    console.log('Created workflow: shared-drive-cleanup');
-  }
+  }, SESSION_PURGE_INTERVAL_MS);
+  sessionMaintenanceTimer.unref();
 }
 
 // Start server
 async function start() {
   try {
-    const writerLockResult = acquireDataDirWriterLock();
-    if (!writerLockResult.acquired) {
-      const owner = writerLockResult.lock || {};
-      throw new Error(
-        'DATA_DIR writer lock is owned by a live process; refusing startup. ' +
-        `pid=${owner.pid || 'unknown'} dataDir=${owner.dataDir || DATA_DIR}`
-      );
-    }
-    startDataDirWriterLockHeartbeat();
-
+    const bootstrapRepository = getRuntimeBootstrapRepository();
+    await bootstrapRepository.acquireRuntimeAuthority();
+    await bootstrapRepository.prepareRuntimePersistence();
     await createDefaultData();
-    await restoreRunEventChainsFromDisk();
+    await purgeExpiredSessions();
     if (!TEST_SKIP_STARTUP_RUN_RECOVERY) await interruptStaleRunsOnStartup();
     // Converge any root/version-store mismatch left by an activation that crashed between
     // its two atomic writes — before the template scheduler can trigger against a stale root.
-    reconcileProcessTemplateVersionConsistencyOnStartup();
+    await getProcessTemplateAuthorityRepository().reconcileProcessTemplateVersions();
+    startSessionMaintenance();
     startRuntimeScheduler();
     startTemplateScheduler();
     serverReady = true;
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`Server running on http://localhost:${PORT}`);
   } catch (err) {
-    releaseDataDirWriterLock();
+    if (sessionMaintenanceTimer) {
+      clearInterval(sessionMaintenanceTimer);
+      sessionMaintenanceTimer = null;
+    }
+    try {
+      await getRuntimeBootstrapRepository().releaseRuntimeAuthority();
+      await postgresRuntimeStore.close();
+    } catch (_) {}
     const startupError = err && err.message ? err.message : String(err);
     // Startup guards are supervisory evidence. Write synchronously because an
     // otherwise idle process can exit before an asynchronous stderr pipe flushes.
@@ -26168,6 +25412,10 @@ function shutdown(signal) {
   if (shutdownPromise) return shutdownPromise;
   shutdownPromise = (async () => {
     serverReady = false;
+    if (sessionMaintenanceTimer) {
+      clearInterval(sessionMaintenanceTimer);
+      sessionMaintenanceTimer = null;
+    }
     if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
     if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
     if (runtimeScheduler && typeof runtimeScheduler.whenIdle === 'function') await runtimeScheduler.whenIdle();
@@ -26188,7 +25436,7 @@ function shutdown(signal) {
     }
 
     // Let already-dispatched work reach a stable boundary, then drain and close
-    // the persistent event journal before releasing single-writer ownership.
+    // the mutation admission before releasing persistence authority.
     // The grace period is configurable and exposed in runtime status. Until
     // provider-wide cancellation exists, a timeout is an explicit forced-stop
     // boundary rather than a claim that the active work settled cleanly.
@@ -26200,16 +25448,17 @@ function shutdown(signal) {
       );
     }
     try {
-      await eventJournal.close();
+      await mutationAdmission.close();
     } catch (error) {
-      if (!eventAppendFailure) eventAppendFailure = error;
+      if (!evidencePersistenceFailure) evidencePersistenceFailure = error;
     }
-    if (eventAppendFailure) console.error(`Event persistence failed before ${signal}: ${eventAppendFailure.message}`);
-    releaseDataDirWriterLock();
+    if (evidencePersistenceFailure) console.error(`Event persistence failed before ${signal}: ${evidencePersistenceFailure.message}`);
+    await getRuntimeBootstrapRepository().releaseRuntimeAuthority();
+    await postgresRuntimeStore.close();
     process.exit(signal === 'SIGINT' ? 130 : 143);
   })().catch(error => {
     console.error(`Shutdown failed: ${error && error.message ? error.message : error}`);
-    try { releaseDataDirWriterLock(); } catch (_) {}
+    void getRuntimeBootstrapRepository().releaseRuntimeAuthority().catch(() => {});
     process.exit(1);
   });
   return shutdownPromise;
@@ -26218,9 +25467,7 @@ function shutdown(signal) {
 process.once('SIGINT', () => { void shutdown('SIGINT'); });
 process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 process.once('exit', () => {
-  try {
-    releaseDataDirWriterLock();
-  } catch (_) {}
+  void getRuntimeBootstrapRepository().releaseRuntimeAuthority().catch(() => {});
 });
 
 start();

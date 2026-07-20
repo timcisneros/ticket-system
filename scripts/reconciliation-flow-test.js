@@ -140,9 +140,7 @@ function scenario3(dir, runId) {
 }
 
 function scenario4(dir, runId) {
-  // All events intact; just fix status and lease
-  resetRunToRunning(dir, runId);
-  setStaleLease(dir, runId);
+  // All evidence and projections are intact. Startup must leave them untouched.
 }
 
 async function main() {
@@ -186,7 +184,7 @@ async function main() {
     },
     {
       name: '4-reconciliation-idempotency',
-      desc: 'All events present, no-op reconciliation',
+      desc: 'All events and projections present, startup is a no-op',
       run: scenario4,
       initialCheck: (types) => types.has('run.evaluation_completed') && types.has('run.consequence_recorded') && types.has('run.snapshot_finalized'),
       afterCheck: (types, beforeCount, afterCount) => afterCount === beforeCount,

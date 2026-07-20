@@ -52,7 +52,7 @@ const TRIAGE = { required: true, reasonCode: 'authority_blocked', summary: 'need
 function ticket(id, status, extra) {
   return { id, objective: 'obj ' + id, assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', ownedOutputPaths: null, executionMode: 'agent', workflowId: null, capabilityType: 'directAction', capabilityId: 'agent-selected-actions', executionPolicy: { maxAttempts: null }, status, createdBy: 'admin', changedBy: 'admin', changedAt: ISO, createdAt: ISO, updatedAt: ISO, ...extra };
 }
-function run(id, ticketId, status) { return { id, ticketId, agentId: 1, agentName: 'A', status, runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(), createdAt: ISO, updatedAt: ISO }; }
+function run(id, ticketId, status, extra = {}) { return { id, ticketId, agentId: 1, agentName: 'A', status, runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(), createdAt: ISO, updatedAt: ISO, ...extra }; }
 function ctx(id, status) { return { id, name: 'C' + id, purpose: 'p', status, allowedTargetIds: [], allowedCapabilities: [], allowedProcessTemplateIds: [], memoryPolicy: { mode: 'none' }, visibilityPolicy: { mode: 'participants' }, participants: [], ticketQueueFilter: {}, triageQueueFilter: {}, scheduleFilter: {}, createdAt: ISO, updatedAt: ISO }; }
 
 function seed() {
@@ -66,14 +66,22 @@ function seed() {
   writeJson('logs.json', [{ id: 1, timestamp: ISO, runId: null, ticketId: null, type: 'ticket:no_model_route', message: 'no permitted provider for run' }]);
   // 2 open, 1 blocked(+triage), 1 completed, 1 failed.
   writeJson('tickets.json', [ticket(1, 'open'), ticket(2, 'open'), ticket(3, 'blocked', { triage: { ...TRIAGE } }), ticket(4, 'completed'), ticket(5, 'failed')]);
-  writeJson('runs.json', [run(10, 4, 'completed'), run(11, 5, 'failed'), run(12, 1, 'interrupted')]);
+  const liveLease = { leaseOwner: 'fixture-worker', leaseExpiresAt: '2099-01-01T00:00:00.000Z', lastHeartbeatAt: ISO };
+  writeJson('runs.json', [
+    run(10, 4, 'completed'),
+    run(11, 5, 'failed'),
+    run(12, 1, 'interrupted'),
+    run(20, 1, 'running', liveLease),
+    run(21, 1, 'running', liveLease),
+    run(22, 2, 'running', liveLease)
+  ]);
   writeJson('work-contexts.json', [ctx(1, 'active'), ctx(2, 'archived')]);
-  writeJson('watchers.json', [{ id: 1, name: 'W', status: 'active', workContextId: 1, sourceKind: 'workspace_file', sourceRefs: [{ path: 'a' }], actionPolicy: { allowedActions: ['summarize'] }, createdAt: ISO, updatedAt: ISO }]);
-  writeJson('watcher-observations.json', [{ id: 1, watcherId: 1, status: 'failed', error: 'source unavailable', observedAt: ISO }, { id: 2, watcherId: 1, status: 'changed', observedAt: ISO }]);
+  writeJson('watchers.json', [{ id: 1, name: 'W', status: 'active', workContextId: 1, sourceKind: 'workspace_file', sourceRefs: [{ path: 'a' }], cadence: { mode: 'manual' }, triggerPolicy: { mode: 'manual' }, deltaPolicy: { mode: 'hash' }, actionPolicy: { allowedActions: ['summarize'] }, triagePolicy: { mode: 'manual' }, ticketProposalPolicy: { enabled: false }, notificationPolicy: { mode: 'none' }, lastObservedAt: ISO, lastObservationHash: null, revision: 1, createdBy: 'seed', createdAt: ISO, updatedBy: 'seed', updatedAt: ISO }]);
+  writeJson('watcher-observations.json', [{ id: 1, watcherId: 1, workContextId: 1, status: 'failed', observedAt: ISO, sourceKind: 'workspace_file', sourceRefs: [{ path: 'a' }], previousHash: null, currentHash: null, summary: null, actionTaken: null, ticketProposalId: null, error: 'source unavailable' }, { id: 2, watcherId: 1, workContextId: 1, status: 'changed', observedAt: ISO, sourceKind: 'workspace_file', sourceRefs: [{ path: 'a' }], previousHash: null, currentHash: 'a'.repeat(64), summary: { bytes: 1, lineCount: 1 }, actionTaken: 'summarized', ticketProposalId: null, error: null }]);
   writeJson('watcher-ticket-proposals.json', []);
-  writeJson('model-routing-policies.json', [{ id: 1, name: 'P', status: 'active', createdAt: ISO, updatedAt: ISO }]);
-  writeJson('connectors.json', [{ id: 1, name: 'Conn', status: 'active', kind: 'local_mock', workContextId: 1, allowedScopes: ['read'], sourceRoots: ['inbox'], createdAt: ISO, updatedAt: ISO }]);
-  writeJson('connector-receipts.json', [{ id: 1, connectorId: 1, operation: 'read_refused', result: { status: 'refused', reason: 'out of bounds' }, timestamp: ISO }, { id: 2, connectorId: 1, operation: 'read', result: { status: 'ok', bytes: 5, hash: 'abc' }, timestamp: ISO }]);
+  writeJson('model-routing-policies.json', [{ id: 1, name: 'P', status: 'active', workContextId: null, capabilityId: null, allowedProviders: [], preferredProvider: null, preferredModel: null, fallbackProviders: [], maxCost: null, maxLatency: null, riskClass: 'standard', toolRequirements: [], targetRequirements: [], verificationRequirement: null, triageOnNoRoute: true, revision: 1, createdBy: 'seed', createdAt: ISO, updatedBy: 'seed', updatedAt: ISO }]);
+  writeJson('connectors.json', [{ id: 1, name: 'Conn', status: 'active', kind: 'local_mock', workContextId: 1, credentialRef: null, allowedScopes: ['read'], sourceRoots: ['inbox'], targetRoots: [], readPolicy: { mode: 'bounded' }, writePolicy: { mode: 'disabled' }, receiptPolicy: { mode: 'required' }, syncPolicy: { mode: 'manual' }, revision: 1, createdBy: 'seed', createdAt: ISO, updatedBy: 'seed', updatedAt: ISO }]);
+  writeJson('connector-receipts.json', [{ id: 1, connectorId: 1, workContextId: 1, operation: 'read_refused', sourceRef: 'outside/item.txt', targetRef: null, externalObjectId: 'outside/item.txt', ticketId: null, runId: null, actor: 'seed', request: { bounded: true }, result: { status: 'refused', reason: 'out of bounds' }, error: 'out of bounds', timestamp: ISO }, { id: 2, connectorId: 1, workContextId: 1, operation: 'read', sourceRef: 'inbox/item.txt', targetRef: null, externalObjectId: 'inbox/item.txt', ticketId: null, runId: null, actor: 'seed', request: { bounded: true }, result: { status: 'ok', bytes: 5, hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }, error: null, timestamp: ISO }]);
   writeJson('local-connector-objects.json', []);
   writeJson('process-templates.json', [
     { id: 1, name: 'T1', version: 1, enabled: true, triggerType: 'manual', schedule: null, ticketTemplate: {}, createdAt: ISO, updatedAt: ISO },
@@ -103,6 +111,7 @@ async function main() {
       PORT,
       DATA_DIR,
       WORKSPACE_ROOT,
+      TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
       RUNTIME_SCHEDULER_INTERVAL_MS: '3600000',
       PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000',
       EVENT_JOURNAL_MAX_RECORD_BYTES: '2048',
@@ -133,7 +142,7 @@ async function main() {
     assert(res.statusCode === 200 && res.json.ok, '/api/ops/summary ok');
     const s = res.json.summary;
     assert(s.tickets.total === 5 && s.tickets.open === 2 && s.tickets.blocked === 1 && s.tickets.completed === 1 && s.tickets.failed === 1, 'ticket counts correct');
-    assert(s.runs.total === 3 && s.runs.running === 0 && s.runs.completed === 1 && s.runs.failed === 1 && s.runs.interrupted === 1, 'run counts correct');
+    assert(s.runs.total === 6 && s.runs.running === 3 && s.runs.completed === 1 && s.runs.failed === 1 && s.runs.interrupted === 1, 'run counts correct');
     assert(s.triage.unresolvedTicketCount === 1, 'unresolved ticket triage count correct');
     assert(s.workContexts.active === 1 && s.workContexts.archived === 1, 'work context counts correct');
     assert(s.watchers.active === 1 && s.watchers.recentFailures.length === 1 && s.watchers.recentFailures[0].status === 'failed', 'watcher failed observation surfaced');
@@ -158,7 +167,20 @@ async function main() {
     const s2 = res2.json.summary; const strip = o => { const c = JSON.parse(JSON.stringify(o)); delete c.generatedAt; return c; };
     assert(JSON.stringify(strip(s)) === JSON.stringify(strip(s2)), 'summary is deterministic (excluding generatedAt)');
 
-    // ---- 5: reads write NOTHING; no new file; UI renders. ----
+    // ---- 5: runtime status keeps exact aggregate counts while active detail is cursor-paged. ----
+    const runtimeFirst = await request('GET', '/api/runtime/status?limit=2', { cookie: admin });
+    assert(runtimeFirst.statusCode === 200, 'runtime status first page ok');
+    assert(runtimeFirst.json.counts.active === 3 && runtimeFirst.json.counts.running === 3, 'runtime aggregate counts are exact beyond the page');
+    assert(runtimeFirst.json.counts.expiredLeases === 0 && runtimeFirst.json.counts.expiredLeasesTruncated === false, 'runtime expired-lease signal reports its bound explicitly');
+    assert(runtimeFirst.json.activeRuns.length === 2, 'runtime active detail respects the requested page bound');
+    assert(runtimeFirst.json.activeRuns.every(runState => runState.detailScope === 'lifecycle_status' && runState.evidenceHref === `/api/runs/${runState.id}/state`), 'runtime collection rows link to exact-run evidence without embedding unbounded histories');
+    assert(runtimeFirst.json.pagination.limit === 2 && runtimeFirst.json.pagination.afterId === 0 && runtimeFirst.json.pagination.nextAfterId === 21, 'runtime first-page cursor is explicit');
+    const runtimeSecond = await request('GET', `/api/runtime/status?limit=2&afterId=${runtimeFirst.json.pagination.nextAfterId}`, { cookie: admin });
+    assert(runtimeSecond.statusCode === 200 && runtimeSecond.json.activeRuns.length === 1, 'runtime status cursor reaches the remaining active detail');
+    assert(runtimeSecond.json.activeRuns[0].id === 22 && runtimeSecond.json.pagination.nextAfterId === null, 'runtime final page terminates the cursor');
+    assert((await request('GET', '/api/runtime/status?afterId=-1', { cookie: admin })).statusCode === 400, 'runtime status rejects an invalid cursor');
+
+    // ---- 6: reads write NOTHING; no new file; UI renders. ----
     await request('GET', '/ops', { cookie: admin });
     await request('GET', '/api/ops/summary', { cookie: admin });
     assert(readRaw('tickets.json') === before.tickets && readRaw('runs.json') === before.runs, 'ops reads never mutate tickets/runs');

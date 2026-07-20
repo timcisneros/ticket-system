@@ -50,6 +50,12 @@ function ticketTriage(id) { return readJsonData('tickets.json').find(t => t.id =
 function runTriage(id) { return readJsonData('runs.json').find(r => r.id === id).triage; }
 function ticketStatus(id) { return readJsonData('tickets.json').find(t => t.id === id).status; }
 function runsForTicket(id) { return readJsonData('runs.json').filter(r => r.ticketId === id); }
+function events() {
+  return fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map(line => JSON.parse(line));
+}
 
 const TICKET_TRIAGE = {
   required: true, reasonCode: 'authority_blocked', summary: 'Missing writable grants',
@@ -208,6 +214,15 @@ async function main() {
     assert(sameArr(after1.evidenceRefs, before1.evidenceRefs) && sameArr(after1.allowedActions, before1.allowedActions) && sameArr(after1.prohibitedActions, before1.prohibitedActions), 'evidence/allowed/prohibited preserved');
     assert(ticketStatus(1) === 'blocked', 'resolving must not change ticket status (no completion)');
     assert(runsForTicket(1).length === 0, 'resolving ticket triage must not create a run');
+    assert(events().filter(event => event.type === 'ticket.triage_resolved' && event.ticketId === 1).length === 1,
+      'ticket resolution must append exactly one authoritative event');
+    const ticketTimeline = JSON.parse((await request('GET', '/api/tickets/1/timeline', { cookie })).body);
+    const ticketResolutionTimeline = ticketTimeline.entries.find(entry =>
+      entry.type === 'triage.resolved' && entry.sourceRole === 'live_state'
+    );
+    assert(ticketResolutionTimeline, 'ticket resolution must appear as authoritative live state in the timeline');
+    assert((ticketResolutionTimeline.details.supportingSourceRefs || []).some(ref => ref.startsWith('events.jsonl:')),
+      'ticket resolution timeline state must retain its append-only supporting event');
 
     // 12 (resolved UI): now renders resolved state truthfully.
     const t1PageAfter = await request('GET', '/tickets/1', { cookie });
@@ -224,6 +239,15 @@ async function main() {
     assert(readJsonData('runs.json').find(r => r.id === 20).status === 'failed', 'resolving must not change run status');
     assert(ticketStatus(2) === 'failed', 'resolving run triage must not change ticket status');
     assert(runsForTicket(2).length === 1, 'resolving run triage must not create/rerun a run (allowedActions not auto-performed)');
+    assert(events().filter(event => event.type === 'run.triage_resolved' && event.runId === 20).length === 1,
+      'run resolution must append exactly one authoritative event');
+    const runTimeline = JSON.parse((await request('GET', '/api/tickets/2/timeline', { cookie })).body);
+    const runResolutionTimeline = runTimeline.entries.find(entry =>
+      entry.type === 'triage.resolved' && entry.runId === 20 && entry.sourceRole === 'live_state'
+    );
+    assert(runResolutionTimeline, 'run resolution must appear as authoritative live state in the timeline');
+    assert((runResolutionTimeline.details.supportingSourceRefs || []).some(ref => ref.startsWith('events.jsonl:')),
+      'run resolution timeline state must retain its append-only supporting event');
 
     // run-detail renders resolved triage.
     const run20Page = await request('GET', '/runs/20', { cookie });
@@ -232,6 +256,8 @@ async function main() {
 
     // 409: resolving an already-resolved run triage.
     assert((await resolveRun(20, 'again', cookie)).statusCode === 409, 'already-resolved run triage → 409');
+    assert(events().filter(event => event.type === 'run.triage_resolved' && event.runId === 20).length === 1,
+      'a repeated resolution must not append another event');
 
     // Completion-gate coverage: resolving run triage must NOT make a failed run
     // completable — the status gate still rejects (not the now-resolved triage gate).

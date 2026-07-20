@@ -139,6 +139,22 @@ async function main() {
     // Render the state page (twice — repeated reads must also be inert).
     const page = await request('GET', '/process-templates', { cookie });
     assert(page.statusCode === 200, '/process-templates HTTP ' + page.statusCode);
+    const boundedPage = await request('GET', '/process-templates?limit=3', { cookie });
+    assert(boundedPage.statusCode === 200, 'bounded /process-templates HTTP ' + boundedPage.statusCode);
+    assert(boundedPage.body.includes('Manual only') && boundedPage.body.includes('Scheduled paused'),
+      'bounded HTML page renders its selected templates');
+    assert(!boundedPage.body.includes('Invalid schedule'), 'bounded HTML page does not leak the next page');
+    assert(boundedPage.body.includes('afterId=3') && boundedPage.body.includes('Next templates'),
+      'bounded HTML page links to the next cursor without rejecting the catalog');
+    const boundedTail = await request('GET', '/process-templates?afterId=3&limit=3', { cookie });
+    assert(boundedTail.statusCode === 200 && boundedTail.body.includes('Invalid schedule') &&
+      boundedTail.body.includes('Attention blocked') && !boundedTail.body.includes('Manual only'),
+    'HTML cursor advances to the next template page');
+    const apiPage = JSON.parse((await request('GET', '/api/process-templates?limit=3', { cookie })).body);
+    assert(apiPage.templates.length === 3 && apiPage.nextAfterId === 3,
+      'process-template API exposes the same bounded cursor');
+    assert((await request('GET', '/process-templates?afterId=bad', { cookie })).statusCode === 400,
+      'invalid HTML cursor is rejected explicitly');
     await request('GET', '/process-templates', { cookie });
 
     // ---- READ-ONLY INVARIANT: nothing changed ----

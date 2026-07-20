@@ -5,8 +5,8 @@
 // 1. Bounded inspection produces exactly one batch
 // 2. Repeated inspection without batch fails
 // 3. Runtime verifies rename success without model re-entry
-// 4. Duplicate primitive commits skipped
-// 5. Conflicting primitive operations rejected
+// 4. Stable operation keys and prepared intents make duplicate execution idempotent
+// 5. Conflicting primitive operations use PostgreSQL ownership authority
 // 6. Batch operation count bounded
 // 7. Exact-path requirement enforced
 
@@ -122,45 +122,35 @@ function testRuntimeVerifiesRename() {
 // ── Test 4: Duplicate primitive commits skipped ──────────────────
 function testDuplicateCommitsSkipped() {
   const code = loadServerCode();
+  const storeCode = fs.readFileSync(path.join(ROOT, 'persistence', 'postgres', 'store.js'), 'utf8');
 
-  const hasFingerprint = code.includes('computeMutationFingerprint');
-  assert(hasFingerprint, 'mutation fingerprinting should exist');
+  assert(code.includes('buildTargetOperationKey'), 'stable target operation keys should exist');
+  const beginFn = extractFunction(code, 'beginWorkspaceMutation');
+  assert(beginFn, 'beginWorkspaceMutation should exist');
+  assert(beginFn.includes('getTargetOperation(run.id, operationKey)'), 'mutation should inspect durable intent/receipt state');
+  assert(beginFn.includes('state.receipt'), 'completed operation receipts should be recognized');
+  assert(beginFn.includes('skipped: true'), 'a durable completion should skip repeating the target effect');
+  assert(beginFn.includes('classifyPreparedWorkspaceMutation'), 'prepared effects should be reconciled before retry');
+  assert(storeCode.includes('ON CONFLICT (run_id, operation_key) DO NOTHING'), 'prepared intent identity should be database-enforced');
+  assert(storeCode.includes('if (!recorded.inserted) return'), 'duplicate completion should return the existing receipt without new evidence');
 
-  const hasSkip = code.includes('already committed in run ledger');
-  assert(hasSkip, 'duplicate commit skipping should exist');
-
-  const hasFindCommitted = code.includes('findCommittedMutation');
-  assert(hasFindCommitted, 'findCommittedMutation should exist');
-
-  // Verify all four mutating operations use commit deduplication
-  const hasWriteFileSkip = code.includes('Skipped writeFile') && code.includes('already committed');
-  const hasCreateFolderSkip = code.includes('Skipped createFolder') && code.includes('already committed');
-  const hasRenamePathSkip = code.includes('Skipped renamePath') && code.includes('already committed');
-  const hasDeletePathSkip = code.includes('Skipped deletePath') && code.includes('already committed');
-
-  assert(hasWriteFileSkip, 'writeFile should skip duplicate commits');
-  assert(hasCreateFolderSkip, 'createFolder should skip duplicate commits');
-  assert(hasRenamePathSkip, 'renamePath should skip duplicate commits');
-  assert(hasDeletePathSkip, 'deletePath should skip duplicate commits');
-
-  console.log('  ✓ duplicate-commits-skipped: all four primitives skip duplicate commits');
+  console.log('  ✓ duplicate-commits-skipped: stable keys, prepared intent, receipt reuse, and reconciliation prevent repeated effects');
 }
 
-// ── Test 5: Conflicting primitive operations rejected ──────────────
+// ── Test 5: PostgreSQL conflict authority ──────────────
 function testConflictingOperationsRejected() {
   const code = loadServerCode();
+  const storeCode = fs.readFileSync(path.join(ROOT, 'persistence', 'postgres', 'store.js'), 'utf8');
 
-  const hasConflictFn = code.includes('findConflictingMutation');
-  assert(hasConflictFn, 'findConflictingMutation should exist');
+  assert(code.includes('findPersistedMutationConflict'), 'repository-backed mutation conflict lookup should exist');
+  assert(code.includes("'MUTATION_CONFLICT'"), 'MUTATION_CONFLICT error code should exist');
+  const conflictCalls = (code.match(/findPersistedMutationConflict\(run, operation, args, runWorkspaceProvider\)/g) || []).length;
+  assert(conflictCalls >= 4, `repository conflict lookup should guard all four mutations (found ${conflictCalls})`);
+  assert(storeCode.includes('findMutationConflict'), 'PostgreSQL ownership repository should implement conflict lookup');
+  assert(storeCode.includes('mutation_fingerprint'), 'conflict lookup should use the indexed receipt projection');
+  assert(code.includes('withTargetOperationLock'), 'workspace effects should run under the shared target lock');
 
-  const hasConflictError = code.includes("'MUTATION_CONFLICT'");
-  assert(hasConflictError, 'MUTATION_CONFLICT error code should exist');
-
-  // Verify conflict check is called for all four mutating operations
-  const conflictCalls = (code.match(/findConflictingMutation\(run\.id, operation, args\)/g) || []).length;
-  assert(conflictCalls >= 4, `conflict check should be called for all four operations (found ${conflictCalls})`);
-
-  console.log('  ✓ conflicting-operations-rejected: same-path different-op rejected for all primitives');
+  console.log('  ✓ conflicting-operations-rejected: all four primitives use PostgreSQL receipt authority and target locks');
 }
 
 // ── Test 6: Batch operation count bounded ────────────────────────

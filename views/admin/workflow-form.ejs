@@ -13,6 +13,7 @@
 <% } %>
 
 <form action="<%= isEdit ? '/admin/workflows/' + workflow.id : '/admin/workflows' %>" method="POST" class="ticket-form">
+  <% if (isEdit) { %><input type="hidden" name="expectedRevision" value="<%= expectedRevision %>"><% } %>
   <div class="form-group">
     <label for="definition">Workflow JSON *</label>
     <textarea id="definition" name="definition" rows="28" spellcheck="false" required><%= definition %></textarea>

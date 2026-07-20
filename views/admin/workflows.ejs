@@ -1,5 +1,5 @@
 <h1>Workflow Capabilities</h1>
-<p class="text-muted">Approved composed workflows backed by JSON definitions and the actions catalog.</p>
+<p class="text-muted">Approved composed workflows backed by the workflow catalog and actions catalog.</p>
 
 <div class="actions actions--page-header">
   <a href="/admin/workflows/new" class="btn-small">Create workflow</a>
@@ -33,7 +33,7 @@
           </td>
           <td>
             <code><%= workflow.id %></code>
-            <div class="text-muted">workflow</div>
+            <div class="text-muted">workflow · revision <%= workflow.revision || 1 %></div>
           </td>
           <td><%= workflow.enabled === false ? 'disabled' : 'enabled' %></td>
           <td><%= Array.isArray(workflow.actions) ? workflow.actions.length : 0 %></td>

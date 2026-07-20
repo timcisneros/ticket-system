@@ -11,7 +11,7 @@ async function main() {
 
   const store = new PostgresRuntimeStore({
     connectionString,
-    schema: process.env.DATABASE_SCHEMA || 'ticket_system'
+    schema: process.env.POSTGRES_SCHEMA || 'ticket_system'
   });
   try {
     const applied = await store.migrate();

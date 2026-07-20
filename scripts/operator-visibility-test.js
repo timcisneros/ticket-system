@@ -39,9 +39,13 @@ function seed() {
   // Watcher provenance on ticket 4.
   const tickets = readData('tickets.json');
   const ticket4 = tickets.find(t => t.id === 4);
-  ticket4.source = { type: 'watcher_proposal', watcherId: 7, proposalId: 12, observationId: 33, createdBy: 'admin', createdAt: ticket4.createdAt };
+  ticket4.source = { type: 'watcher_proposal', watcherId: 7, workContextId: 7, proposalId: 12, observationId: 33, createdBy: 'admin', createdAt: ticket4.createdAt };
+  ticket4.workContextId = 7;
   writeData('tickets.json', tickets);
-  writeData('watchers.json', [{ id: 7, name: 'Demo Watcher', status: 'active', workContextId: null, sourceKind: 'workspace_file', sourceRefs: [], cadenceNote: null, proposalPolicy: 'manual_approval', createdAt: ticket4.createdAt, updatedAt: ticket4.createdAt }]);
+  writeData('work-contexts.json', [{ id: 7, name: 'Demo Context', purpose: 'Operator visibility fixture', status: 'active', defaultTargetId: null, defaultAuthorityProfileId: null, allowedTargetIds: [], allowedCapabilities: [], allowedProcessTemplateIds: [], defaultVerificationProfile: null, memoryPolicy: { mode: 'none' }, visibilityPolicy: { mode: 'participants' }, participants: [], ticketQueueFilter: {}, triageQueueFilter: {}, scheduleFilter: {}, revision: 1, createdBy: 'seed', createdAt: ticket4.createdAt, updatedBy: 'seed', updatedAt: ticket4.createdAt }]);
+  writeData('watchers.json', [{ id: 7, name: 'Demo Watcher', status: 'active', workContextId: 7, sourceKind: 'workspace_file', sourceRefs: [{ path: 'inbox/demo.txt' }], cadence: { mode: 'manual' }, triggerPolicy: { mode: 'manual' }, deltaPolicy: { mode: 'hash' }, actionPolicy: { allowedActions: ['summarize'] }, triagePolicy: { mode: 'manual' }, ticketProposalPolicy: { enabled: false }, notificationPolicy: { mode: 'none' }, lastObservedAt: null, lastObservationHash: null, revision: 1, createdBy: 'seed', createdAt: ticket4.createdAt, updatedBy: 'seed', updatedAt: ticket4.createdAt }]);
+  writeData('watcher-observations.json', [{ id: 33, watcherId: 7, workContextId: 7, status: 'changed', observedAt: ticket4.createdAt, sourceKind: 'workspace_file', sourceRefs: [{ path: 'inbox/demo.txt' }], previousHash: null, currentHash: 'a'.repeat(64), summary: { bytes: 0, lineCount: 0 }, actionTaken: 'summarized', ticketProposalId: null, error: null }]);
+  writeData('watcher-ticket-proposals.json', [{ id: 12, watcherId: 7, workContextId: 7, observationId: 33, status: 'approved', objective: ticket4.objective, sourceRefs: [{ path: 'inbox/demo.txt' }], evidenceRefs: ['watcher-observations.json:33'], constraints: null, authorityLimits: null, stopCondition: null, receiptExpectation: 'work_receipt', createdTicketId: 4, approvedAt: ticket4.createdAt, rejectedAt: null, revision: 2, createdBy: 'admin', createdAt: ticket4.createdAt, updatedBy: 'admin', updatedAt: ticket4.createdAt }]);
 
   // Enrich run 101: live machinery fields + consequence on the record, plus
   // evidence arrays (dedicated sections + one undedicated key for the catch-all)

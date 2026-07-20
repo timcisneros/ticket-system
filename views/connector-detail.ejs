@@ -2,19 +2,20 @@
 <h1><%= connector.name %> <% if (connector.status !== 'active') { %><span class="text-muted">(<%= connector.status %>)</span><% } %></h1>
 <p class="text-muted">
   Local/mock connector only. Reads are bounded to <code>sourceRoots</code> within this Work Context
-  and produce a receipt (metadata/hash, never full content). Writes are refused in r1.30. The
+  and produce a receipt (metadata/hash, never full content). Writes are refused by the current local/mock contract. The
   credential is shown as a reference only — never a secret value.
 </p>
 <table class="data-table">
   <tbody>
     <tr><th>Status</th><td><%= connector.status %></td></tr>
+    <tr><th>Revision</th><td><%= connector.revision %></td></tr>
     <tr><th>Kind</th><td class="text-muted"><%= connector.kind %></td></tr>
     <tr><th>Work Context</th><td><a href="/work-contexts/<%= connector.workContextId %>">#<%= connector.workContextId %></a></td></tr>
     <tr><th>Credential</th><td class="text-muted"><%= connector.credentialRef ? ('ref: ' + connector.credentialRef) : 'none' %> <em>(reference only — no secret value)</em></td></tr>
     <tr><th>Allowed scopes</th><td class="text-muted"><%= (connector.allowedScopes || []).join(', ') || 'none' %></td></tr>
     <tr><th>Source roots</th><td class="text-muted"><%= (connector.sourceRoots || []).join(', ') || 'none' %></td></tr>
     <tr><th>Target roots</th><td class="text-muted"><%= (connector.targetRoots || []).join(', ') || 'none' %></td></tr>
-    <tr><th>Write policy</th><td class="text-muted"><%= connector.writePolicy && connector.writePolicy.mode %> (writes refused in r1.30)</td></tr>
+    <tr><th>Write policy</th><td class="text-muted"><%= connector.writePolicy && connector.writePolicy.mode %> (writes refused)</td></tr>
     <tr><th>Sync</th><td class="text-muted"><%= connector.syncPolicy && connector.syncPolicy.mode %> (no background sync)</td></tr>
   </tbody>
 </table>
@@ -73,6 +74,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          expectedRevision: <%= connector.revision %>,
           name: document.getElementById('conn-name').value.trim(),
           workContextId: parseInt(document.getElementById('conn-edit-wctx').value, 10),
           allowedScopes: scopes,
@@ -108,4 +110,7 @@
       <% }); %>
     </tbody>
   </table>
+<% } %>
+<% if (typeof nextBeforeId !== 'undefined' && nextBeforeId != null) { %>
+  <p><a href="/connectors/<%= connector.id %>?beforeId=<%= nextBeforeId %>">Older receipts →</a></p>
 <% } %>

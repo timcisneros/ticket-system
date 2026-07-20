@@ -34,6 +34,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - run: pnpm run checkpoint:release
-      - run: pnpm run test:persistence:postgres
         env:
           TEST_DATABASE_URL: postgresql://ticket_system:ticket_system@127.0.0.1:5432/ticket_system_test

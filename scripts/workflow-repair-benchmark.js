@@ -125,7 +125,7 @@ function seedFailingWorkflows() {
       enabled: true,
       inputSchema: { content: 'string' },
       actions: [
-        { id: 'write', action: 'writeFile', input: { path: `missing-folder-${STAMP}/summary.md`, content: '{{workflow.input.content}}' }, next: 'done' },
+        { id: 'write', action: 'readFile', input: { path: `missing-folder-${STAMP}/summary.md` }, next: 'done' },
         { id: 'done', action: 'stop', input: { result: { path: `missing-folder-${STAMP}/summary.md` } } }
       ],
       postconditions: [
@@ -236,11 +236,11 @@ global.fetch = async function(_url, options = {}) {
         name: 'Repair draft failing postcondition',
         inputSchema: {},
         actions: [
-          { id: 'write', action: 'writeFile', input: { path: 'failing-postcondition-${STAMP}.txt', content: 'expected' }, next: 'done' },
-          { id: 'done', action: 'stop', input: { result: { path: 'failing-postcondition-${STAMP}.txt' } } }
+          { id: 'write', action: 'writeFile', input: { path: 'failing-postcondition-repaired-${STAMP}.txt', content: 'expected' }, next: 'done' },
+          { id: 'done', action: 'stop', input: { result: { path: 'failing-postcondition-repaired-${STAMP}.txt' } } }
         ],
         postconditions: [
-          { id: 'contains-expected', type: 'fileContains', path: 'failing-postcondition-${STAMP}.txt', contains: 'expected' }
+          { id: 'contains-expected', type: 'fileContains', path: 'failing-postcondition-repaired-${STAMP}.txt', contains: 'expected' }
         ]
       } } }],
       complete: true
@@ -255,12 +255,12 @@ global.fetch = async function(_url, options = {}) {
         name: 'Repair draft invalid next',
         inputSchema: {},
         actions: [
-          { id: 'write', action: 'writeFile', input: { path: 'invalid-next-${STAMP}.txt', content: 'fixed next' }, next: 'done' },
-          { id: 'done', action: 'stop', input: { result: { path: 'invalid-next-${STAMP}.txt' } } }
+          { id: 'write', action: 'writeFile', input: { path: 'invalid-next-repaired-${STAMP}.txt', content: 'fixed next' }, next: 'done' },
+          { id: 'done', action: 'stop', input: { result: { path: 'invalid-next-repaired-${STAMP}.txt' } } }
         ],
         postconditions: [
-          { id: 'file-exists', type: 'fileExists', path: 'invalid-next-${STAMP}.txt' },
-          { id: 'file-contains', type: 'fileContains', path: 'invalid-next-${STAMP}.txt', contains: 'fixed next' }
+          { id: 'file-exists', type: 'fileExists', path: 'invalid-next-repaired-${STAMP}.txt' },
+          { id: 'file-contains', type: 'fileContains', path: 'invalid-next-repaired-${STAMP}.txt', contains: 'fixed next' }
         ]
       } } }],
       complete: true
@@ -409,6 +409,7 @@ async function enableWorkflow(cookie, workflow) {
   const response = await request('POST', `/admin/workflows/${encodeURIComponent(workflow.id)}`, {
     cookie,
     form: {
+      expectedRevision: String(workflow.revision),
       definition: JSON.stringify({
         ...workflow,
         enabled: true,

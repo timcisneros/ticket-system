@@ -3,7 +3,7 @@
 <h1>Logs</h1>
 
 <% const viewFilters = typeof filters === 'undefined' ? { runId: null, ticketId: null } : filters; %>
-<% const viewPagination = typeof pagination === 'undefined' ? { page: 1, limit: 50, total: logs.length, start: logs.length ? 1 : 0, end: logs.length, previousHref: null, nextHref: null } : pagination; %>
+<% const viewPagination = typeof pagination === 'undefined' ? { page: 1, limit: 50, returned: logs.length, previousHref: null, nextHref: null } : pagination; %>
 
 <section class="admin-block">
   <% if (viewFilters && (viewFilters.runId !== null || viewFilters.ticketId !== null)) { %>
@@ -21,7 +21,7 @@
   <% } %>
   <div class="pagination-bar">
     <span>
-      Showing <%= viewPagination.start %>-<%= viewPagination.end %> of <%= viewPagination.total %>
+      Showing <%= viewPagination.returned %> record<%= viewPagination.returned === 1 ? '' : 's' %> on this page
     </span>
     <div class="pagination-actions">
       <% if (viewPagination.previousHref) { %>
@@ -29,7 +29,7 @@
       <% } else { %>
         <span class="btn-small btn-small--disabled">Previous</span>
       <% } %>
-      <span class="text-muted">Page <%= viewPagination.page %> of <%= viewPagination.pageCount || 1 %></span>
+      <span class="text-muted">Page <%= viewPagination.page %></span>
       <% if (viewPagination.nextHref) { %>
         <a class="btn-small" href="<%= viewPagination.nextHref %>">Next</a>
       <% } else { %>

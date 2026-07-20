@@ -10,10 +10,11 @@
 <table class="data-table">
   <tbody>
     <tr><th>Status</th><td><%= watcher.status %></td></tr>
+    <tr><th>Revision</th><td><%= watcher.revision %></td></tr>
     <tr><th>Work Context</th><td><a href="/work-contexts/<%= watcher.workContextId %>">#<%= watcher.workContextId %></a></td></tr>
     <tr><th>Source kind</th><td><%= watcher.sourceKind %></td></tr>
     <tr><th>Sources</th><td class="text-muted"><%= (watcher.sourceRefs || []).map(function (r) { return r.path; }).join(', ') %></td></tr>
-    <tr><th>Cadence</th><td class="text-muted"><%= watcher.cadence && watcher.cadence.mode %> (manual only in r1.26)</td></tr>
+    <tr><th>Cadence</th><td class="text-muted"><%= watcher.cadence && watcher.cadence.mode %> (manual in the current contract)</td></tr>
     <tr><th>Allowed actions</th><td class="text-muted"><%= (watcher.actionPolicy && watcher.actionPolicy.allowedActions || []).join(', ') %></td></tr>
     <tr><th>Last observed</th><td class="text-muted"><%= watcher.lastObservedAt || 'never' %></td></tr>
     <tr><th>Last observation hash</th><td class="text-muted"><%= watcher.lastObservationHash || '—' %></td></tr>
@@ -65,7 +66,8 @@
         body: JSON.stringify({
           name: document.getElementById('w-name').value.trim(),
           workContextId: parseInt(document.getElementById('w-edit-wctx').value, 10),
-          sourceRefs: pathsText ? pathsText.split('\n').map(function(s) { return { path: s.trim() }; }).filter(function(s) { return s.path; }) : []
+          sourceRefs: pathsText ? pathsText.split('\n').map(function(s) { return { path: s.trim() }; }).filter(function(s) { return s.path; }) : [],
+          expectedRevision: <%= watcher.revision %>
         })
       });
       var data = await res.json().catch(function() { return null; });

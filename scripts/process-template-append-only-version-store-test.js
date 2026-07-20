@@ -86,6 +86,28 @@ function seed() {
     tmpl(1, 'Editable manual', 'Create folder v1content', null),
     tmpl(2, 'Editable scheduled', 'Create folder schedv1', { enabled: true, kind: 'interval', everySeconds: 3600, anchor: ISO, nextRunAt: PAST, lastScheduledTriggerAt: '2026-01-01T00:00:00.000Z', timezone: 'UTC', scheduledBy: 'admin' })
   ]);
+  const currentTemplates = readJsonData('process-templates.json').map(template => ({
+    ...template,
+    version: Number.isInteger(template.version) ? template.version : 1,
+    currentVersion: Number.isInteger(template.version) ? template.version : 1,
+    currentVersionId: `ptv_${template.id}_${Number.isInteger(template.version) ? template.version : 1}`
+  }));
+  writeJson('process-templates.json', currentTemplates);
+  writeJson('process-template-versions.json', currentTemplates.map(template => ({
+    id: template.currentVersionId,
+    templateId: template.id,
+    version: template.currentVersion,
+    status: 'active',
+    name: template.name,
+    ticketTemplate: template.ticketTemplate,
+    executionPolicy: template.ticketTemplate.executionPolicy || null,
+    createdBy: template.createdBy || 'admin',
+    createdAt: template.createdAt || ISO,
+    activatedBy: template.createdBy || 'admin',
+    activatedAt: template.createdAt || ISO,
+    supersedesVersionId: null,
+    changeSummary: null
+  })));
   // A legacy generated ticket (pre-r1.10, no templateVersion) — must still render.
   writeJson('tickets.json', [{
     id: 50, objective: 'legacy', assignmentTargetType: 'agent', assignmentTargetId: 1, assignmentMode: 'individual', ownedOutputPaths: null,
@@ -101,7 +123,6 @@ function seed() {
   }]);
   // A legacy ledger entry (no templateVersion) — must remain byte-untouched.
   writeJson('process-template-triggers.json', [{ triggerToken: 'legacy-50', templateId: 1, templateName: 'Editable manual', ticketId: 50, triggeredBy: 'admin', triggerType: 'manual', createdAt: ISO }]);
-  writeJson('process-template-versions.json', []); // starts empty
   fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), '');
 }
 
@@ -138,8 +159,8 @@ async function main() {
     const legacy50Before = JSON.stringify(tickets().find(t => t.id === 50));
     const legacyLedgerBefore = readRaw('process-template-triggers.json');
 
-    // Store starts empty.
-    assert(Array.isArray(versions()) && versions().length === 0, 'version store starts empty');
+    // Current-format roots start with one explicit active version each.
+    assert(Array.isArray(versions()) && versions().length === 2 && versions().every(item => item.status === 'active'), 'version store starts with explicit active versions');
 
     // ---- A pre-activation manual trigger creates a v1 ticket (must stay v1 later). ----
     const preTrig = await trigger(admin, 1, 'm-pre-1');
@@ -149,7 +170,7 @@ async function main() {
     // ---- Draft creation: permission ----
     assert((await draft(viewer, 1, {})).statusCode === 403, 'draft creation requires processTemplate:manage');
 
-    // ---- Draft creation lazily materializes v1, then creates v2 draft ----
+    // ---- Draft creation appends v2 beside the explicit active v1 ----
     const ticketsBeforeDraft = tickets().length;
     const runsBeforeDraft = readRaw('runs.json');
     const d = await draft(admin, 1, { ticketTemplate: { objective: 'Create folder v2content' }, changeSummary: 'demo edit' });

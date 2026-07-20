@@ -1,10 +1,8 @@
 <h1>Connectors</h1>
 <p class="text-muted">
-  A connector is a <strong>bounded source/target adapter</strong> scoped to a Work Context. r1.30
-  ships a <strong>local/mock connector only</strong> — there is <strong>no</strong> external system,
+  A connector is a <strong>bounded source/target adapter</strong> scoped to a Work Context. The current product provides a <strong>local/mock connector only</strong> — there is <strong>no</strong> external system,
   OAuth, API key, or background sync. Connectors hold a <code>credentialRef</code> (never a secret
-  value), produce a <strong>receipt</strong> for every read, and <strong>refuse writes</strong> in
-  r1.30 (connector availability is not write authority). They create no ticket/run and mutate no
+  value), produce a <strong>receipt</strong> for every read, and <strong>refuse writes</strong> in the current local/mock contract (connector availability is not write authority). They create no ticket/run and mutate no
   workspace. Fixtures here are test/demo only — businesses connect their own data later.
 </p>
 
@@ -48,7 +46,7 @@
   <p class="text-muted">No connectors yet.</p>
 <% } else { %>
   <table class="data-table">
-    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Kind</th><th>Work Context</th><th>Scopes</th><th>Credential</th><th>Actions</th></tr></thead>
+    <thead><tr><th>#</th><th>Name</th><th>Status</th><th>Kind</th><th>Work Context</th><th>Scopes</th><th>Credential</th><th>Revision</th><th>Actions</th></tr></thead>
     <tbody>
       <% connectors.forEach(function (c) { %>
         <tr>
@@ -59,16 +57,20 @@
           <td><a href="/work-contexts/<%= c.workContextId %>">#<%= c.workContextId %></a></td>
           <td class="text-muted"><%= (c.allowedScopes || []).join(', ') || 'none' %></td>
           <td class="text-muted"><%= c.credentialRef ? 'set (ref)' : 'none' %></td>
+          <td><%= c.revision %></td>
           <td class="actions">
             <a href="/connectors/<%= c.id %>" class="btn-small">Edit</a>
             <% if (c.status !== 'archived') { %>
-              <button class="btn-small btn-danger archive-btn" data-id="<%= c.id %>" data-resource="connectors">Archive</button>
+              <button class="btn-small btn-danger archive-btn" data-id="<%= c.id %>" data-resource="connectors" data-revision="<%= c.revision %>">Archive</button>
             <% } %>
           </td>
         </tr>
       <% }); %>
     </tbody>
   </table>
+<% } %>
+<% if (typeof nextAfterId !== 'undefined' && nextAfterId != null) { %>
+  <p><a href="/connectors?afterId=<%= nextAfterId %>">Next connectors →</a></p>
 <% } %>
 
 <script>
@@ -97,7 +99,7 @@
         })
       });
       var data = await res.json().catch(function() { return null; });
-      if (res.ok && data && data.id != null) { window.location.reload(); return; }
+      if (res.ok && data && data.connector && data.connector.id != null) { window.location.reload(); return; }
       msg.textContent = (data && data.error) ? data.error : 'Create failed';
     } catch (err) { msg.textContent = 'Create failed'; }
     btn.disabled = false;
@@ -111,7 +113,7 @@
         var res = await fetch('/api/' + btn.dataset.resource + '/' + btn.dataset.id, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'archived' })
+          body: JSON.stringify({ status: 'archived', expectedRevision: parseInt(btn.dataset.revision, 10) })
         });
         var data = await res.json().catch(function() { return null; });
         if (res.ok) { window.location.reload(); return; }

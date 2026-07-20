@@ -1,8 +1,8 @@
 function createRuntimeRunner({ runAgentTicket, markRunStarting, markRunSettled, onError = () => {} }) {
   return {
-    startRun(run) {
+    async startRun(run) {
       if (!run || !run.id) return false;
-      if (typeof markRunStarting === 'function') markRunStarting(run);
+      if (typeof markRunStarting === 'function') await markRunStarting(run);
       setImmediate(() => {
         void Promise.resolve()
           .then(() => runAgentTicket(run.id))

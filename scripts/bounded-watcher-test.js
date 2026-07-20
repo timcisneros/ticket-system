@@ -136,6 +136,7 @@ async function main() {
     // Duplicate observation is deterministic (unchanged).
     const obs2 = await request('POST', '/api/watchers/1/observe', { cookie: admin });
     assert(obs2.json.observation.status === 'unchanged' && obs2.json.observation.currentHash === o.currentHash, 'duplicate observation is deterministic (unchanged, same hash)');
+    assert(obs2.json.watcher.revision === 3, 'observation advances the watcher cursor revision');
 
     // ---- 3: source unavailable records failure (no guess). ----
     const wBad = await request('POST', '/api/watchers', { cookie: admin, json: { ...WATCHER, name: 'Missing source', sourceRefs: [{ path: 'legal/intake/missing.txt' }] } });
@@ -144,10 +145,11 @@ async function main() {
     assert(obsBad.json.observation.status === 'failed' && obsBad.json.observation.error, 'missing source records a failed observation (no guess)');
 
     // ---- 4: archived watcher cannot observe. ----
-    await request('POST', '/api/watchers/1', { cookie: admin, json: { status: 'archived' } });
+    const archived = await request('POST', '/api/watchers/1', { cookie: admin, json: { status: 'archived', expectedRevision: obs2.json.watcher.revision } });
+    assert(archived.statusCode === 200, 'watcher archived with expected revision');
     const obsArch = await request('POST', '/api/watchers/1/observe', { cookie: admin });
     assert(obsArch.json.observation.status === 'refused', 'archived watcher refuses to observe');
-    await request('POST', '/api/watchers/1', { cookie: admin, json: { status: 'active' } });
+    await request('POST', '/api/watchers/1', { cookie: admin, json: { status: 'active', expectedRevision: archived.json.watcher.revision } });
 
     // ---- 5: proposal is a draft (no ticket/run); approval creates a normal ticket via ticket:create. ----
     const prop = await request('POST', '/api/watchers/1/proposals', { cookie: admin, json: {

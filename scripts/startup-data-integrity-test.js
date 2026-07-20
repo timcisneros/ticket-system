@@ -77,6 +77,25 @@ async function main() {
     { id: 1, ticketId: 1, agentId: 1, status: 'completed' }
   ], null, 2));
   await runRefusalScenario('auxiliary-json', 'process-templates.json', '[{"broken":');
+
+  await runRefusalScenario('incomplete-routing-policy', 'model-routing-policies.json', JSON.stringify([
+    { id: 1, name: 'Old shape', status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+  ], null, 2));
+  await runRefusalScenario('incomplete-connector', 'connectors.json', JSON.stringify([
+    { id: 1, name: 'Old shape', status: 'active', kind: 'local_mock', workContextId: 1 }
+  ], null, 2));
+  await runRefusalScenario('incomplete-connector-receipt', 'connector-receipts.json', JSON.stringify([
+    { id: 1, connectorId: 1, operation: 'read' }
+  ], null, 2));
+  await runRefusalScenario('incomplete-watcher', 'watchers.json', JSON.stringify([
+    { id: 1, name: 'Old shape', status: 'active', workContextId: 1 }
+  ], null, 2));
+  await runRefusalScenario('incomplete-watcher-observation', 'watcher-observations.json', JSON.stringify([
+    { id: 1, watcherId: 1, status: 'changed' }
+  ], null, 2));
+  await runRefusalScenario('incomplete-watcher-proposal', 'watcher-ticket-proposals.json', JSON.stringify([
+    { id: 1, watcherId: 1, status: 'proposed' }
+  ], null, 2));
   await runRefusalScenario('runtime-limits-json', 'runtime-limits.json', '{"maxExecutionSteps":"many"}');
   await runRefusalScenario('legacy-run-event', 'events.jsonl', `${JSON.stringify({
     id: 'legacy-event',
@@ -86,7 +105,7 @@ async function main() {
     runId: 1,
     payload: {}
   })}\n`);
-  console.log('PASS: startup strictly refuses and preserves malformed, non-array, duplicate-identity, missing run-snapshot, auxiliary, runtime-limit, and legacy run-event data');
+  console.log('PASS: startup strictly refuses and preserves malformed, non-array, duplicate-identity, missing run-snapshot, auxiliary, incomplete routing-policy, connector, connector-receipt, watcher, watcher-observation, watcher-proposal, runtime-limit, and legacy run-event data');
 }
 
 main().catch(error => {

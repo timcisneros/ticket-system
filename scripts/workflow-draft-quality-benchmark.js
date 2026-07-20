@@ -460,6 +460,7 @@ async function enableWorkflow(cookie, workflow) {
   const response = await request('POST', `/admin/workflows/${encodeURIComponent(workflow.id)}`, {
     cookie,
     form: {
+      expectedRevision: String(workflow.revision),
       definition: JSON.stringify({
         ...workflow,
         enabled: true,

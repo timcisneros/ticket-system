@@ -5,6 +5,7 @@
   "maxRuntimeDurationMs": null,
   "maxActiveRuns": null,
   "localModelConcurrency": null,
+  "revision": 1,
   "updatedBy": null,
   "updatedAt": null
 }

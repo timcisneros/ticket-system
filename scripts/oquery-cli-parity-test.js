@@ -74,21 +74,35 @@ function oquery(args) {
 const plain = s => s.replace(/\[[0-9;]*m/g, '');
 
 (async () => {
-  const server = spawn(process.execPath, ['server.js'], { cwd: ROOT, env: { ...process.env, NODE_ENV: 'test', PORT, DATA_DIR, WORKSPACE_ROOT }, stdio: ['ignore', 'ignore', 'pipe'] });
+  const server = spawn(process.execPath, ['server.js'], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      PORT,
+      DATA_DIR,
+      WORKSPACE_ROOT,
+      // This verifies operator command/API parity, not provider execution.
+      // Keep the retry successor pending so the scheduler cannot race the
+      // immediately following rerun assertion under a busy checkpoint.
+      RUNTIME_SCHEDULER_INTERVAL_MS: '3600000'
+    },
+    stdio: ['ignore', 'ignore', 'pipe']
+  });
   let err = ''; server.stderr.on('data', d => err += d);
   try {
     let ready = false;
     for (let i = 0; i < 150; i++) { try { const h = await req('GET', '/health'); if (h.status === 200 && JSON.parse(h.body).ready) { ready = true; break; } } catch {} await sleep(100); }
     ok('server boots', ready); if (!ready) { console.log(err.slice(0, 400)); throw new Error('not ready'); }
 
+    // login caches a session; catalog reads use the selected server authority.
+    const login = plain(await oquery(['login']));
+    ok('login succeeds and caches a session', /Login successful/.test(login) && fs.existsSync(COOKIE));
+
     // agents: human-readable, lists seeded agents, no API key shown
     const a = plain(await oquery(['agents']));
     ok('agents lists seeded agents in human-readable form', a.includes('Agent 1') && a.includes('Mike') && a.includes('ollama/gemma3:latest'));
     ok('agents output does not leak an apiKey', !/apiKey/i.test(a) && !/sk-/.test(a));
-
-    // login caches a session
-    const login = plain(await oquery(['login']));
-    ok('login succeeds and caches a session', /Login successful/.test(login) && fs.existsSync(COOKIE));
 
     // stop on a terminal run: must call the route and report truthfully (not invent success)
     const stop = plain(await oquery(['stop', String(RID)]));

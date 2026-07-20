@@ -22,6 +22,7 @@
     </div>
   <% } else { %>
     <input type="hidden" name="accountType" value="<%= editAccount.type %>">
+    <input type="hidden" name="revision" value="<%= editAccount.revision %>">
   <% } %>
 
   <div id="user-fields" class="account-fields" style="<%= accountType === 'agent' ? 'display: none;' : '' %>">
