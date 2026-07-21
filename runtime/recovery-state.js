@@ -11,6 +11,7 @@ const RECOVERY_STATE = Object.freeze({
   NEEDS_ACTION_RECONCILIATION: 'NEEDS_ACTION_RECONCILIATION',
   NEEDS_ACTION_EXECUTION: 'NEEDS_ACTION_EXECUTION',
   NEEDS_RESPONSE_PARSE: 'NEEDS_RESPONSE_PARSE',
+  NEEDS_FAILURE_TERMINALIZATION: 'NEEDS_FAILURE_TERMINALIZATION',
   NEEDS_MODEL_REQUEST: 'NEEDS_MODEL_REQUEST',
   NEEDS_STALL_DECISION: 'NEEDS_STALL_DECISION',
   UNSAFE_TO_CONTINUE: 'UNSAFE_TO_CONTINUE'
@@ -521,6 +522,28 @@ function reconstructAgentRecoveryState({
   const planKey = entry.plan ? entry.plan.planKey : null;
   const planComplete = entry.plan && entry.plan.complete === true;
   const opsCount = entry.operationsByActionIndex.size;
+
+  // A provider failure is a completed, durable outcome for this request. It is
+  // neither parseable model output nor permission to issue the request again.
+  // Recovery must carry the recorded failure into terminalization.
+  if (hasResponse && typeof entry.response.error === 'string' && entry.response.error) {
+    if (typeof entry.response.text === 'string' && entry.response.text) {
+      return unsafe('provider_response_has_success_and_failure_payloads', [replayRef(entry.response)]);
+    }
+    result.state = RECOVERY_STATE.NEEDS_FAILURE_TERMINALIZATION;
+    result.modelCallKey = entry.response.modelCallKey || null;
+    result.providerResponseEvidenceKey = entry.response.evidenceKey || null;
+    result.nextPhase = 'failure_terminalization';
+    result.failure = {
+      message: entry.response.error,
+      code: entry.response.code || null,
+      provider: entry.response.provider || null,
+      model: entry.response.model || null,
+      providerResponsePayload: entry.response.providerResponsePayload || null
+    };
+    result.evidenceRefs.push(replayRef(entry.response));
+    return result;
+  }
 
   // Stall detection (issue #7): use NEEDS_STALL_DECISION, not NEEDS_MODEL_REQUEST.
   if (hasPlan && !planComplete && planActions.length === 0) {

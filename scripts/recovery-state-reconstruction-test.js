@@ -735,6 +735,34 @@ test('recovery parses the persisted response without another provider call', () 
   assert.strictEqual(persistedPlan.actions[0].operation, 'createFolder');
 });
 
+test('durable provider failure requires terminalization and never another request', () => {
+  const replaySnapshot = mockSnapshot({
+    providerRequests: [mockReq(4)],
+    modelResponses: [mockResp(4, {
+      text: undefined,
+      error: 'invalid API key',
+      code: 'OPENAI_HTTP_ERROR',
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      providerResponsePayload: { status: 401, requestId: 'req-failed' }
+    })]
+  });
+  const recoveryState = reconstructAgentRecoveryState(opts({
+    run: mockRun(), replaySnapshot, events: []
+  }));
+
+  assertState(recoveryState, 'NEEDS_FAILURE_TERMINALIZATION', '18b');
+  assert.strictEqual(recoveryState.nextPhase, 'failure_terminalization');
+  assert.strictEqual(recoveryState.failure.message, 'invalid API key');
+  assert.strictEqual(recoveryState.failure.code, 'OPENAI_HTTP_ERROR');
+  assert.strictEqual(recoveryState.failure.providerResponsePayload.status, 401);
+  assert.throws(() => resolveExecutionTurnProviderCall({
+    recoveryState,
+    replaySnapshot,
+    requestProvider: () => { throw new Error('must not request provider'); }
+  }), error => error && error.code === 'RUN_RESUME_UNSAFE');
+});
+
 // ── Summary ────────────────────────────────────────────────────────────
 console.log('\n\n');
 if (failed > 0) {

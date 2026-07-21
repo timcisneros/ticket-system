@@ -10029,6 +10029,7 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
         replayKey: 'modelResponses',
         replayItem: {
           error: error.message || String(error),
+          code: error.code || null,
           provider: error.provider || (agent && agent.provider) || 'openai',
           model: agent && agent.model ? agent.model : null,
           providerResponsePayload: safePayload,
@@ -10793,8 +10794,17 @@ async function buildFinalizedRunReplayState(run, status, failureReason = null, m
   const snapshot = await readRunReplaySnapshot(run) || run.replaySnapshot || {};
   const browserEvidence = classifyBrowserEvidence(run, snapshot);
   const browserReport = extractBrowserReport(run, snapshot);
+  const replayEvents = Array.isArray(snapshot.events) ? snapshot.events : [];
+  const failureReplayEvent = status === 'failed' && failureReason && !replayEvents.some(event => event && event.type === 'run:failed')
+    ? [{
+        type: 'run:failed',
+        message: sanitizeLogMessage(failureReason),
+        capturedAt: effectiveFinalizedAt
+      }]
+    : [];
   const finalizedSnapshot = {
     ...snapshot,
+    events: [...replayEvents, ...failureReplayEvent],
     terminalStatus: status,
     failureReason: failureReason ? sanitizeLogMessage(failureReason) : null,
     failure: failure ? sanitizeSnapshotValue(failure) : null,
@@ -11054,7 +11064,6 @@ async function ensureFailedRunReplaySnapshot(run, reason) {
       note: 'Run failed before execution snapshot capture completed'
     })
   });
-  await recordReplayEvent(run, 'run:failed', reason);
 }
 
 function runExecutionKey(run) {
@@ -12028,7 +12037,8 @@ async function validateManualTicketCompletion(ticket) {
 const ticketTransitionTails = new Map();
 
 async function withTicketTransitionLock(ticketId, operation) {
-  const key = normalizeNullableInteger(ticketId);
+  const parsedTicketId = typeof ticketId === 'string' ? Number(ticketId) : ticketId;
+  const key = Number.isSafeInteger(parsedTicketId) && parsedTicketId > 0 ? parsedTicketId : null;
   if (key === null) return operation();
   const prior = ticketTransitionTails.get(key) || Promise.resolve();
   let release;
@@ -17863,6 +17873,26 @@ async function runAgentTicket(runId) {
           operationHistory: await readAllRunOperations(run.id),
           mutatingOperations: AGENT_MUTATING_OPERATIONS
         });
+        if (recoveryState.state === RECOVERY_STATE.NEEDS_FAILURE_TERMINALIZATION) {
+          const persistedFailure = recoveryState.failure || {};
+          const recoveryError = createProviderError(
+            persistedFailure.message || 'Persisted provider request failed',
+            persistedFailure.code || 'PROVIDER_REQUEST_FAILED',
+            {
+              phase: 'recovered_provider_failure',
+              provider: persistedFailure.provider || null,
+              model: persistedFailure.model || null,
+              status: persistedFailure.providerResponsePayload
+                ? persistedFailure.providerResponsePayload.status || null
+                : null,
+              requestId: persistedFailure.providerResponsePayload
+                ? persistedFailure.providerResponsePayload.requestId || null
+                : null
+            }
+          );
+          recoveryError.providerEvidencePersisted = true;
+          throw recoveryError;
+        }
         pendingRecoveredProviderCall = resolveExecutionTurnProviderCall({
           recoveryState,
           replaySnapshot: executionRecoverySnapshot,
