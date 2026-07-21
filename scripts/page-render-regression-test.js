@@ -217,32 +217,58 @@ async function seedCurrentFormatFixture(store) {
   return { ticket: ticketResult.ticket, run, context };
 }
 
+async function assertAddressConflictExitsCleanly(env) {
+  const child = spawn(process.execPath, ['server.js'], {
+    cwd: ROOT,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let output = '';
+  child.stdout.on('data', chunk => { output += String(chunk); });
+  child.stderr.on('data', chunk => { output += String(chunk); });
+  const exited = await Promise.race([
+    waitForExit(child).then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 10_000))
+  ]);
+  if (!exited) {
+    child.kill('SIGTERM');
+    await waitForExit(child);
+  }
+  assert(exited, 'address-conflict server did not exit');
+  assert(child.exitCode === 1, 'address-conflict server exited with ' + child.exitCode);
+  assert(output.includes('EADDRINUSE'), 'address-conflict server did not report EADDRINUSE');
+  assert(!output.includes('Cannot use a pool after calling end on the pool'),
+    'address-conflict cleanup left the runtime scheduler polling a closed PostgreSQL pool');
+}
+
 async function main() {
   const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
   let server = null;
   try {
     await store.migrate();
+    const serverEnv = {
+      ...process.env,
+      NODE_ENV: 'test',
+      DATABASE_URL,
+      POSTGRES_SCHEMA: SCHEMA,
+      SESSION_SECRET,
+      ADMIN_BOOTSTRAP_PASSWORD: 'admin123',
+      PORT,
+      WORKSPACE_ROOT,
+      TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
+      RUNTIME_SCHEDULER_INTERVAL_MS: '60000',
+      PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '60000'
+    };
     server = spawn(process.execPath, ['server.js'], {
       cwd: ROOT,
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-        DATABASE_URL,
-        POSTGRES_SCHEMA: SCHEMA,
-        SESSION_SECRET,
-        ADMIN_BOOTSTRAP_PASSWORD: 'admin123',
-        PORT,
-        WORKSPACE_ROOT,
-        TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
-        RUNTIME_SCHEDULER_INTERVAL_MS: '60000',
-        PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '60000'
-      },
+      env: serverEnv,
       stdio: ['ignore', 'pipe', 'pipe']
     });
     server.stdout.on('data', chunk => process.stdout.write(String(chunk)));
     server.stderr.on('data', chunk => process.stderr.write(String(chunk)));
 
     await waitForReady();
+    await assertAddressConflictExitsCleanly(serverEnv);
     const cookie = await login();
     const fixture = await seedCurrentFormatFixture(store);
 

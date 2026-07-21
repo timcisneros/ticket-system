@@ -25416,10 +25416,15 @@ async function start() {
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`Server running on http://localhost:${PORT}`);
   } catch (err) {
+    serverReady = false;
     if (sessionMaintenanceTimer) {
       clearInterval(sessionMaintenanceTimer);
       sessionMaintenanceTimer = null;
     }
+    if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
+    if (runtimeTemplateScheduler && runtimeTemplateScheduler.isRunning()) runtimeTemplateScheduler.stop();
+    if (runtimeScheduler && typeof runtimeScheduler.whenIdle === 'function') await runtimeScheduler.whenIdle();
+    if (runtimeTemplateScheduler && typeof runtimeTemplateScheduler.whenIdle === 'function') await runtimeTemplateScheduler.whenIdle();
     try {
       await getRuntimeBootstrapRepository().releaseRuntimeAuthority();
       await postgresRuntimeStore.close();
