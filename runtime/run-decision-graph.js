@@ -76,9 +76,14 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
   const journalEvents = Array.isArray(runEvents) ? runEvents : [];
   const history = Array.isArray(operationHistory) ? operationHistory : [];
 
+  // Operation-history step values come back from persistence as strings
+  // ("0"), so parse rather than type-check — otherwise executed operations
+  // render unlinked and their plan actions falsely render as unexecuted.
   const stepByHistoryId = new Map();
   history.forEach(record => {
-    if (record && record.id != null && Number.isInteger(record.step)) stepByHistoryId.set(record.id, record.step);
+    if (!record || record.id == null) return;
+    const step = parseStepRef(record.step);
+    if (step !== null) stepByHistoryId.set(record.id, step);
   });
 
   function addNode(node) {

@@ -22967,6 +22967,7 @@ async function buildRunDiagnosticBundle(ctx) {
     eventSummary, recentLogs, artifactPredictionComparison, artifactAccuracy,
     objectiveSuccess, operationalOutcome, partialMutationCount, runtimeLimitsDisplay,
     permissionCatalog, delegatedAuthorization,
+    runEvents, runLogs,
     generatedAt, route
   } = ctx;
 
@@ -23124,6 +23125,10 @@ async function buildRunDiagnosticBundle(ctx) {
     out('- startedAt: ' + dash(run.startedAt));
     out('- completedAt: ' + dash(run.completedAt));
     out('- duration: ' + dash(typeof formatDurationHuman === 'function' && run.startedAt && run.completedAt ? formatDurationHuman(new Date(run.completedAt) - new Date(run.startedAt)) : null));
+    // startedAt is reset on every lease claim, so after a recovery the
+    // startedAt→completedAt duration covers only the final claim. Wall clock
+    // from creation is the honest elapsed measure for resumed runs.
+    out('- Wall clock (created → completed): ' + dash(typeof formatDurationHuman === 'function' && run.createdAt && run.completedAt ? formatDurationHuman(new Date(run.completedAt) - new Date(run.createdAt)) : null));
     out('- Current phase: ' + dash(run.currentPhase));
     out('- Current step: ' + dash(eventSummary && eventSummary.currentStep && eventSummary.currentStep.stepId));
     out('- Current message: ' + dash(eventSummary && eventSummary.latestStatus && eventSummary.latestStatus.message));
@@ -23401,18 +23406,62 @@ async function buildRunDiagnosticBundle(ctx) {
   out('```');
   out('');
 
-  // 18. Decision Graph — the same projection as /runs/:id/map and
+  // 18. Recovery / Resume History — the lease and recovery lifecycle this run
+  // went through: every recovery-relevant journal event and resume/recovery
+  // log chronologically, plus the lease-vs-provider-latency comparison. A
+  // resume denial (RUN_RESUME_UNSAFE) or duplicated work cannot be diagnosed
+  // without this timeline, and it lived only in scattered log queries before.
+  out('## 18. Recovery / Resume History');
+  const leaseDurationMs = getRunLeaseDurationMs();
+  const modelCallDurations = (Array.isArray(s.modelResponses) ? s.modelResponses : [])
+    .map(response => (Number.isFinite(response && response.durationMs) ? response.durationMs : null))
+    .filter(value => value !== null);
+  const longestModelCallMs = modelCallDurations.length > 0 ? Math.max(...modelCallDurations) : null;
+  const leaseExceedingCalls = modelCallDurations.filter(value => value > leaseDurationMs).length;
+  out('- Run lease duration: ' + leaseDurationMs + 'ms' + (process.env.RUN_LEASE_DURATION_MS ? ' (RUN_LEASE_DURATION_MS)' : ' (default)'));
+  out('- Longest model call: ' + dash(longestModelCallMs !== null ? longestModelCallMs + 'ms' : null));
+  out('- Model calls exceeding the lease duration: ' + leaseExceedingCalls
+    + (leaseExceedingCalls > 0 ? ' — each such call loses the run lease mid-flight and forces a recovery/resume cycle' : ''));
+  const recoveryEvents = (Array.isArray(runEvents) ? runEvents : [])
+    .filter(event => event && typeof event.type === 'string' && /resume|recover|lease|claim/i.test(event.type));
+  out('- Recovery-relevant journal events: ' + recoveryEvents.length);
+  recoveryEvents.forEach(event => {
+    out('  - ' + dash(event.ts) + ' ' + event.type
+      + (event.stepId != null ? ' (step ' + event.stepId + ')' : '')
+      + (event.payload !== undefined && event.payload !== null ? ' payload=' + JSON.stringify(event.payload) : ''));
+  });
+  const recoveryLogs = (Array.isArray(runLogs) ? runLogs : [])
+    .filter(log => log && typeof log.type === 'string' && /resume|recover|lease/i.test(log.type))
+    .slice()
+    .sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+  out('- Resume/recovery logs: ' + recoveryLogs.length);
+  recoveryLogs.forEach(log => {
+    out('  - ' + dash(log.timestamp) + ' ' + log.type + ': ' + dash(log.message));
+  });
+  const failureDetail = s.failure && s.failure.detail ? s.failure.detail : null;
+  if (failureDetail && Array.isArray(failureDetail.inconsistencyDetail) && failureDetail.inconsistencyDetail.length > 0) {
+    out('- Resume-denial findings (offending evidence):');
+    failureDetail.inconsistencyDetail.forEach(item => {
+      out('  - ' + dash(item.code) + ': ' + dash(item.subject) + ' — field ' + dash(item.field)
+        + ' observed ' + dash(item.observed) + (item.evidenceKey ? ' (' + item.evidenceKey + ')' : ''));
+    });
+  } else if (s.failure && s.failure.code === 'RUN_RESUME_UNSAFE') {
+    out('- Resume-denial findings: not recorded (run predates inconsistencyDetail evidence)');
+  }
+  out('');
+
+  // 19. Decision Graph — the same projection as /runs/:id/map and
   // `oquery run-graph`, rendered from runtime/run-decision-graph.js so the
   // copyable bundle can never drift from the map: per-step verbatim model
   // messages with complete flags, every action's fate (executed / blocked
   // with reason / cap-dropped / unexecuted), workflow actions, outcome chain.
-  out('## 18. Decision Graph');
+  out('## 19. Decision Graph');
   out('- Same projection as /runs/' + (run && run.id) + '/map and `oquery run-graph` (runtime/run-decision-graph.js).');
   try {
     const decisionGraph = buildRunDecisionGraph(
       run,
       s,
-      typeof getRunEvents === 'function' && run && run.id != null ? (await getRunEvents(run.id)) : [],
+      Array.isArray(runEvents) ? runEvents : [],
       Array.isArray(operationHistory) ? operationHistory : []
     );
     renderRunDecisionGraphText(decisionGraph).forEach(line => out(line));
@@ -23421,8 +23470,8 @@ async function buildRunDiagnosticBundle(ctx) {
   }
   out('');
 
-  // 19. Redaction Notice
-  out('## 19. Redaction Notice');
+  // 20. Redaction Notice
+  out('## 20. Redaction Notice');
   out('Provider keys, session cookies, password hashes, auth tokens, and environment secrets are excluded from this diagnostic bundle.');
   out('');
 
@@ -23544,6 +23593,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     eventSummary, recentLogs: recentRunLogs, artifactPredictionComparison,
     artifactAccuracy, objectiveSuccess, operationalOutcome, partialMutationCount: runPartialMutationCount,
     runtimeLimitsDisplay, permissionCatalog, delegatedAuthorization,
+    runEvents, runLogs,
     generatedAt: diagnosticsGeneratedAt, route: '/runs/' + runId
   });
 

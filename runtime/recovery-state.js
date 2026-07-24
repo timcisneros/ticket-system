@@ -119,14 +119,21 @@ function reconstructAgentRecoveryState({
     nextPhase: 'model_request',
     evidenceRefs: [],
     inconsistencies: [],
+    inconsistencyDetail: [],
     automaticRecoveryAllowed: true
   };
 
-  function unsafe(inconsistency, refs) {
+  function unsafe(inconsistency, refs, detail) {
     result.state = RECOVERY_STATE.UNSAFE_TO_CONTINUE;
     result.automaticRecoveryAllowed = false;
     if (typeof inconsistency === 'string') result.inconsistencies.push(inconsistency);
     else if (Array.isArray(inconsistency)) result.inconsistencies.push(...inconsistency);
+    if (detail && typeof detail === 'object') {
+      result.inconsistencyDetail.push({
+        code: typeof inconsistency === 'string' ? inconsistency : String(inconsistency),
+        ...detail
+      });
+    }
     if (Array.isArray(refs)) {
       for (const ref of refs) {
         if (ref && typeof ref === 'object' && typeof ref.type === 'string') {
@@ -135,6 +142,31 @@ function reconstructAgentRecoveryState({
       }
     }
     return result;
+  }
+
+  // Identity-contract findings name the offending evidence item, the field, and
+  // the observed value — a resume denial must be diagnosable from the recorded
+  // failure alone, without re-deriving which replay item violated the contract.
+  function identityDetail(item, field, subject) {
+    const observed = item ? item[field] : undefined;
+    return {
+      field,
+      observed: observed === undefined ? 'missing' : String(observed),
+      subject: subject || null,
+      evidenceKey: item && typeof item.evidenceKey === 'string'
+        ? item.evidenceKey
+        : (item && typeof item.operationKey === 'string' ? item.operationKey : null)
+    };
+  }
+  function safeReplayRefs(item) {
+    return item && typeof item.evidenceKey === 'string' ? [replayRef(item)] : undefined;
+  }
+  function operationSubject(op) {
+    const name = op && op.operation && typeof op.operation === 'object'
+      ? op.operation.operation
+      : (typeof (op && op.operation) === 'string' ? op.operation : 'operation');
+    const path = op && op.operation && op.operation.args && op.operation.args.path;
+    return `${name || 'operation'}${path ? ' ' + path : ''}`;
   }
 
   if (!run || typeof run !== 'object') return unsafe('missing_run');
@@ -232,29 +264,29 @@ function reconstructAgentRecoveryState({
 
   // ── 6. Identity type validation (issue #8) ──────────────────────────
   for (const r of modelResponses) {
-    if (!isNonNegInt(r.executionTurn)) return unsafe('response_non_integer_turn');
-    if (!isNonEmptyStr(r.modelCallKey)) return unsafe('response_missing_model_call_key');
-    if (!isNonEmptyStr(r.evidenceKey)) return unsafe('response_missing_evidence_key');
-    if (!isNonEmptyStr(r.providerRequestEvidenceKey)) return unsafe('response_missing_provider_request_evidence_key');
+    if (!isNonNegInt(r.executionTurn)) return unsafe('response_non_integer_turn', safeReplayRefs(r), identityDetail(r, 'executionTurn', 'model response'));
+    if (!isNonEmptyStr(r.modelCallKey)) return unsafe('response_missing_model_call_key', safeReplayRefs(r), identityDetail(r, 'modelCallKey', 'model response'));
+    if (!isNonEmptyStr(r.evidenceKey)) return unsafe('response_missing_evidence_key', safeReplayRefs(r), identityDetail(r, 'evidenceKey', 'model response'));
+    if (!isNonEmptyStr(r.providerRequestEvidenceKey)) return unsafe('response_missing_provider_request_evidence_key', safeReplayRefs(r), identityDetail(r, 'providerRequestEvidenceKey', 'model response'));
   }
   for (const p of parsedPlans) {
-    if (!isNonNegInt(p.executionTurn)) return unsafe('plan_non_integer_turn');
-    if (!isNonEmptyStr(p.modelCallKey)) return unsafe('plan_missing_model_call_key');
-    if (!isNonEmptyStr(p.planKey)) return unsafe('plan_missing_plan_key');
-    if (!isNonEmptyStr(p.providerResponseEvidenceKey)) return unsafe('plan_missing_provider_response_evidence_key');
-    if (!isNonEmptyStr(p.evidenceKey)) return unsafe('plan_missing_evidence_key');
-    if (!Array.isArray(p.actions)) return unsafe('plan_actions_not_array');
+    if (!isNonNegInt(p.executionTurn)) return unsafe('plan_non_integer_turn', safeReplayRefs(p), identityDetail(p, 'executionTurn', 'parsed plan'));
+    if (!isNonEmptyStr(p.modelCallKey)) return unsafe('plan_missing_model_call_key', safeReplayRefs(p), identityDetail(p, 'modelCallKey', 'parsed plan'));
+    if (!isNonEmptyStr(p.planKey)) return unsafe('plan_missing_plan_key', safeReplayRefs(p), identityDetail(p, 'planKey', 'parsed plan'));
+    if (!isNonEmptyStr(p.providerResponseEvidenceKey)) return unsafe('plan_missing_provider_response_evidence_key', safeReplayRefs(p), identityDetail(p, 'providerResponseEvidenceKey', 'parsed plan'));
+    if (!isNonEmptyStr(p.evidenceKey)) return unsafe('plan_missing_evidence_key', safeReplayRefs(p), identityDetail(p, 'evidenceKey', 'parsed plan'));
+    if (!Array.isArray(p.actions)) return unsafe('plan_actions_not_array', safeReplayRefs(p), identityDetail(p, 'actions', 'parsed plan'));
   }
   for (const op of workspaceOps) {
-    if (!isNonNegInt(op.executionTurn)) return unsafe('operation_non_integer_turn');
-    if (!isNonEmptyStr(op.planKey)) return unsafe('operation_missing_plan_key');
-    if (!isNonNegIntOrZero(op.actionIndex)) return unsafe('operation_missing_action_index');
-    if (!isNonEmptyStr(op.operationKey)) return unsafe('operation_missing_operation_key');
+    if (!isNonNegInt(op.executionTurn)) return unsafe('operation_non_integer_turn', safeReplayRefs(op), identityDetail(op, 'executionTurn', operationSubject(op)));
+    if (!isNonEmptyStr(op.planKey)) return unsafe('operation_missing_plan_key', safeReplayRefs(op), identityDetail(op, 'planKey', operationSubject(op)));
+    if (!isNonNegIntOrZero(op.actionIndex)) return unsafe('operation_missing_action_index', safeReplayRefs(op), identityDetail(op, 'actionIndex', operationSubject(op)));
+    if (!isNonEmptyStr(op.operationKey)) return unsafe('operation_missing_operation_key', safeReplayRefs(op), identityDetail(op, 'operationKey', operationSubject(op)));
   }
   for (const req of providerRequests) {
-    if (!isNonNegInt(req.executionTurn)) return unsafe('request_non_integer_turn');
-    if (!isNonEmptyStr(req.modelCallKey)) return unsafe('request_missing_model_call_key');
-    if (!isNonEmptyStr(req.evidenceKey)) return unsafe('request_missing_evidence_key');
+    if (!isNonNegInt(req.executionTurn)) return unsafe('request_non_integer_turn', safeReplayRefs(req), identityDetail(req, 'executionTurn', 'provider request'));
+    if (!isNonEmptyStr(req.modelCallKey)) return unsafe('request_missing_model_call_key', safeReplayRefs(req), identityDetail(req, 'modelCallKey', 'provider request'));
+    if (!isNonEmptyStr(req.evidenceKey)) return unsafe('request_missing_evidence_key', safeReplayRefs(req), identityDetail(req, 'evidenceKey', 'provider request'));
   }
 
   // ── 7. Build per-turn ledger (issue #1) ─────────────────────────────
@@ -638,14 +670,20 @@ function reconstructAgentRecoveryState({
   return result;
 }
 
-function createUnsafeRecoveryError(inconsistencies) {
+function createUnsafeRecoveryError(inconsistencies, inconsistencyDetail) {
   const reasons = Array.isArray(inconsistencies)
     ? inconsistencies.filter(isNonEmptyStr)
     : [inconsistencies].filter(isNonEmptyStr);
   const error = new Error(`Resume denied: ${reasons.join(', ') || 'provider response identity is unsafe'}`);
   error.code = 'RUN_RESUME_UNSAFE';
   error.failureKind = 'resume_rejected';
-  error.details = { inconsistencies: reasons };
+  const detail = Array.isArray(inconsistencyDetail)
+    ? inconsistencyDetail.filter(item => item && typeof item === 'object')
+    : [];
+  error.details = {
+    inconsistencies: reasons,
+    ...(detail.length > 0 ? { inconsistencyDetail: detail } : {})
+  };
   return error;
 }
 
@@ -664,7 +702,7 @@ function resolveExecutionTurnProviderCall({
   }
 
   if (recoveryState.state === RECOVERY_STATE.UNSAFE_TO_CONTINUE) {
-    throw createUnsafeRecoveryError(recoveryState.inconsistencies);
+    throw createUnsafeRecoveryError(recoveryState.inconsistencies, recoveryState.inconsistencyDetail);
   }
 
   if (recoveryState.state === RECOVERY_STATE.NEEDS_MODEL_REQUEST) {

@@ -74,9 +74,13 @@ const runEvents = [
   { type: 'run.verification_failed', seq: 5, payload: { status: 'failed', error: 'Verification failed: 1 postcondition' } }
 ];
 
+// Step values mirror the persisted shape: PostgreSQL returns operation-history
+// steps as strings ("0"), and the projection must parse them — a type-checked
+// step silently unlinks executed operations and falsely renders their plan
+// actions as unexecuted proposals (observed live on run 3, 2026-07-24).
 const operationHistory = [
-  { id: 1, step: 0, operation: 'listDirectory', args: { path: '' } },
-  { id: 2, step: 1, operation: 'writeFile', args: { path: 'reports/summary.md' } },
+  { id: 1, step: '0', operation: 'listDirectory', args: { path: '' } },
+  { id: 2, step: '1', operation: 'writeFile', args: { path: 'reports/summary.md' } },
   { id: 3, step: 1, operation: 'createFolder', args: { path: 'archive' } }
 ];
 
@@ -108,6 +112,9 @@ assert(dropped && dropped.detail.operation === 'deletePath' && dropped.detail.pa
 assert(edgeSet.has(`plan:1>${dropped.id}:dropped`), 'dropped proposal must edge from its plan');
 // The blocked createFolder DID execute (as a blocked op) — it must not double-render as unexecuted.
 assert(!graph.nodes.some(node => node.kind === 'unexecuted_proposal' && node.detail.operation === 'createFolder'), 'blocked op must not also appear as unexecuted proposal');
+// The executed writeFile links through a STRING history step ("1") — it must
+// neither render unlinked nor falsely appear as an unexecuted proposal.
+assert(!graph.nodes.some(node => ['unexecuted_proposal', 'cap_dropped'].includes(node.kind) && node.detail.operation === 'writeFile'), 'string-step executed op must not render as unexecuted');
 
 // Execution phase progression: recorded transitions, step-anchored, with the
 // stored currentPhase carried at the top level.
