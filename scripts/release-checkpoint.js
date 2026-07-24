@@ -12,6 +12,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'business-scenario-contracts-test.js',
   'dev-environment-test.js',
   'catalog-consistency-test.js',
+  'event-integrity-negative-test.js',
   'mutation-admission-contract-test.js',
   'mutation-admission-scheduler-test.js',
   'no-tracked-provider-keys-test.js',
@@ -31,7 +32,10 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
 const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'postgres-persistence-integration-test.js',
   'postgres-runtime-cutover-test.js',
-  'page-render-regression-test.js'
+  'page-render-regression-test.js',
+  'postgres-startup-recovery-test.js',
+  'provider-response-recovery-postgres-test.js',
+  'lease-renewal-resume-safety-test.js'
 ]);
 
 function runCheckpoint() {
