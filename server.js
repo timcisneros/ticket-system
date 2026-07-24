@@ -17,6 +17,7 @@ const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { buildRunDecisionGraph, renderRunDecisionGraphText } = require('./runtime/run-decision-graph');
 const {
   ACTION_CONTRACT_VIOLATION_THRESHOLD,
+  ACTION_CONTRACT_PASSED_EVENT_TYPE,
   reconstructActionContractViolationStreak
 } = require('./runtime/action-contract-streak');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
@@ -18335,6 +18336,11 @@ async function runAgentTicket(runId) {
           step
         });
 
+        // Deterministic crash seam: the violation decision is now durable, no
+        // further provider request has been issued, and the run is not yet
+        // terminated — the exact state for the recovery regression test.
+        await maybeTestInterrupt(run, 'after_action_contract_violation');
+
         if (terminate) {
           await recordRunEvent(run, 'model:no_progress',
             `Model repeatedly exceeded the per-response action limits (${consecutiveActionContractViolations} consecutive rejected response(s)); terminating without spending the remaining runtime budget.`,
@@ -18475,6 +18481,9 @@ async function runAgentTicket(runId) {
             }
           });
 
+          // Deterministic crash seam (see the total-action branch).
+          await maybeTestInterrupt(run, 'after_action_contract_violation');
+
           if (terminate) {
             await recordRunEvent(run, 'model:no_progress',
               `Model repeatedly exceeded the per-response mutating limit (${consecutiveActionContractViolations} consecutive rejected response(s)); terminating without spending the remaining runtime budget.`,
@@ -18499,10 +18508,20 @@ async function runAgentTicket(runId) {
 
       // This response passed both per-response action-count gates (or was a
       // validated bundle / prefix-truncated to fit), so it is a valid bounded
-      // batch: reset the action-contract violation streak now — before any
-      // execution. What the operations do next (authority block, execution
-      // failure, valid no-op) belongs to other classifications and must not
-      // preserve an action-contract streak.
+      // batch. Record an EXPLICIT durable pass decision so recovery can never
+      // confuse a genuine pass with an undecided (crashed-mid-decision) turn,
+      // then reset the streak — before any execution. What the operations do
+      // next (authority block, execution failure, valid no-op) belongs to other
+      // classifications and must not preserve an action-contract streak.
+      await recordRunEvent(run, ACTION_CONTRACT_PASSED_EVENT_TYPE,
+        'Response passed the per-response action-count gates', {
+          actionCount: actions.length,
+          mutatingActionCount: countMutatingActions(actions),
+          maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+          maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+          executionTurn: step,
+          step
+        });
       consecutiveActionContractViolations = 0;
 
       // ── Phase-aware execution enforcement ─────────────────────────

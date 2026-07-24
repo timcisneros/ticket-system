@@ -9,65 +9,65 @@
 // as a model-contract failure rather than burning the runtime-duration budget.
 //
 // The streak must survive process restarts: a run recovered between responses
-// must continue an in-progress streak, not reset it. The runtime records each
-// rejection into the durable replay snapshot's `events` array, and each parsed
-// response into `parsedModelPlans`. This module reconstructs the trailing
-// consecutive streak from that durable evidence alone — no new persistence.
+// must continue an in-progress streak, not reset it. To make recovery safe, the
+// runtime records an EXPLICIT durable contract-decision event for every parsed
+// response — a violation event when a gate rejects it, or a
+// `model:action_contract_passed` event once both gates pass. The streak is
+// reconstructed from these ordered decision events ALONE.
 //
-// The streak resets as soon as a later parsed response PASSES both gates
-// (durably: a turn with a parsed plan but no violation event). Authority
-// blocks, execution failures, and valid no-op outcomes happen AFTER the gates
-// and belong to other classifications — they never preserve the streak.
+// Why not infer "passed" from the absence of a violation event: the parsed plan
+// and the violation event are separate, non-atomic writes. A crash after the
+// plan is durable but before the decision event leaves an UNDECIDED turn. If a
+// pass were inferred from "plan present, no violation", that crash would falsely
+// reset the streak and let a misbehaving model evade termination. An undecided
+// turn carries no decision event, so it is invisible here — it neither resets
+// nor increments the streak until recovery deterministically re-classifies that
+// response and writes its decision event.
 
 // After this many consecutive rejected responses, terminate.
 const ACTION_CONTRACT_VIOLATION_THRESHOLD = 2;
 
+// The durable contract-decision event recorded once a response passes both gates.
+const ACTION_CONTRACT_PASSED_EVENT_TYPE = 'model:action_contract_passed';
+
 // The two rejection event types recorded by the runtime action-count gates.
 const ACTION_CONTRACT_VIOLATION_EVENT_TYPES = Object.freeze([
-  'model:action_limit',        // total-action ceiling
+  'model:action_limit',         // total-action ceiling
   'model:mutating_action_limit' // mutating-action ceiling
 ]);
 
-function turnOf(item) {
-  if (!item || typeof item !== 'object') return null;
-  if (Number.isInteger(item.executionTurn)) return item.executionTurn;
-  if (Number.isInteger(item.step)) return item.step;
-  // stepId is a stringified turn on journal-shaped events.
-  if (typeof item.stepId === 'string' && /^\d+$/.test(item.stepId)) return parseInt(item.stepId, 10);
-  return null;
+// The full set of contract-decision events, the only events reconstruction reads.
+const ACTION_CONTRACT_DECISION_EVENT_TYPES = Object.freeze([
+  ACTION_CONTRACT_PASSED_EVENT_TYPE,
+  ...ACTION_CONTRACT_VIOLATION_EVENT_TYPES
+]);
+
+function isViolationDecision(type) {
+  return ACTION_CONTRACT_VIOLATION_EVENT_TYPES.includes(type);
 }
 
 // Reconstruct the trailing consecutive action-contract violation streak from a
-// durable replay snapshot. Returns 0 for a fresh/absent snapshot.
+// durable replay snapshot, reading contract-decision events ONLY, in their
+// recorded (append/chronological) order. Returns 0 for a fresh/absent snapshot.
+//
+// The trailing run of consecutive violation decisions is the streak; the first
+// `passed` decision encountered scanning backward ends it. Turns with no
+// decision event (undecided — e.g. a crash between plan persistence and the
+// decision write) are absent from the decision stream and therefore never
+// reset and never increment the streak.
 function reconstructActionContractViolationStreak(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return 0;
   const events = Array.isArray(snapshot.events) ? snapshot.events : [];
-  const plans = Array.isArray(snapshot.parsedModelPlans) ? snapshot.parsedModelPlans : [];
 
-  const violationTurns = new Set();
-  for (const event of events) {
-    if (event && ACTION_CONTRACT_VIOLATION_EVENT_TYPES.includes(event.type)) {
-      const turn = turnOf(event);
-      if (turn !== null) violationTurns.add(turn);
-    }
-  }
-  if (violationTurns.size === 0) return 0;
+  const decisions = events.filter(event =>
+    event && ACTION_CONTRACT_DECISION_EVENT_TYPES.includes(event.type));
 
-  const parsedTurns = new Set();
-  for (const plan of plans) {
-    const turn = turnOf(plan);
-    if (turn !== null) parsedTurns.add(turn);
-  }
-
-  const maxTurn = Math.max(...violationTurns, ...parsedTurns);
   let streak = 0;
-  for (let turn = maxTurn; turn >= 0; turn -= 1) {
-    if (violationTurns.has(turn)) {
+  for (let i = decisions.length - 1; i >= 0; i -= 1) {
+    if (isViolationDecision(decisions[i].type)) {
       streak += 1;
-    } else if (parsedTurns.has(turn)) {
-      break; // a parsed response with no violation = it passed both gates
     } else {
-      break; // no response recorded for this turn
+      break; // model:action_contract_passed → the streak was reset here
     }
   }
   return streak;
@@ -75,6 +75,8 @@ function reconstructActionContractViolationStreak(snapshot) {
 
 module.exports = {
   ACTION_CONTRACT_VIOLATION_THRESHOLD,
+  ACTION_CONTRACT_PASSED_EVENT_TYPE,
   ACTION_CONTRACT_VIOLATION_EVENT_TYPES,
+  ACTION_CONTRACT_DECISION_EVENT_TYPES,
   reconstructActionContractViolationStreak
 };
