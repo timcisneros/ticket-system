@@ -76,19 +76,39 @@ it has already created and either re-attempts already-existent items
 limitation, not a budget constraint. It applies regardless of enumeration
 precision, completion criteria, or "do not recreate" instructions.
 
-**Empirical finding**: 16 successful mutations is the reliable ceiling
-per ticket (2 steps × 8 ops). Any ticket requiring more than ~16 mutations
-will truthfully exhaust the budget without completing the remaining items.
+### Enforced runtime limits vs. empirical ticket-sizing advice
 
-### Transactional rule of thumb
+Two different things are easy to conflate here; keep them separate.
 
-> One step can create ~8 folders or write ~8 files.
-> The model can sustain at most 2 productive mutation steps before
-> progress tracking degrades (~16 mutations per ticket).
-> Continuation tickets handle the rest.
+**Enforced per-response limits (runtime contract).** Each model response is
+bounded independently by `MAX_AGENT_ACTIONS_PER_RESPONSE` (default 8 total
+actions) and `MAX_MUTATING_ACTIONS_PER_RESPONSE` (default 2 mutating actions:
+createFolder/writeFile/renamePath/deletePath). The binding independent-mutation
+ceiling is therefore **2 mutations per response**, not 8 — a response may carry
+up to 8 actions, but at most 2 of them may mutate (the sole exception is the
+validated bundle of one createFolder plus up to two writeFile actions inside
+that folder). A response that exceeds either ceiling is rejected; two
+consecutive rejections terminate the run as a model-contract failure
+(`reasonCode: model_contract_failed`) rather than burning the runtime-duration
+budget.
 
-**If a ticket requires more than 16 mutations, split it into multiple
-tickets.** Do not raise the budget. The budget limit is a feature — it
+**Deterministic mutation capacity (runtime contract).** The maximum mutations a
+single run can commit is derived from the applied limits:
+`maxExecutionSteps × MAX_MUTATING_ACTIONS_PER_RESPONSE`. With the defaults
+(32 × 2) that is 64. The pre-dispatch feasibility gate
+(`assertRuntimeBudgetFeasible`) rejects only objectives whose deterministically
+known mutation count needs more steps than `maxExecutionSteps`.
+
+**Empirical ticket-sizing advice (not enforced).** Separately, experience shows
+that beyond roughly 16 mutations per ticket the model's cross-step progress
+tracking degrades, so completion becomes unreliable well before the deterministic
+step ceiling. This ~16 figure is operational guidance, **not** an enforced limit.
+Practical completion also depends on model latency and behavior: a slow local
+model can exhaust the runtime-duration budget long before the step budget, and a
+model that ignores the per-response limits makes no progress at all.
+
+**If a ticket is unlikely to complete (roughly > 16 mutations), split it into
+multiple tickets.** Do not raise the budget. The budget limit is a feature — it
 forces tractable ticket boundaries.
 
 ---

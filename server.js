@@ -15,6 +15,10 @@ const { createRuntimeRunner } = require('./runtime/runner');
 const { createRuntimeScheduler } = require('./runtime/scheduler');
 const { createTemplateScheduler } = require('./runtime/template-scheduler');
 const { buildRunDecisionGraph, renderRunDecisionGraphText } = require('./runtime/run-decision-graph');
+const {
+  ACTION_CONTRACT_VIOLATION_THRESHOLD,
+  reconstructActionContractViolationStreak
+} = require('./runtime/action-contract-streak');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -111,7 +115,7 @@ const SESSION_SECRET = resolveSessionSecret();
 const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed'];
-const TRIAGE_REASON_CODES = ['verification_failed', 'authority_blocked', 'runtime_failed', 'provider_failed', 'stopped', 'objective_ambiguous', 'runtime_budget_insufficient', 'unknown'];
+const TRIAGE_REASON_CODES = ['verification_failed', 'authority_blocked', 'runtime_failed', 'provider_failed', 'model_contract_failed', 'stopped', 'objective_ambiguous', 'runtime_budget_insufficient', 'unknown'];
 const TRIAGE_REQUIRED_DECISIONS = ['review_failure', 'approve_retry', 'change_scope', 'fix_input', 'manual_recovery', 'clarify_objective', 'none'];
 const DEFAULT_EXECUTION_POLICY = Object.freeze({
   mode: 'assisted',
@@ -9933,6 +9937,56 @@ function createRunLimitError(run, type, message, details) {
   return error;
 }
 
+// Corrective feedback for a rejected over-limit response. Both limits are
+// single-sourced from the same configured constants the gates enforce — never
+// hard-coded — so guidance can never drift from enforcement. The total-action
+// message states both ceilings; it does NOT mention the folder+two-files
+// bundle, which does not materially apply to a total-action overflow and would
+// only imply the exception permits arbitrary folder bundles (it does not).
+function buildTotalActionLimitFeedback(actionCount) {
+  return `You returned ${actionCount} workspace actions, exceeding the per-response limit. Emit at most ${MAX_AGENT_ACTIONS_PER_RESPONSE} total action(s) and at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} mutating action(s) (createFolder/writeFile/renamePath/deletePath) per response. If more work remains, emit a bounded batch, set complete:false, and continue in the next response.`;
+}
+
+// The mutating-limit message names the ceiling and the one place the bundle
+// exception materially applies: a single folder plus up to two files written
+// inside it may be emitted together.
+function buildMutatingActionLimitFeedback(mutatingActionCount) {
+  return `You returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Emit at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} mutating action(s) per response — a single createFolder plus up to two writeFile actions inside that folder may be emitted together. You may include read/list actions. If more work remains, set complete:false and continue in the next response.`;
+}
+
+// Terminal failure for a run whose model repeatedly violated the per-response
+// action contract. Classified as a model-contract / instruction-following
+// failure (failureKind no_progress, code MODEL_RESPONSE_CONTRACT_VIOLATION) —
+// deliberately NOT RUN_LIMIT_EXCEEDED and NOT a provider transport failure — so
+// triage names it truthfully (reasonCode model_contract_failed) instead of
+// blaming a timeout or the provider.
+function createModelResponseContractViolationError(run, {
+  consecutiveViolations,
+  violationTypes,
+  lastActionCount,
+  lastMutatingActionCount,
+  step
+}) {
+  const error = new Error(
+    `Model repeatedly violated the per-response action contract: ${consecutiveViolations} consecutive response(s) were rejected by the per-response action limits ` +
+    `(${MAX_AGENT_ACTIONS_PER_RESPONSE} total / ${MAX_MUTATING_ACTIONS_PER_RESPONSE} mutating) with zero accepted operations. The model is not following the bounded-batch instruction.`
+  );
+  error.code = 'MODEL_RESPONSE_CONTRACT_VIOLATION';
+  error.failureKind = 'no_progress';
+  error.details = {
+    reason: 'repeated_model_response_contract_violation',
+    consecutiveViolations,
+    violationTypes,
+    acceptedOperations: 0,
+    maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+    maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+    lastActionCount: lastActionCount != null ? lastActionCount : null,
+    lastMutatingActionCount: lastMutatingActionCount != null ? lastMutatingActionCount : null,
+    step
+  };
+  return error;
+}
+
 function assertRunNotTimedOut(run, startedAtMs, limits) {
   const elapsedMs = Date.now() - startedAtMs;
 
@@ -10774,6 +10828,12 @@ async function buildRunTriage(run, {
     /Agent API key is missing|Agent model is missing|Ollama model is missing/i.test(message)
   )) mappedReason = 'provider_failed';
   if (!mappedReason && failureKind === 'runtime_budget_insufficient') mappedReason = 'runtime_budget_insufficient';
+  // A repeated model-response contract violation is an instruction-following
+  // failure, distinct from a provider transport failure and from a
+  // runtime-duration (timeout) failure. Keyed on the specific failure code so
+  // it does not reclassify the pre-existing inspection no_progress failure
+  // (which carries RUN_LIMIT_EXCEEDED).
+  if (!mappedReason && failureCode === 'MODEL_RESPONSE_CONTRACT_VIOLATION') mappedReason = 'model_contract_failed';
   if (!mappedReason && effectiveStatus === 'failed') mappedReason = 'runtime_failed';
   if (!mappedReason) mappedReason = 'unknown';
 
@@ -10798,6 +10858,12 @@ async function buildRunTriage(run, {
     provider_failed: {
       requiredDecision: 'fix_input',
       evidenceRefs: ['replay:providerRequests', 'replay:modelResponses', 'event:run.execution_completed', 'replay:failure'],
+      allowedActions: ['review', 'rerun_from_start'],
+      prohibitedActions: ['automatic_retry']
+    },
+    model_contract_failed: {
+      requiredDecision: 'review_failure',
+      evidenceRefs: ['event:model:no_progress', 'replay:parsedModelPlans', 'event:run.execution_completed', 'replay:failure'],
       allowedActions: ['review', 'rerun_from_start'],
       prohibitedActions: ['automatic_retry']
     },
@@ -17895,8 +17961,12 @@ async function runAgentTicket(runId) {
     let actionResults = [];
     let stalledResponses = 0;
     let noProgressResponses = 0;
-    let repeatedMutatingActionLimitViolations = 0;
-    let lastMutatingActionLimitSignature = null;
+    // Unified streak of consecutive responses rejected by EITHER per-response
+    // action-count gate (total-action or mutating-action). Seeded from durable
+    // evidence just before the loop so a recovered run continues an in-progress
+    // streak. Reset the moment a later response passes both gates.
+    let consecutiveActionContractViolations = 0;
+    const actionContractViolationTypes = [];
     let modelRequestCount = 0;
     let workspaceOperationCount = 0;
     let listDirectoryCount = 0;
@@ -18057,6 +18127,16 @@ async function runAgentTicket(runId) {
       : null;
 
     assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract);
+
+    // Seed the action-contract violation streak from durable replay evidence so
+    // a run recovered between responses continues an in-progress streak rather
+    // than resetting it. Fresh runs reconstruct to 0.
+    {
+      const seededReplay = await getRunReplayRepository().readRunReplay(run.id);
+      consecutiveActionContractViolations = reconstructActionContractViolationStreak(
+        seededReplay ? seededReplay.snapshot : null
+      );
+    }
 
     for (let step = initialExecutionTurn; !completed; step += 1) {
       await heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
@@ -18238,16 +18318,39 @@ async function runAgentTicket(runId) {
       }
 
       if (actions.length > MAX_AGENT_ACTIONS_PER_RESPONSE) {
+        consecutiveActionContractViolations += 1;
+        actionContractViolationTypes.push('total_action');
+        const terminate = consecutiveActionContractViolations >= ACTION_CONTRACT_VIOLATION_THRESHOLD;
         const message = `Model returned ${actions.length} workspace actions, exceeding the per-response limit of ${MAX_AGENT_ACTIONS_PER_RESPONSE}`;
 
         await recordRunEvent(run, 'model:action_limit', message, {
+          violationType: 'total_action',
           actionCount: actions.length,
+          mutatingActionCount: countMutatingActions(actions),
           maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+          maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+          consecutiveViolationCount: consecutiveActionContractViolations,
+          correctiveFeedbackIssued: !terminate,
+          executionTurn: step,
           step
         });
+
+        if (terminate) {
+          await recordRunEvent(run, 'model:no_progress',
+            `Model repeatedly exceeded the per-response action limits (${consecutiveActionContractViolations} consecutive rejected response(s)); terminating without spending the remaining runtime budget.`,
+            { reason: 'repeated_model_response_contract_violation', consecutiveViolationCount: consecutiveActionContractViolations, executionTurn: step, step });
+          throw createModelResponseContractViolationError(run, {
+            consecutiveViolations: consecutiveActionContractViolations,
+            violationTypes: actionContractViolationTypes.slice(-consecutiveActionContractViolations),
+            lastActionCount: actions.length,
+            lastMutatingActionCount: countMutatingActions(actions),
+            step
+          });
+        }
+
         actionResults = [{
           warning: 'model:action_limit',
-          message: `You returned ${actions.length} workspace actions, exceeding the per-response limit of ${MAX_AGENT_ACTIONS_PER_RESPONSE}. Retry with at most ${MAX_AGENT_ACTIONS_PER_RESPONSE} actions. If more work remains, emit up to the limit, set complete:false, and continue in the next response.`
+          message: buildTotalActionLimitFeedback(actions.length)
         }];
         continue;
       }
@@ -18336,24 +18439,22 @@ async function runAgentTicket(runId) {
 
           actions = executedActions;
         } else {
-          // ── Suppression path (flag disabled) ────────────────────
+          // ── Suppression path (flag disabled): reject the over-limit
+          // response and count it toward the unified action-contract streak. ──
+          consecutiveActionContractViolations += 1;
+          actionContractViolationTypes.push('mutating_action');
+          const terminate = consecutiveActionContractViolations >= ACTION_CONTRACT_VIOLATION_THRESHOLD;
           const message = `Model returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}`;
-          const mutatingActionLimitSignature = actions
-            .filter(action => action && typeof action === 'object' && AGENT_MUTATING_OPERATIONS.includes(action.operation))
-            .map(action => `${action.operation}:${action.args && action.args.path ? action.args.path : ''}:${action.args && action.args.nextPath ? action.args.nextPath : ''}`)
-            .join('|');
-
-          repeatedMutatingActionLimitViolations = mutatingActionLimitSignature === lastMutatingActionLimitSignature
-            ? repeatedMutatingActionLimitViolations + 1
-            : 1;
-          lastMutatingActionLimitSignature = mutatingActionLimitSignature;
 
           await recordRunEvent(run, 'model:mutating_action_limit', message, {
+            violationType: 'mutating_action',
             actionCount: actions.length,
             mutatingActionCount,
             maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
             maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
-            repeatedViolationCount: repeatedMutatingActionLimitViolations,
+            consecutiveViolationCount: consecutiveActionContractViolations,
+            correctiveFeedbackIssued: !terminate,
+            executionTurn: step,
             step
           });
 
@@ -18367,38 +18468,42 @@ async function runAgentTicket(runId) {
               proposedCount: actions.length,
               mutatingCount: mutatingActionCount,
               limit: MAX_MUTATING_ACTIONS_PER_RESPONSE,
-              repeatedViolationCount: repeatedMutatingActionLimitViolations,
+              consecutiveViolationCount: consecutiveActionContractViolations,
               droppedActions: actions
                 .filter(a => a && typeof a === 'object' && AGENT_MUTATING_OPERATIONS.includes(a.operation))
                 .map(a => ({ operation: a.operation, path: a.args && a.args.path, nextPath: a.args && a.args.nextPath }))
             }
           });
 
-          if (repeatedMutatingActionLimitViolations >= 2) {
-            const error = createRunLimitError(
-              run,
-              'mutating_action',
-              'Model repeatedly proposed too many mutating actions; no workspace mutations were executed.',
-              {
-                currentValue: repeatedMutatingActionLimitViolations,
-                configuredLimit: 1,
-                mutatingActionCount,
-                maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
-                step
-              }
-            );
-            error.failureKind = 'invalid_action';
-            throw error;
+          if (terminate) {
+            await recordRunEvent(run, 'model:no_progress',
+              `Model repeatedly exceeded the per-response mutating limit (${consecutiveActionContractViolations} consecutive rejected response(s)); terminating without spending the remaining runtime budget.`,
+              { reason: 'repeated_model_response_contract_violation', consecutiveViolationCount: consecutiveActionContractViolations, executionTurn: step, step });
+            throw createModelResponseContractViolationError(run, {
+              consecutiveViolations: consecutiveActionContractViolations,
+              violationTypes: actionContractViolationTypes.slice(-consecutiveActionContractViolations),
+              lastActionCount: actions.length,
+              lastMutatingActionCount: mutatingActionCount,
+              step
+            });
           }
 
           actionResults = [
             ...priorStepActionResults,
             { warning: 'model:mutating_action_limit',
-              message: `You returned ${mutatingActionCount} mutating workspace actions, exceeding the per-response mutating limit of ${MAX_MUTATING_ACTIONS_PER_RESPONSE}. Retry with at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} createFolder/writeFile/renamePath/deletePath action(s). You may include read/list actions if needed. If more work remains, set complete:false and continue in the next response.` }
+              message: buildMutatingActionLimitFeedback(mutatingActionCount) }
           ];
           continue;
         }
       }
+
+      // This response passed both per-response action-count gates (or was a
+      // validated bundle / prefix-truncated to fit), so it is a valid bounded
+      // batch: reset the action-contract violation streak now — before any
+      // execution. What the operations do next (authority block, execution
+      // failure, valid no-op) belongs to other classifications and must not
+      // preserve an action-contract streak.
+      consecutiveActionContractViolations = 0;
 
       // ── Phase-aware execution enforcement ─────────────────────────
       const phaseCheck = checkPhaseCompliance(run, actions);
