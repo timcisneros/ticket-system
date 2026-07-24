@@ -6,6 +6,8 @@ const fastify = require('fastify')({
 });
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const { AsyncLocalStorage } = require('async_hooks');
 const argon2 = require('argon2');
 const crypto = require('crypto');
@@ -13962,6 +13964,35 @@ async function callOpenAI(agent, input, options = {}) {
   };
 }
 
+// Minimal JSON-over-HTTP request via node:http/https with NO implicit
+// timeouts. Provider calls are budgeted exclusively by the caller's
+// AbortSignal (the run's maxRuntimeDurationMs controller); fetch/undici's
+// hidden headersTimeout (300s) must not preempt a configured longer budget.
+// Response mirrors the subset of the fetch interface callOllama consumes.
+function providerHttpJsonRequest(url, { method = 'POST', headers = {}, body = null, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const transport = target.protocol === 'https:' ? https : http;
+    const request = transport.request(target, { method, headers, signal }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('error', reject);
+      response.on('end', () => {
+        const bodyText = Buffer.concat(chunks).toString('utf8');
+        resolve({
+          ok: response.statusCode >= 200 && response.statusCode < 300,
+          status: response.statusCode,
+          headers: { ...response.headers },
+          text: async () => bodyText
+        });
+      });
+    });
+    request.on('error', reject);
+    if (body !== null && body !== undefined) request.write(body);
+    request.end();
+  });
+}
+
 async function callOllama(agent, input, options = {}) {
   const ollamaConfig = getAgentOllamaConfig(agent);
   const messages = input.map(item => ({
@@ -13989,7 +14020,12 @@ async function callOllama(agent, input, options = {}) {
 
   let response = null;
   try {
-    response = await fetch(`${ollamaConfig.baseUrl}/api/chat`, {
+    // node:http, not fetch: undici's fetch imposes a hidden 300s headersTimeout,
+    // and a local model with stream:false legitimately sends no response bytes
+    // until generation completes — run 4 died at exactly 301s under a 400s run
+    // budget. The run's own AbortController (maxRuntimeDurationMs via
+    // callModelProviderWithRunTimeout) is the sole authoritative timeout here.
+    response = await providerHttpJsonRequest(`${ollamaConfig.baseUrl}/api/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -14001,17 +14037,26 @@ async function callOllama(agent, input, options = {}) {
     if (fetchError && fetchError.name === 'AbortError') {
       throw fetchError;
     }
+    // Name the underlying transport cause — "fetch failed" alone is not
+    // diagnosable (ECONNREFUSED vs timeout vs socket reset all render alike).
+    const causeSource = fetchError && fetchError.cause ? fetchError.cause : fetchError;
     const error = createProviderError(fetchError.message || 'Ollama request failed before response', 'OLLAMA_TRANSPORT_ERROR', {
       phase: 'request',
       provider: 'ollama',
       model: ollamaConfig.model,
-      baseUrl: ollamaConfig.baseUrl
+      baseUrl: ollamaConfig.baseUrl,
+      cause: causeSource ? {
+        name: causeSource.name || null,
+        code: causeSource.code || null,
+        syscall: causeSource.syscall || null,
+        message: causeSource.message || null
+      } : null
     });
     error.providerRequestPayload = requestSnapshot;
     throw error;
   }
 
-  const responseHeaders = Object.fromEntries(response.headers.entries());
+  const responseHeaders = response.headers;
   const requestId = providerRequestId(responseHeaders);
   const responseText = await response.text();
   let data = null;
