@@ -5550,12 +5550,19 @@ class PostgresRuntimeStore {
     operationKey,
     stepId = null,
     leaseOwner,
-    intent
+    intent,
+    // Optional execution-turn identity (executionTurn / planKey / actionIndex),
+    // projected into the workspace.operation_prepared event payload — the
+    // agent resume safety contract requires prepared mutations to carry it.
+    identity = null
   }, { client = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
     const key = requiredString(operationKey, 'operationKey', 512);
     const document = this.assertJsonRecord(intent, 'intent');
+    const eventIdentity = identity === null || identity === undefined
+      ? null
+      : this.assertJsonRecord(identity, 'identity');
     const operation = requiredString(document.operation, 'intent.operation');
     const target = document.target && typeof document.target === 'object' && !Array.isArray(document.target)
       ? document.target
@@ -5616,7 +5623,7 @@ class PostgresRuntimeStore {
         ticketId: ownerTicketId,
         runId: id,
         ...(normalizedStepId === null ? {} : { stepId: normalizedStepId }),
-        payload: { operationKey: key, intent: document }
+        payload: { operationKey: key, ...(eventIdentity || {}), intent: document }
       });
       return { intent: record, receipt: null, event, inserted: true };
     };

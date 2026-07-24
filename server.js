@@ -432,6 +432,39 @@ function canonicalOperationJson(value) {
   return encoded === undefined ? 'null' : encoded;
 }
 
+// Resume-time operation-key verification (recovery-state.js issue #4): a
+// recorded operation is only trusted when its durable operation key recomputes
+// from the plan-derived identity — run id, the deterministic action slot, and
+// the operation input. This binds each committed operation to the exact plan
+// action that proposed it; a key that does not recompute means the evidence
+// does not belong to the turn/action it claims.
+function buildRecoveredOperationKeyVerifier(run) {
+  return ({ operationKey, operation, expectedOperation, args, turn, actionIndex }) => {
+    try {
+      if (typeof operationKey !== 'string' || !operationKey) {
+        return { valid: false, reason: 'missing_operation_key' };
+      }
+      // Direct workspace actions execute under agent:{turn}:{actionIndex};
+      // a handoff wrapper delegates its nested workspace operation under the
+      // same slot with the :workspace-operation suffix.
+      const slots = expectedOperation === 'createHandoffTask'
+        ? [`agent:${turn}:${actionIndex}:workspace-operation`]
+        : [`agent:${turn}:${actionIndex}`];
+      if (expectedOperation !== 'createHandoffTask' && operation !== expectedOperation) {
+        return { valid: false, reason: 'operation_mismatch' };
+      }
+      for (const slot of slots) {
+        if (buildTargetOperationKey(run, operation, args || {}, slot) === operationKey) {
+          return { valid: true };
+        }
+      }
+      return { valid: false, reason: 'operation_key_mismatch' };
+    } catch (error) {
+      return { valid: false, reason: error && error.message ? error.message : 'verification_error' };
+    }
+  };
+}
+
 function buildTargetOperationKey(run, operation, args, slot) {
   const runId = run && Number.isSafeInteger(run.id) ? run.id : null;
   if (!runId) throw new TypeError('A persisted run is required for a target operation key');
@@ -9913,6 +9946,32 @@ function getRemainingRunTimeMs(startedAtMs, limits) {
   return Math.max(0, limits.maxRuntimeDurationMs - (Date.now() - startedAtMs));
 }
 
+// Keep the run lease alive while a provider call is in flight. Model calls
+// routinely outlast the lease (a local model can take minutes per response);
+// without mid-call renewal the scheduler declares the lease stale, claims a
+// recovery against a healthy worker, and the run pays a resume cycle per model
+// call. A renewal failure is deliberately not fatal here: renewal stops, the
+// call finishes, and the authoritative ownership fence remains the existing
+// post-response heartbeat / assertLiveRunLease checks, which refuse to act on
+// a lease someone else now owns.
+async function withInFlightRunLeaseRenewal(run, fn) {
+  const leaseDurationMs = getRunLeaseDurationMs();
+  const intervalMs = Math.max(1000, Math.floor(leaseDurationMs / 3));
+  let renewalStopped = false;
+  const timer = setInterval(() => {
+    if (renewalStopped) return;
+    heartbeatRunLease(run.id, { phase: 'provider_call_in_flight' }).catch(() => {
+      renewalStopped = true;
+    });
+  }, intervalMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 async function callModelProviderWithRunTimeout(run, agent, input, startedAtMs, limits, options = {}) {
   const remainingMs = getRemainingRunTimeMs(startedAtMs, limits);
 
@@ -10011,9 +10070,10 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
 
   let response;
   try {
-    response = await callModelProviderWithRunTimeout(run, agent, input, startedAtMs, limits, {
-      onRequest: persistRequest
-    });
+    response = await withInFlightRunLeaseRenewal(run, () =>
+      callModelProviderWithRunTimeout(run, agent, input, startedAtMs, limits, {
+        onRequest: persistRequest
+      }));
   } catch (error) {
     if (error.providerRequestPayload && !requestPersisted) {
       await persistRequest(error.providerRequestPayload);
@@ -14507,12 +14567,25 @@ async function beginWorkspaceMutation(run, step, operation, args, authorityDecis
   }
 
   const preState = captureWorkspacePreState(provider, operation, args);
+  // Execution-turn identity for the prepared-mutation event: the resume safety
+  // contract requires prepared mutations to name their turn, plan, and action
+  // position (recovery-state.js "prepared mutations must have full identity").
+  const replayIdentity = operationContext.replayMetadata || {};
   const prepared = await getNonTerminalEvidenceRepository().prepareTargetOperation({
     runId: run.id,
     ticketId: run.ticketId,
     operationKey,
     stepId: String(step),
     leaseOwner: RUN_LEASE_OWNER,
+    ...(Number.isInteger(replayIdentity.executionTurn)
+      ? {
+          identity: {
+            executionTurn: replayIdentity.executionTurn,
+            planKey: replayIdentity.planKey || null,
+            actionIndex: Number.isInteger(replayIdentity.actionIndex) ? replayIdentity.actionIndex : null
+          }
+        }
+      : {}),
     intent: {
       operation,
       args: sanitizeSnapshotValue(args),
@@ -15221,6 +15294,7 @@ async function executeHandoffTask(run, handoffInput, step = 0, options = {}) {
     startedAt: operationStartedAt,
     operationDescriptor: workspaceAction,
     replayMetadata: {
+      ...(options.replayMetadata || {}),
       handoffTask: {
         plannerAgentId: run.agentId,
         plannerAgentName: run.agentName || (planner ? planner.name : null),
@@ -17871,7 +17945,8 @@ async function runAgentTicket(runId) {
           replaySnapshot: executionRecoverySnapshot,
           events: resumeEvents,
           operationHistory: await readAllRunOperations(run.id),
-          mutatingOperations: AGENT_MUTATING_OPERATIONS
+          mutatingOperations: AGENT_MUTATING_OPERATIONS,
+          verifyOperationKey: buildRecoveredOperationKeyVerifier(run)
         });
         if (recoveryState.state === RECOVERY_STATE.NEEDS_FAILURE_TERMINALIZATION) {
           const persistedFailure = recoveryState.failure || {};
@@ -18526,13 +18601,30 @@ async function runAgentTicket(runId) {
             });
           } else if (operation.operation === 'createHandoffTask') {
             result = await executeHandoffTask(run, operation.args, step, {
-              slot: `agent:${step}:${actionIndex}`
+              slot: `agent:${step}:${actionIndex}`,
+              // Same execution-turn identity as direct operations: the handoff's
+              // executed workspace operation lands in this run's replay evidence
+              // and must satisfy the resume identity contract.
+              replayMetadata: {
+                executionTurn: providerCall.executionTurn,
+                planKey: `${providerCall.modelCallKey}:plan`,
+                actionIndex
+              }
             });
           } else {
             result = await executeWorkspaceOperation(run, action, step, {
               slot: `agent:${step}:${actionIndex}`,
               startedAt: actionStartedAt,
-              operationDescriptor: operation
+              operationDescriptor: operation,
+              // Execution-turn identity on the durable replay item — the resume
+              // safety contract (runtime/recovery-state.js identity validation)
+              // refuses to resume evidence whose operations cannot be tied to
+              // their turn, plan, and action position.
+              replayMetadata: {
+                executionTurn: providerCall.executionTurn,
+                planKey: `${providerCall.modelCallKey}:plan`,
+                actionIndex
+              }
             });
             // Deterministic runtime verification for bounded operation batches
             if (AGENT_MUTATING_OPERATIONS.includes(operation.operation)) {
