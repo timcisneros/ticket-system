@@ -6,6 +6,7 @@
     <p class="text-muted">
       Ticket <a href="/tickets/<%= run.ticketId %>">#<%= run.ticketId %></a> · <%= run.agentName %> ·
       <span id="map-run-status" class="status-badge status-<%= run.status %>"><%= run.status %></span>
+      <span id="map-run-phase-wrap"<% if (!run.currentPhase) { %> hidden<% } %>> · phase <code id="map-run-phase"><%= run.currentPhase || '' %></code></span>
     </p>
   </div>
   <div class="actions">
@@ -18,9 +19,12 @@
   proposed (its messages verbatim), what the runtime guards decided, what actually executed against
   the target, and how the run was verified. <strong>Horizontal = execution steps</strong> (the
   runtime's model turns, step 0 onward; the outcome chain sits in the final column), left to right
-  in recorded order. Dashed red nodes are proposals that never executed — dropped by caps or
-  blocked by guards. Nodes size to their content, so recorded text is shown in full; click a node
-  for every recorded field. Nothing here is inferred; every node cites its evidence.
+  in recorded order. The colored band under the axis is the recorded <strong>execution phase</strong>
+  (planning → inspection → mutation → verification → terminalization); phase boundaries anchor to
+  the step that recorded the transition — click a segment for the recorded reason. Dashed red nodes
+  are proposals that never executed — dropped by caps or blocked by guards. Nodes size to their
+  content, so recorded text is shown in full; click a node for every recorded field. Nothing here
+  is inferred; every node cites its evidence.
 </p>
 
 <section class="admin-block">
@@ -51,7 +55,7 @@ const MIN_NODE_H = 56;
 const COL_W = 240;
 const ROW_GAP = 10;
 const LANE_GAP = 56;
-const LANE_TOP = 96;
+const LANE_TOP = 108;
 const MAX_SUBCOLS = 3;
 const STATUS_COLORS = {
   complete_claimed: '#4f46e5', continuing: '#6366f1', recorded: '#6b7280',
@@ -59,8 +63,15 @@ const STATUS_COLORS = {
   created: '#16a34a', ok: '#16a34a', noop: '#d97706', error: '#dc2626',
   passed: '#16a34a', failed: '#dc2626', completed: '#16a34a', interrupted: '#7c3aed',
   required: '#dc2626', resolved: '#6b7280', annotation: '#d97706',
-  pending: '#2563eb', running: '#f59e0b'
+  pending: '#2563eb', running: '#f59e0b', unknown: '#d97706'
 };
+// Execution phases (docs/EXECUTION_PHASES.md) — the band under the step axis.
+const PHASE_COLORS = {
+  planning: '#6366f1', inspection: '#0891b2', mutation: '#d97706',
+  verification: '#16a34a', terminalization: '#7c3aed'
+};
+const BAND_Y = 42;
+const BAND_H = 18;
 
 const svg = document.getElementById('map-canvas');
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -90,6 +101,15 @@ function fullText(node) {
   if (node.kind === 'browser_operation') return (d.operation || 'browser operation') + (d.url ? ' ' + d.url : '') + (d.error ? '\n' + d.error : '');
   if (node.kind === 'terminal') return 'run ' + node.status + (d.failureReason ? ': ' + d.failureReason : '');
   if (node.kind === 'triage') return node.label + (d.summary ? '\n' + d.summary : '') + (d.resolution ? '\nresolution: ' + d.resolution : '');
+  if (node.kind === 'evaluation' && d.effectiveness) {
+    return node.label
+      + (Number.isInteger(d.effectiveness.postconditionsPassed)
+        ? '\npostconditions ' + d.effectiveness.postconditionsPassed + ' passed / ' + (d.effectiveness.postconditionsFailed || 0) + ' failed'
+        : '');
+  }
+  if (node.kind === 'provider_request') {
+    return node.label + (d.durationMs != null ? '\n' + d.durationMs + 'ms' : '');
+  }
   return node.label;
 }
 
@@ -200,7 +220,8 @@ function layout(nodes, heights) {
   const hasStepless = Object.values(steplessNodes).some(list => list.length > 0);
   if (hasStepless) columns.push({ x: steplessBase, width: Math.max(NODE_W + 20, maxX - steplessBase), label: 'OUTCOME / UNLINKED' });
 
-  return { positions, laneY, width: maxX, height: maxY, columns };
+  const stepX = new Map(steps.map(step => [step, 140 + stepCol.get(step) * cellWidth]));
+  return { positions, laneY, width: maxX, height: maxY, columns, stepX, steplessX: hasStepless ? steplessBase : null };
 }
 
 function edgePath(a, b) {
@@ -215,10 +236,73 @@ function edgePath(a, b) {
 
 const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 
+// Execution-phase band under the step axis. Segments derive only from the
+// recorded record: runs start in `planning` by schema contract, and each
+// recorded execution.phase_transition anchors a boundary at the step that
+// recorded it (its stepId — the step whose response ran in the new phase).
+// A transition without a recorded step draws no boundary (it stays visible in
+// the graph JSON/text); if the stored currentPhase is ahead of the last
+// anchored transition (terminalization commits without a step), the final
+// phase is drawn over the outcome column, cited to run.currentPhase.
+function drawPhaseBand({ stepX, steplessX, columns, width }) {
+  const transitions = Array.isArray(graph.phases) ? graph.phases : [];
+  if (columns.length === 0 || (transitions.length === 0 && !graph.currentPhase)) return;
+
+  const segments = [];
+  let phase = transitions.length > 0 ? (transitions[0].fromPhase || 'planning') : graph.currentPhase;
+  let segStart = columns[0].x;
+  let segMeta = {
+    step: null,
+    detail: { phase, note: 'initial phase — runs start in planning by schema contract' },
+    evidenceRef: 'run.currentPhase'
+  };
+  for (const t of transitions) {
+    const anchored = t.step !== null && t.step !== undefined && stepX.has(t.step);
+    if (!anchored) continue;
+    const x = stepX.get(t.step);
+    if (x > segStart) segments.push({ phase, x0: segStart, x1: x, ...segMeta });
+    phase = t.toPhase || phase;
+    segStart = Math.max(segStart, x);
+    segMeta = {
+      step: t.step,
+      detail: { fromPhase: t.fromPhase, toPhase: t.toPhase, step: t.step, reason: t.reason },
+      evidenceRef: t.evidenceRef
+    };
+  }
+  if (graph.currentPhase && phase !== graph.currentPhase && steplessX !== null) {
+    if (steplessX > segStart) segments.push({ phase, x0: segStart, x1: steplessX, ...segMeta });
+    phase = graph.currentPhase;
+    segStart = Math.max(segStart, steplessX);
+    segMeta = { step: null, detail: { phase: graph.currentPhase }, evidenceRef: 'run.currentPhase' };
+  }
+  segments.push({ phase, x0: segStart, x1: width, ...segMeta });
+
+  for (const seg of segments) {
+    const color = PHASE_COLORS[seg.phase] || '#6b7280';
+    const group = el('g', { cursor: 'pointer' });
+    el('rect', {
+      x: seg.x0 - 12, y: BAND_Y, width: Math.max(4, seg.x1 - seg.x0), height: BAND_H,
+      rx: 3, fill: color, 'fill-opacity': 0.12
+    }, group);
+    el('line', {
+      x1: seg.x0 - 12, y1: BAND_Y + BAND_H, x2: seg.x1 - 12, y2: BAND_Y + BAND_H,
+      stroke: color, 'stroke-width': 2
+    }, group);
+    el('text', {
+      x: seg.x0 - 4, y: BAND_Y + 13, fill: color,
+      'font-size': 10, 'font-weight': 700, 'letter-spacing': '0.08em'
+    }, group).textContent = seg.phase.toUpperCase();
+    group.addEventListener('click', () => showDetail({
+      kind: 'execution_phase', status: seg.phase, lane: 'phase', step: seg.step,
+      label: seg.phase, detail: seg.detail, evidenceRef: seg.evidenceRef
+    }));
+  }
+}
+
 function render() {
   svg.replaceChildren();
   const heights = measureHeights(graph.nodes);
-  const { positions, laneY, width, height, columns } = layout(graph.nodes, heights);
+  const { positions, laneY, width, height, columns, stepX, steplessX } = layout(graph.nodes, heights);
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.setAttribute('width', width);
   svg.setAttribute('height', height);
@@ -229,6 +313,8 @@ function render() {
     el('line', { x1: column.x - 12, y1: 6, x2: column.x - 12, y2: height - 6, stroke: '#f3f4f6', 'stroke-width': 1 });
     el('text', { x: column.x, y: 34, fill: '#9ca3af', 'font-size': 10, 'font-weight': 700, 'letter-spacing': '0.08em' }).textContent = column.label;
   }
+
+  drawPhaseBand({ stepX, steplessX, columns, width });
 
   for (const lane of LANES) {
     el('line', { x1: 0, y1: laneY[lane.id] - 18, x2: width, y2: laneY[lane.id] - 18, stroke: '#e5e7eb', 'stroke-width': 1 });
@@ -318,6 +404,10 @@ async function refresh() {
     if (next.cursor === graph.cursor) return;
     graph = next;
     render();
+    if (graph.currentPhase) {
+      document.getElementById('map-run-phase').textContent = graph.currentPhase;
+      document.getElementById('map-run-phase-wrap').hidden = false;
+    }
     const terminal = graph.nodes.find(node => node.id === 'terminal');
     if (terminal) {
       const badge = document.getElementById('map-run-status');

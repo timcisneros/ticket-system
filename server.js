@@ -20696,7 +20696,7 @@ fastify.get('/runs/:id/map', { preHandler: fastify.requireAuth }, async (request
   const run = await getRunById(runId);
   return reply.view('run-map.ejs', viewData({
     user: request.user,
-    run: { id: run.id, ticketId: run.ticketId, agentName: run.agentName, status: run.status },
+    run: { id: run.id, ticketId: run.ticketId, agentName: run.agentName, status: run.status, currentPhase: run.currentPhase || null },
     decisionGraph: graph
   }, request.session.userId));
 });

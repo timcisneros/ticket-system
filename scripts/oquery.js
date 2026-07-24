@@ -2968,6 +2968,15 @@ async function cmdRunGraph(args) {
   const nodes = data.nodes || [];
   const plans = nodes.filter(n => n.kind === 'parsed_plan');
   console.log(`  ${bold('Run #' + data.runId + ' decision graph')} — ${nodes.length} node(s), ${(data.edges || []).length} edge(s)`);
+  const phases = Array.isArray(data.phases) ? data.phases : [];
+  if (phases.length > 0) {
+    const chain = [phases[0].fromPhase || 'planning']
+      .concat(phases.map(t => t.toPhase + (t.step !== null && t.step !== undefined ? ` (step ${t.step})` : '')))
+      .join(' → ');
+    console.log(`  ${dim('phases: ' + chain + (data.currentPhase && data.currentPhase !== phases[phases.length - 1].toPhase ? ' → ' + data.currentPhase : ''))}`);
+  } else if (data.currentPhase) {
+    console.log(`  ${dim('phase: ' + data.currentPhase)}`);
+  }
   for (const plan of plans) {
     console.log(`\n  ${cyan('step ' + plan.step)} ${plan.detail.complete ? green('[complete:true]') : dim('[continuing]')} ${bold(plan.label)}`);
     const stepNodes = nodes.filter(n => n.step === plan.step && n.id !== plan.id);
@@ -3494,9 +3503,10 @@ function help() {
     authority-paths List protected workspace paths + sensitive application paths
                     (same shared definition the runtime enforces)
     browser-status  Show browser engine availability and own operator session
-    run-graph <id>  Run decision graph: per-step model plans (verbatim) with
-                    authority decisions, executed/blocked/dropped actions, and
-                    the verified outcome chain (--json for the full graph)
+    run-graph <id>  Run decision graph: execution-phase progression, per-step
+                    model plans (verbatim) with authority decisions,
+                    executed/blocked/dropped actions, and the verified outcome
+                    chain incl. evaluation/consequence (--json for the full graph)
 
   ${bold('Inbox examples:')}
     node scripts/oquery.js inbox --status open

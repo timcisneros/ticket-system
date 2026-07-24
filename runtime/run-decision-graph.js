@@ -4,7 +4,10 @@
 // evidence into a lane graph (docs/RUN_DECISION_MAP_DESIGN.md). It renders the
 // truth hierarchy spatially: what the model proposed (inference), what the
 // runtime allowed (guards), what actually executed against the target (facts),
-// and how the run was verified and terminalized (outcome).
+// and how the run was verified and terminalized (outcome). The recorded
+// execution-phase progression (planning → inspection → mutation → verification
+// → terminalization, docs/EXECUTION_PHASES.md) is carried as `phases` +
+// `currentPhase` and rendered as the map's phase axis.
 //
 // Honesty rules:
 //   - Nodes and edges derive only from recorded linkage (plan step numbers,
@@ -46,6 +49,15 @@ function truncateLabel(value, max = 120) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+// Parse a recorded step reference (events carry stepId as a string, plan/history
+// records as an integer) into an integer step, or null when absent/unparseable.
+function parseStepRef(value) {
+  if (Number.isInteger(value)) return value;
+  if (value === null || value === undefined) return null;
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 // Build the graph. All inputs are plain recorded structures:
 //   run              — the stored run record (status, triage, terminal fields)
 //   snapshot         — the hydrated replay snapshot (may be null)
@@ -77,6 +89,31 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
     edges.push({ from, to, kind });
   }
 
+  // ── Execution phase progression: recorded execution.phase_transition events
+  // (the phase-aware execution contract, docs/EXECUTION_PHASES.md). Each event
+  // carries stepId (the model-turn step), so transitions anchor to the step
+  // axis. Runs start in `planning` by schema contract; `currentPhase` is the
+  // stored run field, falling back to the last recorded transition.
+  const phaseTransitions = [];
+  const seenTransitions = new Set();
+  for (const event of [...journalEvents, ...snapEvents]) {
+    if (!event || event.type !== 'execution.phase_transition') continue;
+    const payload = event.payload || {};
+    const step = parseStepRef(event.stepId !== undefined ? event.stepId : payload.stepId);
+    const key = `${payload.fromPhase || ''}>${payload.toPhase || ''}@${step}`;
+    if (seenTransitions.has(key)) continue;
+    seenTransitions.add(key);
+    phaseTransitions.push({
+      fromPhase: payload.fromPhase || null,
+      toPhase: payload.toPhase || null,
+      step,
+      reason: payload.reason || null,
+      evidenceRef: `event:execution.phase_transition[${phaseTransitions.length}]`
+    });
+  }
+  const currentPhase = run.currentPhase
+    || (phaseTransitions.length > 0 ? phaseTransitions[phaseTransitions.length - 1].toPhase : null);
+
   // ── Model lane: one plan node per parsed plan (the model's stated intent,
   // message verbatim), preceded by its provider request when 1:1 linkage holds.
   const requestLinkable = providerRequests.length === plans.length;
@@ -84,12 +121,20 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
   plans.forEach((plan, index) => {
     const step = Number.isInteger(plan.step) ? plan.step : index;
     if (requestLinkable) {
+      const request = providerRequests[index] || {};
       const requestId = addNode({
         id: `request:${index}`,
         lane: 'model', step, kind: 'provider_request',
-        label: `Model request ${index + 1}`,
+        label: `Model request ${index + 1}${request.body && request.body.model ? ' · ' + truncateLabel(request.body.model, 40) : ''}`,
         status: 'recorded',
-        detail: { durationMs: providerRequests[index] && providerRequests[index].durationMs },
+        detail: {
+          provider: request.provider || null,
+          model: (request.body && request.body.model) || request.model || null,
+          url: request.url || null,
+          method: request.method || null,
+          startedAt: request.startedAt || null,
+          durationMs: request.durationMs
+        },
         evidenceRef: `providerRequests[${index}]`
       });
       addEdge(requestId, `plan:${index}`, 'flow');
@@ -218,20 +263,33 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
     });
   });
 
-  // ── Outcome lane: verification evidence, terminal status, triage.
-  const verificationEvent = [...journalEvents, ...snapEvents].find(event =>
+  // ── Outcome lane: verification evidence, terminal status, evaluation,
+  // consequence, triage — the recorded outcome chain in recording order.
+  const verificationEvents = [...journalEvents, ...snapEvents].filter(event =>
     event && ['run.verification_passed', 'run.verification_failed', 'run.postconditions_checked'].includes(event.type));
   let verificationNodeId = null;
-  if (verificationEvent) {
-    const passed = verificationEvent.type === 'run.verification_passed'
-      || (verificationEvent.payload && verificationEvent.payload.status === 'passed');
+  if (verificationEvents.length > 0) {
+    // An explicit pass/fail verdict event wins over the postconditions check;
+    // the postconditions payload (counts, per-result detail) rides along either way.
+    const verdictEvent = verificationEvents.find(event =>
+      event.type === 'run.verification_passed' || event.type === 'run.verification_failed') || null;
+    const postconditionsEvent = verificationEvents.find(event => event.type === 'run.postconditions_checked') || null;
+    const chosen = verdictEvent || postconditionsEvent;
+    const passed = chosen.type === 'run.verification_passed'
+      || (chosen.type !== 'run.verification_failed' && chosen.payload && chosen.payload.status === 'passed');
+    const pc = postconditionsEvent && postconditionsEvent.payload ? postconditionsEvent.payload : null;
     verificationNodeId = addNode({
       id: 'verification',
       lane: 'outcome', step: null, kind: 'verification',
-      label: passed ? 'verification passed' : 'verification failed',
+      label: (passed ? 'verification passed' : 'verification failed')
+        + (pc && Number.isInteger(pc.total) ? ` (${pc.passed}/${pc.total} postconditions passed)` : ''),
       status: passed ? 'passed' : 'failed',
-      detail: { eventType: verificationEvent.type },
-      evidenceRef: `event:${verificationEvent.type}`
+      detail: {
+        eventType: chosen.type,
+        payload: chosen.payload !== undefined ? chosen.payload : null,
+        postconditionsPayload: postconditionsEvent && postconditionsEvent !== chosen ? postconditionsEvent.payload || null : null
+      },
+      evidenceRef: `event:${chosen.type}`
     });
   }
 
@@ -246,6 +304,54 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
   });
   if (verificationNodeId) addEdge(verificationNodeId, terminalId, 'flow');
   if (plans.length > 0) addEdge(`plan:${plans.length - 1}`, verificationNodeId || terminalId, 'flow');
+
+  // Recorded evaluation (effectiveness / efficiency / violations) and
+  // consequence (committed mutations, notifications, external effects) —
+  // singular per-run records written at terminalization (run.runEvaluation /
+  // run.runConsequence), chained after the terminal node in recording order.
+  const evaluation = run.runEvaluation && typeof run.runEvaluation === 'object' ? run.runEvaluation : null;
+  let evaluationNodeId = null;
+  if (evaluation) {
+    const effectivenessStatus = evaluation.effectiveness && evaluation.effectiveness.status ? evaluation.effectiveness.status : 'unknown';
+    const violationsStatus = evaluation.violations && evaluation.violations.status ? evaluation.violations.status : 'unknown';
+    evaluationNodeId = addNode({
+      id: 'evaluation',
+      lane: 'outcome', step: null, kind: 'evaluation',
+      label: `evaluation: effectiveness ${effectivenessStatus} · violations ${violationsStatus}`,
+      status: effectivenessStatus,
+      detail: {
+        effectiveness: evaluation.effectiveness || null,
+        efficiency: evaluation.efficiency || null,
+        violations: evaluation.violations || null
+      },
+      evidenceRef: 'run.runEvaluation'
+    });
+    addEdge(terminalId, evaluationNodeId, 'flow');
+  }
+
+  const consequence = run.runConsequence && typeof run.runConsequence === 'object' ? run.runConsequence : null;
+  if (consequence) {
+    const mutations = Array.isArray(consequence.mutations) ? consequence.mutations : [];
+    const attempted = mutations.filter(item => item && item.attempted);
+    const notifications = Array.isArray(consequence.notifications) ? consequence.notifications : [];
+    const externalEffects = Array.isArray(consequence.externalEffects) ? consequence.externalEffects : [];
+    const consequenceId = addNode({
+      id: 'consequence',
+      lane: 'outcome', step: null, kind: 'consequence',
+      label: `consequence: ${mutations.length - attempted.length} committed mutation(s)`
+        + (attempted.length > 0 ? ` · ${attempted.length} attempted` : '')
+        + ` · ${notifications.length} notification(s) · ${externalEffects.length} external effect(s)`,
+      status: 'recorded',
+      detail: {
+        mutations,
+        notifications,
+        externalEffects,
+        verification: consequence.verification || null
+      },
+      evidenceRef: 'run.runConsequence'
+    });
+    addEdge(evaluationNodeId || terminalId, consequenceId, 'flow');
+  }
 
   if (run.triage && run.triage.createdAt) {
     const triageId = addNode({
@@ -265,22 +371,38 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
     addEdge(terminalId, triageId, 'flow');
   }
 
-  // Notable replay events (limits, no-progress, truncation) as annotations.
-  snapEvents.forEach((event, index) => {
-    if (!event || typeof event.type !== 'string') return;
-    if (!/limit|trunc|stalled|no_progress|violation/i.test(event.type)) return;
-    addNode({
-      id: `annotation:${index}`,
-      lane: 'authority', step: null, kind: 'runtime_event',
-      label: event.type,
-      status: 'annotation',
-      detail: { payload: event.payload !== undefined ? event.payload : null },
-      evidenceRef: `events[${index}]`
+  // Notable runtime events (limits, no-progress, truncation, violations) as
+  // annotations — from both the replay snapshot and the journal, step-linked
+  // when the event records a stepId. Phase transitions are excluded here: they
+  // render as the phase axis, not as nodes.
+  const seenAnnotations = new Set();
+  function annotateEvents(events, source) {
+    events.forEach((event, index) => {
+      if (!event || typeof event.type !== 'string') return;
+      if (event.type === 'execution.phase_transition') return;
+      if (!/limit|trunc|stalled|no_progress|violation/i.test(event.type)) return;
+      const key = `${event.type}|${event.stepId !== undefined ? event.stepId : ''}|${JSON.stringify(event.payload !== undefined ? event.payload : null)}`;
+      if (seenAnnotations.has(key)) return;
+      seenAnnotations.add(key);
+      addNode({
+        id: `annotation:${source}:${index}`,
+        lane: 'authority',
+        step: parseStepRef(event.stepId !== undefined ? event.stepId : (event.payload && event.payload.stepId)),
+        kind: 'runtime_event',
+        label: event.type,
+        status: 'annotation',
+        detail: { payload: event.payload !== undefined ? event.payload : null },
+        evidenceRef: source === 'snapshot' ? `events[${index}]` : `journal:${event.type}[${index}]`
+      });
     });
-  });
+  }
+  annotateEvents(snapEvents, 'snapshot');
+  annotateEvents(journalEvents, 'journal');
 
   const cursor = JSON.stringify({
     status: run.status || null,
+    currentPhase: currentPhase || null,
+    phaseTransitions: phaseTransitions.length,
     plans: plans.length,
     workspaceOps: workspaceOps.length,
     browserOps: browserOps.length,
@@ -289,6 +411,9 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
     snapEvents: snapEvents.length,
     journalEvents: journalEvents.length,
     history: history.length,
+    verificationEvents: verificationEvents.length,
+    evaluation: Boolean(evaluation),
+    consequence: Boolean(consequence),
     triageResolvedAt: run.triage ? run.triage.resolvedAt || null : null
   });
 
@@ -297,6 +422,8 @@ function buildRunDecisionGraph(run, snapshot, runEvents = [], operationHistory =
     ticketId: run.ticketId != null ? run.ticketId : null,
     generatedAt: new Date().toISOString(),
     lanes: ['model', 'authority', 'target', 'outcome'],
+    currentPhase,
+    phases: phaseTransitions,
     nodes,
     edges,
     cursor
@@ -324,6 +451,12 @@ function nodeFullText(node) {
       + (d.summary ? ' — ' + d.summary : '')
       + (d.resolution ? ' — resolution: ' + d.resolution : '');
   }
+  if (node.kind === 'evaluation' && d.effectiveness) {
+    const eff = d.effectiveness;
+    return node.label
+      + (Number.isInteger(eff.postconditionsPassed) ? ` — postconditions ${eff.postconditionsPassed} passed / ${eff.postconditionsFailed || 0} failed` : '')
+      + (Array.isArray(eff.errors) && eff.errors.length > 0 ? ' — errors: ' + eff.errors.join('; ') : '');
+  }
   return node.label;
 }
 
@@ -346,6 +479,15 @@ function renderRunDecisionGraphText(graph) {
   const plans = nodes.filter(node => node.kind === 'parsed_plan');
 
   lines.push(`- Nodes: ${nodes.length} · Edges: ${Array.isArray(graph.edges) ? graph.edges.length : 0} · Lanes: model / authority / target / outcome`);
+  const phases = Array.isArray(graph.phases) ? graph.phases : [];
+  if (phases.length > 0) {
+    const chain = [phases[0].fromPhase || 'planning']
+      .concat(phases.map(t => t.toPhase + (t.step !== null && t.step !== undefined ? ` (step ${t.step})` : '')))
+      .join(' → ');
+    lines.push(`- Execution phase: ${chain}`);
+  } else if (graph.currentPhase) {
+    lines.push(`- Execution phase: ${graph.currentPhase} (no recorded transitions)`);
+  }
   for (const plan of plans) {
     const d = plan.detail || {};
     lines.push(`- step ${plan.step} [${d.complete ? 'complete:true' : 'continuing'}] model message (verbatim):`);

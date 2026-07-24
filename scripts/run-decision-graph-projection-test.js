@@ -3,10 +3,11 @@
 // (runtime/run-decision-graph.js, docs/RUN_DECISION_MAP_DESIGN.md).
 // Pure, provider-free, no server: feeds a synthetic run whose evidence contains
 // every interesting shape — executed/created/noop/blocked operations, a
-// cap-dropped proposal, verification, terminal failure, resolved triage — and
-// asserts the exact truthfulness properties: evidence-linked edges only,
-// proposed-vs-executed divergence rendered first-class, verbatim plan
-// messages, and a stable cursor.
+// cap-dropped proposal, phase transitions and a phase violation, verification
+// with postcondition counts, terminal failure, recorded evaluation and
+// consequence, resolved triage — and asserts the exact truthfulness
+// properties: evidence-linked edges only, proposed-vs-executed divergence
+// rendered first-class, verbatim plan messages, and a stable cursor.
 
 const { buildRunDecisionGraph, renderRunDecisionGraphText } = require('../runtime/run-decision-graph');
 
@@ -14,10 +15,26 @@ function assert(c, m) { if (!c) throw new Error(m); }
 
 const run = {
   id: 42, ticketId: 7, status: 'failed', error: 'Verification failed: 1 postcondition',
+  currentPhase: 'terminalization',
   triage: {
     required: false, reasonCode: 'verification_failed', summary: 'Verification failed: 1 postcondition',
     requiredDecision: 'review_failure',
     createdAt: '2026-03-01T09:00:10.000Z', resolvedAt: '2026-03-01T10:00:00.000Z', resolvedBy: 'admin', resolution: 'Reviewed.'
+  },
+  runEvaluation: {
+    effectiveness: { status: 'failed', postconditionsPassed: 2, postconditionsFailed: 1, errors: ['Verification failed: 1 postcondition'] },
+    efficiency: { durationMs: 5000, providerRequests: 2, modelResponses: 2, workspaceOperations: 3, mutationCount: 1, retryCount: 0 },
+    violations: { status: 'none', items: [] }
+  },
+  runConsequence: {
+    mutations: [
+      { operation: 'writeFile', path: 'reports/summary.md' },
+      { operation: 'deletePath', path: 'tmp/scratch.txt', attempted: true }
+    ],
+    created: [{ operation: 'writeFile', path: 'reports/summary.md' }],
+    updated: [], deleted: [], renamed: [],
+    notifications: [], externalEffects: [],
+    verification: { postconditionsStatus: 'failed', violationsStatus: 'none' }
   }
 };
 
@@ -36,7 +53,10 @@ const snapshot = {
       complete: true, step: 1
     }
   ],
-  providerRequests: [{ durationMs: 900 }, { durationMs: 1200 }],
+  providerRequests: [
+    { url: 'https://api.example.test/v1/chat/completions', method: 'POST', body: { model: 'gpt-5' }, provider: 'openai', startedAt: '2026-03-01T09:00:01.000Z', durationMs: 900 },
+    { url: 'https://api.example.test/v1/chat/completions', method: 'POST', body: { model: 'gpt-5' }, provider: 'openai', startedAt: '2026-03-01T09:00:04.000Z', durationMs: 1200 }
+  ],
   modelResponses: [{}, {}],
   workspaceOperations: [
     { operation: { operation: 'listDirectory', args: { path: '' } }, result: { entries: [] }, historyId: 1, durationMs: 3 },
@@ -47,6 +67,10 @@ const snapshot = {
 };
 
 const runEvents = [
+  { type: 'execution.phase_transition', seq: 1, stepId: '0', payload: { fromPhase: 'planning', toPhase: 'inspection', reason: 'Inferred from model response actions' } },
+  { type: 'execution.phase_transition', seq: 2, stepId: '1', payload: { fromPhase: 'inspection', toPhase: 'mutation', reason: 'Inferred from model response actions' } },
+  { type: 'execution.phase_violation', seq: 3, stepId: '1', payload: { currentPhase: 'mutation', inferredPhase: 'mixed', violationType: 'mixed_phase', reason: 'Mixed-phase response: actions belong to different execution phases' } },
+  { type: 'run.postconditions_checked', seq: 4, payload: { workflowId: 9, contractSource: 'workflow', status: 'failed', passed: 2, failed: 1, total: 3 } },
   { type: 'run.verification_failed', seq: 5, payload: { status: 'failed', error: 'Verification failed: 1 postcondition' } }
 ];
 
@@ -85,11 +109,42 @@ assert(edgeSet.has(`plan:1>${dropped.id}:dropped`), 'dropped proposal must edge 
 // The blocked createFolder DID execute (as a blocked op) — it must not double-render as unexecuted.
 assert(!graph.nodes.some(node => node.kind === 'unexecuted_proposal' && node.detail.operation === 'createFolder'), 'blocked op must not also appear as unexecuted proposal');
 
-// Outcome lane: verification failed → terminal failed → resolved triage, chained.
+// Execution phase progression: recorded transitions, step-anchored, with the
+// stored currentPhase carried at the top level.
+assert(graph.currentPhase === 'terminalization', 'graph must carry the stored current phase');
+assert(Array.isArray(graph.phases) && graph.phases.length === 2, 'both recorded phase transitions must project');
+assert(graph.phases[0].fromPhase === 'planning' && graph.phases[0].toPhase === 'inspection' && graph.phases[0].step === 0, 'phase transition must anchor to its recorded step');
+assert(graph.phases[1].toPhase === 'mutation' && graph.phases[1].step === 1 && graph.phases[1].reason === 'Inferred from model response actions', 'phase transition must carry the recorded reason');
+assert(graph.phases.every(t => typeof t.evidenceRef === 'string' && t.evidenceRef.length > 0), 'phase transitions must cite evidence');
+assert(!graph.nodes.some(node => node.label === 'execution.phase_transition'), 'phase transitions must render as the phase axis, not as annotation nodes');
+
+// Phase violation surfaces as a step-linked annotation.
+const violation = graph.nodes.find(node => node.kind === 'runtime_event' && node.label === 'execution.phase_violation');
+assert(violation && violation.step === 1, 'phase violation must annotate at its recorded step');
+assert(violation.detail.payload.violationType === 'mixed_phase', 'violation annotation must carry its full recorded payload');
+
+// Provider request nodes carry the recorded request identity.
+assert(byId.get('request:0').detail.model === 'gpt-5' && byId.get('request:0').detail.provider === 'openai', 'provider request must carry recorded model and provider');
+assert(byId.get('request:0').detail.durationMs === 900, 'provider request must carry duration');
+
+// Outcome lane: verification failed → terminal failed → evaluation → consequence, triage chained off terminal.
 assert(byId.get('verification').status === 'failed', 'verification node must reflect the recorded event');
+assert(byId.get('verification').label.includes('2/3 postconditions passed'), 'verification label must carry postcondition counts');
+assert(byId.get('verification').detail.eventType === 'run.verification_failed', 'explicit verdict event must win over the postconditions check');
+assert(byId.get('verification').detail.postconditionsPayload && byId.get('verification').detail.postconditionsPayload.total === 3, 'verification must carry the full postconditions payload');
 assert(byId.get('terminal').status === 'failed' && byId.get('terminal').label.includes('Verification failed'), 'terminal node must carry status + reason');
 assert(byId.get('triage').status === 'resolved', 'resolved triage must render resolved');
 assert(edgeSet.has('verification>terminal:flow') && edgeSet.has('terminal>triage:flow') && edgeSet.has('plan:1>verification:flow'), 'outcome chain must be edged');
+
+// Recorded evaluation and consequence are first-class outcome nodes.
+const evaluationNode = byId.get('evaluation');
+assert(evaluationNode && evaluationNode.status === 'failed' && evaluationNode.label.includes('violations none'), 'evaluation node must carry effectiveness and violations status');
+assert(evaluationNode.detail.efficiency.providerRequests === 2, 'evaluation node must carry the recorded efficiency record');
+assert(edgeSet.has('terminal>evaluation:flow'), 'evaluation must chain from the terminal node');
+const consequenceNode = byId.get('consequence');
+assert(consequenceNode && consequenceNode.label.includes('1 committed mutation(s)') && consequenceNode.label.includes('1 attempted'), 'consequence node must separate committed from attempted mutations');
+assert(consequenceNode.detail.verification.postconditionsStatus === 'failed', 'consequence node must carry the verification rollup');
+assert(edgeSet.has('evaluation>consequence:flow'), 'consequence must chain from evaluation');
 
 // Truncation annotation surfaces as a runtime event node, payload untruncated.
 const annotation = graph.nodes.find(node => node.kind === 'runtime_event' && node.label === 'run:mutating_actions_truncated');
@@ -110,6 +165,8 @@ const again = buildRunDecisionGraph(run, snapshot, runEvents, operationHistory);
 assert(again.cursor === graph.cursor, 'cursor must be deterministic for identical evidence');
 const grown = buildRunDecisionGraph(run, { ...snapshot, workspaceOperations: [...snapshot.workspaceOperations, { operation: { operation: 'writeFile', args: { path: 'x' } }, result: {} }] }, runEvents, operationHistory);
 assert(grown.cursor !== graph.cursor, 'cursor must change when evidence grows');
+const phaseMoved = buildRunDecisionGraph({ ...run, currentPhase: 'verification' }, snapshot, runEvents, operationHistory);
+assert(phaseMoved.cursor !== graph.cursor, 'cursor must change when the phase advances');
 
 // Text rendering (diagnostics bundle): same projection, plain text, nothing lost.
 const text = renderRunDecisionGraphText(graph).join('\n');
@@ -119,6 +176,10 @@ assert(text.includes('[authority] blocked: blocked: Path is outside owned output
 assert(text.includes('dropped by per-response cap: deletePath tmp/scratch.txt'), 'text must carry the cap-dropped proposal');
 assert(text.includes('run failed: Verification failed: 1 postcondition'), 'text must carry the terminal outcome with full reason');
 assert(text.includes('resolution: Reviewed.'), 'text must carry the triage resolution');
+assert(text.includes('Execution phase: planning → inspection (step 0) → mutation (step 1)'), 'text must carry the phase progression');
+assert(text.includes('evaluation: effectiveness failed · violations none'), 'text must carry the evaluation record');
+assert(text.includes('postconditions 2 passed / 1 failed'), 'text must carry the evaluation postcondition counts');
+assert(text.includes('1 committed mutation(s)'), 'text must carry the consequence record');
 
 // Renderer honesty on empty graphs.
 const bareText = renderRunDecisionGraphText(buildRunDecisionGraph({ id: 1, ticketId: 1, status: 'pending' }, null, [], []));
@@ -128,5 +189,6 @@ assert(bareText.some(line => line.includes('run pending')), 'bare-run text must 
 const bare = buildRunDecisionGraph({ id: 1, ticketId: 1, status: 'pending' }, null, [], []);
 assert(bare.nodes.length === 1 && bare.nodes[0].id === 'terminal' && bare.nodes[0].status === 'pending', 'bare run must project only its status');
 assert(bare.edges.length === 0, 'bare run must have no invented edges');
+assert(bare.currentPhase === null && bare.phases.length === 0, 'bare run must not invent phase state');
 
-console.log('PASS: run decision-graph projection — evidence-linked lanes, proposed-vs-executed divergence, outcome chain, deterministic cursor');
+console.log('PASS: run decision-graph projection — evidence-linked lanes, phase progression, proposed-vs-executed divergence, outcome chain, deterministic cursor');

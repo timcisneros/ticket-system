@@ -11,10 +11,23 @@ Four fixed lanes, time flowing left→right by execution step:
 
 | Lane | Layer (`docs/DIRECTION.md`) | Contents |
 |---|---|---|
-| MODEL | inference | provider requests; parsed plans with the model's message **verbatim** and its `complete` claim |
-| AUTHORITY | guards | per-operation allow/block decisions with recorded refusal reasons; cap-dropped and unexecuted proposals; runtime events (limits, truncation, no-progress) |
+| MODEL | inference | provider requests (recorded provider/model/duration); parsed plans with the model's message **verbatim** and its `complete` claim |
+| AUTHORITY | guards | per-operation allow/block decisions with recorded refusal reasons; cap-dropped and unexecuted proposals; runtime events (limits, truncation, no-progress, phase violations) — step-linked when the event records a `stepId` |
 | TARGET | facts | executed workspace/browser/workflow operations with outcome status (created/ok/noop/blocked/error) |
-| OUTCOME | verified facts | verification result, terminal status + failure reason, triage state |
+| OUTCOME | verified facts | verification result with postcondition counts, terminal status + failure reason, recorded evaluation (effectiveness/efficiency/violations), recorded consequence (committed vs attempted mutations, notifications, external effects), triage state |
+
+### Phase axis
+
+Above the lanes, a colored band renders the run's recorded **execution phase** progression
+(`planning → inspection → mutation → verification → terminalization`, `docs/EXECUTION_PHASES.md`).
+The projection carries `currentPhase` (the stored run field) and `phases` (the recorded
+`execution.phase_transition` events, each citing its evidence). Segment boundaries anchor to the
+transition's recorded `stepId` — the step whose response executed in the new phase. Runs start in
+`planning` by schema contract; a transition without a recorded step draws no boundary (it remains
+visible in the JSON/text projection), and when the stored `currentPhase` is ahead of the last
+anchored transition (terminalization commits without a step) the final phase renders over the
+outcome column, cited to `run.currentPhase`. Segments are clickable and show the recorded
+`fromPhase`/`toPhase`/`reason`/`step`.
 
 Reading a column top-to-bottom answers: what did the model *want*, what did the runtime
 *decide*, what *happened*, and was it *verified*. The vertical gaps are the insight: a plan
@@ -47,8 +60,9 @@ a first-class node — the divergence between model intent and substrate reality
 
 Full-fetch with cursor gating, no delta protocol: the graph is bounded by run limits
 (steps × actions), so refetching `GET /api/runs/:id/decision-graph` is cheap. The page
-re-renders only when `cursor` (a digest of evidence-array counts + run status + triage
-resolution) changes. While the run is `pending`/`running`, the page listens to the existing
+re-renders only when `cursor` (a digest of evidence-array counts + run status + current
+phase + verification/evaluation/consequence presence + triage resolution) changes; the
+header's status and phase badges update from the fetched graph. While the run is `pending`/`running`, the page listens to the existing
 `/api/events` SSE (`run:status-changed`) and polls every 3s as fallback; both stop at a
 terminal cursor. Evidence arrays are append-only, so the picture only ever grows — matching
 the immutability of what it renders.

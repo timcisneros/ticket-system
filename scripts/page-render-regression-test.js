@@ -281,6 +281,9 @@ async function main() {
     assert(runDetail.body.includes('How it was set up'), 'run detail must render its configuration zone');
     assert(runDetail.body.includes('What the system did'), 'run detail must render its evidence zone');
     assert(runDetail.body.includes('Decision Map'), 'run detail must retain the decision-map entry point');
+    const runMap = await assertPage(cookie, `/runs/${fixture.run.id}/map`, 'Decision Map');
+    assert(runMap.body.includes('id="map-run-phase"'), 'run map must render the execution-phase badge');
+    assert(runMap.body.includes('"currentPhase"'), 'run map graph payload must carry the current phase');
     assert(runDetail.body.includes("target.closest('details')"),
       'replay jumps must reveal collapsed evidence ancestors before scrolling');
     await assertPage(cookie, '/logs?limit=5', 'PostgreSQL page render fixture created');
