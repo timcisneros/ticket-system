@@ -20673,7 +20673,20 @@ fastify.get('/api/event-journal', { preHandler: fastify.requireAuth }, async (re
 async function buildRunDecisionGraphForRequest(runId) {
   const storedRun = await getRunById(runId);
   if (!storedRun) return null;
-  const run = await hydrateRunReplaySnapshot(storedRun);
+  const hydrated = await hydrateRunReplaySnapshot(storedRun);
+  // The outcome lane renders the recorded evaluation/consequence records,
+  // which live beside the run (run_evaluations / run_consequences) — merge
+  // them the same way the run page's loader does.
+  const repository = getRuntimeStateReadRepository();
+  const [evaluation, consequence] = await Promise.all([
+    repository.getRunEvaluation(storedRun.id),
+    repository.getRunConsequence(storedRun.id)
+  ]);
+  const run = {
+    ...hydrated,
+    ...(evaluation ? { runEvaluation: evaluation.evaluation } : {}),
+    ...(consequence ? { runConsequence: consequence.consequence } : {})
+  };
   return buildRunDecisionGraph(
     run,
     run.replaySnapshot || null,

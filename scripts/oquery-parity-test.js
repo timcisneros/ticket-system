@@ -2,30 +2,45 @@
 // Operator-surface parity for the oquery CLI (docs/OPERATIONAL_TRANSPARENCY.md,
 // "Operator surface parity"): the inbox, event-journal, and admin-listing
 // surfaces added alongside the UI must stay reachable headlessly. Drives the
-// real CLI binary against a live server seeded with the demo fixture:
-// inbox list/read (verbatim messages + triage facts), reply, resolve (annotates
-// run triage without touching run status), journal filters + truncation flag,
-// work-types (including the catalog-invalid path), authority-paths (equality
-// with the shared definition), browser-status, and help coverage.
+// real CLI binary against a live server: inbox list/read (verbatim messages +
+// triage facts), reply, resolve (annotates run triage without touching run
+// status), journal filters + truncation flag, work-types, authority-paths
+// (equality with the shared definition), browser-status, run-graph, and help
+// coverage.
+//
+// Fixtures are seeded through the PostgreSQL store (postgres-operator-fixture.js)
+// — the same authority the runtime writes through. Requires TEST_DATABASE_URL
+// (or DATABASE_URL); each run uses an isolated schema that is dropped at the end.
 
+const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+const { PostgresRuntimeStore } = require('../persistence/postgres/store');
+const { seedOperatorFixture } = require('./postgres-operator-fixture');
+
+const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  console.error('TEST_DATABASE_URL (or DATABASE_URL) is required for the oquery parity test');
+  process.exit(1);
+}
+
+const SCHEMA = `oquery_parity_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
 const PORT = process.env.PORT || '3532';
 const BASE = `http://127.0.0.1:${PORT}`;
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'oquery-parity-data-'));
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'oquery-parity-ws-'));
-const COOKIE_PATH = path.join(DATA_DIR, '.opercookie');
+const COOKIE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'oquery-parity-cookie-'));
+const COOKIE_PATH = path.join(COOKIE_DIR, '.opercookie');
 
 function assert(c, m) { if (!c) throw new Error(m); }
 
 function oquery(argv) {
   return execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'oquery.js'), ...argv], {
     env: {
-      ...process.env, DATA_DIR,
+      ...process.env,
       OPERC_URL: BASE, OPERC_COOKIE_PATH: COOKIE_PATH,
       OPERC_USERNAME: 'admin', OPERC_PASSWORD: 'admin123'
     },
@@ -34,20 +49,24 @@ function oquery(argv) {
 }
 
 async function main() {
-  execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'seed-demo-data.js')], {
-    env: { ...process.env, DEMO_DATA_DIR: DATA_DIR, DEMO_WORKSPACE_ROOT: WORKSPACE_ROOT }, stdio: 'ignore'
-  });
-  const groups = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'groups.json'), 'utf8'));
-  groups[0].permissions.push('ops:read', 'browser:read');
-  fs.writeFileSync(path.join(DATA_DIR, 'groups.json'), JSON.stringify(groups, null, 2));
-  fs.writeFileSync(path.join(DATA_DIR, 'work-types.json'), JSON.stringify([
-    { id: 'meeting-brief', name: 'Meeting Brief', description: 'Summarize a meeting.', status: 'active', allowedTargetKinds: ['workspace'] },
-    { id: 'site-audit', name: 'Site Audit', description: 'Read-only page inspection.', status: 'inactive', allowedTargetKinds: ['browser'] }
-  ], null, 2));
+  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
+  await store.migrate();
 
   const server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
-    env: { ...process.env, NODE_ENV: 'test', PORT, DATA_DIR, WORKSPACE_ROOT, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000', PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000' },
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      DATABASE_URL,
+      POSTGRES_SCHEMA: SCHEMA,
+      SESSION_SECRET: 'oquery-parity-session-secret-0123456789abcdef0123456789abcdef',
+      ADMIN_BOOTSTRAP_PASSWORD: 'admin123',
+      PORT,
+      WORKSPACE_ROOT,
+      TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
+      RUNTIME_SCHEDULER_INTERVAL_MS: '3600000',
+      PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000'
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let out = '';
@@ -63,12 +82,14 @@ async function main() {
     }
     assert(up, 'server did not start:\n' + out.slice(-4000));
 
+    const fx = await seedOperatorFixture(store);
+
     assert(oquery(['login']).includes('Session cached'), 'login must cache a session');
 
     const inboxJson = JSON.parse(oquery(['inbox', '--json']));
-    assert(inboxJson.length >= 3, `inbox must list demo threads, got ${inboxJson.length}`);
-    const blocker = inboxJson.find(t => t.kind === 'blocker' && t.status === 'open' && t.runId === 102);
-    assert(blocker, 'run-102 blocker thread must be present');
+    assert(inboxJson.length >= 3, `inbox must list seeded threads, got ${inboxJson.length}`);
+    const blocker = inboxJson.find(t => t.kind === 'blocker' && t.status === 'open' && t.runId === fx.failedRun.id);
+    assert(blocker, 'failed-run blocker thread must be present');
     const openOnly = JSON.parse(oquery(['inbox', '--status', 'open', '--json']));
     assert(openOnly.every(t => t.status === 'open'), '--status open must filter');
 
@@ -79,15 +100,15 @@ async function main() {
     assert(oquery(['inbox-reply', String(blocker.id), '--message', 'Checked the evidence; restoring fixture.']).includes('Reply added'), 'reply must append');
     const resolveOut = oquery(['inbox-resolve', String(blocker.id), '--message', 'Fixture restored; safe to rerun.']);
     assert(resolveOut.includes('triage resolved'), 'resolve must report triage resolution');
-    const run102 = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'runs.json'), 'utf8')).find(r => r.id === 102);
-    assert(run102.triage.required === false && run102.triage.resolution === 'Fixture restored; safe to rerun.', 'resolve must annotate run triage with the message');
-    assert(run102.status === 'failed', 'resolve must not change run status');
+    const resolvedRun = await store.getRun(fx.failedRun.id);
+    assert(resolvedRun.triage.required === false && resolvedRun.triage.resolution === 'Fixture restored; safe to rerun.', 'resolve must annotate run triage with the message');
+    assert(resolvedRun.status === 'failed', 'resolve must not change run status');
 
     const journal = JSON.parse(oquery(['journal', '--json']));
     assert(journal.events.length >= 2, 'journal must return seeded events');
     // Resolution itself appends run.triage_resolved — the journal shows live reality.
-    const journalRun = JSON.parse(oquery(['journal', '--run', '102', '--json']));
-    assert(journalRun.events.every(e => e.runId === 102)
+    const journalRun = JSON.parse(oquery(['journal', '--run', String(fx.failedRun.id), '--json']));
+    assert(journalRun.events.every(e => e.runId === fx.failedRun.id)
       && journalRun.events.some(e => e.type === 'run.verification_failed')
       && journalRun.events.some(e => e.type === 'run.triage_resolved'), 'journal --run must filter and include the resolution event');
     const journalTrunc = JSON.parse(oquery(['journal', '--type', 'run.verification', '--limit', '1', '--json']));
@@ -95,8 +116,6 @@ async function main() {
 
     const wt = oquery(['work-types']);
     assert(wt.includes('meeting-brief') && wt.includes('site-audit') && wt.includes('grants no target access'), 'work-types must list catalog with boundary');
-    fs.writeFileSync(path.join(DATA_DIR, 'work-types.json'), '{ broken');
-    assert(oquery(['work-types']).includes('Catalog invalid'), 'work-types must surface an invalid catalog truthfully');
 
     const ap = JSON.parse(oquery(['authority-paths', '--json']));
     const configured = JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'protected-paths.json'), 'utf8'));
@@ -108,11 +127,13 @@ async function main() {
     assert(bs.includes('Browser engine'), 'browser-status must report engine state');
     assert(bs.includes('No operator browser session'), 'browser-status must report absent session truthfully');
 
-    const graphOut = oquery(['run-graph', '102']);
+    const graphOut = oquery(['run-graph', String(fx.failedRun.id)]);
     assert(graphOut.includes('decision graph'), 'run-graph must render the graph header');
     assert(graphOut.includes('run failed'), 'run-graph must show the terminal outcome');
-    const graphJson = JSON.parse(oquery(['run-graph', '102', '--json']));
+    assert(graphOut.includes('phase'), 'run-graph must show the execution phase');
+    const graphJson = JSON.parse(oquery(['run-graph', String(fx.failedRun.id), '--json']));
     assert(Array.isArray(graphJson.nodes) && graphJson.nodes.some(n => n.id === 'terminal'), 'run-graph --json must emit the projection');
+    assert(graphJson.currentPhase === 'terminalization', 'run-graph --json must carry the current phase');
 
     const helpOut = oquery(['--help']);
     for (const c of ['inbox', 'inbox-thread', 'inbox-resolve', 'journal', 'work-types', 'authority-paths', 'browser-status', 'run-graph']) {
@@ -124,8 +145,10 @@ async function main() {
     server.kill('SIGTERM');
     await new Promise(r => setTimeout(r, 1200));
     if (server.exitCode === null) server.kill('SIGKILL');
-    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    try { await store.pool.query(`DROP SCHEMA IF EXISTS ${store.schemaSql} CASCADE`); } catch (_) {}
+    await store.close();
     fs.rmSync(WORKSPACE_ROOT, { recursive: true, force: true });
+    fs.rmSync(COOKIE_DIR, { recursive: true, force: true });
   }
 }
 
