@@ -30,7 +30,7 @@ the defect can cause, not how hard it is to fix.
 
 | # | Defect | Severity | Status | Class |
 |---|--------|----------|--------|-------|
-| A1 | Workspace-snapshot failure truthfulness (E4) | **High** | Open | Correctness |
+| A1 | Workspace-snapshot failure truthfulness (E4) | **High** | **Decided 2026-07-25** — shape recorded, implementation pending | Correctness |
 | A2 | Live-state vs immutable-snapshot mutation counting (E5) | Medium | Open | Correctness |
 | A3 | Wall-clock and progress-counter recovery resets | **High** | Open | Bounds integrity |
 | A4 | Enforcement gates bypass the immutable policy snapshot | Medium | Open | Architecture |
@@ -40,14 +40,16 @@ the defect can cause, not how hard it is to fix.
 | A8 | Dead `allow*` policy fields | Low | Open | Dead contract |
 | A9 | Latency-aware feasibility | Medium | Open | Feasibility |
 | A10 | Orphaned PostgreSQL-era test harnesses | **High** | Open | Verification gap |
+| A11 | `truncated:true` disclosed to the model but never explained | Low | Open — split from A1 | Prompt policy |
 
 ### Sequencing
 
 1. **A10 first.** Until the orphaned harnesses are repaired or replaced, there is no working
    feasibility or postcondition coverage in the release checkpoint, so A1/A2/A9 cannot be
    validated through their natural suites.
-2. **A1, then A2.** Both change what the model observes or what the feasibility gate counts.
-   A1 is the higher risk and should not be bundled with anything else.
+2. **A1 (decided, implementation pending), then A2.** A1 changes when a run stops; A2 changes
+   what the feasibility gate counts. A1 is the higher risk and must not be bundled with
+   anything else. Purpose-built coverage is acceptable for A1 while A10 remains open.
 3. **A3** independently — it tightens an effective limit and will fail runs that previously
    passed, so it needs its own observation window.
 4. **A6 and A7** are governance decisions, not defects to fix unilaterally. Do not implement
@@ -60,10 +62,10 @@ the defect can cause, not how hard it is to fix.
 
 | Field | Value |
 |-------|-------|
-| **Status** | Open — highest-severity finding from this audit |
+| **Status** | **Decided 2026-07-25** — shape below is authoritative; implementation pending |
 | **Severity** | High — converts an infrastructure failure into confident model action |
-| **Evidence** | `server.js` `captureRunWorkspaceRootSnapshot` error path |
-| **Decision required** | What shape a failed listing presents to the model, and whether the system prompt must instruct on it |
+| **Evidence** | `server.js` `captureRunWorkspaceRootSnapshot`; capture sites at run start and per step |
+| **Decision** | Fail closed at both capture sites; representation must never encode failure as an empty listing |
 
 **Description:**
 
@@ -74,12 +76,75 @@ model is instructed to read. The system prompt never mentions `error` or `trunca
 model receiving this reasonably concludes the workspace is empty and may create the full
 target state from scratch, or treat pre-existing artifacts as absent.
 
-The success path is comparatively honest: `truncated` is computed as
-`allEntries.length > RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES` and is passed to the model in-band.
-The defect is the failure path plus the absence of any prompt guidance for either flag.
+The failure is also recorded as evidence: the run-start snapshot is persisted to
+`replaySnapshot.targetSnapshots` and emits `target.snapshot.captured`. Encoding failure as an
+empty listing therefore makes the *diagnostic record* assert a clean empty workspace for a run
+that never managed to read it — independent of any model.
 
-**Constraint:** this alters what the model sees and therefore what it does. It needs its own
-tranche with behavioral coverage, not a bundled fix.
+**Why fail closed rather than flag and continue.** A thrown listing can never mean "the
+workspace does not exist yet": `resolveInside` calls `ensureRoot()` (`mkdirSync` recursive)
+before every operation, so a missing root is created and yields an empty listing. Every
+reachable cause of a throw is abnormal — mkdir failure (EACCES/EROFS/ENOSPC, or the root path
+occupied by a file), a containment rejection from `assertRealPathInside`, or `readdirSync`
+failing with EACCES/EIO. `docs/SYSTEM_STATUS.md` already states the house rule: *"Fatal
+persistence/integrity failures fail closed so mutation work never proceeds without its
+required evidence."* The run-start snapshot is required evidence — it anchors relative
+objectives.
+
+**Why the per-step site also stops.** `initialWorkspaceSnapshot` plus `mutationsByThisRun` is
+durable reconstruction evidence, but it is **not** authoritative current workspace state. It
+cannot exclude external changes, partial or unexpected filesystem effects, changed
+permissions, containment changes, or divergence between recorded results and present reality.
+Continuing on reconstruction alone would let the model act on a workspace nobody can currently
+observe.
+
+### Decided shape
+
+**Representation — every capture site, success and failure:**
+
+- `available: false` on failure, `available: true` on success
+- `entries: null`, `entryCount: null`, `truncated: null` on failure — never `[]`, `0`, `false`
+- sanitized structured error classification
+- failure is never encoded as a successful empty listing
+
+**Run-start capture failure:**
+
+- emit durable replay and journal evidence
+- terminate before the first model request
+- permit no mutations
+- classify as an environment/integrity failure — not a model or provider failure
+
+**Per-step capture failure:**
+
+- preserve all mutations and evidence already committed by the run
+- stop before another model request or mutation
+- place the run into a recoverable state; stopping is **not** rollback, and completed
+  mutations are **not** automatically redone
+- resume only after recovery successfully captures a fresh current-workspace snapshot
+
+*Mechanism:* release the run lease (`releaseRunLease` nulls `lease_owner`) and stop without
+terminalizing. `listExpiredRunningRuns` matches `lease_owner IS NULL` ordered `NULLS FIRST`,
+so the existing recovery sweep claims the run immediately and first, and
+`safeToResumeExecution` re-enters `runAgentTicket`, which re-attempts capture at run start.
+This reuses existing plumbing; no new recovery machinery.
+
+**Recovery:**
+
+- record the previous capture failure
+- attempt a new capture
+- continue only when current workspace truth has been re-established; a failed recovery
+  capture takes the run-start failure path and terminates
+
+**Classification — distinct codes, shared fail-closed plumbing:**
+
+| Code | Cause | Significance |
+|------|-------|--------------|
+| `WORKSPACE_CONTAINMENT_VIOLATION` | `assertRealPathInside` rejection (symlink escape) | Security-relevant; must stay distinguishable in triage |
+| `WORKSPACE_SNAPSHOT_UNAVAILABLE` | I/O or availability failure (EACCES, EIO, ENOSPC, ENOTDIR, mkdir failure) | Environment fault; ordinarily retryable |
+
+**Explicitly out of scope for A1:** no model-prompt changes. Under this decision the model
+never receives `available: false` — the run stops first. Guidance for `truncated: true`
+affects healthy runs and is split out as **A11**.
 
 ---
 
@@ -357,6 +422,31 @@ rather than extending `runtime-feasibility-test.js`.
 **Method note for whoever picks this up:** before treating any suite failure as a regression,
 baseline it at the relevant commit in a detached worktree and compare failure strings. Most
 failures in this list are pre-existing.
+
+---
+
+### A11. `truncated:true` is disclosed to the model but never explained
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open — split out of A1 on 2026-07-25 |
+| **Severity** | Low |
+| **Evidence** | `RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES` in `server.js`; the agent system prompt |
+| **Decision required** | Whether the system prompt should instruct the model on incomplete snapshots, and what it should then do |
+
+**Description:**
+
+The run-start and per-step workspace snapshots cap entries at
+`RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES` (200) and set `truncated: true` beyond that. The flag
+reaches the model in-band — a real strength — but no system-prompt line ever mentions it, so
+the model has no instruction for what an incomplete view means or what to do about it. This
+compounds with the workload-profile inspection limits (`maxListDirectory` of 2–3), which can
+leave a capable model structurally unable to see a workspace root larger than 200 entries.
+
+Split from A1 because it differs on both axes that matter: it concerns *successful* captures,
+and any fix changes prompt text sent on **every healthy run**, not only on faults. It
+therefore needs its own behavioral decision and its own tests rather than riding along with a
+fail-closed change.
 
 ---
 
