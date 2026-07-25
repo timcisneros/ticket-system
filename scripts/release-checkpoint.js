@@ -29,6 +29,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'run-decision-graph-projection-test.js',
   'scheduler-observability-test.js',
   'workspace-fixture-catalog-test.js',
+  'workspace-snapshot-availability-test.js',
   'release-checkpoint-coverage-test.js'
 ]);
 

@@ -17800,6 +17800,97 @@ const RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES = 200;
 // Bounded, display-only listing of the run's root workspace. Used to give the
 // model an initial (run-start) and current snapshot without spending a
 // listDirectory action. Captures only the root level to stay small.
+// Two distinct failure classes for a workspace-snapshot capture. They share the
+// fail-closed plumbing but must stay distinguishable in diagnostics, because
+// their retryability and security significance differ:
+//
+//   WORKSPACE_CONTAINMENT_VIOLATION — assertRealPathInside rejected the resolved
+//     root (symlink escape). Security-relevant; retrying is not obviously safe.
+//   WORKSPACE_SNAPSHOT_UNAVAILABLE — ordinary I/O or availability fault (EACCES,
+//     EIO, ENOSPC, ENOTDIR, mkdir failure). Environment fault; ordinarily retryable.
+//
+// A thrown listing never means "the workspace does not exist yet": resolveInside
+// calls ensureRoot() before every operation, so a missing root is created and
+// yields an empty listing rather than an error.
+const WORKSPACE_CONTAINMENT_VIOLATION = 'WORKSPACE_CONTAINMENT_VIOLATION';
+const WORKSPACE_SNAPSHOT_UNAVAILABLE = 'WORKSPACE_SNAPSHOT_UNAVAILABLE';
+
+// Only an EXPLICIT available:false means the capture failed. Snapshots persisted
+// before this field existed carry no `available` key, and absence must never be
+// read as failure — otherwise every historical run would retroactively look like
+// it had an unreadable workspace. Compatibility is the reason this is a named
+// predicate rather than a falsiness check.
+function isWorkspaceSnapshotUnavailable(snapshot) {
+  return Boolean(snapshot) && snapshot.available === false;
+}
+
+function classifyWorkspaceSnapshotFailure(error) {
+  const rawCode = error && error.code ? String(error.code) : null;
+  const containment = rawCode === 'WORKSPACE_OUTSIDE_ROOT'
+    || (error && error.kind === 'protected_path');
+  return {
+    code: containment ? WORKSPACE_CONTAINMENT_VIOLATION : WORKSPACE_SNAPSHOT_UNAVAILABLE,
+    kind: containment ? 'containment_violation' : 'unavailable',
+    // Underlying cause, sanitized. Retained because operators triage EACCES
+    // differently from ENOSPC, and the classification alone loses that.
+    detail: sanitizeLogMessage(rawCode || (error && error.message) || 'list_failed')
+  };
+}
+
+// Terminal/recoverable error for a workspace-snapshot capture failure. The same
+// constructor serves both capture sites; `recoverableStop` is what distinguishes
+// a per-step stop (run is released for recovery, mutations preserved) from a
+// run-start failure (terminalized before the first model request).
+function createWorkspaceSnapshotFailureError(snapshot, { phase, recoverableStop }) {
+  const code = snapshot && snapshot.error === WORKSPACE_CONTAINMENT_VIOLATION
+    ? WORKSPACE_CONTAINMENT_VIOLATION
+    : WORKSPACE_SNAPSHOT_UNAVAILABLE;
+  const isContainment = code === WORKSPACE_CONTAINMENT_VIOLATION;
+  const error = new Error(
+    isContainment
+      ? `Workspace containment violation while capturing the ${phase} workspace snapshot: the workspace root resolves outside its configured boundary. Refusing to proceed.`
+      : `Workspace snapshot unavailable at ${phase}: the workspace root could not be listed (${(snapshot && snapshot.errorDetail) || 'list_failed'}). Refusing to proceed without authoritative workspace state.`
+  );
+  error.code = code;
+  // Not a model or provider failure. Classified as an environment/integrity fault
+  // so triage does not blame the model for an unreadable workspace.
+  error.failureKind = 'environment_integrity';
+  error.recoverableStop = recoverableStop === true;
+  error.details = {
+    phase,
+    classification: code,
+    errorKind: (snapshot && snapshot.errorKind) || null,
+    errorDetail: (snapshot && snapshot.errorDetail) || null,
+    capturedAt: (snapshot && snapshot.capturedAt) || null
+  };
+  return error;
+}
+
+// Durable evidence for a capture failure, written to both the replay snapshot and
+// the event journal before the run stops. Emitted on both paths so a stopped run
+// always explains itself.
+async function recordWorkspaceSnapshotFailure(run, snapshot, { phase, disposition, step = null }) {
+  const payload = {
+    phase,
+    disposition,
+    step,
+    available: false,
+    classification: (snapshot && snapshot.error) || WORKSPACE_SNAPSHOT_UNAVAILABLE,
+    errorKind: (snapshot && snapshot.errorKind) || null,
+    errorDetail: (snapshot && snapshot.errorDetail) || null,
+    capturedAt: (snapshot && snapshot.capturedAt) || null
+  };
+  await recordRunEvent(run, 'workspace:snapshot_unavailable',
+    `Workspace snapshot unavailable (${payload.classification}) at ${phase}; ${disposition}`, payload);
+  await appendEvent({
+    type: 'workspace.snapshot_unavailable',
+    ticketId: run.ticketId,
+    runId: run.id,
+    stepId: step === null ? null : String(step),
+    payload
+  });
+}
+
 function captureRunWorkspaceRootSnapshot(run) {
   const provider = getRunWorkspaceProvider(run);
   const capturedAt = new Date().toISOString();
@@ -17818,23 +17909,34 @@ function captureRunWorkspaceRootSnapshot(run) {
       bounded: true,
       entryCount: allEntries.length,
       entryLimit: RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES,
-      truncated: allEntries.length > RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES
+      truncated: allEntries.length > RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES,
+      available: true
     };
   } catch (error) {
+    // A failed listing must never be representable as a successful empty one.
+    // entries/entryCount/truncated are null rather than []/0/false so no reader —
+    // view, diagnostic bundle, or future consumer — can mistake an unreadable
+    // workspace for an empty one. See docs/ARCHITECTURAL_DECISIONS_PENDING.md
+    // entry A1. Under that decision the model never receives this object: both
+    // capture sites fail closed before the next model request.
+    const failure = classifyWorkspaceSnapshotFailure(error);
     return {
       targetId: provider.id,
       targetKind: provider.kind,
       targetScope: provider.scope,
       path: '',
-      entries: [],
+      available: false,
+      entries: null,
       capturedAt,
       full: false,
       partial: true,
       bounded: true,
-      entryCount: 0,
+      entryCount: null,
       entryLimit: RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES,
-      truncated: false,
-      error: error.code || 'list_failed'
+      truncated: null,
+      error: failure.code,
+      errorKind: failure.kind,
+      errorDetail: failure.detail
     };
   }
 }
@@ -18181,6 +18283,55 @@ async function runAgentTicket(runId) {
       },
       capturedAt: initialWorkspaceSnapshot.capturedAt || null
     });
+
+    // Fail closed at run start: the snapshot anchors relative objectives and is
+    // required evidence, so an unreadable workspace terminates the run before the
+    // first model request and before any mutation is possible. Evidence is
+    // recorded above (target-snapshot) and below (classification) first, so a
+    // terminated run explains itself. See A1.
+    if (!isBrowserRun(run) && isWorkspaceSnapshotUnavailable(initialWorkspaceSnapshot)) {
+      await recordWorkspaceSnapshotFailure(run, initialWorkspaceSnapshot, {
+        phase: 'run_start',
+        disposition: 'terminating before the first model request'
+      });
+      throw createWorkspaceSnapshotFailureError(initialWorkspaceSnapshot, {
+        phase: 'run_start',
+        recoverableStop: false
+      });
+    }
+
+    // Recovery closes the loop: if this run previously stopped because a capture
+    // failed, the fresh capture above is what re-established workspace truth, and
+    // that transition is recorded rather than left implicit. Execution only
+    // reaches here when the capture succeeded, so this event means exactly
+    // "current workspace state is authoritative again". See A1.
+    if (!isBrowserRun(run)) {
+      const priorReplay = await getRunReplayRepository().readRunReplay(run.id);
+      const priorEvents = priorReplay && priorReplay.snapshot && Array.isArray(priorReplay.snapshot.events)
+        ? priorReplay.snapshot.events
+        : [];
+      const priorFailure = priorEvents.filter(event =>
+        event && event.type === 'workspace:snapshot_unavailable').pop() || null;
+      if (priorFailure) {
+        const recoveryPayload = {
+          recoveredAt: initialWorkspaceSnapshot.capturedAt || null,
+          priorClassification: priorFailure.classification || null,
+          priorPhase: priorFailure.phase || null,
+          priorStep: priorFailure.step === undefined ? null : priorFailure.step,
+          entryCount: initialWorkspaceSnapshot.entryCount
+        };
+        await recordRunEvent(run, 'workspace:snapshot_recovered',
+          'Workspace snapshot re-captured successfully; current workspace state is authoritative again',
+          recoveryPayload);
+        await appendEvent({
+          type: 'workspace.snapshot_recovered',
+          ticketId: run.ticketId,
+          runId: run.id,
+          payload: recoveryPayload
+        });
+      }
+    }
+
     const mutationsByThisRun = [];
 
     // ── Resumable execution check ─────────────────────────────────
@@ -18360,11 +18511,33 @@ async function runAgentTicket(runId) {
       }
 
       const currentEnvelope = await buildRuntimeEnvelope(run, step, ticket.objective, limits);
+      const currentWorkspaceSnapshot = isBrowserRun(run)
+        ? await captureBrowserCurrentState(run)
+        : captureRunWorkspaceRootSnapshot(run);
+
+      // Fail closed here too. initialWorkspaceSnapshot + mutationsByThisRun is
+      // durable reconstruction evidence, not authoritative current state: it
+      // cannot exclude external changes, partial filesystem effects, changed
+      // permissions, containment changes, or divergence between recorded results
+      // and present reality. Stopping is NOT rollback — every committed mutation
+      // and its evidence stay exactly as they are, and none is redone. The run is
+      // released for the existing recovery sweep, which re-enters and re-captures;
+      // execution continues only once workspace truth is re-established. See A1.
+      if (!isBrowserRun(run) && isWorkspaceSnapshotUnavailable(currentWorkspaceSnapshot)) {
+        await recordWorkspaceSnapshotFailure(run, currentWorkspaceSnapshot, {
+          phase: 'execution_step',
+          disposition: 'stopping for recovery with committed mutations preserved',
+          step
+        });
+        throw createWorkspaceSnapshotFailureError(currentWorkspaceSnapshot, {
+          phase: 'execution_step',
+          recoverableStop: true
+        });
+      }
+
       const workspaceContext = {
         initialWorkspaceSnapshot,
-        currentWorkspaceSnapshot: isBrowserRun(run)
-          ? await captureBrowserCurrentState(run)
-          : captureRunWorkspaceRootSnapshot(run),
+        currentWorkspaceSnapshot,
         mutationsByThisRun
       };
       const input = await buildAgentPrompt(promptTicket, currentEnvelope, actionResults, run.rerunMode, workspaceContext);
@@ -19347,6 +19520,31 @@ async function runAgentTicket(runId) {
           currentLeaseExpiresAt: currentRun ? currentRun.leaseExpiresAt || null : null,
           outcome: 'execution_stopped_for_recovery'
         }
+      });
+    } else if (error && error.recoverableStop === true) {
+      // Recoverable stop: the run keeps every committed mutation and all its
+      // evidence, and is NOT terminalized. Releasing the lease nulls lease_owner,
+      // which listExpiredRunningRuns matches (ordered NULLS FIRST), so the
+      // existing recovery sweep claims it immediately and re-enters execution —
+      // where run-start capture is attempted again. This is not rollback and
+      // nothing completed is redone. See A1.
+      await appendEvent({
+        type: 'run.execution_stopped_for_recovery',
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: {
+          code: error.code || null,
+          failureKind: error.failureKind || null,
+          details: error.details || null,
+          outcome: 'execution_stopped_for_recovery',
+          mutationsPreserved: true
+        }
+      });
+      appendRunLog(run, 'run:stopped_for_recovery',
+        sanitizeLogMessage(error.message || 'Execution stopped for recovery'));
+      await releaseRunLease(runId, {
+        reason: 'workspace_snapshot_unavailable',
+        code: error.code || null
       });
     } else {
       run = await failAgentRun(run, error, error.workspaceAction || null);
