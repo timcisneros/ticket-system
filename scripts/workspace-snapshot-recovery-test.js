@@ -8,9 +8,16 @@
 // B5 (an assertion that proved terminalization while claiming to prove the
 // opposite). This suite exists to prove the lifecycle against real state.
 //
-// The fault is genuine, not mocked: the workspace root is chmod 000 so
-// readdirSync raises EACCES inside the real provider. Nothing about the failure
-// path is stubbed.
+// The fault is genuine, not mocked, and deterministic in every supported
+// environment. The real workspace root directory is stashed aside and a regular
+// FILE is placed at the root path, so the provider's own ensureRoot()
+// (mkdirSync recursive) raises EEXIST inside the real provider. This depends on
+// POSIX semantics rather than permissions, so it works identically as root and
+// on filesystems that ignore chmod. Nothing on the failure path is stubbed, no
+// production seam or environment flag is involved, and the committed mutation
+// survives untouched inside the stash.
+//
+// This test never skips. If the fault cannot be induced or observed, it FAILS.
 //
 // Proves, in order:
 //    1. a run performs and durably records at least one mutation
@@ -26,8 +33,7 @@
 //   11. later re-entries emit no duplicate recovery event
 //   12. a new later failure produces exactly one new recovery transition
 //
-// Requires TEST_DATABASE_URL (or DATABASE_URL). Skips if run as root, where
-// chmod 000 does not deny access.
+// Requires TEST_DATABASE_URL (or DATABASE_URL).
 
 const crypto = require('crypto');
 const http = require('http');
@@ -45,37 +51,60 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// chmod-based denial does not work for root; skip rather than assert falsely.
-if (typeof process.getuid === 'function' && process.getuid() === 0) {
-  console.log('SKIP: workspace-snapshot recovery test requires a non-root user (chmod 000 must deny access)');
-  process.exit(0);
-}
-
 const SCHEMA = `ws_recovery_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
 const PORT = String(3940 + (process.pid % 50));
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-recovery-'));
 const LEASE_MS = 4000;
 
 let passed = 0;
-function assert(condition, message) {
+const scenariosProven = new Set();
+function assert(condition, message, scenario = null) {
   if (!condition) throw new Error(message);
   passed += 1;
+  if (scenario !== null) scenariosProven.add(scenario);
   console.log(`  ok ${message}`);
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const denyRoot = () => fs.chmodSync(WORKSPACE_ROOT, 0o000);
-const allowRoot = () => fs.chmodSync(WORKSPACE_ROOT, 0o755);
+const STASH_ROOT = `${WORKSPACE_ROOT}.stash`;
 
-// Confirm the fault we rely on is actually produced by this environment.
-denyRoot();
-let evictionWorks = false;
-try { fs.readdirSync(WORKSPACE_ROOT); } catch (error) { evictionWorks = error.code === 'EACCES'; }
-allowRoot();
-if (!evictionWorks) {
-  console.log('SKIP: this filesystem does not deny readdir on a 000 directory');
-  fs.rmSync(WORKSPACE_ROOT, { recursive: true, force: true });
-  process.exit(0);
+// FAULT_DISABLED exists only so the fault mechanism itself can be mutation-tested
+// ("disable the injected failure and prove the test fails"). It is read by this
+// test file alone and has no effect on server.js.
+const FAULT_DISABLED = process.env.WS_RECOVERY_TEST_DISABLE_FAULT === 'true';
+
+// Deterministic, permission-independent fault: move the real root aside and put a
+// regular file where the provider expects a directory. ensureRoot()'s recursive
+// mkdir then fails with EEXIST for every caller, as root or otherwise.
+function breakRoot() {
+  if (FAULT_DISABLED) return;
+  if (fs.existsSync(STASH_ROOT)) return;
+  fs.renameSync(WORKSPACE_ROOT, STASH_ROOT);
+  fs.writeFileSync(WORKSPACE_ROOT, '');
+}
+function repairRoot() {
+  if (!fs.existsSync(STASH_ROOT)) return;
+  if (fs.existsSync(WORKSPACE_ROOT) && fs.lstatSync(WORKSPACE_ROOT).isFile()) {
+    fs.unlinkSync(WORKSPACE_ROOT);
+  }
+  fs.renameSync(STASH_ROOT, WORKSPACE_ROOT);
+}
+
+// Prove the mechanism before relying on it. This is an assertion, not a skip: an
+// environment where the fault cannot be induced must fail the suite.
+if (!FAULT_DISABLED) {
+  fs.mkdirSync(path.join(WORKSPACE_ROOT, '.probe'), { recursive: true });
+  breakRoot();
+  let inducedCode = null;
+  try { fs.mkdirSync(WORKSPACE_ROOT, { recursive: true }); } catch (error) { inducedCode = error.code; }
+  repairRoot();
+  if (inducedCode !== 'EEXIST') {
+    console.error(`FAIL: the deterministic capture fault could not be induced (mkdir gave ${inducedCode || 'no error'})`);
+    fs.rmSync(WORKSPACE_ROOT, { recursive: true, force: true });
+    fs.rmSync(STASH_ROOT, { recursive: true, force: true });
+    process.exit(1);
+  }
+  fs.rmSync(path.join(WORKSPACE_ROOT, '.probe'), { recursive: true, force: true });
 }
 
 // Mock ollama. Every call creates a distinctly-named folder, so the run keeps
@@ -276,23 +305,23 @@ async function main() {
     // ── 1. A durable mutation lands ─────────────────────────────────────────
     await waitFor(async () => (await mutationCount(runId)) >= 1, 30000, 'first committed mutation');
     const mutationsAfterFirst = await mutationCount(runId);
-    assert(mutationsAfterFirst >= 1, `run durably recorded a mutation (${mutationsAfterFirst})`);
-    assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'Alpha')), 'the mutation is present on disk');
+    assert(mutationsAfterFirst >= 1, `run durably recorded a mutation (${mutationsAfterFirst})`, 1)
+    assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'Alpha')), 'the mutation is present on disk', 1)
 
     // ── 2. Make the next per-step capture fail ──────────────────────────────
     await provider.state.reachedHold;
     const callsBeforeFault = provider.state.calls;
-    denyRoot();
+    breakRoot();
     provider.state.resume();
 
     await waitFor(async () => (await countEvents(runId, 'workspace:snapshot_unavailable')) >= 1,
       30000, 'per-step capture failure');
-    assert(true, 'per-step root capture failed and was recorded');
+    assert(true, 'per-step root capture failed and was recorded', 2)
 
     const firstFailure = (await replayEvents(runId))
       .filter(e => e.type === 'workspace:snapshot_unavailable').pop();
     assert(firstFailure.phase === 'execution_step',
-      `failure was recorded at the per-step phase (${firstFailure.phase})`);
+      `failure was recorded at the per-step phase (${firstFailure.phase})`, 2)
     assert(firstFailure.classification === 'WORKSPACE_SNAPSHOT_UNAVAILABLE',
       `failure classified as an availability fault (${firstFailure.classification})`);
     assert(firstFailure.available === false, 'failure evidence records available:false');
@@ -301,9 +330,9 @@ async function main() {
     await sleep(1500);
     let current = await store.getRun(runId);
     assert(current.status === 'running',
-      `run is not terminalized after the stop (status=${current.status})`);
+      `run is not terminalized after the stop (status=${current.status})`, 3)
     assert(current.status !== 'failed' && current.status !== 'interrupted',
-      'run is neither failed nor interrupted');
+      'run is neither failed nor interrupted', 3)
     // The lease must be RETAINED, not released. Checking `leaseOwner !== null` is
     // not sufficient: if the lease were released, the recovery sweep re-claims
     // within milliseconds and the field is populated again by the new owner. The
@@ -312,10 +341,10 @@ async function main() {
     const journalSoFar = await journalEvents(runId);
     const releaseEvents = journalSoFar.filter(e => e.type === 'run.lease_released');
     assert(releaseEvents.length === 0,
-      `the lease was never released, so the run was not reclaimable while unwinding (B3; releases=${releaseEvents.length})`);
+      `the lease was never released, so the run was not reclaimable while unwinding (B3; releases=${releaseEvents.length})`, 6)
     const claimEvents = journalSoFar.filter(e => e.type === 'run.recovery_claimed');
     assert(claimEvents.length === 0,
-      `recovery had not claimed the run during the retention window (claims=${claimEvents.length})`);
+      `recovery had not claimed the run during the retention window (claims=${claimEvents.length})`, 6)
     assert(current.leaseOwner !== null && current.leaseExpiresAt !== null,
       'run still holds its original lease');
     assert(new Date(current.leaseExpiresAt).getTime() > Date.now(),
@@ -330,12 +359,15 @@ async function main() {
       'stop event records that the lease is retained until expiry');
 
     // ── 4/5. Mutation preserved; no further model request or mutation ───────
-    assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'Alpha')) === false || true, 'workspace root is currently unreadable (expected)');
+    assert(fs.lstatSync(WORKSPACE_ROOT).isFile(),
+      'the workspace root is currently a file, so every provider call genuinely fails');
+    assert(fs.existsSync(path.join(STASH_ROOT, 'Alpha')),
+      'the committed mutation is preserved in the stashed root while unavailable', 4)
     assert((await mutationCount(runId)) === mutationsAfterFirst,
-      'no further mutation occurred after the stop');
+      'no further mutation occurred after the stop', 5)
     const callsAfterStop = provider.state.calls;
     assert(callsAfterStop === callsBeforeFault || callsAfterStop === callsBeforeFault + 1,
-      `no runaway model requests after the stop (${callsBeforeFault} -> ${callsAfterStop})`);
+      `no runaway model requests after the stop (${callsBeforeFault} -> ${callsAfterStop})`, 5)
 
     // ── 7/8. Repeated failed recovery attempts must not terminalize ─────────
     const failuresBeforeRetries = await countEvents(runId, 'workspace:snapshot_unavailable');
@@ -343,18 +375,18 @@ async function main() {
       60000, 'two further failed recovery captures');
     const afterRetries = await store.getRun(runId);
     assert(afterRetries.status === 'running',
-      `repeated failed recovery attempts did not terminalize the run (status=${afterRetries.status})`);
+      `repeated failed recovery attempts did not terminalize the run (status=${afterRetries.status})`, 8)
     assert(await countEvents(runId, 'workspace:snapshot_recovered') === 0,
-      'no recovery event was emitted while capture kept failing');
+      'no recovery event was emitted while capture kept failing', 7)
     assert((await mutationCount(runId)) === mutationsAfterFirst,
-      'failed recovery attempts performed no mutation');
+      'failed recovery attempts performed no mutation', 7)
 
     // ── 9/10. A later successful capture resumes and records recovery once ──
-    allowRoot();
+    repairRoot();
     await waitFor(async () => (await countEvents(runId, 'workspace:snapshot_recovered')) >= 1,
       60000, 'successful recovery capture');
     assert(await countEvents(runId, 'workspace:snapshot_recovered') === 1,
-      'exactly one recovery event closed the failure');
+      'exactly one recovery event closed the failure', 10)
 
     const recoveredEvent = (await replayEvents(runId))
       .filter(e => e.type === 'workspace:snapshot_recovered').pop();
@@ -367,23 +399,23 @@ async function main() {
       'replay and journal recovery evidence agree');
 
     assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'Alpha')),
-      'the mutation committed before the stop survived recovery');
+      'the mutation committed before the stop survived recovery', 9)
     const alphaOps = (await store.listRunOperations(runId))
       .filter(op => op && (op.path === 'Alpha' || (op.args && op.args.path === 'Alpha')));
     assert(alphaOps.length === 1,
-      `the pre-stop mutation was not redone or duplicated (Alpha receipts: ${alphaOps.length})`);
+      `the pre-stop mutation was not redone or duplicated (Alpha receipts: ${alphaOps.length})`, 9)
 
     // ── 11. Later re-entries emit no duplicate recovery ─────────────────────
     const callsAfterRecovery = provider.state.calls;
     await waitFor(async () => provider.state.calls > callsAfterRecovery, 30000, 'execution resuming after recovery');
     assert(await countEvents(runId, 'workspace:snapshot_recovered') === 1,
-      'continued execution emitted no duplicate recovery event');
+      'continued execution emitted no duplicate recovery event', 11)
 
     // ── 12. A new failure opens exactly one new recovery transition ─────────
     const failuresBeforeSecondCycle = await countEvents(runId, 'workspace:snapshot_unavailable');
     provider.state.armHold(provider.state.calls + 1);
     await provider.state.reachedHold;
-    denyRoot();
+    breakRoot();
     provider.state.resume();
     await waitFor(async () => (await countEvents(runId, 'workspace:snapshot_unavailable')) > failuresBeforeSecondCycle,
       45000, 'second capture failure');
@@ -392,19 +424,29 @@ async function main() {
     const midCycle = await store.getRun(runId);
     assert(midCycle.status === 'running', 'second failure also stopped recoverably rather than terminalizing');
 
-    allowRoot();
+    repairRoot();
     await waitFor(async () => (await countEvents(runId, 'workspace:snapshot_recovered')) >= 2,
       60000, 'second successful recovery');
     assert(await countEvents(runId, 'workspace:snapshot_recovered') === 2,
-      'the new failure produced exactly one new recovery transition');
+      'the new failure produced exactly one new recovery transition', 12)
 
     const finalJournalRecoveries = (await journalEvents(runId))
       .filter(e => e.type === 'workspace.snapshot_recovered').length;
     assert(finalJournalRecoveries === 2, 'journal recovery count matches replay recovery count');
 
-    console.log(`\nPASS: workspace snapshot recovery lifecycle (A1) — ${passed} checks against real store and real filesystem fault`);
+    const REQUIRED_SCENARIOS = 12;
+    const missing = [];
+    for (let n = 1; n <= REQUIRED_SCENARIOS; n += 1) if (!scenariosProven.has(n)) missing.push(n);
+    if (missing.length > 0) {
+      throw new Error(`lifecycle scenarios not proven: ${missing.join(', ')}`);
+    }
+    console.log(`\nPASS: workspace snapshot recovery lifecycle (A1)`);
+    console.log(`  assertions: ${passed}`);
+    console.log(`  lifecycle scenarios proven: ${scenariosProven.size}/${REQUIRED_SCENARIOS}`);
+    console.log('  skipped: 0');
+    console.log('  fault: deterministic (root replaced by a file; EEXIST from the real provider)');
   } finally {
-    try { allowRoot(); } catch (_) {}
+    try { repairRoot(); } catch (_) {}
     if (server) {
       server.kill('SIGTERM');
       for (let i = 0; i < 40 && server.exitCode === null; i++) await sleep(200);
@@ -414,6 +456,7 @@ async function main() {
     try { await store.pool.query(`DROP SCHEMA IF EXISTS ${store.schemaSql} CASCADE`); } catch (_) {}
     await store.close();
     fs.rmSync(WORKSPACE_ROOT, { recursive: true, force: true });
+    fs.rmSync(STASH_ROOT, { recursive: true, force: true });
   }
 }
 
