@@ -30,7 +30,7 @@ the defect can cause, not how hard it is to fix.
 
 | # | Defect | Severity | Status | Class |
 |---|--------|----------|--------|-------|
-| A1 | Workspace-snapshot failure truthfulness (E4) | **High** | **Implemented** `ee44369` — entry retained for the record | Correctness |
+| A1 | Workspace-snapshot failure truthfulness (E4) | **High** | **Implementation under correction** — `ee44369` partially wrong; see blockers | Correctness |
 | A2 | Live-state vs immutable-snapshot mutation counting (E5) | Medium | Open | Correctness |
 | A3 | Wall-clock and progress-counter recovery resets | **High** | Open | Bounds integrity |
 | A4 | Enforcement gates bypass the immutable policy snapshot | Medium | Open | Architecture |
@@ -62,7 +62,7 @@ the defect can cause, not how hard it is to fix.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Implemented 2026-07-25** in `ee44369`; entry retained as the decision record |
+| **Status** | **Implementation under correction.** Representation and classification landed in `ee44369` and are accepted. The recovery implementation contradicts the decided behavior — blockers below |
 | **Severity** | High — converts an infrastructure failure into confident model action |
 | **Evidence** | `server.js` `captureRunWorkspaceRootSnapshot`; capture sites at run start and per step |
 | **Decision** | Fail closed at both capture sites; representation must never encode failure as an empty listing |
@@ -146,7 +146,42 @@ This reuses existing plumbing; no new recovery machinery.
 never receives `available: false` — the run stops first. Guidance for `truncated: true`
 affects healthy runs and is split out as **A11**.
 
-**Implementation (`ee44369`):** `classifyWorkspaceSnapshotFailure`,
+### A1 blockers — open, implementation under correction
+
+Raised 2026-07-25 against `ee44369`. Representation (`available:false`, null counts) and
+classification (two distinct codes) are accepted and correct. The recovery implementation is
+not, and the suite did not catch it.
+
+**B1 — "recoverable stop" was one automatic retry, then terminalization.** The per-step stop
+released the lease, which made the run immediately reclaimable; the recovery sweep re-entered
+at once and, if the fresh capture also failed, the run-start guard *terminalized* it. The
+decided behavior requires the run to remain recoverably stopped and to resume only after a
+later successful capture. An immediately-expired running lease is not a stable recoverable
+state.
+
+**B2 — no stable recoverable-stopped state exists in the architecture.** Verified: run
+statuses are `pending`, `running`, `completed`, `failed`, `interrupted`, with the last three
+in `TERMINAL_RUN_STATUSES`. `interruptAgentRun` terminalizes, so it does not provide these
+semantics. `listRecoverableRuns` gates **both** recovery modes on the identical condition —
+`status = 'running' AND (lease_owner IS NULL OR lease_expires_at <= clock_timestamp())` — so a
+released lease is claimed immediately and there is no "stopped, awaiting recovery, not yet
+retryable" state to adopt.
+
+**B3 — claim race.** Releasing the lease inside the `catch` made the run reclaimable while the
+original `runAgentTicket` invocation was still unwinding its `finally`.
+
+**B4 — recovery evidence was existence-based, not transition-based.** The acknowledgement
+fired whenever *any* historical `workspace:snapshot_unavailable` event existed, so a later
+clean re-entry would emit a duplicate recovery event for an already-resolved failure.
+
+**B5 — the suite proved the wrong thing.** The assertion labelled *"failed recovery capture
+cannot resume — the only post-guard path throws"* tested `recoverableStop: false` in the
+run-start guard. That is the terminalizing behavior, i.e. the defect. The assertion was
+written to match the implementation rather than the requirement, and passing it was reported
+as covering scenario 7 ("failed recovery capture remaining stopped"). Source-level assertions
+cannot establish lifecycle behavior; that scenario needs real store/server coverage.
+
+**Implementation (`ee44369`, partially superseded):** `classifyWorkspaceSnapshotFailure`,
 `isWorkspaceSnapshotUnavailable`, `createWorkspaceSnapshotFailureError`, and
 `recordWorkspaceSnapshotFailure` in `server.js`; guards at both capture sites; recoverable-stop
 branch in the `runAgentTicket` catch; recovery acknowledgement
