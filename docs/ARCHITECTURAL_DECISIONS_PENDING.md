@@ -43,6 +43,7 @@ the defect can cause, not how hard it is to fix.
 | A11 | `truncated:true` disclosed to the model but never explained | Low | Open — split from A1 | Prompt policy |
 | A12 | Bounded workspace-snapshot recovery policy | Medium | **Open — decision required** — residual of A1 | Policy |
 | A14 | Redundant-mutation postcondition shortcut does not fire | **High** | **Implemented** — see entry | Correctness |
+| A15 | Postcondition telemetry names a source the event never reaches | Low | **Open — decision required** | Documentation / telemetry |
 
 ### Sequencing
 
@@ -505,6 +506,61 @@ rather than extending `runtime-feasibility-test.js`.
 **Method note for whoever picks this up:** before treating any suite failure as a regression,
 baseline it at the relevant commit in a detached worktree and compare failure strings. Most
 failures in this list are pre-existing.
+
+---
+
+### A15. Postcondition telemetry names a source the event never reaches
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — decision required.** Discovered during A14; deliberately excluded from A14's implemented status |
+| **Severity** | Low — a telemetry metric cannot be derived from its documented source |
+| **Evidence** | `docs/OPERATIONAL_TELEMETRY.md`; `recordRunEvent` in `server.js`; commit `b7d1763` |
+| **Decision required** | Correct the documented telemetry source, or add journal routing for the event |
+
+**Description:**
+
+`docs/OPERATIONAL_TELEMETRY.md` lists:
+
+```
+| Postcondition checks | events.jsonl | Count of `run.postcondition_completed` |
+```
+
+Production does not write that event to the journal. `run:postcondition_completed` is emitted
+through `recordRunEvent`, which writes the **replay snapshot** and the **run log** only:
+
+```js
+async function recordRunEvent(run, type, message, details = {}) {
+  appendRunLog(run, type, message);
+  await appendRunReplaySnapshotItem(run.id, 'events', { type, message, ...details });
+}
+```
+
+There is no `appendEvent` for this event type anywhere in `server.js`. The documented metric
+therefore cannot be computed from its documented source. Note the naming also differs — the
+document uses the journal-style `run.postcondition_completed`, while the emitted type is the
+replay-style `run:postcondition_completed`.
+
+**Surfaced by A14, not caused by it.** A14's focused regression test initially asserted journal
+durability for this event; that assertion was wrong about production, not about the fix, and was
+corrected to assert replay and run-log durability — where the event actually lands. A14 changed
+no event routing, so this discrepancy predates it and survives it.
+
+**Decision required — two coherent options, not to be chosen here:**
+
+1. **Correct the documentation.** If replay + run log is the intended durability surface, update
+   `docs/OPERATIONAL_TELEMETRY.md` to name that source and the correct event type. Cheapest, and
+   changes no behavior.
+2. **Add journal routing.** If postcondition completion genuinely belongs in the operational
+   ledger alongside `run.violations_checked` and `run.violation_detected` — the two neighbouring
+   rows in the same table, which *are* journalled — add an `appendEvent` call. This is a
+   runtime-semantic change and would need its own tranche and evidence review.
+
+The neighbouring rows being genuinely journalled is why this is a real ambiguity rather than an
+obvious documentation typo: the table's other entries are accurate, so the intent behind this
+row is not self-evident from the document alone.
+
+**Not to be resolved inside A10.** A10 is test-infrastructure repair.
 
 ---
 
