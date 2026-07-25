@@ -5,6 +5,9 @@
 - [`../README.md`](../README.md) — architecture, startup, and verification.
 - [`SETUP_AND_FIRST_RUN.md`](SETUP_AND_FIRST_RUN.md) — environment and first run.
 - [`SYSTEM_STATUS.md`](SYSTEM_STATUS.md) — implemented guarantees and remaining productization work.
+- [`ARCHITECTURAL_DECISIONS_PENDING.md`](ARCHITECTURAL_DECISIONS_PENDING.md) — canonical register of
+  open integrity defects, deferred work, and pending architectural decisions. Read before starting
+  work that touches runtime enforcement, feasibility, recovery, or objective interpretation.
 - [`POSTGRES_CUTOVER.md`](POSTGRES_CUTOVER.md) — current PostgreSQL authority/coordination contract.
 - [`PRIMITIVE_GLOSSARY.md`](PRIMITIVE_GLOSSARY.md) — runtime terminology.
 - [`OPERATIONAL_TRANSPARENCY.md`](OPERATIONAL_TRANSPARENCY.md) — read-only operational surfaces.

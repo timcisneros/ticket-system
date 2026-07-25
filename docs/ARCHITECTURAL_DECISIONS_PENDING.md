@@ -1,5 +1,365 @@
 # Architectural Decisions Pending
 
+This is the **canonical register of open integrity defects, deferred work, and pending
+architectural decisions**. It is the single authoritative record: nothing required to
+understand, operate, audit, recover, or continue this project may exist only in agent
+memory, chat transcripts, scratchpads, or private notes. A defect or decision discovered
+during work must be recorded here before that work ends, or the work must state explicitly
+that it was not recorded because repository scope was not authorized.
+
+Secondary documents link here rather than restating an entry. Where an entry names a
+governing design memo, that memo holds the rationale and this register holds the status.
+
+---
+
+## Execution-Governance Audit (2026-07-25)
+
+A read-only execution-governance integrity audit was performed against run #8 (ticket #3,
+objective `create folders A-Z in the workspace`, agent Mike / `gemma3:latest`), which failed
+as `MODEL_RESPONSE_CONTRACT_VIOLATION` with zero mutations. The audit examined every
+mechanism that can admit or reject a run, restrict model visibility, limit budgets, truncate
+or reject model output, detect stalls, terminate a run, change behavior after recovery, or
+alter completion eligibility.
+
+Commit `a1143e6` ("Make execution semantics reconstructable") fixed the **evidence
+truthfulness and reconstructability** findings only. Everything below was audited,
+confirmed against source, and deliberately left unfixed. Severity is stated in terms of what
+the defect can cause, not how hard it is to fix.
+
+### Status summary
+
+| # | Defect | Severity | Status | Class |
+|---|--------|----------|--------|-------|
+| A1 | Workspace-snapshot failure truthfulness (E4) | **High** | Open | Correctness |
+| A2 | Live-state vs immutable-snapshot mutation counting (E5) | Medium | Open | Correctness |
+| A3 | Wall-clock and progress-counter recovery resets | **High** | Open | Bounds integrity |
+| A4 | Enforcement gates bypass the immutable policy snapshot | Medium | Open | Architecture |
+| A5 | Workload-profile re-resolution | Low | Open | Architecture |
+| A6 | Gate ordering vs prefix truncation | Medium | **Governance decision required** | Policy |
+| A7 | Objective-grammar anchoring | Medium | **Governance decision required** | Policy |
+| A8 | Dead `allow*` policy fields | Low | Open | Dead contract |
+| A9 | Latency-aware feasibility | Medium | Open | Feasibility |
+| A10 | Orphaned PostgreSQL-era test harnesses | **High** | Open | Verification gap |
+
+### Sequencing
+
+1. **A10 first.** Until the orphaned harnesses are repaired or replaced, there is no working
+   feasibility or postcondition coverage in the release checkpoint, so A1/A2/A9 cannot be
+   validated through their natural suites.
+2. **A1, then A2.** Both change what the model observes or what the feasibility gate counts.
+   A1 is the higher risk and should not be bundled with anything else.
+3. **A3** independently — it tightens an effective limit and will fail runs that previously
+   passed, so it needs its own observation window.
+4. **A6 and A7** are governance decisions, not defects to fix unilaterally. Do not implement
+   either without a recorded decision.
+5. **A4, A5, A8, A9** may follow in any order.
+
+---
+
+### A1. Workspace-snapshot failure truthfulness (E4)
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open — highest-severity finding from this audit |
+| **Severity** | High — converts an infrastructure failure into confident model action |
+| **Evidence** | `server.js` `captureRunWorkspaceRootSnapshot` error path |
+| **Decision required** | What shape a failed listing presents to the model, and whether the system prompt must instruct on it |
+
+**Description:**
+
+When the root workspace listing throws, the catch path returns a snapshot with
+`entries: []`, `truncated: false`, `entryCount: 0`, plus an `error` key. A listing *failure*
+is therefore indistinguishable from a legitimately *empty* workspace in every field the
+model is instructed to read. The system prompt never mentions `error` or `truncated`, so a
+model receiving this reasonably concludes the workspace is empty and may create the full
+target state from scratch, or treat pre-existing artifacts as absent.
+
+The success path is comparatively honest: `truncated` is computed as
+`allEntries.length > RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES` and is passed to the model in-band.
+The defect is the failure path plus the absence of any prompt guidance for either flag.
+
+**Constraint:** this alters what the model sees and therefore what it does. It needs its own
+tranche with behavioral coverage, not a bundled fix.
+
+---
+
+### A2. Live-state vs immutable-snapshot mutation counting (E5)
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open |
+| **Severity** | Medium — understates required mutations on reruns |
+| **Evidence** | `server.js` `countRequiredContractMutations` |
+| **Decision required** | Whether feasibility counts against run-start state or live state |
+
+**Description:**
+
+`countRequiredContractMutations(contract, initialWorkspaceSnapshot)` accepts the run-start
+snapshot as a parameter and **never reads it**. The body queries live filesystem state
+through the module-global `workspaceProvider.getPathInfo`, contradicting two of its own
+comments that claim it uses the initial snapshot. On a rerun, artifacts created by a prior
+attempt are counted as pre-existing, so the required-mutation count — and therefore the
+feasibility projection recorded in `run.feasibility_decision` — understates the real work.
+
+It also reads the module-global provider rather than the run's own provider, which is
+questionable for owned-scope runs.
+
+**Constraint:** changing this changes run admission. Separate tranche, with tests.
+
+---
+
+### A3. Wall-clock and progress-counter recovery resets
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open |
+| **Severity** | High — no mechanism bounds total run cost across recoveries |
+| **Evidence** | `server.js` `runAgentTicket` loop-entry initialization and resume block |
+| **Decision required** | Whether these limits are per-run or per-attempt, and which counters must be durable |
+
+**Description:**
+
+At execution-loop entry the runtime rehydrates some state from durable evidence and resets
+the rest. Restored: workspace-operation count, model-request count (recomputed from durable
+evidence), listed directory paths, current phase, and the action-contract violation streak.
+**Not restored:** the run-start timestamp used for the wall-clock check, the `listDirectory`
+and `readFile` counters, the stalled-response counter, and the inspection-no-progress counter.
+
+Consequences:
+
+- `maxRuntimeDurationMs` is enforced per loop entry, not per run. A run that recovers N times
+  receives N × the configured wall-clock budget. There is no persisted run-start timestamp.
+- `maxListDirectoryPerRun` and `maxReadFilePerRun` are named `PerRun` but are enforced per
+  loop entry.
+- The stall and inspection-no-progress termination counters reset on recovery, while the
+  action-contract streak was deliberately made restart-durable (see
+  `runtime/action-contract-streak.js`, which documents why). A model can evade the two
+  reset counters indefinitely across recovery cycles by exactly the mechanism the streak
+  design was built to prevent. `server.js` carries an acknowledging comment
+  ("We don't track stalled across restarts").
+
+**Constraint:** fixing the wall clock tightens an effective limit and will fail runs that
+previously passed. Stage behind observation.
+
+---
+
+### A4. Enforcement gates bypass the immutable policy snapshot
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open — partially addressed by `a1143e6` |
+| **Severity** | Medium — split-brain policy resolution |
+| **Evidence** | `runtime/execution-semantics.js`; per-response ceilings in `server.js` |
+| **Decision required** | Whether a single resolved policy envelope should be the only input to enforcement |
+
+**Description:**
+
+A real immutable envelope exists and is written before dispatch (`run.runtimeLimitsSnapshot`,
+`run.executionPolicySnapshot`, `run.routingSnapshot`, `replaySnapshot.runtimeEnvelope`).
+Roughly half the enforcement gates read it; the rest independently re-read process constants,
+environment flags, and live regex evaluation of ticket text at the moment they fire.
+
+`a1143e6` made the semantic controls **recordable and reconstructable** — every run now
+persists `runtimeLimitsSnapshot.semantics` — but deliberately did **not** change which values
+the gates consume. The record is descriptive only; no gate branches on it.
+
+The candidate direction is a single `resolvedExecutionPolicy` produced before dispatch, with
+enforcement consuming only that. Two constraints if it is pursued: the process constants must
+become *unreachable* from gate code (otherwise this adds a third source of truth rather than
+removing the second), and regex-derived values must be resolved once at dispatch. Adding
+per-key provenance (`value` + `source: default|env|ui|profile|ticket`) is cheap and directly
+answers "why was this limit this value".
+
+---
+
+### A5. Workload-profile re-resolution
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open |
+| **Severity** | Low — requires an objective edit mid-flight to manifest |
+| **Evidence** | `server.js` `detectWorkloadProfile` call sites: run creation and runtime-envelope construction |
+| **Decision required** | Whether the profile is resolved once at dispatch |
+
+**Description:**
+
+`detectWorkloadProfile` runs twice against different inputs at different times: once at run
+creation, where its result is snapshotted into the runtime-limits snapshot, and again on
+every runtime-envelope build against the **live** `ticket.objective`. Ticket objectives are
+mutable. Editing an objective between run creation and execution makes the model's envelope
+disagree with the limits actually enforced, and nothing detects the divergence.
+
+Note also that the profile is *inferred from objective text by regex*, not selected by an
+operator, and that profile matching can only tighten step/request/operation limits
+(`Math.min`) while it sets the `listDirectory`/`readFile` limits outright.
+
+---
+
+### A6. Gate ordering vs prefix truncation
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Governance decision required** — do not implement unilaterally |
+| **Severity** | Medium |
+| **Evidence** | Run #8; total-action and mutating-action gates in `server.js` |
+| **Governing memo** | `decision-record-truthfulness-over-boundedness.md` (status: *Governance decision pending*) |
+| **Decision required** | Whether an over-limit response is salvaged or rejected whole |
+
+**Description:**
+
+Two per-response gates run in order. The total-action gate (>`MAX_AGENT_ACTIONS_PER_RESPONSE`)
+rejects the whole response and returns. The mutating-action gate
+(>`MAX_MUTATING_ACTIONS_PER_RESPONSE`) has a prefix-truncation path behind
+`ENABLE_PREFIX_TRUNCATION` that executes the first N mutations and continues.
+
+Because the total gate returns first, a response exceeding the total ceiling can never reach
+truncation **regardless of the flag**. Prefix truncation is therefore live only in the narrow
+band of ≤8 total but >2 mutating actions — never for the failure shape it was built for.
+Run #8 (26 actions, twice) is exactly that shape and terminated with zero mutations.
+
+**Do not "fix" this as a bug.** Making the total gate salvage rather than reject is the
+truthfulness-vs-boundedness tradeoff whose decision record is still pending. Note also that
+for run #8 the current behavior produced the *better* outcome: truncation would have made
+partial mutations and then died on the wall clock, replacing a clean, correctly classified
+contract failure with a partial-mutation timeout.
+
+**Prerequisite:** `ENABLE_PREFIX_TRUNCATION` is now recorded per run (`a1143e6`), so any
+change here is observable in evidence. It was not before.
+
+---
+
+### A7. Objective-grammar anchoring
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Governance decision required** — do not implement unilaterally |
+| **Severity** | Medium |
+| **Evidence** | `objective-contract.js` create-range recognizer |
+| **Governing memo** | `decision-memo-objective-interpretation-direction.md` — read before touching objective parsing |
+| **Decision required** | Whether recognizers tolerate trailing locative phrases |
+
+**Description:**
+
+The create-range recognizer is anchored with `$`, so a trailing prepositional phrase defeats
+recognition. Verified empirically:
+
+```
+"create folders A-Z in the workspace" -> recognized: false, intent: model_driven, 0 mutations
+"Create folders A-Z"                  -> recognized: true,  26 mutations
+"create folders A through Z"          -> recognized: true,  26 mutations
+```
+
+For run #8 this silently disabled the feasibility gate entirely: with no enumerable contract,
+`countRequiredContractMutations` returned null and the gate skipped. As of `a1143e6` that skip
+is no longer silent — it emits `run:feasibility_decision` with
+`outcome: skipped_unrecognized_objective` — but the recognition behavior itself is unchanged.
+
+The governing memo freezes the deterministic grammar at its current scope, with existing
+recognizers to be *audited* rather than grandfathered. This entry is that audit finding.
+
+---
+
+### A8. Dead `allow*` policy fields
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open |
+| **Severity** | Low — the UI is already honest about it |
+| **Evidence** | `server.js` `copyExecutionPolicy`; `views/run-detail.ejs`, `views/ticket-detail.ejs` |
+| **Decision required** | Implement enforcement or formally retire the fields |
+
+**Description:**
+
+`executionPolicy.allowWorkspaceWrites`, `allowParallelRuns`, and `allowChildTickets` are
+normalized at policy-copy time and **never read again anywhere in the repository**. They are
+snapshotted into `executionPolicySnapshot` and displayed, but nothing enforces them.
+
+The UI does not lie about this — run detail renders them as "recorded intent, not enforced"
+and ticket detail as "recorded intent" — which is why this is Low rather than High. The
+defect is that a persisted, operator-settable policy field has no effect.
+
+Related and **already honest**: `executionPolicy.maxRuntimeMs`, `maxModelRequests`, and
+`maxWorkspaceOperations` are advisory telemetry only, computed into an explicitly
+advisory-labelled budget block that "never blocks, stops, fails, or reruns anything".
+`maxAttempts` *is* enforced, but only at the manual rerun-from-start gate, and that narrow
+scope is documented at the call site. Do not mistake these for enforced per-ticket limits.
+
+---
+
+### A9. Latency-aware feasibility
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open |
+| **Severity** | Medium |
+| **Evidence** | `server.js` `assertRuntimeBudgetFeasible`; run #8 timings |
+| **Decision required** | Which budget dimensions feasibility must consider before dispatch |
+
+**Description:**
+
+The feasibility gate checks exactly one relation: projected steps against
+`maxExecutionSteps`. It does not consider the model-request budget (each step costs roughly
+one request), the wall clock, observed provider latency, the workspace-operation budget, or
+whether the workspace snapshot was truncated beyond the model's visibility.
+
+Run #8 illustrates the gap: 24 required mutations at a cap of 2 project to 12 steps against a
+limit of 32 — comfortably "feasible" — while the observed 113–169 s per model call put the
+real cost at roughly 1400–2000 s against a 400 s ceiling. Provider and model are already known
+at dispatch (`run.routingSnapshot`), so latency is available and unused.
+
+As of `a1143e6` the gate's decision and its resolved inputs are durable on every path
+(`run:feasibility_decision` / `run.feasibility_decision`), so any added dimension is
+measurable against existing evidence. **What the gate enforces was deliberately not widened.**
+
+---
+
+### A10. Orphaned PostgreSQL-era test harnesses
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open — confirmed pre-existing, not a regression |
+| **Severity** | High — the release checkpoint has no working feasibility or postcondition coverage |
+| **Evidence** | Baselined at commit `3a73a13` in a detached worktree; failure strings identical to current HEAD |
+| **Decision required** | Repair, port, or retire each harness |
+
+**Description:**
+
+These suites fail at HEAD. They are legacy JSON-era harnesses orphaned by the PostgreSQL
+cutover: each spawns a server without setting `DATABASE_URL` and dies with
+`Error: DATABASE_URL is required for the PostgreSQL runtime`.
+
+- `scripts/runtime-feasibility-test.js`
+- `scripts/ticket-feasibility-gate-test.js`
+- `scripts/postcondition-completion-test.js`
+- `scripts/direct-folder-postcondition-completeness-test.js`
+- `scripts/resume-obvious-postcondition-test.js`
+- `scripts/recovery-regression-test.js`
+- `scripts/startup-data-integrity-test.js`
+- `scripts/run-diagnostics-bundle-test.js`
+- `scripts/run-detail-evidence-clarity-test.js`
+- `scripts/bounded-transition-test.js`
+- `scripts/replay-snapshot-storage-test.js`
+- `scripts/runtime-limits-config-test.js`
+- `scripts/runtime-limits-ui-test.js`
+
+A fourteenth, `scripts/execution-semantics-test.js`, fails for a different reason: it asserts
+helpers such as `computeMutationFingerprint` that no longer exist (1 passed / 5 failed at
+HEAD). It is unrelated to `scripts/execution-semantics-snapshot-test.js`, which is current.
+
+None are registered in `CHECKPOINT_TEST_SCRIPTS` or `POSTGRES_INTEGRATION_SCRIPTS`, so
+`npm run checkpoint:release` stays green while they rot.
+
+This gap is why `a1143e6` wrote feasibility coverage as executed code inside
+`scripts/evidence-truthfulness-contract-test.js` (all six outcome paths against stubs) and
+`scripts/execution-semantics-persistence-test.js` (the `passed` path through real dispatch),
+rather than extending `runtime-feasibility-test.js`.
+
+**Method note for whoever picks this up:** before treating any suite failure as a regression,
+baseline it at the relevant commit in a detached worktree and compare failure strings. Most
+failures in this list are pre-existing.
+
+---
+
 ## Workspace Operation Error Handling
 
 | Field | Value |

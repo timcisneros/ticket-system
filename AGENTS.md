@@ -21,6 +21,12 @@ evaluation, and consequence contracts.
 
 ## Core principles
 
+- The repository is the sole source of truth. Nothing required to understand, operate, audit,
+  recover, or continue this project may exist only in agent memory, chat context, scratchpads, or
+  private notes. Open integrity defects, deferred work, and pending architectural decisions belong
+  in `docs/ARCHITECTURAL_DECISIONS_PENDING.md` — the canonical register. A defect or decision
+  discovered during work must be recorded there before the work ends, or the work must state
+  explicitly that it was not recorded because repository scope was not authorized.
 - Inspect evidence before changing code.
 - Prefer deterministic checks over model judgment.
 - Preserve raw runtime evidence in events, replay, logs, operation receipts, evaluation, and
