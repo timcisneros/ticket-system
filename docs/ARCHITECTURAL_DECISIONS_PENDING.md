@@ -41,6 +41,7 @@ the defect can cause, not how hard it is to fix.
 | A9 | Latency-aware feasibility | Medium | Open | Feasibility |
 | A10 | Orphaned PostgreSQL-era test harnesses | **High** | Open | Verification gap |
 | A11 | `truncated:true` disclosed to the model but never explained | Low | Open — split from A1 | Prompt policy |
+| A12 | Bounded workspace-snapshot recovery policy | Medium | **Open — decision required** — residual of A1 | Policy |
 
 ### Sequencing
 
@@ -50,8 +51,9 @@ the defect can cause, not how hard it is to fix.
 2. **A1 (implemented), then A2.** A1 changed when a run stops; A2 changes what the feasibility
    gate counts. A1 shipped with purpose-built coverage because A10 leaves no working
    feasibility/postcondition suite to host it.
-3. **A3** independently — it tightens an effective limit and will fail runs that previously
-   passed, so it needs its own observation window.
+3. **A3 and A12 together.** A3 tightens an effective limit and will fail runs that previously
+   passed, so it needs its own observation window; A12's retry bound depends on whether A3's
+   per-attempt wall-clock reset is fixed. Deciding either alone changes the other's behavior.
 4. **A6 and A7** are governance decisions, not defects to fix unilaterally. Do not implement
    either without a recorded decision.
 5. **A4, A5, A8, A9** may follow in any order.
@@ -153,10 +155,10 @@ recoverably, and whether a successful capture records recovery. Existence-based 
 re-emitted recovery on every later entry and could not distinguish a first failure from a
 failure during recovery.
 
-**Known and accepted:** while capture keeps failing the run retries indefinitely at lease
-cadence, performing no model request and no mutation. No attempt cap was added; that would be
-a separate decision. The per-attempt wall-clock reset noted in **A3** applies here too and is
-out of A1's scope.
+**Residual, unresolved:** A1 decided *that* a failed capture stops recoverably; it did not
+decide how long that may continue. The resulting indefinite lease-cadence retry is **not an
+approved behavior** — it is the current behavior pending a policy decision, tracked separately
+as **A12**. Do not read A1's implemented status as approval of unbounded retry.
 
 **Classification — distinct codes, shared fail-closed plumbing:**
 
@@ -281,6 +283,10 @@ Consequences:
 
 **Constraint:** fixing the wall clock tightens an effective limit and will fail runs that
 previously passed. Stage behind observation.
+
+**Interacts with A12.** Because each recovery re-entry restarts the wall clock, no runtime
+limit currently bounds A12's indefinite snapshot-recovery cycling. Fixing A3 alone would
+silently impose a bound there; the two must be decided consistently.
 
 ---
 
@@ -498,6 +504,63 @@ rather than extending `runtime-feasibility-test.js`.
 **Method note for whoever picks this up:** before treating any suite failure as a regression,
 baseline it at the relevant commit in a detached worktree and compare failure strings. Most
 failures in this list are pre-existing.
+
+---
+
+### A12. Bounded workspace-snapshot recovery policy
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — decision required.** Residual of A1; not solved and not approved |
+| **Severity** | Medium |
+| **Evidence** | A1 implementation (`3f6d4ac`): recoverable-stop branch in `runAgentTicket`, state-aware run-start guard, `runtime/workspace-snapshot-availability.js` |
+| **Decision required** | Backoff, attempt cap, operator-attention state, terminal semantics, and manual recovery |
+
+**Description:**
+
+A1 decided that a workspace-snapshot capture failure stops the run recoverably rather than
+terminalizing. It did **not** decide how long a run may remain in that state. The behavior
+that shipped is therefore a default, not an approved policy.
+
+**Current behavior:**
+
+- One capture attempt per lease-expiry recovery cycle, repeated **indefinitely** for as long
+  as the capture keeps failing.
+- Cadence is bounded only by the run lease duration (`RUN_LEASE_DURATION_MS`, default 180000).
+- While unavailable the run issues **no model request** and performs **no mutation**; committed
+  mutations and their evidence are preserved untouched.
+- Each cycle appends a `workspace:snapshot_unavailable` transition to the replay snapshot and a
+  `workspace.snapshot_unavailable` event to the journal.
+
+**Why this needs a decision:**
+
+- **Unbounded scheduler activity.** A run whose workspace never becomes readable is re-claimed
+  and re-entered forever. The work per cycle is small, but the cycles do not stop on their own.
+- **Unbounded evidence growth.** Every cycle adds durable replay and journal events, so a
+  permanently broken workspace grows a run's evidence without limit.
+- **No operator signal.** The run stays `running` and is not surfaced as needing attention.
+  Nothing distinguishes "recovering normally" from "stuck since yesterday".
+- **Interaction with A3.** The per-attempt wall-clock reset means `maxRuntimeDurationMs` does
+  not bound this either: each recovery re-entry starts a fresh clock, so no existing runtime
+  limit terminates the cycle. A3 and A12 must be decided consistently — fixing A3 alone would
+  silently impose a bound here, and deciding A12 alone leaves that bound dependent on A3.
+
+**Decisions required:**
+
+1. **Backoff** — should retry cadence remain flat at one attempt per lease duration, or grow?
+2. **Attempt cap** — is there a maximum number of failed recovery captures, and is it counted
+   durably (the counters in A3 reset per attempt, so a naive counter would not survive)?
+3. **Operator-attention state** — should a run stuck unavailable become visibly blocked or
+   triage-required rather than silently `running`?
+4. **Terminal semantics** — if a cap exists, what terminal classification applies, and how does
+   it stay distinguishable from the run-start environment/integrity failure?
+5. **Manual recovery** — should an operator be able to force a capture retry, or to terminalize
+   a stuck run explicitly, rather than waiting for an automatic cycle?
+
+**Explicitly not solved in the A1 tranche.** A1 is marked implemented because the fail-closed
+behavior, classification, evidence, and recovery lifecycle are complete and proven. This entry
+carries the remaining policy question so that "implemented" is not mistaken for "unbounded
+retry was approved".
 
 ---
 
