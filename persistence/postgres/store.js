@@ -666,8 +666,12 @@ function targetOperationReceiptProjection(envelope, intentRecord) {
     operation: envelope.operation,
     operationKey: envelope.idempotencyKey,
     args: intent.args || {},
-    preState: document.before || intent.preState || null,
-    postState: document.after || null,
+    // Pre-state survives on the prepared intent, not on the receipt document.
+    // `document.preState` is accepted first so older/alternate receipt shapes
+    // normalize identically; current receipts carry only `after`, so the intent
+    // is what actually supplies this. See A14.
+    preState: document.preState || document.before || intent.preState || null,
+    postState: document.postState || document.after || null,
     result: envelope.outcome === 'succeeded' ? document.providerResponse || null : null,
     error: error ? error.message || 'Target operation failed' : null,
     errorCode: error ? error.code || null : null,
@@ -706,6 +710,23 @@ function actionOperationReceiptProjection(envelope) {
     targetPath: envelope.targetPath || document.targetPath || null,
     targetResourceId: envelope.targetResourceId || document.targetResourceId || null
   };
+}
+
+// The single canonical way to turn an operation-receipt envelope (plus its
+// prepared intent, when one exists) into the projected operation record every
+// consumer sees.
+//
+// Both access paths must use this. They previously diverged: `listRunOperations`
+// projected, while `getOperation` returned the raw receipt document, so
+// `preState` — which lives on the intent, not the receipt — was silently absent
+// from single-operation reads. That made the live redundant-`writeFile`
+// postcondition-completion path return null for every run. See
+// docs/ARCHITECTURAL_DECISIONS_PENDING.md entry A14.
+function projectOperationReceipt(envelope, intentRecord = null) {
+  if (!envelope) return null;
+  return intentRecord
+    ? targetOperationReceiptProjection(envelope, intentRecord)
+    : actionOperationReceiptProjection(envelope);
 }
 
 class PostgresRuntimeStore {
@@ -6358,12 +6379,8 @@ class PostgresRuntimeStore {
       const record = targetOperationIntentFromRow(row);
       return [record.operationKey, record];
     }));
-    return receipts.map(receipt => {
-      const intent = intentsByKey.get(receipt.idempotencyKey) || null;
-      return intent
-        ? targetOperationReceiptProjection(receipt, intent)
-        : actionOperationReceiptProjection(receipt);
-    });
+    return receipts.map(receipt =>
+      projectOperationReceipt(receipt, intentsByKey.get(receipt.idempotencyKey) || null));
   }
 
   async listTicketOperations(ticketId, { afterId = 0, limit = 100 } = {}) {
@@ -6470,7 +6487,12 @@ installModelRoutingPolicyMethods(PostgresRuntimeStore, { OptimisticConcurrencyEr
 installConnectorAuthorityMethods(PostgresRuntimeStore, { OptimisticConcurrencyError });
 installWatcherAuthorityMethods(PostgresRuntimeStore, { OptimisticConcurrencyError });
 installRuntimeLimitsMethods(PostgresRuntimeStore);
-installApplicationStateMethods(PostgresRuntimeStore, { OptimisticConcurrencyError });
+installApplicationStateMethods(PostgresRuntimeStore, {
+  OptimisticConcurrencyError,
+  operationReceiptFromRow,
+  targetOperationIntentFromRow,
+  projectOperationReceipt
+});
 
 module.exports = {
   IdempotencyConflictError,

@@ -86,7 +86,15 @@ function threadFromRow(row, messages = []) {
   };
 }
 
-function methods({ OptimisticConcurrencyError }) {
+// operationReceiptFromRow, targetOperationIntentFromRow, and
+// projectOperationReceipt are injected from store.js so this module shares the
+// store's single canonical receipt projection rather than growing a second one.
+function methods({
+  OptimisticConcurrencyError,
+  operationReceiptFromRow,
+  targetOperationIntentFromRow,
+  projectOperationReceipt
+}) {
   return {
     async listBrowserTargets({ afterId = '', statuses = null, limit = 100 } = {}) {
       const size = positiveSafeInteger(limit, 'limit');
@@ -221,7 +229,37 @@ function methods({ OptimisticConcurrencyError }) {
       return this.getLocalConnectorObject(id);
     },
 
+    // Projected single-operation read. Uses the same canonical projection as
+    // listRunOperations, so a receipt read one at a time and the same receipt read
+    // in a list can never disagree. In particular `preState` lives on the prepared
+    // intent rather than the receipt document, so the intent must be joined here
+    // too — omitting it is what made the redundant-writeFile postcondition path
+    // inert. See docs/ARCHITECTURAL_DECISIONS_PENDING.md entry A14.
     async getOperation(operationId) {
+      const id = positiveSafeInteger(operationId, 'operationId');
+      const result = await this.pool.query(
+        `SELECT * FROM ${this.table('operation_receipts')} WHERE id = $1`,
+        [id]
+      );
+      if (!result.rowCount) return null;
+      const envelope = operationReceiptFromRow(result.rows[0]);
+
+      const intentResult = await this.pool.query(
+        `SELECT * FROM ${this.table('target_operation_intents')}
+         WHERE run_id = $1 AND operation_key = $2`,
+        [envelope.runId, envelope.idempotencyKey]
+      );
+      const intent = intentResult.rowCount
+        ? targetOperationIntentFromRow(intentResult.rows[0])
+        : null;
+
+      return projectOperationReceipt(envelope, intent);
+    },
+
+    // Unprojected escape hatch. No current caller needs it; it exists so that a
+    // future need for the raw stored document is explicit at the call site rather
+    // than served accidentally by the normal accessor.
+    async getOperationRawReceipt(operationId) {
       const id = positiveSafeInteger(operationId, 'operationId');
       const result = await this.pool.query(
         `SELECT * FROM ${this.table('operation_receipts')} WHERE id = $1`,

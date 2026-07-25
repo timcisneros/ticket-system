@@ -43,7 +43,8 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'model-contract-violation-test.js',
   'model-contract-violation-recovery-test.js',
   'execution-semantics-persistence-test.js',
-  'workspace-snapshot-recovery-test.js'
+  'workspace-snapshot-recovery-test.js',
+  'operation-receipt-projection-test.js'
 ]);
 
 function runCheckpoint() {

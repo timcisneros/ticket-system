@@ -42,6 +42,7 @@ the defect can cause, not how hard it is to fix.
 | A10 | Orphaned PostgreSQL-era test harnesses | **High** | Open | Verification gap |
 | A11 | `truncated:true` disclosed to the model but never explained | Low | Open — split from A1 | Prompt policy |
 | A12 | Bounded workspace-snapshot recovery policy | Medium | **Open — decision required** — residual of A1 | Policy |
+| A14 | Redundant-mutation postcondition shortcut does not fire | **High** | **Implemented** — see entry | Correctness |
 
 ### Sequencing
 
@@ -504,6 +505,190 @@ rather than extending `runtime-feasibility-test.js`.
 **Method note for whoever picks this up:** before treating any suite failure as a regression,
 baseline it at the relevant commit in a detached worktree and compare failure strings. Most
 failures in this list are pre-existing.
+
+---
+
+### A14. Redundant-mutation postcondition shortcut does not fire
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Implemented 2026-07-25.** Surfaced by A10, fixed as its own isolated production tranche |
+| **Severity** | High — a documented completion path appears inert |
+| **Evidence** | Live probe against `master` `c062af6` + uncommitted A10 tree; operation receipts and replay events below |
+| **Decision required** | Is the redundancy shortcut still intended? If so, why does it not fire; if not, the postcondition suite's scenarios 1-3 and 8 must be retired |
+
+**Description:**
+
+`checkPostconditionCompletion` (`server.js`) completes a run when every proposed mutation in a
+response turns out to be redundant against current state — `already_exists_noop` for
+`createFolder`, and for `writeFile` a `preState` that already exists with content identical to
+what the action would write. Four scenarios in `postcondition-completion-test.js` depend on it
+(inventory rows 1, 2, 3, 8).
+
+**It does not fire, even though the persisted evidence satisfies every condition it checks.**
+
+A minimal probe ran a two-turn agent that proposed the identical `createFolder pc-folder` +
+`writeFile pc-folder/file.txt` batch twice. The second turn's receipts are exactly what the
+check requires:
+
+```
+{"op":"createFolder","id":3,"preState":{"type":"directory","existed":true},"status":"already_exists_noop"}
+{"op":"writeFile","id":4,"preState":{"type":"file","content":"hello","existed":true,"contentHash":"2cf24d…"}}
+```
+
+`already_exists_noop` is present; `preState.existed` is `true`; `preState.content` is `"hello"`,
+identical to the action's content. Yet the run's replay events are only:
+
+```
+run:feasibility_decision, model:action_contract_passed, model:action_contract_passed
+```
+
+No `run:postcondition_completed`. The run instead completed through the model's own
+`complete:true`.
+
+**Ruled out as port artifacts.** The provider stub, workspace, and objective were reproduced in
+an independent probe that does not use the migrated suite. `readFile` returns a string, so the
+`preState.content !== action.args.content` comparison is comparing like with like. The
+mutating-action cap is not implicated (two mutating actions, cap 2).
+
+**Root cause — proven read-only, 2026-07-25.**
+
+`checkPostconditionCompletion` resolves history with
+`postgresRuntimeStore.getOperation(id)` and then requires `historyRecord.preState`:
+
+```js
+// server.js, checkPostconditionCompletion
+const histories = await Promise.all(historyIds.map(id => postgresRuntimeStore.getOperation(id)));
+...
+const historyRecord = histories.find(h => h.id === ar.result.historyId);
+if (!historyRecord || !historyRecord.preState) return null;   // ← BAILS HERE
+if (!historyRecord.preState.existed) return null;
+if (historyRecord.preState.content !== action.args.content) return null;
+```
+
+`getOperation` (`persistence/postgres/application-state-methods.js`, `async getOperation`)
+returns the **raw receipt document** spread over envelope columns:
+
+```js
+return { ...(row.receipt || {}), id: ..., runId: ..., ticketId: ..., step: ..., operation: ... };
+```
+
+It does **not** apply the receipt projection that `listRunOperations` uses, and that projection
+is where pre-state is resolved:
+
+```js
+// persistence/postgres/store.js — projection only
+preState: document.preState || document.before || intent.preState || null,
+```
+
+Pre-state lives on the **intent**, not the receipt document. Probe output, same four receipts,
+compared through both paths:
+
+```
+id=1 createFolder projection.preState={"existed":false}                    getOperation.preState=undefined  rawStateKeys=["after"]
+id=2 writeFile    projection.preState={"existed":false}                    getOperation.preState=undefined  rawStateKeys=["after"]
+id=3 createFolder projection.preState={"type":"directory","existed":true}  getOperation.preState=undefined  rawStateKeys=["after"]
+id=4 writeFile    projection.preState={"type":"file","content":"hello",…}   getOperation.preState=undefined  rawStateKeys=["after"]
+```
+
+The receipt document carries only `after`. `historyRecord.preState` is therefore `undefined`
+for **every** receipt, and the guard returns `null` before any content comparison runs.
+
+**Failing comparison:** the `!historyRecord.preState` guard in `checkPostconditionCompletion`
+(`server.js`), caused by `getOperation` (`persistence/postgres/application-state-methods.js`)
+bypassing the projection at `persistence/postgres/store.js`. `historyId` is correct, present,
+and resolves to the right receipt — the identifier is not the problem.
+
+**Scope.** Only operations whose check needs the history lookup are affected — i.e. `writeFile`.
+`createFolder` and `deletePath` redundancy is decided from `ar.result.status`
+(`already_exists_noop` / `already_missing_noop`) and still fires correctly. That is why
+`direct-folder-postcondition-completeness-test.js` passes while postcondition scenarios 1, 2, 3
+and 8 do not.
+
+**The shortcut is still an intended live contract.** Evidence, not inference:
+
+- It is wired as the live fallback: `const postcondition = compiledPostcondition || … await checkPostconditionCompletion(…)`
+  (`server.js`). The compiled-contract path is a *preference*, not a replacement — with the
+  objective compiler off by default, the redundancy shortcut is the only postcondition path.
+- Its event is consumed across the runtime: operational-outcome classification
+  (`completed_with_verified_postcondition`), failure summary, run summary, log labelling, and
+  the run-detail surface.
+- It is a **documented telemetry metric** — `docs/OPERATIONAL_TELEMETRY.md`: *"Postcondition
+  checks | events.jsonl | Count of `run.postcondition_completed`"*.
+- It is referenced by the operator CLI (`scripts/oquery.js`) and seven test scripts.
+- **No supersession is recorded anywhere.** A repository-wide search for supersession language
+  near "postcondition" returns nothing. The newer contract-based mechanism was added alongside
+  it, not in place of it.
+
+Per the A14 discipline, supersession was NOT inferred from the mere existence of the
+contract-based path.
+
+### Correction (implemented)
+
+**Shared projection at the repository boundary.** `projectOperationReceipt(envelope, intent)`
+in `persistence/postgres/store.js` is now the single canonical way to turn a receipt envelope
+into a projected operation record, selecting `targetOperationReceiptProjection` when a prepared
+intent exists and `actionOperationReceiptProjection` otherwise. Both `listRunOperations` and
+`getOperation` consume it, so the two access paths cannot drift again.
+
+`getOperation` now joins `target_operation_intents` on `(run_id, operation_key)` and projects,
+instead of spreading the raw receipt document. The projection's state resolution was widened to
+the canonical form for both directions:
+
+```js
+preState:  document.preState || document.before || intent.preState || null,
+postState: document.postState || document.after || null,
+```
+
+`document.preState` is accepted first so alternate/older receipt shapes normalize identically;
+current receipts carry pre-state only on the intent.
+
+**Caller audit.** `getOperation` had exactly two callers — `checkPostconditionCompletion` and
+the rename verification path in `server.js`. Both want projected records; neither needs the raw
+document. An explicitly named `getOperationRawReceipt` is retained as an escape hatch with no
+current callers, so any future need for the stored document is explicit at the call site rather
+than served accidentally by the normal accessor.
+
+**Affected behavior.** Redundant-`writeFile` batches once again complete through the verified
+postcondition path and emit `run:postcondition_completed`. `createFolder` and `deletePath`
+redundancy is unchanged — those never used the history lookup.
+
+**Focused regression coverage.** `scripts/operation-receipt-projection-test.js` (22 assertions,
+registered in the release checkpoint) proves: pre-state persists on the intent and
+`getOperation` resolves it; both access paths agree on `preState`, `postState`, receipt id,
+operation identity, prepared-intent linkage, outcome, and recovery fields; a redundant write
+emits the event; completion comes from the postcondition path and not from `complete:true`
+(no model response in the fixture ever sets it); the event is durable in replay and run-log
+evidence; the operational outcome is `completed_with_verified_postcondition`; a non-redundant
+write never triggers the shortcut; repeated `createFolder` still reports
+`already_exists_noop`; and a receipt storing state as `before`/`after` still normalizes.
+
+**Natural validation.** The A10-migrated `postcondition-completion-test.js` now clears the
+previously blocked scenarios with **unchanged expectations** — `postcondition-create-folder-file`,
+`postcondition-repeated-write`, and `postcondition-repeated-write timeout-avoided` all record
+`run:postcondition_completed` within their step budgets. That suite remains uncommitted A10 work
+and still stops later on an unrelated A10 port gap (an unwired `waitForStoredRun` helper in a
+workflow-draft scenario); that gap is A10's to close, not A14's.
+
+**Mutation proof.** Restoring the raw `getOperation` behavior fails the focused test at
+*"getOperation resolves preState for a prepared operation"* and fails the migrated postcondition
+suite at *"run:postcondition_completed was recorded"*. Both detect the regression; the
+correction was then restored.
+
+**Adjacent discrepancy, not fixed here.** `docs/OPERATIONAL_TELEMETRY.md` lists *"Postcondition
+checks | events.jsonl | Count of `run.postcondition_completed`"*, but this event is written by
+`recordRunEvent` to the replay snapshot and run log only — there is no `appendEvent` for it
+anywhere in `server.js`, so it has never reached the journal. Recorded here as documentation
+drift for a separate decision; A14 changed no event routing.
+
+**Why this was not repaired in A10.** Making it fire is a runtime-semantic change, which A10
+explicitly forbids. A10's job was to restore the harness that reveals this — which it did. The
+migrated `postcondition-completion-test.js` is fully ported (all 20 scenarios) and is blocked at
+scenario 1 by this defect, not by a porting error.
+
+**Decision required.** Either the shortcut is intended and is broken (fix it, then the suite
+passes as ported), or the shortcut was deliberately superseded by contract-based completion and
+inventory rows 1, 2, 3, and 8 must be retired with that reason recorded.
 
 ---
 
