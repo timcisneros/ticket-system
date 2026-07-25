@@ -30,7 +30,7 @@ the defect can cause, not how hard it is to fix.
 
 | # | Defect | Severity | Status | Class |
 |---|--------|----------|--------|-------|
-| A1 | Workspace-snapshot failure truthfulness (E4) | **High** | **Decided 2026-07-25** — shape recorded, implementation pending | Correctness |
+| A1 | Workspace-snapshot failure truthfulness (E4) | **High** | **Implemented** `ee44369` — entry retained for the record | Correctness |
 | A2 | Live-state vs immutable-snapshot mutation counting (E5) | Medium | Open | Correctness |
 | A3 | Wall-clock and progress-counter recovery resets | **High** | Open | Bounds integrity |
 | A4 | Enforcement gates bypass the immutable policy snapshot | Medium | Open | Architecture |
@@ -62,7 +62,7 @@ the defect can cause, not how hard it is to fix.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Decided 2026-07-25** — shape below is authoritative; implementation pending |
+| **Status** | **Implemented 2026-07-25** in `ee44369`; entry retained as the decision record |
 | **Severity** | High — converts an infrastructure failure into confident model action |
 | **Evidence** | `server.js` `captureRunWorkspaceRootSnapshot`; capture sites at run start and per step |
 | **Decision** | Fail closed at both capture sites; representation must never encode failure as an empty listing |
@@ -145,6 +145,19 @@ This reuses existing plumbing; no new recovery machinery.
 **Explicitly out of scope for A1:** no model-prompt changes. Under this decision the model
 never receives `available: false` — the run stops first. Guidance for `truncated: true`
 affects healthy runs and is split out as **A11**.
+
+**Implementation (`ee44369`):** `classifyWorkspaceSnapshotFailure`,
+`isWorkspaceSnapshotUnavailable`, `createWorkspaceSnapshotFailureError`, and
+`recordWorkspaceSnapshotFailure` in `server.js`; guards at both capture sites; recoverable-stop
+branch in the `runAgentTicket` catch; recovery acknowledgement
+(`workspace:snapshot_recovered` / `workspace.snapshot_recovered`) emitted after a successful
+re-capture. Coverage: `scripts/workspace-snapshot-availability-test.js` (70 checks, all nine
+required scenarios), registered in the release checkpoint. Purpose-built rather than routed
+through the orphaned suites — see A10.
+
+`isWorkspaceSnapshotUnavailable` treats only an explicit `available: false` as failure, so
+snapshots persisted before this change are read as available rather than retroactively
+appearing unreadable.
 
 ---
 
