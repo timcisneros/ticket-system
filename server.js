@@ -21,6 +21,11 @@ const {
   reconstructActionContractViolationStreak
 } = require('./runtime/action-contract-streak');
 const {
+  SNAPSHOT_RECOVERED_EVENT,
+  hasUnresolvedSnapshotFailure,
+  unresolvedSnapshotFailure
+} = require('./runtime/workspace-snapshot-availability');
+const {
   buildExecutionSemanticsSnapshot,
   normalizeExecutionSemanticsSnapshot,
   resolveRunActionCaps,
@@ -18289,47 +18294,58 @@ async function runAgentTicket(runId) {
     // first model request and before any mutation is possible. Evidence is
     // recorded above (target-snapshot) and below (classification) first, so a
     // terminated run explains itself. See A1.
+    // Availability state is read from ordered durable transitions, not from
+    // "has a failure ever occurred". It decides two things below: whether a
+    // capture failure terminalizes or stops recoverably, and whether a successful
+    // capture closes an unresolved failure. See A1 and
+    // runtime/workspace-snapshot-availability.js.
+    const priorAvailabilityReplay = isBrowserRun(run)
+      ? null
+      : await getRunReplayRepository().readRunReplay(run.id);
+    const priorAvailabilitySnapshot = priorAvailabilityReplay ? priorAvailabilityReplay.snapshot : null;
+    const wasStoppedForSnapshotFailure = !isBrowserRun(run)
+      && hasUnresolvedSnapshotFailure(priorAvailabilitySnapshot);
+
     if (!isBrowserRun(run) && isWorkspaceSnapshotUnavailable(initialWorkspaceSnapshot)) {
+      // A first failure on a healthy run terminalizes before the first model
+      // request. A failure while a prior failure is still unresolved must NOT
+      // terminalize — the run is mid-recovery, and terminalizing on the first
+      // failed recovery capture would turn a recoverable stop into a single
+      // automatic retry. It stops recoverably again and waits for a later capture.
       await recordWorkspaceSnapshotFailure(run, initialWorkspaceSnapshot, {
         phase: 'run_start',
-        disposition: 'terminating before the first model request'
+        disposition: wasStoppedForSnapshotFailure
+          ? 'remaining recoverably stopped; recovery capture still failing'
+          : 'terminating before the first model request'
       });
       throw createWorkspaceSnapshotFailureError(initialWorkspaceSnapshot, {
         phase: 'run_start',
-        recoverableStop: false
+        recoverableStop: wasStoppedForSnapshotFailure
       });
     }
 
-    // Recovery closes the loop: if this run previously stopped because a capture
-    // failed, the fresh capture above is what re-established workspace truth, and
-    // that transition is recorded rather than left implicit. Execution only
-    // reaches here when the capture succeeded, so this event means exactly
-    // "current workspace state is authoritative again". See A1.
-    if (!isBrowserRun(run)) {
-      const priorReplay = await getRunReplayRepository().readRunReplay(run.id);
-      const priorEvents = priorReplay && priorReplay.snapshot && Array.isArray(priorReplay.snapshot.events)
-        ? priorReplay.snapshot.events
-        : [];
-      const priorFailure = priorEvents.filter(event =>
-        event && event.type === 'workspace:snapshot_unavailable').pop() || null;
-      if (priorFailure) {
-        const recoveryPayload = {
-          recoveredAt: initialWorkspaceSnapshot.capturedAt || null,
-          priorClassification: priorFailure.classification || null,
-          priorPhase: priorFailure.phase || null,
-          priorStep: priorFailure.step === undefined ? null : priorFailure.step,
-          entryCount: initialWorkspaceSnapshot.entryCount
-        };
-        await recordRunEvent(run, 'workspace:snapshot_recovered',
-          'Workspace snapshot re-captured successfully; current workspace state is authoritative again',
-          recoveryPayload);
-        await appendEvent({
-          type: 'workspace.snapshot_recovered',
-          ticketId: run.ticketId,
-          runId: run.id,
-          payload: recoveryPayload
-        });
-      }
+    // Recovery closes an unresolved failure exactly once. Execution only reaches
+    // here when the capture succeeded, so this event means precisely "current
+    // workspace state is authoritative again". A clean re-entry after recovery
+    // emits nothing, because the latest transition is no longer `unavailable`.
+    if (wasStoppedForSnapshotFailure) {
+      const resolvedFailure = unresolvedSnapshotFailure(priorAvailabilitySnapshot) || {};
+      const recoveryPayload = {
+        recoveredAt: initialWorkspaceSnapshot.capturedAt || null,
+        priorClassification: resolvedFailure.classification || null,
+        priorPhase: resolvedFailure.phase || null,
+        priorStep: resolvedFailure.step === undefined ? null : resolvedFailure.step,
+        entryCount: initialWorkspaceSnapshot.entryCount
+      };
+      await recordRunEvent(run, SNAPSHOT_RECOVERED_EVENT,
+        'Workspace snapshot re-captured successfully; current workspace state is authoritative again',
+        recoveryPayload);
+      await appendEvent({
+        type: 'workspace.snapshot_recovered',
+        ticketId: run.ticketId,
+        runId: run.id,
+        payload: recoveryPayload
+      });
     }
 
     const mutationsByThisRun = [];
@@ -19522,12 +19538,23 @@ async function runAgentTicket(runId) {
         }
       });
     } else if (error && error.recoverableStop === true) {
-      // Recoverable stop: the run keeps every committed mutation and all its
-      // evidence, and is NOT terminalized. Releasing the lease nulls lease_owner,
-      // which listExpiredRunningRuns matches (ordered NULLS FIRST), so the
-      // existing recovery sweep claims it immediately and re-enters execution —
-      // where run-start capture is attempted again. This is not rollback and
-      // nothing completed is redone. See A1.
+      // Recoverable stop. The run keeps every committed mutation and all its
+      // evidence and is NOT terminalized: `failAgentRun` is deliberately not
+      // called, so no terminal event, triage, or status transition is written.
+      //
+      // The lease is deliberately NOT released. Releasing it would null
+      // lease_owner, which listRecoverableRuns matches immediately — making the
+      // run reclaimable while this invocation is still unwinding its `finally`
+      // (a claim race), and collapsing "recoverably stopped" into a single
+      // instant automatic retry. Instead the lease is simply left to expire:
+      // heartbeats stop with this invocation, so the run stays held for the
+      // remainder of the lease duration and only then becomes recoverable
+      // through the architecture's existing lease-expiry recovery mechanism.
+      // That also bounds retry cadence to one attempt per lease duration.
+      //
+      // Stopping is not rollback. Nothing completed is undone or redone. If the
+      // recovery capture also fails the run stops recoverably again rather than
+      // terminalizing, and resumes only once some later capture succeeds. See A1.
       await appendEvent({
         type: 'run.execution_stopped_for_recovery',
         ticketId: run.ticketId,
@@ -19537,15 +19564,12 @@ async function runAgentTicket(runId) {
           failureKind: error.failureKind || null,
           details: error.details || null,
           outcome: 'execution_stopped_for_recovery',
-          mutationsPreserved: true
+          mutationsPreserved: true,
+          leaseRetainedUntilExpiry: true
         }
       });
       appendRunLog(run, 'run:stopped_for_recovery',
         sanitizeLogMessage(error.message || 'Execution stopped for recovery'));
-      await releaseRunLease(runId, {
-        reason: 'workspace_snapshot_unavailable',
-        code: error.code || null
-      });
     } else {
       run = await failAgentRun(run, error, error.workspaceAction || null);
     }

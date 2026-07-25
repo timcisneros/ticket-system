@@ -6,23 +6,36 @@
 // This suite is purpose-built because the natural feasibility/postcondition
 // harnesses are orphaned (entry A10) and cannot host it.
 //
-// Covers the nine required scenarios:
-//   1. successful empty root listing
-//   2. successful truncated listing
-//   3. run-start I/O failure, terminating before any model request
-//   4. run-start containment violation with its distinct classification
-//   5. per-step failure after committed mutations — progress preserved, no
-//      further model request or mutation
-//   6. recovery succeeding only after a fresh capture
-//   7. failed recovery capture remaining stopped
-//   8. diagnostics never describing a failed listing as an empty workspace
-//   9. compatibility for historical snapshots that predate `available`
+// SCOPE — this suite covers representation, classification, and the availability
+// transition logic. It does NOT prove the recovery lifecycle.
+//
+// Covered here:
+//   - successful empty root listing
+//   - successful truncated listing
+//   - failure representation (never an empty listing)
+//   - containment violation classified distinctly from an availability fault
+//   - compatibility for historical snapshots that predate `available`
+//   - availability transitions (runtime/workspace-snapshot-availability.js)
+//
+// NOT covered here — see scripts/workspace-snapshot-recovery-test.js:
+//   stopping recoverably, mutation preservation, absence of further model
+//   requests, full unwind before reclaim, repeated failed recovery attempts not
+//   terminalizing, resumption after a later successful capture, and
+//   exactly-once recovery evidence. Those are lifecycle guarantees that source
+//   inspection cannot establish.
+//
+// An earlier revision of this file asserted `recoverableStop: false` in the
+// run-start guard under the label "failed recovery capture cannot resume". That
+// assertion described the terminalizing behavior — the defect — and was reported
+// as covering "failed recovery remains stopped". It was written to match the
+// implementation rather than the requirement. Recorded as blocker B5 in
+// docs/ARCHITECTURAL_DECISIONS_PENDING.md.
 //
 // server.js cannot be required in-process (it calls start() and demands a live
-// database), so the capture/classification/guard functions are extracted from
-// source and executed against injected stubs — the established pattern from
-// scripts/execution-semantics-test.js. Wiring that cannot be isolated is asserted
-// structurally, and each such assertion is written to fail if the wiring is undone.
+// database), so the capture/classification functions are extracted from source
+// and executed against injected stubs — the established pattern from
+// scripts/execution-semantics-test.js. Structural assertions here pin wiring
+// only; they never stand in for behavioral proof.
 
 const assert = require('assert/strict');
 const fs = require('fs');
@@ -252,13 +265,19 @@ const loop = SOURCE.slice(SOURCE.indexOf('async function runAgentTicket'));
 // 3. Run start: evidence, then terminate before the first model request.
 const runStartGuard = loop.slice(
   loop.indexOf('isWorkspaceSnapshotUnavailable(initialWorkspaceSnapshot)'),
-  loop.indexOf('isWorkspaceSnapshotUnavailable(initialWorkspaceSnapshot)') + 700
+  loop.indexOf('isWorkspaceSnapshotUnavailable(initialWorkspaceSnapshot)') + 1400
 );
+ok('run-start guard slice captured the throw', /createWorkspaceSnapshotFailureError/.test(runStartGuard));
 ok('run-start guard records durable evidence before throwing',
   runStartGuard.indexOf('recordWorkspaceSnapshotFailure')
     < runStartGuard.indexOf('createWorkspaceSnapshotFailureError'));
-ok('run-start guard terminates (not a recoverable stop)',
-  /recoverableStop: false/.test(runStartGuard));
+// The guard is state-aware: it terminalizes a FIRST failure but stops
+// recoverably when a prior failure is still unresolved. Asserting only
+// `recoverableStop: false` here is what produced blocker B5.
+ok('run-start guard decides terminalize-vs-stop from unresolved state',
+  /recoverableStop: wasStoppedForSnapshotFailure/.test(runStartGuard));
+ok('run-start guard does not hard-code terminalization',
+  !/recoverableStop: false/.test(runStartGuard));
 ok('run-start guard runs before the execution loop begins',
   loop.indexOf('isWorkspaceSnapshotUnavailable(initialWorkspaceSnapshot)')
     < loop.indexOf('for (let step = initialExecutionTurn'));
@@ -271,7 +290,8 @@ const perStepGuardIndex = loop.indexOf('isWorkspaceSnapshotUnavailable(currentWo
 ok('per-step guard exists', perStepGuardIndex > 0);
 ok('per-step guard precedes prompt construction',
   perStepGuardIndex < loop.indexOf('const input = await buildAgentPrompt(promptTicket, currentEnvelope'));
-const perStepGuard = loop.slice(perStepGuardIndex, perStepGuardIndex + 700);
+const perStepGuard = loop.slice(perStepGuardIndex, perStepGuardIndex + 1400);
+ok('per-step guard slice captured the throw', /createWorkspaceSnapshotFailureError/.test(perStepGuard));
 ok('per-step guard records durable evidence before throwing',
   perStepGuard.indexOf('recordWorkspaceSnapshotFailure') < perStepGuard.indexOf('createWorkspaceSnapshotFailureError'));
 ok('per-step guard stops recoverably', /recoverableStop: true/.test(perStepGuard));
@@ -285,36 +305,46 @@ const catchBlock = loop.slice(catchStart, loop.indexOf('} finally {', catchStart
 ok('catch block was located and is non-empty', catchBlock.length > 0);
 ok('recoverable stop is handled before the generic failure path',
   catchBlock.indexOf('error.recoverableStop === true') < catchBlock.indexOf('failAgentRun'));
+// Strip comment lines first: the branch's own explanation mentions failAgentRun
+// by name, which would otherwise make this assertion fail on prose.
+const stripComments = text => text.split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
+const recoverableBranch = stripComments(catchBlock.slice(
+  catchBlock.indexOf('error.recoverableStop === true'),
+  catchBlock.indexOf('} else {')
+));
+ok('recoverable-stop branch was located', recoverableBranch.length > 0);
 ok('recoverable stop does not call failAgentRun in its own branch',
-  !catchBlock.slice(
-    catchBlock.indexOf('error.recoverableStop === true'),
-    catchBlock.indexOf('} else {')
-  ).includes('failAgentRun'));
-ok('recoverable stop releases the lease so recovery can claim the run',
-  /releaseRunLease\(runId/.test(catchBlock));
+  !recoverableBranch.includes('failAgentRun'));
+ok('recoverable stop writes no terminal status transition',
+  !/commitRunTerminalization|interruptAgentRun/.test(recoverableBranch));
 ok('recoverable stop records that mutations are preserved',
   /mutationsPreserved: true/.test(catchBlock));
 ok('recoverable stop emits a durable journal event',
   /run\.execution_stopped_for_recovery/.test(catchBlock));
 
 // 6/7. Recovery: a fresh capture is attempted on re-entry, and only success
-// records recovery. A failed recovery capture re-enters the run-start guard,
-// which terminates — there is no path that resumes on a failed capture.
+// records recovery. Lifecycle proof lives in the integration suite.
 ok('resumed run re-captures at run start (capture precedes the loop)',
   loop.indexOf('captureRunWorkspaceRootSnapshot(run)') < loop.indexOf('for (let step = initialExecutionTurn'));
-const recoveryBlock = loop.slice(
-  loop.indexOf("recordRunEvent(run, 'workspace:snapshot_recovered'") - 1200,
-  loop.indexOf("recordRunEvent(run, 'workspace:snapshot_recovered'") + 600
-);
-ok('recovery acknowledgement reads the prior capture failure',
-  /workspace:snapshot_unavailable/.test(recoveryBlock));
+ok('recovery acknowledgement is gated on unresolved availability state',
+  /if \(wasStoppedForSnapshotFailure\) \{/.test(loop));
+ok('recovery acknowledgement names the failure it resolved',
+  /unresolvedSnapshotFailure\(priorAvailabilitySnapshot\)/.test(loop));
 ok('recovery acknowledgement is emitted only after the availability guard',
-  loop.indexOf("recordRunEvent(run, 'workspace:snapshot_recovered'")
+  loop.indexOf('if (wasStoppedForSnapshotFailure) {')
     > loop.indexOf('isWorkspaceSnapshotUnavailable(initialWorkspaceSnapshot)'));
 ok('recovery emits a durable journal event',
   /workspace\.snapshot_recovered/.test(SOURCE));
-ok('failed recovery capture cannot resume — the only post-guard path throws',
-  /recoverableStop: false/.test(runStartGuard));
+// Replaces the assertion that produced B5. Lifecycle behavior is proven in
+// scripts/workspace-snapshot-recovery-test.js against a real store; here we pin
+// only that the decision is derived from unresolved availability state.
+ok('unresolved-state predicate drives the stop decision',
+  /const wasStoppedForSnapshotFailure = /.test(loop)
+  && /hasUnresolvedSnapshotFailure\(priorAvailabilitySnapshot\)/.test(loop));
+ok('recoverable stop no longer releases the lease (claim race, B3)',
+  !/releaseRunLease\(runId/.test(catchBlock));
+ok('recoverable stop records that the lease is retained until expiry',
+  /leaseRetainedUntilExpiry: true/.test(catchBlock));
 
 // Scenario 8 at the diagnostic layer: the snapshot object persisted as evidence
 // is the same object asserted above, so a failed capture reaches diagnostics
@@ -329,5 +359,70 @@ ok('snapshot evidence is recorded before the availability guard runs',
 ok('A1 introduced no available:false prompt guidance',
   !/available:\s*false/i.test(SOURCE.slice(SOURCE.indexOf('function buildAgentPrompt'),
     SOURCE.indexOf('function buildAgentPrompt') + 12000)));
+
+// ── Availability transitions (runtime/workspace-snapshot-availability.js) ────
+// Real module, executed — this is the logic that decides whether a capture
+// failure terminalizes or stops recoverably, and whether recovery is recorded.
+const availability = require('../runtime/workspace-snapshot-availability');
+const snap = types => ({ events: types.map(type => ({ type })) });
+const UNAVAIL = availability.SNAPSHOT_UNAVAILABLE_EVENT;
+const RECOV = availability.SNAPSHOT_RECOVERED_EVENT;
+
+eq('no events → no transition', availability.latestSnapshotAvailabilityTransition(snap([])), null);
+eq('null snapshot → no transition', availability.latestSnapshotAvailabilityTransition(null), null);
+ok('a run with no transitions has no unresolved failure',
+  availability.hasUnresolvedSnapshotFailure(snap([])) === false);
+
+// Unrelated events must not affect the state.
+ok('unrelated events do not create an unresolved failure',
+  availability.hasUnresolvedSnapshotFailure(
+    snap(['model:action_limit', 'run:feasibility_decision', 'model:action_contract_passed'])) === false);
+
+// A single failure is unresolved: this is what makes a second failure stop
+// recoverably instead of terminalizing.
+ok('a lone failure is unresolved', availability.hasUnresolvedSnapshotFailure(snap([UNAVAIL])) === true);
+
+// Recovery closes it — and a later clean entry must NOT re-emit recovery.
+ok('failure followed by recovery is resolved',
+  availability.hasUnresolvedSnapshotFailure(snap([UNAVAIL, RECOV])) === false);
+ok('a clean re-entry after recovery stays resolved (no duplicate recovery)',
+  availability.hasUnresolvedSnapshotFailure(
+    snap([UNAVAIL, RECOV, 'model:action_contract_passed'])) === false);
+
+// Repeated failed recovery attempts stay unresolved — the run remains stopped
+// rather than terminalizing on the first failed recovery capture.
+ok('repeated failures remain unresolved',
+  availability.hasUnresolvedSnapshotFailure(snap([UNAVAIL, UNAVAIL, UNAVAIL])) === true);
+ok('many failures then one recovery resolves them',
+  availability.hasUnresolvedSnapshotFailure(snap([UNAVAIL, UNAVAIL, UNAVAIL, RECOV])) === false);
+
+// A genuinely NEW failure after a recovery opens a new transition.
+ok('a new failure after recovery is unresolved again',
+  availability.hasUnresolvedSnapshotFailure(snap([UNAVAIL, RECOV, UNAVAIL])) === true);
+eq('latest transition wins over history',
+  availability.latestSnapshotAvailabilityTransition(snap([UNAVAIL, RECOV, UNAVAIL])), 'unavailable');
+eq('recovery after a new failure resolves again',
+  availability.latestSnapshotAvailabilityTransition(snap([UNAVAIL, RECOV, UNAVAIL, RECOV])), 'recovered');
+
+// Existence-based logic (blocker B4) would answer "unresolved" for every case
+// containing a failure. Transition-based logic must disagree on exactly those.
+ok('transition logic differs from existence logic where B4 mattered',
+  availability.hasUnresolvedSnapshotFailure(snap([UNAVAIL, RECOV])) === false
+  && snap([UNAVAIL, RECOV]).events.some(e => e.type === UNAVAIL));
+
+// The resolved failure is identified so recovery evidence can name it.
+const withDetail = { events: [
+  { type: UNAVAIL, classification: 'WORKSPACE_SNAPSHOT_UNAVAILABLE', phase: 'execution_step', step: 3 },
+  { type: RECOV },
+  { type: UNAVAIL, classification: 'WORKSPACE_CONTAINMENT_VIOLATION', phase: 'run_start', step: null }
+] };
+eq('unresolved failure returns the LATEST failure, not the first',
+  availability.unresolvedSnapshotFailure(withDetail).classification, 'WORKSPACE_CONTAINMENT_VIOLATION');
+eq('a resolved run has no unresolved failure to name',
+  availability.unresolvedSnapshotFailure(snap([UNAVAIL, RECOV])), null);
+
+// server.js must consume the module rather than re-deriving this inline.
+ok('server.js imports the availability module',
+  /require\('\.\/runtime\/workspace-snapshot-availability'\)/.test(SOURCE));
 
 console.log(`\nPASS: workspace snapshot availability (A1) — ${passed} checks`);
