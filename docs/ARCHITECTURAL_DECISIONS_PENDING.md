@@ -30,7 +30,7 @@ the defect can cause, not how hard it is to fix.
 
 | # | Defect | Severity | Status | Class |
 |---|--------|----------|--------|-------|
-| A1 | Workspace-snapshot failure truthfulness (E4) | **High** | **Implementation under correction** — `ee44369` partially wrong; see blockers | Correctness |
+| A1 | Workspace-snapshot failure truthfulness (E4) | **High** | **Implemented** `ee44369` + `3f6d4ac` — entry retained for the record | Correctness |
 | A2 | Live-state vs immutable-snapshot mutation counting (E5) | Medium | Open | Correctness |
 | A3 | Wall-clock and progress-counter recovery resets | **High** | Open | Bounds integrity |
 | A4 | Enforcement gates bypass the immutable policy snapshot | Medium | Open | Architecture |
@@ -47,9 +47,9 @@ the defect can cause, not how hard it is to fix.
 1. **A10 first.** Until the orphaned harnesses are repaired or replaced, there is no working
    feasibility or postcondition coverage in the release checkpoint, so A1/A2/A9 cannot be
    validated through their natural suites.
-2. **A1 (decided, implementation pending), then A2.** A1 changes when a run stops; A2 changes
-   what the feasibility gate counts. A1 is the higher risk and must not be bundled with
-   anything else. Purpose-built coverage is acceptable for A1 while A10 remains open.
+2. **A1 (implemented), then A2.** A1 changed when a run stops; A2 changes what the feasibility
+   gate counts. A1 shipped with purpose-built coverage because A10 leaves no working
+   feasibility/postcondition suite to host it.
 3. **A3** independently — it tightens an effective limit and will fail runs that previously
    passed, so it needs its own observation window.
 4. **A6 and A7** are governance decisions, not defects to fix unilaterally. Do not implement
@@ -62,7 +62,7 @@ the defect can cause, not how hard it is to fix.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Implementation under correction.** Representation and classification landed in `ee44369` and are accepted. The recovery implementation contradicts the decided behavior — blockers below |
+| **Status** | **Implemented 2026-07-25** in `ee44369` (representation, classification) and `3f6d4ac` (recovery lifecycle correction); entry retained as the decision record |
 | **Severity** | High — converts an infrastructure failure into confident model action |
 | **Evidence** | `server.js` `captureRunWorkspaceRootSnapshot`; capture sites at run start and per step |
 | **Decision** | Fail closed at both capture sites; representation must never encode failure as an empty listing |
@@ -122,18 +122,41 @@ observe.
   mutations are **not** automatically redone
 - resume only after recovery successfully captures a fresh current-workspace snapshot
 
-*Mechanism:* release the run lease (`releaseRunLease` nulls `lease_owner`) and stop without
-terminalizing. `listExpiredRunningRuns` matches `lease_owner IS NULL` ordered `NULLS FIRST`,
-so the existing recovery sweep claims the run immediately and first, and
-`safeToResumeExecution` re-enters `runAgentTicket`, which re-attempts capture at run start.
-This reuses existing plumbing; no new recovery machinery.
+*Mechanism (corrected in `3f6d4ac`):* stop without terminalizing and **retain** the lease.
+`failAgentRun` is not called, so no terminal event, triage, or status transition is written.
+The lease is deliberately not released: releasing it nulls `lease_owner`, which
+`listRecoverableRuns` matches immediately — making the run reclaimable while the invocation is
+still unwinding, and collapsing the stop into a single instant retry. Heartbeats stop with the
+invocation, so the lease simply expires, and only then does the architecture's existing
+lease-expiry recovery claim the run and re-enter `runAgentTicket`. Retry cadence is therefore
+bounded to one attempt per lease duration. No new recovery machinery.
+
+*Verified while deciding this:* run statuses are `pending`, `running`, `completed`, `failed`,
+`interrupted`, with the last three in `TERMINAL_RUN_STATUSES`; `interruptAgentRun`
+terminalizes; and both recovery modes in `listRecoverableRuns` gate on
+`status = 'running' AND (lease_owner IS NULL OR lease_expires_at <= clock_timestamp())`. No
+stable recoverable-stopped state exists to adopt, so lease retention plus a state-aware guard
+is the smallest truthful mechanism.
 
 **Recovery:**
 
 - record the previous capture failure
-- attempt a new capture
-- continue only when current workspace truth has been re-established; a failed recovery
-  capture takes the run-start failure path and terminates
+- attempt a new capture on re-entry
+- a failed recovery capture **remains recoverably stopped** — it does not terminalize; only a
+  first failure on a run with no unresolved prior failure terminalizes
+- resume only once some later capture succeeds, which records recovery exactly once
+
+*Availability is a transition, not an existence check* (`runtime/workspace-snapshot-availability.js`):
+the latest ordered transition between `workspace:snapshot_unavailable` and
+`workspace:snapshot_recovered` decides both whether a failure terminalizes or stops
+recoverably, and whether a successful capture records recovery. Existence-based logic
+re-emitted recovery on every later entry and could not distinguish a first failure from a
+failure during recovery.
+
+**Known and accepted:** while capture keeps failing the run retries indefinitely at lease
+cadence, performing no model request and no mutation. No attempt cap was added; that would be
+a separate decision. The per-attempt wall-clock reset noted in **A3** applies here too and is
+out of A1's scope.
 
 **Classification — distinct codes, shared fail-closed plumbing:**
 
@@ -146,11 +169,12 @@ This reuses existing plumbing; no new recovery machinery.
 never receives `available: false` — the run stops first. Guidance for `truncated: true`
 affects healthy runs and is split out as **A11**.
 
-### A1 blockers — open, implementation under correction
+### A1 blockers — all resolved in `3f6d4ac`
 
-Raised 2026-07-25 against `ee44369`. Representation (`available:false`, null counts) and
-classification (two distinct codes) are accepted and correct. The recovery implementation is
-not, and the suite did not catch it.
+Raised 2026-07-25 against `ee44369`; all five resolved in `3f6d4ac`. Representation
+(`available:false`, null counts) and classification (two distinct codes) were accepted as
+landed. The recovery implementation was not, and the suite did not catch it. Retained because
+B5 is a standing lesson about how these tests can pass while proving the wrong thing.
 
 **B1 — "recoverable stop" was one automatic retry, then terminalization.** The per-step stop
 released the lease, which made the run immediately reclaimable; the recovery sweep re-entered
@@ -181,14 +205,18 @@ written to match the implementation rather than the requirement, and passing it 
 as covering scenario 7 ("failed recovery capture remaining stopped"). Source-level assertions
 cannot establish lifecycle behavior; that scenario needs real store/server coverage.
 
-**Implementation (`ee44369`, partially superseded):** `classifyWorkspaceSnapshotFailure`,
+**Implementation (`ee44369`, recovery lifecycle superseded by `3f6d4ac`):**
+`classifyWorkspaceSnapshotFailure`,
 `isWorkspaceSnapshotUnavailable`, `createWorkspaceSnapshotFailureError`, and
 `recordWorkspaceSnapshotFailure` in `server.js`; guards at both capture sites; recoverable-stop
 branch in the `runAgentTicket` catch; recovery acknowledgement
 (`workspace:snapshot_recovered` / `workspace.snapshot_recovered`) emitted after a successful
-re-capture. Coverage: `scripts/workspace-snapshot-availability-test.js` (70 checks, all nine
-required scenarios), registered in the release checkpoint. Purpose-built rather than routed
-through the orphaned suites — see A10.
+re-capture. Coverage is split by what each suite can honestly establish:
+`scripts/workspace-snapshot-availability-test.js` (93 checks) covers representation,
+classification, and transition logic; `scripts/workspace-snapshot-recovery-test.js`
+(34 checks) proves the recovery lifecycle against a real server, a real store, and a real
+EACCES fault induced with `chmod 000` — all twelve lifecycle scenarios. Both are registered in
+the release checkpoint. Purpose-built rather than routed through the orphaned suites — see A10.
 
 `isWorkspaceSnapshotUnavailable` treats only an explicit `available: false` as failure, so
 snapshots persisted before this change are read as available rather than retroactively
