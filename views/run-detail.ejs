@@ -230,8 +230,8 @@
                   <dd><code class="owned-path"><%= failureSummary.firstFailedOperation %></code></dd>
                 </div>
                 <div>
-                  <dt>Bounded Rejections</dt>
-                  <dd><%= failureSummary.boundedTransitionRejectionCount %></dd>
+                  <dt>Rejected Responses</dt>
+                  <dd><%= failureSummary.rejectedResponseCount %></dd>
                 </div>
               </dl>
             </div>
@@ -780,7 +780,7 @@
           </div>
           <div class="authority-row">
             <dt>Max Actions</dt>
-            <dd><%= ac.authority.maxActionsPerResponse %> per response · <%= ac.authority.maxMutatingActionsPerResponse %> mutating</dd>
+            <dd><%= ac.authority.maxActionsPerResponse %> per response · <%= ac.authority.maxMutatingActionsPerResponse %> mutating<% if (!ac.authority.actionCapsRecorded) { %> · <span class="text-muted">not recorded for this run; showing current defaults</span><% } %></dd>
           </div>
           <div class="authority-row">
             <dt>Max Steps</dt>

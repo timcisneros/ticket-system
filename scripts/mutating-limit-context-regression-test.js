@@ -38,10 +38,20 @@ assert(
   'no_progress must preserve priorStepActionResults'
 );
 
-// 4. action_limit must still use replacement pattern (explicitly out of scope)
+// 4. action_limit must ALSO preserve priorStepActionResults.
+//    Previously this asserted the opposite — the total-action gate was left on the
+//    bare replacement pattern while only the mutating gate was fixed. That
+//    asymmetry meant a response rejected by the total-action gate silently dropped
+//    the prior step's action results from the model's next prompt, while an
+//    otherwise identical response rejected by the mutating gate kept them. Both
+//    gates now preserve context, so the old expectation is inverted.
 assert(
-  source.includes("actionResults = [{\n          warning: 'model:action_limit'"),
-  'action_limit must still use replacement pattern (out of scope per patch)'
+  !source.includes("actionResults = [{\n          warning: 'model:action_limit'"),
+  'action_limit must NOT use bare replacement pattern'
+);
+assert(
+  /actionResults = \[\s*\n\s*\.\.\.priorStepActionResults,[\s\S]{0,200}?warning: 'model:action_limit'/.test(source),
+  'action_limit path must use spread pattern [...priorStepActionResults, { warning: ...}]'
 );
 
 // 5. Every model:mutating_action_limit warning reference uses spread pattern

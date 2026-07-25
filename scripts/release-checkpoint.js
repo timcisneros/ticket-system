@@ -13,7 +13,9 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'dev-environment-test.js',
   'catalog-consistency-test.js',
   'action-contract-streak-test.js',
+  'evidence-truthfulness-contract-test.js',
   'event-integrity-negative-test.js',
+  'execution-semantics-snapshot-test.js',
   'mutation-admission-contract-test.js',
   'mutation-admission-scheduler-test.js',
   'no-tracked-provider-keys-test.js',
@@ -38,7 +40,8 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'provider-response-recovery-postgres-test.js',
   'lease-renewal-resume-safety-test.js',
   'model-contract-violation-test.js',
-  'model-contract-violation-recovery-test.js'
+  'model-contract-violation-recovery-test.js',
+  'execution-semantics-persistence-test.js'
 ]);
 
 function runCheckpoint() {

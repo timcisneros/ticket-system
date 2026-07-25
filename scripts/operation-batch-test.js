@@ -77,11 +77,25 @@ function testRepeatedInspectionFails() {
   const hasNoProgressThrow = code.includes("error.failureKind = 'no_progress'");
   assert(hasNoProgressThrow, 'no_progress should throw a run limit error');
 
-  // Verify the count threshold is 2 (already the existing behavior)
-  const hasThreshold = code.includes('noProgressResponses >= 2');
-  assert(hasThreshold, 'noProgressResponses should have threshold of 2');
+  // Verify the corrective-feedback threshold is still the second inspection-only
+  // response. The comparison now uses a named constant so the terminal evidence
+  // can report the threshold it actually enforces, so assert the constant is
+  // defined, that it resolves to 2, and that the loop compares against it.
+  const hasWarningComparison = code.includes('noProgressResponses >= INSPECTION_NO_PROGRESS_WARNING_THRESHOLD');
+  assert(hasWarningComparison, 'no-progress warning should compare against the named warning threshold');
 
-  console.log('  ✓ repeated-inspection-fails: second inspection-only response triggers failure');
+  const derivesFromTerminalThreshold = code.includes(
+    'const INSPECTION_NO_PROGRESS_WARNING_THRESHOLD = INSPECTION_NO_PROGRESS_THRESHOLD - 1;');
+  assert(derivesFromTerminalThreshold, 'warning threshold should derive from the terminal threshold');
+
+  const terminalThresholdIsThree = code.includes('const INSPECTION_NO_PROGRESS_THRESHOLD = 3;');
+  assert(terminalThresholdIsThree, 'terminal no-progress threshold should be 3');
+  // 3 - 1 = 2: the warning still fires on the second inspection-only response.
+
+  const terminatesOnNamedThreshold = code.includes('noProgressResponses >= INSPECTION_NO_PROGRESS_THRESHOLD');
+  assert(terminatesOnNamedThreshold, 'termination should compare against the terminal threshold');
+
+  console.log('  ✓ repeated-inspection-fails: second inspection-only response returns corrective feedback, third terminates the run');
 }
 
 // ── Test 3: Runtime verifies rename without model re-entry ─────

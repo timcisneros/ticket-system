@@ -20,6 +20,12 @@ const {
   ACTION_CONTRACT_PASSED_EVENT_TYPE,
   reconstructActionContractViolationStreak
 } = require('./runtime/action-contract-streak');
+const {
+  buildExecutionSemanticsSnapshot,
+  normalizeExecutionSemanticsSnapshot,
+  resolveRunActionCaps,
+  countResponseRejections
+} = require('./runtime/execution-semantics');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -185,6 +191,15 @@ const ACTION_TYPES = ['workspaceAction', 'agentAction', 'conditionAction', 'syst
 const MAX_AGENT_ACTIONS_PER_RESPONSE = 8;
 const MAX_MUTATING_ACTIONS_PER_RESPONSE = parseInt(process.env.AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE || '2', 10) || 2;
 const ENABLE_PREFIX_TRUNCATION = process.env.ENABLE_PREFIX_TRUNCATION === 'true';
+// Consecutive `complete:false` responses carrying no actions before the run is
+// terminated. Named so the terminal evidence can report the threshold it
+// actually enforces instead of a literal duplicated at the throw site.
+const STALLED_RESPONSE_THRESHOLD = 2;
+// Inspection-only responses before the run is terminated for non-progress. The
+// first is legitimate discovery; the second earns corrective feedback; the third
+// terminates. Corrective feedback therefore begins one response earlier.
+const INSPECTION_NO_PROGRESS_THRESHOLD = 3;
+const INSPECTION_NO_PROGRESS_WARNING_THRESHOLD = INSPECTION_NO_PROGRESS_THRESHOLD - 1;
 const DEFAULT_AGENT_RUNTIME_LIMITS = {
   maxExecutionSteps: 4,
   maxWorkspaceOperationsPerRun: 32,
@@ -4346,14 +4361,6 @@ function createDisplaySnapshot(snapshot) {
   return sanitizeWorkspaceDisplayValue(snapshot, snapshot.executionWorkspaceType || 'main');
 }
 
-function countBoundedTransitionRejections(snapshot) {
-  const events = snapshot && Array.isArray(snapshot.events) ? snapshot.events : [];
-  return events.filter(event => {
-    const type = event && event.type ? event.type : '';
-    return type.includes('limit') || type.includes('stalled') || type.includes('no_progress') || type.includes('blocked');
-  }).length;
-}
-
 function describeFirstFailedOperation(source) {
   if (!source) return '-';
   const operation = source.operation && typeof source.operation === 'object' ? source.operation.operation : source.operation;
@@ -4437,7 +4444,12 @@ function buildRunFailureSummary(run, snapshot, operationHistory, mutationCount, 
     mutationSummary: buildMutationSummary(operationHistory),
     mutationsBeforeFailure: (mutationCount || 0) > 0,
     recoveryAvailable: recoveryAvailable === true,
-    boundedTransitionRejectionCount: countBoundedTransitionRejections(snapshot),
+    // Exact count of model responses the runtime rejected in full. Replaces an
+    // event-type substring heuristic that also matched the terminal
+    // model:no_progress decision, reporting N+1 for a run terminated after N
+    // rejections. Renamed from boundedTransitionRejectionCount so the field name
+    // describes what is now actually measured.
+    rejectedResponseCount: countResponseRejections(snapshot),
     lastModelMessage: lastPlan && lastPlan.message ? lastPlan.message : '-',
     lastProposedActions: lastPlan && Array.isArray(lastPlan.actions)
       ? lastPlan.actions.map(describeWorkspaceAction).filter(Boolean)
@@ -4561,6 +4573,14 @@ async function buildRunAuthorityContext(run, ticket, agent, snapshot) {
   const allocationItemId = run.allocationItemId || s.allocationItemId || null;
   const ownedOutputPaths = getRunOwnedOutputPaths(run);
   const limits = getRunRuntimeLimitsSnapshot(run);
+  const actionCaps = resolveRunActionCaps({
+    semantics: limits.semantics,
+    runtimeEnvelope: s.runtimeEnvelope,
+    liveDefaults: {
+      maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+      maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE
+    }
+  });
   const groups = await listAccessGroups();
   const agentGroupNames = agent
     ? (agent.groupIds || []).map(groupId => (groups.find(group => group.id === groupId) || {}).name).filter(Boolean)
@@ -4582,8 +4602,15 @@ async function buildRunAuthorityContext(run, ticket, agent, snapshot) {
     authority: {
       allowedOperations: (s.primitiveContract && s.primitiveContract.allowedOperations) || AGENT_ALLOWED_OPERATIONS,
       mutatingOperations: (s.primitiveContract && s.primitiveContract.mutatingOperations) || AGENT_MUTATING_OPERATIONS,
-      maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
-      maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+      // Per-response ceilings come from what this run RECORDED, never from the
+      // live process constants — otherwise changing the environment would
+      // retroactively rewrite the displayed authority of every historical run.
+      // When nothing was recorded, actionCapsRecorded is false and the values
+      // are today's defaults, which the view must label as unrecorded.
+      maxActionsPerResponse: actionCaps.maxActionsPerResponse,
+      maxMutatingActionsPerResponse: actionCaps.maxMutatingActionsPerResponse,
+      actionCapsSource: actionCaps.source,
+      actionCapsRecorded: actionCaps.recorded,
       maxSteps: limits.maxExecutionSteps,
       maxWorkspaceOperations: limits.maxWorkspaceOperationsPerRun,
       maxModelRequests: limits.maxModelRequestsPerRun,
@@ -4598,7 +4625,9 @@ async function buildRunAuthorityContext(run, ticket, agent, snapshot) {
         ? `Granted via ticket assignment group "${assignmentGroup.name}"`
         : 'Granted via direct ticket assignment',
       groups: agentGroupNames.length > 0 ? agentGroupNames.join(', ') : 'No agent group grant recorded',
-      runtimePolicy: 'Immutable run-start bounded workspace runtime policy',
+      runtimePolicy: actionCaps.recorded
+        ? 'Immutable run-start bounded workspace runtime policy'
+        : 'Run-start limits are immutable; per-response ceilings were not recorded for this run and are shown as current defaults',
       scope: allocationPlanId ? 'Owned-scope allocation plan' : 'Direct assignment workspace scope'
     },
     controls: {
@@ -6046,9 +6075,22 @@ function buildRunRuntimeLimitsDisplay(run, snapshot, attemptUsage) {
     mutating_action: 'operations'
   };
   const timeoutFromRun = run && /runtime duration limit/i.test(run.error || '');
+  const actionCaps = resolveRunActionCaps({
+    semantics: persisted.semantics,
+    runtimeEnvelope: snapshot && snapshot.runtimeEnvelope,
+    liveDefaults: {
+      maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+      maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE
+    }
+  });
   return {
     sourceLabel: 'Applied run-start limits',
     limits: pickRuntimeLimitValues(persisted),
+    // Execution-semantic controls recorded at run creation. Null for runs that
+    // predate the field; callers must say "not recorded" rather than substitute
+    // current process values.
+    semantics: persisted.semantics,
+    actionCaps,
     usage: {
       executionTurns: snapshot ? parsedPlans.length : null,
       runtimeMs: attemptUsage && attemptUsage.durationMs !== null ? attemptUsage.durationMs : null,
@@ -9750,6 +9792,27 @@ function getWorkflowSpecificLimits() {
   };
 }
 
+// Capture the execution-semantic controls in force right now, so a finished run
+// can be explained without re-reading process state that may since have changed.
+// This is the ONLY place these constants are read for recording purposes; the
+// enforcement gates continue to read them directly, which keeps this record
+// strictly descriptive and unable to alter behavior.
+function buildCurrentExecutionSemanticsSnapshot(limits, profileName) {
+  return buildExecutionSemanticsSnapshot({
+    prefixTruncationEnabled: ENABLE_PREFIX_TRUNCATION,
+    contractCompilerEnabled: MODEL_CONTRACT_COMPILER_ENABLED,
+    actionContractViolationThreshold: ACTION_CONTRACT_VIOLATION_THRESHOLD,
+    stalledResponseThreshold: STALLED_RESPONSE_THRESHOLD,
+    inspectionNoProgressThreshold: INSPECTION_NO_PROGRESS_THRESHOLD,
+    workspaceSnapshotMaxEntries: RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES,
+    maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
+    maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
+    workloadProfile: profileName || null,
+    maxListDirectoryPerRun: limits ? limits.maxListDirectoryPerRun : null,
+    maxReadFilePerRun: limits ? limits.maxReadFilePerRun : null
+  });
+}
+
 function resolveAgentRuntimeLimitsFromConfig(objective, config, options = {}) {
   const deploymentDefaults = getDeploymentRuntimeDefaults();
   const uiConfiguredKeys = [];
@@ -9779,7 +9842,11 @@ function resolveAgentRuntimeLimitsFromConfig(objective, config, options = {}) {
         uiConfiguredKeys,
         workloadProfile: profile || null,
         workflowLimits: options.workflow ? getWorkflowSpecificLimits() : null
-      }
+      },
+      // Immutable record of the process constants and environment flags that
+      // govern this run's execution semantics. Display and diagnostics only —
+      // no gate reads it, so recording it cannot change enforcement.
+      semantics: buildCurrentExecutionSemanticsSnapshot(limits, profile)
     },
     deploymentDefaults,
     config
@@ -9800,7 +9867,11 @@ function normalizeRuntimeLimitsSnapshot(snapshot) {
     ...runtimeLimitsForExecution(snapshot),
     source: snapshot.source && typeof snapshot.source === 'object' && !Array.isArray(snapshot.source)
       ? sanitizeSnapshotValue(snapshot.source)
-      : null
+      : null,
+    // Null for runs created before semantics were recorded. Kept optional on
+    // purpose: requiring it would make every historical run fail the integrity
+    // check in getRunRuntimeLimitsSnapshot.
+    semantics: normalizeExecutionSemanticsSnapshot(snapshot.semantics)
   };
 }
 
@@ -10310,29 +10381,138 @@ function countRequiredContractMutations(contract, initialWorkspaceSnapshot) {
   return required;
 }
 
-function assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract = null) {
-  if (isBrowserRun(run)) return;
-  if (run.executionMode === 'workflow' || (ticket && ticket.executionMode === 'workflow')) return;
+// Durable record of the feasibility gate's decision, emitted on EVERY path
+// including the skips. Previously the gate returned silently on four different
+// paths and emitted nothing on the two it did evaluate, so a finished run gave
+// no way to tell whether the gate had passed, been skipped, or never applied —
+// the single most common reconstruction gap when triaging a run that ran out of
+// budget. Descriptive only: what the gate enforces is unchanged.
+async function recordRuntimeFeasibilityDecision(run, decision) {
+  const payload = {
+    outcome: decision.outcome,
+    checked: decision.checked === true,
+    recognized: decision.recognized === true,
+    recognitionSource: decision.recognitionSource || null,
+    contractIntent: decision.contractIntent || null,
+    requiredMutations: decision.requiredMutations === undefined ? null : decision.requiredMutations,
+    projectedSteps: decision.projectedSteps === undefined ? null : decision.projectedSteps,
+    effectiveMutationCap: decision.effectiveMutationCap === undefined ? null : decision.effectiveMutationCap,
+    effectiveExecutionStepLimit: decision.effectiveExecutionStepLimit === undefined
+      ? null
+      : decision.effectiveExecutionStepLimit
+  };
+  await recordRunEvent(run, 'run:feasibility_decision', decision.message, payload);
+  await appendEvent({
+    type: 'run.feasibility_decision',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload
+  });
+}
+
+async function assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract = null) {
+  const effectiveMutationCap = MAX_MUTATING_ACTIONS_PER_RESPONSE;
+  const effectiveExecutionStepLimit = limits.maxExecutionSteps;
+
+  if (isBrowserRun(run)) {
+    await recordRuntimeFeasibilityDecision(run, {
+      outcome: 'skipped_browser_run',
+      message: 'Feasibility gate skipped: browser runs have no workspace mutation contract',
+      checked: false,
+      effectiveMutationCap,
+      effectiveExecutionStepLimit
+    });
+    return;
+  }
+  if (run.executionMode === 'workflow' || (ticket && ticket.executionMode === 'workflow')) {
+    await recordRuntimeFeasibilityDecision(run, {
+      outcome: 'skipped_workflow_run',
+      message: 'Feasibility gate skipped: workflow runs are bounded by workflow limits',
+      checked: false,
+      effectiveMutationCap,
+      effectiveExecutionStepLimit
+    });
+    return;
+  }
 
   const contract = compiledContract || buildObjectiveContract(ticket && ticket.objective);
+  const recognitionSource = compiledContract
+    ? 'compiled_contract'
+    : ((contract && contract.source) || 'objective_grammar');
+  const contractIntent = (contract && contract.intent) || null;
+  const recognized = Boolean(contract && contract.recognized);
   const required = countRequiredContractMutations(contract, initialWorkspaceSnapshot);
-  if (required === null || required === 0) return;
 
-  const requiredSteps = Math.ceil(required / MAX_MUTATING_ACTIONS_PER_RESPONSE);
-  if (requiredSteps > limits.maxExecutionSteps) {
+  // The objective produced no enumerable mutation contract, so the gate has
+  // nothing deterministic to measure and the model path decides feasibility.
+  // This is the path an unanchored objective takes, and it used to be silent.
+  if (required === null) {
+    await recordRuntimeFeasibilityDecision(run, {
+      outcome: 'skipped_unrecognized_objective',
+      message: 'Feasibility gate skipped: objective produced no enumerable mutation contract',
+      checked: false,
+      recognized,
+      recognitionSource,
+      contractIntent,
+      effectiveMutationCap,
+      effectiveExecutionStepLimit
+    });
+    return;
+  }
+
+  if (required === 0) {
+    await recordRuntimeFeasibilityDecision(run, {
+      outcome: 'skipped_no_required_mutations',
+      message: 'Feasibility gate skipped: contract requires no mutations against the current workspace',
+      checked: false,
+      recognized,
+      recognitionSource,
+      contractIntent,
+      requiredMutations: 0,
+      projectedSteps: 0,
+      effectiveMutationCap,
+      effectiveExecutionStepLimit
+    });
+    return;
+  }
+
+  const requiredSteps = Math.ceil(required / effectiveMutationCap);
+  const decisionBase = {
+    checked: true,
+    recognized,
+    recognitionSource,
+    contractIntent,
+    requiredMutations: required,
+    projectedSteps: requiredSteps,
+    effectiveMutationCap,
+    effectiveExecutionStepLimit
+  };
+
+  if (requiredSteps > effectiveExecutionStepLimit) {
+    await recordRuntimeFeasibilityDecision(run, {
+      ...decisionBase,
+      outcome: 'rejected',
+      message: `Feasibility gate rejected the run: ${required} required mutation(s) project to ${requiredSteps} step(s) against a limit of ${effectiveExecutionStepLimit}`
+    });
     const error = new Error(
-      `Runtime budget infeasible: ${required} required mutation(s) need at least ${requiredSteps} execution step(s), but maxExecutionSteps is ${limits.maxExecutionSteps}. Raise the mutating-action limit, split the task into smaller objectives, or manually recover.`
+      `Runtime budget infeasible: ${required} required mutation(s) need at least ${requiredSteps} execution step(s), but maxExecutionSteps is ${effectiveExecutionStepLimit}. Raise the mutating-action limit, split the task into smaller objectives, or manually recover.`
     );
     error.code = 'RUNTIME_BUDGET_INSUFFICIENT';
     error.failureKind = 'runtime_budget_insufficient';
     error.details = {
       requiredMutations: required,
       requiredSteps,
-      maxExecutionSteps: limits.maxExecutionSteps,
-      maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE
+      maxExecutionSteps: effectiveExecutionStepLimit,
+      maxMutatingActionsPerResponse: effectiveMutationCap
     };
     throw error;
   }
+
+  await recordRuntimeFeasibilityDecision(run, {
+    ...decisionBase,
+    outcome: 'passed',
+    message: `Feasibility gate passed: ${required} required mutation(s) project to ${requiredSteps} step(s) within a limit of ${effectiveExecutionStepLimit}`
+  });
 }
 
 // Preflight compiler prompt. Asks the model to normalize a vague user objective
@@ -18127,7 +18307,7 @@ async function runAgentTicket(runId) {
       ? new Set(simpleDeleteTargets.map(t => normalizeArtifactOwnershipPath(t)).filter(Boolean))
       : null;
 
-    assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract);
+    await assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract);
 
     // Seed the action-contract violation streak from durable replay evidence so
     // a run recovered between responses continues an in-progress streak rather
@@ -18354,10 +18534,18 @@ async function runAgentTicket(runId) {
           });
         }
 
-        actionResults = [{
-          warning: 'model:action_limit',
-          message: buildTotalActionLimitFeedback(actions.length)
-        }];
+        // Preserve the prior step's action results, matching the mutating-action
+        // gate. Without this, a response rejected by the total-action gate also
+        // silently discarded the previous step's inspection/operation evidence
+        // from the model's next prompt, while a response rejected by the
+        // mutating gate kept it.
+        actionResults = [
+          ...priorStepActionResults,
+          {
+            warning: 'model:action_limit',
+            message: buildTotalActionLimitFeedback(actions.length)
+          }
+        ];
         continue;
       }
 
@@ -18575,10 +18763,10 @@ async function runAgentTicket(runId) {
         stalledResponses += 1;
         await recordRunEvent(run, 'model:stalled', 'Model returned complete:false with no workspace actions', { step });
 
-        if (stalledResponses >= 2) {
+        if (stalledResponses >= STALLED_RESPONSE_THRESHOLD) {
           throw createRunLimitError(run, 'step', 'Model stalled twice with complete:false and no workspace actions', {
             currentValue: stalledResponses,
-            configuredLimit: 1,
+            configuredLimit: STALLED_RESPONSE_THRESHOLD,
             step
           });
         }
@@ -19068,7 +19256,7 @@ async function runAgentTicket(runId) {
 
           // Only warn and penalize starting from the second inspection-only step.
           // The first inspection step is legitimate discovery and must not be scolded.
-          if (noProgressResponses >= 2) {
+          if (noProgressResponses >= INSPECTION_NO_PROGRESS_WARNING_THRESHOLD) {
             const uniqueRepeatedPaths = Array.from(new Set(repeatedListPaths));
             const message = uniqueRepeatedPaths.length > 0
               ? `Model repeated listDirectory without a write/create/rename/delete action: ${uniqueRepeatedPaths.join(', ')}`
@@ -19079,10 +19267,12 @@ async function runAgentTicket(runId) {
               isInspectionOnly: true
             });
 
-            if (noProgressResponses >= 3) {
+            if (noProgressResponses >= INSPECTION_NO_PROGRESS_THRESHOLD) {
               const error = createRunLimitError(run, 'step', 'Model repeated inspection-only non-progress twice. Bounded inspection must be followed by exactly one bounded operation batch.', {
                 currentValue: noProgressResponses,
-                configuredLimit: 1,
+                // The threshold actually enforced. Previously reported as 1,
+                // which named a limit the runtime does not apply.
+                configuredLimit: INSPECTION_NO_PROGRESS_THRESHOLD,
                 step,
                 repeatedListPaths: uniqueRepeatedPaths
               });
@@ -23414,6 +23604,36 @@ async function buildRunDiagnosticBundle(ctx) {
     out('- Workspace operations: ' + dash(runtimePolicy.usage.workspaceOperations) + ' / ' + dash(runtimePolicy.limits.maxWorkspaceOperationsPerRun));
     out('- Limit outcome: ' + dash(runtimePolicy.limitOutcome));
     out('- Provider symptom: ' + dash(runtimePolicy.providerSymptom));
+  }
+  out('');
+
+  // Execution-semantic controls: the process constants and environment flags
+  // that governed this run's behavior beyond the four numeric limits. Without
+  // these, two runs with identical evidence can have executed under different
+  // semantics with no way to tell them apart.
+  out('### Execution semantics (run-start)');
+  const semantics = runtimePolicy && runtimePolicy.semantics ? runtimePolicy.semantics : null;
+  if (semantics) {
+    out('- Recorded at run creation: yes');
+    out('- Prefix truncation enabled: ' + semantics.prefixTruncationEnabled);
+    out('- Objective-contract compiler enabled: ' + semantics.contractCompilerEnabled);
+    out('- Max actions per response: ' + semantics.maxActionsPerResponse);
+    out('- Max mutating actions per response: ' + semantics.maxMutatingActionsPerResponse);
+    out('- Action-contract violation threshold: ' + semantics.actionContractViolationThreshold);
+    out('- Stalled-response threshold: ' + semantics.stalledResponseThreshold);
+    out('- Inspection no-progress threshold: ' + semantics.inspectionNoProgressThreshold);
+    out('- Workspace snapshot entry limit: ' + semantics.workspaceSnapshotMaxEntries);
+    out('- Workload profile: ' + dash(semantics.workloadProfile));
+    out('- Max listDirectory per run: ' + dash(semantics.maxListDirectoryPerRun));
+    out('- Max readFile per run: ' + dash(semantics.maxReadFilePerRun));
+  } else {
+    out('- Recorded at run creation: no (run predates execution-semantics capture)');
+    const caps = runtimePolicy && runtimePolicy.actionCaps ? runtimePolicy.actionCaps : null;
+    out('- Max actions per response: ' + dash(caps && caps.maxActionsPerResponse)
+      + ' (source: ' + dash(caps && caps.source) + ')');
+    out('- Max mutating actions per response: ' + dash(caps && caps.maxMutatingActionsPerResponse)
+      + ' (source: ' + dash(caps && caps.source) + ')');
+    out('- Remaining semantic controls: not reconstructable for this run');
   }
   out('');
 

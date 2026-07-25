@@ -28,6 +28,19 @@ A batch is an ordered list of existing primitives:
 
 No new operation semantics. No recursive expansion. No self-spawning tickets.
 
+A batch is bounded by two per-response ceilings, both surfaced to the model in
+`runtimeEnvelope`:
+
+- `maxActionsPerResponse` — total actions in one response.
+- `maxMutatingActionsPerResponse` — how many of those may be mutations
+  (`createFolder`, `writeFile`, `renamePath`, `deletePath`). Default **2**;
+  deployments may configure it, so always read the value from
+  `runtimeEnvelope` rather than assuming the default.
+
+When more mutations remain than one response allows, emit a bounded batch, set
+`complete:false`, and continue in the next response. The examples below are
+written against the default of 2.
+
 ### 3. Deterministic Runtime Execution
 
 The runtime validates every primitive independently:
@@ -77,13 +90,23 @@ If the model cannot produce a valid bounded batch after bounded inspection:
 }
 ```
 
-**Step 2 (MUTATE — bounded batch):**
+**Step 2 (MUTATE — bounded batch, at most `maxMutatingActionsPerResponse`):**
 ```json
 {
-  "message": "Creating folders and moving matching folders",
+  "message": "Creating target folders A and B",
   "actions": [
     {"operation":"createFolder","args":{"path":"A"}},
-    {"operation":"createFolder","args":{"path":"B"}},
+    {"operation":"createFolder","args":{"path":"B"}}
+  ],
+  "complete": false
+}
+```
+
+**Step 3 (MUTATE — next bounded batch):**
+```json
+{
+  "message": "Moving matching folders into their targets",
+  "actions": [
     {"operation":"renamePath","args":{"path":"Alpha","nextPath":"A/Alpha"}},
     {"operation":"renamePath","args":{"path":"Beta","nextPath":"B/Beta"}}
   ],
@@ -91,7 +114,7 @@ If the model cannot produce a valid bounded batch after bounded inspection:
 }
 ```
 
-**Step 3 (VERIFY):**
+**Step 4 (VERIFY):**
 ```json
 {
   "message": "Verifying folders moved correctly",
@@ -108,9 +131,16 @@ If the model cannot produce a valid bounded batch after bounded inspection:
 - Step 2: executes each primitive, verifies each independently
   - `createFolder A` → verify folder exists
   - `createFolder B` → verify folder exists
+- Step 3: executes each primitive, verifies each independently
   - `renamePath Alpha → A/Alpha` → verify Alpha no longer exists at root, A/Alpha exists
   - `renamePath Beta → B/Beta` → verify Beta no longer exists at root, B/Beta exists
-- Step 3: executes `listDirectory` for confirmation, signals completion
+- Step 4: executes `listDirectory` for confirmation, signals completion
+
+Four mutations across two responses, because the default
+`maxMutatingActionsPerResponse` is 2. A deployment configured with a higher
+ceiling could emit them in a single batch; one configured lower would need more
+responses. Read the value from `runtimeEnvelope` rather than counting on the
+shape of this example.
 
 **Invalid model responses (would fail):**
 
@@ -141,7 +171,7 @@ If the model cannot produce a valid bounded batch after bounded inspection:
 The phase system rejects any response containing both inspection and mutation operations. A response must belong to exactly one execution phase.
 
 ### Non-Progress Detection
-After a response containing only `listDirectory`/`readFile`, the next response must contain mutations or signal completion. A second inspection-only response is treated as non-progress and fails with:
+After a response containing only `listDirectory`/`readFile`, the next response must contain mutations or signal completion. The second inspection-only response records a `model:no_progress` event and returns corrective feedback; the third terminates the run with:
 
 ```
 Model repeated inspection-only non-progress twice.
