@@ -44,6 +44,7 @@ the defect can cause, not how hard it is to fix.
 | A12 | Bounded workspace-snapshot recovery policy | Medium | **Open — decision required** — residual of A1 | Policy |
 | A14 | Redundant-mutation postcondition shortcut does not fire | **High** | **Implemented** — see entry | Correctness |
 | A15 | Postcondition telemetry names a source the event never reaches | Low | **Open — decision required** | Documentation / telemetry |
+| A16 | Run consequence records no committed mutations | **High** | **Open — production/contract conflict** | Correctness |
 
 ### Sequencing
 
@@ -506,6 +507,55 @@ rather than extending `runtime-feasibility-test.js`.
 **Method note for whoever picks this up:** before treating any suite failure as a regression,
 baseline it at the relevant commit in a detached worktree and compare failure strings. Most
 failures in this list are pre-existing.
+
+---
+
+### A16. Run consequence records no committed mutations
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — diagnosis required.** Proven behavior; root cause unverified |
+| **Severity** | **High** — a run's durable record of what it changed is empty even when it changed something |
+| **Scope** | Separate production-runtime defect. **Not** an A10 test-migration issue |
+| **Evidence** | Independent read-only probe against `master` `074526e` |
+| **Decision required** | Diagnose the consequence path, then decide the smallest coherent correction |
+
+**Proven behavior.**
+
+A completed run holding a **succeeded** `writeFile` operation receipt persists an empty
+consequence:
+
+```
+RUN status=completed
+OPS=["writeFile:cons-note.md:succeeded"]
+CONSEQUENCE.created=[]
+CONSEQUENCE.mutations=[]
+```
+
+`runConsequence.created` is `[]` and `runConsequence.mutations` is `[]` despite the receipt
+existing with `outcome: succeeded`.
+
+**Operational impact.** The run surface and the diagnostic bundle render `runConsequence` as
+what the run created, deleted, renamed, updated, and mutated. With these collections empty, both
+surfaces **falsely report that the run changed nothing** — while the workspace and the operation
+receipts show that it did. An operator triaging from either surface is told the opposite of what
+happened.
+
+**Natural test impact.** `postcondition-completion-test.js` scenario 6
+(`workspace-objective-satisfied`) remains blocked. Its assertion —
+`runConsequence.created` contains the written note — is **retained unchanged**; it is the
+contract this entry exists to protect and must not be weakened to make the suite pass.
+
+**Root cause: unverified.** No mechanism is asserted here. In particular this entry does **not**
+claim any relationship to A14's read-path projection defect; that would require source and
+persisted evidence proving it, which has not been gathered.
+
+**Reproduction.** Minimal single-turn agent writing one file, dispatched through the normal
+ticket path, observed through the store only. Reproduced independently of the A10-migrated
+harness, so it is not a porting artifact.
+
+**Not repaired in A10.** Any correction is a runtime-semantic change, which the A10
+test-infrastructure tranche forbids.
 
 ---
 
