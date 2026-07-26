@@ -15,8 +15,7 @@
 // operator nothing about what to fix.
 //
 // Refused when: no run exists; the latest run failed; the latest run was interrupted;
-// or triage is unresolved. (The historical verification-required refusal is NOT
-// migrated — see the note at scenario 5 and A20.)
+// triage is unresolved; or verification was declared and no passing verdict exists.
 //
 // THE POSITIVE CONTROL IS THE WHOLE TEST. Refusals prove nothing on their own — a
 // runtime that refuses every completion satisfies all of them. The sixth case is a
@@ -92,6 +91,38 @@ async function main() {
       return store.getRun(created.id);
     }
 
+    // A completed WORKFLOW run carrying a declared verification contract but no
+    // passing verdict — the only shape that makes verification "required".
+    async function makeVerificationRun(ticketId) {
+      const created = await store.createRun({
+        ticketId, agentId: agent.id, agentName: agent.name,
+        executionMode: 'workflow', workflowId: `wf-verify-${STAMP}`,
+        // The snapshot must carry its OWN workflowId: `normalizeVerificationContractSnapshot`
+        // returns null without it, and a null contract means verification is not required.
+        verificationContractSnapshot: {
+          workflowId: `wf-verify-${STAMP}`,
+          workflowName: 'Verification fixture',
+          capturedAt: now(),
+          postconditions: [{ type: 'fileExists', path: `verify-${STAMP}.txt` }]
+        },
+        runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
+        executionPolicySnapshot: { requireVerification: 'when_declared' }, status: 'pending'
+      });
+      const claim = await store.claimPendingRun({
+        leaseOwner: 'completion-fixture', leaseDurationMs: 60000, eligibleRunIds: [created.id]
+      });
+      const started = await store.transitionRun({
+        runId: created.id, expectedRevision: claim.run.revision, fromStatuses: ['pending'],
+        toStatus: 'running', leaseOwner: 'completion-fixture', eventType: 'run.started'
+      });
+      await store.transitionRun({
+        runId: created.id, expectedRevision: started.run.revision, fromStatuses: ['running'],
+        toStatus: 'completed', leaseOwner: 'completion-fixture', eventType: 'run.execution_completed',
+        patch: { completedAt: now() }, eventPayload: { status: 'completed' }
+      });
+      return store.getRun(created.id);
+    }
+
     const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
     const cookie = await server.login();
 
@@ -142,14 +173,18 @@ async function main() {
     });
     await refuses('triage', triageTicket.id, /triage/i);
 
-    // ── 5. NOT MIGRATED: verification-required-but-not-passed ───────────────
-    // The historical suite asserted this refusal. It is not reproduced here because a
-    // completed run with `requireVerification: 'always'` on its policy snapshot is
-    // still ACCEPTED — the gate evidently keys off recorded evaluation/verification
-    // state that this fixture does not create, not off the policy alone. Rather than
-    // guess at that state and risk asserting a shape the runtime does not use, the
-    // assertion is left explicitly open in A20. It is the one historical assertion in
-    // this half without a destination.
+    // ── 5. Verification required but not passed ─────────────────────────────
+    // RESOLVED by reading `isRunVerificationRequired`, which is narrower than the
+    // policy field alone. Verification is required only when ALL of these hold:
+    //   * the run's policy snapshot says `when_declared` — note `'always'` returns
+    //     FALSE here, which is why an earlier `'always'` fixture was accepted
+    //   * the run is a WORKFLOW run with a workflowId
+    //   * the run captured a verification contract carrying at least one postcondition
+    // With that state and no verified objective-success evidence, completion must be
+    // refused. The historical assertion is real; only the fixture was wrong.
+    const verifyTicket = await makeTicket('verification', 'when_declared');
+    await makeVerificationRun(verifyTicket.id);
+    await refuses('verification', verifyTicket.id, /verif/i);
 
     // ── 6. POSITIVE CONTROL — a genuinely completed run is accepted ─────────
     // Five refusals prove nothing without this: a runtime refusing every completion
@@ -179,8 +214,8 @@ async function main() {
       label: 'completion admission',
       assertions: assert.count(),
       scenarios: scenariosRun,
-      minAssertions: 18,
-      minScenarios: 6
+      minAssertions: 22,
+      minScenarios: 7
     });
     console.log(`\nPASS: manual completion admission — ${scenariosRun} scenarios, ${assert.count()} assertions (PostgreSQL-native)`);
   }, { schemaSlug: 'completion_admission' });

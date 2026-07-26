@@ -182,6 +182,40 @@ const MUTATIONS = Object.freeze([
     expect: 'the timeline shows a refusal it cannot attribute to any rule'
   },
   {
+    // The highest-stakes reconciliation boundary in the system: startup deciding what a
+    // finished run PROVED. A failed run finalized as completed is a durable lie that no
+    // later step revisits.
+    name: 'startup-converges-failed-run-to-completed',
+    suite: 'startup-state-convergence-test.js',
+    file: 'server.js',
+    contract: 'startup convergence finalizes a stuck ticket to its run\'s ACTUAL terminal status',
+    find: '      updated = await finalizeTicketForRun(latestRun, latestRun.status);',
+    replace: '      updated = await finalizeTicketForRun(latestRun, \'completed\');',
+    expect: 'a ticket whose run failed is converged to completed on startup'
+  },
+  {
+    // Guards the negative control: convergence must never run while execution could
+    // still be in flight, or startup terminalizes work the scheduler is about to do.
+    name: 'startup-finalizes-ticket-with-live-run',
+    suite: 'startup-state-convergence-test.js',
+    file: 'server.js',
+    contract: 'a ticket with a pending or running run is never finalized by startup convergence',
+    find: "    if (ticketRuns.some(run => ['pending', 'running'].includes(run.status))) continue;",
+    replace: '    if (false) continue;',
+    expect: 'a ticket with live in-flight work is finalized from a sibling terminal run'
+  },
+  {
+    // Proves the verification refusal is falsifiable. The historical assertion was
+    // twice mis-fixtured before the gate was read properly, so it earns a mutation.
+    name: 'completion-ignores-required-verification',
+    suite: 'completion-admission-test.js',
+    file: 'server.js',
+    contract: 'a run with a declared verification contract needs a passing verdict before completion',
+    find: '  if (isRunVerificationRequired(latestRun)) {',
+    replace: '  if (false) {',
+    expect: 'a ticket completes with declared verification and no passing verdict'
+  },
+  {
     name: 'completion-ignores-unresolved-triage',
     suite: 'completion-admission-test.js',
     file: 'server.js',

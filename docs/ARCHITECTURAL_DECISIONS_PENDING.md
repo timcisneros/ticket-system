@@ -2229,50 +2229,100 @@ the escalation is exhausted and the next step is the recorded one: treat a runti
 cannot drain under reasonable bounded load as a **production progress/liveness defect**,
 not a harness problem.
 
-### Terminal-state cluster — completion admission (2026-07-26)
+### Terminal-state cluster — RETIRED `state-agreement-completion-test.js` (2026-07-26)
 
-**`state-agreement-completion-test.js` — SPLIT.** It combines two related but distinct
-terminal-state contracts:
+**The file is deleted.** It combined two related but distinct terminal-state contracts,
+and both now have registered PostgreSQL-native destinations:
 
-| Half | Contract | Disposition |
+| Half | Contract | Destination |
 |------|----------|-------------|
-| completion admission | what an operator may manually mark completed | **migrated** → `completion-admission-test.js` |
-| startup state convergence | a ticket whose run already terminalized converges to the matching status on restart, creating no new runs and exactly one `run.terminalized` per run | **still open** |
+| completion admission | what an operator may manually mark completed | `completion-admission-test.js` — 25 assertions, 7 scenarios, registered |
+| startup state convergence | a ticket whose run already terminalized converges to the matching status on restart | `startup-state-convergence-test.js` — 35 assertions, 10 scenarios, registered |
+| immutable verification snapshot | reconciliation verifies from the run's captured contract (`contractSource: 'run_snapshot'`), never the live catalog | inherited by the named orphan `verification-contract-reconciliation-test.js`, which already asserts exactly this at its restart-recovery step — see the note below |
 
-The historical file stays `orphaned`: half its contract has not moved.
+**`completion-admission-test.js`.** "Completed" is the strongest claim the system makes
+about work and an operator can assert it directly, so this gate is the only thing
+between a wish and a durable record. Refusals are proved for: no run at all, a failed
+latest run, an interrupted latest run, unresolved triage, and declared-but-unverified
+verification. Each refusal must EXPLAIN itself — an unexplained 409 tells an operator
+nothing about what to fix — and each is checked for EFFECT: the ticket must be
+unchanged, not merely un-completed. **The positive control is the whole test**: a ticket
+whose run genuinely completed IS accepted and DOES persist, and a seventh check
+re-attempts one refusal afterwards to rule out order-dependent behaviour.
 
-**`completion-admission-test.js` — 21 assertions, 6 scenarios, registered.**
-"Completed" is the strongest claim the system makes about work and an operator can
-assert it directly, so this gate is the only thing between a wish and a durable record.
-Refusals are proved for: no run at all, a failed latest run, an interrupted latest run,
-and unresolved triage. Each refusal must also EXPLAIN itself — an unexplained 409 tells
-an operator nothing about what to fix — and each is checked for EFFECT: the ticket must
-be unchanged, not merely un-completed.
+**The verification refusal is RESOLVED — the assertion was real, the fixture was wrong,
+twice.** It was previously recorded here as unreproducible. Reading
+`isRunVerificationRequired` settled it: verification is required only when *all* of
+  * the run's policy snapshot says `when_declared` — `'always'` returns **false**, which
+    is why the first fixture was accepted;
+  * the run is a **workflow** run with a `workflowId`; and
+  * `normalizeVerificationContractSnapshot` returns non-null, which requires the
+    snapshot to carry its **own** `workflowId` — the second fixture omitted it, so the
+    contract normalized to null and verification silently was not required.
 
-**The positive control is the whole test.** Refusals prove nothing alone: a runtime that
-refused every completion would satisfy all of them. A ticket whose run genuinely
-completed IS accepted and DOES persist as completed, and a seventh check re-attempts one
-refusal afterwards to rule out order-dependent behaviour.
+The earlier conclusion ("the gate keys off recorded evaluation state") was wrong, and
+the honest lesson is narrower than it looked: two plausible fixture shapes both produced
+a 200 for two *different* reasons, and neither was visible without reading the predicate.
+Guessing a third time would have been worse than the recorded gap.
 
-**One historical assertion is explicitly NOT migrated.** The suite asserted that
-completion is refused when verification was required and did not pass. Reproducing it
-failed: a completed run carrying `requireVerification: 'always'` on its **policy
-snapshot** is still accepted, so the gate evidently keys off recorded
-evaluation/verification state rather than the policy alone. Rather than guess at that
-state and risk asserting a shape the runtime does not use, it is left open here and
-noted in the suite at the point where it would have gone. It is the one assertion in
-this half without a destination.
+*(A second fixture lesson: the gate reads the RUN's policy snapshot, not the ticket's
+live policy — correctly, since editing a policy after the fact must not retroactively
+change what a finished run proved.)*
 
-*(Worth noting the fixture lesson found on the way: the gate reads the RUN's policy
-snapshot, not the ticket's live policy — correctly, since editing a policy after the
-fact must not retroactively change what a finished run proved.)*
+*(Noted, not chased: `requireVerification: 'always'` makes verification **less** binding
+than `'when_declared'`, because `isRunVerificationRequired` returns false for it
+outright. That reads as either a naming trap or a real defect. It is outside this
+tranche's scope and no suite depends on the current behaviour.)*
 
-**Mutation `completion-ignores-unresolved-triage`** lets an operator complete a ticket
-over an unresolved triage flag. The other refusals still fire and the positive control
-still passes, so only the triage scenario catches a durable "completed" claim over work
-nobody reviewed. Killed.
+**`startup-state-convergence-test.js`.** `run.terminalized` and the ticket's
+finalization are separate durable steps; a process that dies between them leaves a
+finished run and a ticket still claiming `in_progress` — a lie about live work that no
+scheduler revisits. Covered: completed → completed, failed → failed (**never**
+completed), interrupted → open; incomplete terminal evidence is completed and recorded
+before convergence; no new runs; exactly one `run.terminalized` per run; ticket, run,
+replay and timeline agree; a second restart changes nothing.
 
-### The remaining 73 — sequencing
+**Two reconcilers, not one — found by a failing negative control.** The suite was
+written assuming `reconcileUnfinalizedTicketsOnStartup` was the only healer, so a
+completed run *without* `run.terminalized` was seeded as a negative control that must
+not converge. It converged. `interruptStaleRunsOnStartup` runs first and handles runs
+whose **evidence** is incomplete (`readRunsNeedingTerminalReconciliation` →
+`reconcileTerminalRun`); the second handles runs whose evidence is complete but whose
+**ticket** is stuck. The scenario was re-aimed to the contract that actually matters
+there: convergence is allowed, but startup must durably record the terminalization it
+acted on rather than finalize a ticket on evidence that still does not exist. This is
+the sixth time in A20 that a surprising result was defense-in-depth rather than a
+coverage hole; the rule holds — **identify which layer executes before judging a suite.**
+
+**Both directions are controlled.** Scenarios 1–4 demand real transitions, so a startup
+that changes nothing fails. Scenarios 5–6 seed `in_progress` tickets that must NOT move
+— one with a still-pending sibling run, one with no runs at all — so a startup that
+converges everything also fails.
+
+**The in-flight control had to be built deliberately to be load-bearing.** Its first
+form put the pending run *newest*, and the mutation below survived: with a pending
+latest run the healer stops at its terminal-status branch and the in-flight guard is
+never reached. Reordering so the *completed* run is latest puts the guard on the only
+path. The pending sibling is also created holding an unexpired lease, so the scheduler's
+first tick cannot claim it and the scenario observes the healer rather than racing it.
+
+**Mutations — all killed.**
+
+| Mutation | Removes | Result |
+|----------|---------|--------|
+| `startup-converges-failed-run-to-completed` | convergence finalizes to the run's ACTUAL terminal status | killed — a failed run's ticket no longer reaches `failed` |
+| `startup-finalizes-ticket-with-live-run` | the pending/running guard | killed after the fixture was re-aimed |
+| `completion-ignores-unresolved-triage` | the triage gate | killed |
+| `completion-ignores-required-verification` | the declared-verification gate | killed |
+
+**On the inherited assertion.** `verification-contract-reconciliation-test.js` asserts
+`contractSource === 'run_snapshot'` at its restart-recovery step — the same contract the
+retired suite checked for run 103, and more thoroughly. It is itself an A20 orphan, so
+this is a **named successor that is not yet registered**, not proven coverage. Retiring
+the historical file does not lose the contract, but it does not currently run either;
+it is tracked in the orphan list below and must be repaired before A20 closes.
+
+### The remaining 72 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

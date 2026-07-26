@@ -133,8 +133,11 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'allocation-lifecycle-isolation-test.js',
   // A20 — the injection-security half split out of rbac-and-inline-data-security-test.js.
   'inline-data-injection-test.js',
-  // A20 — the completion-gating half of state-agreement-completion-test.js.
-  'completion-admission-test.js'
+  // A20 — the two halves of the retired state-agreement-completion-test.js:
+  // what an operator may mark completed, and what startup concludes about
+  // tickets whose runs already finished.
+  'completion-admission-test.js',
+  'startup-state-convergence-test.js'
 ]);
 
 function runCheckpoint() {
