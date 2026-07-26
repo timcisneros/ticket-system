@@ -47,7 +47,8 @@ the defect can cause, not how hard it is to fix.
 | A15 | Postcondition telemetry names a source the event never reaches | Low | **Open — decision required** | Documentation / telemetry |
 | A16 | Run consequence records no committed mutations | **High** | **Implemented** — see entry | Correctness |
 | A17 | Delegated handoff logging crashes the server process | **Critical** | **Open — implementation required** | Correctness / availability |
-| A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented, 83 orphans remain | Verification gap |
+| A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented; 81 orphans remain | Verification gap |
+| A21 | Ticket reassignment silently discarded; audit trail asserts otherwise | **High** | **Open — implementation required** | Correctness / truthfulness |
 
 ### Sequencing
 
@@ -970,6 +971,78 @@ durable evidence.
 
 ---
 
+### A21. Ticket reassignment is silently discarded, and the audit trail says otherwise
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — implementation required** |
+| **Severity** | **High** — an audit record asserts a change that did not happen |
+| **Scope** | Production runtime/persistence defect. Found by A20 tranche 2; **not** a test-migration issue |
+| **Evidence** | Reproduced against `d29b3c5` by `scripts/assignment-audit-test.js`; root cause below |
+| **Decision required** | Whether `transitionTicket` should patch the assignment columns, or whether reassignment needs its own store method |
+
+**Description:**
+
+`PATCH /api/tickets/:id/assignment` answers **HTTP 200**, advances the ticket revision,
+sets `changedBy`/`changedAt`, appends a `ticket:assignment_change` audit log naming the
+old and new agent, and emits `ticket.updated` — **while leaving the ticket assigned to
+the original agent.**
+
+```
+agents a=1 b=2   ticket target=1
+PATCH /api/tickets/1/assignment  { agentId: 2 }   → HTTP 200
+after target=1   changedBy=admin
+```
+
+**Root cause.** `assignment_target_type` and `assignment_target_id` are real columns on
+`tickets` (`persistence/postgres/migrations/001_runtime_core.sql`). `ticketFromRow`
+reads them **from the columns**, overriding whatever the JSON `body` holds:
+
+```js
+assignmentTargetId: nullablePositiveSafeInteger(row.assignment_target_id, 'ticket.assignmentTargetId'),
+```
+
+`transitionTicket` — the only update path the endpoint uses — writes just two things:
+
+```sql
+SET status = $4,
+    body = ticket.body || $5::jsonb,
+```
+
+So the endpoint's patch lands in `body`, where the column immediately shadows it.
+Grepping `assignment_target_id` in `persistence/postgres/store.js` confirms it is
+written **only at INSERT** (`createTicket`, `createTicketWithEvent`). **No update path
+anywhere writes those columns.** A ticket's assignment is effectively immutable after
+creation, and every surface that claims to change it is lying.
+
+**Why this is High rather than Medium.** The failure is not "reassignment doesn't
+work" — a visibly broken button is recoverable. It is that the system **records a
+false audit fact**: the log says the ticket moved from agent 1 to agent 2, the
+`ticket.updated` event payload says the same, and the ticket did not move. Anyone
+reconstructing who was responsible for work at a given time gets a wrong answer from
+the durable record. `docs/SYSTEM_STATUS.md`'s truthfulness rule applies directly here.
+
+There is a second-order effect: the endpoint then calls `createRunsForTicket(ticket)`,
+so the run it dispatches goes to the **old** agent while the audit trail attributes the
+work to the new one.
+
+**Coverage.** `scripts/assignment-audit-test.js` is repaired, PostgreSQL-native, and
+correctly **fails** on this. It is classified `excluded` / `blocked-by-defect` in
+`scripts/test-manifest.js` — not weakened to pass, and not deleted. It reverts to
+`required` the moment this entry is implemented, and it already asserts the exact
+property that must hold:
+
+```js
+assert(auditLog.nextAssignment.assignmentTargetId === reassigned.assignmentTargetId,
+  'the audit log agrees with the ticket it describes');
+```
+
+**Not fixed here.** A20 tranche 2 is a test-repair tranche and has modified no
+production file. Changing ticket-update semantics touches the transition guard shared by
+every ticket mutation, so it needs its own tranche with its own regression coverage.
+
+---
+
 ### A20. Repository-wide PostgreSQL-cutover test-orphan population
 
 | Field | Value |
@@ -987,10 +1060,10 @@ larger. It is. Executing every unregistered suite establishes the real numbers:
 
 | Classification | Count |
 |----------------|-------|
-| **required** — must run in the release checkpoint | 63 |
-| **orphaned** — genuine cutover orphan, cannot run | 83 |
+| **required** — must run in the release checkpoint | 65 |
+| **orphaned** — genuine cutover orphan, cannot run | 81 (was 83) |
 | **excluded** — deliberately outside the checkpoint | 20 |
-| **total `scripts/*-test.js`** | **161** (164 before A13 retired five and added two) |
+| **total `scripts/*-test.js`** | **162** |
 
 The A10 entry guessed ~96 candidates and cautioned that the list "includes false positives,
 comments, and intentionally excluded live-provider tests." **That caution was wrong in one
@@ -1140,7 +1213,66 @@ The second is worth noting: only the suite's **negative** half catches it. A blo
 renders would attest to an authorization that never happened, and a suite asserting only the
 happy path would have stayed green.
 
-### The remaining 83 — sequencing
+### Tranche 2 (2026-07-26) — the silent orphans
+
+Started with the seven `cutover-orphan-silent` suites, per this entry's own sequencing.
+
+**The shared fix.** `scripts/child-process-settlement.js` replaces the unguarded
+`child.once('exit')` pattern once rather than seven times:
+
+- `settleChild(child, { timeoutMs })` — resolves whether the child exited before or
+  after the call, and **rejects rather than hangs** if it does neither
+- `stopChild(child, { graceMs, killMs })` — SIGTERM → SIGKILL, always settles
+- `assertScenariosExecuted({ assertions, scenarios, minAssertions })` — the vacuity
+  floor, because "zero assertions ran" is never a valid successful outcome
+
+`scripts/child-process-settlement-test.js` (23 assertions, registered) demonstrates all
+six required cases: child still running, child already exited, normal exit codes,
+forced termination, a child that never exits reaching the caller as a rejection, and no
+successful zero-assertion exit. The already-exited case asserts the helper returns in
+under a second — the old pattern waited forever there.
+
+**Dispositions this tranche:**
+
+| Suite | Disposition | Result |
+|-------|-------------|--------|
+| `status-transition-evidence-test.js` | Repair and retain → **required** | ✅ 22 assertions |
+| `assignment-audit-test.js` | Repair and retain → **excluded / blocked-by-defect** | ✅ repaired; **fails on a real production defect — see A21** |
+| `conditional-workflow-prompt-test.js` | Still `cutover-orphan-silent` | Not reached |
+| `workflow-composition-test.js` | Still `cutover-orphan-silent` | Not reached |
+| `operational-abuse-test.js` | Still `cutover-orphan-silent` | Not reached |
+| `resumable-execution-test.js` | Still `cutover-orphan-silent` | Not reached |
+| `scheduler-integrity-abuse-test.js` | Still `cutover-orphan-silent` | Not reached |
+
+**The tranche found a High-severity production defect, which is the point.**
+`assignment-audit-test.js`, once it could actually fail, immediately exposed **A21**:
+`PATCH /api/tickets/:id/assignment` returns 200 and writes an audit record claiming the
+ticket moved between agents, while the assignment columns are never updated by any
+update path. That defect had been sitting behind a suite that exited 0 in silence.
+
+It is classified `blocked-by-defect` rather than weakened to pass. A new exclusion
+reason was added for exactly this case: **the suite is correct and production is
+broken.** Excluding it keeps the checkpoint honest; adjusting the assertion until it
+went green would have re-hidden the defect the suite exists to catch.
+
+**Note for whoever takes the remaining five.** Two things learned here that will save
+time:
+
+- The scheduler must be parked (`RUNTIME_SCHEDULER_INTERVAL_MS: '3600000'`) for any
+  suite that measures ticket state, or it dispatches a run and mutates the fields under
+  test mid-assertion.
+- Reopening a ticket synchronously calls `createRunsForTicket`, so a ticket asserted as
+  `open` may legitimately already be `in_progress`. Assert what the transition
+  guarantees (it left `blocked`), not an exact resting status.
+
+A preliminary read suggests `resumable-execution-test.js`'s five scenarios may overlap
+`recovery-state-reconstruction-test.js` (corrupt chain, missing authority),
+`lease-renewal-resume-safety-test.js` (resume without duplicate operations) and
+`postgres-startup-recovery-test.js` (replay finalization). That is a **hypothesis, not
+a disposition** — it must be verified scenario by scenario before anything is retired,
+per the discipline this entry established.
+
+### The remaining 81 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the
@@ -1150,9 +1282,9 @@ live.
 
 Recommended order:
 
-1. **The 7 `cutover-orphan-silent` suites**, regardless of what they guard. Their failure mode
-   is invisible, so they are the ones most likely to be mistaken for coverage. Fix the
-   unguarded `child.once('exit')` in every repair.
+1. **The remaining 5 `cutover-orphan-silent` suites**, regardless of what they guard. Their
+   failure mode is invisible, so they are the ones most likely to be mistaken for coverage.
+   Use `scripts/child-process-settlement.js`; the unguarded pattern is now fixed in one place.
 2. **Suites guarding authority, mutation and evidence contracts** — the ones whose regression
    would be a correctness or security defect rather than a display defect.
 3. **Everything else**, retiring rather than porting wherever the mechanism is dead, with the

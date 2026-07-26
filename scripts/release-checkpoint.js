@@ -39,7 +39,11 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'telemetry-test.js',
   'workload-profile-test.js',
   'archive-local-events-test.js',
-  'mutating-limit-context-regression-test.js'
+  'mutating-limit-context-regression-test.js',
+  // A20 tranche 2 — the shared child-settlement helper that removes the
+  // silent-success failure mode from the orphaned suites. Deterministic: it spawns
+  // only short-lived `node -e` children.
+  'child-process-settlement-test.js'
 ]);
 
 const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
@@ -89,7 +93,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // Those read server.js as text and evaluated extracted helpers, so they broke on
   // internal structure while the behavior they guarded stayed live and uncovered.
   'rerun-mode-evidence-test.js',
-  'operation-poststate-observation-test.js'
+  'operation-poststate-observation-test.js',
+  // A20 tranche 2 — repaired from cutover-orphan-silent.
+  'status-transition-evidence-test.js'
 ]);
 
 function runCheckpoint() {

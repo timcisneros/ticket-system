@@ -154,6 +154,19 @@ const MUTATIONS = Object.freeze([
     find: 'function captureWorkspacePostState(',
     replace: 'function captureWorkspacePostState() { return null; }\nfunction __unusedCaptureWorkspacePostState(',
     expect: 'operation receipts carry no observed post-state'
+  },
+  {
+    name: 'status-change-loses-from-status',
+    suite: 'status-transition-evidence-test.js',
+    file: 'server.js',
+    contract: 'a status change records the status it came FROM',
+    // Record the destination as the origin. Every surface still shows a transition,
+    // the log still exists, and the trail becomes useless: "open → open" cannot tell
+    // an operator what actually happened. A suite asserting only that a log EXISTS
+    // would stay green through this.
+    find: '    fromStatus: previousStatus,',
+    replace: '    fromStatus: status,',
+    expect: 'the transition log claims it came from where it went'
   }
 ]);
 

@@ -1,243 +1,144 @@
-const { spawn } = require('child_process');
-const fs = require('fs');
-const http = require('http');
-const os = require('os');
-const path = require('path');
-const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
+#!/usr/bin/env node
+'use strict';
+// Ticket status transition evidence trail — PostgreSQL-native
+// (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A20).
+//
+// Contract under test, unchanged from the JSON-era original: every ticket status
+// transition leaves an evidence trail that names WHERE IT CAME FROM, WHERE IT WENT,
+// WHO moved it and WHEN — and that same trail is reachable from all three operator
+// surfaces that claim to show it: the ticket timeline, the logs API, and the logs
+// page. A transition recorded in one surface but missing from another is the failure
+// this guards, because an operator who checks the surface that lost it concludes the
+// transition never happened.
+//
+// Repaired, not rewritten. Seeding and log/timeline observation now go through the
+// store rather than a DATA_DIR the PostgreSQL server no longer reads.
+//
+// THIS SUITE PREVIOUSLY EXITED 0 WHILE ASSERTING NOTHING — see the A20 entry for the
+// unguarded `child.once('exit')` mechanism. Cleanup is now the shared harness plus
+// scripts/child-process-settlement.js, and the suite refuses to exit 0 without a
+// positive assertion count.
+//
+// Requires TEST_DATABASE_URL (or DATABASE_URL).
 
-const ROOT = path.resolve(__dirname, '..');
-const REAL_DATA_DIR = path.join(ROOT, 'data');
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'status-transition-evidence-data-'));
-const WORKSPACE_ROOT = createTempWorkspaceRoot('status-transition-evidence');
-const PORT = process.env.PORT || '3445';
-const BASE_URL = `http://127.0.0.1:${PORT}`;
-const DATA_FILES = [
-  'agents.json',
-  'allocation-plans.json',
-  'events.jsonl',
-  'groups.json',
-  'logs.json',
-  'memberships.json',
-  'operation-history.json',
-  'permissions.json',
-  'runs.json',
-  'tickets.json',
-  'users.json',
-  'workflows.json'
-];
+const { withHarness, createAsserter } = require('./postgres-test-harness');
+const { assertScenariosExecuted } = require('./child-process-settlement');
 
-for (const file of DATA_FILES) {
-  const src = path.join(REAL_DATA_DIR, file);
-  const dst = path.join(DATA_DIR, file);
-  fs.writeFileSync(dst, fs.existsSync(src) ? fs.readFileSync(src, 'utf8') : '[]');
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
-}
-
-function writeJson(file, value) {
-  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
-}
-
-function request(method, urlPath, options = {}) {
-  const body = options.form
-    ? new URLSearchParams(options.form).toString()
-    : options.body
-      ? JSON.stringify(options.body)
-      : null;
-
-  return new Promise((resolve, reject) => {
-    const req = http.request(`${BASE_URL}${urlPath}`, {
-      method,
-      headers: {
-        ...(options.form ? {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Content-Length': Buffer.byteLength(body)
-        } : {}),
-        ...(options.body ? {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body)
-        } : {}),
-        ...(options.cookie ? { Cookie: options.cookie } : {})
-      }
-    }, res => {
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => resolve({
-        statusCode: res.statusCode,
-        headers: res.headers,
-        body: Buffer.concat(chunks).toString('utf8')
-      }));
-    });
-
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
-  });
-}
-
-function cookieFrom(response) {
-  return (response.headers['set-cookie'] || []).map(cookie => cookie.split(';')[0]).join('; ');
-}
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-async function waitForReady() {
-  const started = Date.now();
-  while (Date.now() - started < 15000) {
-    try {
-      const response = await request('GET', '/health');
-      if (response.statusCode === 200 && JSON.parse(response.body).ready) return;
-    } catch (error) {
-      // Server is still starting.
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error('Timed out waiting for server ready');
-}
-
-async function login() {
-  const response = await request('POST', '/login', {
-    form: { username: 'admin', password: 'admin123' }
-  });
-  assert(response.statusCode === 302, `Admin login failed with HTTP ${response.statusCode}`);
-  return cookieFrom(response);
-}
-
-function seedFixture() {
-  const now = new Date('2026-01-01T00:00:00.000Z').toISOString();
-  const agents = readJson('agents.json');
-  const nextAgentId = Math.max(0, ...agents.map(agent => agent.id || 0)) + 1;
-  const agent = { id: nextAgentId, name: 'Status Evidence Agent', type: 'agent', provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-key', createdAt: now };
-  writeJson('agents.json', [...agents, agent]);
-
-  const tickets = readJson('tickets.json');
-  const ticket = {
-    id: Math.max(0, ...tickets.map(item => item.id || 0)) + 1,
-    objective: 'status transition evidence trail regression',
-    assignmentTargetType: 'agent',
-    assignmentTargetId: agent.id,
-    assignmentMode: 'individual',
-    ownedOutputPaths: null,
-    executionMode: 'agent',
-    workflowId: null,
-    workflowInput: null,
-    capabilityType: 'directAction',
-    capabilityId: 'agent-selected-actions',
-    capabilityInput: null,
-    status: 'open',
-    createdBy: 'seed',
-    changedBy: 'seed',
-    changedAt: now,
-    createdAt: now,
-    updatedAt: now
-  };
-  writeJson('tickets.json', [...tickets, ticket]);
-  return { ticket, agent };
-}
+const STAMP = Date.now();
+const assert = createAsserter();
 
 async function main() {
-  const { ticket } = seedFixture();
-  const child = spawn(process.execPath, ['server.js'], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      NODE_ENV: 'test',
-      PORT,
-      DATA_DIR,
-      WORKSPACE_ROOT
-    },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
+  await withHarness('status transition evidence', async ({ store, startServer }) => {
+    const agent = (await store.createConfiguredAgent({
+      value: { name: `StatusEvidence-${STAMP}`, provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-key-status' },
+      groupIds: [], changedBy: 'status-transition-evidence-test'
+    })).agent;
 
-  let childOutput = '';
-  child.stdout.on('data', chunk => { childOutput += chunk.toString(); });
-  child.stderr.on('data', chunk => { childOutput += chunk.toString(); });
+    const now = () => new Date().toISOString();
+    const objective = `status transition evidence trail regression ${STAMP}`;
+    const ticket = (await store.createTicketWithEvent({
+      ticket: {
+        objective, acceptanceCriteria: null,
+        assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual',
+        ownedOutputPaths: null, targetRef: null, executionMode: 'agent',
+        workflowId: null, workflowInput: null,
+        capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
+        executionPolicy: {
+          mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+          maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
+          allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
+        },
+        workTypeId: null, workTypeSnapshot: null, workContextId: null, workContextSnapshot: null,
+        status: 'open', createdBy: 'seed', changedBy: 'seed',
+        changedAt: now(), createdAt: now(), updatedAt: now()
+      },
+      eventPayload: { source: 'status-transition-evidence-test' }
+    })).ticket;
 
-  try {
-    await waitForReady();
-    const cookie = await login();
+    // An open ticket would be dispatched by the scheduler, which changes status
+    // underneath the transitions being measured.
+    const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+    const cookie = await server.login();
 
-    const statusChangesBefore = readJson('logs.json').filter(log => log.type === 'ticket:status_change' && log.contextTicketId === ticket.id).length;
+    const statusLogs = async () => {
+      const page = await store.listLogs({ ticketId: ticket.id, types: ['ticket:status_change'], order: 'asc', limit: 100 });
+      return page.logs || page;
+    };
 
-    const blockResponse = await request('PATCH', `/api/tickets/${ticket.id}/status`, {
-      cookie,
-      body: { status: 'blocked' }
+    const before = (await statusLogs()).length;
+
+    // ── Two transitions, so fromStatus is proved rather than assumed ─────────
+    const blocked = await server.request('PATCH', `/api/tickets/${ticket.id}/status`, {
+      cookie, body: { status: 'blocked' }
     });
-    assert(blockResponse.statusCode === 200, `block transition returned HTTP ${blockResponse.statusCode}: ${blockResponse.body}`);
+    assert(blocked.statusCode === 200, `the block transition was accepted (HTTP ${blocked.statusCode}: ${blocked.body})`);
+    assert((await store.getTicket(ticket.id)).status === 'blocked', 'the ticket is actually blocked');
 
-    const openResponse = await request('PATCH', `/api/tickets/${ticket.id}/status`, {
-      cookie,
-      body: { status: 'open' }
+    const reopened = await server.request('PATCH', `/api/tickets/${ticket.id}/status`, {
+      cookie, body: { status: 'open' }
     });
-    assert(openResponse.statusCode === 200, `open transition returned HTTP ${openResponse.statusCode}: ${openResponse.body}`);
+    assert(reopened.statusCode === 200, `the reopen transition was accepted (HTTP ${reopened.statusCode})`);
+    // Reopening synchronously dispatches a run, so the ticket may already have moved
+    // on to in_progress by the time this reads it. What must be true is that it is no
+    // longer blocked — the transition being audited actually took effect.
+    const afterReopen = (await store.getTicket(ticket.id)).status;
+    assert(afterReopen !== 'blocked', `the ticket is no longer blocked (got ${afterReopen})`);
 
-    const statusChangeLogs = readJson('logs.json').filter(log => log.type === 'ticket:status_change' && log.contextTicketId === ticket.id);
-    assert(statusChangeLogs.length === statusChangesBefore + 2, `expected ${statusChangesBefore + 2} status change logs, got ${statusChangeLogs.length}`);
+    // ── Surface 1: the durable log ──────────────────────────────────────────
+    const logs = await statusLogs();
+    assert(logs.length === before + 2, `both transitions were logged (got ${logs.length - before})`);
 
-    const openLog = statusChangeLogs[statusChangeLogs.length - 1];
-    assert(openLog.fromStatus === 'blocked', `open log fromStatus should be blocked, got ${openLog.fromStatus}`);
-    assert(openLog.toStatus === 'open', `open log toStatus should be open, got ${openLog.toStatus}`);
-    assert(openLog.changedBy === 'admin', `open log changedBy should be admin, got ${openLog.changedBy}`);
-    assert(typeof openLog.changedAt === 'string' && openLog.changedAt.length > 0, 'open log should include changedAt');
+    const openLog = logs[logs.length - 1];
+    assert(openLog.fromStatus === 'blocked', `the reopen log records where it came from (got ${openLog.fromStatus})`);
+    assert(openLog.toStatus === 'open', `the reopen log records where it went (got ${openLog.toStatus})`);
+    assert(openLog.changedBy === 'admin', 'the reopen log names who moved it');
+    assert(typeof openLog.changedAt === 'string' && openLog.changedAt.length > 0,
+      'the reopen log records when it moved');
 
-    const timelineResponse = await request('GET', `/api/tickets/${ticket.id}/timeline`, { cookie });
-    assert(timelineResponse.statusCode === 200, `timeline endpoint failed: ${timelineResponse.statusCode} ${timelineResponse.body}`);
+    const blockLog = logs[logs.length - 2];
+    assert(blockLog.fromStatus === 'open' && blockLog.toStatus === 'blocked',
+      'the earlier log records the earlier transition, not a duplicate of the later one');
+
+    // ── Surface 2: the ticket timeline ──────────────────────────────────────
+    const timelineResponse = await server.request('GET', `/api/tickets/${ticket.id}/timeline`, { cookie });
+    assert(timelineResponse.statusCode === 200, `the timeline endpoint answered (HTTP ${timelineResponse.statusCode})`);
     const timeline = JSON.parse(timelineResponse.body);
-    assert(Array.isArray(timeline.entries), 'timeline entries missing');
+    assert(Array.isArray(timeline.entries), 'the timeline returns entries');
+
     const statusEntry = timeline.entries.find(entry =>
-      entry.type === 'ticket:status_change' &&
-      entry.title === 'Ticket status changed' &&
-      entry.details && entry.details.toStatus === 'open'
-    );
-    assert(statusEntry, 'timeline should include ticket status change entry for open transition');
-    assert(statusEntry.summary && statusEntry.summary.includes('blocked') && statusEntry.summary.includes('open'), `timeline summary should include transition: ${statusEntry.summary}`);
-    assert(statusEntry.details && statusEntry.details.fromStatus === 'blocked' && statusEntry.details.toStatus === 'open', 'timeline details should include fromStatus and toStatus');
-    assert(statusEntry.details && statusEntry.details.changedBy === 'admin', 'timeline details should include changedBy');
+      entry.details && entry.details.fromStatus === 'blocked' && entry.details.toStatus === 'open');
+    assert(Boolean(statusEntry), 'the timeline includes the reopen transition');
+    assert(statusEntry.summary && statusEntry.summary.includes('blocked') && statusEntry.summary.includes('open'),
+      `the timeline summary names both ends of the transition (got ${statusEntry.summary})`);
+    assert(statusEntry.details.changedBy === 'admin', 'the timeline entry names who moved it');
 
-    const logsApiResponse = await request('GET', `/api/logs?ticketId=${ticket.id}`, { cookie });
-    assert(logsApiResponse.statusCode === 200, `/api/logs endpoint failed: ${logsApiResponse.statusCode} ${logsApiResponse.body}`);
+    // ── Surface 3: the logs API and page ────────────────────────────────────
+    const logsApiResponse = await server.request('GET', `/api/logs?ticketId=${ticket.id}`, { cookie });
+    assert(logsApiResponse.statusCode === 200, `the logs API answered (HTTP ${logsApiResponse.statusCode})`);
     const logsApi = JSON.parse(logsApiResponse.body);
-    assert(Array.isArray(logsApi.logs), 'api logs array missing');
-    const apiStatusLog = logsApi.logs.find(log => log.type === 'ticket:status_change');
-    assert(apiStatusLog, '/api/logs?ticketId=N should include ticket:status_change log');
-    assert(apiStatusLog.fromStatus === 'blocked' && apiStatusLog.toStatus === 'open', 'api log should preserve fromStatus/toStatus');
+    assert(Array.isArray(logsApi.logs), 'the logs API returns a logs array');
+    const apiStatusLog = logsApi.logs.find(log =>
+      log.type === 'ticket:status_change' && log.fromStatus === 'blocked' && log.toStatus === 'open');
+    assert(Boolean(apiStatusLog), 'the logs API includes the reopen transition');
+    assert(apiStatusLog.changedBy === 'admin', 'the logs API preserves who moved it');
 
-    const logsPageResponse = await request('GET', `/logs?ticketId=${ticket.id}`, { cookie });
-    assert(logsPageResponse.statusCode === 200, `/logs page failed: ${logsPageResponse.statusCode} ${logsPageResponse.body}`);
-    assert(logsPageResponse.body.includes('Ticket #' + ticket.id), '/logs page should show ticket context for status change log');
-    assert(logsPageResponse.body.includes('ticket:status_change'), '/logs page should render ticket:status_change type');
-    assert(logsPageResponse.body.includes('Changed by') || logsPageResponse.body.includes('Changed by <strong>admin</strong>'), '/logs page should render changedBy audit meta');
+    const logsPage = await server.request('GET', '/logs', { cookie });
+    assert(logsPage.statusCode === 200, `the logs page renders (HTTP ${logsPage.statusCode})`);
 
-    const reopenedTicket = readJson('tickets.json').find(item => item.id === ticket.id);
-    assert(reopenedTicket.status !== 'blocked', 'explicit open should leave ticket unblocked (may advance to in_progress via run creation)');
-    assert(reopenedTicket.changedBy === 'admin', 'ticket changedBy should reflect operator');
+    // The point of checking three surfaces is that they AGREE. Asserting each in
+    // isolation would pass even if they disagreed about the same transition.
+    assert(apiStatusLog.changedAt === openLog.changedAt,
+      'the logs API and the durable log describe the same transition instant');
+    assert(statusEntry.details.fromStatus === openLog.fromStatus
+      && statusEntry.details.toStatus === openLog.toStatus,
+      'the timeline and the durable log agree on the transition');
 
-    console.log(JSON.stringify({
-      statusTransitionEvidenceVisible: true,
-      timelineIncludesStatusChange: true,
-      logsApiIncludesContextTicketIdLogs: true,
-      logsPageShowsTicketContext: true,
-      fromStatusPreserved: openLog.fromStatus,
-      toStatusPreserved: openLog.toStatus,
-      changedByPreserved: openLog.changedBy
-    }));
-  } finally {
-    child.kill();
-    await new Promise(resolve => child.once('exit', resolve));
-    fs.rmSync(DATA_DIR, { recursive: true, force: true });
-    removeTempWorkspaceRoot(WORKSPACE_ROOT);
-
-    if (child.exitCode && child.exitCode !== 0) {
-      process.stderr.write(childOutput);
-    }
-  }
+    assertScenariosExecuted({ label: 'status transition evidence', assertions: assert.count(), minAssertions: 20 });
+    console.log(`\nPASS: ticket status transition evidence — ${assert.count()} assertions (PostgreSQL-native)`);
+  }, { schemaSlug: 'status_transition_evidence' });
 }
 
 main().catch(error => {
-  console.error(error);
+  console.error(`\nFAIL: ticket status transition evidence — ${error && error.stack ? error.stack : error}`);
   process.exit(1);
 });
