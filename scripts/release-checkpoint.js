@@ -121,7 +121,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // A20 — the authority half split out of rbac-and-inline-data-security-test.js.
   'permission-escalation-boundary-test.js',
   // A20 — the authority-evidence half of ticket-timeline-authority-visibility-test.js.
-  'timeline-authority-evidence-test.js'
+  'timeline-authority-evidence-test.js',
+  // A20 — the authority core (scope admission + owned-path enforcement) split out of
+  // allocated-regression-test.js.
+  'allocation-scope-authority-test.js'
 ]);
 
 function runCheckpoint() {

@@ -2004,18 +2004,42 @@ ported:
 | **replay fidelity and secret redaction** — snapshot carries correct run/ticket/agent/allocation identity and exposes no API key or `Authorization` value | evidence + security |
 | **retry / rerun / idempotency / stop / budget** lifecycle | lifecycle |
 
-The first two were attempted as `allocation-scope-authority-test.js`. **The three
-admission rejections passed** — overlapping scopes, a non-directory scope, and absent
-`ownedOutputPaths` are each refused with HTTP 400 and leave no persisted ticket.
+**Authority core migrated — `allocation-scope-authority-test.js`, 31 assertions,
+7 scenarios, registered.**
 
-**The blocker is the positive control.** A well-formed allocated ticket carrying an
-`#ACTIONS=` directive is *also* refused with 400, so the suite could not yet prove that
-allocation admits anything — and a rejection-only suite would pass against a runtime
-that refuses every allocated ticket. The work was **not committed** rather than
-registered without its control. `ticket-feasibility-gate-test.js` creates an accepted
-allocated ticket using a natural-language objective and no `#ACTIONS=` marker, which is
-the likely difference; whoever resumes should establish the accepted objective shape
-first, then drive the in-scope/out-of-scope pair from it.
+**The recorded hypothesis about the blocker was WRONG, and the correction matters more
+than the fix.** A20 guessed the embedded `#ACTIONS=` directive made the objective
+infeasible. It does not. The real gate is `assertAllocatedObjectiveSupported`: an
+allocated objective must contain an ADDITIVE noun (`file`, `folder`, `report`,
+`document`, …) and must contain NO destructive verb (`delete`, `remove`, `rename`,
+`move`, `edit`, `update existing`, …). The failing probe objective was "Write status
+notes" — and *notes* is simply not in the additive vocabulary. The directive was never
+the problem; three different objective shapes all failed identically, which is what
+exposed the guess.
+
+The fix is therefore not a workaround: the objectives are natural language that
+genuinely describes additive independent outputs, and the provider stub keys off a
+distinct MARKER WORD carried inside that objective rather than an encoded plan. The
+feasibility gate runs for real — nothing bypassed, disabled or mocked.
+
+**What it proves:** overlapping scopes, a non-directory scope and absent
+`ownedOutputPaths` are each refused with HTTP 400 leaving no persisted ticket; a
+well-formed allocated ticket is ADMITTED, is not blocked by feasibility, and produces
+one run per allocated agent sharing one allocation plan with distinct items, each naming
+its own owned path; the in-scope write completes and leaves exactly one successful
+receipt; and an out-of-scope write — on a ticket that was *admitted*, so the refusal is
+enforcement rather than admission — fails the run, leaves no file and no successful
+receipt, and names both the ownership rule and the refused target.
+
+**Mutation `owned-path-scope-broadened`** widens the containment check so every path
+counts as owned. Admission still works and the in-scope control stays green; only the
+out-of-scope scenario catches an allocated agent writing into a peer's territory.
+Killed.
+
+**Still open from this file (three of five contracts):** allocation attribution beyond
+plan/item/owned-path, replay fidelity with secret redaction (the snapshot must expose no
+API key or `Authorization` value), and the retry/rerun/stop/budget lifecycle. The
+historical file stays `orphaned` until those have replacements or dispositions.
 
 **Not done in this tranche:** the allocation split above and the inline-data-security half of
 `rbac-and-inline-data-security-test.js`, which remains explicitly open as an injection

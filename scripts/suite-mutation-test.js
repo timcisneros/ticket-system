@@ -156,6 +156,18 @@ const MUTATIONS = Object.freeze([
     expect: 'operation receipts carry no observed post-state'
   },
   {
+    name: 'owned-path-scope-broadened',
+    suite: 'allocation-scope-authority-test.js',
+    file: 'server.js',
+    contract: 'an allocated run may mutate only inside its own owned paths',
+    // Broaden the containment check so every path counts as owned. Admission still
+    // works and the in-scope positive control stays green — only the out-of-scope
+    // scenario catches an allocated agent writing into a peer's territory.
+    find: '    return normalizedPath === normalizedOwnedPath.slice(0, -1) || normalizedPath.startsWith(normalizedOwnedPath);',
+    replace: '    return Boolean(normalizedOwnedPath) || normalizedPath === normalizedPath;',
+    expect: 'an allocated run writes outside its owned scope unopposed'
+  },
+  {
     name: 'authority-denial-loses-its-rule',
     suite: 'timeline-authority-evidence-test.js',
     file: 'server.js',

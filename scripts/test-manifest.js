@@ -90,6 +90,7 @@ const TESTS = Object.freeze([
   { file: "agent-regression-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "allocated-live-openai-test.js", status: "excluded", reason: "live-provider" },
   { file: "allocated-regression-test.js", status: "orphaned", reason: "cutover-orphan" },
+  { file: "allocation-scope-authority-test.js", status: "required" },
   { file: "archive-local-events-test.js", status: "required" },
   { file: "artifact-prediction-capture-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "artifact-projection-status-test.js", status: "orphaned", reason: "cutover-orphan" },
