@@ -591,6 +591,74 @@ rejection that terminates the process rather than failing that run closed.
 
 ---
 
+### A18. Required replay evidence is silently discarded when no snapshot exists
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — implementation required** |
+| **Severity** | **High** — an evidence-of-last-resort channel reports success after writing nothing |
+| **Found** | 2026-07-25, while proving A17 proof 8a (startup settle boundary) |
+| **Blocks** | A17 proof 8a; A17 proofs 5 and 8b depend on the same fallback |
+
+**Defect.** `settleTerminalRunEvidence` (`server.js`) uses `recordReplayEvent` as the
+last authoritative channel after a *required* diagnostic log has already failed.
+`recordReplayEvent` calls `appendRunReplaySnapshotItem`, which opens with:
+
+```js
+return updateRunReplaySnapshot(runId, snapshot => {
+  if (!snapshot) return snapshot;   // silent success: nothing is written
+  ...
+```
+
+When the run has no replay snapshot the append writes nothing, raises nothing, and
+returns normally. The caller cannot distinguish "durably recorded" from "silently
+discarded", so reconciliation and startup settlement may be treated as
+evidence-complete when the required failure evidence was in fact lost. The
+`try/catch` around the fallback is ineffective because no error is ever thrown.
+
+**Proven symptom.** `scripts/reconciliation-evidence-failure-test.js` fails
+deterministically at:
+
+```
+ok  the fixture run row reads running
+ok  terminal evidence exists while the row still reads running
+ok  the intended run:terminalized insert was attempted and rejected (1 fires)
+FAIL timed out waiting for run.reconciliation_evidence_failed
+```
+
+The trigger firing proves the settle boundary is genuinely reached and the
+rejection genuinely contained; only the durable evidence is missing.
+
+**Fixture shape (startup Path B).** Terminal evidence committed while the run row
+still reads `running` with an expired lease — created through store primitives
+(`createRun` → `claimPendingRun` → `transitionRun` to `running` → append
+`run.terminalized` → expire lease). This drives `interruptStaleRunsOnStartup` and
+its `run:terminalized` log, not `run:reconciled`. A rejecting trigger on
+`diagnostic_logs` proves firing via a sequence, whose increments survive the
+rollback `RAISE EXCEPTION` causes.
+
+**Unknown.** Whether ordinary crashed runs reaching startup repair usually *do*
+possess a replay snapshot is **not established**. This fixture builds a run that
+lacks one, so production frequency is unknown and must not be assumed low. The
+behavior is defective regardless of frequency: this call site requires evidence,
+not optional enrichment, and a silent success is wrong at any rate of occurrence.
+
+**Required direction.** Do not globally make `appendRunReplaySnapshotItem` strict —
+its missing-snapshot tolerance may be intentional for optional enrichment and for
+historical runs. Instead inventory every caller of `appendRunReplaySnapshotItem`,
+`recordReplayEvent`, and related helpers, classify each as required evidence,
+optional enrichment, or historical-compatibility, and introduce an explicitly named
+strict API (`appendRequiredRunReplaySnapshotItem` / `recordRequiredReplayEvent`)
+whose contract is: append durably, or throw a structured evidence-persistence
+error — never return success having written nothing. A17's reconciliation and
+startup fallback must use the strict path. Where no snapshot can be validly
+initialized, persist through another authoritative durable channel (such as the run
+event journal) or return an explicit evidence-incomplete result. Do not fabricate a
+partial replay snapshot to make the append succeed, and do not downgrade required
+evidence to stderr.
+
+---
+
 ### A16. Run consequence records no committed mutations
 
 | Field | Value |
