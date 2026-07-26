@@ -156,6 +156,27 @@ const MUTATIONS = Object.freeze([
     expect: 'operation receipts carry no observed post-state'
   },
   {
+    name: 'reconcile-under-divergence',
+    suite: 'target-operation-reconciliation-test.js',
+    file: 'server.js',
+    contract: 'a prepared effect is reconciled only when the world still matches the intent',
+    // Treat an UNCERTAIN target as applied. Recovery then manufactures a receipt for an
+    // effect nobody can prove this run produced, over state a third party changed.
+    // The applied scenario still passes — only the refusal half catches it.
+    // Anchored on reconcilePreparedTargetOperation — the STARTUP recovery path.
+    // `reconciliation.status === 'uncertain'` appears three times on three different
+    // paths; an earlier attempt aimed at beginWorkspaceMutation's in-run branch and
+    // survived, because a crashed run is reconciled by startup recovery, not by the
+    // in-run begin path. Defense in depth again: the layer that fires is the one to cut.
+    find: `  const reconciliation = classifyPreparedWorkspaceMutation(getRunWorkspaceProvider(run), intent);
+  if (reconciliation.status === 'not_applied') return 'not_applied';
+  if (reconciliation.status === 'uncertain') {`,
+    replace: `  const reconciliation = classifyPreparedWorkspaceMutation(getRunWorkspaceProvider(run), intent);
+  if (reconciliation.status === 'not_applied') return 'not_applied';
+  if (false) {`,
+    expect: 'divergent state is reconciled and a receipt is fabricated'
+  },
+  {
     name: 'action-plan-allowlist-ignored',
     suite: 'workflow-action-plan-test.js',
     file: 'server.js',

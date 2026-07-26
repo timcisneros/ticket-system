@@ -111,7 +111,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // these, and no suite asserted prompt content.
   'workflow-action-plan-test.js',
   'workflow-ticket-plan-test.js',
-  'workflow-prompt-composition-test.js'
+  'workflow-prompt-composition-test.js',
+  // A20 — the only suite driving `after_first_workspace_target_effect`, the crash
+  // window where the external effect has landed and its evidence has not.
+  'target-operation-reconciliation-test.js'
 ]);
 
 function runCheckpoint() {

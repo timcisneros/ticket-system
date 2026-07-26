@@ -1273,8 +1273,8 @@ larger. It is. Executing every unregistered suite establishes the real numbers:
 
 | Classification | Count |
 |----------------|-------|
-| **required** — must run in the release checkpoint | 71 |
-| **orphaned** — genuine cutover orphan, cannot run | 76 |
+| **required** — must run in the release checkpoint | 72 |
+| **orphaned** — genuine cutover orphan, cannot run | 75 |
 | **excluded** — deliberately outside the checkpoint | 20 |
 | **total `scripts/*-test.js`** | **162** |
 
@@ -1786,7 +1786,48 @@ the suite's own negative assertions could never have failed, because the guidanc
 excluded was never emitted under the test's environment. Enabling
 `AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT` made them real.
 
-### The remaining 76 — sequencing
+### Crash-seam coverage, remapped after A22 (2026-07-26)
+
+Rebuilt from the repository, not carried forward from the pre-A22 count:
+
+| Seam | Registered driver |
+|------|-------------------|
+| `after_action_contract_violation` | `model-contract-violation-recovery-test.js` |
+| `after_first_authority.allowed` | `resumable-execution-test.js` |
+| `after_first_workspace.operation` | `resume-obvious-postcondition-test.js`, `resumable-execution-test.js` |
+| `after_run.started` | `resumable-execution-test.js` |
+| `before_run.snapshot_finalized` | `resumable-execution-test.js` |
+| `after_first_workspace_target_effect` | **`target-operation-reconciliation-test.js` (repaired here)** |
+| `after_run.created` | none |
+| `after_run.snapshot_finalized` | none |
+| `before_run.consequence_recorded` | none |
+
+A22 took this from 2 of 9 to 5; repairing the reconciliation suite makes it **6 of 9**.
+The three still uncovered are all terminalization-boundary seams and are the natural
+next recovery cluster.
+
+**`target-operation-reconciliation-test.js` — repaired and registered (20 assertions).**
+It was the only suite in the repository driving `after_first_workspace_target_effect`,
+the window where the external effect has landed and its evidence has not. It proves both
+outcomes: an APPLIED effect is reconciled into exactly one recovery-marked receipt
+retaining its stable operation key, with one completion event and replay linkage and no
+re-application; and an UNCERTAIN effect — where a third party changed the target while
+the runtime was down — is REFUSED, manufacturing no successful receipt, leaving the
+divergent state untouched, and emitting
+`workspace.operation_reconciliation_required` for a human to decide.
+
+The refusal half is the safety-critical one: reconciling under divergence would fabricate
+evidence for an effect nobody can prove this run produced.
+
+**The mutation needed two re-aims, and the reason is reusable.**
+`reconciliation.status === 'uncertain'` appears at three sites on three different paths.
+Cutting the in-run `beginWorkspaceMutation` branch **survived** — a crashed run is
+reconciled by STARTUP recovery (`reconcilePreparedTargetOperation`), not by the in-run
+begin path. Aimed there, it kills. When a mutation survives, check which layer actually
+executes before concluding the suite is weak; this is the fourth time in A20 that a
+surviving mutation meant defense in depth rather than a coverage hole.
+
+### The remaining 75 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

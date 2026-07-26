@@ -1,205 +1,252 @@
 #!/usr/bin/env node
 'use strict';
+// Prepared target-effect reconciliation — PostgreSQL-native
+// (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A20).
+//
+// THE SEAM NOTHING ELSE DRIVES. Post-A22 the runtime's nine deterministic crash seams
+// are covered five ways; `after_first_workspace_target_effect` is one of the four that
+// are not, and this is the only suite in the repository that drives it.
+//
+// It is also the most dangerous window in the runtime: the external effect has already
+// landed on the filesystem, and the evidence describing it has not been written yet. A
+// restart must decide what happened using only the prepared intent and the current
+// state of the world.
+//
+// THE CONTRACT — two outcomes, and the refusal is the safety-critical one:
+//
+//   APPLIED    the world matches what the intent predicted. Recovery RECONCILES:
+//              exactly one receipt, marked as recovery, retaining the stable operation
+//              key, with one completion event and replay linkage. The effect is not
+//              re-applied and no second receipt appears.
+//
+//   UNCERTAIN  a third party changed the target between the effect and the restart.
+//              Recovery must REFUSE: manufacture no receipt, leave the divergent state
+//              alone rather than "repairing" it, and emit
+//              `workspace.operation_reconciliation_required` so a human decides.
+//
+// Reconciling under divergence would fabricate evidence for an effect nobody can prove
+// this run produced, which is why the uncertain half is not optional.
+//
+// Repaired, not rewritten: both scenarios and their assertions are the original ones.
+// Seeding and observation move to the store; the JSON-era `DATA_DIR` seeding,
+// `operation-history.json` reads and `events.jsonl` string matching are not ported.
+//
+// Requires TEST_DATABASE_URL (or DATABASE_URL).
 
-const { spawn } = require('child_process');
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
-const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
+const { withHarness, createAsserter, sleep } = require('./postgres-test-harness');
+const { settleChild, assertScenariosExecuted } = require('./child-process-settlement');
 
-const ROOT = path.resolve(__dirname, '..');
-const REAL_DATA_DIR = path.join(ROOT, 'data');
-const DATA_FILES = [
-  'agents.json', 'allocation-plans.json', 'groups.json', 'logs.json', 'memberships.json',
-  'operation-history.json', 'permissions.json', 'runs.json', 'tickets.json', 'users.json'
-];
+const STAMP = Date.now();
+const assert = createAsserter();
+let scenariosRun = 0;
 
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
+const INTENDED = 'intended-reconciliation-content';
+const THIRD_PARTY = 'unexpected-third-party-content';
+
+function encodeActions(plan) {
+  return Buffer.from(JSON.stringify(plan), 'utf8').toString('base64url');
 }
 
-function request(baseUrl, method, urlPath, options = {}) {
-  const body = options.form ? new URLSearchParams(options.form).toString() : null;
-  return new Promise((resolve, reject) => {
-    const req = http.request(`${baseUrl}${urlPath}`, {
-      method,
-      headers: {
-        ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) } : {}),
-        ...(options.cookie ? { Cookie: options.cookie } : {})
-      }
-    }, response => {
-      const chunks = [];
-      response.on('data', chunk => chunks.push(chunk));
-      response.on('end', () => resolve({
-        statusCode: response.statusCode,
-        headers: response.headers,
-        body: Buffer.concat(chunks).toString('utf8')
-      }));
-    });
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
-  });
+function createFetchStub() {
+  const preloadPath = path.join(os.tmpdir(), `reconciliation-stub-${process.pid}-${STAMP}.js`);
+  fs.writeFileSync(preloadPath, `
+function okResponse(plan) {
+  return { ok: true, status: 200, headers: new Map([['x-request-id', 'fake-reconciliation']]),
+    async text() { return JSON.stringify({ output_text: JSON.stringify(plan), usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }); } };
 }
-
-function waitForExit(child, timeoutMs = 20_000) {
-  if (child.exitCode !== null) return Promise.resolve(child.exitCode);
-  return Promise.race([
-    new Promise(resolve => child.once('exit', resolve)),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for test server exit')), timeoutMs))
-  ]);
-}
-
-async function waitForReady(baseUrl) {
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    try {
-      const response = await request(baseUrl, 'GET', '/health');
-      if (response.statusCode === 200 && JSON.parse(response.body).ready) return;
-    } catch (_) {}
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  throw new Error('Timed out waiting for reconciliation test server');
-}
-
-async function waitForRun(dataDir, predicate) {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    const runs = JSON.parse(fs.readFileSync(path.join(dataDir, 'runs.json'), 'utf8'));
-    const run = runs.find(predicate);
-    if (run) return run;
-    await new Promise(resolve => setTimeout(resolve, 75));
-  }
-  throw new Error('Timed out waiting for reconciled run state');
-}
-
-function preloadSource(objective, fileName, content) {
-  return `
-global.fetch = async function(url, options = {}) {
-  const body = JSON.parse(options.body || '{}');
-  const combined = (body.input || []).map(item => String(item && item.content || '')).join('\\n');
-  const plan = combined.includes(${JSON.stringify(objective)})
-    ? { message: 'write target', actions: [{ operation: 'writeFile', args: { path: ${JSON.stringify(fileName)}, content: ${JSON.stringify(content)} } }], complete: true }
-    : { message: 'complete', actions: [], complete: true };
-  return { ok: true, status: 200, headers: new Map([['x-request-id', 'target-reconciliation-test']]), async text() {
-    return JSON.stringify({ output_text: JSON.stringify(plan), usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
-  } };
-};
-`;
-}
-
-async function runScenario({ name, port, diverge }) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `target-reconciliation-${name}-data-`));
-  const workspaceRoot = createTempWorkspaceRoot(`target-reconciliation-${name}`);
-  const objective = `target-reconciliation-${name}-${Date.now()}`;
-  const fileName = `${objective}.txt`;
-  const intendedContent = 'intended-content';
-  const preloadPath = path.join(os.tmpdir(), `${objective}-preload.js`);
-  const baseUrl = `http://127.0.0.1:${port}`;
-  let server = null;
-
+global.fetch = async function(_url, options = {}) {
+  let combined = '';
   try {
-    for (const file of DATA_FILES) {
-      const source = path.join(REAL_DATA_DIR, file);
-      fs.copyFileSync(source, path.join(dataDir, file));
-    }
-    const agents = JSON.parse(fs.readFileSync(path.join(dataDir, 'agents.json'), 'utf8'));
-    const agentId = Math.max(0, ...agents.map(agent => agent.id)) + 1;
-    agents.push({
-      id: agentId,
-      name: `TargetReconciliation-${name}`,
-      type: 'agent',
-      provider: 'openai',
-      model: 'gpt-test',
-      apiKey: 'test-key',
-      createdAt: new Date().toISOString()
-    });
-    fs.writeFileSync(path.join(dataDir, 'agents.json'), JSON.stringify(agents, null, 2));
-    fs.writeFileSync(preloadPath, preloadSource(objective, fileName, intendedContent));
+    const body = JSON.parse(options.body || '{}');
+    const input = Array.isArray(body.input) ? body.input : [];
+    combined = input.map(i => i && i.content ? String(i.content) : '').join('\\n');
+  } catch (_) {}
+  const m = combined.match(/#ACTIONS=([A-Za-z0-9_-]+=*)/);
+  if (!m) return okResponse({ message: 'noop', actions: [], complete: true });
+  let plan;
+  try { plan = JSON.parse(Buffer.from(m[1], 'base64url').toString('utf8')); } catch (_) { plan = { actions: [], complete: true }; }
+  return okResponse({ message: plan.message || 'stubbed', actions: plan.actions || [], complete: plan.complete !== false });
+};
+`);
+  return preloadPath;
+}
 
-    const spawnServer = interruptionPoint => {
-      const child = spawn(process.execPath, ['server.js'], {
-        cwd: ROOT,
-        env: {
-          ...process.env,
-          NODE_ENV: 'test',
-          PORT: String(port),
-          DATA_DIR: dataDir,
-          WORKSPACE_ROOT: workspaceRoot,
-          NODE_OPTIONS: `--require ${preloadPath}`,
-          ...(interruptionPoint ? { TEST_INTERRUPTION_POINT: interruptionPoint } : {})
-        },
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-      child.stdout.on('data', chunk => process.stdout.write(String(chunk)));
-      child.stderr.on('data', chunk => process.stderr.write(String(chunk)));
-      return child;
-    };
-
-    server = spawnServer('after_first_workspace_target_effect');
-    await waitForReady(baseUrl);
-    const login = await request(baseUrl, 'POST', '/login', { form: { username: 'admin', password: 'admin123' } });
-    const cookie = (login.headers['set-cookie'] || []).map(value => value.split(';')[0]).join('; ');
-    const created = await request(baseUrl, 'POST', '/tickets', {
-      cookie,
-      form: { objective, assignmentTargetType: 'agent', assignmentTargetId: String(agentId) }
-    });
-    assert(created.statusCode === 302, `ticket creation failed for ${name}: ${created.statusCode}`);
-    await waitForExit(server);
-    server = null;
-
-    const targetPath = path.join(workspaceRoot, fileName);
-    assert(fs.readFileSync(targetPath, 'utf8') === intendedContent, `${name}: target effect did not happen before crash`);
-    const historyBeforeRestart = JSON.parse(fs.readFileSync(path.join(dataDir, 'operation-history.json'), 'utf8'));
-    assert(historyBeforeRestart.length === 0, `${name}: receipt existed before the crash boundary`);
-    const journalBeforeRestart = fs.readFileSync(path.join(dataDir, 'events.jsonl'), 'utf8');
-    assert(journalBeforeRestart.includes('workspace.operation_prepared'), `${name}: prepared intent is missing`);
-
-    if (diverge) fs.writeFileSync(targetPath, 'unexpected-third-party-content');
-    server = spawnServer(null);
-    await waitForReady(baseUrl);
-    const finalRun = await waitForRun(dataDir, run =>
-      run.status === (diverge ? 'interrupted' : 'completed')
-    );
-    const history = JSON.parse(fs.readFileSync(path.join(dataDir, 'operation-history.json'), 'utf8'));
-    const events = fs.readFileSync(path.join(dataDir, 'events.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
-
-    if (diverge) {
-      assert(history.length === 0, 'uncertain effect must not manufacture a receipt');
-      assert(fs.readFileSync(targetPath, 'utf8') === 'unexpected-third-party-content', 'uncertain effect must not be retried or overwritten');
-      assert(events.some(event => event.type === 'workspace.operation_reconciliation_required'),
-        'uncertain effect must emit reconciliation-required evidence');
-    } else {
-      assert(history.length === 1, `applied effect should produce exactly one receipt, found ${history.length}`);
-      assert(history[0].isRecovery === true, 'applied effect receipt must identify reconciliation');
-      assert(history[0].operationKey, 'applied effect receipt must retain its stable operation key');
-      assert(events.filter(event => event.type === 'workspace.operation').length === 1,
-        'applied effect must produce exactly one completion event');
-      assert(events.some(event => event.type === 'workspace.operation' && event.payload && event.payload.isRecovery === true),
-        'completion event must expose reconciliation');
-      const replay = JSON.parse(fs.readFileSync(path.join(dataDir, finalRun.replaySnapshotPath), 'utf8'));
-      assert(replay.workspaceOperations.some(item => item.operationKey === history[0].operationKey && item.isRecovery === true),
-        'replay must link the reconciled receipt');
-    }
-  } finally {
-    if (server) {
-      server.kill('SIGTERM');
-      await waitForExit(server).catch(() => {});
-    }
-    fs.rmSync(dataDir, { recursive: true, force: true });
-    fs.rmSync(preloadPath, { force: true });
-    removeTempWorkspaceRoot(workspaceRoot);
+async function waitFor(fn, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await fn();
+    if (result) return result;
+    await sleep(120);
   }
+  throw new Error(`timed out waiting for ${label}`);
 }
 
 async function main() {
-  await runScenario({ name: 'applied', port: 3494, diverge: false });
-  await runScenario({ name: 'uncertain', port: 3495, diverge: true });
-  console.log('PASS: prepared target effects are reconciled when applied and refused when uncertain');
+  const preloadPath = createFetchStub();
+  try {
+    await withHarness('target operation reconciliation', async ({ store, workspaceRoot, startServer }) => {
+      const agent = (await store.createConfiguredAgent({
+        value: { name: `Reconciliation-${STAMP}`, provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-key-reconcile' },
+        groupIds: [], changedBy: 'target-operation-reconciliation-test'
+      })).agent;
+
+      const baseEnv = {
+        NODE_OPTIONS: `--require ${preloadPath}`,
+        RUNTIME_SCHEDULER_INTERVAL_MS: '200',
+        // The killed process keeps its lease until it expires; recovery cannot claim
+        // the run before then. Test-environment knob only.
+        RUN_LEASE_DURATION_MS: '4000'
+      };
+
+      // Only one server may own the schema at a time: a leftover clean server would
+      // claim the next scenario's run and finish it without ever reaching the seam.
+      let liveServer = null;
+      async function retireLiveServer() {
+        if (!liveServer) return;
+        const previous = liveServer;
+        liveServer = null;
+        await previous.stop();
+        await settleChild(previous.child, { timeoutMs: 30000 });
+      }
+
+      async function crashAtTargetEffect(label, fileName) {
+        scenariosRun += 1;
+        await retireLiveServer();
+
+        const crashing = await startServer({
+          ...baseEnv, TEST_INTERRUPTION_POINT: 'after_first_workspace_target_effect'
+        });
+        const cookie = await crashing.login();
+
+        const objective = `reconciliation ${label} ${STAMP} #ACTIONS=${encodeActions({
+          actions: [{ operation: 'writeFile', args: { path: fileName, content: INTENDED } }], complete: true
+        })}`;
+        await crashing.request('POST', '/tickets', {
+          cookie,
+          form: { objective, assignmentTargetType: 'agent', assignmentTargetId: String(agent.id), assignmentMode: 'individual' }
+        }).catch(error => {
+          if (/ECONNRESET|socket hang up/i.test(String(error && error.message))) return null;
+          throw error;
+        });
+
+        const ticket = await waitFor(async () => {
+          const { tickets } = await store.listTickets({ limit: 300 });
+          return tickets.find(t => t.objective === objective) || null;
+        }, 30000, `${label} ticket`);
+        const run = await waitFor(async () => {
+          const { runs } = await store.listRunsForTicket({ ticketId: ticket.id, limit: 10 });
+          return runs[0] || null;
+        }, 30000, `${label} run dispatch`);
+
+        // The seam must fire and the process must die, or the "recovery" below would be
+        // an ordinary run and would prove nothing.
+        await waitFor(async () => {
+          const events = await store.listRunEvents(run.id, { afterSeq: -1, limit: 500 });
+          return (events || []).find(e => e.type === 'interruption.test_hook'
+            && (e.payload || e).point === 'after_first_workspace_target_effect') || null;
+        }, 30000, `${label} interruption hook`);
+        const death = await settleChild(crashing.child, { timeoutMs: 30000 });
+        assert(death.code !== 0 || death.signal !== null,
+          `${label}: the process died at the target-effect seam`);
+
+        // The defining property of this window: the effect landed, the receipt did not.
+        assert(fs.readFileSync(path.join(workspaceRoot, fileName), 'utf8') === INTENDED,
+          `${label}: the external effect landed before the crash`);
+        const beforeOps = await store.listRunOperations(run.id, { limit: 50 });
+        assert((beforeOps.operations || beforeOps).length === 0,
+          `${label}: no receipt existed before the crash boundary`);
+        const events = await store.listRunEvents(run.id, { afterSeq: -1, limit: 500 });
+        assert((events || []).some(e => e.type === 'workspace.operation_prepared'),
+          `${label}: the prepared intent survived the crash`);
+
+        return { ticket, run, fileName };
+      }
+
+      async function resumeAndSettle(label, runId) {
+        const resumed = await startServer(baseEnv);
+        liveServer = resumed;
+        await resumed.login();
+        return waitFor(async () => {
+          const current = await store.getRun(runId);
+          return current && ['completed', 'failed', 'interrupted'].includes(current.status) ? current : null;
+        }, 120000, `${label} run to terminalize after resume`);
+      }
+
+      // ── 1. APPLIED — the world matches the intent, so reconcile ─────────────
+      {
+        const fileName = `reconcile-applied-${STAMP}.txt`;
+        const crashed = await crashAtTargetEffect('applied', fileName);
+        const terminal = await resumeAndSettle('applied', crashed.run.id);
+
+        assert(terminal.status === 'completed',
+          `1: the reconciled run completed (${terminal.status}: ${terminal.error || ''})`);
+        const ops = await store.listRunOperations(crashed.run.id, { limit: 100 });
+        const receipts = ops.operations || ops;
+        assert(receipts.length === 1,
+          `1: reconciliation produced exactly one receipt (found ${receipts.length})`);
+        assert(receipts[0].isRecovery === true,
+          '1: the receipt identifies itself as reconciliation rather than fresh work');
+        assert(Boolean(receipts[0].operationKey),
+          '1: the receipt retains its stable operation key');
+        assert(fs.readFileSync(path.join(workspaceRoot, fileName), 'utf8') === INTENDED,
+          '1: the effect was not re-applied — the file is unchanged');
+
+        const events = await store.listRunEvents(crashed.run.id, { afterSeq: -1, limit: 500 });
+        const completions = (events || []).filter(e => e.type === 'workspace.operation');
+        assert(completions.length === 1,
+          `1: exactly one completion event was emitted (found ${completions.length})`);
+        assert((completions[0].payload || {}).isRecovery === true,
+          '1: the completion event exposes that it was reconciled');
+
+        const replay = (await store.readRunReplay(crashed.run.id)).snapshot;
+        assert((replay.workspaceOperations || []).length === 1,
+          '1: replay links exactly one reconciled workspace operation');
+      }
+
+      // ── 2. UNCERTAIN — a third party diverged the target, so REFUSE ─────────
+      {
+        const fileName = `reconcile-uncertain-${STAMP}.txt`;
+        const crashed = await crashAtTargetEffect('uncertain', fileName);
+
+        // Diverge the target while the runtime is down.
+        fs.writeFileSync(path.join(workspaceRoot, fileName), THIRD_PARTY);
+
+        const terminal = await resumeAndSettle('uncertain', crashed.run.id);
+        assert(['failed', 'interrupted'].includes(terminal.status),
+          `2: the run did not complete over divergent state (${terminal.status})`);
+
+        const ops = await store.listRunOperations(crashed.run.id, { limit: 100 });
+        const receipts = ops.operations || ops;
+        const succeeded = receipts.filter(op => !op.error && op.outcome !== 'failed' && op.outcome !== 'refused');
+        assert(succeeded.length === 0,
+          `2: an uncertain effect manufactures no successful receipt (found ${succeeded.length})`);
+        assert(fs.readFileSync(path.join(workspaceRoot, fileName), 'utf8') === THIRD_PARTY,
+          '2: the divergent state was left alone — not retried, not overwritten');
+
+        const events = await store.listRunEvents(crashed.run.id, { afterSeq: -1, limit: 500 });
+        assert((events || []).some(e => e.type === 'workspace.operation_reconciliation_required'),
+          '2: the runtime emitted reconciliation-required evidence for a human to decide');
+      }
+
+      await retireLiveServer();
+      assertScenariosExecuted({
+        label: 'target operation reconciliation',
+        assertions: assert.count(),
+        scenarios: scenariosRun,
+        minAssertions: 16,
+        minScenarios: 2
+      });
+      console.log(`\nPASS: prepared target-effect reconciliation — ${scenariosRun} scenarios, ${assert.count()} assertions (PostgreSQL-native)`);
+    }, { schemaSlug: 'target_reconciliation' });
+  } finally {
+    try { fs.unlinkSync(preloadPath); } catch (_) { /* best effort */ }
+  }
 }
 
 main().catch(error => {
-  console.error(error.stack || error.message);
+  console.error(`\nFAIL: prepared target-effect reconciliation — ${error && error.stack ? error.stack : error}`);
   process.exit(1);
 });
