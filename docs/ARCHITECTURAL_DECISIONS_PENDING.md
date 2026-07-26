@@ -589,6 +589,43 @@ than overrunning a budget.
 the run's owner in the log identity predicate. (2) A failed run-log append becomes an unhandled
 rejection that terminates the process rather than failing that run closed.
 
+
+**Outside-`runAgentTicket` caller classification (complete).** The rule: a required
+log inside an execution path with a guaranteed later drain may use tracked
+`appendRunLog`; outside such a path it must use `appendRequiredRunLog` or an
+explicit settle boundary before the guarded transition returns success; only the
+five listed terminal echoes may be best effort after authoritative terminal state.
+A marker with no consumer is invalid.
+
+| Caller | Log type | Class | Boundary | Guarded transition | Failure outcome | Cleanup |
+|---|---|---|---|---|---|---|
+| `runAgentTicket` | `run:started` | Required | `appendRequiredRunLog` — rejection propagates | run start | run fails closed | `commitRunTerminalization` |
+| `runAgentTicket` (27 exec-phase sites) | model/workspace/postcondition events | Required | Loop gate drains before next model request or mutation | step + action execution | run fails closed, `EVIDENCE_PERSISTENCE_FAILED` | `commitRunTerminalization` |
+| `completeAgentRunUnlocked` | `run:completed`, `run:verification_failed` | **Best effort** | none needed — post-terminal echo | none | logged to stderr, run unaffected | n/a (never marked) |
+| `failAgentRunUnlocked` | `run:failed`, `run:failed_auto_retried` | **Best effort** | none needed — post-terminal echo | none | stderr, run unaffected | n/a |
+| `interruptAgentRunUnlocked` | `run:interrupted` | **Best effort** | none needed — post-terminal echo | none | stderr, run unaffected | n/a |
+| `reconcileTerminalRunUnlocked` | `run:reconciled` | Required | `settleTerminalRunEvidence` → `recordRequiredReplayEvent` | terminal reconciliation | durable `run.reconciliation_evidence_failed` | `releaseRunEvidenceTracking` |
+| `interruptStaleRunsOnStartup` | `run:terminalized` | Required | `settleTerminalRunEvidence` | startup terminal repair | durable replay evidence | `releaseRunEvidenceTracking` |
+| `interruptStaleRunsOnStartup` / `expireStaleRunLeases` | `run:resumed` | Required | Case 1 — resumed run re-enters `runAgentTicket`, whose first gate drains | resumption | run fails closed at the gate | `commitRunTerminalization` |
+| `reconcileUnfinalizedTicketsOnStartup` | `run:ticket_finalized` | Required | `settleTerminalRunEvidence` | ticket finalization | durable replay evidence | `releaseRunEvidenceTracking` |
+
+**Best-effort set is exactly five types** and is asserted for exact membership in
+`scripts/run-evidence-drain-test.js`; adding a sixth fails the suite. Each is emitted
+only after `commitRunTerminalization` has made the runs row, replay snapshot,
+terminal bundle, evaluation, and consequence durable, so losing one cannot change
+reconstruction, terminal classification, authority attribution, recovery safety,
+operator truth, or compliance evidence.
+
+**Tests.** `scripts/delegated-run-logging-containment-test.js` (37),
+`scripts/run-evidence-drain-test.js` (40),
+`scripts/reconciliation-evidence-failure-test.js` (18).
+
+**Mutation proofs.** Ownership overwrite → focused identity test and natural
+scenario 16; containment removal → process death; single-snapshot drain → nested
+write test; completion drain removal → false `completed`; `logType`→`type` →
+required-log propagation; settle boundary removal at both startup sites → missing
+durable evidence.
+
 ---
 
 ### A19. No canonical runtime replay-snapshot validator exists

@@ -30,6 +30,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'scheduler-observability-test.js',
   'workspace-fixture-catalog-test.js',
   'workspace-snapshot-availability-test.js',
+  'run-evidence-drain-test.js',
   'release-checkpoint-coverage-test.js'
 ]);
 
@@ -46,7 +47,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'workspace-snapshot-recovery-test.js',
   'operation-receipt-projection-test.js',
   'run-consequence-mutation-test.js',
-  'required-replay-evidence-test.js'
+  'required-replay-evidence-test.js',
+  'delegated-run-logging-containment-test.js',
+  'reconciliation-evidence-failure-test.js'
 ]);
 
 function runCheckpoint() {

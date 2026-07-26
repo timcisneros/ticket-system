@@ -4994,6 +4994,199 @@ function isValidIsoTimestamp(value) {
   return !Number.isNaN(Date.parse(value));
 }
 
+// Run-log persistence containment (A17).
+//
+// 48 of the 50 appendRunLog call sites do not observe the returned promise, so a
+// single rejected diagnostic-log insert became an unhandled rejection and killed
+// the process. Containment is applied once, here, rather than as scattered
+// try/catch at every call site.
+//
+// The failure is contained, NOT swallowed: it is recorded against the run so the
+// execution loop stops that run fail-closed before any further model request or
+// mutation, and it is reported on stderr through a path that does not re-enter
+// appendRunLog. Only the affected run stops; the process and every other run
+// continue.
+// A17 log criticality. Default is REQUIRED (fail-closed): a log type must be
+// explicitly named here to be downgraded to best-effort observability. Best-effort
+// failures are still contained and reported, but they do not stop the run and must
+// never be presented as evidence. Required-evidence failures stop the run.
+// Intentionally EMPTY. Every run log type this server emits participates in run
+// reconstruction, terminal classification, authority attribution, recovery
+// safety, operator truth, or compliance evidence, so none qualifies as
+// non-authoritative observability. The mechanism exists so a future best-effort
+// type must be named and justified here explicitly rather than being downgraded
+// implicitly by the absence of a gate. Adding an entry requires showing that
+// losing that log cannot change any of the six properties above.
+// These four are emitted AFTER commitRunTerminalization has already made terminal
+// state durable (runs row + replay snapshot + terminal bundle + consequence +
+// evaluation). They are redundant human-readable echoes of a decision that is
+// already recorded authoritatively elsewhere, so losing one cannot alter:
+//   run reconstruction      - rebuilt from the replay snapshot, not from logs
+//   terminal classification - the runs row and terminal bundle are the authority
+//   authority attribution   - carried by authority checks and operation receipts
+//   recovery safety         - recovery reads run status and lease state
+//   operator truth          - run status/failure render from the run + snapshot
+//   compliance evidence     - the consequence record is the audit artifact
+// This is the ONLY post-terminal exception, and it is explicit. Any other required
+// log that fails post-terminal still marks its run and must be settled at the
+// caller's boundary.
+const BEST_EFFORT_RUN_LOG_TYPES = new Set([
+  'run:completed',
+  'run:verification_failed',
+  'run:failed',
+  'run:failed_auto_retried',
+  'run:interrupted'
+]);
+
+function isRequiredRunEvidenceLog(type) {
+  return !BEST_EFFORT_RUN_LOG_TYPES.has(type);
+}
+
+const runEvidencePersistenceFailures = new Map();
+// Required-evidence writes still in flight, keyed by run id. The gate DRAINS these
+// before deciding, so containment never depends on promise-microtask timing: a
+// rejection that settles after the caller continued is still observed before the
+// run is allowed to cross a model-request, mutation, or completion boundary.
+const pendingRunEvidenceWrites = new Map();
+
+function trackRunEvidenceWrite(run, promise) {
+  const runId = run && run.id != null ? run.id : null;
+  if (runId === null) return promise;
+  let pending = pendingRunEvidenceWrites.get(runId);
+  if (!pending) { pending = new Set(); pendingRunEvidenceWrites.set(runId, pending); }
+  const settled = promise.finally(() => {
+    pending.delete(settled);
+    if (pending.size === 0) pendingRunEvidenceWrites.delete(runId);
+  });
+  pending.add(settled);
+  return settled;
+}
+
+// Await every in-flight required-evidence write for this run. Safe to call
+// repeatedly; drains iteratively because draining can itself enqueue nothing new
+// but may complete out of order.
+const MAX_EVIDENCE_DRAIN_ROUNDS = 20;
+
+async function drainRunEvidenceWrites(run) {
+  const runId = run && run.id != null ? run.id : null;
+  if (runId === null) return;
+  // Re-capture the pending set every round. Settling a write can register another
+  // required write (cleanup, failure handling, terminal evidence); draining a single
+  // snapshot would return before those settle and reintroduce the very race this
+  // exists to remove.
+  for (let round = 0; round < MAX_EVIDENCE_DRAIN_ROUNDS; round += 1) {
+    const pending = pendingRunEvidenceWrites.get(runId);
+    if (!pending || pending.size === 0) return;
+    await Promise.allSettled([...pending]);
+  }
+  // Quiescence not reached: a self-producing write loop. Fail explicitly rather
+  // than proceeding as though evidence had settled.
+  const error = new Error(
+    `Required run evidence did not reach quiescence for run ${runId} after ${MAX_EVIDENCE_DRAIN_ROUNDS} drain rounds`
+  );
+  error.code = 'EVIDENCE_DRAIN_NOT_QUIESCENT';
+  error.failureKind = 'evidence_persistence';
+  throw error;
+}
+
+// Terminal runs must not retain tracking entries. Every terminal status
+// (completed, failed, interrupted, recovered, startup-reconciled) funnels through
+// commitRunTerminalization, which calls this once terminal state is durable.
+// Explicit settle boundary for callers that log required evidence about an
+// ALREADY-terminal run (reconciliation, startup repair). Their runs will never
+// reach commitRunTerminalization again, so without this the marker would strand.
+// Draining first means the decision is made on settled state, not on timing.
+async function settleTerminalRunEvidence(run) {
+  const runId = run && run.id != null ? run.id : null;
+  if (runId === null) return;
+  try {
+    await drainRunEvidenceWrites(run);
+  } catch (error) {
+    process.stderr.write(`run ${runId} evidence drain failed at terminal settle: ${error.message}\n`);
+  }
+  const failure = getRunEvidencePersistenceFailure(run);
+  if (failure) {
+    process.stderr.write(
+      `run ${runId} required post-terminal log failed (${failure.logType}): ${failure.message}\n`
+    );
+    // Required evidence must not be lost to stderr. Persist a structured record
+    // through the replay-event authority, which does NOT route through
+    // appendRunLog and therefore cannot re-enter the path that just failed.
+    // The reconciliation is then durably marked as evidence-incomplete rather
+    // than being reported as cleanly reconciled.
+    try {
+      await recordRequiredReplayEvent(run, 'run.reconciliation_evidence_failed',
+        `Required reconciliation evidence could not be persisted (${failure.logType})`, {
+          evidenceId: buildReconciliationEvidenceId(runId, run.revision, failure.logType),
+          payload: {
+            evidenceFailure: {
+              code: failure.code || null,
+              logType: failure.logType || null,
+              message: failure.message || null,
+              kind: 'evidence_persistence'
+            }
+          }
+        });
+    } catch (error) {
+      // The replay authority is the last durable channel. If it is also
+      // unavailable, surface loudly rather than claiming a clean reconciliation.
+      process.stderr.write(
+        `run ${runId} could not persist reconciliation evidence failure: ${error.message}\n`
+      );
+      throw error;
+    }
+  }
+  releaseRunEvidenceTracking(runId);
+}
+
+function releaseRunEvidenceTracking(runId) {
+  if (runId == null) return;
+  pendingRunEvidenceWrites.delete(runId);
+  runEvidencePersistenceFailures.delete(runId);
+}
+
+function markRunEvidencePersistenceFailure(run, type, error) {
+  const runId = run && run.id != null ? run.id : null;
+  if (runId === null) return;
+  if (runEvidencePersistenceFailures.has(runId)) return; // never loop on repeated failures
+  const detail = {
+    logType: type || null,
+    code: (error && error.code) || null,
+    message: sanitizeLogMessage((error && error.message) || 'diagnostic log persistence failed')
+  };
+  runEvidencePersistenceFailures.set(runId, detail);
+  // Deliberately process stderr, not appendRunLog: the log path is what failed.
+  try {
+    process.stderr.write(
+      `run ${runId} diagnostic-log persistence failed (${detail.code || 'unknown'}): ${detail.message}\n`
+    );
+  } catch (_) { /* stderr must never itself break the run */ }
+}
+
+function getRunEvidencePersistenceFailure(run) {
+  const runId = run && run.id != null ? run.id : null;
+  return runId === null ? null : (runEvidencePersistenceFailures.get(runId) || null);
+}
+
+// Fail-closed gate. Called before each model request and before executing actions
+// so a run whose required evidence could not be persisted performs no further
+// model call and no further mutation.
+async function assertRunEvidencePersistenceIntact(run) {
+  // Drain before deciding. Without this the check could pass while a required log
+  // write is still in flight and about to reject (A17).
+  await drainRunEvidenceWrites(run);
+  const failure = getRunEvidencePersistenceFailure(run);
+  if (!failure) return;
+  const error = new Error(
+    `Run ${run.id} stopped: required diagnostic-log evidence could not be persisted `
+    + `(${failure.logType || 'log'}: ${failure.message}). No further model request or mutation was performed.`
+  );
+  error.code = 'EVIDENCE_PERSISTENCE_FAILED';
+  error.failureKind = 'evidence_persistence';
+  error.details = { ...failure };
+  throw error;
+}
+
 function finalizeDiagnosticLogAppend(result, { ticketChanged = false } = {}) {
   const publish = log => {
     broadcastLogEntry(log);
@@ -5003,14 +5196,59 @@ function finalizeDiagnosticLogAppend(result, { ticketChanged = false } = {}) {
   return result && typeof result.then === 'function' ? result.then(publish) : publish(result);
 }
 
+// The run identity passed to the repository is always the persisted owner, so the
+// owner predicate stays valid. When a validated handoff is acting, the executor is
+// recorded as structured provenance alongside it — never substituted for the owner
+// and never hidden inside the message string. See A17.
 function appendRunLog(run, type, message, workspaceAction = null, extraFields = {}) {
-  return finalizeDiagnosticLogAppend(getDiagnosticLogRepository().appendRunLog({
-    run,
+  const acting = resolveActingPrincipal(run);
+  const provenance = acting.delegated
+    ? {
+      runOwnerAgentId: acting.ownerAgentId,
+      runOwnerAgentName: acting.ownerAgentName,
+      actingAgentId: acting.agentId,
+      actingAgentName: acting.agentName,
+      authoritySource: acting.authoritySource,
+      ...(run && run.handoffTaskId != null ? { handoffTaskId: run.handoffTaskId } : {})
+    }
+    : {};
+  const appended = finalizeDiagnosticLogAppend(getDiagnosticLogRepository().appendRunLog({
+    // Ownership fields only; acting identity travels in metadata.
+    run: acting.delegated
+      ? { ...run, agentId: acting.ownerAgentId, agentName: acting.ownerAgentName }
+      : run,
     type,
     message: sanitizeLogMessage(message),
     workspaceAction,
-    metadata: extraFields
+    metadata: { ...extraFields, ...provenance }
   }), { ticketChanged: true });
+  // Contained here so no unobserved call site can leak a rejection to the process.
+  if (!appended || typeof appended.then !== 'function') return appended;
+  if (!isRequiredRunEvidenceLog(type)) {
+    // Explicitly non-critical: contain and report, but never stop the run.
+    return appended.catch(error => {
+      process.stderr.write(`[best-effort-log-failed] run=${run && run.id} type=${type}: ${error && error.message}\n`);
+      return null;
+    });
+  }
+  return trackRunEvidenceWrite(run,
+    appended.catch(error => { markRunEvidencePersistenceFailure(run, type, error); return null; }));
+}
+
+// Explicit required-log API for callers that depend on rejection propagation.
+// appendRunLog contains rejections so that 49 unobserved call sites cannot kill the
+// process; that containment must not silently convert a caller's failure path into
+// a success path. This variant still marks the run (so the gates fail closed) but
+// re-raises, preserving the pre-A17 control flow for callers that awaited it.
+async function appendRequiredRunLog(run, type, message, workspaceAction = null, extraFields = {}) {
+  await appendRunLog(run, type, message, workspaceAction, extraFields);
+  const failure = getRunEvidencePersistenceFailure(run);
+  if (failure && failure.logType === type) {
+    const error = new Error(`Required run evidence could not be persisted (${type})`);
+    error.code = 'EVIDENCE_PERSISTENCE_FAILED';
+    error.failureKind = 'evidence_persistence';
+    throw error;
+  }
 }
 
 function appendSystemLog(type, message, workspaceAction = null, extraFields = {}) {
@@ -11517,6 +11755,9 @@ async function commitRunTerminalization(run, {
     error: error || null
   });
   await maybeTestInterrupt(terminalRun, 'after_run.snapshot_finalized');
+  // Terminal state is durable; drop per-run evidence tracking so the module-level
+  // maps stay bounded by live runs rather than by all runs this process ever saw.
+  releaseRunEvidenceTracking(terminalRun && terminalRun.id != null ? terminalRun.id : run.id);
   return terminalRun;
 }
 
@@ -11718,12 +11959,48 @@ function buildTargetEvidenceMetadata(run, operation, args = {}) {
   };
 }
 
+// Acting-principal resolution (A17).
+//
+// `run.agentId` / `run.agentName` always mean the persisted run OWNER. A delegated
+// executor may act on that run only through explicit validated handoff context,
+// which is carried alongside the run rather than by overwriting its ownership.
+// Delegation is never inferred from an actor id merely differing from the owner.
+//
+// Run-row identity and ownership validation use the owner; authority, receipt
+// actor, and log provenance use the acting principal.
+function resolveActingPrincipal(run) {
+  const ownerId = run && run.agentId != null ? run.agentId : null;
+  const ownerName = (run && run.agentName) || null;
+  if (run && run.authoritySource === 'validated_handoff' && run.actingAgentId != null) {
+    return {
+      agentId: run.actingAgentId,
+      agentName: run.actingAgentName || null,
+      delegated: true,
+      authoritySource: 'validated_handoff',
+      ownerAgentId: ownerId,
+      ownerAgentName: ownerName
+    };
+  }
+  return {
+    agentId: ownerId,
+    agentName: ownerName,
+    delegated: false,
+    authoritySource: 'run_owner',
+    ownerAgentId: ownerId,
+    ownerAgentName: ownerName
+  };
+}
+
 function buildTargetActorContext(run) {
+  const acting = resolveActingPrincipal(run);
   return {
     actorType: 'agent',
-    actorId: run.agentId || null,
+    actorId: acting.agentId,
     runId: run.id,
-    ticketId: run.ticketId
+    ticketId: run.ticketId,
+    ...(acting.delegated
+      ? { actorDelegatedFromAgentId: acting.ownerAgentId, actorAuthoritySource: acting.authoritySource }
+      : {})
   };
 }
 
@@ -11914,7 +12191,7 @@ function buildAuthorityEvidence(run, operation, pathValue, status, rule, reason)
     rule,
     operation,
     path: pathValue || null,
-    actor: run && run.agentId ? `agent:${run.agentId}` : 'unknown',
+    actor: (() => { const a = resolveActingPrincipal(run); return a.agentId ? `agent:${a.agentId}` : 'unknown'; })(),
     workspaceType: run ? run.executionWorkspaceType || 'main' : 'unknown',
     status,
     reason: reason || ''
@@ -12835,6 +13112,9 @@ async function reconcileTerminalRunUnlocked(run) {
     didEvaluate: !existingTypes.has('run.evaluation_completed'),
     didConsequence: !existingTypes.has('run.consequence_recorded')
   });
+  // Required audit log about an already-terminal run: settle explicitly here
+  // because no later terminalization will release its marker.
+  await settleTerminalRunEvidence(run);
 }
 
 async function updateTicketAfterRunInterrupted(run) {
@@ -13138,6 +13418,9 @@ async function interruptStaleRunsOnStartup() {
       });
       if (repaired) {
         appendRunLog(repaired.run, 'run:terminalized', `Startup: terminal run ${run.id} had stale status '${run.status}', fixed to '${status}'`);
+        // Required audit log about an already-terminal run: no execution loop
+        // follows, so settle explicitly (caller rule, outside-path case).
+        await settleTerminalRunEvidence(repaired.run);
       }
       continue;
     }
@@ -13226,6 +13509,7 @@ async function reconcileUnfinalizedTicketsOnStartup() {
       finalizedCount++;
       appendRunLog(latestRun, 'run:ticket_finalized',
         `Startup: finalized stuck ticket #${ticket.id} from 'in_progress' to '${updated.status}' from terminal run ${latestRun.id}`);
+      await settleTerminalRunEvidence(latestRun);
     }
   }
 
@@ -13377,6 +13661,9 @@ async function completeAgentRunUnlocked(run) {
       payload: { status: 'passed' }
     });
   }
+  // No loop gate follows this path. A run with unresolved required-evidence
+  // failure must never be marked completed, so drain and check here (A17).
+  await assertRunEvidencePersistenceIntact(run);
   const completedRun = await commitRunTerminalization(run, {
     status: 'completed',
     mutationCount: countRunMutatingOperations(run.id),
@@ -15763,10 +16050,16 @@ async function validateHandoffTaskInput(input) {
 async function executeHandoffTask(run, handoffInput, step = 0, options = {}) {
   const validated = await validateHandoffTaskInput(handoffInput);
   const planner = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
+  // Ownership is NOT rewritten. The run keeps its persisted owner so run-row
+  // identity and appendRunLog's owner predicate stay valid; the executor travels
+  // as explicit validated-handoff acting context. See A17.
   const executorRun = {
     ...run,
-    agentId: validated.executor.id,
-    agentName: validated.executor.name
+    actingAgentId: validated.executor.id,
+    actingAgentName: validated.executor.name,
+    authoritySource: 'validated_handoff',
+    plannerAgentId: run.agentId,
+    executorAgentId: validated.executor.id
   };
   const workspaceAction = {
     operation: 'writeFile',
@@ -18358,7 +18651,7 @@ async function runAgentTicket(runId) {
     broadcastEvent('run:status-changed', {
       runId: run.id, ticketId: run.ticketId, status: 'running', error: null
     });
-    await appendRunLog(run, 'run:started', `Agent run started${allocationLogSuffix(run)}`, null, {
+    await appendRequiredRunLog(run, 'run:started', `Agent run started${allocationLogSuffix(run)}`, null, {
       allocationPlanId: run.allocationPlanId || null,
       allocationItemId: run.allocationItemId || null
     });
@@ -18701,6 +18994,9 @@ async function runAgentTicket(runId) {
       await heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       assertRunStepAllowed(run, step, limits);
+      // Fail closed if required diagnostic evidence could not be persisted: no
+      // further model request and no further mutation on this run (A17).
+      await assertRunEvidencePersistenceIntact(run);
 
       try {
         const wsRoot = typeof workspaceProvider.root === 'string' ? workspaceProvider.root : String(workspaceProvider.root);
@@ -19113,6 +19409,10 @@ async function runAgentTicket(runId) {
       consecutiveActionContractViolations = 0;
 
       // ── Phase-aware execution enforcement ─────────────────────────
+      // Second gate: a log failure recorded during this turn must stop the run
+      // before any of its proposed actions execute (A17).
+      await assertRunEvidencePersistenceIntact(run);
+
       const phaseCheck = checkPhaseCompliance(run, actions);
       if (!phaseCheck.compliant) {
         await recordRunEvent(run, 'execution.phase_violation', phaseCheck.reason, {
