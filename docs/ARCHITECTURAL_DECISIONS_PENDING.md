@@ -2036,10 +2036,35 @@ counts as owned. Admission still works and the in-scope control stays green; onl
 out-of-scope scenario catches an allocated agent writing into a peer's territory.
 Killed.
 
-**Still open from this file (three of five contracts):** allocation attribution beyond
-plan/item/owned-path, replay fidelity with secret redaction (the snapshot must expose no
-API key or `Authorization` value), and the retry/rerun/stop/budget lifecycle. The
-historical file stays `orphaned` until those have replacements or dispositions.
+**Contracts 2 and 3 migrated — `allocation-attribution-redaction-test.js`, 50
+assertions, 5 scenarios, registered.**
+
+*Attribution* is asserted as a **bijection**, not merely as presence: two runs, two
+distinct allocation items, one shared plan, each owning exactly the scope its agent was
+allocated. The failure that matters is not missing attribution but WRONG attribution —
+item B's receipt filed under item A is worse than no receipt, because it is confidently
+false. Cross-contamination is checked directly: every receipt is filed under the run
+that produced it, each item's receipts stay inside its own scope, and item A's event
+stream never mentions item B's scope.
+
+*Redaction* uses distinctive high-entropy fake keys, so absence means something, and
+every absence assertion is paired with proof the snapshot is genuinely POPULATED —
+allocation identity, owned scope, provider, model, actions, terminal status. Without
+that pairing, deleting the replay snapshot entirely would make the suite greener.
+
+**An honest limitation, found by the mutation test and recorded rather than papered
+over.** Two mutations were aimed at redaction and both showed the same thing: the
+agent's `apiKey` **never reaches the replay path at all**. Disabling
+`sanitizeSnapshotValue`'s key redaction changed nothing, because the snapshot records
+`assignedAgentId`, `provider` and `model` — not the agent record. Credentials are kept
+out **by construction**, not by an active redaction step on this path. The assertions
+are therefore a *regression guard on a leak that does not currently exist*. That is
+worth having and worth not overstating, so no mutation was manufactured to make the
+guard look load-bearing. The allocation cluster's mutation proof rests on
+`owned-path-scope-broadened`, which is genuinely load-bearing.
+
+**Still open from this file (one of five contracts):** the retry / rerun / stop /
+budget lifecycle. The historical file stays `orphaned` until it has a replacement.
 
 **Not done in this tranche:** the allocation split above and the inline-data-security half of
 `rbac-and-inline-data-security-test.js`, which remains explicitly open as an injection
