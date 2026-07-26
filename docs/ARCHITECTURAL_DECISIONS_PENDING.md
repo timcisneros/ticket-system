@@ -44,7 +44,7 @@ the defect can cause, not how hard it is to fix.
 | A12 | Bounded workspace-snapshot recovery policy | Medium | **Open — decision required** — residual of A1 | Policy |
 | A14 | Redundant-mutation postcondition shortcut does not fire | **High** | **Implemented** — see entry | Correctness |
 | A15 | Postcondition telemetry names a source the event never reaches | Low | **Open — decision required** | Documentation / telemetry |
-| A16 | Run consequence records no committed mutations | **High** | **Open — production/contract conflict** | Correctness |
+| A16 | Run consequence records no committed mutations | **High** | **Implemented** — see entry | Correctness |
 
 ### Sequencing
 
@@ -514,7 +514,7 @@ failures in this list are pre-existing.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Open — diagnosis required.** Proven behavior; root cause unverified |
+| **Status** | **Implemented 2026-07-26.** Prospective correction + historical compatibility |
 | **Severity** | **High** — a run's durable record of what it changed is empty even when it changed something |
 | **Scope** | Separate production-runtime defect. **Not** an A10 test-migration issue |
 | **Evidence** | Independent read-only probe against `master` `074526e` |
@@ -546,9 +546,137 @@ happened.
 `runConsequence.created` contains the written note — is **retained unchanged**; it is the
 contract this entry exists to protect and must not be weakened to make the suite pass.
 
-**Root cause: unverified.** No mechanism is asserted here. In particular this entry does **not**
-claim any relationship to A14's read-path projection defect; that would require source and
-persisted evidence proving it, which has not been gathered.
+### Root cause — proven read-only, 2026-07-25
+
+**Data is lost at write/finalization time. Not at persistence, and not at projection.**
+
+`buildRunConsequence` (`server.js`) populates `mutations` and the category collections from
+**one** source, with no fallback:
+
+```js
+(Array.isArray(suppliedOperations) ? suppliedOperations : []).forEach(record => {
+  const mutation = buildMutationConsequenceFromHistory(record);
+  if (!mutation) return;
+  consequence.mutations.push(mutation.item);
+  consequence[mutation.category].push(mutation.item);
+});
+```
+
+If `operations` is not supplied, those collections are unconditionally empty. There are three
+call sites and they disagree:
+
+| Site | Path | Passes `operations`? | Result |
+|------|------|----------------------|--------|
+| `buildRunConsequence(projectedRun, …)` inside `commitRunTerminalization` | **normal terminalization** | **NO** — passes `snapshot`, `evaluation`, `events` only | **empty `created`/`mutations` persisted** |
+| `buildRunConsequence({…}, { …, operations })` in the terminal-repair path | reconcile/repair | **YES** | populated |
+| `run.runConsequence \|\| buildRunConsequence(run, { events, operations, evaluation })` | read-time reconstruction | YES | **never reached** |
+
+The normal terminalization path — the one every ordinary run takes — omits the argument. The
+terminal-repair path in the same file passes it, which is what proves the omission is a defect
+rather than a narrower intended meaning.
+
+The read-time fallback would have masked this, but cannot: it is guarded by
+`run.runConsequence || …`, and an **empty-but-present** consequence is truthy, so the persisted
+empty value wins and the reconstruction never runs.
+
+**Answers to the diagnosis questions:**
+
+- *Calculated during execution?* No — built once at terminalization.
+- *Reconstructed on read?* Only when absent; an empty persisted consequence blocks it.
+- *Projected differently between access paths?* No. The projection and the row are faithful to
+  what was built; nothing is dropped on write to PostgreSQL or on read.
+- *Did PostgreSQL persistence drop fields the JSON runtime wrote?* No. The row stores exactly the
+  object `buildRunConsequence` returned.
+- *Is the succeeded receipt visible to the builder?* Yes — receipts are committed before
+  terminalization. The builder is simply never handed them.
+- *Does something overwrite a populated consequence with an empty default?* No. It is never
+  populated on this path.
+- *Are `created`/`mutations` narrower concepts than the scenario assumes?* No —
+  `buildMutationConsequenceFromHistory` exists specifically to classify a receipt into
+  `created` / `updated` / `deleted` / `renamed` / `mutations`, and the repair path uses it that way.
+
+**Affected operations and runs.** All mutating operations (`writeFile`, `createFolder`,
+`renamePath`, `deletePath`) on **every run that terminalizes normally** — i.e. the common case.
+Runs that go through terminal repair are unaffected.
+
+**Is scenario 6's expectation still an intended contract? Yes.** Evidence, not inference:
+
+- The terminal-repair call site passes `operations`, so the same codebase intends consequences to
+  enumerate committed mutations.
+- `buildMutationConsequenceFromHistory` exists only to build these entries.
+- `views/run-detail.ejs` renders the consequence categories directly to the operator.
+- `summarizeDeliverableConsequence` composes the run's terminal report from
+  `consequence.created` and its siblings when the model left no message — so an empty consequence
+  makes the run report "no recorded consequence".
+
+**Relationship to A14: none established.** A14 was a read-path projection defect in
+`getOperation`. This is a missing argument at a write-path call site. Different mechanism,
+different layer. No shared cause is claimed.
+
+### Correction (implemented)
+
+**Prospective — receipts read inside the terminalization transaction.** The store now loads the
+run's canonical projected receipts on the terminalization transaction's **own client**
+(`_listRunOperationsOn(client, id, …)`) and passes them to the consequence callback, so the
+consequence describes exactly the evidence committed under that boundary. `listRunOperations`
+and the in-transaction reader share one body, so pooled and transactional reads cannot project
+differently. No array loaded outside the transaction is used.
+
+**Omission made impossible.** `buildRunConsequence` now requires an explicit `operations` array
+and throws when it is missing; the silent `Array.isArray(...) ? ... : []` default is gone. All
+three call sites — normal terminalization, terminal repair, read-time reconstruction — pass
+deliberately. `[]` remains valid and meaningful for a genuinely non-mutating run.
+`buildMutationConsequenceFromHistory` semantics are unchanged.
+
+**Historical — one canonical presentation hydration.** Three sites attach `runConsequence` to a
+run: `readRuntimeRunAuthority` (run detail and diagnostics), `buildTicketTimeline`
+(ticket-level), and `buildRunDecisionGraphForRequest` (decision map). All three now hydrate
+through `hydrateRunConsequenceForPresentation`, so no two surfaces can derive different
+consequences.
+
+Reconstruction applies only when the persisted consequence is materially empty **and** succeeded
+mutating receipts exist. It preserves every non-mutation field, never replaces a non-empty
+mutation consequence, never counts failed/refused/prepared operations, leaves a genuinely
+non-mutating run empty and unmarked, and **never writes back** — reading does not mutate stored
+evidence. Provenance is explicit: `mutationConsequenceSource: reconstructed_from_operation_receipts`,
+surfaced in run detail ("Reconstructed, not originally persisted") and in the diagnostic bundle
+("NOT the terminal record written at the time").
+
+**Query discipline.** The hydration helper returns immediately when the mutation consequence is
+materially non-empty, so normally populated runs perform **no** operation-history query. Receipts
+are read only for the empty case. `buildTicketTimeline` and the decision-graph builder therefore
+issue at most one extra query per historical run; batching was not available at these call sites,
+so the bounded per-run read was kept. **Recorded concern:** a ticket with many historical
+mutating runs will issue one receipt query per such run (N+1). This is bounded, affects only
+pre-fix runs, and is a performance note rather than a correctness issue — worth revisiting if
+durable backfill is chosen.
+
+**No silent catch.** An earlier draft wrapped the receipt read in a swallowing `try/catch`; that
+would have degraded every surface back to a false "changed nothing", the exact failure this entry
+removes. It was deliberately removed so a reconstruction failure surfaces.
+
+**Coverage.** `scripts/run-consequence-mutation-test.js` — **33 assertions**, registered in the
+release checkpoint. Proves all four mutation categories at normal terminalization; refused
+operations excluded; `already_exists_noop` follows existing builder semantics; non-mutating runs
+empty and unmarked; consequence matches succeeded receipts one-for-one; missing `operations`
+fails loudly; terminalization reads on its transaction client; historical reconstruction with and
+without succeeded receipts; non-empty consequences preserved; non-mutation fields survived;
+provenance reaching run detail **and** the diagnostic bundle; and run detail and bundle agreeing
+on the reconstructed mutation.
+
+**Natural validation.** The A10-migrated `postcondition-completion-test.js` scenario 6 passes
+unchanged, reporting the `writeFile` in `runConsequence.created`. That suite reaches **106
+assertions across scenarios 1–15** before an unrelated A10 port defect at scenario 16
+(`handoff-valid` timeout), which is out of A16 scope.
+
+**Mutation proofs.** Removing the transaction-local operations load fails the focused test
+(*"createFolder is recorded in consequence.created"*) and fails scenario 6 (*"Run consequence
+should record created note"*). Disabling historical reconstruction fails the provenance assertion
+(*"run detail marks reconstructed data as not the originally persisted record"*). Both restored.
+
+**Durable backfill remains open.** Historical runs are corrected **on read only**; their stored
+consequences are still empty. Whether to backfill `run_consequences` durably is deliberately not
+decided here — the table is append-only, so any backfill needs its own sanctioned mechanism.
 
 **Reproduction.** Minimal single-turn agent writing one file, dispatched through the normal
 ticket path, observed through the store only. Reproduced independently of the A10-migrated

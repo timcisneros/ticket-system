@@ -4704,12 +4704,15 @@ class PostgresRuntimeStore {
         evaluation: evaluationDocument
       }, { client });
       storedEvents.push(evaluationResult.event);
+      // Receipts are read on the terminalization client so the consequence
+      // describes exactly the evidence committed in this transaction. See A16.
       const consequenceDocument = typeof consequence === 'function'
         ? await consequence({
             run: transitioned.run,
             replaySnapshot,
             events: storedEvents.slice(),
-            evaluation: evaluationDocument
+            evaluation: evaluationDocument,
+            operations: await this._listRunOperationsOn(client, id, { limit: this.maxQueryRows })
           })
         : consequence;
       const consequenceResult = await this.recordRunConsequence({
@@ -5020,7 +5023,8 @@ class PostgresRuntimeStore {
               run: projectedRun,
               replaySnapshot: effectiveReplay.snapshot,
               events: [...observedEvents, projectedTerminalEvent],
-              evaluation: evaluationDocument
+              evaluation: evaluationDocument,
+              operations: await this._listRunOperationsOn(client, id, { limit: this.maxQueryRows })
             })
           : consequence;
         const recorded = await this.recordRunConsequence({
@@ -6353,14 +6357,23 @@ class PostgresRuntimeStore {
     };
   }
 
-  async listRunOperations(runId, { afterId = 0, limit = 100 } = {}) {
+  // Connection-aware operation read. Terminalization must derive a run's
+  // consequence from the receipts visible INSIDE its own transaction, so the
+  // consequence and the evidence it describes are committed under one boundary.
+  // Both the pooled reader and the in-transaction reader share this body so they
+  // cannot project differently. See A16.
+  async listRunOperations(runId, options = {}) {
+    return this._listRunOperationsOn(this.pool, runId, options);
+  }
+
+  async _listRunOperationsOn(connection, runId, { afterId = 0, limit = 100 } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const cursor = nonNegativeSafeInteger(afterId, 'afterId');
     const boundedLimit = positiveSafeInteger(limit, 'limit');
     if (boundedLimit > this.maxQueryRows) {
       throw new RangeError(`limit exceeds the configured maximum of ${this.maxQueryRows}`);
     }
-    const receiptResult = await this.pool.query(
+    const receiptResult = await connection.query(
       `SELECT * FROM ${this.table('operation_receipts')}
        WHERE run_id = $1 AND id > $2
        ORDER BY id
@@ -6370,7 +6383,7 @@ class PostgresRuntimeStore {
     const receipts = receiptResult.rows.map(operationReceiptFromRow);
     if (receipts.length === 0) return [];
     const keys = receipts.map(receipt => receipt.idempotencyKey);
-    const intentResult = await this.pool.query(
+    const intentResult = await connection.query(
       `SELECT * FROM ${this.table('target_operation_intents')}
        WHERE run_id = $1 AND operation_key = ANY($2::text[])`,
       [id, keys]

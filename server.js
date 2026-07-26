@@ -5640,7 +5640,9 @@ async function readRuntimeRunAuthority(runId) {
       ...run,
       ...(replay ? { replaySnapshot: replay.snapshot, replaySummary: extractReplaySummary(replay.snapshot) } : {}),
       ...(evaluation ? { runEvaluation: evaluation.evaluation } : {}),
-      ...(consequence ? { runConsequence: consequence.consequence } : {})
+      ...(consequence
+        ? { runConsequence: await hydrateRunConsequenceForPresentation(run.id, consequence.consequence) }
+        : {})
     }
   };
 }
@@ -6648,13 +6650,91 @@ function collectExplicitNotifications(run, suppliedEvents = null) {
     }));
 }
 
+// `operations` is REQUIRED and must be an explicit array. The mutation categories
+// are derived solely from it, so a missing argument silently produced a run that
+// reported changing nothing — the defect recorded as A16. An empty array remains
+// valid and meaningful: it is how a genuinely non-mutating run is expressed.
+// Canonical consequence hydration for every presentation consumer (A16).
+//
+// A persisted consequence is authoritative when it already carries mutations.
+// When it is materially empty but the run has succeeded mutating receipts — the
+// historical shape produced before terminalization loaded operations — the
+// mutation categories are rebuilt on read from those canonical receipts.
+//
+// Every surface that presents a consequence must hydrate through this, so run
+// detail, the diagnostic bundle, the decision map, and ticket-level summaries can
+// never derive different answers for the same run.
+async function hydrateRunConsequenceForPresentation(runId, consequenceDocument) {
+  if (!consequenceDocument) return consequenceDocument;
+  if (hasMaterialMutationConsequence(consequenceDocument)) return consequenceDocument;
+  // Deliberately not wrapped in a swallowing try/catch: a receipt read that fails
+  // here would otherwise silently degrade every surface back to "changed nothing",
+  // which is the exact failure this entry exists to remove.
+  const operations = await getRuntimeStateReadRepository().listRunOperations(runId, { limit: 500 });
+  return applyHistoricalMutationConsequence(consequenceDocument, operations);
+}
+
+// Mutation-bearing consequence categories. `mutations` is the flat list; the
+// others are its classification, assigned by buildMutationConsequenceFromHistory.
+const MUTATION_CONSEQUENCE_CATEGORIES = Object.freeze(['mutations', 'created', 'updated', 'deleted', 'renamed']);
+
+function hasMaterialMutationConsequence(consequence) {
+  if (!consequence || typeof consequence !== 'object') return false;
+  return MUTATION_CONSEQUENCE_CATEGORIES.some(key =>
+    Array.isArray(consequence[key]) && consequence[key].length > 0);
+}
+
+// Historical compatibility (A16). Runs terminalized before the fix persisted an
+// empty mutation consequence even when they committed mutations, so they render
+// as "changed nothing" forever: the read-time reconstruction is guarded by
+// `run.runConsequence || …` and an empty-but-present consequence is truthy.
+//
+// This rebuilds ONLY the mutation categories, only when the persisted consequence
+// is materially empty and succeeded mutating receipts exist. It is deterministic,
+// derived from the canonical receipts, applied on read, and never written back —
+// reading must not mutate stored evidence. Durable backfill is tracked separately.
+//
+// Category semantics are unchanged: classification is delegated to
+// buildMutationConsequenceFromHistory, and only succeeded receipts are considered,
+// so failed, refused, or merely prepared operations are never counted.
+function applyHistoricalMutationConsequence(persistedConsequence, operations) {
+  if (!persistedConsequence || typeof persistedConsequence !== 'object') return persistedConsequence;
+  if (hasMaterialMutationConsequence(persistedConsequence)) return persistedConsequence;
+  if (!Array.isArray(operations) || operations.length === 0) return persistedConsequence;
+
+  const rebuilt = { mutations: [], created: [], updated: [], deleted: [], renamed: [] };
+  operations
+    .filter(record => record && record.outcome === 'succeeded')
+    .forEach(record => {
+      const mutation = buildMutationConsequenceFromHistory(record);
+      if (!mutation) return;
+      rebuilt.mutations.push(mutation.item);
+      rebuilt[mutation.category].push(mutation.item);
+    });
+
+  // A genuinely non-mutating run stays empty rather than gaining a provenance flag.
+  if (!hasMaterialMutationConsequence(rebuilt)) return persistedConsequence;
+
+  return {
+    ...persistedConsequence,
+    ...rebuilt,
+    mutationConsequenceSource: 'reconstructed_from_operation_receipts'
+  };
+}
+
 function buildRunConsequence(run, {
   snapshot: suppliedSnapshot = null,
   evaluation: suppliedEvaluation = null,
   events: suppliedEvents = null,
-  operations: suppliedOperations = null
+  operations: suppliedOperations
 } = {}) {
   if (!run) return null;
+  if (!Array.isArray(suppliedOperations)) {
+    throw new TypeError(
+      'buildRunConsequence requires an explicit operations array; '
+      + 'pass [] for a run with no operations rather than omitting it (A16)'
+    );
+  }
 
   const snapshot = suppliedSnapshot || run.replaySnapshot || {};
   const evaluation = suppliedEvaluation || run.runEvaluation || buildRunEvaluation(run, {
@@ -6675,7 +6755,7 @@ function buildRunConsequence(run, {
     }
   };
 
-  (Array.isArray(suppliedOperations) ? suppliedOperations : []).forEach(record => {
+  suppliedOperations.forEach(record => {
     const mutation = buildMutationConsequenceFromHistory(record);
     if (!mutation) return;
     consequence.mutations.push(mutation.item);
@@ -7002,11 +7082,12 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     }),
     attemptUsage: serializedAttemptUsage,
     budgetStatus: buildRunBudgetStatus(run, serializedAttemptUsage),
-    runConsequence: run.runConsequence || buildRunConsequence(run, {
-      events: suppliedEvents,
-      operations: suppliedOperations,
-      evaluation: run.runEvaluation || null
-    }),
+    runConsequence: applyHistoricalMutationConsequence(run.runConsequence, suppliedOperations || [])
+      || buildRunConsequence(run, {
+        events: suppliedEvents,
+        operations: suppliedOperations || [],
+        evaluation: run.runEvaluation || null
+      }),
     currentMessage: getRunCurrentMessage(run, effectiveLogsByRunId, summary),
     stateInconsistency: detectRunStateInconsistency(run, {
       logs: runLogs,
@@ -7484,7 +7565,9 @@ async function buildTicketTimeline(ticketId) {
     return {
       ...run,
       ...(evaluation ? { runEvaluation: evaluation.evaluation } : {}),
-      ...(consequence ? { runConsequence: consequence.consequence } : {})
+      ...(consequence
+        ? { runConsequence: await hydrateRunConsequenceForPresentation(run.id, consequence.consequence) }
+        : {})
     };
   }));
   const runIds = new Set(runs.map(run => run.id));
@@ -11271,7 +11354,10 @@ async function commitRunTerminalization(run, {
       return buildRunConsequence(projectedRun, {
         snapshot: finalized.snapshot,
         evaluation: context.evaluation,
-        events: projectedEvents
+        events: projectedEvents,
+        // Receipts read by the store on the terminalization client, so the
+        // consequence describes evidence committed under the same boundary (A16).
+        operations: context.operations || []
       });
     },
     executionEvent: {
@@ -12587,7 +12673,10 @@ async function reconcileTerminalRunUnlocked(run) {
         snapshot: context.replaySnapshot,
         evaluation: context.evaluation,
         events: consequenceEvents,
-        operations
+        // Prefer the receipts the store read on this transaction's client over any
+        // array loaded outside it, so both terminal paths derive the consequence
+        // from the same authoritative boundary (A16).
+        operations: context.operations || operations || []
       });
     },
     terminalEvent
@@ -21358,7 +21447,9 @@ async function buildRunDecisionGraphForRequest(runId) {
   const run = {
     ...hydrated,
     ...(evaluation ? { runEvaluation: evaluation.evaluation } : {}),
-    ...(consequence ? { runConsequence: consequence.consequence } : {})
+    ...(consequence
+      ? { runConsequence: await hydrateRunConsequenceForPresentation(storedRun.id, consequence.consequence) }
+      : {})
   };
   return buildRunDecisionGraph(
     run,
@@ -23989,6 +24080,15 @@ async function buildRunDiagnosticBundle(ctx) {
   }
   if (blockedConflict) {
     out('- Conflicting owner (from blocked op): ticket #' + dash(blockedConflict.conflictingTicketId) + ', run #' + dash(blockedConflict.conflictingRunId) + ', history id ' + dash(blockedConflict.conflictingHistoryId) + ', path ' + dash(blockedConflict.conflictingPath));
+  }
+  // A16: a historical run whose stored consequence was empty has its mutation
+  // categories rebuilt on read. Say so plainly, so the bundle never presents a
+  // reconstruction as the terminal record that was originally written.
+  if (run && run.runConsequence
+      && run.runConsequence.mutationConsequenceSource === 'reconstructed_from_operation_receipts') {
+    out('- Consequence provenance: RECONSTRUCTED on read from succeeded operation receipts.');
+    out('  This run terminalized before mutation consequences were recorded correctly;');
+    out('  its stored consequence was empty and is NOT the terminal record written at the time.');
   }
   out('');
 

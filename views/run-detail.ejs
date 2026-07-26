@@ -327,7 +327,11 @@
 %>
 <section class="detail-section" id="run-consequence">
   <h2>Recorded Consequence</h2>
+<% if (consequence.mutationConsequenceSource === 'reconstructed_from_operation_receipts') { %>
+  <p class="text-muted"><strong>Reconstructed, not originally persisted.</strong> This run terminalized before mutation consequences were recorded correctly, so its stored consequence was empty. The categories below are derived on read from this run's succeeded operation receipts and are not the terminal record that was written at the time.</p>
+<% } else { %>
   <p class="text-muted">The authoritative record of what this run changed, derived from operation history at terminalization. Empty categories mean nothing of that kind was recorded.</p>
+<% } %>
   <dl class="detail-grid">
     <% consequenceCategories.forEach(([key, label, items]) => { %>
       <div>
