@@ -1356,8 +1356,8 @@ larger. It is. Executing every unregistered suite establishes the real numbers:
 
 | Classification | Count |
 |----------------|-------|
-| **required** — must run in the release checkpoint | 72 |
-| **orphaned** — genuine cutover orphan, cannot run | 75 |
+| **required** — must run in the release checkpoint | 74 |
+| **orphaned** — genuine cutover orphan, cannot run | 75 (one split; its injection half still open) |
 | **excluded** — deliberately outside the checkpoint | 20 |
 | **total `scripts/*-test.js`** | **162** |
 
@@ -1910,7 +1910,49 @@ begin path. Aimed there, it kills. When a mutation survives, check which layer a
 executes before concluding the suite is weak; this is the fourth time in A20 that a
 surviving mutation meant defense in depth rather than a coverage hole.
 
-### The remaining 75 — sequencing
+### Authority cluster 1 — permission escalation (2026-07-26)
+
+**`rbac-and-inline-data-security-test.js` — SPLIT.** It bundles two unrelated
+contracts, and only one of them is an authority boundary:
+
+| Half | Contract | Disposition |
+|------|----------|-------------|
+| privilege escalation | a partial admin cannot reach permissions it was not granted | **migrated** → `permission-escalation-boundary-test.js` |
+| inline data security | hostile agent names are script-escaped, provider secrets are not rendered, client rows avoid HTML sinks | **still open** — an injection contract, not an authority one; needs its own home |
+
+The historical file stays `orphaned` because half its contract has not moved yet.
+Retiring it now would silently drop the injection half — thematic proximity to "security"
+is not a successor relationship.
+
+**`permission-escalation-boundary-test.js` — 17 assertions, 7 scenarios, registered.**
+
+The escalation shape that matters is not "can a nobody do nothing" but "can a partial
+admin promote itself", so the seeded principal holds a realistic bundle —
+`user:create`, `user:read`, `user:update`, `group:create`, `group:update` — and is
+refused when it tries to create an account already inside a privileged group, mint a
+group carrying `user:delete`, reach workflow management on the strength of `user:read`,
+or read the event stream without `ticket:read`.
+
+**Both sides, and effect not just status.** Every refusal is paired with the nearest
+action the same principal legitimately may take — an unassigned account, an empty group
+— and with an administrator succeeding on the surface the limited principal was refused.
+Refusals additionally assert the row was **not written**: a 403 that still created the
+user would be worse than a 500, and status alone cannot distinguish them. A seventh
+scenario pins the outer boundary, so the 403s above are known to be about permissions
+rather than authentication.
+
+One assertion was weakened deliberately and the reason recorded in the suite:
+`/admin/users` and `/admin/groups` are POST-only, so an anonymous GET is a 404 rather
+than a redirect. The property under test is that nothing is *served*, so those assert
+"not 200", with `/admin/workflows` — which does have a GET — carrying the stricter
+redirect/401/403 assertion.
+
+**Mutation-verified.** `permission-grant-escalation-open` removes the
+`permission:assign` check from group creation, letting a principal with `group:create`
+mint a group carrying any permission and add itself. Killed. Note that every positive
+control stays green under it — only the refusal half catches self-promotion.
+
+### The remaining 74 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

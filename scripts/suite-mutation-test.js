@@ -156,6 +156,18 @@ const MUTATIONS = Object.freeze([
     expect: 'operation receipts carry no observed post-state'
   },
   {
+    name: 'permission-grant-escalation-open',
+    suite: 'permission-escalation-boundary-test.js',
+    file: 'server.js',
+    contract: 'granting permissions requires permission:assign',
+    // A principal with group:create but not permission:assign can then mint a group
+    // carrying any permission — and add itself. This is self-promotion, and the
+    // positive controls stay green through it, so only the refusal half catches it.
+    find: "  if (normalizedPermissions.length > 0 && !hasPermission(request.session.userId, 'permission:assign')) {",
+    replace: '  if (false) {',
+    expect: 'a partial admin mints a group carrying a permission it does not hold'
+  },
+  {
     name: 'crashed-runs-never-reclaimed',
     suite: 'terminalization-boundary-recovery-test.js',
     file: 'server.js',

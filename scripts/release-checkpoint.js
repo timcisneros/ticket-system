@@ -117,7 +117,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'target-operation-reconciliation-test.js',
   // A23 — the last three deterministic crash seams: run created, death before the
   // atomic terminalization bundle, and death immediately after it committed.
-  'terminalization-boundary-recovery-test.js'
+  'terminalization-boundary-recovery-test.js',
+  // A20 — the authority half split out of rbac-and-inline-data-security-test.js.
+  'permission-escalation-boundary-test.js'
 ]);
 
 function runCheckpoint() {

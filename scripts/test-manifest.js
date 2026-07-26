@@ -167,6 +167,7 @@ const TESTS = Object.freeze([
   { file: "organization-guidance-test.js", status: "required" },
   { file: "page-render-regression-test.js", status: "required" },
   { file: "phase-contract-alignment-test.js", status: "orphaned", reason: "cutover-orphan" },
+  { file: "permission-escalation-boundary-test.js", status: "required" },
   { file: "phase-gated-catalog-behavioral-test.js", status: "required" },
   { file: "postcondition-completion-test.js", status: "required" },
   { file: "postgres-persistence-contract-test.js", status: "required" },
