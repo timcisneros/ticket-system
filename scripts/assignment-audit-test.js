@@ -81,12 +81,19 @@ async function main() {
     assert(response.statusCode === 200, `reassignment returned HTTP ${response.statusCode}: ${response.body}`);
 
     const reassigned = await store.getTicket(ticket.id);
-    // This is the assertion that exposed A21: the endpoint answers 200 and writes an
-    // audit record claiming the assignment moved, while the ticket still targets the
-    // old agent. An audit trail that contradicts the state it describes is worse than
-    // no audit trail, so this suite asserts the truth rather than the current behavior.
+    // The assertion that exposed A21. The endpoint used to answer 200 and write an
+    // audit record claiming the assignment moved while the ticket still targeted the
+    // old agent, because the target lives in COLUMNS that the shared ticket transition
+    // never wrote. An audit trail that contradicts the state it describes is worse
+    // than no audit trail.
     assert(reassigned.assignmentTargetId === toAgent.id,
-      `the ticket now targets the new agent (see A21; got ${reassigned.assignmentTargetId}, expected ${toAgent.id})`);
+      `the ticket actually targets the new agent (got ${reassigned.assignmentTargetId}, expected ${toAgent.id})`);
+    assert(reassigned.assignmentTargetType === 'agent' && reassigned.assignmentMode === 'individual',
+      'the authoritative assignment fields stay internally consistent');
+    // The HTTP body is what an operator and every API client sees. It must describe
+    // the row that was written, not the request that was made.
+    assert(JSON.parse(response.body).ticket.assignmentTargetId === reassigned.assignmentTargetId,
+      'the returned ticket reflects the persisted assignment');
     assert(reassigned.changedBy === 'admin', 'the reassignment records who changed it');
     assert(typeof reassigned.changedAt === 'string' && reassigned.changedAt.length > 0,
       'the reassignment records when it changed');
@@ -102,7 +109,58 @@ async function main() {
     assert(auditLog.nextAssignment && auditLog.nextAssignment.assignmentTargetId === toAgent.id,
       'the audit log records what the assignment became');
     assert(auditLog.nextAssignment.assignmentTargetId === reassigned.assignmentTargetId,
-      'the audit log agrees with the ticket it describes (A21: it does not)');
+      'the audit log agrees with the ticket it describes');
+
+    // ── The event must agree with the row too ───────────────────────────────
+    // Selected by its previousAssignment marker, not by being last: dispatching a run
+    // emits its own ticket.updated immediately afterwards, so "the latest one" is the
+    // dispatch event rather than the reassignment.
+    const assignmentEvent = (await ticketEvents())
+      .filter(e => e.type === 'ticket.updated' && (e.payload || {}).previousAssignment)
+      .pop();
+    assert(Boolean(assignmentEvent), 'the reassignment emitted its own ticket.updated event');
+    const eventPayload = assignmentEvent.payload || assignmentEvent;
+    assert(eventPayload.assignmentTargetId === reassigned.assignmentTargetId,
+      'the ticket.updated event agrees with the persisted assignment');
+    assert(eventPayload.previousAssignment
+      && eventPayload.previousAssignment.assignmentTargetId === fromAgent.id,
+      'the event records the assignment it moved away from');
+    // The revision the REASSIGNMENT produced, not the ticket's current one: dispatching
+    // a run advances it again immediately afterwards.
+    assert(eventPayload.revision === ticket.revision + 1,
+      `the event is stamped with the revision the reassignment produced (got ${eventPayload.revision}, expected ${ticket.revision + 1})`);
+
+    // ── The dispatched run follows the NEW assignment ───────────────────────
+    // Reassigning an open ticket dispatches a run. Before A21 the ticket never moved,
+    // so the run went to the original agent while the audit trail credited the new
+    // one — the most consequential form of the defect.
+    const dispatched = (await store.listRunsForTicket({ ticketId: ticket.id, limit: 20 })).runs;
+    assert(dispatched.length >= 1, `the reassignment dispatched a run (got ${dispatched.length})`);
+    assert(dispatched.every(run => run.agentId === toAgent.id),
+      `every dispatched run targets the newly assigned agent (got ${dispatched.map(r => r.agentId).join(',')})`);
+    assert(!dispatched.some(run => run.agentId === fromAgent.id),
+      'no run was dispatched to the agent the ticket was moved away from');
+
+    // ── A stale writer cannot overwrite a newer assignment ──────────────────
+    // Asserted at the store boundary because the optimistic guard lives there; the
+    // endpoint reads the current revision on every call and so cannot express it.
+    let staleRejected = false;
+    try {
+      await store.reassignTicket({
+        ticketId: ticket.id,
+        expectedRevision: reassigned.revision - 1,
+        fromStatuses: [reassigned.status],
+        assignmentTargetType: 'agent', assignmentTargetId: fromAgent.id,
+        assignmentMode: 'individual', changedBy: 'stale-writer'
+      });
+    } catch (_) {
+      staleRejected = true;
+    }
+    assert(staleRejected, 'a reassignment against a stale revision is rejected');
+    assert((await store.getTicket(ticket.id)).assignmentTargetId === toAgent.id,
+      'the rejected stale write did not move the ticket back');
+    assert((await assignmentLogs()).length === logs.length,
+      'the rejected stale write left no audit evidence behind');
 
     // ── A no-op reassignment records nothing ────────────────────────────────
     // Without this, an implementation that logged every request would pass every
@@ -126,8 +184,11 @@ async function main() {
       'a no-op appends no ticket.updated event');
     assert((await ticketEvents()).filter(e => e.type === 'ticket.updated').length > updatedEventsBefore,
       'the real reassignment did emit a ticket.updated event, so the no-op check is meaningful');
+    assert(afterNoop.revision === beforeNoop.revision, 'a no-op does not advance the revision');
+    assert((await store.listRunsForTicket({ ticketId: ticket.id, limit: 20 })).runs.length === dispatched.length,
+      'a no-op dispatches no additional run');
 
-    assertScenariosExecuted({ label: 'assignment audit', assertions: assert.count(), minAssertions: 16 });
+    assertScenariosExecuted({ label: 'assignment audit', assertions: assert.count(), minAssertions: 28 });
     console.log(`\nPASS: ticket assignment audit trail — ${assert.count()} assertions (PostgreSQL-native)`);
   }, { schemaSlug: 'assignment_audit' });
 }

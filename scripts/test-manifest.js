@@ -89,7 +89,7 @@ const TESTS = Object.freeze([
   { file: "archive-local-events-test.js", status: "required" },
   { file: "artifact-prediction-capture-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "artifact-projection-status-test.js", status: "orphaned", reason: "cutover-orphan" },
-  { file: "assignment-audit-test.js", status: "excluded", reason: "blocked-by-defect" },
+  { file: "assignment-audit-test.js", status: "required" },
   { file: "attempt-usage-visibility-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "auto-retry-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "batch-workload-validation-test.js", status: "orphaned", reason: "cutover-orphan" },

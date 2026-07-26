@@ -156,6 +156,24 @@ const MUTATIONS = Object.freeze([
     expect: 'operation receipts carry no observed post-state'
   },
   {
+    name: 'assignment-column-divergence',
+    suite: 'assignment-audit-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'reassignment writes the AUTHORITATIVE assignment columns',
+    // Restores the exact A21 divergence: the assignment lands in the JSON body, where
+    // ticketFromRow's column read shadows it. The endpoint still answers 200, still
+    // advances the revision, and still writes an audit log and event claiming the
+    // move — and the ticket does not move. Reproducing it here keeps the defect from
+    // silently returning.
+    find: `           SET assignment_target_type = $4,
+               assignment_target_id = $5,
+               body = ticket.body || $6::jsonb,`,
+    replace: `           SET assignment_target_type = ticket.assignment_target_type,
+               assignment_target_id = ticket.assignment_target_id,
+               body = ticket.body || jsonb_build_object('assignmentTargetType', $4::text, 'assignmentTargetId', $5::bigint) || $6::jsonb,`,
+    expect: 'the assignment lands only in the body, where the column shadows it'
+  },
+  {
     name: 'status-change-loses-from-status',
     suite: 'status-transition-evidence-test.js',
     file: 'server.js',

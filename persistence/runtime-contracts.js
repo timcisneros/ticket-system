@@ -9,7 +9,7 @@ const CONTRACTS = Object.freeze({
   runLease: ['getRun', 'verifyRunLease', 'listPendingRuns', 'listExpiredRunningRuns', 'claimPendingRun', 'startClaimedRun', 'heartbeatRunLease', 'releaseRunLease', 'persistRunWorkflowStep', 'recoverExpiredRun'],
   runPhase: ['advanceRunPhase'],
   runTerminalization: ['terminalizeRun', 'repairRunTerminalization'],
-  ticketRunLifecycle: ['createTicketWithEvent', 'transitionTicketState', 'createRunsAndStartTicket', 'transitionTicketAfterRun', 'reopenTicket', 'createRetryRun'],
+  ticketRunLifecycle: ['createTicketWithEvent', 'transitionTicketState', 'reassignTicket', 'createRunsAndStartTicket', 'transitionTicketAfterRun', 'reopenTicket', 'createRetryRun'],
   nonTerminalEvidence: ['appendRunEvidence', 'completeActionReceipt', 'prepareTargetOperation', 'completeTargetOperation', 'getTargetOperation', 'withTargetOperationLock'],
   workspaceOwnership: ['findMutationConflict', 'listArtifactOwners'],
   operatorRecovery: ['getOperatorRecovery', 'prepareOperatorRecovery', 'completeOperatorRecovery', 'withOperatorRecoveryLock'],

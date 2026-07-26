@@ -22851,38 +22851,25 @@ fastify.patch('/api/tickets/:id/assignment', {
 
   if (assignmentChanged) {
     const changedBy = request.user ? request.user.username : String(request.session.userId);
-    const previousAssignment = {
-      assignmentTargetType: ticket.assignmentTargetType,
-      assignmentTargetId: ticket.assignmentTargetId,
-      assignmentMode: ticket.assignmentMode
-    };
-    const result = await getTicketRunLifecycleRepository().transitionTicketState({
+    // A21: reassignment goes through its own store writer. `transitionTicketState`
+    // updates only `status` and the JSON body, and the assignment target lives in
+    // COLUMNS that `ticketFromRow` reads in preference to the body — so patching it
+    // through the shared transition wrote a value that was immediately shadowed,
+    // leaving the ticket on its original principal while the audit log and event both
+    // claimed it had moved. `reassignTicket` writes the columns, the body, the event
+    // and the audit log in one transaction, so the evidence cannot outlive a failed
+    // update or describe an assignment the ticket does not hold.
+    const result = await getTicketRunLifecycleRepository().reassignTicket({
       ticketId,
+      expectedRevision: ticket.revision,
       fromStatuses: [ticket.status],
-      toStatus: ticket.status,
-      patch: {
-        assignmentTargetType: 'agent',
-        assignmentTargetId: agent.id,
-        assignmentMode: 'individual',
-        changedBy,
-        changedAt: new Date().toISOString()
-      },
-      eventType: 'ticket.updated',
-      eventPayload: {
-        assignmentTargetType: 'agent',
-        assignmentTargetId: agent.id,
-        assignmentMode: 'individual',
-        changedBy
-      }
+      assignmentTargetType: 'agent',
+      assignmentTargetId: agent.id,
+      assignmentMode: 'individual',
+      changedBy,
+      eventType: 'ticket.updated'
     });
     ticket = result.ticket;
-    await appendSystemLog('ticket:assignment_change', `Ticket #${ticket.id} assignment changed by ${changedBy}`, null, {
-      ticketId: ticket.id,
-      changedBy,
-      changedAt: ticket.changedAt,
-      previousAssignment,
-      nextAssignment: { assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual' }
-    });
     broadcastTicketChange();
   }
 

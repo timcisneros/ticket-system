@@ -95,7 +95,11 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'rerun-mode-evidence-test.js',
   'operation-poststate-observation-test.js',
   // A20 tranche 2 — repaired from cutover-orphan-silent.
-  'status-transition-evidence-test.js'
+  'status-transition-evidence-test.js',
+  // A21 — reinstated once truthful reassignment was implemented. This suite is the
+  // regression test for that fix; it was excluded as blocked-by-defect while the
+  // production behavior it asserts was broken.
+  'assignment-audit-test.js'
 ]);
 
 function runCheckpoint() {

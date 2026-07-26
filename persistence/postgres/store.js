@@ -3922,6 +3922,143 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+  // Reassign a ticket to a different principal (A21).
+  //
+  // WHY THIS IS A DEDICATED METHOD rather than a patch through transitionTicket.
+  // `assignment_target_type` and `assignment_target_id` are COLUMNS, and
+  // `ticketFromRow` reads them from the columns — so anything written into the JSON
+  // `body` under those keys is shadowed and silently lost. transitionTicket updates
+  // only `status` and `body`, which is correct for its eleven other callers: none of
+  // them changes the assignment, and widening its UPDATE to touch the assignment
+  // columns would make every status transition capable of moving a ticket between
+  // principals. Reassignment gets its own writer instead.
+  //
+  // `assignmentMode` genuinely lives in the body, so this writes both surfaces in one
+  // statement and they cannot diverge.
+  //
+  // The event AND the audit log are appended inside the same transaction as the
+  // update. Evidence that a reassignment happened therefore commits with the
+  // reassignment or not at all — a failure cannot leave a durable record claiming a
+  // move that never landed, which is the defect this method exists to prevent.
+  async reassignTicket({
+    ticketId,
+    expectedRevision,
+    fromStatuses,
+    assignmentTargetType,
+    assignmentTargetId,
+    assignmentMode,
+    changedBy,
+    eventType = 'ticket.updated',
+    eventPayload = {},
+    auditLogType = 'ticket:assignment_change'
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const revision = positiveSafeInteger(expectedRevision, 'expectedRevision');
+    const sources = normalizeStatuses(fromStatuses, TICKET_STATUSES, 'ticket source status');
+    const targetType = requiredString(assignmentTargetType, 'assignmentTargetType');
+    if (!['agent', 'group'].includes(targetType)) {
+      throw new TypeError(`Unsupported assignment target type: ${targetType}`);
+    }
+    const targetId = positiveSafeInteger(assignmentTargetId, 'assignmentTargetId');
+    const mode = requiredString(assignmentMode, 'assignmentMode');
+    const actor = requiredString(changedBy, 'changedBy');
+    const type = requiredString(eventType, 'eventType');
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+
+    const execute = async connection => {
+      // Read the prior assignment inside the transaction so the audit record and the
+      // update describe the same instant. Reading it from a caller-supplied snapshot
+      // would let a concurrent writer make the "previous" value a lie.
+      const currentResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (currentResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const before = ticketFromRow(currentResult.rows[0]);
+      const previousAssignment = {
+        assignmentTargetType: before.assignmentTargetType,
+        assignmentTargetId: before.assignmentTargetId,
+        assignmentMode: before.assignmentMode || null
+      };
+
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const changedAt = isoTimestamp(clock.rows[0].ts, 'ticket assignment clock');
+      const bodyPatch = { assignmentMode: mode, changedBy: actor, changedAt };
+
+      const result = await connection.query(
+        `WITH candidate AS (
+           SELECT id
+           FROM ${this.table('tickets')}
+           WHERE id = $1 AND revision = $2 AND status = ANY($3::text[])
+         ), updated AS (
+           UPDATE ${this.table('tickets')} AS ticket
+           SET assignment_target_type = $4,
+               assignment_target_id = $5,
+               body = ticket.body || $6::jsonb,
+               revision = ticket.revision + 1,
+               updated_at = clock_timestamp()
+           FROM candidate
+           WHERE ticket.id = candidate.id
+           RETURNING ticket.*
+         )
+         SELECT * FROM updated`,
+        [id, revision, sources, targetType, targetId, bodyPatch]
+      );
+      if (result.rowCount === 0) {
+        return this._throwTransitionConflict(connection, {
+          entity: 'ticket',
+          tableName: 'tickets',
+          id,
+          expectedRevision: revision,
+          expectedStatuses: sources,
+          fromRow: ticketFromRow
+        });
+      }
+
+      const ticket = ticketFromRow(result.rows[0]);
+      const nextAssignment = {
+        assignmentTargetType: ticket.assignmentTargetType,
+        assignmentTargetId: ticket.assignmentTargetId,
+        assignmentMode: ticket.assignmentMode || null
+      };
+
+      // Both records are built from the row that was actually written, so neither can
+      // describe an assignment the ticket does not hold.
+      const event = await this._appendEvent(connection, {
+        type,
+        ticketId: ticket.id,
+        payload: {
+          ...callerPayload,
+          ...nextAssignment,
+          changedBy: actor,
+          previousAssignment,
+          status: ticket.status,
+          revision: ticket.revision,
+          updatedAt: ticket.updatedAt
+        }
+      });
+
+      const auditLog = await this._appendSystemLog(connection, {
+        type: auditLogType,
+        message: `Ticket #${ticket.id} assignment changed by ${actor}`,
+        metadata: {
+          ticketId: ticket.id,
+          changedBy: actor,
+          changedAt: ticket.changedAt,
+          previousAssignment,
+          nextAssignment
+        }
+      });
+
+      return { ticket, event, auditLog, previousAssignment, nextAssignment };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async transitionTicketState({
     ticketId,
     fromStatuses,

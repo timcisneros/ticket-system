@@ -48,7 +48,7 @@ the defect can cause, not how hard it is to fix.
 | A16 | Run consequence records no committed mutations | **High** | **Implemented** — see entry | Correctness |
 | A17 | Delegated handoff logging crashes the server process | **Critical** | **Open — implementation required** | Correctness / availability |
 | A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented; 81 orphans remain | Verification gap |
-| A21 | Ticket reassignment silently discarded; audit trail asserts otherwise | **High** | **Open — implementation required** | Correctness / truthfulness |
+| A21 | Ticket reassignment silently discarded; audit trail asserts otherwise | **High** | **Implemented 2026-07-26** — see entry | Correctness / truthfulness |
 
 ### Sequencing
 
@@ -975,8 +975,8 @@ durable evidence.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Open — implementation required** |
-| **Severity** | **High** — an audit record asserts a change that did not happen |
+| **Status** | **Implemented 2026-07-26.** `reassignTicket` store writer; `assignment-audit-test.js` reinstated as required (31 assertions); mutation-verified |
+| **Severity** | **High** — an audit record asserted a change that did not happen |
 | **Scope** | Production runtime/persistence defect. Found by A20 tranche 2; **not** a test-migration issue |
 | **Evidence** | Reproduced against `d29b3c5` by `scripts/assignment-audit-test.js`; root cause below |
 | **Decision required** | Whether `transitionTicket` should patch the assignment columns, or whether reassignment needs its own store method |
@@ -1037,9 +1037,50 @@ assert(auditLog.nextAssignment.assignmentTargetId === reassigned.assignmentTarge
   'the audit log agrees with the ticket it describes');
 ```
 
-**Not fixed here.** A20 tranche 2 is a test-repair tranche and has modified no
-production file. Changing ticket-update semantics touches the transition guard shared by
-every ticket mutation, so it needs its own tranche with its own regression coverage.
+### Implementation (2026-07-26)
+
+**A dedicated store writer, not a widened primitive.** `transitionTicket` has eleven
+callers and none of them changes an assignment. Teaching it to write the assignment
+columns would have made *every* status transition capable of moving a ticket between
+principals — a much larger blast radius than the defect. `PostgresRuntimeStore.reassignTicket`
+was added instead, and `transitionTicket` is untouched, so the other callers are correct
+by construction rather than by review.
+
+`reassignTicket` writes the two authoritative COLUMNS and the body's `assignmentMode` in
+a single UPDATE, under the same optimistic revision guard and status guard the other
+transitions use, and it appends **both** the `ticket.updated` event and the
+`ticket:assignment_change` audit log **inside the same transaction**. The endpoint
+previously appended the audit log after the commit, so a failure between the two left a
+reassignment with no audit record; now the evidence and the change commit together or
+not at all.
+
+The prior assignment is read `FOR UPDATE` inside that transaction rather than taken from
+the caller's snapshot, so a concurrent writer cannot make the recorded "previous" value
+a lie. The event and log payloads are both built from the row that was actually written.
+
+**Proof — `scripts/assignment-audit-test.js`, 31 assertions**, one per guarantee:
+
+| Guarantee | How it is proved |
+|-----------|------------------|
+| the ticket acquires the requested assignment | `store.getTicket` reports the new agent |
+| assignment fields stay internally consistent | target type, target id and mode asserted together |
+| the returned ticket reflects persistence | the HTTP body's ticket is compared to the stored row |
+| the audit log matches ticket state | `nextAssignment` compared to the ticket, not to the request |
+| the event agrees with the persisted ticket | payload assignment, `previousAssignment`, and the revision it produced |
+| the run is dispatched on the NEW assignment | every dispatched run targets the new agent and none the old |
+| a no-op is inert | revision, timestamps, log, event and run count all unchanged |
+| stale writes cannot overwrite | a stale-revision `reassignTicket` is rejected, the ticket does not move back, and no audit evidence is left |
+
+Two of those needed care to state truthfully: dispatching a run emits its own
+`ticket.updated` immediately after the reassignment, so the assignment event is selected
+by its `previousAssignment` marker rather than by being last, and the revision asserted
+is the one the reassignment produced rather than the ticket's current one.
+
+**Mutation-verified.** `assignment-column-divergence` in `scripts/suite-mutation-test.js`
+restores the exact defect — the assignment lands in the JSON body where the column read
+shadows it — and the suite fails. The endpoint still answers 200 and still writes its
+evidence under that mutation, which is precisely why a suite that checked only the HTTP
+status or only the log's existence would have stayed green.
 
 ---
 
