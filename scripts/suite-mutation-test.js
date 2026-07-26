@@ -182,6 +182,29 @@ const MUTATIONS = Object.freeze([
     expect: 'the timeline shows a refusal it cannot attribute to any rule'
   },
   {
+    name: 'inline-script-escaping-removed',
+    suite: 'inline-data-injection-test.js',
+    file: 'server.js',
+    contract: 'operator text embedded in an inline script block is script-context escaped',
+    // Stop escaping `<`. An agent named `</script><img …>` then terminates the data
+    // block early and its markup becomes live in the page's own origin. The page still
+    // renders and every other assertion holds — only the injection checks catch it.
+    find: "    .replace(/</g, '\\\\u003c')\n",
+    replace: '',
+    expect: 'a hostile agent name closes the script block and injects markup'
+  },
+  {
+    name: 'agents-api-leaks-provider-key',
+    suite: 'inline-data-injection-test.js',
+    file: 'server.js',
+    contract: 'the agents API does not serialize provider credentials',
+    // Return the raw agent record instead of the public projection. Every agent's API
+    // key is then handed to any client permitted to list agents.
+    find: '  return { agents: page.agents.map(publicConfiguredAgent), nextAfterId: page.nextAfterId };',
+    replace: '  return { agents: page.agents, nextAfterId: page.nextAfterId };',
+    expect: 'provider API keys are serialized to every agent-list caller'
+  },
+  {
     name: 'permission-grant-escalation-open',
     suite: 'permission-escalation-boundary-test.js',
     file: 'server.js',

@@ -2113,6 +2113,50 @@ whose surviving properties are asserted through the store in the three replaceme
 historical file is deleted; 112 assertions became 112 across three focused suites with
 positive controls the original lacked.
 
+### `rbac-and-inline-data-security-test.js` — RETIRED (2026-07-26)
+
+Both halves now have destinations, so the file is deleted:
+
+| Half | Destination |
+|------|-------------|
+| privilege escalation | `permission-escalation-boundary-test.js` |
+| inline data security | `inline-data-injection-test.js` |
+
+**`inline-data-injection-test.js` — 23 assertions, 3 surfaces, registered.** The
+boundaries were taken from the historical assertions rather than guessed:
+`/process-templates`, the ticket-creation page's allocated-agent selector, and — added
+here — the `/api/configured-agents` JSON surface, because escaping the HTML page would
+not help if the API handed the same record to a client with its credential attached.
+A20's instruction not to treat absence from one path as application-wide coverage is
+what made that third boundary necessary.
+
+The hostile payload closes a script block and injects markup, and includes quotes,
+backslashes and an HTML entity so escaping is exercised on each. The credential is
+distinctive so absence means something.
+
+**The positive control is load-bearing.** "The raw payload is absent" is satisfied by a
+page that renders no agents at all — a broken query, an empty list, a 500. The suite
+requires the payload to be present in **script-context escaped** form
+(`\u003c/script\u003e`) and a benign agent to render normally, which together prove the
+data reached the page and was made safe rather than dropped.
+
+**One assertion was deliberately NOT made, and the reason is recorded inline.** An early
+version asserted the absence of the payload's `onerror=` text. That is wrong: once
+`</script>` is escaped, the remainder is an inert JS string literal, and demanding its
+absence would assert that the data had been DROPPED rather than escaped. The
+vulnerability signature is raw block termination followed by markup, plus the payload
+never landing as a real element.
+
+**Mutations, both killed at the exact boundary each guards:**
+
+| Mutation | Contract removed | Caught by |
+|----------|------------------|-----------|
+| `inline-script-escaping-removed` | `<` is escaped in inline script serialization | the hostile name lands as a real `<img>` element |
+| `agents-api-leaks-provider-key` | the agents API returns the public projection | the API serializes provider keys |
+
+Both leave the page rendering and every unrelated assertion green, which is why the
+injection-specific checks are the ones that catch them.
+
 **Not done in this tranche:** the allocation split above and the inline-data-security half of
 `rbac-and-inline-data-security-test.js`, which remains explicitly open as an injection
 contract: script-context escaping, provider-secret leakage, unsafe DOM sinks, inline

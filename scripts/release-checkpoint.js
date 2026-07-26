@@ -130,7 +130,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'allocation-attribution-redaction-test.js',
   // A20 — allocation lifecycle isolation, the fifth and final contract split out of
   // allocated-regression-test.js.
-  'allocation-lifecycle-isolation-test.js'
+  'allocation-lifecycle-isolation-test.js',
+  // A20 — the injection-security half split out of rbac-and-inline-data-security-test.js.
+  'inline-data-injection-test.js'
 ]);
 
 function runCheckpoint() {
