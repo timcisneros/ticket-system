@@ -156,6 +156,51 @@ const MUTATIONS = Object.freeze([
     expect: 'operation receipts carry no observed post-state'
   },
   {
+    name: 'action-plan-allowlist-ignored',
+    suite: 'workflow-action-plan-test.js',
+    file: 'server.js',
+    contract: 'a planned action outside allowedOperations is rejected',
+    // The plan then executes an operation the workflow never permitted. This is a
+    // bounded-authority bypass: the whole point of `allowedOperations` is that a
+    // workflow declares what its plan may do.
+    find: "    if (operation && !allowedSet.has(operation)) reasons.push('operation ' + operation + ' is not in allowedOperations');",
+    replace: '    if (false) reasons.push(\'unreachable\');',
+    expect: 'a planned deletePath runs despite being outside allowedOperations'
+  },
+  {
+    name: 'child-tickets-auto-run',
+    suite: 'workflow-ticket-plan-test.js',
+    file: 'server.js',
+    contract: 'executeTicketPlan children are created blocked and do not auto-run',
+    // Spawning children unblocked lets one ticket fan out into unbounded execution
+    // with no operator decision in between.
+    // An earlier attempt targeted only the explanatory COMMENT above this code and
+    // survived, which proves nothing about the suite — a mutation must change
+    // behavior, not prose.
+    find: `    objective: planTicket.objective,
+    status: 'blocked',
+    blockedReason: 'Created by executeTicketPlan; child workflow execution is not automatic in v1.',`,
+    replace: `    objective: planTicket.objective,
+    status: 'open',
+    blockedReason: null,`,
+    expect: 'child tickets are dispatched without an operator decision'
+  },
+  {
+    name: 'workflow-guidance-leaks-into-ordinary-prompt',
+    suite: 'workflow-prompt-composition-test.js',
+    file: 'server.js',
+    contract: 'workflow-draft guidance is included only when it applies to the run',
+    // Drop the applicability gate so every run is taught workflow-draft rules. The
+    // positive assertions all still pass — the workflow run keeps its guidance — so
+    // only the negative controls catch this, which is why they are load-bearing.
+    // Aimed at the applicability predicate itself, not at one guidance block: an
+    // earlier attempt gated on AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED, which is off
+    // by default here, so removing it changed nothing.
+    find: '  const includeWorkflowDraftPromptGuidance = isWorkflowDraftPromptObjective(ticket.objective);',
+    replace: '  const includeWorkflowDraftPromptGuidance = true;',
+    expect: 'an ordinary run is told canonical workflow-draft rules that do not apply to it'
+  },
+  {
     name: 'protected-path-gate-disabled',
     suite: 'workspace-authority-gate-test.js',
     file: 'server.js',

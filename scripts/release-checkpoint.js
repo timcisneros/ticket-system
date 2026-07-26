@@ -105,7 +105,13 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'resumable-execution-test.js',
   // A20 — authority/gate residue split out of operational-abuse-test.js. Protected-path
   // and containment refusal had only pure-classifier coverage before this.
-  'workspace-authority-gate-test.js'
+  'workspace-authority-gate-test.js',
+  // A20 — replacements for the last two silent orphans. Workflow composition
+  // (executeActionPlan / executeTicketPlan) had NO registered coverage at all before
+  // these, and no suite asserted prompt content.
+  'workflow-action-plan-test.js',
+  'workflow-ticket-plan-test.js',
+  'workflow-prompt-composition-test.js'
 ]);
 
 function runCheckpoint() {

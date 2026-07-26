@@ -1273,8 +1273,8 @@ larger. It is. Executing every unregistered suite establishes the real numbers:
 
 | Classification | Count |
 |----------------|-------|
-| **required** — must run in the release checkpoint | 67 |
-| **orphaned** — genuine cutover orphan, cannot run | 80 |
+| **required** — must run in the release checkpoint | 71 |
+| **orphaned** — genuine cutover orphan, cannot run | 76 |
 | **excluded** — deliberately outside the checkpoint | 20 |
 | **total `scripts/*-test.js`** | **162** |
 
@@ -1736,7 +1736,57 @@ tranche found production defects the moment they could fail (A21, A22), and A20'
 overlap hypothesis about `resumable-execution-test.js` was wrong. Apparent redundancy in
 this list should be treated as a hypothesis to test, not a reason to delete.
 
-### The remaining 80 — sequencing
+### Silent orphans: closed (2026-07-26)
+
+**`cutover-orphan-silent` is now zero.** All seven are dispositioned: two repaired in
+tranche 2, two split against named successors, one repaired under A22, and the final two
+replaced here.
+
+**Workflow composition — the subsystem that had no coverage at all — is now guarded.**
+The 1,275-line monolith is retired and replaced by two focused suites along the
+primitive boundary, because `workflowActionPlans` and `workflowTicketPlans` are separate
+evidence collections and the original conflated them behind one harness.
+
+`workflow-action-plan-test.js` (31 assertions, 3 scenarios): a valid plan executes for
+real and in order — proved from the workspace, not just the evidence — with the
+proposed/accepted/rejected/executed quartet consistent and one durable operation receipt
+per executed action; an action outside `allowedOperations` is rejected with a reason,
+executes nothing, and **does not fail the workflow**; an over-cap plan rejects **every**
+proposed action rather than a prefix, leaving no partial effect.
+
+That last one matters most: partial acceptance would let a run claim a bounded plan
+while having performed an unbounded fraction of it.
+
+`workflow-ticket-plan-test.js` (31 assertions, 2 scenarios): planned children are
+created with the requested workflow, objective and per-child workflow input, fully
+attributable to parent ticket, run, workflow, step and plan instance, each carrying a
+distinct parent-scoped spawn idempotency key; **v1 does not auto-run them** — they are
+created blocked with zero runs; and a workflow outside `allowedWorkflowIds` is rejected
+without creating anything or failing the parent.
+
+`workflow-prompt-composition-test.js` (15 assertions) replaces the conditional-prompt
+suite. It reads `systemInstructionSnapshot` from the durable replay snapshot — the
+instruction the runtime actually sent, recorded by the runtime itself — so the dead
+`replaySnapshotPath` helper is simply not ported. It proves branching, canonical,
+draft-intent and handoff guidance stay out of an ordinary run, that a workflow-shaped
+objective does receive them (the positive control), and that `allowedOperations` remains
+truthful on the ordinary run even where the guidance is withheld. Guidance and
+capability are asserted separately because they must be allowed to disagree.
+
+**Three mutations added, all killed** — and two needed re-aiming, in ways worth keeping:
+
+| Mutation | Note |
+|----------|------|
+| `action-plan-allowlist-ignored` | killed first try |
+| `child-tickets-auto-run` | first attempt edited only the explanatory COMMENT above the code and survived. A mutation must change behavior, not prose. Re-aimed at the child's `status: 'blocked'` |
+| `workflow-guidance-leaks-into-ordinary-prompt` | first attempt gated on `AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED`, which is **off by default**, so removing it changed nothing — and that also revealed the suite's canonical-marker assertions were vacuous until the flag was enabled. Re-aimed at the applicability predicate itself |
+
+The second of those is the more useful lesson: a surviving mutation exposed that two of
+the suite's own negative assertions could never have failed, because the guidance they
+excluded was never emitted under the test's environment. Enabling
+`AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT` made them real.
+
+### The remaining 76 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the
