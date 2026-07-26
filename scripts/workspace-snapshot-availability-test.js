@@ -33,9 +33,11 @@
 //
 // server.js cannot be required in-process (it calls start() and demands a live
 // database), so the capture/classification functions are extracted from source
-// and executed against injected stubs — the established pattern from
-// scripts/execution-semantics-test.js. Structural assertions here pin wiring
-// only; they never stand in for behavioral proof.
+// and executed against injected stubs. Structural assertions here pin wiring
+// only; they never stand in for behavioral proof. (A13 retired the suites that
+// relied on source extraction ALONE, because coupling to internal structure
+// breaks on renames while missing behavioral regressions; the pattern is sound
+// only alongside behavioral coverage, which this file has.)
 
 const assert = require('assert/strict');
 const fs = require('fs');

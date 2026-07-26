@@ -2,8 +2,10 @@
 'use strict';
 // Pure test for runtime/execution-semantics.js.
 //
-// Distinct from execution-semantics-test.js, which covers resume/retry/commit
-// boundaries. This one covers the run-evidence reconstruction guarantees:
+// Distinct from the resume/retry/commit-boundary coverage that lived in
+// execution-semantics-test.js (retired in A13; its live assertions now sit in
+// rerun-mode-evidence-test.js and operation-batch-test.js). This one covers the
+// run-evidence reconstruction guarantees:
 //
 //  1. A finished run's execution semantics are recoverable from what the run
 //     PERSISTED, and never silently substituted from current process state.

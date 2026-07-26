@@ -42,7 +42,7 @@ the defect can cause, not how hard it is to fix.
 | A10 | Orphaned PostgreSQL-era test harnesses | **High** | **Resolved for the inventoried 14** — see entry; wider orphan population newly recorded | Verification gap |
 | A11 | `truncated:true` disclosed to the model but never explained | Low | Open — split from A1 | Prompt policy |
 | A12 | Bounded workspace-snapshot recovery policy | Medium | **Open — decision required** — residual of A1 | Policy |
-| A13 | Tests asserting removed commit-idempotency helpers | Medium | **Open — decision required**; disposition finalized per suite, premise corrected | Verification gap |
+| A13 | Tests asserting removed commit-idempotency helpers | Medium | **Resolved 2026-07-26** — five retired, two contracts re-expressed behaviorally; one residual `verifyBatchOperation` gap | Verification gap |
 | A14 | Redundant-mutation postcondition shortcut does not fire | **High** | **Implemented** — see entry | Correctness |
 | A15 | Postcondition telemetry names a source the event never reaches | Low | **Open — decision required** | Documentation / telemetry |
 | A16 | Run consequence records no committed mutations | **High** | **Implemented** — see entry | Correctness |
@@ -987,10 +987,10 @@ larger. It is. Executing every unregistered suite establishes the real numbers:
 
 | Classification | Count |
 |----------------|-------|
-| **required** — must run in the release checkpoint | 61 |
+| **required** — must run in the release checkpoint | 63 |
 | **orphaned** — genuine cutover orphan, cannot run | 83 |
 | **excluded** — deliberately outside the checkpoint | 20 |
-| **total `scripts/*-test.js`** | **164** |
+| **total `scripts/*-test.js`** | **161** (164 before A13 retired five and added two) |
 
 The A10 entry guessed ~96 candidates and cautioned that the list "includes false positives,
 comments, and intentionally excluded live-provider tests." **That caution was wrong in one
@@ -1087,7 +1087,6 @@ anyone's memory.
 | `live-provider` | 4 | Needs a real OpenAI key or a running Ollama |
 | `manual-demo` | 8 | Operator demo/stress runners, not regression suites |
 | `mutation-tool` | 1 | `suite-mutation-test.js` edits tracked source by design |
-| `source-coupled-a13` | 5 | Tracked in A13 |
 | `source-coupled-other` | 2 | `operator-workflow-test.js`, `report-generation-test.js` — same extraction coupling, outside A13's scope; needs its own disposition |
 
 **`manual-demo` is a safety classification, not a taste one — demonstrated accidentally.** The
@@ -1742,8 +1741,8 @@ inventory rows 1, 2, 3, and 8 must be retired with that reason recorded.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Open — decision required.** Distinct from A10: not a storage-bootstrap failure |
-| **Severity** | Medium — five suites are dead, but the contract they guarded is covered elsewhere |
+| **Status** | **Resolved 2026-07-26.** All five retired; the two live contracts they guarded are re-expressed behaviorally, registered, and mutation-verified. One residual gap recorded below |
+| **Severity** | Medium — five suites were dead; two of the contracts they guarded were NOT covered elsewhere |
 | **Evidence** | Failures reproduced against `master` `c062af6`; symbol counts in `server.js` |
 | **Decision required** | Retire each suite, or re-point it at the surviving PostgreSQL-enforced contract |
 
@@ -1851,6 +1850,58 @@ explicit.
    and register them, since the substring check in `operation-batch-test.js` is the only
    thing standing behind `batch.verification_failed` today.
 4. Mutation-test the result. `scripts/suite-mutation-test.js` is the template.
+
+### Executed 2026-07-26
+
+All five suites are **retired**. Their coverage was not deleted: the two contracts that
+were genuinely live, and genuinely uncovered, are now asserted behaviorally against the
+real PostgreSQL runtime.
+
+| Retired suite | Replacement | Why retirement does not reduce protection |
+|---------------|-------------|-------------------------------------------|
+| `execution-semantics-test.js` | `rerun-mode-evidence-test.js` (new) for its one live assertion; `operation-batch-test.js` for commit idempotency | Its commit-idempotency helpers are gone from `server.js` (0 occurrences), and receipt authority plus target locks are asserted by `operation-batch-test.js` |
+| `renamepath-conflict-regression-test.js` | `renamepath-runtime-regression-test.js` (A10) | The replacement drives all five carve-out cases end-to-end through the real runtime and the real receipt table, and is mutation-verified — strictly stronger than extracting `findConflictingMutation` from source text |
+| `observed-poststate-regression-test.js` | `operation-poststate-observation-test.js` (new) | Same property, asserted against receipts the running system wrote |
+| `renamepath-preservation-regression-test.js` | `operation-poststate-observation-test.js` (new) | Preservation is asserted from the stored receipt's source pre-state vs destination post-state |
+| `verify-batch-operation-regression-test.js` | `operation-poststate-observation-test.js` (new), partially — see the residual gap | The reachable half is covered; the unreachable half is recorded rather than pretended |
+
+**What the two new suites assert, and why the negative halves carry the weight.**
+
+`rerun-mode-evidence-test.js` (22 assertions) — a recording provider stub captures every
+prompt, so *reassess injects structured prior-failure context* and *retry injects none*
+are both asserted against what the model actually received. The retry half is the
+load-bearing one: silently injecting a previous failure into every rerun would make
+"retry" a different operation than it claims to be and would leak one run's evidence
+into a run that never asked for it. **The retired suite could not express this at all** —
+a substring match on `server.js` cannot tell whether a function is *called*.
+
+`operation-poststate-observation-test.js` (27 assertions) — an operation receipt must
+describe what the filesystem did, not what the model asked for. The discriminating case
+is a **refused** mutation: on success the request and reality agree, so success alone
+cannot distinguish an observing implementation from an echoing one. A refused
+cross-ticket write is used, and no receipt may carry the content hash of bytes that
+never reached disk.
+
+**Residual gap, recorded rather than papered over.** `verifyBatchOperation` runs
+immediately after each action inside the per-action loop (`server.js`), so its
+DIVERGENCE branches — `content_mismatch`, `file_missing`, `destination_content_mismatch`,
+`path_still_exists`, `source_still_exists`, `destination_missing`, `folder_missing` —
+cannot be reached through the runtime's public surface: nothing can change the
+filesystem between an action and its own verification. The new suite covers the
+reachable half (verification runs and stays silent exactly when reality matches). Making
+the divergence branches reachable requires a test seam in production code, which is a
+production change and was out of scope for a test-only tranche. **This is a real gap in
+`verifyBatchOperation` coverage and should be decided separately** — either add a
+seam in the style of the existing `TEST_INTERRUPT_*` hooks, or accept that those
+branches are verified only by inspection.
+
+**Mutation-verified.** Two mutations added to `scripts/suite-mutation-test.js`, both
+killed:
+
+| Mutation | Contract removed | Caught by |
+|----------|------------------|-----------|
+| `reassess-context-always-injected` | prior-failure context is injected for reassess only | the retry half of `rerun-mode-evidence-test.js` |
+| `poststate-echoes-request` | post-state is captured by observing the filesystem | `operation-poststate-observation-test.js` |
 
 ---
 

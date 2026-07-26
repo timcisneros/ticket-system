@@ -47,10 +47,6 @@ const EXCLUSION_REASONS = Object.freeze({
     'Deliberately edits tracked source in place to prove other suites are not vacuous. ' +
     'Running it inside the checkpoint would mutate the tree under the very suites it ' +
     'is validating. Invoked explicitly instead.',
-  'source-coupled-a13':
-    'Reads server.js as text and evals extracted helpers, so it breaks on internal ' +
-    'structure rather than behavior. Tracked in A13, which decides retire vs re-point ' +
-    'per suite.',
   'source-coupled-other':
     'Same source-extraction coupling as the A13 suites but outside A13 scope, because ' +
     'the helpers they assert were not part of the commit-idempotency removal. Needs its ' +
@@ -120,7 +116,6 @@ const TESTS = Object.freeze([
   { file: "exact-delete-target-absent-guard-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "execution-semantics-persistence-test.js", status: "required" },
   { file: "execution-semantics-snapshot-test.js", status: "required" },
-  { file: "execution-semantics-test.js", status: "excluded", reason: "source-coupled-a13" },
   { file: "handoff-smoke-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "health-live-paths-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "inbox-messaging-test.js", status: "orphaned", reason: "cutover-orphan" },
@@ -145,10 +140,10 @@ const TESTS = Object.freeze([
   { file: "objective-clarification-gate-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "objective-contract-compiler-test.js", status: "required" },
   { file: "objective-contract-parity-test.js", status: "required" },
-  { file: "observed-poststate-regression-test.js", status: "excluded", reason: "source-coupled-a13" },
   { file: "ollama-failure-scenario-test.js", status: "excluded", reason: "live-provider" },
   { file: "ollama-provider-test.js", status: "excluded", reason: "live-provider" },
   { file: "operation-batch-test.js", status: "required" },
+  { file: "operation-poststate-observation-test.js", status: "required" },
   { file: "operation-receipt-projection-test.js", status: "required" },
   { file: "operational-abuse-test.js", status: "orphaned", reason: "cutover-orphan-silent" },
   { file: "operational-transparency-test.js", status: "orphaned", reason: "cutover-orphan" },
@@ -178,12 +173,11 @@ const TESTS = Object.freeze([
   { file: "recovery-regression-test.js", status: "required" },
   { file: "recovery-state-reconstruction-test.js", status: "required" },
   { file: "release-checkpoint-coverage-test.js", status: "required" },
-  { file: "renamepath-conflict-regression-test.js", status: "excluded", reason: "source-coupled-a13" },
-  { file: "renamepath-preservation-regression-test.js", status: "excluded", reason: "source-coupled-a13" },
   { file: "renamepath-runtime-regression-test.js", status: "required" },
   { file: "replay-snapshot-storage-test.js", status: "required" },
   { file: "report-generation-test.js", status: "excluded", reason: "source-coupled-other" },
   { file: "required-replay-evidence-test.js", status: "required" },
+  { file: "rerun-mode-evidence-test.js", status: "required" },
   { file: "resumable-execution-test.js", status: "orphaned", reason: "cutover-orphan-silent" },
   { file: "resume-obvious-postcondition-test.js", status: "required" },
   { file: "run-consequence-mutation-test.js", status: "required" },
@@ -226,7 +220,6 @@ const TESTS = Object.freeze([
   { file: "unverified-evaluation-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "verification-contract-reconciliation-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "verifier-contract-test.js", status: "orphaned", reason: "cutover-orphan" },
-  { file: "verify-batch-operation-regression-test.js", status: "excluded", reason: "source-coupled-a13" },
   { file: "wal-append-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "work-context-primitive-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "work-context-visibility-surface-test.js", status: "orphaned", reason: "cutover-orphan" },

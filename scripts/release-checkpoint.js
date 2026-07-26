@@ -84,7 +84,12 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'concurrency-conflict-test.js',
   'run-detail-permissioned-delete-audit-test.js',
   'operator-visibility-test.js',
-  'oquery-parity-test.js'
+  'oquery-parity-test.js',
+  // A13 — behavioral replacements for the five retired source-extraction suites.
+  // Those read server.js as text and evaluated extracted helpers, so they broke on
+  // internal structure while the behavior they guarded stayed live and uncovered.
+  'rerun-mode-evidence-test.js',
+  'operation-poststate-observation-test.js'
 ]);
 
 function runCheckpoint() {

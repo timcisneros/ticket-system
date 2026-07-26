@@ -3,10 +3,10 @@
 // Evidence-truthfulness contract test.
 //
 // server.js cannot be required in-process (it calls start() on load and demands
-// a live database), so this test uses the established pattern from
-// execution-semantics-test.js: extract the functions under test from source and
-// execute them against injected stubs. That gives real behavioral coverage of
-// the feasibility gate rather than a source-text grep.
+// a live database), so this test extracts the functions under test from source
+// and executes them against injected stubs. That gives real behavioral coverage
+// of the feasibility gate rather than a source-text grep — the distinction that
+// decided A13, where suites that only grepped source were retired.
 //
 // Structural assertions are used only where behavior genuinely cannot be
 // isolated — the two corrective-feedback assignments and the authority block —

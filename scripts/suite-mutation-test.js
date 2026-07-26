@@ -129,6 +129,31 @@ const MUTATIONS = Object.freeze([
       + '&& permissionedDeleteAuditEvents && permissionedDeleteAuditEvents.length > 0) { %>',
     replace: '  <% if (true) { %>',
     expect: 'the audit block renders on runs that never exercised the permission'
+  },
+  {
+    name: 'reassess-context-always-injected',
+    suite: 'rerun-mode-evidence-test.js',
+    file: 'server.js',
+    contract: 'prior-failure context is injected for reassess mode only',
+    // Inject the prior failure into every rerun, not only reassess. Only the suite's
+    // RETRY half catches this — which is the half the retired source-extraction test
+    // could not express at all, because a substring match on server.js cannot tell
+    // when a function is called.
+    find: "        actionResults.length === 0 && rerunMode === 'reassess'",
+    replace: '        actionResults.length === 0',
+    expect: 'a default retry silently receives the previous run\'s failure evidence'
+  },
+  {
+    name: 'poststate-echoes-request',
+    suite: 'operation-poststate-observation-test.js',
+    file: 'server.js',
+    contract: 'post-state is captured by observing the filesystem',
+    // Make capture a no-op so nothing is observed. A receipt that reports no observed
+    // state is the mildest possible version of "stopped observing"; a suite that
+    // cannot notice even this is not testing observation at all.
+    find: 'function captureWorkspacePostState(',
+    replace: 'function captureWorkspacePostState() { return null; }\nfunction __unusedCaptureWorkspacePostState(',
+    expect: 'operation receipts carry no observed post-state'
   }
 ]);
 
