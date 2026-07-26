@@ -225,6 +225,7 @@ const TESTS = Object.freeze([
   { file: "ticket-budget-rollup-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "ticket-execution-state-clarity-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "ticket-feasibility-gate-test.js", status: "required" },
+  { file: "timeline-authority-evidence-test.js", status: "required" },
   { file: "ticket-shaping-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "ticket-timeline-authority-visibility-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "ticket-triage-rerun-hardening-test.js", status: "orphaned", reason: "cutover-orphan" },

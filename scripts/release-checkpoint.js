@@ -119,7 +119,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // atomic terminalization bundle, and death immediately after it committed.
   'terminalization-boundary-recovery-test.js',
   // A20 — the authority half split out of rbac-and-inline-data-security-test.js.
-  'permission-escalation-boundary-test.js'
+  'permission-escalation-boundary-test.js',
+  // A20 — the authority-evidence half of ticket-timeline-authority-visibility-test.js.
+  'timeline-authority-evidence-test.js'
 ]);
 
 function runCheckpoint() {

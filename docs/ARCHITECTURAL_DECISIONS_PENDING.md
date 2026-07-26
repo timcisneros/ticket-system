@@ -1356,7 +1356,7 @@ larger. It is. Executing every unregistered suite establishes the real numbers:
 
 | Classification | Count |
 |----------------|-------|
-| **required** — must run in the release checkpoint | 74 |
+| **required** — must run in the release checkpoint | 75 |
 | **orphaned** — genuine cutover orphan, cannot run | 75 (one split; its injection half still open) |
 | **excluded** — deliberately outside the checkpoint | 20 |
 | **total `scripts/*-test.js`** | **162** |
@@ -1952,7 +1952,53 @@ redirect/401/403 assertion.
 mint a group carrying any permission and add itself. Killed. Note that every positive
 control stays green under it — only the refusal half catches self-promotion.
 
-### The remaining 74 — sequencing
+### Authority cluster 2 — timeline authority evidence (2026-07-26)
+
+**`ticket-timeline-authority-visibility-test.js` → `timeline-authority-evidence-test.js`**
+(30 assertions, 5 scenarios, registered). The historical file stays `orphaned`: it also
+carries read-receipt, provenance-versioning and triage-projection assertions that have
+not moved yet.
+
+The contract is that the timeline is a **truthful, deterministic, read-only** projection
+of what authority decided. Proved: a protected-path refusal appears exactly once as an
+`authority.denied` entry carrying the structured `rule` and the refused target, leaves
+no filesystem effect and no successful receipt; an allowed mutation on the same agent
+appears once as `target.mutation_committed` with an `authority.allowed` counterpart and
+is never rendered as a denial; neither ticket's timeline carries an entry belonging to
+the other's run or ticket; projecting twice is byte-identical; and projecting mutates no
+run or ticket revision.
+
+**Two of this suite's own assertions were vacuous until the mutation test caught them.**
+Both are recorded because the pattern will recur:
+
+1. *Folding.* The suite asserted that a blocked `workspace.operation` folds into the
+   authority entry. Cutting the folding logic — both the key dedupe and the id set —
+   **survived**, because a protected-path block throws *before* any
+   `workspace.operation` event is written. There was never a duplicate to fold, so the
+   assertion could not fail. It is retained as a real invariant with that limitation
+   stated inline. **Fold coverage still needs a denial shape that does emit a blocked
+   workspace event** — cross-ticket ownership is the candidate, and
+   `concurrency-conflict-test.js` already drives it behaviorally.
+
+2. *Rule attribution.* The suite matched `/protected/i` against the entry's details and
+   summary. Stripping the structured `rule` field **survived**, because the summary
+   prose still contains the word "protected". Re-expressed as
+   `details.rule === 'protected_path'`, which is what the objective's "name the actual
+   rule" requires — a substring of English is not attribution.
+
+**Mutation status, stated precisely.** `authority-denial-loses-its-rule` is **killed**,
+but by the determinism assertion rather than the attribution one: nulling the rule also
+changes the projection between two reads. The suite therefore detects the regression,
+which is the required proof, but the kill is not attributable to the assertion aimed at
+it. Left as-is rather than tuned to produce a prettier attribution.
+
+**Not done in this tranche:** `allocated-regression-test.js` (owned-path scope, 1,372
+lines — needs the same split treatment) and the inline-data-security half of
+`rbac-and-inline-data-security-test.js`, which remains explicitly open as an injection
+contract: script-context escaping, provider-secret leakage, unsafe DOM sinks, inline
+serialized-data safety.
+
+### The remaining 73 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

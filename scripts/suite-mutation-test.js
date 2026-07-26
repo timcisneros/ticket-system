@@ -156,6 +156,20 @@ const MUTATIONS = Object.freeze([
     expect: 'operation receipts carry no observed post-state'
   },
   {
+    name: 'authority-denial-loses-its-rule',
+    suite: 'timeline-authority-evidence-test.js',
+    file: 'server.js',
+    contract: 'a timeline authority denial names the rule that refused it',
+    // Strip the rule from the denial. The entry still appears and the run still
+    // fails, so a suite asserting only "a denial exists" stays green while the
+    // operator surface can no longer say WHY anything was refused.
+    find: `      return {
+        rule: 'protected_path',`,
+    replace: `      return {
+        rule: null,`,
+    expect: 'the timeline shows a refusal it cannot attribute to any rule'
+  },
+  {
     name: 'permission-grant-escalation-open',
     suite: 'permission-escalation-boundary-test.js',
     file: 'server.js',
