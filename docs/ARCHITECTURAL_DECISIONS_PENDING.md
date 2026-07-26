@@ -591,11 +591,39 @@ rejection that terminates the process rather than failing that run closed.
 
 ---
 
+### A19. No canonical runtime replay-snapshot validator exists
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — decision required** |
+| **Severity** | Medium — replay validity is asserted piecemeal, never centrally |
+| **Found** | 2026-07-25, while proving A18 |
+
+Replay snapshot creation and mutation are guarded by **distributed** shape checks:
+`createReplaySnapshotBase` defines the creation contract, individual append helpers
+guard their own keys, and test scripts carry their own expectations (for example
+`assertReplayOrdering` in `scripts/scheduler-integrity-abuse-test.js`). No single
+runtime validator establishes that a replay snapshot is complete, well-formed, and
+reconstructable.
+
+Consequence: code that creates or repairs a replay snapshot cannot ask the system
+whether the result is valid. A18's strict evidence path therefore validates the
+snapshots it initializes against `createReplaySnapshotBase` and normal
+`readRunReplay` reader behavior in `scripts/required-replay-evidence-test.js`. That
+is contract-and-reader validation, **not** formal runtime validation, and A18 does
+not claim otherwise.
+
+Whether to introduce a runtime replay validator — and whether it should run on
+creation, on repair, or on read — is a governance decision outside A18's scope and
+is deliberately left open here rather than resolved implicitly.
+
+---
+
 ### A18. Required replay evidence is silently discarded when no snapshot exists
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Open — implementation required** |
+| **Status** | **Resolved — strict required-evidence replay path implemented and mutation-proven** |
 | **Severity** | **High** — an evidence-of-last-resort channel reports success after writing nothing |
 | **Found** | 2026-07-25, while proving A17 proof 8a (startup settle boundary) |
 | **Blocks** | A17 proof 8a; A17 proofs 5 and 8b depend on the same fallback |
@@ -642,6 +670,67 @@ possess a replay snapshot is **not established**. This fixture builds a run that
 lacks one, so production frequency is unknown and must not be assumed low. The
 behavior is defective regardless of frequency: this call site requires evidence,
 not optional enrichment, and a silent success is wrong at any rate of occurrence.
+
+**Resolution.** `appendRequiredRunReplaySnapshotItem` owns the whole required-evidence
+sequence — identity/shape validation, canonical initialization via `initializeRunReplay`
+(`ON CONFLICT DO NOTHING`, so idempotent and non-destructive), existing-identity
+inspection, idempotency/conflict decision, append, and exact readback of identity +
+type + payload. `recordRequiredReplayEvent` is a thin wrapper. The tolerant
+`appendRunReplaySnapshotItem` is unchanged and remains documented as optional
+enrichment.
+
+Required evidence carries a **caller-supplied stable identity**, never derived from
+type, message, timestamp, or serialized payload. Payload comparison is semantic
+(`canonicalOperationJson`) because PostgreSQL `jsonb` does not preserve key order.
+Failures are classified as `initialization_failure`, `append_failure`,
+`readback_failure`, `event_missing_after_append`, `event_identity_conflict`, or
+`malformed_replay`, each carrying `EVIDENCE_PERSISTENCE_FAILED`,
+`failureKind: evidence_persistence`, `evidenceChannel: replay`, run id, event type,
+evidence identity, store code where available, and internal `cause` linkage — never
+replay contents.
+
+`buildReconciliationEvidenceId(runId, revision, logType)` scopes one occurrence to
+one reconciliation attempt against one run state. It is a named function rather than
+an inline template precisely so the scoping is testable: an inline string passed
+every test while silently collapsing occurrences.
+
+**Proof.** `scripts/required-replay-evidence-test.js` — 56 assertions, PostgreSQL-native,
+with the strict helper extracted from `server.js` source and driven against the real
+replay store. Seven mutations each fail a named assertion:
+
+| Mutation | Failing assertion |
+|---|---|
+| Silent return on missing event | `an append that writes nothing is detected, not trusted` |
+| Canonical initialization removed | `initialization_failure` |
+| Readback weakened to type-only | `event_identity_conflict` |
+| Identity conflict check removed | `same identity with conflicting type fails` |
+| Idempotency removed | `retrying the same occurrence appends no duplicate event` |
+| Identity requirement removed | `required evidence without a stable identity is refused` |
+| Identity reverted to `runId + logType` | `the occurrence identity embeds the persisted run revision` |
+
+Revision scoping is proven against **real persisted revisions**: a retry reuses the
+identity and appends nothing; a genuine `claimPendingRun` + `transitionRun` advances
+the revision (1 → 3) and yields a distinct identity; both occurrences persist
+separately. Snapshot validation is against `createReplaySnapshotBase` and normal
+reader behavior — see [A19] for the absent canonical runtime validator.
+
+**Caller classification (complete).** The tolerant helper has exactly two wrappers.
+Absence of a replay snapshot is only *possible* at one of their call sites, which is
+why this defect is narrow rather than pervasive.
+
+| Wrapper / site | Event type(s) | Lifecycle phase | Snapshot guaranteed present? | Classification | API |
+|---|---|---|---|---|---|
+| `recordRunEvent` — 27 sites (`server.js` 10382, 10787, 17178, 18327, 18779, 18946, 19056, 19138, 19156, 19229, 19274, 19307, 19335, 19353, 19390, 19399, 19437, 19468, 19505, 19860, 19869, 19899, 19933, 19942, 19948, 19963) | feasibility, model-contract, workspace-contract, postcondition, phase-violation, snapshot-recovery | Active execution inside `runAgentTicket` | **Yes** — `createRunReplaySnapshot` runs `initializeRunReplay` at run start, before any step | Required evidence, but absence is unreachable | Tolerant (correct) |
+| `recordReplayEvent` — `server.js` ~11681 | `run:interrupted` | Interrupted-run terminalization | **Yes** — `ensureInterruptedRunReplaySnapshot` calls `initializeRunReplay` immediately above it in the same function | Required evidence, absence unreachable **by construction** | Tolerant (correct — explicit decision, not left vague) |
+| `recordReplayEvent` — `server.js` ~5118 (A17 settle boundary) | `run.reconciliation_evidence_failed` | Startup repair / terminal reconciliation | **No** — the run may never have had a snapshot | **Required evidence of last resort** | **Strict** (`recordRequiredReplayEvent`) |
+
+Every execution-phase caller is preceded by initialization on its own path, so the
+tolerant no-op is unreachable for them and switching them to the strict API would
+add cost without changing behavior. The startup/reconciliation fallback is the sole
+site where a snapshot may legitimately be absent, and it is the only site switched.
+Direct `updateRunReplaySnapshot` callers (`server.js` 9957 artifact prediction,
+19048 browser report text) are **optional enrichment**: both guard on `!snapshot`
+deliberately, and both are meaningless without a snapshot. They stay tolerant.
 
 **Required direction.** Do not globally make `appendRunReplaySnapshotItem` strict —
 its missing-snapshot tolerance may be intentional for optional enrichment and for

@@ -9813,6 +9813,128 @@ async function recordRunEvent(run, type, message, details = {}) {
   });
 }
 
+// A18 strict required-evidence replay path.
+//
+// appendRunReplaySnapshotItem is deliberately TOLERANT: it no-ops when a run has
+// no replay snapshot, which is correct for optional enrichment (artifact
+// predictions, browser report text) that is meaningless without one. It is wrong
+// for evidence of last resort, where a silent no-op reports success having
+// written nothing.
+//
+// Required evidence carries a caller-supplied stable `evidenceId`. Identity is
+// never derived from type, message, timestamp, or serialized payload, so retrying
+// the same evidence is idempotent while genuinely distinct events stay distinct.
+
+const REQUIRED_EVIDENCE_REASONS = Object.freeze({
+  INIT: 'initialization_failure',
+  APPEND: 'append_failure',
+  READBACK: 'readback_failure',
+  MISSING: 'event_missing_after_append',
+  CONFLICT: 'event_identity_conflict',
+  MALFORMED: 'malformed_replay'
+});
+
+function requiredEvidenceError(reason, { runId, type, evidenceId, cause = null }) {
+  const error = new Error(`Required replay evidence could not be persisted (${type}): ${reason}`);
+  error.code = 'EVIDENCE_PERSISTENCE_FAILED';
+  error.failureKind = 'evidence_persistence';
+  error.evidenceChannel = 'replay';
+  error.evidenceReason = reason;
+  error.runId = runId != null ? runId : null;
+  error.eventType = type || null;
+  error.evidenceId = evidenceId || null;
+  if (cause && cause.code) error.storeErrorCode = cause.code;
+  if (cause) error.cause = cause; // internal linkage; never rendered to operators
+  // Deliberately no replay contents on the error.
+  return error;
+}
+
+// Semantic comparison: PostgreSQL jsonb does not preserve key insertion order, so
+// payload equality must be structural rather than string-based.
+function sameEvidencePayload(left, right) {
+  return canonicalOperationJson(left || {}) === canonicalOperationJson(right || {});
+}
+
+// Owns the whole required-evidence sequence: validate, initialize-if-absent,
+// idempotency check, append, exact readback. Wrappers must not duplicate it.
+async function appendRequiredRunReplaySnapshotItem(run, key, item) {
+  const runId = run && run.id != null ? run.id : null;
+  const type = item && item.type;
+  const evidenceId = item && item.evidenceId;
+  const fail = (reason, cause) => {
+    throw requiredEvidenceError(reason, { runId, type, evidenceId, cause });
+  };
+
+  if (runId === null || !type) fail(REQUIRED_EVIDENCE_REASONS.APPEND, null);
+  if (!evidenceId || typeof evidenceId !== 'string') {
+    fail(REQUIRED_EVIDENCE_REASONS.CONFLICT, new Error('required evidence must carry a stable evidenceId'));
+  }
+
+  const readEvents = async reason => {
+    let record;
+    try {
+      record = await getRunReplayRepository().readRunReplay(runId);
+    } catch (error) {
+      fail(reason, error);
+    }
+    if (!record || !record.snapshot || typeof record.snapshot !== 'object') return null;
+    const events = record.snapshot[key];
+    if (events !== undefined && !Array.isArray(events)) fail(REQUIRED_EVIDENCE_REASONS.MALFORMED, null);
+    return Array.isArray(events) ? events : [];
+  };
+
+  // 1. Canonical initialization when absent. ON CONFLICT DO NOTHING makes this
+  //    idempotent and non-destructive, so existing history is never discarded.
+  try {
+    await getRunReplayRepository().initializeRunReplay({
+      runId, ticketId: run.ticketId, snapshot: createReplaySnapshotBase(run, {})
+    });
+  } catch (error) {
+    fail(REQUIRED_EVIDENCE_REASONS.INIT, error);
+  }
+
+  // 2. Idempotency: return only when an existing event is semantically identical.
+  const existing = await readEvents(REQUIRED_EVIDENCE_REASONS.READBACK);
+  if (existing === null) fail(REQUIRED_EVIDENCE_REASONS.INIT, null);
+  const prior = existing.find(e => e && e.evidenceId === evidenceId);
+  if (prior) {
+    if (prior.type !== type) fail(REQUIRED_EVIDENCE_REASONS.CONFLICT, null);
+    if (!sameEvidencePayload(prior.payload, item.payload)) fail(REQUIRED_EVIDENCE_REASONS.CONFLICT, null);
+    return; // already durably recorded
+  }
+
+  // 3. Append.
+  try {
+    await appendRunReplaySnapshotItem(runId, key, item);
+  } catch (error) {
+    fail(REQUIRED_EVIDENCE_REASONS.APPEND, error);
+  }
+
+  // 4. Exact readback: this identity, this type, this payload. The tolerant
+  //    helper cannot report whether it wrote, which is the whole defect.
+  const after = await readEvents(REQUIRED_EVIDENCE_REASONS.READBACK);
+  if (after === null) fail(REQUIRED_EVIDENCE_REASONS.MISSING, null);
+  const landed = after.find(e => e && e.evidenceId === evidenceId);
+  if (!landed) fail(REQUIRED_EVIDENCE_REASONS.MISSING, null);
+  if (landed.type !== type) fail(REQUIRED_EVIDENCE_REASONS.CONFLICT, null);
+  if (!sameEvidencePayload(landed.payload, item.payload)) fail(REQUIRED_EVIDENCE_REASONS.CONFLICT, null);
+}
+
+// One logical reconciliation-evidence occurrence = one reconciliation attempt
+// against one run state. run.revision is a durable persisted counter that advances
+// on every run transition, so a retry of the SAME attempt reuses this id
+// (idempotent) while a genuinely later reconciliation of a since-transitioned run
+// gets a distinct one. Not timestamp-derived, and stable across process restart.
+// runId + logType alone would collapse distinct occurrences (A18).
+function buildReconciliationEvidenceId(runId, revision, logType) {
+  const rev = revision != null ? `r${revision}` : 'runknown';
+  return `reconciliation-evidence-failed:${runId}:${rev}:${logType || 'unknown'}`;
+}
+
+async function recordRequiredReplayEvent(run, type, message, { evidenceId, payload = {} } = {}) {
+  await appendRequiredRunReplaySnapshotItem(run, 'events', { type, message, evidenceId, payload });
+}
+
 async function recordReplayEvent(run, type, message, details = {}) {
   await appendRunReplaySnapshotItem(run.id, 'events', {
     type,
