@@ -102,7 +102,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'assignment-audit-test.js',
   // A22 — reinstated once the prepared-intent projection exposed its persisted
   // pre-state. Drives four crash seams; three of them are exercised by nothing else.
-  'resumable-execution-test.js'
+  'resumable-execution-test.js',
+  // A20 — authority/gate residue split out of operational-abuse-test.js. Protected-path
+  // and containment refusal had only pure-classifier coverage before this.
+  'workspace-authority-gate-test.js'
 ]);
 
 function runCheckpoint() {

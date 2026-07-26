@@ -1539,7 +1539,73 @@ can never pass again and the suite is coupled to a retired storage layout, not o
 draft intents and handoff tasks). *Unverified:* whether any prompt-shaping assertion is
 unique to it. Confirm that before deleting.
 
-**`operational-abuse-test.js` — split, do not treat as one unit.** Of its 15 scenarios,
+**`operational-abuse-test.js` — SPLIT AND CLOSED (2026-07-26).** Every one of its 15
+scenarios now has a named end-state, so none is left ambiguous:
+
+| Scenario | End state |
+|----------|-----------|
+| `testTooManyActions`, `testTooManyMutatingActions` | covered — `bounded-transition-test.js` |
+| `testStalledResponses`, `testMultiStepStallThenRecover` | covered — `model-contract-violation-test.js` |
+| `testLeaseExpiryRecovery` | covered — `lease-renewal-resume-safety-test.js` |
+| `testRunInterruption` | covered — `resumable-execution-test.js` (A22) |
+| `testConcurrentAgentRuns` | covered — `concurrency-conflict-test.js` |
+| `testReplayEventConsistency` | covered — `required-replay-evidence-test.js`, `replay-snapshot-storage-test.js` |
+| `testInvalidRuntimeConfig` | covered — `runtime-limits-config-test.js` |
+| `testMalformedHandoff`, `testInvalidDraftIntent`, `testHandoffExecutorMismatch` | covered — `postcondition-completion-test.js` scenarios 9–19 |
+| `testProtectedPathWrite`, `testAgentDirectOperationAccess` | **migrated** → `workspace-authority-gate-test.js` |
+| `testDisabledOperationGate` | **left open — A8.** See below |
+
+The suite is `excluded / superseded`: retained on disk so the mapping can be re-checked,
+not run, and no coverage lost.
+
+**`testDisabledOperationGate` is left open deliberately, and it is not a test defect.**
+The scenario seeds an agent with `runtimeConfig: { allowWorkflowDraftIntent: false }`,
+observes whether the restriction is enforced, and then returns `passed: true`
+**regardless** — logging a "FINDING" that the flag "is declared but not enforced". So
+the historical suite already knew the gate does not exist and chose to report rather
+than fail. That is **A8 (dead `allow*` policy fields)**, an open governance item: whether
+those flags become enforced or are removed is a product decision, not something a test
+tranche may settle by picking one. Migrating the scenario now would mean either encoding
+the broken behavior as correct or shipping a red suite for a decision nobody has made.
+
+### `workspace-authority-gate-test.js` — the migrated residue
+
+17 assertions, 3 scenarios, registered. What it proves that nothing did before:
+
+- a `writeFile` to `.env` (in `config/protected-paths.json`) fails the run, records an
+  `authority.denied` event carrying the structured `rule: 'protected_path'` and the
+  refused path, creates no file, and leaves **no receipt claiming a successful write**
+- a path escaping the workspace root is refused on the same terms
+- **positive control:** the same agent, same run shape, an ordinary path — succeeds,
+  writes exactly one receipt, and records no denial
+
+The control is load-bearing. Without it, both refusal scenarios would also pass against
+a runtime that refused every mutation or never dispatched a run at all.
+
+**Why this was genuinely uncovered.** `protected_path` appeared in the registered
+checkpoint only inside `workspace-snapshot-availability-test.js`, and only as a pure
+classifier check — `classifyWorkspaceSnapshotFailure({ kind: 'protected_path' })`.
+Nothing drove a real run at a protected path. A classifier agreeing with itself is not
+evidence that the gate fires, which the `protected-path-gate-disabled` mutation
+confirms.
+
+**Aiming that mutation taught something worth keeping.** The first attempt neutered
+`blockProtectedWorkspaceOperation` alone and **survived** — a second, independent
+authority check (`createWorkspaceViolationItem`) also matches protected paths, so
+removing one layer left the contract intact. Re-aimed at the shared matcher
+`getProtectedWorkspacePathMatch`, which both gates consult, it kills the suite. And the
+kill exposed a **third** layer: with protected-path matching gone, `.env` is still
+refused — by the hidden/system-path rule ("Hidden and system paths are not allowed").
+
+So protected paths are defended three deep. That is good news for the runtime and a
+warning for testing it: a suite asserting only "the run failed" would have stayed green
+through the removal of two independent gates. The assertion that actually caught it is
+the one requiring the failure to **name the protected-path rule**, which is why the
+suite checks the structured `rule` and the refused path rather than just the outcome.
+This is the third time in A20 that a surviving mutation meant defense in depth rather
+than a coverage hole.
+
+**Superseded scenario mapping (retained for re-checking):** of its 15 scenarios,
 at least five have registered successors:
 
 | Scenario | Covered by |

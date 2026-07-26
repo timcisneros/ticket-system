@@ -51,6 +51,10 @@ const EXCLUSION_REASONS = Object.freeze({
     'Deliberately edits tracked source in place to prove other suites are not vacuous. ' +
     'Running it inside the checkpoint would mutate the tree under the very suites it ' +
     'is validating. Invoked explicitly instead.',
+  'superseded':
+    'Every scenario it guarded is now covered by named registered successors, recorded ' +
+    'scenario by scenario in the A20 entry. Retained on disk rather than deleted so the ' +
+    'mapping can be re-checked; it is not run, and its coverage is not lost.',
   'blocked-by-defect':
     'Repaired, PostgreSQL-native, and correct — and it FAILS, because the production ' +
     'behavior it asserts is broken. Excluded so the checkpoint stays honest rather ' +
@@ -155,7 +159,7 @@ const TESTS = Object.freeze([
   { file: "operation-batch-test.js", status: "required" },
   { file: "operation-poststate-observation-test.js", status: "required" },
   { file: "operation-receipt-projection-test.js", status: "required" },
-  { file: "operational-abuse-test.js", status: "orphaned", reason: "cutover-orphan-silent" },
+  { file: "operational-abuse-test.js", status: "excluded", reason: "superseded" },
   { file: "operational-transparency-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "operator-visibility-test.js", status: "required" },
   { file: "operator-workflow-test.js", status: "excluded", reason: "source-coupled-other" },
@@ -236,6 +240,7 @@ const TESTS = Object.freeze([
   { file: "work-type-regression-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "workflow-composition-test.js", status: "orphaned", reason: "cutover-orphan-silent" },
   { file: "workload-profile-test.js", status: "required" },
+  { file: "workspace-authority-gate-test.js", status: "required" },
   { file: "workspace-fixture-catalog-test.js", status: "required" },
   { file: "workspace-snapshot-availability-test.js", status: "required" },
   { file: "workspace-snapshot-recovery-test.js", status: "required" },

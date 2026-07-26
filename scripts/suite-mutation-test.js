@@ -156,6 +156,21 @@ const MUTATIONS = Object.freeze([
     expect: 'operation receipts carry no observed post-state'
   },
   {
+    name: 'protected-path-gate-disabled',
+    suite: 'workspace-authority-gate-test.js',
+    file: 'server.js',
+    contract: 'a mutation targeting a protected path is refused',
+    // Aimed at the shared MATCHER, not at one gate. An earlier attempt neutered
+    // `blockProtectedWorkspaceOperation` alone and SURVIVED: a second, independent
+    // authority check also matches protected paths, so removing one layer left the
+    // contract intact. Defense in depth again — the same lesson as the A10
+    // `access_users` mutation. Both gates consult this one function, so this is the
+    // earliest layer that actually removes the protection.
+    find: '  return readProtectedWorkspacePaths().find(pattern => workspacePatternMatches(pattern, relativePath)) || null;',
+    replace: '  return null;',
+    expect: 'a run writes to a protected path unopposed'
+  },
+  {
     name: 'prepared-prestate-not-propagated',
     suite: 'resumable-execution-test.js',
     file: 'persistence/postgres/store.js',
