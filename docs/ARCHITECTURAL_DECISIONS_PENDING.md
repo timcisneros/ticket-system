@@ -1529,15 +1529,44 @@ backlog and is worth a decision of its own.
 Partial. Each finding below is stated with the evidence that supports it, and what is
 **not** yet verified is marked as such rather than rounded up to a disposition.
 
-**`conditional-workflow-prompt-test.js` — retire recommended.** It asserts
-`run.replaySnapshotPath` twice, including a hard
-`assert(run.replaySnapshotPath, …)`. A10 established that field is dead: replay
-snapshots moved to their own table and the pointer no longer exists, so that assertion
-can never pass again and the suite is coupled to a retired storage layout, not only to
-`DATA_DIR`. Its workflow-draft and prompt-shaping contract overlaps
-`postcondition-completion-test.js` scenarios 9–19 (registered, 140 assertions, covering
-draft intents and handoff tasks). *Unverified:* whether any prompt-shaping assertion is
-unique to it. Confirm that before deleting.
+**`conditional-workflow-prompt-test.js` — REPAIR, not retire. Earlier recommendation
+withdrawn (inventory 2026-07-26).**
+
+The previous entry recommended retiring it on the strength of the dead
+`replaySnapshotPath` coupling. Reading the rest of the suite shows that was the wrong
+call, and the correction is worth stating plainly: **a dead mechanism in one helper is
+not evidence that the properties are dead.**
+
+The `replaySnapshotPath` coupling is confined to a **single three-line helper**
+(`readSnapshot`), which falls back to it only when an inline snapshot is absent. That
+helper is dead storage-layout coupling and must not be ported. It is not the suite.
+
+What the suite actually guards is **prompt composition**, asserted against the prompt
+the model received — the recording-provider shape, already built. It carries **34
+negative assertions** of the form *"ordinary prompt should not include …"*, which is
+exactly the leak protection that matters here:
+
+| Property | Assertion style |
+|----------|-----------------|
+| workflow guidance appears only for workflow runs | positive on workflow prompt |
+| branching guidance, example and intent warning excluded from ordinary runs | **negative** |
+| workflow-draft-intent prose, example, id guidance, nested-field and postcondition guidance excluded from ordinary runs | **negative** |
+| handoff prose and args reminder excluded from ordinary runs | **negative** |
+| `allowedOperations` still lists `createHandoffTask` / `createWorkflowDraftIntent` on ordinary runs | positive control — capability is present even when its guidance is not |
+| branching directs away from `createWorkflowDraftIntent` | positive |
+| allocated runs carry populated `allocationPlanId`, `allocationItemId`, `allocationItem`, `allocationSubtask`, `ownedOutputPaths` | positive |
+
+`postcondition-completion-test.js` covers draft-intent and handoff **behavior** —
+whether an intent is recorded, whether a handoff is created. It asserts nothing about
+what the model was **told**, so it is not a successor for any of the above. **No
+registered suite asserts prompt content at all.**
+
+**Recommended shape.** Port it as `workflow-prompt-composition-test.js` against the
+harness, keeping the negative assertions verbatim, sourcing prompts from a recording
+provider (the pattern in `rerun-mode-evidence-test.js`), and dropping `readSnapshot`
+entirely — nothing in the prompt contract needs a replay snapshot. Required additions:
+a non-workflow run must receive no workflow-only instruction, an unrelated workflow must
+not leak context, and zero captured prompts must fail rather than pass vacuously.
 
 **`operational-abuse-test.js` — SPLIT AND CLOSED (2026-07-26).** Every one of its 15
 scenarios now has a named end-state, so none is left ambiguous:
@@ -1656,9 +1685,51 @@ properties or merely touch the same mechanism. Check scenario by scenario before
 retiring anything — A20 already rejected one overlap hypothesis that looked stronger
 than these.
 
-**`workflow-composition-test.js` — not decided.** 1,519 lines; its draft-intent surface
-overlaps `postcondition-completion-test.js`, but composition itself may be unique. Needs
-the same scenario-level comparison.
+**`workflow-composition-test.js` — REPAIR, and it is the most valuable orphan left
+(inventory 2026-07-26).**
+
+Structure first, because it changes how the file must be handled: there are **no
+discrete scenarios**. `main()` is one 1,275-line sequence carrying **~340 inline
+assertions** and ending in a single JSON emission. It cannot be split by lifting
+scenario functions the way `operational-abuse-test.js` was; the contracts have to be
+read out of the assertions.
+
+Contract groups, from the assertion inventory:
+
+| Group | Registered successor? |
+|-------|----------------------|
+| `executeActionPlan` — proposed / accepted / executed / rejected action evidence, `workflowActionPlans` | **NONE** |
+| `executeTicketPlan` — child ticket creation, `workflowTicketPlans`, parent ticket/run/step/plan linkage, parent-scoped spawn idempotency, "v1 must not auto-run children" | **NONE** |
+| Workflow branch execution (true and false paths, invalid `trueNext` rejection) | **NONE** |
+| Workflow mutation budgets — `maxMutations`, exact-cap stop, over-cap deterministic rejection | Partial — `bounded-transition-test.js` covers per-response caps, not per-workflow budgets |
+| Execution-policy normalization for legacy tickets (assisted mode, null maxAttempts, `when_declared`, shared scope, policy-change must not mutate replay evidence) | **NONE** |
+| Failing postcondition → `run.verification_failed`, `run.triage_created`, failed effectiveness, "completed status alone must not report 100% objective success" | Mostly — `postcondition-completion-test.js` |
+| Run lifecycle event completeness (~20 event types) | Partial — `operator-visibility-test.js`, `event-integrity-negative-test.js` |
+
+**The headline: `executeActionPlan`, `executeTicketPlan`, `workflowActionPlans` and
+`workflowTicketPlans` appear in NO registered suite.** Workflow composition — the
+runtime path that spawns child tickets and executes planned actions — is guarded by
+this orphan and by nothing else. `spawnIdempotencyKey` has store-level coverage in
+`postgres-persistence-integration-test.js`, but the runtime path that produces it does
+not.
+
+That makes this the **highest-value repair remaining in A20**, ahead of the 76 loud
+orphans: it is the only coverage of a whole subsystem, and it has been dead since the
+cutover.
+
+**Recommended shape.** Do not port the monolith. Extract focused PostgreSQL-native
+suites along the group boundaries above, starting with the two that have no successor
+at all:
+
+1. `workflow-action-plan-test.js` — proposed/accepted/executed/rejected evidence, and
+   that rejection is deterministic and does not fail the workflow
+2. `workflow-ticket-plan-test.js` — child ticket creation and full parent linkage,
+   parent-scoped spawn idempotency (duplicate plan steps create one child), and that v1
+   does not auto-run children
+
+Both need negative controls: an invalid plan must record the proposal AND the rejection
+while executing nothing, and an over-cap plan must reject **all** proposed actions
+rather than a prefix.
 
 **A caution that has now been earned twice.** Both suites repaired in the previous
 tranche found production defects the moment they could fail (A21, A22), and A20's own
