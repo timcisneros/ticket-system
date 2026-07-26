@@ -188,7 +188,7 @@ const TESTS = Object.freeze([
   { file: "report-generation-test.js", status: "excluded", reason: "source-coupled-other" },
   { file: "required-replay-evidence-test.js", status: "required" },
   { file: "rerun-mode-evidence-test.js", status: "required" },
-  { file: "resumable-execution-test.js", status: "orphaned", reason: "cutover-orphan-silent" },
+  { file: "resumable-execution-test.js", status: "excluded", reason: "blocked-by-defect" },
   { file: "resume-obvious-postcondition-test.js", status: "required" },
   { file: "run-consequence-mutation-test.js", status: "required" },
   { file: "run-customer-support-test.js", status: "excluded", reason: "manual-demo" },

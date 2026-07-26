@@ -49,6 +49,7 @@ the defect can cause, not how hard it is to fix.
 | A17 | Delegated handoff logging crashes the server process | **Critical** | **Open — implementation required** | Correctness / availability |
 | A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented; 81 orphans remain | Verification gap |
 | A21 | Ticket reassignment silently discarded; audit trail asserts otherwise | **High** | **Implemented 2026-07-26** — see entry | Correctness / truthfulness |
+| A22 | Resume after a committed workspace operation fails on an idempotency conflict | **High** | **Open — investigation required** | Correctness / recovery |
 
 ### Sequencing
 
@@ -971,6 +972,72 @@ durable evidence.
 
 ---
 
+### A22. Resume after a committed workspace operation fails on an idempotency conflict
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — investigation required.** Reproduced, not yet diagnosed |
+| **Severity** | **High** — a crash after a committed mutation makes the run unrecoverable |
+| **Scope** | Production runtime/persistence. Found by A20 while migrating `resumable-execution-test.js` |
+| **Evidence** | `scripts/resumable-execution-test.js` scenario 2, against `940c32a` |
+| **Decision required** | Whether the divergent field is legitimate nondeterminism the guard should tolerate, or a genuine evidence mismatch |
+
+**Description:**
+
+Kill the runtime at `after_first_workspace.operation` — after a `writeFile` has
+committed but before the run finishes — then restart. Recovery claims the run and the
+resume **fails**:
+
+```
+Operation receipt idempotency key conflicts for run 2:
+run:2:slot:ed5dcf36…:input:e7484052…
+```
+
+The mutation is **not** duplicated, so the safety property holds. But the run does not
+complete either: it terminalizes as `failed`. A crash at this seam therefore makes the
+run unrecoverable rather than resumable, which is the opposite of what the seam exists
+to support.
+
+**Where it comes from.** `persistence/postgres/store.js` raises
+`IdempotencyConflictError` when a resumed run re-emits evidence under a key that already
+exists and the stored event differs from the re-derived one:
+
+```js
+if (storedEvent.type !== eventType || storedEvent.stepId !== eventStepId ||
+    canonicalJson(storedEvent.payload) !== canonicalJson(eventPayload)) {
+  throw new IdempotencyConflictError(id, key);
+}
+```
+
+The guard itself is right — silently overwriting divergent evidence would be worse. The
+open question is **why the re-derived payload differs at all**. Two possibilities, and
+they have opposite fixes:
+
+1. **Legitimate nondeterminism.** If the payload carries a duration, timestamp or other
+   per-attempt field, the comparison is too strict and should exclude it. The guard
+   should compare the evidence's *meaning*, not fields that cannot survive a replay.
+2. **A genuine mismatch.** If the resumed run reconstructs materially different
+   evidence, the conflict is correctly reporting a real reconstruction defect and the
+   bug is upstream of the guard.
+
+Diagnosing this needs the two payloads diffed field by field. That was not done here,
+and the entry deliberately records the reproduction rather than a guess.
+
+**Why this went unnoticed.** `after_first_workspace.operation` is one of only two crash
+seams any registered suite drives, and the suite that drives it
+(`resume-obvious-postcondition-test.js`) asserts a postcondition outcome rather than
+resume-to-completion. The seven other seams are driven by nothing. See A20's note on
+crash-seam coverage.
+
+**Coverage.** `scripts/resumable-execution-test.js` is migrated, PostgreSQL-native, and
+reproduces this deterministically as scenario 2. It is classified `excluded` /
+`blocked-by-defect` — correct suite, broken production — exactly as
+`assignment-audit-test.js` was before A21. Scenario 1 (crash *before* the operation,
+resume executes it exactly once) is **verified green**, so the migration and the resume
+path itself are sound; scenarios 3 and 4 are unverified because the suite aborts at 2.
+
+---
+
 ### A21. Ticket reassignment is silently discarded, and the audit trail says otherwise
 
 | Field | Value |
@@ -1282,7 +1349,7 @@ under a second — the old pattern waited forever there.
 | `conditional-workflow-prompt-test.js` | Still `cutover-orphan-silent` | Not reached |
 | `workflow-composition-test.js` | Still `cutover-orphan-silent` | Not reached |
 | `operational-abuse-test.js` | Still `cutover-orphan-silent` | Not reached |
-| `resumable-execution-test.js` | Still `cutover-orphan-silent` | Not reached |
+| `resumable-execution-test.js` | **Migrated** → `excluded / blocked-by-defect` | Scenario 1 verified green; scenario 2 reproduces **A22** |
 | `scheduler-integrity-abuse-test.js` | Still `cutover-orphan-silent` | Not reached |
 
 **The tranche found a High-severity production defect, which is the point.**

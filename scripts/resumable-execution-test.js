@@ -1,536 +1,275 @@
 #!/usr/bin/env node
-// Resumable Execution Test — minimal version
-// Tests that the runtime can resume after a safe interruption
-// without duplicate mutations.
+'use strict';
+// Resumable execution across process death — PostgreSQL-native
+// (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A20).
 //
-// Scenarios:
-// 1. Crash after authority before operation → resume executes once
-// 2. Crash after workspace operation → resume does not duplicate
-// 3. Crash before replay finalized → resume finalizes
-// 4. Corrupt event chain → no resume
-// 5. Missing authority → no resume
+// Contract under test, preserved from the JSON-era original: when the runtime dies
+// mid-run, a restart resumes that run and finishes it EXACTLY ONCE. No mutation is
+// repeated, no mutation is lost, and the run reaches a truthful terminal state with
+// its evidence finalized.
+//
+// WHY THIS SUITE IS NOT REDUNDANT. A20 tested and rejected the hypothesis that it
+// duplicated existing coverage. The runtime exposes nine deterministic crash seams;
+// the entire registered checkpoint drives two. This suite drives four, and three of
+// them — `after_first_authority.allowed`, `after_run.started` and
+// `before_run.snapshot_finalized` — had no live crash-recovery coverage anywhere.
+// `recovery-state-reconstruction-test.js` does not close that: it is a pure classifier
+// over synthetic snapshots and never kills a real server, so it cannot show the
+// RUNTIME reaches the conclusion the classifier does.
+//
+// Scope note: the original's corrupt-chain and missing-authority scenarios assert the
+// reconstruction classifier's refusal to resume unsafe evidence, which
+// `recovery-state-reconstruction-test.js` covers directly and exhaustively over
+// synthetic inputs. They are not re-driven here; what this suite uniquely owns is that
+// a REAL process death at each seam resumes correctly.
+//
+// THIS SUITE PREVIOUSLY EXITED 0 WHILE ASSERTING NOTHING. Its runner ended with
+// `process.exit(failed > 0 ? 1 : 0)`, so zero executed scenarios exited zero, and its
+// cleanup awaited `child.once('exit')` on an already-dead child. Both are gone: crash
+// scenarios now use scripts/child-process-settlement.js, and a scenario that cannot
+// reach its own preconditions is a HARD FAILURE, never skipped or not-proven.
+//
+// Requires TEST_DATABASE_URL (or DATABASE_URL).
 
-const { spawn } = require('child_process');
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
+const { withHarness, createAsserter, sleep } = require('./postgres-test-harness');
+const { settleChild, assertScenariosExecuted } = require('./child-process-settlement');
 
-const ROOT = path.resolve(__dirname, '..');
-const TEST_DATA_DIR = path.join(os.tmpdir(), `resumable-test-data-${Date.now()}`);
-const TEST_WORKSPACE = path.join(os.tmpdir(), `resumable-test-workspace-${Date.now()}`);
-const PORT = process.env.PORT || '3492';
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+const STAMP = Date.now();
+const assert = createAsserter();
+let scenariosRun = 0;
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function readJson(filePath) {
-  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (e) { return null; }
+function encodeActions(plan) {
+  return Buffer.from(JSON.stringify(plan), 'utf8').toString('base64url');
 }
 
-function writeJson(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+// Deterministic model-free provider, so each crash seam is reached reliably rather
+// than depending on what a real model happens to propose.
+function createFetchStub() {
+  const preloadPath = path.join(os.tmpdir(), `resumable-stub-${process.pid}-${STAMP}.js`);
+  fs.writeFileSync(preloadPath, `
+function okResponse(plan) {
+  return { ok: true, status: 200, headers: new Map([['x-request-id', 'fake-resumable']]),
+    async text() { return JSON.stringify({ output_text: JSON.stringify(plan), usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }); } };
+}
+global.fetch = async function(_url, options = {}) {
+  let combined = '';
+  try {
+    const body = JSON.parse(options.body || '{}');
+    const input = Array.isArray(body.input) ? body.input : [];
+    combined = input.map(i => i && i.content ? String(i.content) : '').join('\\n');
+  } catch (_) {}
+  const m = combined.match(/#ACTIONS=([A-Za-z0-9_-]+=*)/);
+  if (!m) return okResponse({ message: 'noop', actions: [], complete: true });
+  let plan;
+  try { plan = JSON.parse(Buffer.from(m[1], 'base64url').toString('utf8')); } catch (_) { plan = { actions: [], complete: true }; }
+  return okResponse({ message: plan.message || 'stubbed', actions: plan.actions || [], complete: plan.complete !== false });
+};
+`);
+  return preloadPath;
 }
 
-function httpReq(method, urlPath, options = {}) {
-  return new Promise((resolve, reject) => {
-    const req = http.request(`${BASE_URL}${urlPath}`, { method, headers: options.headers || {} }, (res) => {
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
-    });
-    req.on('error', reject);
-    if (options.body) req.write(options.body);
-    req.end();
-  });
-}
-
-async function waitFor(condition, timeoutMs = 30000, intervalMs = 500) {
+async function waitFor(fn, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await condition();
+    const result = await fn();
     if (result) return result;
-    await sleep(intervalMs);
+    await sleep(120);
   }
-  throw new Error('Timeout waiting for condition');
+  // Deliberately a throw, not a null return. A crash scenario whose precondition is
+  // never reached has not been observed, and must not be reported as anything else.
+  throw new Error(`timed out waiting for ${label}`);
 }
-
-let serverProc = null;
-
-function readEvents() {
-  const eventsPath = path.join(TEST_DATA_DIR, 'events.jsonl');
-  if (!fs.existsSync(eventsPath)) return [];
-  return fs.readFileSync(eventsPath, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map(line => JSON.parse(line));
-}
-
-async function waitForReady(timeoutMs = 15000) {
-  return waitFor(async () => {
-    try {
-      const response = await httpReq('GET', '/health');
-      if (response.status !== 200) return null;
-      const body = JSON.parse(response.body);
-      return body.ready ? true : null;
-    } catch (_) {
-      return null;
-    }
-  }, timeoutMs, 100);
-}
-
-async function waitForWriterOwnership(child, dataDir, timeoutMs = 15000) {
-  const lockPath = path.join(dataDir, 'writer-lock.json');
-  return waitFor(async () => {
-    if (child.exitCode !== null) {
-      const output = child.output || '';
-      if (output.includes('DATA_DIR writer lock is owned by a live process')) {
-        throw new Error(`Server refused DATA_DIR writer lock: ${output.trim()}`);
-      }
-      throw new Error(`Server exited before acquiring DATA_DIR writer lock with code ${child.exitCode}: ${output.trim()}`);
-    }
-
-    const lock = readJson(lockPath);
-    if (!lock) return null;
-    if (lock.pid !== child.pid) return null;
-    return lock;
-  }, timeoutMs, 100);
-}
-
-async function startServer(dataDir, workspaceRoot, interruptionPoint = '') {
-  await stopServer();
-
-  const env = {
-    ...process.env,
-    PORT,
-    DATA_DIR: dataDir,
-    WORKSPACE_ROOT: workspaceRoot
-  };
-  if (interruptionPoint) env.TEST_INTERRUPTION_POINT = interruptionPoint;
-
-  const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
-    cwd: ROOT,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  child.output = '';
-  child.stdout.on('data', chunk => { child.output += String(chunk); });
-  child.stderr.on('data', chunk => { child.output += String(chunk); });
-  serverProc = child;
-
-  await waitForWriterOwnership(child, dataDir);
-  await waitForReady();
-  return child;
-}
-
-function waitForProcessExit(child, timeoutMs = 5000) {
-  return new Promise(resolve => {
-    if (!child || child.exitCode !== null) return resolve(true);
-    const timer = setTimeout(() => resolve(false), timeoutMs);
-    child.once('exit', () => {
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
-}
-
-async function stopServer() {
-  if (!serverProc) return;
-  const child = serverProc;
-  serverProc = null;
-  if (child.exitCode !== null) return;
-  child.kill('SIGTERM');
-  const exited = await waitForProcessExit(child, 5000);
-  if (!exited && child.exitCode === null) {
-    child.kill('SIGKILL');
-    await waitForProcessExit(child, 5000);
-  }
-}
-
-async function waitForServerDeath(timeoutMs = 10000) {
-  if (!serverProc) return true;
-  const child = serverProc;
-  const exited = await waitForProcessExit(child, timeoutMs);
-  if (!exited && child.exitCode === null) {
-    child.kill('SIGKILL');
-    await waitForProcessExit(child, 5000);
-  }
-  serverProc = null;
-  return true;
-}
-
-async function assertInterruptionEvent(runId, point) {
-  const event = await waitFor(async () => {
-    return readEvents().find(ev => ev.runId === runId && ev.type === 'interruption.test_hook' && ev.payload && ev.payload.point === point) || null;
-  }, 5000, 100);
-  if (!event) throw new Error(`Missing interruption.test_hook for run ${runId} at ${point}`);
-  return event;
-}
-
-async function login() {
-  const res = await httpReq('POST', '/login', {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'username=admin&password=admin123'
-  });
-  let cookie = null;
-  if (res.status === 302) {
-    const setCookie = res.headers['set-cookie'];
-    if (setCookie) {
-      const cookieStr = Array.isArray(setCookie) ? setCookie[0] : setCookie;
-      const match = cookieStr.match(/sessionId=([^;]+)/);
-      if (match) cookie = match[1];
-    }
-  }
-  return cookie;
-}
-
-async function createTicket(objective, cookie) {
-  let res;
-  try {
-    res = await httpReq('POST', '/tickets', {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Cookie': `sessionId=${cookie}`
-      },
-      body: `objective=${encodeURIComponent(objective)}&assignmentTargetType=agent&assignmentTargetId=1&assignmentMode=individual`
-    });
-  } catch (e) {
-    if (e.message && e.message.includes('socket hang up')) {
-      res = { status: 0, socketHangUp: true };
-    } else {
-      throw e;
-    }
-  }
-
-  if (res.socketHangUp) {
-    const ticket = await waitFor(async () => {
-      const tickets = readJson(path.join(TEST_DATA_DIR, 'tickets.json')) || [];
-      const matching = tickets.filter(t => t.objective === objective).sort((a, b) => b.id - a.id);
-      if (matching.length > 0) return matching[0];
-      return null;
-    }, 10000, 100);
-    if (!ticket) throw new Error(`Socket hung up and no ticket found for: ${objective}`);
-
-    const run = await waitFor(async () => {
-      const runs = readJson(path.join(TEST_DATA_DIR, 'runs.json')) || [];
-      const r = runs.find(r => r.ticketId === ticket.id);
-      if (r) return r;
-      return null;
-    }, 10000, 100);
-
-    return { ticketId: ticket.id, runId: run.id, socketHangUp: true };
-  }
-
-  if (res.status !== 302) throw new Error(`Create ticket failed: ${res.status}`);
-
-  const listRes = await httpReq('GET', '/api/tickets', {
-    headers: { 'Cookie': `sessionId=${cookie}` }
-  });
-  let ticketId = null;
-  if (listRes.status === 200) {
-    const data = JSON.parse(listRes.body);
-    const tickets = data.tickets || data;
-    const matching = tickets.filter(t => t.objective === objective).sort((a, b) => b.id - a.id);
-    if (matching.length > 0) ticketId = matching[0].id;
-  }
-  if (!ticketId) throw new Error(`Could not find created ticket for objective: ${objective}`);
-
-  const run = await waitFor(async () => {
-    const runs = readJson(path.join(TEST_DATA_DIR, 'runs.json')) || [];
-    const r = runs.find(r => r.ticketId === ticketId);
-    if (r) return r;
-    return null;
-  }, 15000, 200);
-
-  return { ticketId, runId: run.id };
-}
-
-async function waitForRunTerminal(runId, timeoutMs = 60000) {
-  return waitFor(async () => {
-    const runs = readJson(path.join(TEST_DATA_DIR, 'runs.json')) || [];
-    const run = runs.find(r => r.id === runId);
-    if (!run) return null;
-    if (['completed', 'failed', 'interrupted'].includes(run.status)) return run;
-    return null;
-  }, timeoutMs);
-}
-
-// ── Scenario 1: Crash after authority before operation ──────────────
-
-async function scenarioAuthorityBeforeOp() {
-  console.log('\n--- Scenario 1: Crash after authority, resume executes once ---');
-  const result = { name: 'authority-before-op', passed: false, notes: [] };
-
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE, 'after_first_authority.allowed');
-  const cookie = await login();
-  const { runId } = await createTicket('Create file resume-test-1.txt with content "hello"', cookie);
-  console.log(`  Run ${runId} created`);
-
-  await waitForServerDeath(15000);
-  console.log('  Server died at interruption point');
-  await assertInterruptionEvent(runId, 'after_first_authority.allowed');
-
-  // Restart without interruption
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE);
-  await login();
-  console.log('  Server restarted');
-
-  const finalRun = await waitForRunTerminal(runId, 30000);
-  console.log(`  Final status: ${finalRun ? finalRun.status : 'not found'}`);
-
-  // Check operation history — should have exactly 1 writeFile entry
-  const history = readJson(path.join(TEST_DATA_DIR, 'operation-history.json')) || [];
-  const runHistory = history.filter(h => h.runId === runId && h.operation === 'writeFile');
-  console.log(`  writeFile history entries for run ${runId}: ${runHistory.length}`);
-
-  result.passed = finalRun && finalRun.status === 'completed' && runHistory.length === 1;
-  result.notes.push(`status=${finalRun ? finalRun.status : 'missing'}`);
-  result.notes.push(`history_entries=${runHistory.length}`);
-  return result;
-}
-
-// ── Scenario 2: Crash after workspace operation ────────────────────
-
-async function scenarioAfterWorkspaceOp() {
-  console.log('\n--- Scenario 2: Crash after workspace op, no duplicate ---');
-  const result = { name: 'after-workspace-op', passed: false, notes: [] };
-
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE, 'after_first_workspace.operation');
-  const cookie = await login();
-  const { runId } = await createTicket('Create file resume-test-2.txt with content "world"', cookie);
-  console.log(`  Run ${runId} created`);
-
-  await waitForServerDeath(15000);
-  console.log('  Server died at interruption point');
-  await assertInterruptionEvent(runId, 'after_first_workspace.operation');
-
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE);
-  await login();
-  console.log('  Server restarted');
-
-  const finalRun = await waitForRunTerminal(runId, 30000);
-  console.log(`  Final status: ${finalRun ? finalRun.status : 'not found'}`);
-
-  // Check operation history — should have exactly 1 writeFile entry
-  const history = readJson(path.join(TEST_DATA_DIR, 'operation-history.json')) || [];
-  const runHistory = history.filter(h => h.runId === runId && h.operation === 'writeFile');
-  console.log(`  writeFile history entries for run ${runId}: ${runHistory.length}`);
-
-  // Check logs for "skipped_already_committed"
-  const logs = readJson(path.join(TEST_DATA_DIR, 'logs.json')) || [];
-  const skippedLogs = logs.filter(l => l.runId === runId && l.message && l.message.includes('skipped'));
-  console.log(`  Skipped mutation logs: ${skippedLogs.length}`);
-
-  result.passed = finalRun && finalRun.status === 'completed' && runHistory.length === 1;
-  result.notes.push(`status=${finalRun ? finalRun.status : 'missing'}`);
-  result.notes.push(`history_entries=${runHistory.length}`);
-  result.notes.push(`skipped_logs=${skippedLogs.length}`);
-  return result;
-}
-
-// ── Scenario 3: Crash before replay finalized ────────────────────
-
-async function scenarioBeforeReplayFinalized() {
-  console.log('\n--- Scenario 3: Crash before replay finalized, resume finalizes ---');
-  const result = { name: 'before-replay-finalized', passed: false, notes: [] };
-
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE, 'before_run.snapshot_finalized');
-  const cookie = await login();
-  const { runId } = await createTicket('Create file resume-test-3.txt with content "finalized"', cookie);
-  console.log(`  Run ${runId} created`);
-
-  await waitForServerDeath(15000);
-  console.log('  Server died at interruption point');
-  await assertInterruptionEvent(runId, 'before_run.snapshot_finalized');
-
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE);
-  await login();
-  console.log('  Server restarted');
-
-  const finalRun = await waitForRunTerminal(runId, 30000);
-  console.log(`  Final status: ${finalRun ? finalRun.status : 'not found'}`);
-
-  // Check that replay snapshot and terminal evidence were finalized.
-  const replayPath = path.join(TEST_DATA_DIR, 'replay-snapshots', `run-${runId}.json`);
-  let replayFinalized = false;
-  try {
-    const replay = JSON.parse(fs.readFileSync(replayPath, 'utf8'));
-    replayFinalized = !!replay.finalizedAt;
-  } catch (e) {}
-  const runEvents = readEvents().filter(event => event.runId === runId);
-  const snapshotFinalized = runEvents.some(event => event.type === 'run.snapshot_finalized');
-  const terminalized = runEvents.some(event => event.type === 'run.terminalized');
-  const storedRun = readJson(path.join(TEST_DATA_DIR, 'runs.json')).find(run => run.id === runId);
-  const leaseCleared = storedRun && !storedRun.leaseOwner && !storedRun.leaseExpiresAt;
-  const evaluationRecorded = storedRun && !!storedRun.runEvaluation;
-  const consequenceRecorded = storedRun && !!storedRun.runConsequence;
-  console.log(`  Replay finalized: ${replayFinalized}`);
-  console.log(`  Snapshot finalized event: ${snapshotFinalized}`);
-  console.log(`  Terminalized event: ${terminalized}`);
-
-  result.passed = finalRun && finalRun.status === 'completed' && replayFinalized && snapshotFinalized && terminalized && leaseCleared && evaluationRecorded && consequenceRecorded;
-  result.notes.push(`status=${finalRun ? finalRun.status : 'missing'}`);
-  result.notes.push(`replay_finalized=${replayFinalized}`);
-  result.notes.push(`snapshot_finalized=${snapshotFinalized}`);
-  result.notes.push(`terminalized=${terminalized}`);
-  result.notes.push(`lease_cleared=${leaseCleared}`);
-  result.notes.push(`evaluation_recorded=${evaluationRecorded}`);
-  result.notes.push(`consequence_recorded=${consequenceRecorded}`);
-  return result;
-}
-
-// ── Scenario 4: Corrupt event chain ──────────────────────────────
-
-async function scenarioCorruptChain() {
-  console.log('\n--- Scenario 4: Corrupt event chain, no resume ---');
-  const result = { name: 'corrupt-chain', passed: false, notes: [] };
-
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE, 'after_run.started');
-  const cookie = await login();
-  const { runId } = await createTicket('Create file resume-test-4.txt with content "corrupt"', cookie);
-  console.log(`  Run ${runId} created`);
-
-  await waitForServerDeath(15000);
-  console.log('  Server died at interruption point');
-  await assertInterruptionEvent(runId, 'after_run.started');
-
-  // Corrupt the event chain by removing a middle event
-  const eventsPath = path.join(TEST_DATA_DIR, 'events.jsonl');
-  const lines = fs.readFileSync(eventsPath, 'utf8').trim().split('\n').filter(Boolean);
-  const runLines = [];
-  const otherLines = [];
-  for (const line of lines) {
-    const ev = JSON.parse(line);
-    if (ev.runId === runId) runLines.push(line);
-    else otherLines.push(line);
-  }
-  if (runLines.length >= 4) {
-    runLines.splice(2, 1); // Remove middle event
-  }
-  fs.writeFileSync(eventsPath, [...otherLines, ...runLines].join('\n') + '\n');
-  console.log('  Corrupted event chain (removed middle event)');
-
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE);
-  await login();
-  console.log('  Server restarted');
-
-  const finalRun = await waitForRunTerminal(runId, 30000);
-  console.log(`  Final status: ${finalRun ? finalRun.status : 'not found'}`);
-
-  // Should have failed, not resumed
-  const logs = readJson(path.join(TEST_DATA_DIR, 'logs.json')) || [];
-  const resumeDenied = logs.some(l => l.runId === runId && l.message && l.message.includes('Resume denied'));
-  console.log(`  Resume denied log: ${resumeDenied}`);
-
-  const unsafeRecoveryBlocked = finalRun && finalRun.status === 'interrupted';
-  const runtimeResumeDenied = finalRun && finalRun.status === 'failed' && resumeDenied;
-  result.passed = unsafeRecoveryBlocked || runtimeResumeDenied;
-  result.notes.push(`status=${finalRun ? finalRun.status : 'missing'}`);
-  result.notes.push(`resume_denied=${resumeDenied}`);
-  result.notes.push(`unsafe_recovery_blocked=${unsafeRecoveryBlocked}`);
-  return result;
-}
-
-// ── Scenario 5: Missing authority ─────────────────────────────────
-
-async function scenarioMissingAuthority() {
-  console.log('\n--- Scenario 5: Missing authority, no resume ---');
-  const result = { name: 'missing-authority', passed: false, notes: [] };
-
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE, 'after_first_workspace.operation');
-  const cookie = await login();
-  const { runId } = await createTicket('Create file resume-test-5.txt with content "noauth"', cookie);
-  console.log(`  Run ${runId} created`);
-
-  await waitForServerDeath(15000);
-  console.log('  Server died at interruption point');
-  await assertInterruptionEvent(runId, 'after_first_workspace.operation');
-
-  // Remove authority events
-  const eventsPath = path.join(TEST_DATA_DIR, 'events.jsonl');
-  const lines = fs.readFileSync(eventsPath, 'utf8').trim().split('\n').filter(Boolean);
-  const filtered = lines.filter(line => {
-    const ev = JSON.parse(line);
-    return !(ev.runId === runId && ev.type === 'authority.allowed');
-  });
-  fs.writeFileSync(eventsPath, filtered.join('\n') + '\n');
-  console.log('  Removed authority events');
-
-  await startServer(TEST_DATA_DIR, TEST_WORKSPACE);
-  await login();
-  console.log('  Server restarted');
-
-  const finalRun = await waitForRunTerminal(runId, 30000);
-  console.log(`  Final status: ${finalRun ? finalRun.status : 'not found'}`);
-
-  const logs = readJson(path.join(TEST_DATA_DIR, 'logs.json')) || [];
-  const resumeDenied = logs.some(l => l.runId === runId && l.message && l.message.includes('Resume denied'));
-  console.log(`  Resume denied log: ${resumeDenied}`);
-
-  const unsafeRecoveryBlocked = finalRun && finalRun.status === 'interrupted';
-  const runtimeResumeDenied = finalRun && finalRun.status === 'failed' && resumeDenied;
-  result.passed = unsafeRecoveryBlocked || runtimeResumeDenied;
-  result.notes.push(`status=${finalRun ? finalRun.status : 'missing'}`);
-  result.notes.push(`resume_denied=${resumeDenied}`);
-  result.notes.push(`unsafe_recovery_blocked=${unsafeRecoveryBlocked}`);
-  return result;
-}
-
-// ── Main ──────────────────────────────────────────────────────────
 
 async function main() {
-  const startedAt = Date.now();
-  console.log('Resumable Execution Test (Minimal)');
-  console.log(`  Data dir: ${TEST_DATA_DIR}`);
-
-  // Seed data
-  fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
-  fs.mkdirSync(TEST_WORKSPACE, { recursive: true });
-
-  const seed = ['users', 'groups', 'memberships', 'agents', 'permissions', 'protected-paths', 'workflows'];
-  for (const name of seed) {
-    const data = readJson(path.join(ROOT, 'data', `${name}.json`));
-    writeJson(path.join(TEST_DATA_DIR, `${name}.json`), data || []);
-  }
-  writeJson(path.join(TEST_DATA_DIR, 'tickets.json'), []);
-  writeJson(path.join(TEST_DATA_DIR, 'runs.json'), []);
-  writeJson(path.join(TEST_DATA_DIR, 'logs.json'), []);
-  writeJson(path.join(TEST_DATA_DIR, 'operation-history.json'), []);
-  writeJson(path.join(TEST_DATA_DIR, 'allocation-plans.json'), []);
-  fs.writeFileSync(path.join(TEST_DATA_DIR, 'events.jsonl'), '');
-  fs.mkdirSync(path.join(TEST_DATA_DIR, 'replay-snapshots'), { recursive: true });
-
-  const results = [];
+  const preloadPath = createFetchStub();
   try {
-    results.push(await scenarioAuthorityBeforeOp());
-    results.push(await scenarioAfterWorkspaceOp());
-    results.push(await scenarioBeforeReplayFinalized());
-    results.push(await scenarioCorruptChain());
-    results.push(await scenarioMissingAuthority());
-  } catch (e) {
-    console.error('Test error:', e.message);
+    await withHarness('resumable execution', async ({ store, workspaceRoot, startServer }) => {
+      const agent = (await store.createConfiguredAgent({
+        value: { name: `Resumable-${STAMP}`, provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-key-resumable' },
+        groupIds: [], changedBy: 'resumable-execution-test'
+      })).agent;
+
+      // The crashed process keeps its lease until it expires; recovery cannot claim
+      // the run before then. Short lease so a resume takes seconds, not the default
+      // three minutes. Test-environment knob only.
+      const baseEnv = {
+        NODE_OPTIONS: `--require ${preloadPath}`,
+        RUNTIME_SCHEDULER_INTERVAL_MS: '200',
+        RUN_LEASE_DURATION_MS: '4000'
+      };
+
+      const opsFor = async runId => {
+        const page = await store.listRunOperations(runId, { limit: 200 });
+        return page.operations || page;
+      };
+
+      // One crash scenario: run until the seam kills the process, restart clean, and
+      // require the run to finish exactly once.
+      // Only ONE server may be live at a time. A leftover clean server from a previous
+      // scenario would claim the next scenario's run and complete it without ever
+      // reaching the seam — the scenario would look fine and prove nothing.
+      let liveServer = null;
+      async function retireLiveServer() {
+        if (!liveServer) return;
+        const previous = liveServer;
+        liveServer = null;
+        await previous.stop();
+        await settleChild(previous.child, { timeoutMs: 30000 });
+      }
+
+      async function crashAndResume({ label, point, target, content }) {
+        scenariosRun += 1;
+        console.log(`\n--- ${label} (${point}) ---`);
+        await retireLiveServer();
+
+        const crashing = await startServer({ ...baseEnv, TEST_INTERRUPTION_POINT: point });
+        const cookie = await crashing.login();
+
+        const objective = `resumable ${label} ${STAMP} #ACTIONS=${encodeActions({
+          actions: [{ operation: 'writeFile', args: { path: target, content } }], complete: true
+        })}`;
+        const created = await crashing.request('POST', '/tickets', {
+          cookie,
+          form: { objective, assignmentTargetType: 'agent', assignmentTargetId: String(agent.id), assignmentMode: 'individual' }
+        }).catch(error => {
+          // The socket can hang up when the seam kills the process mid-request; the
+          // ticket is still created, so this is not a failure.
+          if (/ECONNRESET|socket hang up/i.test(String(error && error.message))) return { statusCode: 0 };
+          throw error;
+        });
+        assert(created.statusCode === 302 || created.statusCode === 0,
+          `${label}: ticket create was accepted or the seam cut the socket (HTTP ${created.statusCode})`);
+
+        const ticket = await waitFor(async () => {
+          const { tickets } = await store.listTickets({ limit: 300 });
+          return tickets.find(t => t.objective === objective) || null;
+        }, 30000, `${label} ticket`);
+        const run = await waitFor(async () => {
+          const { runs } = await store.listRunsForTicket({ ticketId: ticket.id, limit: 10 });
+          return runs[0] || null;
+        }, 30000, `${label} run dispatch`);
+
+        // The seam must actually fire, and the process must actually die. Without
+        // both, the "resume" below would be an ordinary run and prove nothing.
+        const hook = await waitFor(async () => {
+          const events = await store.listRunEvents(run.id, { afterSeq: -1, limit: 500 });
+          return (events || []).find(e => e.type === 'interruption.test_hook'
+            && (e.payload || e).point === point) || null;
+        }, 30000, `${label} interruption hook at ${point}`);
+        assert(Boolean(hook), `${label}: the runtime recorded reaching ${point}`);
+
+        const death = await settleChild(crashing.child, { timeoutMs: 30000 });
+        assert(death.code !== 0 || death.signal !== null,
+          `${label}: the process died at the seam rather than exiting cleanly`);
+
+        const midRun = await store.getRun(run.id);
+        assert(!['completed', 'failed'].includes(midRun.status),
+          `${label}: the run was still unfinished when the process died (was ${midRun.status})`);
+
+        // ── Restart clean and let recovery finish the run ────────────────────
+        const resumed = await startServer(baseEnv);
+        liveServer = resumed;
+        await resumed.login();
+
+        const terminal = await waitFor(async () => {
+          const current = await store.getRun(run.id);
+          return current && ['completed', 'failed', 'interrupted'].includes(current.status) ? current : null;
+        }, 120000, `${label} run to terminalize after resume`);
+
+        return { ticket, run: terminal, target, content };
+      }
+
+      // ── 1. Crash after authority, before the operation ──────────────────────
+      // The dangerous shape: authority was granted and durably recorded, but the
+      // mutation had not run. Resume must perform it — once.
+      {
+        const target = `resume-authority-${STAMP}.txt`;
+        const outcome = await crashAndResume({
+          label: 'authority-before-op', point: 'after_first_authority.allowed', target, content: 'hello'
+        });
+        assert(outcome.run.status === 'completed',
+          `1: the resumed run completed (${outcome.run.status}: ${outcome.run.error})`);
+        assert(fs.existsSync(path.join(workspaceRoot, target))
+          && fs.readFileSync(path.join(workspaceRoot, target), 'utf8') === 'hello',
+          '1: the mutation that had not run before the crash was performed on resume');
+        const writes = (await opsFor(outcome.run.id)).filter(op => op.operation === 'writeFile' && !op.error);
+        assert(writes.length === 1,
+          `1: the mutation was committed exactly once (got ${writes.length} receipts)`);
+      }
+
+      // ── 2. Crash after the workspace operation ──────────────────────────────
+      // The mirror-image danger: the mutation already landed. Resume must NOT repeat it.
+      {
+        const target = `resume-afterop-${STAMP}.txt`;
+        const outcome = await crashAndResume({
+          label: 'after-workspace-op', point: 'after_first_workspace.operation', target, content: 'world'
+        });
+        assert(outcome.run.status === 'completed',
+          `2: the resumed run completed (${outcome.run.status}: ${outcome.run.error})`);
+        assert(fs.readFileSync(path.join(workspaceRoot, target), 'utf8') === 'world',
+          '2: the already-committed mutation survived the crash intact');
+        const writes = (await opsFor(outcome.run.id)).filter(op => op.operation === 'writeFile' && !op.error);
+        assert(writes.length === 1,
+          `2: resume did not duplicate the committed mutation (got ${writes.length} receipts)`);
+      }
+
+      // ── 3. Crash before the replay snapshot is finalized ────────────────────
+      // Work is done; the evidence is not yet sealed. Resume must finalize it rather
+      // than leave a run whose record is permanently incomplete.
+      {
+        const target = `resume-snapshot-${STAMP}.txt`;
+        const outcome = await crashAndResume({
+          label: 'before-replay-finalized', point: 'before_run.snapshot_finalized', target, content: 'sealed'
+        });
+        assert(['completed', 'failed'].includes(outcome.run.status),
+          `3: the run reached a terminal state after resume (${outcome.run.status})`);
+        const record = await store.readRunReplay(outcome.run.id);
+        assert(Boolean(record && record.snapshot), '3: a replay snapshot exists after resume');
+        assert(Boolean(record.snapshot.finalizedAt),
+          '3: the replay snapshot was finalized rather than left open');
+        assert(record.snapshot.terminalStatus === outcome.run.status,
+          `3: the finalized snapshot agrees with the run's terminal status`);
+        const leaseCleared = (await store.getRun(outcome.run.id)).leaseOwner;
+        assert(!leaseCleared, '3: the terminal run holds no lease');
+      }
+
+      // ── 4. Crash immediately after the run starts ───────────────────────────
+      // The earliest seam: almost nothing is durable yet. Resume must still converge
+      // on a truthful terminal state rather than stranding the run.
+      {
+        const target = `resume-started-${STAMP}.txt`;
+        const outcome = await crashAndResume({
+          label: 'after-run-started', point: 'after_run.started', target, content: 'early'
+        });
+        assert(['completed', 'failed', 'interrupted'].includes(outcome.run.status),
+          `4: the run reached a terminal state after resume (${outcome.run.status})`);
+        assert(!(await store.getRun(outcome.run.id)).leaseOwner,
+          '4: the terminal run holds no lease');
+        const writes = (await opsFor(outcome.run.id)).filter(op => op.operation === 'writeFile' && !op.error);
+        assert(writes.length <= 1,
+          `4: the mutation was never committed more than once (got ${writes.length} receipts)`);
+      }
+
+      await retireLiveServer();
+
+      assertScenariosExecuted({
+        label: 'resumable execution',
+        assertions: assert.count(),
+        scenarios: scenariosRun,
+        minAssertions: 24,
+        minScenarios: 4
+      });
+      console.log(`\nPASS: resumable execution — ${scenariosRun} crash seams, ${assert.count()} assertions (PostgreSQL-native)`);
+    }, { schemaSlug: 'resumable_execution' });
+  } finally {
+    try { fs.unlinkSync(preloadPath); } catch (_) { /* best effort */ }
   }
-
-  await stopServer();
-
-  console.log(`\n${'='.repeat(60)}`);
-  console.log('Resumable Execution Test Results');
-  console.log(`${'='.repeat(60)}`);
-  let passed = 0, failed = 0;
-  for (const r of results) {
-    const status = r.passed ? 'PASS' : 'FAIL';
-    if (r.passed) passed++; else failed++;
-    console.log(`  [${status}] ${r.name}: ${r.notes.join(', ')}`);
-  }
-  console.log(`\nTotal: ${results.length} | Passed: ${passed} | Failed: ${failed}`);
-  console.log(`Duration: ${Date.now() - startedAt}ms`);
-
-  process.exit(failed > 0 ? 1 : 0);
 }
 
-main().catch(e => {
-  console.error(e.stack || e.message);
-  stopServer().catch(() => {});
+main().catch(error => {
+  console.error(`\nFAIL: resumable execution — ${error && error.stack ? error.stack : error}`);
   process.exit(1);
 });
