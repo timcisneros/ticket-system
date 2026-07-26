@@ -45,6 +45,7 @@ the defect can cause, not how hard it is to fix.
 | A14 | Redundant-mutation postcondition shortcut does not fire | **High** | **Implemented** — see entry | Correctness |
 | A15 | Postcondition telemetry names a source the event never reaches | Low | **Open — decision required** | Documentation / telemetry |
 | A16 | Run consequence records no committed mutations | **High** | **Implemented** — see entry | Correctness |
+| A17 | Delegated handoff logging crashes the server process | **Critical** | **Open — implementation required** | Correctness / availability |
 
 ### Sequencing
 
@@ -507,6 +508,86 @@ rather than extending `runtime-feasibility-test.js`.
 **Method note for whoever picks this up:** before treating any suite failure as a regression,
 baseline it at the relevant commit in a detached worktree and compare failure strings. Most
 failures in this list are pre-existing.
+
+---
+
+### A17. Delegated handoff logging crashes the server process
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — implementation required** |
+| **Severity** | **Critical** — one diagnostic-log identity mismatch terminates the entire Node process |
+| **Scope** | Production runtime defect. Surfaced by A10; **not** an A10 test-migration issue |
+| **Evidence** | Read-only probe against `master` `f0a18be`; stack, events, and receipts below |
+| **Decision required** | Separate the run's owner identity from the acting executor, and contain run-log failures |
+
+**Proven behavior.**
+
+A valid handoff task — planner delegates one `writeFile` to an existing executor agent — kills
+the server. Observed stack:
+
+```
+Error: run 1 was not found with the supplied ticket and agent authority
+    at PostgresRuntimeStore.appendRunLog (persistence/postgres/store.js:2125)
+  code: 'POSTGRES_RECORD_NOT_FOUND'
+```
+
+**Mechanism.** `appendRunLog` resolves the run row with an identity predicate that includes the
+acting agent:
+
+```sql
+FROM runs WHERE id = $1 AND ticket_id = $2 AND agent_id = $3
+```
+
+`agentId` is read from the passed run object (`persistence/postgres/store.js`, `appendRunLog`;
+entered from `server.js` `appendRunLog(run, type, message, workspaceAction, extraFields)`).
+During handoff execution the runtime acts as the **executor**, while the run is owned by the
+**planner**. The predicate therefore matches no row, `rowCount === 0`, and the method throws.
+The rejection is unhandled and the process exits.
+
+**Identities in the observed run:** run owner / planner `agentId = 1`; delegated executor
+(`Mike`) `agentId = 2`.
+
+**The delegated work itself is correct.** Authority was evaluated and granted under the executor
+identity, and the mutation committed durably:
+
+```
+authorityChecks: [{ actor: "agent:2", status: "allowed", path: "handoff-note.md" }]
+receipts:        ["writeFile:succeeded"]
+handoffTasks:    [{ status: "validated", plannerAgentId: 1, executorAgentId: 2 }]
+```
+
+**Last durable events** (journal, in order):
+
+```
+… handoff.task_validated, authority.allowed, workspace.operation_prepared, workspace.operation
+```
+
+**First expected evidence that never occurs:** the handoff task's transition to `executed`, and
+any terminal evidence. `lastHeartbeatAt` freezes at the moment of the workspace operation.
+
+**Process and run aftermath.** The server process exits (`/health` → `ECONNREFUSED`, non-null
+`exitCode`). The run is left **falsely `running`** with a live lease and **no terminal error**,
+so nothing distinguishes it from healthy in-flight work until the lease expires. Every other
+concurrent run in that process is abandoned the same way.
+
+**Impact.** The capability documented in `server.js` — *"Planner may create one validated
+writeFile handoff to one existing executor agent; runtime executes directly through workspace
+authority"* — is unreachable in practice: any valid handoff reproduces this. A single
+diagnostic-log identity mismatch is amplified into a process-wide outage.
+
+**Natural blocked regression.** `postcondition-completion-test.js` scenario 16 (`handoff-valid`)
+times out waiting for a terminal run, because the server that would terminalize it is gone. The
+scenario is **unchanged and remains blocked**; it is the contract this entry protects.
+
+**Ruled out.** Not mutation-admission starvation — nothing was waiting; `waitForAdmissionChange`
+is not implicated. Not an A10 fixture defect — the executor agent resolved, authority was
+granted, and the mutation succeeded. Not a runtime-duration defect — the process died rather
+than overrunning a budget.
+
+**Two defects, to be proven separately.** (1) Delegated execution substitutes the executor for
+the run's owner in the log identity predicate. (2) A failed run-log append becomes an unhandled
+rejection that terminates the process rather than failing that run closed.
 
 ---
 
