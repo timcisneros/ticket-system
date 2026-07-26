@@ -99,7 +99,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // A21 — reinstated once truthful reassignment was implemented. This suite is the
   // regression test for that fix; it was excluded as blocked-by-defect while the
   // production behavior it asserts was broken.
-  'assignment-audit-test.js'
+  'assignment-audit-test.js',
+  // A22 — reinstated once the prepared-intent projection exposed its persisted
+  // pre-state. Drives four crash seams; three of them are exercised by nothing else.
+  'resumable-execution-test.js'
 ]);
 
 function runCheckpoint() {

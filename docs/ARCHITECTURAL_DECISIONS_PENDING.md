@@ -49,7 +49,7 @@ the defect can cause, not how hard it is to fix.
 | A17 | Delegated handoff logging crashes the server process | **Critical** | **Open — implementation required** | Correctness / availability |
 | A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented; 81 orphans remain | Verification gap |
 | A21 | Ticket reassignment silently discarded; audit trail asserts otherwise | **High** | **Implemented 2026-07-26** — see entry | Correctness / truthfulness |
-| A22 | Resume after a committed workspace operation fails on an idempotency conflict | **High** | **Open — diagnosed, implementation required** | Correctness / recovery |
+| A22 | Resume after a committed workspace operation fails on an idempotency conflict | **High** | **Implemented 2026-07-26** — see entry | Correctness / recovery |
 
 ### Sequencing
 
@@ -976,7 +976,7 @@ durable evidence.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Open — implementation required.** Root cause identified to the field; fix location named. Not implemented |
+| **Status** | **Implemented 2026-07-26.** Canonical prepared-intent projection; `resumable-execution-test.js` reinstated as required (35 assertions, 4 crash seams); mutation-verified |
 | **Severity** | **High** — a crash after a committed mutation makes the run unrecoverable |
 | **Scope** | Production runtime/persistence. Found by A20 while migrating `resumable-execution-test.js` |
 | **Evidence** | `scripts/resumable-execution-test.js` scenario 2, against `940c32a` |
@@ -1077,11 +1077,56 @@ belongs at the earliest layer: **`beginWorkspaceMutation` must return the same
 `preState` it persisted to the target-operation receipt**, so both passes build an
 identical document and the resume compares equal.
 
-**Not implemented here.** Changing what the mutation-evidence path records touches the
-guard protecting against duplicate committed mutations, and it needs its own validation
-cycle — the focused suite, the receipt/idempotency and recovery suites, the mutation
-suite and a clean-worktree checkpoint. Landing it unvalidated would be worse than
-landing the diagnosis.
+### Implementation (2026-07-26)
+
+**One line of cause, one place to fix it.** `targetOperationIntentFromRow` returned only
+the row shape, leaving the persisted intent document nested at `.intent`. Four runtime
+readers treat that record AS the document:
+
+```js
+classifyPreparedWorkspaceMutation(provider, intent)   // intent.args, intent.preState
+beginWorkspaceMutation → return { preState: prepared.intent.preState }
+reconcileWorkspaceOperation                            // intent.target, intent.args
+```
+
+Every one of those reads landed **one level too shallow** and silently produced
+`undefined`. `intent.operation` appeared to work only because `operation` is also a
+column — which is exactly why this survived so long.
+
+So the first execution built its receipt with `preState === undefined`, giving no
+`before` and an empty `createdResources`. Recovery rebuilt the same receipt through
+`targetOperationReceiptProjection`, which *does* dig into the document
+(`intent.preState`), and got both. Two projections of one operation disagreed, and the
+disagreement was invisible until a resume compared them.
+
+**The fix spreads the persisted document onto the record**, so the durable and
+in-memory projections are the same values by construction rather than by two
+independently-written readers agreeing. `intent` is kept nested so the prepare-conflict
+comparison (`canonicalJson(current.intent.intent)`) and
+`targetOperationReceiptProjection` continue to read the raw document unchanged.
+
+**Nothing was weakened.** `before` and `createdResources` remain in the receipt
+comparison; the idempotency guard is untouched; resume accepts no conflicting evidence;
+no pre-state is recomputed after the mutation. The fix makes logically identical work
+*compare equal*, which is what the guard always intended.
+
+**Proof — `scripts/resumable-execution-test.js`, 35 assertions across 4 crash seams**,
+all now passing. Every scenario proves its seam actually fired, the process actually
+died, and the run was genuinely unfinished before resume — so a scenario cannot pass by
+never crashing. The committed-operation case additionally proves:
+
+- the first mutation committed and the file holds its intended contents
+- exactly one successful mutation receipt exists
+- the resume produced **no** idempotency conflict, in neither the run error nor the log
+- the stored receipt document records `before` and names the created resource, so first
+  pass and resume project identically
+- the run **completes** rather than merely avoiding duplication — the distinction that
+  matters, because the defect produced no duplicate either; it failed the run instead
+
+**Mutation-verified.** `prepared-prestate-not-propagated` removes the document spread
+and restores A22 exactly. Worth noting what it does *not* do: it produces no duplicate
+mutation, so a suite that only checked "the mutation did not run twice" would have
+stayed green through the entire defect.
 
 **Why this went unnoticed.** `after_first_workspace.operation` is one of only two crash
 seams any registered suite drives, and the suite that drives it

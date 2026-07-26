@@ -214,6 +214,30 @@ async function main() {
         const writes = (await opsFor(outcome.run.id)).filter(op => op.operation === 'writeFile' && !op.error);
         assert(writes.length === 1,
           `2: resume did not duplicate the committed mutation (got ${writes.length} receipts)`);
+
+        // A22's specific proofs. "Did not duplicate" is not enough on its own: the
+        // defect this scenario exists for produced no duplicate either — it failed the
+        // run instead. The resume must reconcile cleanly and the run must COMPLETE.
+        assert(!/idempotency/i.test(String(outcome.run.error || '')),
+          '2: the resume produced no receipt idempotency conflict');
+        const conflictLogs = (await store.listLogs({ runId: outcome.run.id, limit: 200 })).logs || [];
+        assert(!conflictLogs.some(entry => /idempotency key conflicts/i.test(String(entry.message || ''))),
+          '2: no idempotency conflict was recorded anywhere in the run log');
+
+        // The completed receipt must be canonically consistent with the pre-state the
+        // prepare step durably recorded — the exact divergence that caused A22.
+        const committed = writes[0];
+        assert(committed.preState && committed.preState.existed === false,
+          '2: the committed receipt carries the pre-state observed before the mutation');
+        // getOperation returns the canonical projection; the raw receipt document —
+        // the thing the idempotency comparison actually canonicalises — is on
+        // `mutationReceipt`.
+        const projected = await store.getOperation(committed.id);
+        const document = (projected && (projected.mutationReceipt || projected.receipt)) || {};
+        assert(Array.isArray(document.createdResources) && document.createdResources.includes(target),
+          '2: the stored receipt document names the resource the mutation created');
+        assert(document.before && document.before.existed === false,
+          '2: the stored receipt document records `before`, so first pass and resume project identically');
       }
 
       // ── 3. Crash before the replay snapshot is finalized ────────────────────

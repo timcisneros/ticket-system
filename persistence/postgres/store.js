@@ -578,8 +578,31 @@ function operationReceiptFromRow(row) {
   };
 }
 
+// Canonical prepared-intent projection (A22).
+//
+// The persisted intent document — `preState`, `args`, `authorityDecision`, `target` —
+// lives in the `intent` jsonb column. Every runtime reader wants those fields, and
+// several read them straight off this record: `classifyPreparedWorkspaceMutation` uses
+// `intent.operation` / `intent.args` / `intent.preState`, and `beginWorkspaceMutation`
+// returned `prepared.intent.preState` to its caller.
+//
+// Returning only the row shape made those reads land ONE LEVEL TOO SHALLOW. They
+// silently produced `undefined` — `operation` appeared to work only because it is also
+// a column. The first execution therefore built its receipt with no `preState`, while
+// recovery rebuilt the same receipt from `targetOperationReceiptProjection`, which does
+// dig into the document. The two projections of one operation disagreed, and the
+// disagreement stayed invisible until a resume compared them and failed idempotency.
+//
+// The document is spread onto the record so the durable and in-memory projections are
+// the same values by construction, and `intent` is kept nested so the prepare-conflict
+// comparison (`canonicalJson(current.intent.intent)`) and
+// `targetOperationReceiptProjection` continue to read the raw document.
 function targetOperationIntentFromRow(row) {
+  const document = row.intent && typeof row.intent === 'object' && !Array.isArray(row.intent)
+    ? row.intent
+    : {};
   return {
+    ...document,
     id: positiveSafeInteger(row.id, 'targetOperationIntent.id'),
     runId: positiveSafeInteger(row.run_id, 'targetOperationIntent.runId'),
     ticketId: positiveSafeInteger(row.ticket_id, 'targetOperationIntent.ticketId'),

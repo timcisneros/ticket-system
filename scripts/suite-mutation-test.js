@@ -156,6 +156,24 @@ const MUTATIONS = Object.freeze([
     expect: 'operation receipts carry no observed post-state'
   },
   {
+    name: 'prepared-prestate-not-propagated',
+    suite: 'resumable-execution-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'the prepared-intent projection exposes the pre-state it persisted',
+    // Restores A22 exactly: drop the persisted document from the projection, so the
+    // first pass reads `prepared.intent.preState` one level too shallow and builds a
+    // receipt with no `before` and no `createdResources`, while recovery rebuilds it
+    // from the document and the two disagree. The mutation does NOT duplicate under
+    // this — the run fails on an idempotency conflict instead — so a suite that only
+    // checked "no duplicate mutation" would have stayed green.
+    find: `  return {
+    ...document,
+    id: positiveSafeInteger(row.id, 'targetOperationIntent.id'),`,
+    replace: `  return {
+    id: positiveSafeInteger(row.id, 'targetOperationIntent.id'),`,
+    expect: 'first execution and recovery build different receipts for one operation'
+  },
+  {
     name: 'assignment-column-divergence',
     suite: 'assignment-audit-test.js',
     file: 'persistence/postgres/store.js',
