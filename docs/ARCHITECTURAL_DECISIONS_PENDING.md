@@ -47,6 +47,7 @@ the defect can cause, not how hard it is to fix.
 | A15 | Postcondition telemetry names a source the event never reaches | Low | **Open — decision required** | Documentation / telemetry |
 | A16 | Run consequence records no committed mutations | **High** | **Implemented** — see entry | Correctness |
 | A17 | Delegated handoff logging crashes the server process | **Critical** | **Open — implementation required** | Correctness / availability |
+| A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented, 83 orphans remain | Verification gap |
 
 ### Sequencing
 
@@ -664,7 +665,7 @@ deliberately left alone by a test-only tranche.
 
 ### Mutation testing: proving the restored suites are not vacuous
 
-`scripts/a10-suite-mutation-test.js` breaks one runtime contract at a time and requires
+`scripts/suite-mutation-test.js` breaks one runtime contract at a time and requires
 the corresponding suite to FAIL. It exists because `startup-data-integrity-test.js`
 demonstrated that green and vacuous are not mutually exclusive, and "the migrated suite
 passes" is therefore not evidence that it still catches anything.
@@ -673,7 +674,7 @@ Run it explicitly — it is **deliberately not in the release checkpoint** becau
 edits tracked source in place:
 
 ```
-TEST_DATABASE_URL='postgresql://...' node scripts/a10-suite-mutation-test.js
+TEST_DATABASE_URL='postgresql://...' node scripts/suite-mutation-test.js
 ```
 
 It refuses to start if any file it would mutate has uncommitted changes, restores every
@@ -823,6 +824,13 @@ reason recorded — the same discipline this entry established.
 its confirmed seed set, since both guard the cross-ticket-delete authority contract
 that only `run-diagnostics-bundle-test.js` currently covers.
 
+**Done — see A20.** The sweep was executed rather than inferred. The real orphan count
+is **83**, not ~96: all 96 candidates do reference `DATA_DIR` in executable code (there
+were no comment-only false positives, contrary to the caution recorded above), but 13
+are legitimately excluded rather than orphaned. Both seed suites are repaired and
+registered. A20 also found seven orphans that **exit zero while asserting nothing**, a
+class no grep sweep could have surfaced.
+
 ---
 
 ### A17. Delegated handoff logging crashes the server process
@@ -959,6 +967,201 @@ scenario 16; containment removal → process death; single-snapshot drain → ne
 write test; completion drain removal → false `completed`; `logType`→`type` →
 required-log propagation; settle boundary removal at both startup sites → missing
 durable evidence.
+
+---
+
+### A20. Repository-wide PostgreSQL-cutover test-orphan population
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — inventory complete and authoritative; repair backlog of 83 remains.** Anti-rot mechanism implemented; two confirmed orphans repaired |
+| **Severity** | **High** — 83 suites guard live contracts and none of them can run |
+| **Scope** | Successor to A10, which inventoried 14 of them |
+| **Evidence** | Every unregistered suite executed at `e1d05a7`; results in the classification below |
+| **Decision required** | Repair, replace, or retire each of the 83, in priority order |
+
+**Description:**
+
+A10 restored fourteen orphaned harnesses and recorded a suspicion that the population was
+larger. It is. Executing every unregistered suite establishes the real numbers:
+
+| Classification | Count |
+|----------------|-------|
+| **required** — must run in the release checkpoint | 61 |
+| **orphaned** — genuine cutover orphan, cannot run | 83 |
+| **excluded** — deliberately outside the checkpoint | 20 |
+| **total `scripts/*-test.js`** | **164** |
+
+The A10 entry guessed ~96 candidates and cautioned that the list "includes false positives,
+comments, and intentionally excluded live-provider tests." **That caution was wrong in one
+direction and right in another.** All 96 reference `DATA_DIR` in executable code, not
+comments — there were no comment-only false positives. But 13 of them are legitimately
+excluded (live-provider, manual-demo) rather than orphaned, so the true orphan count is 83.
+
+### The inventory is execution-backed, not grep-backed
+
+Every one of the 111 unregistered suites was executed. Grep established candidates; execution
+established categories, and it moved suites between them:
+
+- **70** die on `DATABASE_URL is required for the PostgreSQL runtime` — the loud A10 shape.
+- **11** present as `Timed out waiting for server ready`. Same root cause: they spawn a server
+  with no database URL, and their own readiness poll masks the child's death.
+- **7** were the reason this had to be executed rather than inferred. See below.
+- **14** PASS. Six are genuinely runnable and were simply never registered.
+- **4** fail on missing helper symbols — the A13 population.
+- **12** fail for assorted separate reasons (live-provider guards, manual-demo prerequisites,
+  two more source-coupled suites).
+
+### Seven suites exit ZERO while asserting nothing
+
+The most serious finding, and the one a grep sweep could never have produced: these suites
+report success while executing no assertions at all.
+
+```
+assignment-audit-test.js              15s, exit 0, ZERO bytes of output
+conditional-workflow-prompt-test.js   15s, exit 0, ZERO bytes of output
+status-transition-evidence-test.js    15s, exit 0, ZERO bytes of output
+workflow-composition-test.js          15s, exit 0, ZERO bytes of output
+operational-abuse-test.js             exit 0, "Total: 0 | Passed: 0 | Failed: 0"
+resumable-execution-test.js           exit 0, "Total: 0 | Passed: 0 | Failed: 0"
+scheduler-integrity-abuse-test.js     exit 0, "Total: 0 | Passed: 0 | Failed: 0"
+```
+
+**Mechanism, confirmed in the source.** Each has a cleanup block of the form:
+
+```js
+} finally {
+  child.kill();
+  await new Promise(resolve => child.once('exit', resolve));   // no guard
+}
+```
+
+When the server dies at startup — which is the orphan condition — the child has **already**
+exited, so `child.once('exit')` never fires again and the promise never settles. The `finally`
+hangs, `main().catch(...)` never runs, the event loop drains, and node exits **0** with the
+error never printed. `waitForReady()` did throw; nobody ever saw it.
+
+Contrast the correct form, present in the suites that fail loudly:
+
+```js
+if (child.exitCode !== null || child.killed) return resolve();
+```
+
+**Why this is worse than a loud orphan.** A loud orphan is a known gap. A silent one is
+indistinguishable from working coverage — and if anyone had "helpfully" registered these to
+raise the checkpoint count, they would have been permanently green while asserting nothing.
+They are classified `cutover-orphan-silent` and must have this defect fixed as part of any
+repair, not merely be pointed at PostgreSQL.
+
+### Anti-rot: `scripts/test-manifest.js`
+
+The gap A10 left is that its guard is a hand-maintained list of fourteen filenames. It cannot
+notice a *new* suite nobody registers — which is exactly how the cutover orphaned suites in
+bulk without anything going red.
+
+The manifest is now the authority. Every `scripts/*-test.js` file carries a status
+(`required` / `orphaned` / `excluded`) and, when not required, a reason from a documented
+vocabulary. `scripts/release-checkpoint-coverage-test.js` enforces six rules:
+
+1. every test file appears in the manifest — **an unclassified new test fails the checkpoint**;
+2. no manifest entry points at a file that no longer exists;
+3. every `required` suite is registered in the checkpoint;
+4. every registered suite is classified `required` — nothing orphaned or excluded runs;
+5. every non-required entry carries a reason from the documented vocabulary;
+6. the three statuses partition the manifest exactly.
+
+**Why a manifest rather than another filename heuristic.** Rule 3 is the anti-rot rule, but it
+only works if exclusions are legitimate and explicit. "Every `*-test.js` must be registered"
+would be false — live-provider suites need an API key or a running Ollama, the mutation tool
+edits tracked source, and the manual-demo runners expect a developer server. A heuristic would
+have to encode those exceptions by filename and would drift. The manifest states them.
+
+`node scripts/test-manifest.js` prints the inventory, so the repository answers *what tests
+exist, which are required, which are excluded, why, and where each runs* without depending on
+anyone's memory.
+
+### Exclusions, and one that is not merely a preference
+
+| Reason | Count | Basis |
+|--------|-------|-------|
+| `live-provider` | 4 | Needs a real OpenAI key or a running Ollama |
+| `manual-demo` | 8 | Operator demo/stress runners, not regression suites |
+| `mutation-tool` | 1 | `suite-mutation-test.js` edits tracked source by design |
+| `source-coupled-a13` | 5 | Tracked in A13 |
+| `source-coupled-other` | 2 | `operator-workflow-test.js`, `report-generation-test.js` — same extraction coupling, outside A13's scope; needs its own disposition |
+
+**`manual-demo` is a safety classification, not a taste one — demonstrated accidentally.** The
+inventory sweep executed them, and several write into the repository working tree: they set
+`DATA_DIR = path.join(ROOT, 'data')` and `WORKSPACE_ROOT = path.join(ROOT, 'workspace-root')`.
+The sweep left six tracked `data/*.json` files modified (`data/tickets.json` lost 869 lines)
+and created a stray `workspace-root/`. All were restored, but the lesson stands: these must
+never run unattended, and the manifest is where that is now written down.
+
+### Repaired in this tranche
+
+| Suite | Contract | Result |
+|-------|----------|--------|
+| `concurrency-conflict-test.js` | Concurrent overlapping/non-overlapping workspace mutation; cross-ticket delete authority | 16 scenarios, 0 not-proven |
+| `run-detail-permissioned-delete-audit-test.js` | Run detail displays permissioned cross-ticket delete provenance — **and only when the permission was used** | 16 assertions |
+
+**A strengthening that was a precondition for registering the first one.**
+`concurrency-conflict-test.js` treated `NOT_PROVEN` as a neutral discovery outcome, and every
+scenario had a `NOT_PROVEN` escape ("owner run did not complete"). A run of it in which nothing
+worked would have exited **0**. That is the same green-but-vacuous shape as the seven silent
+suites, just with a tidier report. `NOT_PROVEN` is now a hard failure: against a real store
+driven by a deterministic model-free stub, a scenario that cannot reach its own preconditions
+means the harness is broken, not that reality is ambiguous.
+
+Its JSON-corruption assertions (`jsonParsesOrNull`) were retired: they guarded against a torn
+concurrent write to a flat file, which PostgreSQL cannot produce. The surviving property —
+concurrent writers lose and duplicate no records — is asserted directly through record counts
+and per-run receipt isolation.
+
+`OBSERVED_SAFE`/`OBSERVED_UNSAFE` is kept for the two parent/child probes, because the
+vocabulary still records *how* the guard fired rather than only that it did.
+
+### Also registered: six suites that were passing and unwatched
+
+`telemetry-test.js`, `workload-profile-test.js`, `archive-local-events-test.js`,
+`mutating-limit-context-regression-test.js` (deterministic) and `operator-visibility-test.js`,
+`oquery-parity-test.js` (already PostgreSQL-native). Nothing was wrong with any of them.
+Nothing ran them either — the same gap, in its quietest form.
+
+### Mutation coverage
+
+`scripts/suite-mutation-test.js` (renamed from `a10-suite-mutation-test.js`, which now covers
+A10 and A20) gained two mutations for the repaired suites, both killed:
+
+| Mutation | Contract removed | Suite |
+|----------|------------------|-------|
+| `cross-ticket-delete-gate` | a cross-ticket delete requires the permission | `concurrency-conflict-test.js` |
+| `permissioned-delete-block-unconditional` | the audit block renders only when the permission was used | `run-detail-permissioned-delete-audit-test.js` |
+
+The second is worth noting: only the suite's **negative** half catches it. A block that always
+renders would attest to an authorization that never happened, and a suite asserting only the
+happy path would have stayed green.
+
+### The remaining 83 — sequencing
+
+Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
+migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the
+phase gate superseded them, and `replay-snapshot-storage-test.js` needed a third of itself
+retired. Each of the 83 needs the same per-suite judgement about whether its contract is still
+live.
+
+Recommended order:
+
+1. **The 7 `cutover-orphan-silent` suites**, regardless of what they guard. Their failure mode
+   is invisible, so they are the ones most likely to be mistaken for coverage. Fix the
+   unguarded `child.once('exit')` in every repair.
+2. **Suites guarding authority, mutation and evidence contracts** — the ones whose regression
+   would be a correctness or security defect rather than a display defect.
+3. **Everything else**, retiring rather than porting wherever the mechanism is dead, with the
+   reason recorded here.
+
+The manifest makes progress measurable: `node scripts/test-manifest.js` reports the orphan
+count directly, and it can only fall by a suite being repaired and registered, or retired with
+a reason.
 
 ---
 
@@ -1647,7 +1850,7 @@ explicit.
    the real runtime via `scripts/postgres-test-harness.js`, following the A10 pattern —
    and register them, since the substring check in `operation-batch-test.js` is the only
    thing standing behind `batch.verification_failed` today.
-4. Mutation-test the result. `scripts/a10-suite-mutation-test.js` is the template.
+4. Mutation-test the result. `scripts/suite-mutation-test.js` is the template.
 
 ---
 

@@ -31,7 +31,15 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'workspace-fixture-catalog-test.js',
   'workspace-snapshot-availability-test.js',
   'run-evidence-drain-test.js',
-  'release-checkpoint-coverage-test.js'
+  'release-checkpoint-coverage-test.js',
+  // A20 — deterministic suites that pass today and were never registered. Nothing
+  // was wrong with them; nothing ran them either, which is the same gap that let the
+  // cutover orphans rot unnoticed. scripts/test-manifest.js now classifies every
+  // test file, and the coverage test fails if a required one is missing here.
+  'telemetry-test.js',
+  'workload-profile-test.js',
+  'archive-local-events-test.js',
+  'mutating-limit-context-regression-test.js'
 ]);
 
 const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
@@ -54,7 +62,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // Registered here rather than in CHECKPOINT_TEST_SCRIPTS because every one of them
   // exercises the real PostgreSQL runtime and has no in-memory fallback. Until this
   // block existed the checkpoint stayed green while these suites rotted, which is the
-  // gap A10 was opened for. scripts/a10-suite-mutation-test.js proves a representative
+  // gap A10 was opened for. scripts/suite-mutation-test.js proves a representative
   // sample of them still fails when the contract they guard is removed; it is
   // deliberately NOT registered because it edits tracked source in place.
   'ticket-feasibility-gate-test.js',
@@ -70,7 +78,13 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'replay-snapshot-storage-test.js',
   'runtime-limits-config-test.js',
   'runtime-limits-ui-test.js',
-  'renamepath-runtime-regression-test.js'
+  'renamepath-runtime-regression-test.js',
+  // A20 — the two confirmed orphans repaired in this tranche, plus two suites that
+  // already exercised the PostgreSQL store and were nonetheless unregistered.
+  'concurrency-conflict-test.js',
+  'run-detail-permissioned-delete-audit-test.js',
+  'operator-visibility-test.js',
+  'oquery-parity-test.js'
 ]);
 
 function runCheckpoint() {

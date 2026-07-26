@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 'use strict';
-// A10 restored-suite mutation test (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A10).
+// Restored-suite mutation test
+// (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A10 and A20).
 //
 // WHY THIS EXISTS. A migrated suite that runs and prints "PASS" has proved only that
 // it no longer errors. It has NOT proved that it would still catch the regression it
-// was written to catch — and during the A10 tranche exactly that failure was found in
-// a suite already recorded as restored: `startup-data-integrity-test.js` omitted
+// was written to catch — and the A10 tranche found exactly that failure in a suite
+// already recorded as restored: `startup-data-integrity-test.js` omitted
 // SESSION_SECRET, so both its scenarios exited non-zero because the server could not
 // boot at all, and all eight assertions passed without ever exercising a storage
 // fault. A suite can be green and vacuous at the same time.
+//
+// A20 then found the same disease in a different form: seven suites that exit ZERO
+// while asserting nothing, because their cleanup awaits an exit event from an
+// already-dead child and the .catch() never runs. Vacuity is not an accident that
+// happened once; it is a recurring shape, so it needs a standing check.
 //
 // This script closes that gap the only way that actually settles it: it breaks the
 // runtime on purpose, one contract at a time, and requires the corresponding suite to
@@ -17,7 +23,7 @@
 // DELIBERATELY NOT IN THE RELEASE CHECKPOINT. It edits tracked source files in place.
 // It is an audit tool, run explicitly:
 //
-//   TEST_DATABASE_URL=... node scripts/a10-suite-mutation-test.js [suite-name ...]
+//   TEST_DATABASE_URL=... node scripts/suite-mutation-test.js [suite-name ...]
 //
 // SAFETY. Source is restored in a `finally` and on SIGINT/SIGTERM, and the restore is
 // verified by SHA-256 against the bytes read before mutating. The run REFUSES TO START
@@ -32,7 +38,7 @@ const { spawnSync } = require('child_process');
 const ROOT = path.resolve(__dirname, '..');
 
 if (!process.env.TEST_DATABASE_URL && !process.env.DATABASE_URL) {
-  console.error('TEST_DATABASE_URL (or DATABASE_URL) is required for the A10 mutation test');
+  console.error('TEST_DATABASE_URL (or DATABASE_URL) is required for the suite mutation test');
   process.exit(1);
 }
 
@@ -97,6 +103,32 @@ const MUTATIONS = Object.freeze([
     find: "  const countSuffix = runFailed ? ' before failure' : '';",
     replace: "  const countSuffix = '';",
     expect: 'a failed run reports its counts with neutral wording'
+  },
+  {
+    name: 'cross-ticket-delete-gate',
+    suite: 'concurrency-conflict-test.js',
+    file: 'server.js',
+    contract: 'a cross-ticket delete requires workspace.delete.cross_ticket_artifact',
+    // Drop the permission test from the gate: every delegated user is now treated as
+    // holding the permission, so an unpermitted cross-ticket delete succeeds. This is
+    // an authorization bypass, and the suite must refuse to stay green through it.
+    find: "  if (operation === 'deletePath' && run && run.delegatedUserId != null "
+      + '&& await userHasPermission(run.delegatedUserId, CROSS_TICKET_DELETE_PERMISSION)) {',
+    replace: "  if (operation === 'deletePath' && run && run.delegatedUserId != null) {",
+    expect: 'a user without the permission can delete another ticket\'s artifact'
+  },
+  {
+    name: 'permissioned-delete-block-unconditional',
+    suite: 'run-detail-permissioned-delete-audit-test.js',
+    file: 'views/run-detail.ejs',
+    contract: 'the permissioned-delete block renders only when the permission was used',
+    // The positive half of that suite would still pass here; only the negative half
+    // catches it. That is the point — a block that always renders attests to an
+    // authorization that never happened.
+    find: "  <% if (typeof permissionedDeleteAuditEvents !== 'undefined' "
+      + '&& permissionedDeleteAuditEvents && permissionedDeleteAuditEvents.length > 0) { %>',
+    replace: '  <% if (true) { %>',
+    expect: 'the audit block renders on runs that never exercised the permission'
   }
 ]);
 
@@ -163,7 +195,7 @@ function main() {
   const survived = [];
   let killed = 0;
 
-  console.log(`A10 restored-suite mutation test — ${selected.length} mutation(s)\n`);
+  console.log(`Suite mutation test — ${selected.length} mutation(s)\n`);
 
   try {
     for (const mutation of selected) {
@@ -223,7 +255,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`PASS: A10 mutation test — ${killed}/${selected.length} mutations killed; every restored suite detected its regression`);
+  console.log(`PASS: suite mutation test — ${killed}/${selected.length} mutations killed; every restored suite detected its regression`);
 }
 
 main();
