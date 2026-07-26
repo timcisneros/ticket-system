@@ -2046,6 +2046,24 @@ historical file stays `orphaned` until those have replacements or dispositions.
 contract: script-context escaping, provider-secret leakage, unsafe DOM sinks, inline
 serialized-data safety.
 
+### `concurrency-conflict-test.js` is load-sensitive (observed 2026-07-26)
+
+Recorded because a flaky suite inside the gate erodes trust in the gate.
+
+A clean-worktree checkpoint failed on it with a cascade — `bothOk=null`,
+`statuses=[null,null]`, then seven consecutive `NOT_PROVEN` "run did not reach
+terminal". Re-run in isolation on the same commit and database it passes with **16
+scenarios, 0 hard failures, 0 not-proven**, and a second full checkpoint passed 77/77.
+So the failure was contention, not a regression: the suite creates many concurrent runs
+and stalls when the machine is already busy.
+
+This is not harmless. The suite's `NOT_PROVEN`-is-fatal rule — added deliberately when
+it was migrated — means load now surfaces as a hard checkpoint failure rather than a
+silent pass, which is the right trade, but it makes the gate non-deterministic under
+load. **Decision needed:** give it a longer terminal-run budget, serialize it within the
+checkpoint, or bound its concurrency. Do not resolve this by relaxing `NOT_PROVEN` back
+to a soft outcome — that would restore exactly the vacuity A20 removed.
+
 ### The remaining 73 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
