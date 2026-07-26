@@ -1265,12 +1265,51 @@ time:
   `open` may legitimately already be `in_progress`. Assert what the transition
   guarantees (it left `blocked`), not an exact resting status.
 
-A preliminary read suggests `resumable-execution-test.js`'s five scenarios may overlap
-`recovery-state-reconstruction-test.js` (corrupt chain, missing authority),
-`lease-renewal-resume-safety-test.js` (resume without duplicate operations) and
-`postgres-startup-recovery-test.js` (replay finalization). That is a **hypothesis, not
-a disposition** — it must be verified scenario by scenario before anything is retired,
-per the discipline this entry established.
+**`resumable-execution-test.js` — hypothesis tested and REJECTED. Disposition: repair
+and retain.**
+
+A preliminary read suggested its five scenarios might already be covered by
+`recovery-state-reconstruction-test.js`, `lease-renewal-resume-safety-test.js` and
+`postgres-startup-recovery-test.js`. That hypothesis was recorded rather than acted on,
+and checking it showed it is **materially wrong**.
+
+The runtime exposes **nine** deterministic crash seams:
+
+```
+after_action_contract_violation      after_run.created
+after_first_authority.allowed        after_run.snapshot_finalized
+after_first_workspace.operation      after_run.started
+after_first_workspace_target_effect  before_run.consequence_recorded
+before_run.snapshot_finalized
+```
+
+Across the **entire registered checkpoint**, only **two** are ever driven:
+`after_first_workspace.operation` (`resume-obvious-postcondition-test.js`) and
+`after_action_contract_violation` (`model-contract-violation-recovery-test.js`).
+
+`resumable-execution-test.js` drives **four**:
+
+| Interruption point | Covered by a registered suite? |
+|--------------------|-------------------------------|
+| `after_first_authority.allowed` | **No** |
+| `after_run.started` | **No** |
+| `before_run.snapshot_finalized` | **No** |
+| `after_first_workspace.operation` | Yes |
+
+`recovery-state-reconstruction-test.js` does not close this: it is a **pure classifier
+test** over synthetic snapshots and never crashes a real server, so it cannot show that
+the runtime reaches the same conclusion the classifier does. Three of the four crash
+points here have **no live crash-recovery coverage anywhere in the repository**.
+
+Retiring this suite would therefore have deleted unique coverage of exactly the
+contract A20 ranks highest — recovery and terminal-state integrity. It is
+**repair and retain**, and it should lead the next tranche.
+
+**Wider finding worth its own attention:** 7 of 9 crash seams are exercised by nothing
+in the checkpoint. The seams exist because the recovery contract is hard to prove any
+other way; leaving most of them unused means recovery is largely asserted by
+construction rather than demonstrated. That is a coverage gap independent of the orphan
+backlog and is worth a decision of its own.
 
 ### The remaining 81 — sequencing
 
