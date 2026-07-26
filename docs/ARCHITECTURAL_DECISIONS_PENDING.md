@@ -1992,8 +1992,32 @@ changes the projection between two reads. The suite therefore detects the regres
 which is the required proof, but the kill is not attributable to the assertion aimed at
 it. Left as-is rather than tuned to produce a prettier attribution.
 
-**Not done in this tranche:** `allocated-regression-test.js` (owned-path scope, 1,372
-lines — needs the same split treatment) and the inline-data-security half of
+**`allocated-regression-test.js` — inventoried, split identified, not yet migrated.**
+Its 1,372 lines carry **five separable contracts**, so it must be split rather than
+ported:
+
+| Contract | Nature |
+|----------|--------|
+| **scope admission** — overlapping, non-directory, absent or ambiguous owned scopes refused at creation and not persisted | authority |
+| **owned-path enforcement** — an allocated run may mutate only inside its own scope | authority |
+| **allocation attribution** — plan id, item id, subtask, agent, status, shared batch marker, one run per group agent | authority/provenance |
+| **replay fidelity and secret redaction** — snapshot carries correct run/ticket/agent/allocation identity and exposes no API key or `Authorization` value | evidence + security |
+| **retry / rerun / idempotency / stop / budget** lifecycle | lifecycle |
+
+The first two were attempted as `allocation-scope-authority-test.js`. **The three
+admission rejections passed** — overlapping scopes, a non-directory scope, and absent
+`ownedOutputPaths` are each refused with HTTP 400 and leave no persisted ticket.
+
+**The blocker is the positive control.** A well-formed allocated ticket carrying an
+`#ACTIONS=` directive is *also* refused with 400, so the suite could not yet prove that
+allocation admits anything — and a rejection-only suite would pass against a runtime
+that refuses every allocated ticket. The work was **not committed** rather than
+registered without its control. `ticket-feasibility-gate-test.js` creates an accepted
+allocated ticket using a natural-language objective and no `#ACTIONS=` marker, which is
+the likely difference; whoever resumes should establish the accepted objective shape
+first, then drive the in-scope/out-of-scope pair from it.
+
+**Not done in this tranche:** the allocation split above and the inline-data-security half of
 `rbac-and-inline-data-security-test.js`, which remains explicitly open as an injection
 contract: script-context escaping, provider-secret leakage, unsafe DOM sinks, inline
 serialized-data safety.
