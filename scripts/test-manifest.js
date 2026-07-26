@@ -110,6 +110,7 @@ const TESTS = Object.freeze([
   { file: "business-scenario-contracts-test.js", status: "required" },
   { file: "catalog-consistency-test.js", status: "required" },
   { file: "child-process-settlement-test.js", status: "required" },
+  { file: "completion-admission-test.js", status: "required" },
   { file: "complete-flag-truncation-guard-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "concurrency-conflict-test.js", status: "required" },
   { file: "debug-reset-contamination-test.js", status: "orphaned", reason: "cutover-orphan" },

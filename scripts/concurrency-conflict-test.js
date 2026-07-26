@@ -198,6 +198,20 @@ async function main() {
           allAccepted && eachExactlyOnce && uniqueIds && tickets.length === before + N,
           `accepted=${allAccepted} counts=${JSON.stringify(persistedCounts)} uniqueIds=${uniqueIds} total=${tickets.length} expected=${before + N}`,
           `${N} concurrent creations persisted exactly once each, ids unique, none lost`);
+
+        // BOUND THE SUITE'S OWN CONCURRENCY (A20 escalation rule). This burst is the
+        // largest in the suite and its runs are noop plans, but leaving them in flight
+        // means every later scenario competes with them for run admission. The
+        // CONTRACT under test is that concurrent CREATION loses nothing — which the
+        // assertion above has already proved — so draining here costs no coverage and
+        // stops the suite from carrying its own peak load forward.
+        await waitFor(async () => {
+          const ids = objectives.map(o => tickets.find(t => t.objective === o)).filter(Boolean).map(t => t.id);
+          const settled = await Promise.all(ids.map(async id =>
+            (await store.listRunsForTicket({ ticketId: id, limit: 5 })).runs
+              .every(r => ['completed', 'failed', 'interrupted'].includes(r.status))));
+          return settled.every(Boolean) ? true : null;
+        }, 90000);
       }
 
       // 2. Different-path writes: both succeed, one clean receipt each.

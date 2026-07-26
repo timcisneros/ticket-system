@@ -2205,11 +2205,72 @@ of overlapping shutdowns. It now uses `stopChild` from
 
 That is the same "signalled is not exited" distinction the settlement helper was written
 for in the silent-orphan tranche, and it should have been applied to the harness then.
-**It is not claimed as the cause.** If the incident recurs after this change, the next
-step is to bound the suite's concurrency explicitly (`MAX_ACTIVE_RUNS` in its own
-environment) and, if the runtime still fails to drain under bounded load, to treat that
-as a production defect rather than a harness problem — per the standing rule that a
-runtime which cannot make progress under reasonable bounded load is not a test issue.
+**It is not claimed as the cause.**
+
+### Recurrence, and step two of the escalation (2026-07-26)
+
+It recurred on a later checkpoint, so the recorded next step was taken: **bound the
+suite's own concurrency**.
+
+The suite's largest burst is scenario 1, which creates ten tickets at once and never
+waits for their runs. Those are noop plans, but leaving them in flight meant every later
+scenario competed with them for run admission — the suite carried its own peak load
+forward through all sixteen scenarios. It now DRAINS that burst before continuing.
+
+This costs no coverage. The contract scenario 1 asserts is that concurrent CREATION
+loses and duplicates nothing, which the assertions have already proved by the time the
+drain runs. What is removed is only the residual in-flight work, not any concurrency the
+suite intends to exercise.
+
+Checkpoint passed 81/81 after the change. **This is step two of the escalation, not a
+confirmed cure** — the incident was never reproduced on demand, so a passing run is
+consistent with the fix and also with the flake simply not firing. If it recurs again,
+the escalation is exhausted and the next step is the recorded one: treat a runtime that
+cannot drain under reasonable bounded load as a **production progress/liveness defect**,
+not a harness problem.
+
+### Terminal-state cluster — completion admission (2026-07-26)
+
+**`state-agreement-completion-test.js` — SPLIT.** It combines two related but distinct
+terminal-state contracts:
+
+| Half | Contract | Disposition |
+|------|----------|-------------|
+| completion admission | what an operator may manually mark completed | **migrated** → `completion-admission-test.js` |
+| startup state convergence | a ticket whose run already terminalized converges to the matching status on restart, creating no new runs and exactly one `run.terminalized` per run | **still open** |
+
+The historical file stays `orphaned`: half its contract has not moved.
+
+**`completion-admission-test.js` — 21 assertions, 6 scenarios, registered.**
+"Completed" is the strongest claim the system makes about work and an operator can
+assert it directly, so this gate is the only thing between a wish and a durable record.
+Refusals are proved for: no run at all, a failed latest run, an interrupted latest run,
+and unresolved triage. Each refusal must also EXPLAIN itself — an unexplained 409 tells
+an operator nothing about what to fix — and each is checked for EFFECT: the ticket must
+be unchanged, not merely un-completed.
+
+**The positive control is the whole test.** Refusals prove nothing alone: a runtime that
+refused every completion would satisfy all of them. A ticket whose run genuinely
+completed IS accepted and DOES persist as completed, and a seventh check re-attempts one
+refusal afterwards to rule out order-dependent behaviour.
+
+**One historical assertion is explicitly NOT migrated.** The suite asserted that
+completion is refused when verification was required and did not pass. Reproducing it
+failed: a completed run carrying `requireVerification: 'always'` on its **policy
+snapshot** is still accepted, so the gate evidently keys off recorded
+evaluation/verification state rather than the policy alone. Rather than guess at that
+state and risk asserting a shape the runtime does not use, it is left open here and
+noted in the suite at the point where it would have gone. It is the one assertion in
+this half without a destination.
+
+*(Worth noting the fixture lesson found on the way: the gate reads the RUN's policy
+snapshot, not the ticket's live policy — correctly, since editing a policy after the
+fact must not retroactively change what a finished run proved.)*
+
+**Mutation `completion-ignores-unresolved-triage`** lets an operator complete a ticket
+over an unresolved triage flag. The other refusals still fire and the positive control
+still passes, so only the triage scenario catches a durable "completed" claim over work
+nobody reviewed. Killed.
 
 ### The remaining 73 — sequencing
 
