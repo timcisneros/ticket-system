@@ -33,6 +33,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const { PostgresRuntimeStore } = require(path.join(ROOT, 'persistence/postgres/store'));
+const { stopChild } = require('./child-process-settlement');
 
 // Every schema this harness creates carries this prefix so reaping can identify
 // its own leftovers and never touch anything else in the database.
@@ -198,11 +199,18 @@ async function startServer({
     return cookie;
   }
 
+  // Teardown must WAIT for the child to actually die. The previous implementation sent
+  // SIGKILL and returned immediately, so `withHarness` could drop the schema — and the
+  // checkpoint could start the next suite — while a killed server was still unwinding
+  // its connections and transactions. Across a ~50-suite checkpoint that is an
+  // unbounded number of overlapping shutdowns.
+  //
+  // This is NOT a proven cause of any observed failure; see A20 on the
+  // concurrency-conflict incident, which did not reproduce. It is fixed because
+  // "signalled" is not "exited", which is the same distinction
+  // scripts/child-process-settlement.js was written for.
   async function stop() {
-    if (child.exitCode !== null) return;
-    child.kill('SIGTERM');
-    for (let i = 0; i < 50 && child.exitCode === null; i += 1) await sleep(100);
-    if (child.exitCode === null) child.kill('SIGKILL');
+    await stopChild(child, { graceMs: 5000, killMs: 15000 });
   }
 
   return { baseUrl, port, request, login, stop, child, output: () => output };

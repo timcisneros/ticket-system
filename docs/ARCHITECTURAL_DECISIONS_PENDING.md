@@ -2060,9 +2060,40 @@ and stalls when the machine is already busy.
 This is not harmless. The suite's `NOT_PROVEN`-is-fatal rule — added deliberately when
 it was migrated — means load now surfaces as a hard checkpoint failure rather than a
 silent pass, which is the right trade, but it makes the gate non-deterministic under
-load. **Decision needed:** give it a longer terminal-run budget, serialize it within the
-checkpoint, or bound its concurrency. Do not resolve this by relaxing `NOT_PROVEN` back
-to a soft outcome — that would restore exactly the vacuity A20 removed.
+load.
+
+### Investigation (2026-07-26) — cause NOT found; teardown hardened anyway
+
+Candidates were tested rather than assumed, and most are **ruled out**:
+
+| Candidate | Result |
+|-----------|--------|
+| PostgreSQL connection exhaustion | **Ruled out** — peak 9 of 100 connections |
+| CPU contention | **Ruled out** — the suite passes with six CPU-saturating processes running alongside it |
+| Stray server processes surviving a suite | **Not observed** at rest |
+| Contention with other integration suites | Untested — the checkpoint runs suites serially via `spawnSync`, so overlap would require a leaked process |
+| Test-internal concurrency exceeding its contract | Plausible but unconfirmed; the suite creates ~21 tickets against a default `MAX_ACTIVE_RUNS` of 32 |
+
+**The incident did not reproduce**: not in isolation, not under artificial CPU load, not
+on a repeat checkpoint. It is therefore recorded as **unexplained**, not as fixed. No
+speculative cure was applied to the suite: `NOT_PROVEN` remains fatal, no retry was
+added, no timeout was multiplied, and the suite stays in the checkpoint.
+
+**One genuine latent defect was found and fixed on its own merits.**
+`scripts/postgres-test-harness.js` `stop()` sent SIGKILL and returned **immediately**
+without waiting for the child to exit, so `withHarness` could drop the schema — and the
+checkpoint start the next suite — while a killed server was still unwinding its
+connections and transactions. Across a ~50-suite checkpoint that is an unbounded number
+of overlapping shutdowns. It now uses `stopChild` from
+`scripts/child-process-settlement.js`, which escalates and **awaits actual exit**.
+
+That is the same "signalled is not exited" distinction the settlement helper was written
+for in the silent-orphan tranche, and it should have been applied to the harness then.
+**It is not claimed as the cause.** If the incident recurs after this change, the next
+step is to bound the suite's concurrency explicitly (`MAX_ACTIVE_RUNS` in its own
+environment) and, if the runtime still fails to drain under bounded load, to treat that
+as a production defect rather than a harness problem — per the standing rule that a
+runtime which cannot make progress under reasonable bounded load is not a test issue.
 
 ### The remaining 73 — sequencing
 
