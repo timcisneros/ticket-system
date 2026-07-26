@@ -1273,8 +1273,8 @@ larger. It is. Executing every unregistered suite establishes the real numbers:
 
 | Classification | Count |
 |----------------|-------|
-| **required** — must run in the release checkpoint | 65 |
-| **orphaned** — genuine cutover orphan, cannot run | 81 (was 83) |
+| **required** — must run in the release checkpoint | 67 |
+| **orphaned** — genuine cutover orphan, cannot run | 80 |
 | **excluded** — deliberately outside the checkpoint | 20 |
 | **total `scripts/*-test.js`** | **162** |
 
@@ -1524,7 +1524,59 @@ other way; leaving most of them unused means recovery is largely asserted by
 construction rather than demonstrated. That is a coverage gap independent of the orphan
 backlog and is worth a decision of its own.
 
-### The remaining 81 — sequencing
+### The last four silent orphans — coverage analysis (2026-07-26)
+
+Partial. Each finding below is stated with the evidence that supports it, and what is
+**not** yet verified is marked as such rather than rounded up to a disposition.
+
+**`conditional-workflow-prompt-test.js` — retire recommended.** It asserts
+`run.replaySnapshotPath` twice, including a hard
+`assert(run.replaySnapshotPath, …)`. A10 established that field is dead: replay
+snapshots moved to their own table and the pointer no longer exists, so that assertion
+can never pass again and the suite is coupled to a retired storage layout, not only to
+`DATA_DIR`. Its workflow-draft and prompt-shaping contract overlaps
+`postcondition-completion-test.js` scenarios 9–19 (registered, 140 assertions, covering
+draft intents and handoff tasks). *Unverified:* whether any prompt-shaping assertion is
+unique to it. Confirm that before deleting.
+
+**`operational-abuse-test.js` — split, do not treat as one unit.** Of its 15 scenarios,
+at least five have registered successors:
+
+| Scenario | Covered by |
+|----------|-----------|
+| `testTooManyActions`, `testTooManyMutatingActions` | `bounded-transition-test.js` |
+| `testStalledResponses`, `testMultiStepStallThenRecover` | `model-contract-violation-test.js` |
+| `testLeaseExpiryRecovery` | `lease-renewal-resume-safety-test.js` |
+| `testRunInterruption` | `resumable-execution-test.js` (registered under A22) |
+
+The residue is authority and gate coverage — `testProtectedPathWrite`,
+`testDisabledOperationGate`, `testAgentDirectOperationAccess`, `testMalformedHandoff`,
+`testHandoffExecutorMismatch`, `testInvalidDraftIntent` — and that is where the value
+is. Port the residue; retire the rest with the mapping above recorded.
+
+**`scheduler-integrity-abuse-test.js` — split, same shape.** At least seven of its 13
+scenarios map onto registered suites: crash resumption to `resumable-execution-test.js`;
+lease expiry, stale-lease cleanup, double acquisition and concurrent claims to
+`lease-renewal-resume-safety-test.js` and `scheduler-observability-test.js`; duplicate
+replay append and replay ordering to `required-replay-evidence-test.js` and
+`replay-snapshot-storage-test.js`; concurrent workspace mutation to
+`concurrency-conflict-test.js`; evaluation/consequence ordering to
+`run-consequence-mutation-test.js` (A16). The residue is executor orphaning and partial
+write interruption. *Unverified:* whether the registered successors assert the same
+properties or merely touch the same mechanism. Check scenario by scenario before
+retiring anything — A20 already rejected one overlap hypothesis that looked stronger
+than these.
+
+**`workflow-composition-test.js` — not decided.** 1,519 lines; its draft-intent surface
+overlaps `postcondition-completion-test.js`, but composition itself may be unique. Needs
+the same scenario-level comparison.
+
+**A caution that has now been earned twice.** Both suites repaired in the previous
+tranche found production defects the moment they could fail (A21, A22), and A20's own
+overlap hypothesis about `resumable-execution-test.js` was wrong. Apparent redundancy in
+this list should be treated as a hypothesis to test, not a reason to delete.
+
+### The remaining 80 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the
