@@ -49,7 +49,7 @@ the defect can cause, not how hard it is to fix.
 | A17 | Delegated handoff logging crashes the server process | **Critical** | **Open — implementation required** | Correctness / availability |
 | A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented; 81 orphans remain | Verification gap |
 | A21 | Ticket reassignment silently discarded; audit trail asserts otherwise | **High** | **Implemented 2026-07-26** — see entry | Correctness / truthfulness |
-| A22 | Resume after a committed workspace operation fails on an idempotency conflict | **High** | **Open — investigation required** | Correctness / recovery |
+| A22 | Resume after a committed workspace operation fails on an idempotency conflict | **High** | **Open — diagnosed, implementation required** | Correctness / recovery |
 
 ### Sequencing
 
@@ -976,11 +976,11 @@ durable evidence.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Open — investigation required.** Reproduced, not yet diagnosed |
+| **Status** | **Open — implementation required.** Root cause identified to the field; fix location named. Not implemented |
 | **Severity** | **High** — a crash after a committed mutation makes the run unrecoverable |
 | **Scope** | Production runtime/persistence. Found by A20 while migrating `resumable-execution-test.js` |
 | **Evidence** | `scripts/resumable-execution-test.js` scenario 2, against `940c32a` |
-| **Decision required** | Whether the divergent field is legitimate nondeterminism the guard should tolerate, or a genuine evidence mismatch |
+| **Decision required** | Confirmed: neither. The two write paths source `preState` from different places. See the diagnosis |
 
 **Description:**
 
@@ -1020,8 +1020,68 @@ they have opposite fixes:
    evidence, the conflict is correctly reporting a real reconstruction defect and the
    bug is upstream of the guard.
 
-Diagnosing this needs the two payloads diffed field by field. That was not done here,
-and the entry deliberately records the reproduction rather than a guess.
+### Diagnosis (2026-07-26) — field-level
+
+The conflict is raised at the **operation receipt** insert (`persistence/postgres/store.js`,
+the `matches` comparison in the receipt writer), not at the replay-item or event
+comparison. Every scalar column matches; only the `receipt` JSON document differs.
+
+Instrumenting the comparison and diffing the two documents gives exactly three
+differences, and one of them is an artefact of the diagnostic:
+
+| Field | Stored (first pass) | Rebuilt (resume) | Real? |
+|-------|--------------------|------------------|-------|
+| `before` | *absent* | `{"existed": false}` | **yes** |
+| `createdResources` | `[]` | `["resume-afterop-….txt"]` | **yes** |
+| `targetScope` | `{root, type}` | `{type, root}` | **no** — key order only; `canonicalJson` sorts keys recursively, so this cannot contribute |
+
+**Both real differences reduce to one cause.** `buildTargetMutationReceipt` derives
+`before` directly from `preState`, and `buildMutationResourceChanges` derives
+`createdResources` from `preState.existed === false && postState.existed`. A single
+missing `preState` produces both.
+
+**The two write paths source `preState` from different places:**
+
+```js
+// first pass — server.js, the writeFile execute path
+const prepared = await beginWorkspaceMutation(...);
+const preState = prepared.preState;          // ← empty on this run
+… completeWorkspaceMutationEvidence({ …, preState, postState, … })
+
+// resume — server.js, beginWorkspaceMutation's reconciliation branch
+await completeWorkspaceMutationEvidence({
+  …, preState: state.receipt.preState,        // ← populated, from the durable receipt
+})
+```
+
+The durable target-operation receipt records a populated `preState`; the value
+`beginWorkspaceMutation` hands back to the caller for the first pass does not. The two
+therefore build **different receipt documents for the same logical operation**, and the
+disagreement is invisible until a resume compares them.
+
+**Classification, against the four cases this entry had to distinguish:**
+
+- ~~transient/attempt-local metadata treated as semantic identity~~ — no; `before` and
+  `createdResources` are semantic, and no timestamp or duration is involved
+- **canonical payload construction differs across restart** — **yes, this one**
+- ~~resume reconstructs a materially different operation~~ — no; same path, same content,
+  same fingerprint, and every scalar column matches
+- ~~the guard is right and an upstream recovery defect produces the mismatch~~ — the guard
+  is right, but the defect is not in recovery: it is that the *first* pass writes an
+  under-populated receipt
+
+**The guard is correct and must not be weakened.** Excluding `before` or
+`createdResources` from the comparison would let genuinely divergent evidence overwrite
+committed evidence — precisely what the idempotency key exists to prevent. The fix
+belongs at the earliest layer: **`beginWorkspaceMutation` must return the same
+`preState` it persisted to the target-operation receipt**, so both passes build an
+identical document and the resume compares equal.
+
+**Not implemented here.** Changing what the mutation-evidence path records touches the
+guard protecting against duplicate committed mutations, and it needs its own validation
+cycle — the focused suite, the receipt/idempotency and recovery suites, the mutation
+suite and a clean-worktree checkpoint. Landing it unvalidated would be worse than
+landing the diagnosis.
 
 **Why this went unnoticed.** `after_first_workspace.operation` is one of only two crash
 seams any registered suite drives, and the suite that drives it
