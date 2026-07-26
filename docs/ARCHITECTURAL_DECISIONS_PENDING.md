@@ -2063,8 +2063,55 @@ worth having and worth not overstating, so no mutation was manufactured to make 
 guard look load-bearing. The allocation cluster's mutation proof rests on
 `owned-path-scope-broadened`, which is genuinely load-bearing.
 
-**Still open from this file (one of five contracts):** the retry / rerun / stop /
-budget lifecycle. The historical file stays `orphaned` until it has a replacement.
+**Contract 5 migrated — `allocation-lifecycle-isolation-test.js`, 31 assertions,
+4 scenarios, registered.** All five contracts now have destinations.
+
+Sibling items are made ASYMMETRIC on purpose — the ScopeA agent reaches into ScopeB and
+is refused while the ScopeB agent does legitimate work — because coupling between
+allocation items is invisible while everything succeeds and only appears when something
+goes wrong. A sibling marked failed because its neighbour failed is a false accusation
+against work that actually succeeded.
+
+Proved: the out-of-scope item fails while its sibling COMPLETES with its file on disk,
+its single receipt, a replay recording its own success, no failure reason, and no trace
+of the neighbour's refused work; owned scope and plan/item identity survive the failure;
+a rerun produces exactly one fresh run per agent under ONE new plan distinct from the
+original, each keeping its agent's owned scope and allocation identity, with no run left
+active and no runaway duplication of committed mutations.
+
+**Two honest limitations, recorded rather than smoothed over.**
+
+1. *Stop is tested against an already-terminal run.* By the time the rerun settles both
+   runs are terminal, so the stop is REFUSED rather than executed. That refusal is
+   itself a real contract — a finished run cannot be stopped — and the assertions prove
+   a *rejected* lifecycle call touches neither the sibling nor its own target. They do
+   **not** prove isolation of an in-flight stop. Forcing that needs a long-running run
+   the deterministic stub cannot currently produce.
+
+2. *No mutation is registered for this suite.* The intended mutation — stripping owned
+   paths from the rerun draft — could not be aimed: `ownedOutputPaths:
+   getRunOwnedOutputPaths(run),` occurs **nine** times in `server.js`, so the anchor is
+   not unique, and no mutation was manufactured against a different contract to fill the
+   slot. The allocation cluster's mutation proof rests on `owned-path-scope-broadened`.
+   Aiming a lifecycle-specific mutation with a unique anchor is outstanding work.
+
+### `allocated-regression-test.js` — RETIRED
+
+All five recorded contracts have named destinations:
+
+| Contract | Destination |
+|----------|-------------|
+| scope admission | `allocation-scope-authority-test.js` |
+| owned-path enforcement | `allocation-scope-authority-test.js` |
+| allocation attribution | `allocation-attribution-redaction-test.js` |
+| replay fidelity and secret redaction | `allocation-attribution-redaction-test.js` |
+| retry / rerun / stop lifecycle isolation | `allocation-lifecycle-isolation-test.js` |
+
+Assertions not carried across were JSON-era mechanics — `operation-history.json` and
+`runs.json` reads, `replaySnapshotPath` file hydration, `events.jsonl` string matching —
+whose surviving properties are asserted through the store in the three replacements. The
+historical file is deleted; 112 assertions became 112 across three focused suites with
+positive controls the original lacked.
 
 **Not done in this tranche:** the allocation split above and the inline-data-security half of
 `rbac-and-inline-data-security-test.js`, which remains explicitly open as an injection

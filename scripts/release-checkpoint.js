@@ -127,7 +127,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'allocation-scope-authority-test.js',
   // A20 — allocation attribution and provider-secret redaction, contracts 2 and 3 of
   // the five split out of allocated-regression-test.js.
-  'allocation-attribution-redaction-test.js'
+  'allocation-attribution-redaction-test.js',
+  // A20 — allocation lifecycle isolation, the fifth and final contract split out of
+  // allocated-regression-test.js.
+  'allocation-lifecycle-isolation-test.js'
 ]);
 
 function runCheckpoint() {
