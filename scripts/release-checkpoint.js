@@ -114,7 +114,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'workflow-prompt-composition-test.js',
   // A20 — the only suite driving `after_first_workspace_target_effect`, the crash
   // window where the external effect has landed and its evidence has not.
-  'target-operation-reconciliation-test.js'
+  'target-operation-reconciliation-test.js',
+  // A23 — the last three deterministic crash seams: run created, death before the
+  // atomic terminalization bundle, and death immediately after it committed.
+  'terminalization-boundary-recovery-test.js'
 ]);
 
 function runCheckpoint() {

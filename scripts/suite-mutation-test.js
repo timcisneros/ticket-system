@@ -156,6 +156,33 @@ const MUTATIONS = Object.freeze([
     expect: 'operation receipts carry no observed post-state'
   },
   {
+    name: 'crashed-runs-never-reclaimed',
+    suite: 'terminalization-boundary-recovery-test.js',
+    file: 'server.js',
+    contract: 'a run abandoned by a dead process is reclaimed once its lease expires',
+    // Aimed at the recoverable-run scan the SCHEDULER uses, not at
+    // interruptStaleRunsOnStartup. An earlier attempt disabled startup recovery and
+    // survived: a run abandoned by a dead process is reclaimed when its lease expires,
+    // which the scheduler does on its own interval. Defense in depth — cut the layer
+    // that actually reclaims.
+    find: `    const page = await repository.listRecoverableRuns({ mode, afterId, limit });
+    runs.push(...(page && Array.isArray(page.runs) ? page.runs : []));`,
+    replace: `    const page = await repository.listRecoverableRuns({ mode, afterId, limit });
+    runs.push();`,
+    expect: 'a crashed run is never reclaimed after restart'
+  },
+  {
+    name: 'terminalization-not-atomic',
+    suite: 'terminalization-boundary-recovery-test.js',
+    file: 'server.js',
+    contract: 'a run reaching terminalization records its consequence',
+    // Terminalize without the consequence. The run goes terminal, so the suite's
+    // status assertions still pass; only the consequence cross-check catches it.
+    find: '      return buildRunConsequence(projectedRun, {',
+    replace: '      return null && buildRunConsequence(projectedRun, {',
+    expect: 'a terminal run carries no consequence'
+  },
+  {
     name: 'reconcile-under-divergence',
     suite: 'target-operation-reconciliation-test.js',
     file: 'server.js',

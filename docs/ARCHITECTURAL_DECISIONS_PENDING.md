@@ -50,6 +50,7 @@ the defect can cause, not how hard it is to fix.
 | A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented; 81 orphans remain | Verification gap |
 | A21 | Ticket reassignment silently discarded; audit trail asserts otherwise | **High** | **Implemented 2026-07-26** — see entry | Correctness / truthfulness |
 | A22 | Resume after a committed workspace operation fails on an idempotency conflict | **High** | **Implemented 2026-07-26** — see entry | Correctness / recovery |
+| A23 | Deterministic crash-seam coverage was incomplete | Medium | **Closed 2026-07-26** — all nine seams driven | Verification gap |
 
 ### Sequencing
 
@@ -969,6 +970,88 @@ scenario 16; containment removal → process death; single-snapshot drain → ne
 write test; completion drain removal → false `completed`; `logType`→`type` →
 required-log propagation; settle boundary removal at both startup sites → missing
 durable evidence.
+
+---
+
+### A23. Deterministic crash-seam coverage was incomplete
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Closed 2026-07-26.** All nine seams are driven by registered suites |
+| **Severity** | Medium — recovery was largely asserted by construction rather than demonstrated |
+| **Scope** | Verification gap in its own right. Opened separately from A20, which is scoped to test ORPHANS; these three seams were driven by no suite at all, orphaned or otherwise |
+| **Evidence** | Seam map rebuilt from the repository after A22 and after the reconciliation repair |
+
+**Description:**
+
+The runtime exposes nine deterministic crash seams (`maybeTestInterrupt`). They exist
+because the recovery contract is hard to prove any other way. A20 found only two were
+ever driven; A22 took that to five and the reconciliation repair to six. The last three
+were driven by nothing, and — unlike everything in A20 — no orphaned suite guarded them
+either, so repairing an orphan could never have closed the gap.
+
+| Seam | Driver |
+|------|--------|
+| `after_action_contract_violation` | `model-contract-violation-recovery-test.js` |
+| `after_first_authority.allowed` | `resumable-execution-test.js` |
+| `after_first_workspace.operation` | `resume-obvious-postcondition-test.js`, `resumable-execution-test.js` |
+| `after_run.started` | `resumable-execution-test.js` |
+| `before_run.snapshot_finalized` | `resumable-execution-test.js` |
+| `after_first_workspace_target_effect` | `target-operation-reconciliation-test.js` |
+| `after_run.created` | **`terminalization-boundary-recovery-test.js`** |
+| `before_run.consequence_recorded` | **`terminalization-boundary-recovery-test.js`** |
+| `after_run.snapshot_finalized` | **`terminalization-boundary-recovery-test.js`** |
+
+### The seam names no longer describe the states they were coined for
+
+Writing the suite surfaced a correction worth recording.
+`before_run.snapshot_finalized` and `before_run.consequence_recorded` fire **back to
+back at the same point**, and `server.js` says why:
+
+> The old interruption points now sit before the repository boundary. They can abort
+> before the bundle, but cannot create a partially committed PostgreSQL terminal state
+> between its constituent records.
+
+Terminalization is a single transaction. A crash at `before_run.consequence_recorded`
+therefore leaves the run **non-terminal** — not "terminal with a missing consequence",
+which is the state the seam name implies and which the current runtime **cannot
+produce**. The suite asserts what is reachable and additionally proves the unreachable
+state stays unreachable, rather than encoding a shape that no longer exists.
+
+That leaves three materially different recovery contracts, which is why one suite with
+three scenarios was the right shape:
+
+| Seam | Durable state at death | What recovery must do |
+|------|------------------------|-----------------------|
+| `after_run.created` | run row only | claim and execute it; no duplicate run |
+| `before_run.consequence_recorded` | run still running, bundle aborted | terminalize once, recording the consequence |
+| `after_run.snapshot_finalized` | bundle committed, terminal | add nothing, contradict nothing |
+
+**`terminalization-boundary-recovery-test.js` — 56 assertions, 3 seams, registered.**
+Every scenario proves the hook fired, the process died, and the run was in the expected
+incomplete durable state at death, so none can pass by never crashing. A shared
+convergence check then requires: one run (no duplicate), original ownership and
+assignment intact, no stale lease, exactly one finalized snapshot agreeing with the
+run's terminal status, a recorded consequence, at most one `run.terminalized` and one
+`run.consequence_recorded` event, and at most one successful mutation receipt. The
+consequence is cross-checked against the receipts rather than merely asserted present —
+that is the A16 property, and a consequence claiming no mutations while receipts say
+otherwise is the failure that matters.
+
+**Mutation-verified, and one needed re-aiming.**
+
+| Mutation | Contract removed | Result |
+|----------|------------------|--------|
+| `crashed-runs-never-reclaimed` | a run abandoned by a dead process is reclaimed once its lease expires | killed |
+| `terminalization-not-atomic` | a run reaching terminalization records its consequence | killed |
+
+The first was initially aimed at `interruptStaleRunsOnStartup` and **survived**: a run
+abandoned by a dead process is reclaimed when its **lease expires**, which the scheduler
+does on its own interval, not by startup recovery. Re-aimed at the recoverable-run scan,
+it kills. Fifth instance in this effort of a surviving mutation meaning defense in depth
+rather than a coverage hole — the rule now has enough evidence to state plainly: **when
+a mutation survives, identify which layer actually executes before concluding anything
+about the suite.**
 
 ---
 
