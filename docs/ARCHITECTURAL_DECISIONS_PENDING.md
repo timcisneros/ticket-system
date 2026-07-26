@@ -1620,7 +1620,30 @@ The residue is authority and gate coverage — `testProtectedPathWrite`,
 `testHandoffExecutorMismatch`, `testInvalidDraftIntent` — and that is where the value
 is. Port the residue; retire the rest with the mapping above recorded.
 
-**`scheduler-integrity-abuse-test.js` — split, same shape.** At least seven of its 13
+**`scheduler-integrity-abuse-test.js` — CLOSED (2026-07-26).** Checked scenario by
+scenario rather than assumed. Every one of its 13 has a named end state, and unlike
+`operational-abuse-test.js` the residue produced no migration: it is covered, obsolete,
+or vacuous by construction.
+
+| Scenario | End state |
+|----------|-----------|
+| `testRunResumptionAfterCrash` | covered — `resumable-execution-test.js` (A22) |
+| `testLeaseExpiryDuringRun`, `testStaleLeaseCleanup`, `testDoubleLeaseAcquisition`, `testConcurrentRunClaims` | covered — `lease-renewal-resume-safety-test.js`, `scheduler-observability-test.js` |
+| `testDuplicateReplayAppend`, `testReplayOrdering` | covered — `required-replay-evidence-test.js`, `replay-snapshot-storage-test.js` |
+| `testConcurrentWorkspaceMutation` | covered — `concurrency-conflict-test.js` |
+| `testEvaluationConsequenceOrdering` | covered — `run-consequence-mutation-test.js` (A16) |
+| `testExecutorRunOrphaning` | covered — `concurrency-conflict-test.js` asserts `stuckRunning === 0` after concurrent stop+rerun, the same no-orphan property under strictly harder conditions |
+| `testInterruptedExecutorHandoff` | covered — `resumable-execution-test.js` (terminal convergence incl. `interrupted`) and `delegated-run-logging-containment-test.js` |
+| `testPartialWriteInterruption` | **retired — mechanism and property both obsolete.** It asserts `dataValid`, meaning a flat JSON file was not left torn by an interrupted write. PostgreSQL cannot produce that state; the same reasoning retired `jsonParsesOrNull` from `concurrency-conflict-test.js` |
+| `testStalledProviderRecovery` | **retired — vacuous by construction.** It returns `passed: true` unconditionally. Stall recovery is covered by `model-contract-violation-recovery-test.js` |
+
+**Ten of its 13 scenarios return `passed: true` literally**, so the suite could not have
+failed on those regardless of runtime behavior. That is worth recording as a caution
+about the whole `*-abuse-test.js` family: they were written as *exploratory probes* that
+report findings, not as regressions that gate. Reading their names as coverage would
+overstate what they ever guaranteed.
+
+**Superseded mapping detail (retained for re-checking):** At least seven of its 13
 scenarios map onto registered suites: crash resumption to `resumable-execution-test.js`;
 lease expiry, stale-lease cleanup, double acquisition and concurrent claims to
 `lease-renewal-resume-safety-test.js` and `scheduler-observability-test.js`; duplicate

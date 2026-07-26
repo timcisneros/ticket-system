@@ -213,7 +213,7 @@ const TESTS = Object.freeze([
   { file: "runtime-limits-config-test.js", status: "required" },
   { file: "runtime-limits-ui-test.js", status: "required" },
   { file: "scheduled-process-template-trigger-test.js", status: "orphaned", reason: "cutover-orphan" },
-  { file: "scheduler-integrity-abuse-test.js", status: "orphaned", reason: "cutover-orphan-silent" },
+  { file: "scheduler-integrity-abuse-test.js", status: "excluded", reason: "superseded" },
   { file: "scheduler-observability-test.js", status: "required" },
   { file: "startup-data-integrity-test.js", status: "required" },
   { file: "state-agreement-completion-test.js", status: "orphaned", reason: "cutover-orphan" },
