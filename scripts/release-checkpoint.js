@@ -49,7 +49,28 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'run-consequence-mutation-test.js',
   'required-replay-evidence-test.js',
   'delegated-run-logging-containment-test.js',
-  'reconciliation-evidence-failure-test.js'
+  'reconciliation-evidence-failure-test.js',
+  // A10 — PostgreSQL runtime integrity suites, restored from the JSON-era orphans.
+  // Registered here rather than in CHECKPOINT_TEST_SCRIPTS because every one of them
+  // exercises the real PostgreSQL runtime and has no in-memory fallback. Until this
+  // block existed the checkpoint stayed green while these suites rotted, which is the
+  // gap A10 was opened for. scripts/a10-suite-mutation-test.js proves a representative
+  // sample of them still fails when the contract they guard is removed; it is
+  // deliberately NOT registered because it edits tracked source in place.
+  'ticket-feasibility-gate-test.js',
+  'resume-obvious-postcondition-test.js',
+  'direct-folder-postcondition-completeness-test.js',
+  'runtime-feasibility-test.js',
+  'recovery-regression-test.js',
+  'postcondition-completion-test.js',
+  'startup-data-integrity-test.js',
+  'run-detail-evidence-clarity-test.js',
+  'run-diagnostics-bundle-test.js',
+  'bounded-transition-test.js',
+  'replay-snapshot-storage-test.js',
+  'runtime-limits-config-test.js',
+  'runtime-limits-ui-test.js',
+  'renamepath-runtime-regression-test.js'
 ]);
 
 function runCheckpoint() {

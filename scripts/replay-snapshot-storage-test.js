@@ -1,275 +1,223 @@
+#!/usr/bin/env node
+'use strict';
+// Replay-snapshot storage separation — PostgreSQL-native
+// (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A10).
+//
+// SURVIVING CONTRACT: a run's replay snapshot is stored SEPARATELY from the run
+// record, and every consumer hydrates it from that separate record rather than from
+// anything inline on the run. The run row stays metadata-only; the snapshot round
+// trips without loss; and the operator surfaces that read it — the run detail page
+// and the `oquery` CLI — reconstruct the run from it faithfully.
+//
+// RETIRED FROM THE JSON-ERA SUITE, deliberately and not by omission: the original
+// spent its first third driving `scripts/extract-replay-snapshots.js`, a one-shot
+// migration that lifted an inline `run.replaySnapshot` out of `runs.json` into
+// `data/replay-snapshots/run-N.json` and left a `replaySnapshotPath` pointer behind.
+// That helper reads `DATA_DIR`, which the PostgreSQL runtime does not read at all,
+// and the storage layout it produced no longer exists — separation is now structural
+// (a `replay_snapshots` table keyed by run id), not the product of a migration step.
+// Asserting the helper would assert a dead mechanism. The helper itself is a residual
+// JSON-era artifact and is recorded as such in the A10 entry.
+//
+// What survives is the PROPERTY the migration existed to establish, which is what
+// this suite now asserts directly against the store.
+//
+// Requires TEST_DATABASE_URL (or DATABASE_URL).
+
 const { execFile } = require('child_process');
-const { spawn } = require('child_process');
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
-const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
+const { withHarness, createAsserter } = require('./postgres-test-harness');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 
 const ROOT = path.resolve(__dirname, '..');
-const REAL_DATA_DIR = path.join(ROOT, 'data');
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'replay-snapshot-storage-'));
-const WORKSPACE_ROOT = createTempWorkspaceRoot('replay-snapshot-storage');
-const PORT = process.env.PORT || '3431';
-const BASE_URL = `http://127.0.0.1:${PORT}`;
-const DATA_FILES = [
-  'agents.json',
-  'allocation-plans.json',
-  'groups.json',
-  'logs.json',
-  'memberships.json',
-  'operation-history.json',
-  'permissions.json',
-  'runs.json',
-  'tickets.json',
-  'users.json'
-];
+const STAMP = Date.now();
+const assert = createAsserter();
 
-for (const file of DATA_FILES) {
-  const src = path.join(REAL_DATA_DIR, file);
-  const dst = path.join(DATA_DIR, file);
-  fs.writeFileSync(dst, fs.existsSync(src) ? fs.readFileSync(src, 'utf8') : '[]');
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
-}
-
-function writeJson(file, value) {
-  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
-}
-
-function request(method, urlPath, options = {}) {
-  const body = options.form
-    ? new URLSearchParams(options.form).toString()
-    : options.body
-      ? JSON.stringify(options.body)
-      : null;
-
-  return new Promise((resolve, reject) => {
-    const req = http.request(`${BASE_URL}${urlPath}`, {
-      method,
-      headers: {
-        ...(options.form ? {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Content-Length': Buffer.byteLength(body)
-        } : {}),
-        ...(options.body ? {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body)
-        } : {}),
-        ...(options.cookie ? { Cookie: options.cookie } : {})
-      }
-    }, res => {
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => resolve({
-        statusCode: res.statusCode,
-        headers: res.headers,
-        body: Buffer.concat(chunks).toString('utf8')
-      }));
-    });
-
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
-  });
-}
-
-function cookieFrom(response) {
-  return (response.headers['set-cookie'] || []).map(cookie => cookie.split(';')[0]).join('; ');
-}
-
-async function waitForReady() {
-  const started = Date.now();
-  while (Date.now() - started < 15000) {
-    try {
-      const response = await request('GET', '/health');
-      if (response.statusCode === 200 && JSON.parse(response.body).ready) return;
-    } catch (error) {
-      // Server is still starting.
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
+// jsonb does not preserve key insertion order, so equality must be structural.
+// Element order inside arrays IS part of the contract and is compared positionally.
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => deepEqual(item, b[index]));
   }
-  throw new Error('Timed out waiting for server ready');
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const aKeys = Object.keys(a).sort();
+    const bKeys = Object.keys(b).sort();
+    if (aKeys.length !== bKeys.length || aKeys.some((key, i) => key !== bKeys[i])) return false;
+    return aKeys.every(key => deepEqual(a[key], b[key]));
+  }
+  return false;
 }
 
-function waitForExit(child) {
+function runOquery(args, env) {
   return new Promise(resolve => {
-    if (child.exitCode !== null || child.killed) return resolve();
-    child.once('exit', () => resolve());
+    execFile(process.execPath, [path.join(ROOT, 'scripts/oquery.js'), ...args], {
+      cwd: ROOT, env: { ...process.env, ...env }, timeout: 60000
+    }, (error, stdout, stderr) => resolve({ error, stdout: String(stdout || ''), stderr: String(stderr || '') }));
   });
-}
-
-async function login() {
-  const response = await request('POST', '/login', {
-    form: { username: 'admin', password: 'admin123' }
-  });
-  if (response.statusCode !== 302) throw new Error(`Admin login failed with HTTP ${response.statusCode}`);
-  return cookieFrom(response);
-}
-
-function execNode(args) {
-  return new Promise((resolve, reject) => {
-    execFile(process.execPath, args, {
-      cwd: ROOT,
-      env: { ...process.env, DATA_DIR, WORKSPACE_ROOT }
-    }, (error, stdout, stderr) => {
-      if (error) {
-        error.stdout = stdout;
-        error.stderr = stderr;
-        reject(error);
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-  });
-}
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-function seedInlineReplayFixture() {
-  const now = new Date().toISOString();
-  const agent = readJson('agents.json')[0] || { id: 1, name: 'Fixture Agent', provider: 'openai', model: 'gpt-5.1-mini' };
-  const ticketId = Math.max(0, ...readJson('tickets.json').map(item => item.id || 0)) + 1;
-  const runId = Math.max(0, ...readJson('runs.json').map(item => item.id || 0)) + 1;
-  const ticket = {
-    id: ticketId,
-    objective: 'replay snapshot storage fixture',
-    assignmentTargetType: 'agent',
-    assignmentTargetId: agent.id,
-    assignmentMode: 'individual',
-    status: 'failed',
-    createdBy: 'admin',
-    createdAt: now,
-    updatedAt: now
-  };
-  const replaySnapshot = {
-    version: 1,
-    runId,
-    ticketId,
-    assignedAgentId: agent.id,
-    agentNameSnapshot: agent.name,
-    provider: 'openai',
-    model: agent.model || 'gpt-5.1-mini',
-    runtimeEnvelope: {},
-    ticketObjectiveSnapshot: ticket.objective,
-    systemInstructionSnapshot: 'fixture',
-    primitiveContract: {},
-    workspaceRoot: WORKSPACE_ROOT,
-    mainWorkspaceRoot: WORKSPACE_ROOT,
-    executionWorkspaceType: 'main',
-    runtimeLimits: { maxExecutionSteps: 4, maxModelRequestsPerRun: 4, maxWorkspaceOperationsPerRun: 32 },
-    providerRequests: [{ requestId: 'fixture-request' }],
-    modelResponses: [{ text: '{"actions":[],"complete":false}' }],
-    parsedModelPlans: [{ actions: [], complete: false }],
-    workspaceOperations: [],
-    events: [{ type: 'model:no_progress', message: 'fixture no progress' }],
-    terminalStatus: 'failed',
-    failureReason: 'fixture structured failure',
-    failure: { code: 'RUN_LIMIT_EXCEEDED', kind: 'no_progress', detail: { limitType: 'execution_steps' } },
-    mutationCount: 0,
-    mutationOutcome: 'no_mutations',
-    createdAt: now,
-    finalizedAt: now
-  };
-  const run = {
-    id: runId,
-    ticketId,
-    agentId: agent.id,
-    agentName: agent.name,
-    workspaceRoot: WORKSPACE_ROOT,
-    mainWorkspaceRoot: WORKSPACE_ROOT,
-    executionWorkspaceType: 'main',
-    status: 'failed',
-    ticketOpenedAt: now,
-    createdAt: now,
-    updatedAt: now,
-    startedAt: now,
-    completedAt: now,
-    error: 'fixture structured failure',
-    replaySnapshot
-  };
-
-  writeJson('tickets.json', [...readJson('tickets.json'), ticket]);
-  writeJson('runs.json', [...readJson('runs.json'), run]);
-  writeJson('logs.json', [
-    ...readJson('logs.json'),
-    {
-      id: Math.max(0, ...readJson('logs.json').map(item => item.id || 0)) + 1,
-      timestamp: now,
-      runId,
-      ticketId,
-      agentId: agent.id,
-      agentName: agent.name,
-      type: 'run:failed',
-      message: 'fixture structured failure',
-      workspaceAction: null
-    }
-  ]);
-  return { ticket, run, replaySnapshot };
 }
 
 async function main() {
-  const fixture = seedInlineReplayFixture();
-  const extraction = await execNode(['scripts/extract-replay-snapshots.js']);
-  const extractionPayload = JSON.parse(extraction.stdout);
-  assert(extractionPayload.extracted >= 1, 'Extraction helper should extract inline replay snapshots');
-  const migratedRun = readJson('runs.json').find(run => run.id === fixture.run.id);
-  assert(migratedRun && !migratedRun.replaySnapshot, 'Extraction helper should remove inline replay snapshot');
-  assert(migratedRun.replaySnapshotPath === `replay-snapshots/run-${fixture.run.id}.json`, 'Extraction helper should write replay snapshot pointer');
-  const migratedSnapshot = readJson(migratedRun.replaySnapshotPath);
-  assert(JSON.stringify(migratedSnapshot) === JSON.stringify(fixture.replaySnapshot), 'Extraction helper should preserve snapshot equality');
-  let server = null;
+  await withHarness('replay snapshot storage', async ({ store, workspaceRoot, startServer }) => {
+    const agent = (await store.createConfiguredAgent({
+      value: { name: `ReplayStorage-${STAMP}`, provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-key-replay-storage' },
+      groupIds: [], changedBy: 'replay-snapshot-storage-test'
+    })).agent;
 
-  try {
-    server = spawn(process.execPath, ['server.js'], {
-      cwd: ROOT,
-      env: { ...process.env, NODE_ENV: 'test', PORT, WORKSPACE_ROOT, DATA_DIR },
-      stdio: ['ignore', 'pipe', 'pipe']
+    const now = () => new Date().toISOString();
+    const objective = `replay snapshot storage fixture ${STAMP}`;
+
+    const ticket = (await store.createTicketWithEvent({
+      ticket: {
+        objective, acceptanceCriteria: null,
+        assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual',
+        ownedOutputPaths: null, targetRef: null, executionMode: 'agent',
+        workflowId: null, workflowInput: null,
+        capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
+        executionPolicy: {
+          mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+          maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
+          allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
+        },
+        workTypeId: null, workTypeSnapshot: null, workContextId: null, workContextSnapshot: null,
+        status: 'failed', createdBy: 'admin', changedBy: 'admin',
+        changedAt: now(), createdAt: now(), updatedAt: now()
+      },
+      eventPayload: { source: 'replay-snapshot-storage-test' }
+    })).ticket;
+
+    // Established A10 fixture pattern for a terminal run carrying crafted replay
+    // evidence: create → claim → running → terminal → initializeRunReplay. Direct
+    // UPDATEs are rejected by the revision and terminal-reopen guards.
+    const created = await store.createRun({
+      ticketId: ticket.id, agentId: agent.id, agentName: agent.name,
+      runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
+      executionPolicySnapshot: { requireVerification: 'when_declared' }, status: 'pending'
     });
-    server.stdout.on('data', chunk => process.stdout.write(String(chunk)));
-    server.stderr.on('data', chunk => process.stderr.write(String(chunk)));
+    const claim = await store.claimPendingRun({
+      leaseOwner: 'replay-storage-fixture', leaseDurationMs: 60000, eligibleRunIds: [created.id]
+    });
+    const started = await store.transitionRun({
+      runId: created.id, expectedRevision: claim.run.revision, fromStatuses: ['pending'],
+      toStatus: 'running', leaseOwner: 'replay-storage-fixture', eventType: 'run.started'
+    });
+    await store.transitionRun({
+      runId: created.id, expectedRevision: started.run.revision, fromStatuses: ['running'],
+      toStatus: 'failed', leaseOwner: 'replay-storage-fixture', eventType: 'run.execution_failed',
+      eventPayload: { status: 'failed' }
+      // Deliberately NO error patch on the run row: the failure text below must be
+      // attributable to the replay record alone, which is the point of the suite.
+    });
 
-    await waitForReady();
-    const cookie = await login();
+    // Deliberately nested and multi-element so the round-trip assertion is about
+    // structure, not just scalars.
+    const snapshot = {
+      version: 1, runId: created.id, ticketId: ticket.id,
+      assignedAgentId: agent.id, agentNameSnapshot: agent.name,
+      provider: 'openai', model: 'gpt-4.1-mini',
+      runtimeEnvelope: { maxExecutionSteps: 4, allowedOperations: ['listDirectory', 'readFile', 'writeFile'] },
+      ticketObjectiveSnapshot: objective, systemInstructionSnapshot: 'fixture',
+      primitiveContract: {}, workspaceRoot, mainWorkspaceRoot: workspaceRoot,
+      executionWorkspaceType: 'main',
+      runtimeLimits: { maxExecutionSteps: 4, maxModelRequestsPerRun: 4, maxWorkspaceOperationsPerRun: 32 },
+      providerRequests: [{ requestId: 'fixture-request-1' }, { requestId: 'fixture-request-2' }],
+      modelResponses: [{ text: '{"actions":[],"complete":false}' }],
+      parsedModelPlans: [{ step: 0, actions: [], complete: false }],
+      workspaceOperations: [],
+      events: [{ type: 'model:no_progress', message: 'fixture no progress', step: 0 }],
+      terminalStatus: 'failed',
+      failureReason: 'fixture structured failure',
+      failure: { code: 'RUN_LIMIT_EXCEEDED', kind: 'no_progress', detail: { limitType: 'execution_steps' } },
+      mutationCount: 0, mutationOutcome: 'no_mutations',
+      createdAt: now(), finalizedAt: now()
+    };
+    await store.initializeRunReplay({ runId: created.id, ticketId: ticket.id, snapshot });
 
-    const rawRun = readJson('runs.json').find(run => run.id === fixture.run.id);
-    assert(rawRun && !rawRun.replaySnapshot, 'Server should keep runs.json metadata-only');
-    assert(rawRun.replaySnapshotPath === `replay-snapshots/run-${fixture.run.id}.json`, 'Run should point at replay snapshot file');
-    assert(rawRun.replaySummary && rawRun.replaySummary.failure.kind === 'no_progress', 'Run should keep structured replay summary');
-    const storedSnapshot = readJson(rawRun.replaySnapshotPath);
-    assert(JSON.stringify(storedSnapshot) === JSON.stringify(fixture.replaySnapshot), 'Extracted replay snapshot should preserve equality');
+    // ── 1. The run record stays metadata-only ────────────────────────────────
+    const run = await store.getRun(created.id);
+    assert(Boolean(run) && run.status === 'failed', '1: the fixture run is terminal in the store');
+    assert(run.replaySnapshot === undefined,
+      '1: the run record carries no inline replay snapshot');
+    assert(run.replaySnapshotPath === undefined,
+      '1: the run record carries no JSON-era replay snapshot pointer either');
 
-    const runDetail = await request('GET', `/runs/${fixture.run.id}`, { cookie });
-    assert(runDetail.statusCode === 200, `Run detail returned HTTP ${runDetail.statusCode}`);
-    assert(runDetail.body.includes('Provider Requests (1)'), 'Run detail should hydrate replay snapshot file');
+    // Separation is structural, not a convention of the row mapper: the runs table
+    // itself must hold no snapshot payload.
+    const rawRun = await store.pool.query(
+      `SELECT * FROM ${store.table('runs')} WHERE id = $1`, [created.id]
+    );
+    const rawColumns = Object.keys(rawRun.rows[0]);
+    assert(!rawColumns.some(column => /replay/i.test(column)),
+      '1: the runs table has no replay-snapshot column');
+    const rawBody = JSON.stringify(rawRun.rows[0]);
+    assert(!rawBody.includes('fixture-request-1'),
+      '1: no replay evidence is embedded anywhere in the run row');
 
-    const replay = await execNode(['scripts/oquery.js', 'replay', String(fixture.run.id)]);
-    assert(replay.stdout.includes(`Replay: Run #${fixture.run.id}`), 'oquery replay should hydrate replay snapshot file');
+    // ── 2. The snapshot round-trips through its own record ───────────────────
+    const record = await store.readRunReplay(created.id);
+    assert(Boolean(record) && Boolean(record.snapshot), '2: the replay record exists for the run');
+    assert(deepEqual(record.snapshot, snapshot),
+      '2: the snapshot round-trips structurally intact through jsonb');
+    assert(record.snapshot.providerRequests[0].requestId === 'fixture-request-1'
+      && record.snapshot.providerRequests[1].requestId === 'fixture-request-2',
+      '2: array element order inside the snapshot is preserved');
 
-    const failures = await execNode(['scripts/oquery.js', 'failures', '--run', String(fixture.run.id)]);
-    assert(failures.stdout.includes('NO_PROGRESS'), 'oquery failures should classify from hydrated replay snapshot');
+    const batch = await store.listRunReplays({ runIds: [created.id] });
+    assert(batch.length === 1 && deepEqual(batch[0].snapshot, snapshot),
+      '2: the batch read returns the same snapshot as the single read');
 
-    const tickets = await request('GET', '/tickets?limit=1', { cookie });
-    assert(tickets.statusCode === 200, `Tickets page returned HTTP ${tickets.statusCode}`);
-    const agents = await request('GET', '/agents', { cookie });
-    assert(agents.statusCode === 200, `Agents page returned HTTP ${agents.statusCode}`);
+    // ── 3. Consumers hydrate from the separate record ────────────────────────
+    const server = await startServer({});
+    const cookie = await server.login();
 
-    console.log(JSON.stringify({ replaySnapshotStorage: true, runId: fixture.run.id }));
-  } finally {
-    if (server) {
-      server.kill();
-      await waitForExit(server);
+    const runDetail = await server.request('GET', `/runs/${created.id}`, { cookie });
+    assert(runDetail.statusCode === 200, `3: run detail returned HTTP ${runDetail.statusCode}`);
+    assert(/2 provider request\(s\)/.test(runDetail.body.replace(/\s+/g, ' ')),
+      '3: run detail reports the provider-request count only the snapshot can supply');
+    assert(runDetail.body.includes('fixture structured failure'),
+      '3: run detail surfaces the failure reason carried by the snapshot');
+
+    // The CLI is a separate consumer reaching the same record over a separate code
+    // path, which is what makes this a storage assertion rather than a rendering one.
+    const cookieFile = path.join(os.tmpdir(), `replay-storage-cookie-${process.pid}-${STAMP}`);
+    const oqueryEnv = {
+      OPERC_URL: server.baseUrl,
+      OPERC_COOKIE_PATH: cookieFile,
+      OPERC_USERNAME: 'admin',
+      OPERC_PASSWORD: 'admin123'
+    };
+    try {
+      const loggedIn = await runOquery(['login'], oqueryEnv);
+      assert(fs.existsSync(cookieFile),
+        `3: oquery authenticated against the harness server (${loggedIn.stdout.trim().slice(0, 200)})`);
+
+      const replayOut = await runOquery(['replay', String(created.id)], oqueryEnv);
+      assert(replayOut.stdout.includes(`Replay: Run #${created.id}`),
+        '3: oquery replay hydrates the snapshot from its own record');
+
+      const failuresOut = await runOquery(['failures', '--run', String(created.id)], oqueryEnv);
+      assert(failuresOut.stdout.includes('NO_PROGRESS'),
+        '3: oquery failures classifies the run from the hydrated snapshot');
+    } finally {
+      try { fs.unlinkSync(cookieFile); } catch (_) { /* best effort */ }
     }
-    removeTempWorkspaceRoot(WORKSPACE_ROOT);
-    fs.rmSync(DATA_DIR, { recursive: true, force: true });
-  }
+
+    // ── 4. Neighbouring surfaces still render ────────────────────────────────
+    // Cheap regression guard kept from the original: a run whose evidence lives in
+    // a separate record must not break list pages that only read run metadata.
+    const tickets = await server.request('GET', '/tickets?limit=1', { cookie });
+    assert(tickets.statusCode === 200, `4: tickets page returned HTTP ${tickets.statusCode}`);
+    const agents = await server.request('GET', '/agents', { cookie });
+    assert(agents.statusCode === 200, `4: agents page returned HTTP ${agents.statusCode}`);
+
+    console.log(`\nPASS: replay snapshot storage separation — ${assert.count()} assertions (PostgreSQL-native)`);
+  }, { schemaSlug: 'replay_snapshot_storage' });
 }
 
 main().catch(error => {
-  console.error(error && error.stack ? error.stack : error);
+  console.error(`\nFAIL: replay snapshot storage separation — ${error && error.stack ? error.stack : error}`);
   process.exit(1);
 });

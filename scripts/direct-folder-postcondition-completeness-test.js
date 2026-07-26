@@ -1,71 +1,45 @@
 #!/usr/bin/env node
-const { spawn } = require('child_process');
+'use strict';
+// Direct-folder postcondition completeness — PostgreSQL-native
+// (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A10).
+//
+// Contract under test, preserved from the JSON-era original: the deterministic
+// folder-list postcondition shortcut may complete a run only when EVERY requested
+// folder exists. Four scenarios pin that:
+//
+//   negative   — only some requested folders exist -> must not complete, and must
+//                not emit run:postcondition_completed
+//   positive   — all requested folders exist -> completes, and checkedPaths lists
+//                every requested folder in order
+//   single     — a one-folder objective still completes, checking exactly that path
+//   ambiguous  — prose beyond a plain folder list must not complete through the
+//                shortcut at all
+//
+// The negative scenario deliberately leans on the per-response mutating cap: the
+// stub's first response proposes four createFolder actions, which exceeds
+// AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE=2 and is rejected, so only the later
+// two-folder response lands. That coupling is intentional and preserved.
+//
+// Repaired, not rewritten. The provider stub (a NODE_OPTIONS `global.fetch`
+// preload) is storage-independent and unchanged. Seeding and snapshot reads now go
+// through the PostgreSQL store instead of a DATA_DIR the server no longer reads.
+
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
+const { withHarness, createAsserter, sleep } = require('./postgres-test-harness');
 
-const ROOT = path.resolve(__dirname, '..');
 const STAMP = Date.now();
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'direct-folder-postcondition-data-'));
-const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'direct-folder-postcondition-workspace-'));
-const PORT = String(17000 + Math.floor(Math.random() * 1000));
-const BASE_URL = 'http://127.0.0.1:' + PORT;
-const NEGATIVE_OBJECTIVE = 'Create folder A B C and D';
-const SINGLE_FOLDER = 'single-folder-' + STAMP;
-const AMBIGUOUS_FOLDER = 'ambiguous-folder-' + STAMP;
+const LIST_OBJECTIVE = 'Create folder A B C and D';
+const SINGLE_FOLDER = `single-folder-${STAMP}`;
+const AMBIGUOUS_FOLDER = `ambiguous-folder-${STAMP}`;
 
-let server = null;
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
-}
-
-function writeJson(file, value) {
-  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
-}
-
-function setupDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.mkdirSync(path.join(DATA_DIR, 'replay-snapshots'), { recursive: true });
-  fs.mkdirSync(WORKSPACE_ROOT, { recursive: true });
-
-  for (const file of ['users.json', 'agents.json', 'groups.json', 'memberships.json', 'permissions.json', 'workflows.json']) {
-    fs.copyFileSync(path.join(ROOT, 'data', file), path.join(DATA_DIR, file));
-  }
-
-  for (const file of ['tickets.json', 'runs.json', 'logs.json', 'operation-history.json', 'allocation-plans.json']) {
-    writeJson(file, []);
-  }
-  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), '');
-
-  const agents = readJson('agents.json').filter(agent => agent.name !== 'Direct Folder Test Agent');
-  agents.push({
-    id: 9901,
-    name: 'Direct Folder Test Agent',
-    type: 'agent',
-    provider: 'openai',
-    model: 'fake-model',
-    apiKey: 'fake-key',
-    runtimeConfig: {},
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  });
-  writeJson('agents.json', agents);
-}
+const assert = createAsserter();
 
 function createPreload() {
-  const preloadPath = path.join(os.tmpdir(), 'direct-folder-postcondition-openai-' + process.pid + '-' + STAMP + '.js');
-  const source = `
-let negativeCallCount = 0;
+  const preloadPath = path.join(os.tmpdir(), `direct-folder-postcondition-openai-${process.pid}-${STAMP}.js`);
+  fs.writeFileSync(preloadPath, `
+let listCallCount = 0;
 
 function ok(plan) {
   return {
@@ -87,9 +61,11 @@ global.fetch = async function(_url, options = {}) {
     .map(item => item && item.content ? String(item.content) : '')
     .join('\\n');
 
-  if (combined.includes(${JSON.stringify(NEGATIVE_OBJECTIVE)})) {
-    negativeCallCount += 1;
-    if (negativeCallCount === 1) {
+  if (combined.includes(${JSON.stringify(LIST_OBJECTIVE)})) {
+    listCallCount += 1;
+    // Exceeds the mutating cap on purpose: this response is rejected, so the
+    // negative scenario ends with only A and B on disk.
+    if (listCallCount === 1) {
       return ok({
         message: 'Create folders A, B, C, and D.',
         actions: [
@@ -101,7 +77,7 @@ global.fetch = async function(_url, options = {}) {
         complete: true
       });
     }
-    if (negativeCallCount === 2) {
+    if (listCallCount === 2) {
       return ok({
         message: 'Create only A and B.',
         actions: [
@@ -111,219 +87,139 @@ global.fetch = async function(_url, options = {}) {
         complete: false
       });
     }
-    return ok({
-      message: 'Cannot be completed with the allowed operations in this synthetic test.',
-      actions: [],
-      complete: false
-    });
+    return ok({ message: 'Cannot continue in this synthetic test.', actions: [], complete: false });
   }
 
-  return ok({
-    message: 'Cannot be completed with the allowed operations in this synthetic test.',
-    actions: [],
-    complete: false
-  });
+  return ok({ message: 'Cannot continue in this synthetic test.', actions: [], complete: false });
 };
-`;
-  fs.writeFileSync(preloadPath, source);
+`);
   return preloadPath;
 }
 
-function request(method, urlPath, options = {}) {
-  const body = options.form ? new URLSearchParams(options.form).toString() : null;
-  return new Promise((resolve, reject) => {
-    const req = http.request(BASE_URL + urlPath, {
-      method,
-      headers: {
-        ...(body ? {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Content-Length': Buffer.byteLength(body)
-        } : {}),
-        ...(options.cookie ? { Cookie: options.cookie } : {})
-      }
-    }, res => {
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => resolve({
-        statusCode: res.statusCode,
-        headers: res.headers,
-        body: Buffer.concat(chunks).toString('utf8')
-      }));
-    });
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
-  });
-}
-
-function cookieFrom(response) {
-  return (response.headers['set-cookie'] || []).map(cookie => cookie.split(';')[0]).join('; ');
-}
-
-async function waitFor(fn, timeoutMs = 20000, intervalMs = 100) {
+async function waitFor(fn, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const result = await fn();
     if (result) return result;
-    await sleep(intervalMs);
+    await sleep(150);
   }
-  throw new Error('Timed out waiting for condition');
-}
-
-async function waitForReady() {
-  await waitFor(async () => {
-    if (server && server.exitCode !== null) throw new Error('Server exited before ready with code ' + server.exitCode);
-    try {
-      const response = await request('GET', '/health');
-      return response.statusCode === 200 && JSON.parse(response.body).ready;
-    } catch (_) {
-      return false;
-    }
-  }, 15000);
-}
-
-async function login() {
-  const response = await request('POST', '/login', {
-    form: { username: 'admin', password: 'admin123' }
-  });
-  assert(response.statusCode === 302, 'Admin login failed with HTTP ' + response.statusCode);
-  const cookie = cookieFrom(response);
-  assert(cookie.includes('sessionId='), 'Login did not return a session cookie');
-  return cookie;
-}
-
-async function createTicket(cookie, objective) {
-  const response = await request('POST', '/tickets', {
-    cookie,
-    form: {
-      objective,
-      assignmentTargetType: 'agent',
-      assignmentTargetId: '9901',
-      assignmentMode: 'individual'
-    }
-  });
-  assert(response.statusCode === 302, 'Ticket create failed with HTTP ' + response.statusCode + ': ' + response.body);
-  return waitFor(() => {
-    const tickets = readJson('tickets.json').filter(item => item.objective === objective);
-    const ticket = tickets[tickets.length - 1];
-    if (!ticket) return null;
-    const run = readJson('runs.json').find(item => item.ticketId === ticket.id);
-    return run ? { ticket, run } : null;
-  });
-}
-
-async function waitForTerminalRun(runId) {
-  return waitFor(() => {
-    const run = readJson('runs.json').find(item => item.id === runId);
-    return run && ['completed', 'failed', 'interrupted'].includes(run.status) ? run : null;
-  }, 30000);
-}
-
-function readSnapshot(runId) {
-  return JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'replay-snapshots', 'run-' + runId + '.json'), 'utf8'));
-}
-
-function hasPostconditionCompleted(snapshot) {
-  return Array.isArray(snapshot.events) && snapshot.events.some(event => event.type === 'run:postcondition_completed');
-}
-
-function postconditionEvent(snapshot) {
-  return (snapshot.events || []).find(event => event.type === 'run:postcondition_completed') || null;
-}
-
-function workspaceFolderExists(relativePath) {
-  return fs.existsSync(path.join(WORKSPACE_ROOT, relativePath)) &&
-    fs.statSync(path.join(WORKSPACE_ROOT, relativePath)).isDirectory();
+  throw new Error(`timed out waiting for ${label}`);
 }
 
 async function main() {
-  setupDataDir();
   const preloadPath = createPreload();
-  let output = '';
-
   try {
-    server = spawn(process.execPath, ['server.js'], {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-        PORT,
-        DATA_DIR,
-        WORKSPACE_ROOT,
-        NODE_OPTIONS: '--require ' + preloadPath,
+    await withHarness('direct folder postcondition', async ({ store, workspaceRoot, startServer }) => {
+      const agent = (await store.createConfiguredAgent({
+        value: { name: 'Direct Folder Agent', provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-key' },
+        groupIds: [], changedBy: 'direct-folder-postcondition-test'
+      })).agent;
+
+      const server = await startServer({
+        NODE_OPTIONS: `--require ${preloadPath}`,
         AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE: '2',
         AGENT_MAX_EXECUTION_STEPS: '4',
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
         AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
-        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
-      },
-      stdio: ['ignore', 'pipe', 'pipe']
+        AGENT_MAX_RUNTIME_DURATION_MS: '20000',
+        RUNTIME_SCHEDULER_INTERVAL_MS: '200'
+      });
+      const cookie = await server.login();
+
+      const seenRunIds = new Set();
+      async function runTicket(objective) {
+        const created = await server.request('POST', '/tickets', {
+          cookie,
+          form: {
+            objective,
+            assignmentTargetType: 'agent',
+            assignmentTargetId: String(agent.id),
+            assignmentMode: 'individual'
+          }
+        });
+        if (created.statusCode !== 302) {
+          throw new Error(`ticket create returned HTTP ${created.statusCode}: ${created.body.slice(0, 300)}`);
+        }
+        const run = await waitFor(async () => {
+          const page = await store.listRuns({ limit: 100 });
+          return (page.runs || []).find(r => r.agentId === agent.id && !seenRunIds.has(r.id)) || null;
+        }, 30000, `run dispatch for "${objective}"`);
+        seenRunIds.add(run.id);
+        const terminal = await waitFor(async () => {
+          const current = await store.getRun(run.id);
+          return current && ['completed', 'failed', 'interrupted'].includes(current.status) ? current : null;
+        }, 60000, `terminal run for "${objective}"`);
+        const replay = await store.readRunReplay(run.id);
+        const events = replay && replay.snapshot && Array.isArray(replay.snapshot.events)
+          ? replay.snapshot.events : [];
+        return {
+          run: terminal,
+          postcondition: events.find(e => e.type === 'run:postcondition_completed') || null
+        };
+      }
+
+      const folderExists = rel => fs.existsSync(path.join(workspaceRoot, rel))
+        && fs.statSync(path.join(workspaceRoot, rel)).isDirectory();
+
+      // Compare checkedPaths element-by-element rather than by JSON.stringify.
+      // Element ORDER is part of the contract and is asserted; key insertion order
+      // is not, and PostgreSQL jsonb does not preserve it, so a stringify
+      // comparison would fail for a reason unrelated to the behavior under test.
+      const checkedPathsMatch = (actual, expected) => {
+        const list = Array.isArray(actual) ? actual : [];
+        return list.length === expected.length
+          && expected.every((want, i) => list[i]
+            && list[i].type === want.type
+            && list[i].path === want.path);
+      };
+
+      // ── Negative: only part of the requested list exists ───────────────────
+      const negative = await runTicket(LIST_OBJECTIVE);
+      assert(negative.run.status !== 'completed',
+        `partial folder-list run did not complete as satisfied (status=${negative.run.status})`);
+      assert(!negative.postcondition,
+        'partial folder-list run emitted no run:postcondition_completed');
+      assert(folderExists('A'), 'negative fixture created A');
+      assert(folderExists('B'), 'negative fixture created B');
+      assert(!folderExists('C'), 'negative fixture did not create C');
+      assert(!folderExists('D'), 'negative fixture did not create D');
+
+      // ── Positive: complete the list, then the shortcut may fire ────────────
+      fs.mkdirSync(path.join(workspaceRoot, 'C'), { recursive: true });
+      fs.mkdirSync(path.join(workspaceRoot, 'D'), { recursive: true });
+      const positive = await runTicket(LIST_OBJECTIVE);
+      assert(positive.run.status === 'completed', 'complete folder-list run completed');
+      assert(Boolean(positive.postcondition),
+        'complete folder-list run emitted run:postcondition_completed');
+      assert(checkedPathsMatch(positive.postcondition.checkedPaths, [
+        { type: 'folder', path: 'A' },
+        { type: 'folder', path: 'B' },
+        { type: 'folder', path: 'C' },
+        { type: 'folder', path: 'D' }
+      ]), 'complete folder-list run checked every requested folder, in order');
+
+      // ── Single folder ──────────────────────────────────────────────────────
+      fs.mkdirSync(path.join(workspaceRoot, SINGLE_FOLDER), { recursive: true });
+      const single = await runTicket(`Create folder ${SINGLE_FOLDER}`);
+      assert(single.run.status === 'completed', 'single-folder run completed');
+      assert(Boolean(single.postcondition),
+        'single-folder run emitted run:postcondition_completed');
+      assert(checkedPathsMatch(single.postcondition.checkedPaths, [
+        { type: 'folder', path: SINGLE_FOLDER }
+      ]), 'single-folder run checked exactly the requested path');
+
+      // ── Ambiguous prose must not take the shortcut ─────────────────────────
+      fs.mkdirSync(path.join(workspaceRoot, AMBIGUOUS_FOLDER), { recursive: true });
+      const ambiguous = await runTicket(`Create folder ${AMBIGUOUS_FOLDER} and write summary`);
+      assert(!ambiguous.postcondition,
+        'ambiguous prose emitted no run:postcondition_completed');
+      assert(ambiguous.run.status !== 'completed',
+        `ambiguous prose did not complete through the shortcut (status=${ambiguous.run.status})`);
+
+      console.log(`\nPASS: direct folder-list postcondition completeness — ${assert.count()} assertions (PostgreSQL-native)`);
     });
-    server.stdout.on('data', chunk => { output += String(chunk); });
-    server.stderr.on('data', chunk => { output += String(chunk); });
-    server.on('exit', (code, signal) => {
-      output += `\n[server exited code=${code} signal=${signal}]\n`;
-    });
-
-    await waitForReady();
-    const cookie = await login();
-
-    const negative = await createTicket(cookie, NEGATIVE_OBJECTIVE);
-    const negativeRun = await waitForTerminalRun(negative.run.id);
-    const negativeSnapshot = readSnapshot(negativeRun.id);
-    assert(negativeRun.status !== 'completed', 'Partial folder-list run must not complete as satisfied');
-    assert(!hasPostconditionCompleted(negativeSnapshot), 'Partial folder-list run emitted run:postcondition_completed');
-    assert(workspaceFolderExists('A'), 'Negative fixture did not create A');
-    assert(workspaceFolderExists('B'), 'Negative fixture did not create B');
-    assert(!workspaceFolderExists('C'), 'Negative fixture unexpectedly created C');
-    assert(!workspaceFolderExists('D'), 'Negative fixture unexpectedly created D');
-
-    fs.mkdirSync(path.join(WORKSPACE_ROOT, 'C'), { recursive: true });
-    fs.mkdirSync(path.join(WORKSPACE_ROOT, 'D'), { recursive: true });
-    const positive = await createTicket(cookie, NEGATIVE_OBJECTIVE);
-    const positiveRun = await waitForTerminalRun(positive.run.id);
-    const positiveSnapshot = readSnapshot(positiveRun.id);
-    const positiveEvent = postconditionEvent(positiveSnapshot);
-    assert(positiveRun.status === 'completed', 'Complete folder-list run should complete');
-    assert(positiveEvent, 'Complete folder-list run did not emit run:postcondition_completed');
-    assert(JSON.stringify(positiveEvent.checkedPaths || []) === JSON.stringify([
-      { type: 'folder', path: 'A' },
-      { type: 'folder', path: 'B' },
-      { type: 'folder', path: 'C' },
-      { type: 'folder', path: 'D' }
-    ]), 'Complete folder-list run did not check every requested folder');
-
-    fs.mkdirSync(path.join(WORKSPACE_ROOT, SINGLE_FOLDER), { recursive: true });
-    const single = await createTicket(cookie, 'Create folder ' + SINGLE_FOLDER);
-    const singleRun = await waitForTerminalRun(single.run.id);
-    const singleSnapshot = readSnapshot(singleRun.id);
-    const singleEvent = postconditionEvent(singleSnapshot);
-    assert(singleRun.status === 'completed', 'Single-folder run should still complete');
-    assert(singleEvent, 'Single-folder run did not emit run:postcondition_completed');
-    assert(JSON.stringify(singleEvent.checkedPaths || []) === JSON.stringify([
-      { type: 'folder', path: SINGLE_FOLDER }
-    ]), 'Single-folder run checked unexpected paths');
-
-    fs.mkdirSync(path.join(WORKSPACE_ROOT, AMBIGUOUS_FOLDER), { recursive: true });
-    const ambiguous = await createTicket(cookie, 'Create folder ' + AMBIGUOUS_FOLDER + ' and write summary');
-    const ambiguousRun = await waitForTerminalRun(ambiguous.run.id);
-    const ambiguousSnapshot = readSnapshot(ambiguousRun.id);
-    assert(!hasPostconditionCompleted(ambiguousSnapshot), 'Ambiguous prose emitted run:postcondition_completed');
-    assert(ambiguousRun.status !== 'completed', 'Ambiguous prose should not complete through the obvious shortcut');
-
-    console.log('PASS: direct folder-list postconditions require every requested folder');
-  } catch (error) {
-    if (output) process.stderr.write(output);
-    throw error;
   } finally {
-    if (server) {
-      server.kill('SIGTERM');
-      await sleep(500);
-      if (server.exitCode === null) server.kill('SIGKILL');
-    }
-    try { fs.rmSync(preloadPath, { force: true }); } catch (_) {}
-    fs.rmSync(DATA_DIR, { recursive: true, force: true });
-    fs.rmSync(WORKSPACE_ROOT, { recursive: true, force: true });
+    try { fs.unlinkSync(preloadPath); } catch (_) { /* best effort */ }
   }
 }
 

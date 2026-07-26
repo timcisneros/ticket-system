@@ -28,6 +28,49 @@ for (const required of [
   assert.equal(all.includes(required), true, `checkpoint must include ${required}`);
 }
 
+// A10 — the fourteen restored PostgreSQL runtime integrity suites are MANDATORY.
+//
+// This list is the anti-rot guard, not bookkeeping. These suites were orphaned by the
+// PostgreSQL cutover and went unnoticed for exactly one reason: none of them was
+// registered, so `npm run checkpoint:release` stayed green while every one of them
+// failed at HEAD. Pinning them here means dropping one from the checkpoint fails the
+// checkpoint, so the same silent decay cannot recur.
+//
+// Removing an entry below is a disposition decision and belongs in
+// docs/ARCHITECTURAL_DECISIONS_PENDING.md (A10) with its reason recorded — not a
+// quiet edit here.
+for (const restored of [
+  'ticket-feasibility-gate-test.js',
+  'resume-obvious-postcondition-test.js',
+  'direct-folder-postcondition-completeness-test.js',
+  'runtime-feasibility-test.js',
+  'recovery-regression-test.js',
+  'postcondition-completion-test.js',
+  'startup-data-integrity-test.js',
+  'run-detail-evidence-clarity-test.js',
+  'run-diagnostics-bundle-test.js',
+  'bounded-transition-test.js',
+  'replay-snapshot-storage-test.js',
+  'runtime-limits-config-test.js',
+  'runtime-limits-ui-test.js',
+  'renamepath-runtime-regression-test.js'
+]) {
+  assert.equal(all.includes(restored), true,
+    `checkpoint must include the restored A10 suite ${restored}`);
+}
+
+// Every restored suite must exercise the real PostgreSQL runtime, so none may be
+// parked in the deterministic (no-database) list where it would be run without one.
+for (const restored of POSTGRES_INTEGRATION_SCRIPTS) {
+  assert.equal(CHECKPOINT_TEST_SCRIPTS.includes(restored), false,
+    `${restored} must not also appear in the deterministic checkpoint list`);
+}
+
+// The A10 mutation test edits tracked source in place and must never run as part of
+// the release checkpoint.
+assert.equal(all.includes('a10-suite-mutation-test.js'), false,
+  'the A10 mutation test must not be registered in the release checkpoint');
+
 const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 assert.match(packageJson.scripts['test:persistence:postgres'], /postgres-persistence-integration-test\.js/);
 assert.match(packageJson.scripts['test:cutover:postgres'], /postgres-runtime-cutover-test\.js/);

@@ -1,214 +1,32 @@
-const { spawn } = require('child_process');
+#!/usr/bin/env node
+'use strict';
+// Postcondition-based completion, workflow-draft intents, and handoff tasks —
+// PostgreSQL-native (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A10).
+//
+// Twenty scenarios, ported one-for-one from the JSON-era original against the
+// inventory recorded in A10. Each keeps its own server restart, its own runtime
+// budget, its own objective and provider-response branch, and the exact negative
+// regression it guards. They are deliberately NOT collapsed into shared
+// assertions: scenarios 1-8 cover postcondition completion, 9-15 cover workflow
+// draft intents, 16-18 cover handoff tasks, 19 covers draft rejection, and 20
+// covers compiled partial completion.
+//
+// Repaired, not rewritten. The provider preload (21 objective branches) and every
+// scenario body are preserved verbatim from the original; only the storage layer
+// changed. Seeding, run/ticket/workflow lookups, and event waits now go through
+// the PostgreSQL store via scripts/postgres-test-harness.js instead of a DATA_DIR
+// of JSON files the server no longer reads.
+//
+// AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT and ENABLE_MODEL_CONTRACT_COMPILER are
+// baseline environment for every scenario, as in the original.
+
 const fs = require('fs');
-const http = require('http');
-const net = require('net');
 const os = require('os');
 const path = require('path');
-const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
+const { withHarness, createAsserter, sleep } = require('./postgres-test-harness');
 
-const ROOT = path.resolve(__dirname, '..');
-const REAL_DATA_DIR = path.join(ROOT, 'data');
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'postcondition-data-'));
-const WORKSPACE_ROOT = createTempWorkspaceRoot('postcondition');
-// Resolved to a free ephemeral port in main() (overridable via PORT env) so
-// repeated/concurrent local runs never collide on a fixed port. Assigned before
-// any server is started or request is made.
-let PORT = null;
-let BASE_URL = null;
-
-// Ask the OS for an unused port by binding to 0, then release it for the server.
-function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
-}
 const STAMP = Date.now();
-const DATA_FILES = ['agents.json', 'allocation-plans.json', 'events.jsonl', 'groups.json', 'logs.json', 'memberships.json', 'operation-history.json', 'permissions.json', 'runs.json', 'tickets.json', 'users.json', 'workflows.json'];
-
-for (const file of DATA_FILES) {
-  const src = path.join(REAL_DATA_DIR, file);
-  const dst = path.join(DATA_DIR, file);
-  if (file === 'events.jsonl') {
-    fs.writeFileSync(dst, '');
-  } else if (fs.existsSync(src)) {
-    fs.copyFileSync(src, dst);
-  } else {
-    fs.writeFileSync(dst, '[]');
-  }
-}
-
-function readJson(file) {
-  const value = JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
-  if (file !== 'runs.json' || !Array.isArray(value)) return value;
-  return value.map(hydrateRunReplaySnapshot);
-}
-
-function readRunReplaySnapshot(run) {
-  if (!run || typeof run !== 'object') return null;
-  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
-  if (!run.replaySnapshotPath) return null;
-
-  const snapshotPath = path.resolve(DATA_DIR, run.replaySnapshotPath);
-  if (!snapshotPath.startsWith(DATA_DIR + path.sep)) return null;
-  if (!fs.existsSync(snapshotPath)) return null;
-  return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
-}
-
-function hydrateRunReplaySnapshot(run) {
-  if (!run || typeof run !== 'object') return run;
-  const replaySnapshot = readRunReplaySnapshot(run);
-  return replaySnapshot ? { ...run, replaySnapshot } : run;
-}
-
-async function waitForEvent(predicate, timeoutMs = 1000) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const events = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .map(line => JSON.parse(line));
-    const event = events.find(predicate);
-    if (event) return event;
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-  return null;
-}
-
-async function waitForStoredRun(runId, predicate, timeoutMs = 1000) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const run = readJson('runs.json').find(item => item.id === runId);
-    if (run && predicate(run)) return run;
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-  return readJson('runs.json').find(item => item.id === runId) || null;
-}
-
-async function waitForStoredTicket(ticketId, predicate, timeoutMs = 1000) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const ticket = readJson('tickets.json').find(item => item.id === ticketId);
-    if (ticket && predicate(ticket)) return ticket;
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-  return readJson('tickets.json').find(item => item.id === ticketId) || null;
-}
-
-function writeJson(file, value) {
-  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
-}
-
-function request(method, urlPath, options = {}) {
-  const body = options.form
-    ? new URLSearchParams(options.form).toString()
-    : options.body
-      ? JSON.stringify(options.body)
-      : null;
-
-  return new Promise((resolve, reject) => {
-    const req = http.request(`${BASE_URL}${urlPath}`, {
-      method,
-      headers: {
-        ...(options.form ? { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) } : {}),
-        ...(options.body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {}),
-        ...(options.cookie ? { Cookie: options.cookie } : {})
-      }
-    }, res => {
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
-    });
-
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
-  });
-}
-
-function cookieFrom(response) {
-  return (response.headers['set-cookie'] || []).map(cookie => cookie.split(';')[0]).join('; ');
-}
-
-async function waitForReady() {
-  const started = Date.now();
-  while (Date.now() - started < 15000) {
-    try {
-      const response = await request('GET', '/health');
-      if (response.statusCode === 200) {
-        const body = JSON.parse(response.body);
-        if (body.ready) return;
-      }
-    } catch (error) {
-      // Server is still starting.
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error('Timed out waiting for server ready');
-}
-
-// Resolve only when the process has actually exited. `child.killed` only means a
-// signal was sent (not that the OS process is gone), so it must NOT short-circuit
-// the wait: doing so let teardown delete the temp data dir while the server still
-// held files open (ENOTEMPTY) and let the next server bind before the port was
-// released (ECONNRESET). Escalate to SIGKILL if graceful shutdown stalls.
-async function waitForExit(child, timeoutMs = 8000) {
-  return new Promise(resolve => {
-    if (child.exitCode !== null) return resolve();
-    const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch (_) { /* already gone */ }
-    }, timeoutMs);
-    child.once('exit', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-}
-
-async function login() {
-  const response = await request('POST', '/login', {
-    form: { username: 'admin', password: 'admin123' }
-  });
-  if (response.statusCode !== 302) {
-    throw new Error(`Admin login failed with HTTP ${response.statusCode}`);
-  }
-  return cookieFrom(response);
-}
-
-function seedAgent() {
-  const agents = readJson('agents.json');
-  const agent = {
-    id: Math.max(0, ...agents.map(item => item.id)) + 1,
-    name: `PostconditionAgent-${STAMP}`,
-    type: 'agent',
-    provider: 'openai',
-    model: 'gpt-4.1-mini',
-    apiKey: 'test-key-postcondition',
-    createdAt: new Date().toISOString()
-  };
-  writeJson('agents.json', [...agents, agent]);
-  return agent;
-}
-
-function seedMikeExecutor() {
-  const agents = readJson('agents.json');
-  const existing = agents.find(agent => agent.name === 'Mike');
-  if (existing) return existing;
-  const agent = {
-    id: Math.max(0, ...agents.map(item => item.id)) + 1,
-    name: 'Mike',
-    type: 'agent',
-    provider: 'ollama',
-    model: 'gemma3:latest',
-    createdAt: new Date().toISOString()
-  };
-  writeJson('agents.json', [...agents, agent]);
-  return agent;
-}
+const assert = createAsserter();
 
 function createFakeOpenAIPreload() {
   const preloadPath = path.join(os.tmpdir(), `postcondition-openai-${process.pid}-${Date.now()}.js`);
@@ -588,132 +406,9 @@ function createFakeOpenAIPreload() {
   return preloadPath;
 }
 
-function startServer(preloadPath, env) {
-  const server = spawn(process.execPath, ['server.js'], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      NODE_ENV: 'test',
-      PORT,
-      NODE_OPTIONS: `--require ${preloadPath}`,
-      WORKSPACE_ROOT,
-      DATA_DIR,
-      AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT: '1',
-      ENABLE_MODEL_CONTRACT_COMPILER: 'true',
-      ...env
-    },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-
-  server.stdout.on('data', chunk => process.stdout.write(String(chunk)));
-  server.stderr.on('data', chunk => process.stderr.write(String(chunk)));
-  return server;
-}
-
-async function createAssignedTicket(cookie, agentId, objective) {
-  const response = await request('POST', '/tickets', {
-    cookie,
-    form: {
-      objective,
-      assignmentTargetType: 'agent',
-      assignmentTargetId: String(agentId)
-    }
-  });
-  if (response.statusCode !== 302) {
-    throw new Error(`Ticket create failed with HTTP ${response.statusCode}: ${response.body}`);
-  }
-  const ticket = readJson('tickets.json').find(item => item.objective === objective);
-  if (!ticket) throw new Error('Ticket was not persisted');
-  return ticket;
-}
-
-async function waitForTerminalRun(ticketId, expectedStatus) {
-  const started = Date.now();
-  while (Date.now() - started < 15000) {
-    const runs = readJson('runs.json').filter(run => run.ticketId === ticketId);
-    if (runs.length >= 1 && runs[0].status === expectedStatus && runs[0].replaySnapshot && runs[0].replaySnapshot.terminalStatus === expectedStatus) {
-      return runs[0];
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  const ticket = readJson('tickets.json').find(item => item.id === ticketId) || null;
-  const runs = readJson('runs.json').filter(run => run.ticketId === ticketId);
-  const run = runs[runs.length - 1] || null;
-  const events = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map(line => JSON.parse(line))
-    .filter(event => event.ticketId === ticketId || (run && event.runId === run.id));
-  const diagnostic = {
-    ticketId,
-    expectedStatus,
-    ticketStatus: ticket ? ticket.status : null,
-    runId: run ? run.id : null,
-    runStatus: run ? run.status : null,
-    runError: run ? run.error || null : null,
-    latestEvents: events.slice(-12),
-    replayTerminalStatus: run && run.replaySnapshot ? run.replaySnapshot.terminalStatus || null : null,
-    replayFailureReason: run && run.replaySnapshot ? run.replaySnapshot.failureReason || null : null,
-    verificationStatus: run && run.runEvaluation && run.runEvaluation.effectiveness
-      ? run.runEvaluation.effectiveness.status
-      : null
-  };
-  throw new Error(`Timed out waiting for terminal run:\n${JSON.stringify(diagnostic, null, 2)}`);
-}
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-async function runScenario(preloadPath, agent, objective, envOverrides, expectations) {
-  let server = null;
-  try {
-    server = startServer(preloadPath, envOverrides);
-    await waitForReady();
-    const cookie = await login();
-    const ticket = await createAssignedTicket(cookie, agent.id, objective);
-    const run = await waitForTerminalRun(ticket.id, expectations.expectedStatus);
-    const snapshot = run.replaySnapshot;
-
-    assert(run.status === expectations.expectedStatus, `Run ${run.id} status ${run.status} !== ${expectations.expectedStatus}`);
-
-    if (expectations.expectPostconditionCompleted) {
-      assert(snapshot.events.some(e => e.type === 'run:postcondition_completed'), `Missing run:postcondition_completed event for run ${run.id}`);
-      const operationalOutcome = snapshot.events.some(e => e.type === 'run:postcondition_completed') ? 'completed_with_verified_postcondition' : null;
-      assert(operationalOutcome === 'completed_with_verified_postcondition', `Run ${run.id} did not classify as postcondition completed`);
-    }
-
-    if (expectations.expectNoPostcondition) {
-      assert(!snapshot.events.some(e => e.type === 'run:postcondition_completed'), `Unexpected run:postcondition_completed event for run ${run.id}`);
-    }
-
-    if (expectations.expectStepsAtMost !== undefined) {
-      assert(snapshot.parsedModelPlans.length <= expectations.expectStepsAtMost, `Run ${run.id} used ${snapshot.parsedModelPlans.length} steps, expected at most ${expectations.expectStepsAtMost}`);
-    }
-
-    if (expectations.expectStepsAtLeast !== undefined) {
-      assert(snapshot.parsedModelPlans.length >= expectations.expectStepsAtLeast, `Run ${run.id} used ${snapshot.parsedModelPlans.length} steps, expected at least ${expectations.expectStepsAtLeast}`);
-    }
-
-    if (typeof expectations.verify === 'function') {
-      await expectations.verify({ run, ticket, snapshot, cookie });
-    }
-
-    return run;
-  } finally {
-    if (server) {
-      server.kill('SIGTERM');
-      await waitForExit(server);
-    }
-  }
-}
-
-async function main() {
-  PORT = process.env.PORT || String(await getFreePort());
-  BASE_URL = `http://127.0.0.1:${PORT}`;
-  const preloadPath = createFakeOpenAIPreload();
-  const agent = seedAgent();
-  const mike = seedMikeExecutor();
+async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, getWorkflow, request, waitForEvent, waitForStoredTicket, waitForStoredRun, assert, workspaceRoot }) {
+  // The scenarios assert real filesystem effects against the harness workspace.
+  const WORKSPACE_ROOT = workspaceRoot;
 
   try {
     // 1. folder+file creation finalizes automatically once satisfied
@@ -895,7 +590,7 @@ async function main() {
         expectedStatus: 'completed',
         expectNoPostcondition: true,
         verify: async ({ run, snapshot, cookie }) => {
-          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-valid');
+          const draft = await getWorkflow( 'agent-draft-valid');
           assert(draft, 'Agent-created workflow draft was not saved');
           assert(draft.enabled === false, 'Agent-created workflow draft should be disabled');
           assert(draft.createdByType === 'agent', 'Agent-created workflow draft should persist createdByType');
@@ -917,7 +612,7 @@ async function main() {
             }
           });
           assert(enableResponse.statusCode === 302, `Operator enable workflow draft returned HTTP ${enableResponse.statusCode}`);
-          const enabledDraft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-valid');
+          const enabledDraft = await getWorkflow( 'agent-draft-valid');
           assert(enabledDraft.enabled === true, 'Operator should be able to enable agent-created draft through admin workflow path');
         }
       }
@@ -938,7 +633,7 @@ async function main() {
         expectedStatus: 'completed',
         expectNoPostcondition: true,
         verify: async ({ run, snapshot }) => {
-          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-intent');
+          const draft = await getWorkflow( 'agent-draft-intent');
           assert(draft, 'Agent-created workflow draft intent was not saved');
           assert(draft.enabled === false, 'Agent-created workflow draft intent should be disabled');
           assert(draft.createdByType === 'agent', 'Intent-created workflow draft should persist createdByType');
@@ -978,7 +673,7 @@ async function main() {
         expectedStatus: 'completed',
         expectNoPostcondition: true,
         verify: async ({ run, snapshot }) => {
-          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-intent-action-postconditions');
+          const draft = await getWorkflow( 'agent-draft-intent-action-postconditions');
           assert(draft, 'Action-level postconditions intent should create a workflow draft');
           assert(draft.enabled === false, 'Action-level postconditions draft should be disabled');
           assert(draft.createdByRunId === run.id, 'Action-level postconditions draft should preserve createdByRunId');
@@ -1006,7 +701,7 @@ async function main() {
         verify: async ({ run, snapshot }) => {
           assert(run.error === 'Agent action includes unsupported field: postconditions', 'Both postcondition locations should reject action-level postconditions');
           assert(snapshot.failureReason === run.error, 'Both postcondition locations should preserve failure reason');
-          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-intent-both-postconditions');
+          const draft = await getWorkflow( 'agent-draft-intent-both-postconditions');
           assert(!draft, 'Both postcondition locations should not create a workflow draft');
         }
       }
@@ -1029,7 +724,7 @@ async function main() {
         verify: async ({ run, snapshot }) => {
           assert(run.error === 'Agent action includes unsupported field: note', 'Unrelated action-level field should remain rejected');
           assert(snapshot.failureReason === run.error, 'Unrelated action-level field should preserve failure reason');
-          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-intent-action-note');
+          const draft = await getWorkflow( 'agent-draft-intent-action-note');
           assert(!draft, 'Unrelated action-level field should not create a workflow draft');
         }
       }
@@ -1056,7 +751,7 @@ async function main() {
           assert(snapshot.parsedModelPlans.length === 1, 'Numeric id validation should not retry or recover');
           assert(snapshot.workflowDraftIntents.length === 0, 'Invalid numeric id intent should not record compiled workflow intent');
           assert(snapshot.workflowDrafts.length === 0, 'Invalid numeric id intent should not create a workflow draft');
-          const draft = readJson('workflows.json').find(workflow => workflow.id === '12345');
+          const draft = await getWorkflow( '12345');
           assert(!draft, 'Invalid numeric id should not create a workflow under the numeric id');
         }
       }
@@ -1182,7 +877,7 @@ async function main() {
         expectedStatus: 'failed',
         expectNoPostcondition: true,
         verify: async () => {
-          const draft = readJson('workflows.json').find(workflow => workflow.id === 'agent-draft-invalid');
+          const draft = await getWorkflow( 'agent-draft-invalid');
           assert(!draft, 'Invalid workflow draft should not be saved');
         }
       }
@@ -1236,29 +931,184 @@ async function main() {
       compiledPartialCompletionDeferred: true
     }));
   } finally {
-    // Servers are killed and awaited per scenario, so nothing should hold these
-    // open here. Retry once anyway to stay idempotent on slow-FS / failure paths.
-    safeRmSync(DATA_DIR, { recursive: true, force: true });
-    removeTempWorkspaceRoot(WORKSPACE_ROOT);
-    safeRmSync(preloadPath, { force: true });
+    // Workspace and schema cleanup belong to the shared harness; only the
+    // generated provider preload is owned by this suite.
+    try { require('fs').unlinkSync(preloadPath); } catch (_) { /* best effort */ }
   }
 }
 
-function safeRmSync(target, options) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      fs.rmSync(target, options);
-      return;
-    } catch (error) {
-      if (attempt === 1) {
-        process.stderr.write(`warning: cleanup of ${target} failed: ${error.message}\n`);
-        return;
+async function main() {
+  await withHarness('postcondition completion', async ({ store, workspaceRoot, startServer }) => {
+    const preloadPath = createFakeOpenAIPreload();
+
+    const agent = (await store.createConfiguredAgent({
+      value: { name: `PostconditionAgent-${STAMP}`, provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-key-postcondition' },
+      groupIds: [], changedBy: 'postcondition-completion-test'
+    })).agent;
+
+    // Handoff scenarios name "Mike" as the executor; it must exist as a real agent.
+    const mike = (await store.createConfiguredAgent({
+      value: { name: 'Mike', provider: 'ollama', model: 'gemma3:latest', apiKey: '' },
+      groupIds: [], changedBy: 'postcondition-completion-test'
+    })).agent;
+
+    const getWorkflow = async workflowId => store.getWorkflowById(workflowId);
+
+    // Store-backed replacements for the JSON-era pollers. Timeouts are widened
+    // from the original 1s: PostgreSQL round-trips are slower than a local file
+    // read, and the assertions are about eventual durability, not latency.
+    const waitForEvent = async (predicate, timeoutMs = 8000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const page = await store.listRuns({ limit: 100 });
+        for (const run of page.runs || []) {
+          const events = await store.listRunEvents(run.id, { afterSeq: -1, limit: 300 });
+          const found = (events || []).find(predicate);
+          if (found) return found;
+        }
+        await sleep(120);
       }
-      const wait = Date.now() + 200;
-      while (Date.now() < wait) { /* brief backoff before retry */ }
+      return null;
+    };
+
+    // The JSON-era store kept runEvaluation and runConsequence inline on the run
+    // record. PostgreSQL keeps them in their own tables, so the "stored run" the
+    // scenarios assert against is composed from the run plus those two reads.
+    const waitForStoredRun = async (runId, predicate, timeoutMs = 15000) => {
+      const deadline = Date.now() + timeoutMs;
+      let composed = null;
+      while (Date.now() < deadline) {
+        const run = await store.getRun(runId);
+        if (run) {
+          // Both accessors return a row wrapper; the scenarios assert against the
+          // documents themselves, which is what the JSON-era run record inlined.
+          const [evaluationRow, consequenceRow] = await Promise.all([
+            store.getRunEvaluation(runId),
+            store.getRunConsequence(runId)
+          ]);
+          composed = {
+            ...run,
+            runEvaluation: evaluationRow ? evaluationRow.evaluation : null,
+            runConsequence: consequenceRow ? consequenceRow.consequence : null
+          };
+          if (predicate(composed)) return composed;
+        }
+        await sleep(120);
+      }
+      return composed;
+    };
+
+    const waitForStoredTicket = async (ticketId, predicate, timeoutMs = 8000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const ticket = await store.getTicket(ticketId);
+        if (ticket && predicate(ticket)) return ticket;
+        await sleep(120);
+      }
+      return store.getTicket(ticketId);
+    };
+
+    // Scenario isolation is the contract: every scenario restarts the server
+    // with its own budget, creates its ticket, and asserts against that run alone.
+    let activeRequest = null;
+    const request = (method, urlPath, options = {}) => activeRequest(method, urlPath, options);
+
+    const seenRunIds = new Set();
+
+    async function runScenario(preload, scenarioAgent, objective, envOverrides, expectations) {
+      const server = await startServer({
+        NODE_OPTIONS: `--require ${preload}`,
+        AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT: '1',
+        ENABLE_MODEL_CONTRACT_COMPILER: 'true',
+        RUNTIME_SCHEDULER_INTERVAL_MS: '200',
+        ...envOverrides
+      });
+      activeRequest = server.request;
+      try {
+        const cookie = await server.login();
+        const created = await server.request('POST', '/tickets', {
+          cookie,
+          form: {
+            objective,
+            assignmentTargetType: 'agent',
+            assignmentTargetId: String(scenarioAgent.id),
+            assignmentMode: 'individual'
+          }
+        });
+        if (created.statusCode !== 302) {
+          throw new Error(`${objective}: ticket create returned HTTP ${created.statusCode}`);
+        }
+
+        const run = await (async () => {
+          const deadline = Date.now() + 60000;
+          while (Date.now() < deadline) {
+            const page = await store.listRuns({ limit: 200 });
+            const candidate = (page.runs || [])
+              .find(r => r.agentId === scenarioAgent.id && !seenRunIds.has(r.id));
+            if (candidate) {
+              const current = await store.getRun(candidate.id);
+              if (current && ['completed', 'failed', 'interrupted'].includes(current.status)) {
+                seenRunIds.add(current.id);
+                return current;
+              }
+            }
+            await sleep(150);
+          }
+          const page = await store.listRuns({ limit: 200 });
+          const cand = (page.runs || []).filter(r => !seenRunIds.has(r.id));
+          const diag = [];
+          for (const c of cand) {
+            const cur = await store.getRun(c.id);
+            diag.push(`run#${cur.id} agent=${cur.agentId} status=${cur.status} err=${cur.error || '-'}`);
+          }
+          throw new Error(`${objective}: timed out waiting for a terminal run [${diag.join(' | ') || 'no candidate runs'}]`);
+        })();
+
+        const replay = await store.readRunReplay(run.id);
+        const snapshot = replay ? replay.snapshot : null;
+        const ticket = await store.getTicket(run.ticketId);
+
+        assert(run.status === expectations.expectedStatus,
+          `${objective}: run status ${run.status} === ${expectations.expectedStatus}`);
+
+        const events = (snapshot && Array.isArray(snapshot.events)) ? snapshot.events : [];
+        const plans = (snapshot && Array.isArray(snapshot.parsedModelPlans)) ? snapshot.parsedModelPlans : [];
+
+        if (expectations.expectPostconditionCompleted) {
+          assert(events.some(e => e.type === 'run:postcondition_completed'),
+            `${objective}: run:postcondition_completed was recorded`);
+        }
+        if (expectations.expectNoPostcondition) {
+          assert(!events.some(e => e.type === 'run:postcondition_completed'),
+            `${objective}: no run:postcondition_completed was recorded`);
+        }
+        if (expectations.expectStepsAtMost !== undefined) {
+          assert(plans.length <= expectations.expectStepsAtMost,
+            `${objective}: used ${plans.length} steps, at most ${expectations.expectStepsAtMost}`);
+        }
+        if (expectations.expectStepsAtLeast !== undefined) {
+          assert(plans.length >= expectations.expectStepsAtLeast,
+            `${objective}: used ${plans.length} steps, at least ${expectations.expectStepsAtLeast}`);
+        }
+        if (typeof expectations.verify === 'function') {
+          await expectations.verify({ run, ticket, snapshot, cookie });
+        }
+        return run;
+      } finally {
+        await server.stop();
+        activeRequest = null;
+      }
     }
-  }
+
+    await runAllScenarios({
+      store, preloadPath, agent, mike, runScenario, getWorkflow, request,
+      waitForEvent, waitForStoredTicket, waitForStoredRun, assert, workspaceRoot
+    });
+
+    console.log(`\nPASS: postcondition completion, workflow drafts, and handoffs — ${assert.count()} assertions (PostgreSQL-native, 20 scenarios)`);
+  });
 }
+
 
 main().catch(error => {
   console.error(error.stack || error.message);

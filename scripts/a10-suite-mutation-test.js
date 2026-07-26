@@ -1,0 +1,229 @@
+#!/usr/bin/env node
+'use strict';
+// A10 restored-suite mutation test (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A10).
+//
+// WHY THIS EXISTS. A migrated suite that runs and prints "PASS" has proved only that
+// it no longer errors. It has NOT proved that it would still catch the regression it
+// was written to catch — and during the A10 tranche exactly that failure was found in
+// a suite already recorded as restored: `startup-data-integrity-test.js` omitted
+// SESSION_SECRET, so both its scenarios exited non-zero because the server could not
+// boot at all, and all eight assertions passed without ever exercising a storage
+// fault. A suite can be green and vacuous at the same time.
+//
+// This script closes that gap the only way that actually settles it: it breaks the
+// runtime on purpose, one contract at a time, and requires the corresponding suite to
+// FAIL. A mutation that leaves its suite green is a coverage hole, reported as such.
+//
+// DELIBERATELY NOT IN THE RELEASE CHECKPOINT. It edits tracked source files in place.
+// It is an audit tool, run explicitly:
+//
+//   TEST_DATABASE_URL=... node scripts/a10-suite-mutation-test.js [suite-name ...]
+//
+// SAFETY. Source is restored in a `finally` and on SIGINT/SIGTERM, and the restore is
+// verified by SHA-256 against the bytes read before mutating. The run REFUSES TO START
+// if any target file already has uncommitted changes, so a crash can never be confused
+// with, or destroy, work in progress.
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const ROOT = path.resolve(__dirname, '..');
+
+if (!process.env.TEST_DATABASE_URL && !process.env.DATABASE_URL) {
+  console.error('TEST_DATABASE_URL (or DATABASE_URL) is required for the A10 mutation test');
+  process.exit(1);
+}
+
+// Each mutation names the SINGLE contract it removes. `find` must occur exactly once
+// in the file, so a mutation can never land somewhere other than where it was aimed.
+const MUTATIONS = Object.freeze([
+  {
+    name: 'startup-fails-open',
+    suite: 'startup-data-integrity-test.js',
+    file: 'server.js',
+    contract: 'a startup guard failure exits non-zero (fail closed)',
+    find: '    process.exitCode = 1;',
+    replace: '    process.exitCode = 0;',
+    // A supervisor reads the exit code. Reporting success after refusing to start is
+    // the regression that turns a storage fault into a silently degraded deployment.
+    //
+    // An earlier attempt aimed this mutation at the required-relation list in
+    // persistence/postgres/store.js and it SURVIVED — not because the suite was
+    // vacuous, but because dropping access_users also breaks bootstrap, which fails
+    // closed independently. That is defense in depth, so removing one layer does not
+    // remove the contract. The lesson is recorded here because a surviving mutation
+    // means one of two different things, and only one of them is a coverage hole.
+    //
+    // The suite's other half — "no default administrator is created from unusable
+    // state" — is guarded by its own scenario 0 positive control, which requires the
+    // "Default admin user created" line to APPEAR on a healthy start. That makes its
+    // absence in the refusal scenarios evidence rather than an accident.
+    expect: 'an unusable store produces a zero exit code'
+  },
+  {
+    name: 'mutating-action-cap',
+    suite: 'bounded-transition-test.js',
+    file: 'server.js',
+    contract: 'a response may propose at most 2 mutating actions',
+    find: "parseInt(process.env.AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE || '2', 10) || 2",
+    replace: "parseInt(process.env.AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE || '8', 10) || 8",
+    expect: 'the oversized three-mutation batch is accepted instead of rejected whole'
+  },
+  {
+    name: 'renamepath-conflict-carveout',
+    suite: 'renamepath-runtime-regression-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'renamePath may consume a path this run created',
+    // Replaces the whole query tail, not just the carve-out clause: dropping the
+    // clause alone would leave $5/$6 bound and the query would fail to parse, killing
+    // the suite for a reason that proves nothing. The mutation must yield a VALID
+    // query that simply lacks the carve-out.
+    find: "         AND NOT ($5::text = 'renamePath' AND operation = ANY($6::text[]))\n"
+      + '       ORDER BY id\n'
+      + '       LIMIT 1`,\n'
+      + "      [id, target, workspacePath, mutationFingerprint, operationName, ['writeFile', 'createFolder']]",
+    replace: '       ORDER BY id\n'
+      + '       LIMIT 1`,\n'
+      + '      [id, target, workspacePath, mutationFingerprint]',
+    expect: 'writeFile-then-renamePath is rejected as a conflict'
+  },
+  {
+    name: 'diagnostic-count-wording',
+    suite: 'run-diagnostics-bundle-test.js',
+    file: 'server.js',
+    contract: 'count wording is status-aware ("before failure" only for failed runs)',
+    find: "  const countSuffix = runFailed ? ' before failure' : '';",
+    replace: "  const countSuffix = '';",
+    expect: 'a failed run reports its counts with neutral wording'
+  }
+]);
+
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function isFileClean(relativePath) {
+  const result = spawnSync('git', ['diff', '--quiet', '--', relativePath], { cwd: ROOT });
+  return result.status === 0;
+}
+
+const restorers = new Map();
+
+function restoreAll() {
+  for (const [absolutePath, original] of restorers) {
+    try {
+      fs.writeFileSync(absolutePath, original);
+      if (sha256(fs.readFileSync(absolutePath)) !== sha256(original)) {
+        console.error(`CRITICAL: failed to restore ${absolutePath} — restore it from git before continuing.`);
+      }
+    } catch (error) {
+      console.error(`CRITICAL: could not restore ${absolutePath}: ${error.message}`);
+    }
+  }
+  restorers.clear();
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => { restoreAll(); process.exit(130); });
+}
+
+function runSuite(suite) {
+  const result = spawnSync(process.execPath, [path.join('scripts', suite)], {
+    cwd: ROOT,
+    env: { ...process.env, NODE_ENV: process.env.NODE_ENV || 'test' },
+    encoding: 'utf8',
+    timeout: 15 * 60 * 1000
+  });
+  return { status: result.status, output: `${result.stdout || ''}${result.stderr || ''}` };
+}
+
+function main() {
+  const requested = process.argv.slice(2);
+  const selected = requested.length === 0
+    ? MUTATIONS
+    : MUTATIONS.filter(m => requested.includes(m.name) || requested.includes(m.suite));
+  if (selected.length === 0) {
+    console.error(`No mutation matched ${requested.join(', ')}. Known: ${MUTATIONS.map(m => m.name).join(', ')}`);
+    process.exit(1);
+  }
+
+  // Refuse to touch a file that already carries uncommitted work.
+  const dirty = [...new Set(selected.map(m => m.file))].filter(file => !isFileClean(file));
+  if (dirty.length > 0) {
+    console.error(
+      'REFUSING TO RUN: these files have uncommitted changes and would be rewritten:\n' +
+      dirty.map(file => `      ${file}`).join('\n') +
+      '\n      Commit or stash them first. This tool edits tracked source in place.'
+    );
+    process.exit(1);
+  }
+
+  const survived = [];
+  let killed = 0;
+
+  console.log(`A10 restored-suite mutation test — ${selected.length} mutation(s)\n`);
+
+  try {
+    for (const mutation of selected) {
+      const absolutePath = path.join(ROOT, mutation.file);
+      const original = fs.readFileSync(absolutePath);
+      const text = original.toString('utf8');
+
+      const occurrences = text.split(mutation.find).length - 1;
+      if (occurrences !== 1) {
+        console.error(
+          `FAIL: mutation "${mutation.name}" expected exactly one occurrence of its anchor in ` +
+          `${mutation.file}, found ${occurrences}. The runtime moved; re-aim the mutation.`
+        );
+        process.exit(1);
+      }
+
+      console.log(`── ${mutation.name}`);
+      console.log(`   removes: ${mutation.contract}`);
+      console.log(`   so that: ${mutation.expect}`);
+      console.log(`   suite:   ${mutation.suite}`);
+
+      restorers.set(absolutePath, original);
+      fs.writeFileSync(absolutePath, text.replace(mutation.find, mutation.replace));
+
+      const startedAt = Date.now();
+      const { status, output } = runSuite(mutation.suite);
+      const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+
+      fs.writeFileSync(absolutePath, original);
+      const restoredHash = sha256(fs.readFileSync(absolutePath));
+      if (restoredHash !== sha256(original)) {
+        console.error(`CRITICAL: ${mutation.file} did not restore cleanly. Restore it from git.`);
+        process.exit(1);
+      }
+      restorers.delete(absolutePath);
+
+      if (status === 0) {
+        survived.push(mutation);
+        console.log(`   ✗ SURVIVED (${seconds}s) — the suite passed with the contract removed.`);
+        console.log(`     Last output: ${output.trim().split('\n').slice(-1)[0]}`);
+      } else {
+        killed += 1;
+        const failureLine = output.split('\n').reverse().find(line => /FAIL|Error|✗/.test(line)) || `exit ${status}`;
+        console.log(`   ✓ killed (${seconds}s) — ${failureLine.trim().slice(0, 160)}`);
+      }
+      console.log('');
+    }
+  } finally {
+    restoreAll();
+  }
+
+  if (survived.length > 0) {
+    console.error(`FAIL: ${survived.length}/${selected.length} mutation(s) survived — those contracts are not actually covered:`);
+    for (const mutation of survived) {
+      console.error(`  - ${mutation.suite} does not detect: ${mutation.contract}`);
+    }
+    process.exit(1);
+  }
+
+  console.log(`PASS: A10 mutation test — ${killed}/${selected.length} mutations killed; every restored suite detected its regression`);
+}
+
+main();

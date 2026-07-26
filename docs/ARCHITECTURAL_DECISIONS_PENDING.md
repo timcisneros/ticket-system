@@ -39,9 +39,10 @@ the defect can cause, not how hard it is to fix.
 | A7 | Objective-grammar anchoring | Medium | **Governance decision required** | Policy |
 | A8 | Dead `allow*` policy fields | Low | Open | Dead contract |
 | A9 | Latency-aware feasibility | Medium | Open | Feasibility |
-| A10 | Orphaned PostgreSQL-era test harnesses | **High** | Open | Verification gap |
+| A10 | Orphaned PostgreSQL-era test harnesses | **High** | **Resolved for the inventoried 14** — see entry; wider orphan population newly recorded | Verification gap |
 | A11 | `truncated:true` disclosed to the model but never explained | Low | Open — split from A1 | Prompt policy |
 | A12 | Bounded workspace-snapshot recovery policy | Medium | **Open — decision required** — residual of A1 | Policy |
+| A13 | Tests asserting removed commit-idempotency helpers | Medium | **Open — decision required**; disposition finalized per suite, premise corrected | Verification gap |
 | A14 | Redundant-mutation postcondition shortcut does not fire | **High** | **Implemented** — see entry | Correctness |
 | A15 | Postcondition telemetry names a source the event never reaches | Low | **Open — decision required** | Documentation / telemetry |
 | A16 | Run consequence records no committed mutations | **High** | **Implemented** — see entry | Correctness |
@@ -468,10 +469,10 @@ measurable against existing evidence. **What the gate enforces was deliberately 
 
 | Field | Value |
 |-------|-------|
-| **Status** | Open — confirmed pre-existing, not a regression |
-| **Severity** | High — the release checkpoint has no working feasibility or postcondition coverage |
+| **Status** | **Resolved for the inventoried 14.** All fourteen are migrated, individually green, registered in the release checkpoint, and pinned as mandatory. A wider orphan population found during the tranche is recorded below and is **not** resolved |
+| **Severity** | High — the release checkpoint had no working feasibility or postcondition coverage |
 | **Evidence** | Baselined at commit `3a73a13` in a detached worktree; failure strings identical to current HEAD |
-| **Decision required** | Repair, port, or retire each harness |
+| **Decision required** | Repair, port, or retire each harness — **decided per suite below** |
 
 **Description:**
 
@@ -492,10 +493,14 @@ cutover: each spawns a server without setting `DATABASE_URL` and dies with
 - `scripts/replay-snapshot-storage-test.js`
 - `scripts/runtime-limits-config-test.js`
 - `scripts/runtime-limits-ui-test.js`
+- `scripts/renamepath-runtime-regression-test.js` *(added 2026-07-25: same JSON-era cause —
+  9 `DATA_DIR` references and the identical `DATABASE_URL is required` failure. Missed by the
+  original inventory.)*
 
-A fourteenth, `scripts/execution-semantics-test.js`, fails for a different reason: it asserts
-helpers such as `computeMutationFingerprint` that no longer exist (1 passed / 5 failed at
-HEAD). It is unrelated to `scripts/execution-semantics-snapshot-test.js`, which is current.
+`scripts/execution-semantics-test.js` fails for a *different* reason — it asserts helpers that
+no longer exist — and is **not** part of this storage migration. It is tracked separately as
+**A13**, together with four sibling scripts that fail the same way. It is unrelated to
+`scripts/execution-semantics-snapshot-test.js`, which is current and passing.
 
 None are registered in `CHECKPOINT_TEST_SCRIPTS` or `POSTGRES_INTEGRATION_SCRIPTS`, so
 `npm run checkpoint:release` stays green while they rot.
@@ -508,6 +513,315 @@ rather than extending `runtime-feasibility-test.js`.
 **Method note for whoever picks this up:** before treating any suite failure as a regression,
 baseline it at the relevant commit in a detached worktree and compare failure strings. Most
 failures in this list are pre-existing.
+
+### Audit findings (2026-07-25) — repair is a migration, not a configuration fix
+
+Re-audited against clean `master` (`c062af6`); all fourteen still fail. The missing
+`DATABASE_URL` is the *first* error each hits, but it is **not** the only defect:
+
+1. **`DATA_DIR` is read nowhere.** `grep -c 'process.env.DATA_DIR' server.js` returns **0**.
+   Every one of these harnesses seeds `data/*.json` into a temporary `DATA_DIR` and then
+   asserts by re-reading those files. The PostgreSQL server ignores that directory entirely,
+   so simply supplying `DATABASE_URL` would let the server boot and then fail every assertion,
+   because the seeded fixtures would not exist and the asserted state would never be written
+   there. Repair therefore requires migrating **seeding and assertions** onto the store, not
+   just adding an environment variable.
+
+2. **All thirteen server-based harnesses are JSON-era.** None references
+   `PostgresRuntimeStore`; all spawn a server and use `DATA_DIR` plus JSON reads
+   (~4,750 lines total). Each also carries its own copy of the same ~90 lines of scaffolding
+   (HTTP client, readiness poll, login, spawn, cleanup), which is why the cutover orphaned
+   them all simultaneously.
+
+3. **The startup data-integrity contract no longer exists.** `validateUniqueIntegerIds`
+   (`server.js`) is **defined but never called** — its only occurrence is its own definition.
+   The JSON-era startup refusal it powered (duplicate ids, malformed flat-file records) was
+   removed by the cutover, and PostgreSQL enforces that class of integrity structurally through
+   primary keys and constraints. `scripts/startup-data-integrity-test.js` therefore asserts a
+   behavior the runtime no longer has. The dead helper is a small residual defect in its own
+   right and should be removed or re-wired by whoever decides that contract's future.
+
+### Final disposition (complete)
+
+**Restoration count: 14 of 14.** A suite counts as restored only when its migrated test
+executes and passes its intended behavioral assertions. Neither a scenario inventory nor an
+audit plan counts as restoration.
+
+All fourteen are registered in `POSTGRES_INTEGRATION_SCRIPTS` and pinned as mandatory by
+`scripts/release-checkpoint-coverage-test.js`, so dropping one now fails the checkpoint. That
+pin is the actual fix for the original defect: the suites did not rot because they were hard
+to maintain, they rotted because nothing failed when they were absent.
+
+**570 assertions across the fourteen suites.**
+
+| Harness | Disposition | Status |
+|---------|-------------|--------|
+| `ticket-feasibility-gate-test.js` | Repair and retain | ✅ Migrated — 22 assertions |
+| `resume-obvious-postcondition-test.js` | Repair and retain | ✅ Migrated — 15 assertions |
+| `direct-folder-postcondition-completeness-test.js` | Repair and retain | ✅ Migrated — 14 assertions |
+| `runtime-feasibility-test.js` | Repair and retain | ✅ Migrated — 76 assertions |
+| `recovery-regression-test.js` | Repair and retain | ✅ Migrated — 47 assertions |
+| `postcondition-completion-test.js` | Repair and retain | ✅ Migrated — 140 assertions, 20/20 scenarios |
+| `startup-data-integrity-test.js` | **Replace** — the JSON `DATA_DIR` refusal mechanism no longer exists | ✅ Migrated — 14 assertions; **was vacuous, repaired** (below) |
+| `run-diagnostics-bundle-test.js` | Repair and retain | ✅ Migrated — 35 assertions |
+| `run-detail-evidence-clarity-test.js` | Repair and retain | ✅ Migrated — 15 assertions |
+| `bounded-transition-test.js` | **Repair, two scenarios re-expressed** — the phase gate and the action-contract streak superseded them | ✅ Migrated — 31 assertions |
+| `replay-snapshot-storage-test.js` | **Repair with the extraction-helper third retired** — separation is now structural | ✅ Migrated — 17 assertions |
+| `runtime-limits-config-test.js` | Repair and retain | ✅ Migrated — 88 assertions |
+| `runtime-limits-ui-test.js` | Repair and retain | ✅ Migrated — 34 assertions |
+| `renamepath-runtime-regression-test.js` | Repair and retain | ✅ Migrated — 22 assertions |
+| `execution-semantics-test.js` | **Not in A10** — see A13 | Tracked separately |
+
+### `startup-data-integrity-test.js` passed while asserting nothing (found and fixed 2026-07-25)
+
+Recorded prominently because it is the most transferable lesson in this tranche, and
+because the suite had already been counted as restored.
+
+The migrated suite spawned the server with only `DATABASE_URL`, `POSTGRES_SCHEMA`,
+`WORKSPACE_ROOT`, `NODE_ENV` and `PORT`. It supplied no `SESSION_SECRET`, so **both**
+scenarios died at `resolveSessionSecret` before reaching any storage code. Every
+assertion — non-zero exit, no default admin in the output, no leaked bootstrap
+password — held trivially, because a process that dies on line 122 satisfies all
+three. It also passed `DATABASE_SCHEMA`, which nothing reads (`server.js` reads
+`POSTGRES_SCHEMA`), so its "structurally unusable schema" scenario never pointed the
+server at the schema it had corrupted.
+
+Three changes, and the assertion count went 8 → 14:
+
+1. `POSTGRES_SCHEMA`, plus `SESSION_SECRET` and a per-run random
+   `ADMIN_BOOTSTRAP_PASSWORD`, so the server reaches storage and the leak assertion is
+   about *this run's* secret rather than the historical `admin123` literal.
+2. **A positive control (scenario 0).** The same binary and the same environment
+   against an intact migrated schema must reach `/health` ready and must print
+   `Default admin user created`. This is what makes the refusals attributable: only
+   the injected fault differs between scenario 0 and scenarios 1–2, and the control
+   proves the bootstrap line appears when bootstrap actually runs — so its absence in
+   the refusal scenarios is evidence rather than an accident.
+3. Each refusal must name its cause (`expectedCause` regex), so a refusal for an
+   unrelated reason no longer counts.
+
+**The general rule this establishes: a refusal test is worthless without a positive
+control.** "Exit code was non-zero" is satisfied by every crash, including the ones
+that never reach the behavior under test.
+
+### Dead JSON-era behavior that was retired rather than ported
+
+Repair was not mechanical everywhere. Where the runtime had moved, the retired
+assertion is recorded here so a future reader can tell a deliberate retirement from an
+accidental omission.
+
+**`bounded-transition-test.js` — two scenarios re-expressed.**
+
+- The suite expected a *mixed* inspection+mutation batch to execute and record four
+  workspace operations. That batch shape is now rejected by the **execution phase
+  gate** (`execution.phase_violation`, "actions belong to different execution phases"),
+  which did not exist when the suite was written; nothing is executed. The scenario now
+  proves the two gates are DISTINCT — the mutating cap accepts the batch
+  (`model:action_contract_passed`) and the phase gate then rejects it — and a new
+  at-cap same-phase scenario covers the boundary the old assertion was reaching for.
+  (The ordering of those two gates is A6's open governance question; this suite only
+  records the current behavior, it does not endorse it.)
+- The suite pinned the failure to the string *"Model repeatedly proposed too many
+  mutating actions; no workspace mutations were executed."* and to a
+  `run:mutating_action_limit` event. Neither exists: the mutating-action gate was
+  folded into the unified action-contract streak (`runtime/action-contract-streak.js`),
+  which terminates through `MODEL_RESPONSE_CONTRACT_VIOLATION` and records
+  `model:no_progress`. The live structured classification is asserted instead. Streak
+  *semantics* stay with `model-contract-violation-test.js`; this suite owns only that
+  the mutating cap was the gate that fired.
+
+**`replay-snapshot-storage-test.js` — the extraction helper retired.** A third of the
+suite drove `scripts/extract-replay-snapshots.js`, a one-shot JSON-era migration that
+lifted an inline `run.replaySnapshot` out of `runs.json` into
+`data/replay-snapshots/run-N.json` and left a `replaySnapshotPath` pointer. It reads
+`DATA_DIR`; separation is now structural (a `replay_snapshots` table keyed by run id)
+rather than the product of a migration step. The suite now asserts the PROPERTY that
+migration existed to establish: the run row holds no snapshot payload, the snapshot
+round-trips through its own record, and both consumers — run detail and the `oquery`
+CLI — hydrate it from there.
+
+**`runtime-limits-config-test.js` / `runtime-limits-ui-test.js` — renamed surfaces.**
+`concurrencyLimits.process` and `concurrencyLimits.activeProcessRuns` no longer exist;
+the status payload now distinguishes the deployment-scoped cap (`maxActiveRuns`) from
+this process's occupancy (`localProcess.admittedRuns`), and both are asserted. The
+admin form label "Max active runs in this **process**" is now "in this **deployment**".
+
+**Residual JSON-era artifacts, not fixed here.** `scripts/extract-replay-snapshots.js`
+is dead (reads `DATA_DIR`, produces a layout that no longer exists), as is
+`validateUniqueIntegerIds` in `server.js` (defined, never called — already noted in the
+audit findings above). Both are small disposition decisions in their own right and are
+deliberately left alone by a test-only tranche.
+
+### Two migration hazards worth knowing
+
+- **Crashed-run leases.** `TEST_INTERRUPTION_POINT` SIGKILLs the process, so the run keeps a
+  lease nobody can renew and recovery cannot claim it until that lease expires. A resume test
+  must shorten `RUN_LEASE_DURATION_MS` in its own environment or it will appear to hang for the
+  default 180s. This is a test-environment knob only.
+- **`jsonb` does not preserve key insertion order.** Assertions ported from the JSON era that
+  compared payloads with `JSON.stringify` fail for that reason alone. Compare structurally;
+  element order is usually part of the contract, key order never is.
+
+### Mutation testing: proving the restored suites are not vacuous
+
+`scripts/a10-suite-mutation-test.js` breaks one runtime contract at a time and requires
+the corresponding suite to FAIL. It exists because `startup-data-integrity-test.js`
+demonstrated that green and vacuous are not mutually exclusive, and "the migrated suite
+passes" is therefore not evidence that it still catches anything.
+
+Run it explicitly — it is **deliberately not in the release checkpoint** because it
+edits tracked source in place:
+
+```
+TEST_DATABASE_URL='postgresql://...' node scripts/a10-suite-mutation-test.js
+```
+
+It refuses to start if any file it would mutate has uncommitted changes, restores every
+file in a `finally` and on SIGINT/SIGTERM, and verifies the restore by SHA-256.
+
+| Mutation | Contract removed | Suite | Result |
+|----------|------------------|-------|--------|
+| `startup-fails-open` | a startup guard failure exits non-zero | `startup-data-integrity-test.js` | killed |
+| `mutating-action-cap` | a response may propose at most 2 mutating actions | `bounded-transition-test.js` | killed |
+| `renamepath-conflict-carveout` | renamePath may consume a path this run created | `renamepath-runtime-regression-test.js` | killed |
+| `diagnostic-count-wording` | count wording is status-aware | `run-diagnostics-bundle-test.js` | killed |
+
+**Two lessons from building it, both recorded in the script itself.**
+
+- *A surviving mutation means one of two different things.* The first aim at the
+  startup suite removed `access_users` from the required-relation list and SURVIVED —
+  not because the suite was vacuous, but because dropping that table also breaks
+  bootstrap, which fails closed independently. Defense in depth means removing one
+  layer does not remove the contract. The mutation was re-aimed at the exit code.
+- *A kill can be false.* The first renamePath mutation deleted only the carve-out
+  clause and left `$5`/`$6` bound, so the query failed to parse. The suite failed —
+  proving nothing. A mutation must yield a runtime that is **wrong**, not one that is
+  **broken**.
+
+### `postcondition-completion-test.js` scenario inventory
+
+Recorded before migration, per the A10 discipline. Retained as the contract record; the
+suite is now migrated and passing at 140 assertions across all 20 scenarios.
+
+ 20 scenarios across 1,266 lines, driven by a
+shared `runScenario(preloadPath, agent, objective, envOverrides, expectations)` helper and a
+single `global.fetch` preload that branches on the objective string. Each scenario restarts the
+server with its own budget overrides, so per-scenario limits are part of the contract.
+
+Only the first eight concern postcondition completion directly. Scenarios 9–19 use the same
+harness to cover **workflow draft intents and handoff tasks** — they assert
+`expectNoPostcondition` plus scenario-specific verification, and are distinct regressions that
+must not be collapsed together.
+
+| # | Objective shape | Budget (steps/reqs) | Expected outcome | Negative condition guarded |
+|---|-----------------|---------------------|------------------|----------------------------|
+| 1 | `postcondition-create-folder-file` | 4/4 | completed, postcondition fired, ≤N steps | completion must not need extra model turns |
+| 2 | `postcondition-repeated-write` | 4/4 | completed, postcondition fired, ≤N steps | repeated identical write must not loop |
+| 3 | `postcondition-repeated-write` (tight) | 3/3 | completed, postcondition fired, ≤N steps | must complete before exhausting a tighter budget |
+| 4 | `postcondition-failed-op` | 4/4 | **no** postcondition | a failed operation must never satisfy a postcondition |
+| 5 | `postcondition-mixed-read` | 4/4 | no postcondition, ≥N steps | inspection mixed with mutation must not shortcut |
+| 6 | `workspace-objective-satisfied` (write note) | 3/3 | no postcondition | workspace-satisfied path must not fire the postcondition path |
+| 7 | `workspace-root-objective-satisfied` | 3/3 | terminal status only | root-scoped objective resolves without shortcut |
+| 8 | `postcondition-non-obvious` | 4/4 | completed, postcondition fired, ≤N steps | non-obvious objectives still complete deterministically |
+| 9 | `workflow-draft-valid` | 3/3 | no postcondition, `expectedRevision` | a valid draft persists at the expected revision |
+| 10 | `workflow-draft-intent` | 3/3 | no postcondition | draft intent recorded, not executed |
+| 11 | `workflow-draft-intent-action-postconditions` | 3/3 | no postcondition | action-level postconditions captured on the intent |
+| 12 | `workflow-draft-intent-both-postconditions` | 3/3 | no postcondition | both draft- and action-level postconditions captured |
+| 13 | `workflow-draft-intent-action-note` | 3/3 | no postcondition | action notes preserved |
+| 14 | `workflow-draft-intent-numeric-id` | 3/3 | no postcondition | numeric ids normalized rather than rejected |
+| 15 | `workflow-branching-unsupported` | 3/3 | no postcondition | branching objectives are not misfiled as draft-intent failures |
+| 16 | `handoff-valid` | 3/3 | no postcondition | a valid handoff task is created |
+| 17 | `handoff-invalid-path` | 3/3 | no postcondition | an out-of-scope handoff path is rejected |
+| 18 | `handoff-unknown-executor` | 3/3 | no postcondition | an unknown executor is rejected |
+| 19 | `workflow-draft-invalid` | 3/3 | no postcondition | an invalid draft is rejected, not silently stored |
+| 20 | `compiled-partial-completion` | 3/4 | completed, postcondition fired, ≥N steps | a compiled contract must not complete on partial state |
+
+**Mapping to current runtime.** All 20 objective shapes still route through live code paths:
+`checkPostconditionCompletion`, `checkObjectiveContractPostcondition`, the workflow
+draft-intent surface, and `createHandoffTask`. Nothing in the inventory asserts a removed
+helper, so this suite is a **repair**, not a replacement or retirement.
+
+**Established port mappings** (verified against the current store while inventorying, so the
+next porter does not re-derive them):
+
+| JSON-era access | PostgreSQL replacement |
+|-----------------|------------------------|
+| `run.replaySnapshot` | `(await store.readRunReplay(runId)).snapshot` |
+| `readJson('runs.json')` lookup | `store.listRuns({ limit })` then `store.getRun(id)` |
+| `readJson('tickets.json')` | `store.listTickets({ limit })` / `store.getTicket(id)` |
+| `readJson('workflows.json')` | workflow-catalog store methods (`persistence/postgres/workflow-catalog-methods.js`) |
+| `readJson('operation-history.json')` | `store.listRunOperations(runId, { limit })` |
+| `readJson('logs.json')` | `store.listLogs({ types, runId, ticketId, limit })` |
+| `events.jsonl` filtered by run | `store.listRunEvents(runId, { afterSeq: -1, limit })` |
+| `waitForEvent(predicate)` | poll `store.listRunEvents` for the predicate |
+| seeded `agents.json` entry | `store.createConfiguredAgent({ value, groupIds, changedBy })` |
+| seeded group / membership | `store.createGroup({ value, changedBy })` + agent `groupIds` |
+
+`runScenario(preloadPath, agent, objective, envOverrides, expectations)` ports cleanly: its
+`startServer(preloadPath, envOverrides)` becomes the harness `startServer({ NODE_OPTIONS,
+...envOverrides })`, and its `expectations.verify({ run, ticket, snapshot, cookie })` callback
+keeps the same shape with `snapshot` sourced from `readRunReplay`. The helper's structure is
+worth preserving rather than flattening — it is what keeps the twenty scenarios independent.
+
+**Port note.** The per-scenario server restart is intrinsic to the contract (each scenario
+asserts behavior under its own budget), so the migrated suite must keep restarting the server
+per scenario through the shared harness rather than sharing one server.
+
+### Repair mechanism
+
+`scripts/postgres-test-harness.js` — one shared bootstrap the orphaned suites migrate onto,
+rather than thirteen independent patches. It provides an explicit test database URL with loud
+failure when absent, one isolated `tstharness_*` schema per test process, deterministic
+migration, deterministic cleanup on success *and* failure, age-based reaping of schemas left by
+interrupted runs, and a real server spawn with readiness polling and login. It has no JSON or
+in-memory fallback: these suites must exercise the PostgreSQL runtime because that is what
+production uses. It deliberately does not abstract what any suite asserts.
+
+### A10's inventory of fourteen badly understates the orphan population (found 2026-07-25)
+
+**This is the one part of A10 that is NOT resolved, and it is larger than what was
+fixed.** While migrating the last six suites, two more JSON-era orphans surfaced that
+drive the *same* cross-ticket-delete contract as `run-diagnostics-bundle-test.js`:
+
+- `scripts/concurrency-conflict-test.js` (12 `DATA_DIR` references)
+- `scripts/run-detail-permissioned-delete-audit-test.js` (9 `DATA_DIR` references)
+
+Neither references `PostgresRuntimeStore` or the shared harness, and neither is
+registered in the checkpoint. Sweeping for the general shape — a script under
+`scripts/` matching `*-test.js` that references `DATA_DIR` and references neither
+`postgres-test-harness` nor `PostgresRuntimeStore` — returns **96 files**:
+
+```
+for f in scripts/*-test.js; do
+  if grep -q "DATA_DIR" "$f" && ! grep -q "postgres-test-harness\|PostgresRuntimeStore" "$f";
+  then echo "$f"; fi
+done | wc -l
+```
+
+**What this count does and does not establish.** It is a *candidate* list, not 96
+confirmed failures. It certainly includes false positives — suites that only mention
+`DATA_DIR` in a comment, and deliberately-skipped live-provider suites such as
+`live-openai-test.js` and `allocated-live-openai-test.js`. The two named above were
+individually confirmed to be genuine JSON-era orphans. The rest have **not** been
+executed or triaged.
+
+**Why it matters anyway.** A10's framing — "fourteen suites" — implied the orphaned
+population was bounded and now cleared. It is not. The fourteen were the ones somebody
+happened to notice; the cutover orphaned suites in bulk and nothing detected it,
+because the checkpoint never ran any of them. Closing A10's inventory without recording
+this would leave the next reader believing the verification gap is closed when the
+majority of it has not even been measured.
+
+**Not done here, deliberately.** Triaging ~96 candidate scripts is a tranche of its own
+and is not test-migration work that can ride along with fourteen suites. It needs its
+own inventory pass: execute each, classify (genuine orphan / false positive /
+intentionally-excluded live-provider suite), then repair, replace, or retire with the
+reason recorded — the same discipline this entry established.
+
+**Recommended next step:** open a successor entry scoped to that sweep, with
+`concurrency-conflict-test.js` and `run-detail-permissioned-delete-audit-test.js` as
+its confirmed seed set, since both guard the cross-ticket-delete authority contract
+that only `run-diagnostics-bundle-test.js` currently covers.
 
 ---
 
@@ -615,6 +929,26 @@ only after `commitRunTerminalization` has made the runs row, replay snapshot,
 terminal bundle, evaluation, and consequence durable, so losing one cannot change
 reconstruction, terminal classification, authority attribution, recovery safety,
 operator truth, or compliance evidence.
+
+**Verification coverage map (audited 2026-07-25 against the committed suites).**
+
+| Guarantee | Covered? | Test / assertion |
+|---|---|---|
+| Containment does not recurse into the failing log path | **Yes** | `delegated-run-logging-containment-test.js:309` "containment did not recurse into the failing log path"; `reconciliation-evidence-failure-test.js:286` "no recursive diagnostic-log attempt occurred: exactly one per fixture" |
+| Terminalization clears pending-write and failure-marker state | **Yes** | `run-evidence-drain-test.js:183` "terminalization clears the failure marker"; `:185` "terminalization clears pending-write state"; `:274`/`:276` no marker or pending-write entries leak after release |
+| A later run id inherits no stale state | **Yes** | `run-evidence-drain-test.js` "a later run with a different id does not inherit stale failure state" |
+| Post-mutation and final-step failure positions | **Yes** | `delegated-run-logging-containment-test.js`, mutation-proven via completion-drain removal |
+| **Resumed-run initial evidence drain** | **No** | *(open follow-up A17-V1)* |
+| **Required-log failure strictly before action execution** | **No** | *(open follow-up A17-V2)* |
+| **Cleanup asserted end-to-end across recovery/startup-reconciled paths** | **Partial** | proven at unit level in `run-evidence-drain-test.js`; not asserted through a live recovery run *(A17-V3)* |
+
+**Open verification follow-ups (A17-V1..V3).** These are *missing proofs*, not known
+defects. The production paths they would exercise are implemented and reasoned:
+`run:resumed` is classified under caller-rule case 1 because the resumed run re-enters
+`runAgentTicket`, whose first gate drains before any model request or mutation; the
+before-mutation position is guarded by the same gate that the post-mutation case
+proves. No incorrect production behavior is known or implied. They are recorded here
+so no future reader mistakes reasoned coverage for tested coverage.
 
 **Tests.** `scripts/delegated-run-logging-containment-test.js` (37),
 `scripts/run-evidence-drain-test.js` (40),
@@ -1198,6 +1532,122 @@ scenario 1 by this defect, not by a porting error.
 **Decision required.** Either the shortcut is intended and is broken (fix it, then the suite
 passes as ported), or the shortcut was deliberately superseded by contract-based completion and
 inventory rows 1, 2, 3, and 8 must be retired with that reason recorded.
+
+---
+
+### A13. Tests asserting removed commit-idempotency helpers
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — decision required.** Distinct from A10: not a storage-bootstrap failure |
+| **Severity** | Medium — five suites are dead, but the contract they guarded is covered elsewhere |
+| **Evidence** | Failures reproduced against `master` `c062af6`; symbol counts in `server.js` |
+| **Decision required** | Retire each suite, or re-point it at the surviving PostgreSQL-enforced contract |
+
+**Description:**
+
+Five scripts fail because they extract and assert helper functions that production no longer
+contains. This is **not** the A10 cause: they do not fail on `DATABASE_URL`, and repairing them
+is not part of the PostgreSQL-storage migration. Investigation confirmed the causes do not
+overlap, so per instruction they are tracked separately rather than folded into A10.
+
+**Exact failures:**
+
+| Script | Failure |
+|--------|---------|
+| `scripts/execution-semantics-test.js` | `computeMutationFingerprint should exist`; `findConflictingMutation should exist`; `findCommittedMutation should be called in executeWorkspaceOperation`; `rerun endpoint should pass mode to rerunTicketFromBeginning` (1 passed / 5 failed) |
+| `scripts/renamepath-conflict-regression-test.js` | `ASSERTION FAILED` on the same extracted helpers |
+| `scripts/observed-poststate-regression-test.js` | `buildTargetOperationKey is not defined` |
+| `scripts/renamepath-preservation-regression-test.js` | `buildTargetOperationKey is not defined` |
+| `scripts/verify-batch-operation-regression-test.js` | `buildTargetOperationKey is not defined` |
+
+**Removed helpers.** `computeMutationFingerprint`, `findConflictingMutation`, and
+`findCommittedMutation` each occur **0 times** in `server.js`. The suites extract them from
+source text and execute them, so their absence fails the extraction rather than any behavior.
+`buildTargetOperationKey` does exist in `server.js` but is not exported into the scope those
+scripts build, which is the same class of defect: they depend on internal structure, not
+behavior.
+
+**The contract survives — in a different mechanism.** Commit idempotency and conflict rejection
+moved from in-process JavaScript helpers to PostgreSQL enforcement: stable operation keys
+(`buildTargetOperationKey` + `operationKey`), prepared intent, and the `operation_receipts`
+table with its `operation_receipts_idempotency_unique` and `operation_receipts_append_only`
+constraints.
+
+**It is already covered.** `scripts/operation-batch-test.js` — in the release checkpoint and
+**passing** — asserts exactly these contracts today:
+
+- *"duplicate-commits-skipped: stable keys, prepared intent, receipt reuse, and reconciliation
+  prevent repeated effects"*
+- *"conflicting-operations-rejected: all four primitives use PostgreSQL receipt authority and
+  target locks"*
+
+So the runtime guarantee is not unprotected; only these five source-coupled suites are dead.
+
+**Decision required:** for each of the five, either retire it with the overlap against
+`operation-batch-test.js` recorded assertion-by-assertion, or re-point it at the surviving
+receipt-based contract. Retirement must not be assumed — `execution-semantics-test.js` also
+covers resume deduplication, retry hidden-context, and reassess evidence injection, and the
+*reassess* assertion still passes today, so at least part of that file guards live behavior
+that must be preserved somewhere before anything is deleted.
+
+**Not to be repaired inside A10.** Investigation established the causes are disjoint.
+
+### Finalized disposition (2026-07-25) — and a correction to this entry's premise
+
+Re-verified by executing all five at HEAD and by counting every symbol in `server.js`.
+All five still fail exactly as tabulated above.
+
+**Symbol census — this is what splits the five into two groups:**
+
+| Symbol | Occurrences in `server.js` | Consequence |
+|--------|---------------------------|-------------|
+| `computeMutationFingerprint` | 0 | genuinely removed |
+| `findConflictingMutation` | 0 | genuinely removed |
+| `findCommittedMutation` | 0 | genuinely removed |
+| `buildTargetOperationKey` | 5 | **live** |
+| `captureWorkspacePostState` | 12 | **live** |
+| `verifyBatchOperation` | 2 | **live** |
+| `rerunTicketFromBeginning` | 3 | **live** |
+
+**The premise above is true for two of the five and false for three.** This entry
+states that "the contract they guarded is covered elsewhere" and that "only these five
+source-coupled suites are dead". That holds for the two commit-idempotency suites,
+whose helpers are gone. It does **not** hold for the three `buildTargetOperationKey`
+suites: the behavior they guard is still in the runtime, and retiring them would delete
+coverage rather than delete dead weight.
+
+| Suite | Contract it guards | Still live? | Covered elsewhere? | Disposition |
+|-------|--------------------|-------------|--------------------|-------------|
+| `execution-semantics-test.js` | commit idempotency, conflict rejection via removed helpers | **No** (0 occurrences) | Yes — `operation-batch-test.js` (receipt authority, target locks) | **Retire**, *after* relocating its one live assertion (below) |
+| `renamepath-conflict-regression-test.js` | the renamePath conflict carve-out, by source extraction | **No** (extracts `findConflictingMutation`) | **Yes, and better** — `renamepath-runtime-regression-test.js` (A10) now drives all five carve-out cases end-to-end through the real runtime and the real receipt table, and its coverage is mutation-verified | **Retire** |
+| `observed-poststate-regression-test.js` | `operation-history.postState` comes from filesystem observation, not from requested args | **Yes** (`captureWorkspacePostState`, 12) | **Partially** — `recovery-regression-test.js` asserts `preState.existed`/`postState.existed` on one operation; the divergence case (filesystem differs from args) is uncovered | **Re-point, do not retire** |
+| `renamepath-preservation-regression-test.js` | `batch.verification_failed` emits exact checks when a renamePath destination's type or contentHash diverges | **Yes** (`verifyBatchOperation`, 2) | **No** — `operation-batch-test.js` only asserts the source text *contains* `'batch.verification_failed'`, which is a substring check, not a behavioral one | **Re-point, do not retire** |
+| `verify-batch-operation-regression-test.js` | the remaining `batch.verification_failed` checks | **Yes** | **No** — same gap | **Re-point, do not retire** |
+
+**The one live assertion inside `execution-semantics-test.js`.** Of its six, exactly one
+passes today: *`reassess-explicit-evidence`: reassess mode injects structured failure
+context*. It must land somewhere before that file is deleted. It is unrelated to commit
+idempotency and does not belong with the receipt suites.
+
+**Why this was not executed in the A10 tranche.** Retiring test suites, and rewriting
+three that guard live-but-uncovered behavior, is a verification-scope decision this
+entry itself marks *decision required* — and the third column above shows two contracts
+with **no behavioral coverage at all** today. Acting on that unilaterally inside a
+test-migration commit would be the wrong place to make it. What has changed is that the
+decision is now evidence-backed rather than assumed: the coverage map is complete, the
+false premise is corrected, and the sequencing constraint (relocate `reassess` first) is
+explicit.
+
+**Recommended sequence when A13 is picked up:**
+
+1. Relocate `reassess-explicit-evidence` into a PostgreSQL-native suite.
+2. Retire `execution-semantics-test.js` and `renamepath-conflict-regression-test.js`.
+3. Re-point the three `verifyBatchOperation` / `captureWorkspacePostState` suites onto
+   the real runtime via `scripts/postgres-test-harness.js`, following the A10 pattern —
+   and register them, since the substring check in `operation-batch-test.js` is the only
+   thing standing behind `batch.verification_failed` today.
+4. Mutation-test the result. `scripts/a10-suite-mutation-test.js` is the template.
 
 ---
 

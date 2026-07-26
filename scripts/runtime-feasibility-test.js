@@ -1,143 +1,44 @@
-const { spawn } = require('child_process');
+#!/usr/bin/env node
+'use strict';
+// Runtime feasibility admission and rejection — PostgreSQL-native
+// (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A10).
+//
+// Contract under test, preserved from the JSON-era original: when an objective
+// contract requires more mutations than the step budget can deliver, the run is
+// REJECTED before it mutates anything. Three objective shapes pin that:
+//
+//   delete range     — deterministic grammar; 10 deletes at 2/response needs 5
+//                      steps against a limit of 4
+//   create range     — deterministic grammar; 24 remaining creates need 12 steps,
+//                      and the provider is never called at all
+//   compiled create  — prose the grammar misses, normalized by the objective
+//                      compiler; 16 remaining creates need 8 steps
+//
+// For every shape: run fails with "Runtime budget infeasible", triage reasonCode
+// is runtime_budget_insufficient, triage offers raise_limit / split_task /
+// manual_recovery, and nothing in the workspace is mutated.
+//
+// The create-range scenario's provider assertion is the sharpest one here: it is
+// what proves the gate rejects BEFORE the model is consulted rather than after a
+// first turn.
+//
+// Repaired, not rewritten. The provider stub (a NODE_OPTIONS `global.fetch`
+// preload) is storage-independent and preserved verbatim in behavior. Seeding, run
+// lookup, triage, and replay reads now go through the PostgreSQL store.
+
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
-const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
+const { withHarness, createAsserter, sleep } = require('./postgres-test-harness');
 
-const ROOT = path.resolve(__dirname, '..');
-const REAL_DATA_DIR = path.join(ROOT, 'data');
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-feasibility-data-'));
-const WORKSPACE_ROOT = createTempWorkspaceRoot('runtime-feasibility');
-const PORT = process.env.PORT || '3432';
-const BASE_URL = `http://127.0.0.1:${PORT}`;
-const STAMP = Date.now();
-const DATA_FILES = ['agents.json', 'allocation-plans.json', 'groups.json', 'logs.json', 'memberships.json', 'operation-history.json', 'permissions.json', 'runs.json', 'tickets.json', 'users.json'];
+const assert = createAsserter();
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
-for (const file of DATA_FILES) {
-  const src = path.join(REAL_DATA_DIR, file);
-  const dst = path.join(DATA_DIR, file);
-  if (fs.existsSync(src)) {
-    fs.copyFileSync(src, dst);
-  } else {
-    fs.writeFileSync(dst, '[]');
-  }
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
-}
-
-function readRunReplaySnapshot(run) {
-  if (!run || typeof run !== 'object') return null;
-  if (run.replaySnapshot && typeof run.replaySnapshot === 'object') return run.replaySnapshot;
-  if (!run.replaySnapshotPath) return null;
-  const snapshotPath = path.resolve(DATA_DIR, run.replaySnapshotPath);
-  if (!snapshotPath.startsWith(DATA_DIR + path.sep)) return null;
-  if (!fs.existsSync(snapshotPath)) return null;
-  return JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
-}
-
-function readEvents() {
-  const file = path.join(DATA_DIR, 'events.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf8')
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(line => {
-      try { return JSON.parse(line); } catch { return null; }
-    })
-    .filter(Boolean);
-}
-
-function writeJson(file, value) {
-  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
-}
-
-function request(method, urlPath, options = {}) {
-  const body = options.form
-    ? new URLSearchParams(options.form).toString()
-    : options.body
-      ? JSON.stringify(options.body)
-      : null;
-
-  return new Promise((resolve, reject) => {
-    const req = http.request(`${BASE_URL}${urlPath}`, {
-      method,
-      headers: {
-        ...(options.form ? { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) } : {}),
-        ...(options.body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {}),
-        ...(options.cookie ? { Cookie: options.cookie } : {})
-      }
-    }, res => {
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
-    });
-
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
-  });
-}
-
-function cookieFrom(response) {
-  return (response.headers['set-cookie'] || []).map(cookie => cookie.split(';')[0]).join('; ');
-}
-
-async function waitForReady() {
-  const started = Date.now();
-  while (Date.now() - started < 15000) {
-    try {
-      const response = await request('GET', '/health');
-      if (response.statusCode === 200) {
-        const body = JSON.parse(response.body);
-        if (body.ready) return;
-      }
-    } catch (error) {
-      // Server is still starting.
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error('Timed out waiting for server ready');
-}
-
-async function waitForExit(child) {
-  return new Promise(resolve => {
-    if (child.exitCode !== null || child.killed) return resolve();
-    child.once('exit', () => resolve());
-  });
-}
-
-async function login() {
-  const response = await request('POST', '/login', {
-    form: { username: 'admin', password: 'admin123' }
-  });
-  if (response.statusCode !== 302) {
-    throw new Error(`Admin login failed with HTTP ${response.statusCode}`);
-  }
-  return cookieFrom(response);
-}
-
-function seedAgent() {
-  const agents = readJson('agents.json');
-  const agent = {
-    id: Math.max(0, ...agents.map(item => item.id)) + 1,
-    name: `RuntimeFeasibilityAgent-${STAMP}`,
-    type: 'agent',
-    provider: 'openai',
-    model: 'gpt-4.1-mini',
-    apiKey: 'test-key-runtime-feasibility',
-    createdAt: new Date().toISOString()
-  };
-  writeJson('agents.json', [...agents, agent]);
-  return agent;
-}
-
+// Only the objective compiler is answered meaningfully; execution plans are never
+// expected, because every scenario must be rejected before execution.
 function createFakeOpenAIPreload() {
   const preloadPath = path.join(os.tmpdir(), `runtime-feasibility-openai-${process.pid}-${Date.now()}.js`);
-  const source = `
+  fs.writeFileSync(preloadPath, `
 global.fetch = async function(url, options = {}) {
   const body = JSON.parse(options.body || '{}');
   const input = Array.isArray(body.input) ? body.input : [];
@@ -179,220 +80,145 @@ global.fetch = async function(url, options = {}) {
     }
   };
 };
-`;
-  fs.writeFileSync(preloadPath, source);
+`);
   return preloadPath;
 }
 
-function startServer(preloadPath) {
-  const server = spawn(process.execPath, ['server.js'], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      NODE_ENV: 'test',
-      PORT,
-      NODE_OPTIONS: `--require ${preloadPath}`,
-      WORKSPACE_ROOT,
-      DATA_DIR,
-      AGENT_MAX_EXECUTION_STEPS: '4',
-      AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE: '2',
-      AGENT_MAX_MODEL_REQUESTS_PER_RUN: '10',
-      AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '20',
-      AGENT_MAX_RUNTIME_DURATION_MS: '5000',
-      ENABLE_MODEL_CONTRACT_COMPILER: 'true'
-    },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  server.stdout.on('data', chunk => process.stdout.write(String(chunk)));
-  server.stderr.on('data', chunk => process.stderr.write(String(chunk)));
-  return server;
-}
-
-async function createAssignedTicket(cookie, agentId, objective) {
-  const response = await request('POST', '/tickets', {
-    cookie,
-    form: {
-      objective,
-      assignmentTargetType: 'agent',
-      assignmentTargetId: String(agentId)
-    }
-  });
-  if (response.statusCode !== 302) {
-    throw new Error(`Ticket create failed with HTTP ${response.statusCode}: ${response.body}`);
+async function waitFor(fn, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await fn();
+    if (result) return result;
+    await sleep(150);
   }
-  const ticket = readJson('tickets.json').find(item => item.objective === objective);
-  if (!ticket) throw new Error('Ticket was not persisted');
-  return ticket;
-}
-
-async function waitForFailedRun(ticketId) {
-  const started = Date.now();
-  while (Date.now() - started < 15000) {
-    const runs = readJson('runs.json').filter(run => run.ticketId === ticketId);
-    if (runs.length === 1 && runs[0].status === 'failed' && runs[0].triage && runs[0].triage.reasonCode) {
-      const runId = runs[0].id;
-      const terminalized = readEvents().some(event => event.type === 'run.terminalized' && event.runId === runId);
-      if (terminalized) return runs[0];
-    }
-    if (runs.length === 1 && (runs[0].status === 'completed' || runs[0].status === 'succeeded')) {
-      throw new Error(`Run completed unexpectedly: ${JSON.stringify(runs[0])}`);
-    }
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  const runs = readJson('runs.json').filter(run => run.ticketId === ticketId);
-  throw new Error(`Timed out waiting for failed run for ticket ${ticketId}; runs=${JSON.stringify(runs)}`);
-}
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-function rmDirectoryWithRetry(dir) {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      if (attempt === 9) throw error;
-      try {
-        fs.accessSync(dir);
-      } catch {
-        return;
-      }
-    }
-  }
-}
-
-async function runDeleteScenario(server, cookie, agent) {
-  const targets = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
-  const objective = `Delete files ${targets.join(', ')}`;
-  const ticket = await createAssignedTicket(cookie, agent.id, objective);
-  const run = await waitForFailedRun(ticket.id);
-
-  assert(run.status === 'failed', `Expected run status failed, got ${run.status}`);
-  assert(/Runtime budget infeasible/i.test(run.error || ''), `Expected budget infeasibility error, got: ${run.error}`);
-  assert(run.triage && run.triage.reasonCode === 'runtime_budget_insufficient', `Expected triage reason runtime_budget_insufficient, got ${run.triage && run.triage.reasonCode}`);
-  assert(run.triage && run.triage.allowedActions.includes('raise_limit'), 'Expected raise_limit allowed action');
-  assert(run.triage && run.triage.allowedActions.includes('split_task'), 'Expected split_task allowed action');
-  assert(run.triage && run.triage.allowedActions.includes('manual_recovery'), 'Expected manual_recovery allowed action');
-
-  for (const name of targets) {
-    assert(fs.existsSync(path.join(WORKSPACE_ROOT, name)), `Target ${name} should not have been mutated`);
-  }
-
-  return run;
-}
-
-async function runCreateRangeScenario(server, cookie, agent) {
-  const existing = ['L', 'M'];
-  const objective = 'Create folders A-Z';
-  const ticket = await createAssignedTicket(cookie, agent.id, objective);
-  const run = await waitForFailedRun(ticket.id);
-
-  assert(run.status === 'failed', `Expected run status failed, got ${run.status}`);
-  assert(/Runtime budget infeasible/i.test(run.error || ''), `Expected budget infeasibility error, got: ${run.error}`);
-  assert(run.triage && run.triage.reasonCode === 'runtime_budget_insufficient', `Expected triage reason runtime_budget_insufficient, got ${run.triage && run.triage.reasonCode}`);
-  assert(run.triage && run.triage.allowedActions.includes('raise_limit'), 'Expected raise_limit allowed action');
-  assert(run.triage && run.triage.allowedActions.includes('split_task'), 'Expected split_task allowed action');
-  assert(run.triage && run.triage.allowedActions.includes('manual_recovery'), 'Expected manual_recovery allowed action');
-
-    for (const name of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
-      const createdPath = path.join(WORKSPACE_ROOT, name);
-      const isDir = fs.existsSync(createdPath) && fs.statSync(createdPath).isDirectory();
-      assert(!isDir, `Folder ${name} should not have been created`);
-    }
-    for (const name of existing) {
-      assert(fs.existsSync(path.join(WORKSPACE_ROOT, name)) && fs.statSync(path.join(WORKSPACE_ROOT, name)).isDirectory(), `Existing folder ${name} should remain`);
-    }
-
-  const replaySnapshot = readRunReplaySnapshot(run);
-  assert(!replaySnapshot || !replaySnapshot.providerRequests || replaySnapshot.providerRequests.length === 0, 'Provider should not have been called');
-
-  if (run.triage && run.triage.summary) {
-    assert(run.triage.summary.includes('24 required mutation'), `Expected 24 required mutations in summary, got: ${run.triage.summary}`);
-    assert(run.triage.summary.includes('12 execution step'), `Expected 12 required steps in summary, got: ${run.triage.summary}`);
-  }
-
-  return run;
-}
-
-async function runCompiledCreateRangeScenario(server, cookie, agent) {
-  const existing = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'L', 'M'];
-  const objective = 'Make folders for the letter A-Z in the workspace';
-  const ticket = await createAssignedTicket(cookie, agent.id, objective);
-  const run = await waitForFailedRun(ticket.id);
-
-  assert(run.status === 'failed', `Expected run status failed, got ${run.status}`);
-  assert(/Runtime budget infeasible/i.test(run.error || ''), `Expected budget infeasibility error, got: ${run.error}`);
-  assert(run.triage && run.triage.reasonCode === 'runtime_budget_insufficient', `Expected triage reason runtime_budget_insufficient, got ${run.triage && run.triage.reasonCode}`);
-  assert(run.triage && run.triage.allowedActions.includes('raise_limit'), 'Expected raise_limit allowed action');
-  assert(run.triage && run.triage.allowedActions.includes('split_task'), 'Expected split_task allowed action');
-  assert(run.triage && run.triage.allowedActions.includes('manual_recovery'), 'Expected manual_recovery allowed action');
-
-  for (const name of ['I', 'J', 'K', 'N', 'O', 'P', 'Q', 'R']) {
-    const createdPath = path.join(WORKSPACE_ROOT, name);
-    const isDir = fs.existsSync(createdPath) && fs.statSync(createdPath).isDirectory();
-    assert(!isDir, `Folder ${name} should not have been created`);
-  }
-  for (const name of existing) {
-    assert(fs.existsSync(path.join(WORKSPACE_ROOT, name)) && fs.statSync(path.join(WORKSPACE_ROOT, name)).isDirectory(), `Existing folder ${name} should remain`);
-  }
-
-  const replaySnapshot = readRunReplaySnapshot(run);
-  assert(replaySnapshot && replaySnapshot.providerRequests && replaySnapshot.providerRequests.length >= 1, 'Compiler provider request should be recorded');
-
-  if (run.triage && run.triage.summary) {
-    assert(run.triage.summary.includes('16 required mutation'), `Expected 16 required mutations in summary, got: ${run.triage.summary}`);
-    assert(run.triage.summary.includes('8 execution step'), `Expected 8 required steps in summary, got: ${run.triage.summary}`);
-  }
-
-  return run;
+  throw new Error(`timed out waiting for ${label}`);
 }
 
 async function main() {
   const preloadPath = createFakeOpenAIPreload();
-
   try {
-    const deleteTargets = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
-    for (const name of deleteTargets) {
-      fs.writeFileSync(path.join(WORKSPACE_ROOT, name), `target ${name}\n`);
-    }
-    for (const name of ['L', 'M']) {
-      fs.mkdirSync(path.join(WORKSPACE_ROOT, name));
-    }
+    await withHarness('runtime feasibility', async ({ store, workspaceRoot, startServer }) => {
+      const agent = (await store.createConfiguredAgent({
+        value: { name: 'Feasibility Agent', provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-key' },
+        groupIds: [], changedBy: 'runtime-feasibility-test'
+      })).agent;
 
-    const agent = seedAgent();
-    const server = startServer(preloadPath);
-    await waitForReady();
-    const cookie = await login();
+      const server = await startServer({
+        NODE_OPTIONS: `--require ${preloadPath}`,
+        AGENT_MAX_EXECUTION_STEPS: '4',
+        AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE: '2',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '10',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '20',
+        AGENT_MAX_RUNTIME_DURATION_MS: '15000',
+        ENABLE_MODEL_CONTRACT_COMPILER: 'true',
+        RUNTIME_SCHEDULER_INTERVAL_MS: '200'
+      });
+      const cookie = await server.login();
 
-    await runDeleteScenario(server, cookie, agent);
+      const seen = new Set();
+      async function failedRunFor(objective) {
+        const created = await server.request('POST', '/tickets', {
+          cookie,
+          form: {
+            objective,
+            assignmentTargetType: 'agent',
+            assignmentTargetId: String(agent.id),
+            assignmentMode: 'individual'
+          }
+        });
+        if (created.statusCode !== 302) {
+          throw new Error(`ticket create returned HTTP ${created.statusCode}`);
+        }
+        const run = await waitFor(async () => {
+          const page = await store.listRuns({ limit: 100 });
+          return (page.runs || []).find(r => r.agentId === agent.id && !seen.has(r.id)) || null;
+        }, 30000, `run dispatch for "${objective}"`);
+        seen.add(run.id);
+        const terminal = await waitFor(async () => {
+          const current = await store.getRun(run.id);
+          return current && ['completed', 'failed', 'interrupted'].includes(current.status) ? current : null;
+        }, 60000, `terminal run for "${objective}"`);
+        const replay = await store.readRunReplay(terminal.id);
+        return { run: terminal, snapshot: replay ? replay.snapshot : null };
+      }
 
-    // Remove the delete-scenario seed files so the create-range scenario sees only L and M.
-    for (const name of deleteTargets) {
-      fs.rmSync(path.join(WORKSPACE_ROOT, name), { force: true, recursive: true });
-    }
+      // The rejection contract is identical for every shape; asserted for each.
+      function assertRejected(label, run) {
+        assert(run.status === 'failed', `${label}: run failed (got ${run.status})`);
+        assert(/Runtime budget infeasible/i.test(run.error || ''),
+          `${label}: error identifies budget infeasibility`);
+        assert(run.triage && run.triage.reasonCode === 'runtime_budget_insufficient',
+          `${label}: triage reason is runtime_budget_insufficient`);
+        for (const action of ['raise_limit', 'split_task', 'manual_recovery']) {
+          assert(run.triage.allowedActions.includes(action), `${label}: triage offers ${action}`);
+        }
+      }
 
-    await runCreateRangeScenario(server, cookie, agent);
+      const isDir = rel => fs.existsSync(path.join(workspaceRoot, rel))
+        && fs.statSync(path.join(workspaceRoot, rel)).isDirectory();
 
-    // Seed additional existing folders for the compiled-contract create-range scenario.
-    for (const name of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
-      fs.mkdirSync(path.join(WORKSPACE_ROOT, name));
-    }
+      // ── Scenario 1: delete range ───────────────────────────────────────────
+      const deleteTargets = ['A','B','C','D','E','F','G','H','I','J'];
+      for (const name of deleteTargets) {
+        fs.writeFileSync(path.join(workspaceRoot, name), `target ${name}\n`);
+      }
+      const deleteResult = await failedRunFor(`Delete files ${deleteTargets.join(', ')}`);
+      assertRejected('delete range', deleteResult.run);
+      for (const name of deleteTargets) {
+        assert(fs.existsSync(path.join(workspaceRoot, name)),
+          `delete range: target ${name} was not deleted`);
+      }
 
-    await runCompiledCreateRangeScenario(server, cookie, agent);
+      for (const name of deleteTargets) fs.rmSync(path.join(workspaceRoot, name), { force: true });
 
-    console.log(JSON.stringify({ deleteInfeasibility: true, createRangeInfeasibility: true, compiledCreateRangeInfeasibility: true }));
-    server.kill('SIGTERM');
-    await waitForExit(server);
+      // ── Scenario 2: create range, rejected before the model is consulted ────
+      for (const name of ['L', 'M']) fs.mkdirSync(path.join(workspaceRoot, name), { recursive: true });
+      const createResult = await failedRunFor('Create folders A-Z');
+      assertRejected('create range', createResult.run);
+      for (const name of LETTERS) {
+        if (name === 'L' || name === 'M') {
+          assert(isDir(name), `create range: pre-existing folder ${name} remains`);
+        } else {
+          assert(!isDir(name), `create range: folder ${name} was not created`);
+        }
+      }
+      assert(!createResult.snapshot
+        || !Array.isArray(createResult.snapshot.providerRequests)
+        || createResult.snapshot.providerRequests.length === 0,
+        'create range: provider was never called — the gate rejects pre-model');
+      if (createResult.run.triage && createResult.run.triage.summary) {
+        assert(createResult.run.triage.summary.includes('24 required mutation'),
+          'create range: summary states 24 required mutations (26 targets minus L and M)');
+        assert(createResult.run.triage.summary.includes('12 execution step'),
+          'create range: summary states 12 projected steps');
+      }
+
+      // ── Scenario 3: compiled create range ──────────────────────────────────
+      for (const name of ['A','B','C','D','E','F','G','H']) {
+        fs.mkdirSync(path.join(workspaceRoot, name), { recursive: true });
+      }
+      const compiledResult = await failedRunFor('Make folders for the letter A-Z in the workspace');
+      assertRejected('compiled create range', compiledResult.run);
+      const preExisting = new Set(['A','B','C','D','E','F','G','H','L','M']);
+      for (const name of LETTERS) {
+        if (!preExisting.has(name)) {
+          assert(!isDir(name), `compiled create range: folder ${name} was not created`);
+        }
+      }
+      assert(compiledResult.snapshot && Array.isArray(compiledResult.snapshot.providerRequests)
+        && compiledResult.snapshot.providerRequests.length >= 1,
+        'compiled create range: the compiler provider request was recorded');
+      if (compiledResult.run.triage && compiledResult.run.triage.summary) {
+        assert(compiledResult.run.triage.summary.includes('16 required mutation'),
+          'compiled create range: summary states 16 required mutations');
+        assert(compiledResult.run.triage.summary.includes('8 execution step'),
+          'compiled create range: summary states 8 projected steps');
+      }
+
+      console.log(`\nPASS: runtime feasibility admission/rejection — ${assert.count()} assertions (PostgreSQL-native)`);
+    });
   } finally {
-    rmDirectoryWithRetry(DATA_DIR);
-    try {
-      removeTempWorkspaceRoot(WORKSPACE_ROOT);
-    } catch {
-      rmDirectoryWithRetry(WORKSPACE_ROOT);
-    }
-    fs.rmSync(preloadPath, { force: true });
+    try { fs.unlinkSync(preloadPath); } catch (_) { /* best effort */ }
   }
 }
 

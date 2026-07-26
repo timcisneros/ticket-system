@@ -1,15 +1,38 @@
-const { spawn } = require('child_process');
+#!/usr/bin/env node
+'use strict';
+// Configurable runtime limits — JSON API contract, PostgreSQL-native
+// (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A10).
+//
+// Contract under test, unchanged from the JSON-era original: runtime limits are
+// permissioned, validated, optimistically versioned, audited, inherited from
+// deployment defaults when unset, and — once a run starts — IMMUTABLE for that run.
+// A mid-run policy change must not retroactively re-bound a run already in flight.
+//
+// Repaired, not rewritten. The assertions are the original ones. What changed is
+// where state comes from and where it is read back:
+//
+//   * the non-admin principal used to prove the 403 paths is created through the
+//     store's access APIs instead of a seeded users/groups/memberships JSON trio
+//   * `readJson('runtime-limits.json')` becomes `store.getRuntimeLimitsConfig()`
+//   * `readJson('runs.json' | 'tickets.json' | 'logs.json')` becomes store reads
+//   * the run's replay snapshot is read with `readRunReplay` rather than by
+//     following a `replaySnapshotPath` into DATA_DIR
+//   * `events.jsonl` string matching becomes a structural read of the event journal
+//
+// That last substitution is a strengthening, not a translation: the original
+// asserted the audit event by substring-matching a JSONL file, which would pass on
+// any event that merely CONTAINED the words. The journal read checks the actual
+// payload of the actual `runtime_limits.updated` event.
+//
+// Requires TEST_DATABASE_URL (or DATABASE_URL).
+
+const argon2 = require('argon2');
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
-const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
+const { withHarness, createAsserter, sleep } = require('./postgres-test-harness');
 
-const ROOT = path.resolve(__dirname, '..');
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-limits-config-data-'));
-const WORKSPACE_ROOT = createTempWorkspaceRoot('runtime-limits-config');
-const PORT = process.env.PORT || '3497';
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+const STAMP = Date.now();
 const LIMIT_KEYS = ['maxExecutionSteps', 'maxModelRequestsPerRun', 'maxWorkspaceOperationsPerRun', 'maxRuntimeDurationMs'];
 const DEPLOYMENT = {
   maxExecutionSteps: 20,
@@ -17,43 +40,21 @@ const DEPLOYMENT = {
   maxWorkspaceOperationsPerRun: 40,
   maxRuntimeDurationMs: 20000
 };
+const VIEWER_PASSWORD = 'viewer-password-runtime-limits';
 
-function writeJson(file, value) {
-  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2));
-}
+const assert = createAsserter();
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
-}
-
-function seedData() {
-  for (const file of ['agents.json', 'permissions.json', 'workflows.json']) {
-    fs.copyFileSync(path.join(ROOT, 'data', file), path.join(DATA_DIR, file));
+function assertLimits(actual, expected, label) {
+  for (const key of LIMIT_KEYS) {
+    assert(actual[key] === expected[key], `${label}: ${key} is ${expected[key]} (got ${actual[key]})`);
   }
-  const agents = readJson('agents.json');
-  agents[0] = { ...agents[0], provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-runtime-limits-key' };
-  writeJson('agents.json', agents);
-  const seededAdmin = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'users.json'), 'utf8'))[0];
-  writeJson('users.json', [
-    { ...seededAdmin, id: 1, username: 'admin', type: 'user' },
-    { ...seededAdmin, id: 2, username: 'viewer', type: 'user' }
-  ]);
-  writeJson('groups.json', [
-    { id: 1, name: 'Administrators', permissions: [], canReceiveTickets: false },
-    { id: 2, name: 'Viewers', permissions: ['ticket:read'], canReceiveTickets: false }
-  ]);
-  writeJson('memberships.json', [
-    { id: 1, principalType: 'user', principalId: 1, groupId: 1 },
-    { id: 2, principalType: 'user', principalId: 2, groupId: 2 }
-  ]);
-  for (const file of ['tickets.json', 'runs.json', 'logs.json', 'operation-history.json', 'allocation-plans.json']) writeJson(file, []);
-  fs.writeFileSync(path.join(DATA_DIR, 'events.jsonl'), '');
 }
 
+// Slow enough that the suite can observe a run mid-flight and change policy under it.
 function createPreload() {
-  const file = path.join(os.tmpdir(), `runtime-limits-config-preload-${process.pid}-${Date.now()}.js`);
-  const source = `
-global.fetch = async function(url, options) {
+  const file = path.join(os.tmpdir(), `runtime-limits-config-preload-${process.pid}-${STAMP}.js`);
+  fs.writeFileSync(file, `
+global.fetch = async function() {
   await new Promise(resolve => setTimeout(resolve, 350));
   return {
     ok: true,
@@ -67,258 +68,299 @@ global.fetch = async function(url, options) {
     }
   };
 };
-`;
-  fs.writeFileSync(file, source);
+`);
   return file;
 }
 
-function request(method, urlPath, options = {}) {
-  const body = options.form
-    ? new URLSearchParams(options.form).toString()
-    : options.body !== undefined
-      ? JSON.stringify(options.body)
-      : null;
-  return new Promise((resolve, reject) => {
-    const req = http.request(`${BASE_URL}${urlPath}`, {
-      method,
-      headers: {
-        ...(options.form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
-        ...(options.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-        ...(body !== null ? { 'Content-Length': Buffer.byteLength(body) } : {}),
-        ...(options.cookie ? { Cookie: options.cookie } : {})
-      }
-    }, res => {
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        let json = null;
-        try { json = JSON.parse(text); } catch (_) {}
-        resolve({ statusCode: res.statusCode, headers: res.headers, body: text, json });
-      });
-    });
-    req.on('error', reject);
-    if (body !== null) req.write(body);
-    req.end();
-  });
-}
-
-function cookieFrom(response) {
-  return (response.headers['set-cookie'] || []).map(value => value.split(';')[0]).join('; ');
-}
-
-async function waitFor(fn, timeoutMs = 15000) {
+async function waitFor(fn, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const value = await fn();
-    if (value) return value;
-    await new Promise(resolve => setTimeout(resolve, 50));
+    const result = await fn();
+    if (result) return result;
+    await sleep(100);
   }
-  throw new Error('Timed out waiting for test state');
-}
-
-async function login(username) {
-  const response = await request('POST', '/login', { form: { username, password: 'admin123' } });
-  if (response.statusCode !== 302) throw new Error(`Login failed for ${username}: ${response.statusCode}`);
-  return cookieFrom(response);
-}
-
-async function updateRuntimeLimits(cookie, body, expectedRevision = null) {
-  let revision = expectedRevision;
-  if (revision === null) {
-    const current = await request('GET', '/api/runtime-limits', { cookie });
-    if (current.statusCode !== 200) throw new Error(`Runtime limits GET failed: ${current.statusCode}`);
-    revision = current.json.config.revision;
-  }
-  return request('POST', '/api/runtime-limits', {
-    cookie,
-    body: { ...body, expectedRevision: revision }
-  });
-}
-
-async function createTicket(cookie, objective) {
-  const response = await request('POST', '/tickets', {
-    cookie,
-    form: { objective, assignmentTargetType: 'agent', assignmentTargetId: '1', assignmentMode: 'individual' }
-  });
-  if (response.statusCode !== 302) throw new Error(`Ticket creation failed: ${response.statusCode} ${response.body}`);
-  return readJson('tickets.json').find(ticket => ticket.objective === objective);
-}
-
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
-function assertLimits(actual, expected, label) {
-  for (const key of LIMIT_KEYS) assert(actual[key] === expected[key], `${label}: ${key}=${actual[key]}, expected ${expected[key]}`);
+  throw new Error(`timed out waiting for ${label}`);
 }
 
 async function main() {
-  seedData();
   const preload = createPreload();
-  const server = spawn(process.execPath, ['server.js'], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      NODE_ENV: 'test',
-      PORT,
-      DATA_DIR,
-      WORKSPACE_ROOT,
-      NODE_OPTIONS: `--require ${preload}`,
-      RUNTIME_SCHEDULER_INTERVAL_MS: '25',
-      AGENT_MAX_EXECUTION_STEPS: String(DEPLOYMENT.maxExecutionSteps),
-      AGENT_MAX_MODEL_REQUESTS_PER_RUN: String(DEPLOYMENT.maxModelRequestsPerRun),
-      AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: String(DEPLOYMENT.maxWorkspaceOperationsPerRun),
-      AGENT_MAX_RUNTIME_DURATION_MS: String(DEPLOYMENT.maxRuntimeDurationMs),
-      MAX_ACTIVE_RUNS: '16',
-      MAX_ACTIVE_RUNS_CAP: '64',
-      LOCAL_MODEL_CONCURRENCY: '4',
-      MAX_LOCAL_MODEL_CONCURRENCY: '8'
-    },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  server.stdout.on('data', chunk => process.stdout.write(String(chunk)));
-  server.stderr.on('data', chunk => process.stderr.write(String(chunk)));
-
   try {
-    await waitFor(async () => {
-      try { return (await request('GET', '/health')).statusCode === 200; } catch (_) { return false; }
-    });
-    const admin = await login('admin');
-    const viewer = await login('viewer');
+    await withHarness('runtime limits config', async ({ store, startServer }) => {
+      // ── Principals ─────────────────────────────────────────────────────────
+      // A real non-admin user, created through the store's access APIs. The JSON-era
+      // suite seeded this by copying the admin's password hash into a second
+      // users.json row; here the viewer gets its own credential and its own group.
+      const viewerGroup = (await store.createGroup({
+        value: { name: `Viewers-${STAMP}`, permissions: ['ticket:read'], canReceiveTickets: false },
+        changedBy: 'runtime-limits-config-test'
+      })).group;
+      await store.createUser({
+        value: { username: 'viewer', passwordHash: await argon2.hash(VIEWER_PASSWORD) },
+        groupIds: [viewerGroup.id],
+        changedBy: 'runtime-limits-config-test'
+      });
 
-    assert((await request('GET', '/api/runtime-limits', { cookie: viewer })).statusCode === 403, 'viewer must not read runtime limits');
-    assert((await request('POST', '/api/runtime-limits', { cookie: viewer, body: { maxExecutionSteps: 1 } })).statusCode === 403, 'viewer must not update runtime limits');
+      const agent = (await store.createConfiguredAgent({
+        value: { name: `RuntimeLimitsAgent-${STAMP}`, provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-runtime-limits-key' },
+        groupIds: [], changedBy: 'runtime-limits-config-test'
+      })).agent;
 
-    const inherited = await request('GET', '/api/runtime-limits', { cookie: admin });
-    assert(inherited.statusCode === 200, 'authorized GET should succeed');
-    assertLimits(inherited.json.effectiveLimits, DEPLOYMENT, 'missing config inherits deployment defaults');
-    assert(LIMIT_KEYS.every(key => inherited.json.config[key] === null), 'missing config should materialize as all-null config');
-    assert(inherited.json.config.revision === 1, 'current-format config must start at revision 1');
+      const server = await startServer({
+        NODE_OPTIONS: `--require ${preload}`,
+        RUNTIME_SCHEDULER_INTERVAL_MS: '25',
+        AGENT_MAX_EXECUTION_STEPS: String(DEPLOYMENT.maxExecutionSteps),
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: String(DEPLOYMENT.maxModelRequestsPerRun),
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: String(DEPLOYMENT.maxWorkspaceOperationsPerRun),
+        AGENT_MAX_RUNTIME_DURATION_MS: String(DEPLOYMENT.maxRuntimeDurationMs),
+        MAX_ACTIVE_RUNS: '16',
+        MAX_ACTIVE_RUNS_CAP: '64',
+        LOCAL_MODEL_CONCURRENCY: '4',
+        MAX_LOCAL_MODEL_CONCURRENCY: '8'
+      });
+      const admin = await server.login();
+      const viewer = await server.login('viewer', VIEWER_PASSWORD);
 
-    const allNull = Object.fromEntries(LIMIT_KEYS.map(key => [key, null]));
-    const nullUpdate = await updateRuntimeLimits(admin, allNull);
-    assert(nullUpdate.statusCode === 200, 'all-null config should be accepted');
-    assertLimits(nullUpdate.json.effectiveLimits, DEPLOYMENT, 'null config inherits deployment defaults');
+      const json = response => { try { return JSON.parse(response.body); } catch (_) { return null; } };
+      const storedConfig = () => store.getRuntimeLimitsConfig();
 
-    const invalidCases = [
-      { maxExecutionSteps: 0 },
-      { maxExecutionSteps: -1 },
-      { maxExecutionSteps: 1.5 },
-      { maxExecutionSteps: '2' },
-      { maxRuntimeDurationMs: 4999 }
-    ];
-    for (const body of invalidCases) {
-      const response = await updateRuntimeLimits(admin, body);
-      assert(response.statusCode === 400, `invalid config should be rejected: ${JSON.stringify(body)}`);
-    }
+      async function updateRuntimeLimits(cookie, body, expectedRevision = null) {
+        let revision = expectedRevision;
+        if (revision === null) {
+          const current = await server.request('GET', '/api/runtime-limits', { cookie });
+          if (current.statusCode !== 200) throw new Error(`runtime limits GET failed: ${current.statusCode}`);
+          revision = json(current).config.revision;
+        }
+        return server.request('POST', '/api/runtime-limits', {
+          cookie, body: { ...body, expectedRevision: revision }
+        });
+      }
 
-    const configured = {
-      maxExecutionSteps: 3,
-      maxModelRequestsPerRun: 3,
-      maxWorkspaceOperationsPerRun: 10,
-      maxRuntimeDurationMs: 5000
-    };
-    const valid = await updateRuntimeLimits(admin, configured);
-    assert(valid.statusCode === 200, `valid config rejected: ${valid.body}`);
-    assertLimits(valid.json.effectiveLimits, configured, 'valid UI values become effective');
-    const stored = readJson('runtime-limits.json');
-    assertLimits(stored, configured, 'valid config persisted');
-    assert(stored.updatedBy === 'admin' && typeof stored.updatedAt === 'string', 'config audit metadata missing');
+      // ── Authorization ──────────────────────────────────────────────────────
+      assert((await server.request('GET', '/api/runtime-limits', { cookie: viewer })).statusCode === 403,
+        'a non-admin cannot read runtime limits');
+      assert((await server.request('POST', '/api/runtime-limits', { cookie: viewer, body: { maxExecutionSteps: 1 } })).statusCode === 403,
+        'a non-admin cannot update runtime limits');
 
-    const beforeStaleUpdate = await request('GET', '/api/runtime-limits', { cookie: admin });
-    const staleRevision = beforeStaleUpdate.json.config.revision;
-    const revisionAdvance = await updateRuntimeLimits(admin, { maxExecutionSteps: 4 }, staleRevision);
-    assert(revisionAdvance.statusCode === 200 && revisionAdvance.json.config.revision === staleRevision + 1,
-      'successful update must advance the config revision');
-    const staleUpdate = await updateRuntimeLimits(admin, { maxExecutionSteps: 5 }, staleRevision);
-    assert(staleUpdate.statusCode === 409, 'stale runtime-limit update must be rejected');
-    assert(readJson('runtime-limits.json').maxExecutionSteps === 4, 'stale update must not overwrite current policy');
+      // ── Inheritance ────────────────────────────────────────────────────────
+      const inherited = await server.request('GET', '/api/runtime-limits', { cookie: admin });
+      assert(inherited.statusCode === 200, 'an authorized read succeeds');
+      assertLimits(json(inherited).effectiveLimits, DEPLOYMENT, 'unset config inherits deployment defaults');
+      assert(LIMIT_KEYS.every(key => json(inherited).config[key] === null),
+        'an unset config materializes as all-null rather than as absent');
+      assert(json(inherited).config.revision === 1, 'the config starts at revision 1');
 
-    // System config keys must round-trip through validate -> persist -> read.
-    // Regression: the validator previously returned only pickRuntimeLimitValues(), silently dropping
-    // localModelConcurrency so it always persisted as null and the setting was inert.
-    // The ceiling (MAX_LOCAL_MODEL_CONCURRENCY=8) is decoupled from the inherited default
-    // (LOCAL_MODEL_CONCURRENCY=4), so the UI may raise concurrency above the default up to the ceiling.
-    for (const body of [{ localModelConcurrency: 0 }, { localModelConcurrency: -1 }, { localModelConcurrency: 1.5 }, { localModelConcurrency: '2' }, { localModelConcurrency: 9 }]) {
-      const response = await updateRuntimeLimits(admin, body);
-      assert(response.statusCode === 400, `invalid localModelConcurrency should be rejected: ${JSON.stringify(body)}`);
-    }
-    // 6 exceeds the inherited default (4) but is within the ceiling (8); this was wrongly rejected
-    // before the deployment-cap decoupling.
-    const concurrencyUpdate = await updateRuntimeLimits(admin, { localModelConcurrency: 6 });
-    assert(concurrencyUpdate.statusCode === 200, `valid localModelConcurrency rejected: ${concurrencyUpdate.body}`);
-    assert(concurrencyUpdate.json.config.localModelConcurrency === 6, `localModelConcurrency not returned: ${concurrencyUpdate.body}`);
-    assert(readJson('runtime-limits.json').localModelConcurrency === 6, 'localModelConcurrency must persist to disk');
-    for (const body of [{ maxActiveRuns: 0 }, { maxActiveRuns: -1 }, { maxActiveRuns: 1.5 }, { maxActiveRuns: '2' }, { maxActiveRuns: 65 }]) {
-      const response = await updateRuntimeLimits(admin, body);
-      assert(response.statusCode === 400, `invalid maxActiveRuns should be rejected: ${JSON.stringify(body)}`);
-    }
-    const processConcurrencyUpdate = await updateRuntimeLimits(admin, { maxActiveRuns: 24 });
-    assert(processConcurrencyUpdate.statusCode === 200, `valid maxActiveRuns rejected: ${processConcurrencyUpdate.body}`);
-    assert(processConcurrencyUpdate.json.config.maxActiveRuns === 24, `maxActiveRuns not returned: ${processConcurrencyUpdate.body}`);
-    assert(readJson('runtime-limits.json').maxActiveRuns === 24, 'maxActiveRuns must persist to disk');
-    const runtimeStatus = await request('GET', '/api/runtime/status', { cookie: admin });
-    assert(runtimeStatus.statusCode === 200, `runtime status rejected: ${runtimeStatus.body}`);
-    assert(runtimeStatus.json.concurrencyLimits.process === 24, 'runtime status does not expose effective process-wide concurrency');
-    assert(Number.isInteger(runtimeStatus.json.concurrencyLimits.activeProcessRuns), 'runtime status does not expose active process run slots');
-    // A subsequent limit-only update that omits the system key must not wipe the persisted value.
-    // (Re-applying `configured` also restores the limit state the run-snapshot assertions below expect.)
-    assert((await updateRuntimeLimits(admin, configured)).statusCode === 200, 'limit-only update failed');
-    assert(readJson('runtime-limits.json').localModelConcurrency === 6, 'localModelConcurrency must survive unrelated updates');
-    assert(readJson('runtime-limits.json').maxActiveRuns === 24, 'maxActiveRuns must survive unrelated updates');
-    assertLimits(readJson('runtime-limits.json'), configured, 'limit-only update preserves configured limits');
+      const allNull = Object.fromEntries(LIMIT_KEYS.map(key => [key, null]));
+      const nullUpdate = await updateRuntimeLimits(admin, allNull);
+      assert(nullUpdate.statusCode === 200, 'an explicit all-null config is accepted');
+      assertLimits(json(nullUpdate).effectiveLimits, DEPLOYMENT, 'an all-null config still inherits deployment defaults');
 
-    const objective = `Create a runtime snapshot ${Date.now()}`;
-    const ticket = await createTicket(admin, objective);
-    const createdRun = await waitFor(() => readJson('runs.json').find(run => run.ticketId === ticket.id));
-    assertLimits(createdRun.runtimeLimitsSnapshot, configured, 'new run snapshot');
-    assert(createdRun.runtimeLimitsSnapshot.source.uiConfigured === true, 'snapshot should identify UI configuration');
+      // ── Validation ─────────────────────────────────────────────────────────
+      for (const body of [
+        { maxExecutionSteps: 0 },
+        { maxExecutionSteps: -1 },
+        { maxExecutionSteps: 1.5 },
+        { maxExecutionSteps: '2' },
+        { maxRuntimeDurationMs: 4999 }
+      ]) {
+        const response = await updateRuntimeLimits(admin, body);
+        assert(response.statusCode === 400, `invalid limit rejected: ${JSON.stringify(body)}`);
+      }
 
-    await waitFor(() => readJson('logs.json').some(log => log.runId === createdRun.id && log.type === 'model:request'));
-    const lowered = { ...configured, maxExecutionSteps: 1, maxModelRequestsPerRun: 1, maxWorkspaceOperationsPerRun: 1 };
-    const changedMidRun = await updateRuntimeLimits(admin, lowered);
-    assert(changedMidRun.statusCode === 200, 'mid-run settings update should succeed for future runs');
-    const terminal = await waitFor(() => {
-      const run = readJson('runs.json').find(item => item.id === createdRun.id);
-      return run && ['completed', 'failed'].includes(run.status) ? run : null;
-    });
-    assertLimits(terminal.runtimeLimitsSnapshot, configured, 'active run snapshot remains immutable');
-    const replay = JSON.parse(fs.readFileSync(path.join(DATA_DIR, terminal.replaySnapshotPath), 'utf8'));
-    assertLimits(replay.runtimeLimitsSnapshot, configured, 'replay snapshot uses run-start limits');
-    assert(replay.runtimeEnvelope.maxExecutionSteps === configured.maxExecutionSteps, 'runtime envelope should use run-start limits');
+      // ── Persistence ────────────────────────────────────────────────────────
+      const configured = {
+        maxExecutionSteps: 3,
+        maxModelRequestsPerRun: 3,
+        maxWorkspaceOperationsPerRun: 10,
+        maxRuntimeDurationMs: 5000
+      };
+      const valid = await updateRuntimeLimits(admin, configured);
+      assert(valid.statusCode === 200, `a valid config is accepted (${valid.body})`);
+      assertLimits(json(valid).effectiveLimits, configured, 'configured values become effective');
+      assertLimits(await storedConfig(), configured, 'configured values are persisted to the store');
+      const audited = await storedConfig();
+      assert(audited.updatedBy === 'admin' && typeof audited.updatedAt === 'string',
+        'the persisted config carries audit metadata');
 
-    const profileConfig = {
-      maxExecutionSteps: 15,
-      maxModelRequestsPerRun: 15,
-      maxWorkspaceOperationsPerRun: 30,
-      maxRuntimeDurationMs: 10000
-    };
-    assert((await updateRuntimeLimits(admin, profileConfig)).statusCode === 200, 'profile config update failed');
-    const reportTicket = await createTicket(admin, `Write report-summary-${Date.now()}.txt with a report summary`);
-    const reportRun = await waitFor(() => readJson('runs.json').find(run => run.ticketId === reportTicket.id));
-    assert(reportRun.runtimeLimitsSnapshot.maxExecutionSteps === 12, 'report profile must cap execution steps at 12');
-    assert(reportRun.runtimeLimitsSnapshot.maxModelRequestsPerRun === 8, 'report profile must cap model requests at 8');
-    assert(reportRun.runtimeLimitsSnapshot.maxListDirectoryPerRun === 3, 'report listDirectory cap must be snapshotted');
-    assert(reportRun.runtimeLimitsSnapshot.maxReadFilePerRun === 8, 'report readFile cap must be snapshotted');
+      // ── Optimistic concurrency ─────────────────────────────────────────────
+      const staleRevision = json(await server.request('GET', '/api/runtime-limits', { cookie: admin })).config.revision;
+      const advanced = await updateRuntimeLimits(admin, { maxExecutionSteps: 4 }, staleRevision);
+      assert(advanced.statusCode === 200 && json(advanced).config.revision === staleRevision + 1,
+        'a successful update advances the config revision');
+      const stale = await updateRuntimeLimits(admin, { maxExecutionSteps: 5 }, staleRevision);
+      assert(stale.statusCode === 409, 'an update against a stale revision is rejected');
+      assert((await storedConfig()).maxExecutionSteps === 4,
+        'a rejected stale update does not overwrite current policy');
 
-    await waitFor(() => fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8').includes('runtime_limits.updated'));
-    const eventsText = fs.readFileSync(path.join(DATA_DIR, 'events.jsonl'), 'utf8');
-    assert(eventsText.includes('oldValues') && eventsText.includes('newValues') && eventsText.includes('"actor":"admin"'), 'runtime limit audit event is incomplete');
-    assert(eventsText.includes('"maxActiveRuns"'), 'runtime limit audit event omits the process-wide concurrency policy');
-    assert(readJson('logs.json').some(log => log.type === 'runtime_limits.updated' && log.actor === 'admin'), 'runtime limit operator log missing');
+      // ── System keys round-trip ─────────────────────────────────────────────
+      // Regression: the validator once returned only pickRuntimeLimitValues(),
+      // silently dropping localModelConcurrency so the setting persisted as null and
+      // was inert. The ceiling (MAX_LOCAL_MODEL_CONCURRENCY=8) is decoupled from the
+      // inherited default (LOCAL_MODEL_CONCURRENCY=4), so raising above the default
+      // up to the ceiling must be allowed.
+      for (const body of [
+        { localModelConcurrency: 0 }, { localModelConcurrency: -1 },
+        { localModelConcurrency: 1.5 }, { localModelConcurrency: '2' },
+        { localModelConcurrency: 9 }
+      ]) {
+        assert((await updateRuntimeLimits(admin, body)).statusCode === 400,
+          `invalid localModelConcurrency rejected: ${JSON.stringify(body)}`);
+      }
+      const concurrency = await updateRuntimeLimits(admin, { localModelConcurrency: 6 });
+      assert(concurrency.statusCode === 200, `localModelConcurrency above the default is accepted (${concurrency.body})`);
+      assert(json(concurrency).config.localModelConcurrency === 6, 'the response echoes the stored concurrency');
+      assert((await storedConfig()).localModelConcurrency === 6, 'localModelConcurrency is persisted');
 
-    console.log('PASS: configurable runtime limits are permissioned, validated, capped, audited, and immutable per run');
+      for (const body of [
+        { maxActiveRuns: 0 }, { maxActiveRuns: -1 },
+        { maxActiveRuns: 1.5 }, { maxActiveRuns: '2' }, { maxActiveRuns: 65 }
+      ]) {
+        assert((await updateRuntimeLimits(admin, body)).statusCode === 400,
+          `invalid maxActiveRuns rejected: ${JSON.stringify(body)}`);
+      }
+      const activeRuns = await updateRuntimeLimits(admin, { maxActiveRuns: 24 });
+      assert(activeRuns.statusCode === 200, `a valid maxActiveRuns is accepted (${activeRuns.body})`);
+      assert(json(activeRuns).config.maxActiveRuns === 24, 'the response echoes the stored run admission cap');
+      assert((await storedConfig()).maxActiveRuns === 24, 'maxActiveRuns is persisted');
+
+      const status = await server.request('GET', '/api/runtime/status', { cookie: admin });
+      assert(status.statusCode === 200, `runtime status is readable (${status.body})`);
+      // Field names re-pointed at the live shape: the JSON-era suite read
+      // `concurrencyLimits.process` and `concurrencyLimits.activeProcessRuns`, which
+      // no longer exist. The status payload now distinguishes the DEPLOYMENT-scoped
+      // cap from this PROCESS's occupancy, so both are asserted.
+      assert(json(status).concurrencyLimits.maxActiveRuns === 24,
+        'runtime status exposes the effective process-wide concurrency cap');
+      assert(json(status).concurrencyLimits.localModelConcurrency === 6,
+        'runtime status exposes the effective local-model concurrency');
+      assert(Number.isInteger(json(status).concurrencyLimits.localProcess.admittedRuns),
+        'runtime status exposes this process\'s admitted run slots');
+
+      // A limit-only update that omits the system keys must not wipe them.
+      // (Re-applying `configured` also restores the state the run assertions expect.)
+      assert((await updateRuntimeLimits(admin, configured)).statusCode === 200, 'a limit-only update succeeds');
+      const afterLimitOnly = await storedConfig();
+      assert(afterLimitOnly.localModelConcurrency === 6, 'localModelConcurrency survives an unrelated update');
+      assert(afterLimitOnly.maxActiveRuns === 24, 'maxActiveRuns survives an unrelated update');
+      assertLimits(afterLimitOnly, configured, 'a limit-only update preserves the configured limits');
+
+      // ── Per-run immutability ───────────────────────────────────────────────
+      const objective = `Create a runtime snapshot ${STAMP}`;
+      const created = await server.request('POST', '/tickets', {
+        cookie: admin,
+        form: {
+          objective, assignmentTargetType: 'agent',
+          assignmentTargetId: String(agent.id), assignmentMode: 'individual'
+        }
+      });
+      assert(created.statusCode === 302, `ticket create redirected (HTTP ${created.statusCode})`);
+
+      const ticket = await waitFor(async () => {
+        const { tickets } = await store.listTickets({ limit: 200 });
+        return tickets.find(t => t.objective === objective) || null;
+      }, 30000, 'ticket persistence');
+      const run = await waitFor(async () => {
+        const { runs } = await store.listRunsForTicket({ ticketId: ticket.id, limit: 10 });
+        return runs[0] || null;
+      }, 30000, 'run dispatch');
+
+      assertLimits(run.runtimeLimitsSnapshot, configured, 'the new run snapshots the configured limits');
+      assert(run.runtimeLimitsSnapshot.source.uiConfigured === true,
+        'the run snapshot identifies the limits as UI-configured');
+
+      // Change policy while the run is in flight. The stub sleeps 350ms per call, so
+      // the update lands mid-run rather than after terminalization.
+      await waitFor(async () => {
+        const logs = await store.listLogs({ runId: run.id, types: ['model:request'], limit: 5 });
+        return (logs.logs || logs).length > 0 ? true : null;
+      }, 30000, 'the run to reach its first model request');
+      const lowered = { ...configured, maxExecutionSteps: 1, maxModelRequestsPerRun: 1, maxWorkspaceOperationsPerRun: 1 };
+      assert((await updateRuntimeLimits(admin, lowered)).statusCode === 200,
+        'policy may be changed while a run is in flight (for future runs)');
+
+      const terminal = await waitFor(async () => {
+        const current = await store.getRun(run.id);
+        return current && ['completed', 'failed'].includes(current.status) ? current : null;
+      }, 60000, 'the in-flight run to terminalize');
+      assertLimits(terminal.runtimeLimitsSnapshot, configured,
+        'the in-flight run keeps its run-start limits after the policy change');
+
+      const replay = (await store.readRunReplay(terminal.id)).snapshot;
+      assertLimits(replay.runtimeLimitsSnapshot, configured, 'the replay snapshot records the run-start limits');
+      assert(replay.runtimeEnvelope.maxExecutionSteps === configured.maxExecutionSteps,
+        'the runtime envelope the model saw used the run-start limits');
+
+      // ── Workload profile caps ──────────────────────────────────────────────
+      const profileConfig = {
+        maxExecutionSteps: 15,
+        maxModelRequestsPerRun: 15,
+        maxWorkspaceOperationsPerRun: 30,
+        maxRuntimeDurationMs: 10000
+      };
+      assert((await updateRuntimeLimits(admin, profileConfig)).statusCode === 200, 'the profile config update succeeds');
+      const reportObjective = `Write report-summary-${STAMP}.txt with a report summary`;
+      const reportCreated = await server.request('POST', '/tickets', {
+        cookie: admin,
+        form: {
+          objective: reportObjective, assignmentTargetType: 'agent',
+          assignmentTargetId: String(agent.id), assignmentMode: 'individual'
+        }
+      });
+      assert(reportCreated.statusCode === 302, 'the report ticket was created');
+      const reportTicket = await waitFor(async () => {
+        const { tickets } = await store.listTickets({ limit: 200 });
+        return tickets.find(t => t.objective === reportObjective) || null;
+      }, 30000, 'report ticket persistence');
+      const reportRun = await waitFor(async () => {
+        const { runs } = await store.listRunsForTicket({ ticketId: reportTicket.id, limit: 10 });
+        return runs[0] || null;
+      }, 30000, 'report run dispatch');
+
+      assert(reportRun.runtimeLimitsSnapshot.maxExecutionSteps === 12,
+        'the report profile caps execution steps below the configured value');
+      assert(reportRun.runtimeLimitsSnapshot.maxModelRequestsPerRun === 8,
+        'the report profile caps model requests below the configured value');
+      assert(reportRun.runtimeLimitsSnapshot.maxListDirectoryPerRun === 3,
+        'the report profile listDirectory cap is snapshotted');
+      assert(reportRun.runtimeLimitsSnapshot.maxReadFilePerRun === 8,
+        'the report profile readFile cap is snapshotted');
+
+      // ── Audit trail ────────────────────────────────────────────────────────
+      // Read the journal structurally. The JSON-era suite substring-matched
+      // events.jsonl, which would have accepted any event merely containing these
+      // words anywhere in the file.
+      const journal = await waitFor(async () => {
+        const entries = await store.listEventJournal({ typePrefix: 'runtime_limits.updated', limit: 100 });
+        const rows = entries.events || entries;
+        return rows.length > 0 ? rows : null;
+      }, 30000, 'the runtime_limits.updated audit event');
+
+      const audit = journal[journal.length - 1];
+      const auditPayload = audit.payload || audit;
+      assert(audit.type === 'runtime_limits.updated', 'the audit event carries the runtime-limits type');
+      assert(auditPayload.actor === 'admin', 'the audit event names the acting operator');
+      assert(auditPayload.oldValues && auditPayload.newValues,
+        'the audit event records both the previous and the new values');
+      assert('maxActiveRuns' in auditPayload.newValues,
+        'the audit event covers the process-wide concurrency policy, not only the per-run limits');
+      assert(Object.prototype.hasOwnProperty.call(auditPayload, 'revision'),
+        'the audit event records the revision it advanced to');
+
+      const operatorLogs = await store.listLogs({ types: ['runtime_limits.updated'], limit: 50 });
+      const logRows = operatorLogs.logs || operatorLogs;
+      const operatorEntry = logRows.find(entry => entry.actor === 'admin');
+      assert(Boolean(operatorEntry),
+        'the operator log records the runtime-limits change and its actor');
+      assert(Boolean(operatorEntry.oldValues) && Boolean(operatorEntry.newValues),
+        'the operator log carries the same before/after values as the journal event');
+
+      console.log(`\nPASS: configurable runtime limits — ${assert.count()} assertions (PostgreSQL-native)`);
+    }, { schemaSlug: 'runtime_limits_config' });
   } finally {
-    server.kill('SIGTERM');
-    if (server.exitCode === null) await new Promise(resolve => server.once('exit', resolve));
-    fs.rmSync(DATA_DIR, { recursive: true, force: true });
-    removeTempWorkspaceRoot(WORKSPACE_ROOT);
-    fs.rmSync(preload, { force: true });
+    try { fs.unlinkSync(preload); } catch (_) { /* best effort */ }
   }
 }
 
 main().catch(error => {
-  console.error(error.stack || error.message);
+  console.error(`\nFAIL: configurable runtime limits — ${error && error.stack ? error.stack : error}`);
   process.exit(1);
 });
