@@ -2612,9 +2612,27 @@ killed with the captured error verbatim — `(40P01: deadlock detected)`. Fail-c
 behaviour is unchanged: `evidence-failure-treated-as-client-error` still kills against
 `event-record-limit-containment-test.js`.
 
+**The fix broke a mutation, and that mattered.** Adding the retry made
+`event-append-restores-lock-inversion` SURVIVE: the retry absorbed the very deadlock the
+lock-order guard prevents, so removing the guard failed nothing — the append still
+succeeded. Genuine defense-in-depth, but it left the ordering contract unobservable.
+
+`PostgresRuntimeStore.transientConflictRetries` now counts absorbed retries, which
+separates the two contracts:
+
+| Layer | Contract | Assertion |
+|-------|----------|-----------|
+| lock ordering | conflicts must not ARISE | scenario 2 requires **zero** absorbed conflicts from the correctly ordered interleaving |
+| transient retry | conflicts that arise must be ABSORBED | scenario 5 requires the count to **rise**, proving its success is recovery and not an absent conflict |
+
+Both mutations kill again. The generalizable point: **when a recovery layer is added
+above a prevention layer, the prevention layer stops being observable through outcomes
+alone.** Something has to count the recoveries, or the older guard silently becomes
+untested while still appearing green.
+
 **The instrumentation is what solved this.** Three hypotheses preceded it and all three
-were wrong. The incident only moved once the repository could state which operation
-failed and how PostgreSQL classified it.
+were wrong — including one previously recorded here as ruled out. The incident only moved
+once the repository could state which operation failed and how PostgreSQL classified it.
 
 #### Hunt log (superseded by the capture above)
 
