@@ -3,9 +3,11 @@
 // Bounded automatic retry — PostgreSQL-native
 // (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A20 / A25 / A26).
 //
-// Behavioral replacement for the eligibility and bounding half of the JSON-era
-// `auto-retry-test.js`. That orphan is NOT retired by this file — see the end of this
-// header for the one property that still has no destination.
+// Behavioral replacement for the JSON-era `auto-retry-test.js`: its eligibility,
+// bounding, classification, triage-precedence and audit properties land here, and its
+// mutated-run prohibition lands in `run-mutation-evidence-test.js` (A26). One of its
+// assertions — "a verification failure never retries" — is deliberately NOT claimed
+// here; see scenario 5b.
 //
 // THE CONTRACT: automatic retry is default-off, policy-gated, bounded, and allowed for
 // exactly one failure classification. A retry the operator did not ask for, or one that
@@ -42,9 +44,9 @@
 // run then fell through to triage exactly as an ineligible one would, so nothing looked
 // wrong. Fixed alongside this suite.
 //
-// A26 (OPEN): the `mutationCount === 0` half of eligibility is inert, so a run that
-// already mutated the workspace IS retried. That is the reason the historical suite
-// stays orphaned rather than retired — see the register entry.
+// A26: the `mutationCount === 0` half of eligibility was inert — a run that had already
+// mutated the workspace was retried. Fixed, and covered by `run-mutation-evidence-test.js`
+// rather than here, because it is a durable-evidence contract in its own right.
 //
 // NO VACUOUS EXIT. No skip path, no NOT_PROVEN, every wait throws on timeout, and the
 // floor requires each ticket to have produced runs before any count is trusted:
@@ -84,6 +86,18 @@ const CASES = Object.freeze([
     key: 'authority', kind: 'escape', expectRuns: 1,
     policy: { autoRetry: true, maxAttempts: 2 },
     why: 'a policy refusal is not a runtime failure'
+  },
+  {
+    key: 'provider', kind: 'providerfault', expectRuns: 1,
+    policy: { autoRetry: true, maxAttempts: 2 },
+    expectReason: 'provider_failed',
+    why: 'a provider transport fault is not a runtime failure'
+  },
+  {
+    key: 'triaged', kind: 'stall', expectRuns: 1, seedTriage: true,
+    policy: { autoRetry: true, maxAttempts: 2 },
+    expectReason: 'runtime_failed',
+    why: 'an outstanding human decision outranks the retry policy'
   }
 ]);
 
@@ -126,6 +140,11 @@ global.fetch = async function(_url, options = {}) {
     return ok({ message: 'Reading above the root.',
       actions: [{ operation: 'readFile', args: { path: '../outside.txt' } }], complete: false });
   }
+  if (scenario.kind === 'providerfault') {
+    // A transport-level provider failure, which classifies as provider_failed.
+    return { ok: false, status: 500, headers: new Map(),
+      async text() { return 'upstream provider unavailable'; } };
+  }
   // Never acts, never completes: the run exhausts a runtime limit with no failure kind
   // and no workspace mutation, which is the only shape auto-retry accepts.
   return ok({ message: 'Still thinking.', actions: [], complete: false });
@@ -152,12 +171,17 @@ async function main() {
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '2',
         AGENT_MAX_EXECUTION_STEPS: '2'
       };
-      const server = await startServer(serverEnv);
-      const cookie = await server.login();
+      // Tickets are created with the scheduler PARKED so their runs stay pending while
+      // the triage case has its outstanding decision attached. Attaching it after the
+      // run had already failed would test nothing: the retry decision happens during
+      // that run's terminalization.
+      const stagingEnv = { ...serverEnv, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' };
+      const staging = await startServer(stagingEnv);
+      const cookie = await staging.login();
 
       for (const scenario of CASES) {
         scenario.objective = `${marker(scenario.key)} exercise the ${scenario.key} retry path`;
-        const response = await server.request('POST', '/tickets', {
+        const response = await staging.request('POST', '/tickets', {
           cookie,
           form: {
             objective: scenario.objective,
@@ -178,6 +202,34 @@ async function main() {
         if (!ticket) throw new Error(`ticket for ${scenario.key} was not persisted`);
         scenario.ticketId = ticket.id;
       }
+
+      // The outstanding human decision, written through the same repository call
+      // `blockTicketForNoModelRoute` uses, before the run is allowed to execute.
+      const triagedCase = CASES.find(item => item.seedTriage);
+      const beforeSeed = await store.getTicket(triagedCase.ticketId);
+      await store.transitionTicketState({
+        ticketId: triagedCase.ticketId,
+        fromStatuses: [beforeSeed.status],
+        toStatus: 'blocked',
+        patch: {
+          blockedReason: 'seeded outstanding decision',
+          triage: {
+            required: true,
+            reasonCode: 'authority_blocked',
+            summary: `outstanding decision seeded by the auto-retry bounds suite ${STAMP}`,
+            requiredDecision: 'change_scope',
+            createdAt: new Date().toISOString(),
+            resolvedAt: null
+          },
+          changedAt: new Date().toISOString()
+        },
+        eventType: 'ticket.blocked',
+        eventPayload: { reason: 'seeded outstanding decision', reasonCode: 'test_seeded' }
+      });
+
+      await staging.stop();
+      const server = await startServer(serverEnv);
+      await server.login();
 
       const runsFor = async ticketId => {
         const runs = (await store.listRuns({ limit: 300 })).runs || [];
@@ -284,6 +336,68 @@ async function main() {
              byKey('authority').policy.maxAttempts === byKey('eligible').policy.maxAttempts,
         '5: and the two tickets really did carry identical retry policy, so classification is the only difference');
 
+      // ── 5b. A PROVIDER FAULT IS ALSO INELIGIBLE ──────────────────────────────
+      // A transport failure is a failure the policy would happily retry if
+      // classification were ignored — and it is the one most likely to look transient.
+      //
+      // NOT covered here: "a verification failure never retries". A postcondition
+      // failure terminalizes through `completeAgentRun`, which never reaches the retry
+      // hook, so the property holds structurally — but this suite could not produce a
+      // real verification failure (an objective naming a folder, left undone, still
+      // completed), and asserting a property against a fixture that does not reproduce
+      // it would be worse than leaving it recorded as open. See A26.
+      scenariosRun += 1;
+      for (const key of ['provider']) {
+        const scenario = byKey(key);
+        const runs = await runsFor(scenario.ticketId);
+        assert(runs.length === 1,
+          `5b: ${scenario.why} — not retried (${runs.length} runs)`);
+        const settled = runs[runs.length - 1];
+        assert(settled.triage && settled.triage.reasonCode === scenario.expectReason,
+          `5b: ${key} classifies as ${scenario.expectReason} (${settled.triage && settled.triage.reasonCode})`);
+        assert(scenario.policy.autoRetry === true && scenario.policy.maxAttempts === 2,
+          `5b: ${key} carried the same retry policy that did retry elsewhere`);
+      }
+
+      // ── 5c. AN OUTSTANDING DECISION OUTRANKS THE POLICY ──────────────────────
+      // Same classification as the eligible case — runtime_failed, no mutations — and
+      // the same policy. The only difference is that a human decision is pending.
+      scenariosRun += 1;
+      const triaged = byKey('triaged');
+      const triagedRuns = await runsFor(triaged.ticketId);
+      assert(triagedRuns.length === 1,
+        `5c: a ticket with unresolved triage is not auto-retried (${triagedRuns.length} runs)`);
+      assert(triagedRuns[0].status === 'failed',
+        `5c: its run really did fail, so the retry hook was reached (${triagedRuns[0].status})`);
+      const triagedTicket = await store.getTicket(triaged.ticketId);
+      assert(triagedTicket.triage && triagedTicket.triage.required === true &&
+             !triagedTicket.triage.resolvedAt,
+        '5c: and the ticket-level decision was outstanding when it failed');
+
+      // ── 5d. THE RETRY IS AUDITED EXACTLY ONCE ────────────────────────────────
+      // An automatic retry is the runtime starting work nobody asked for at that
+      // moment; it must leave exactly one operator-visible record saying so.
+      scenariosRun += 1;
+      const allLogs = (await store.listLogs({ limit: 500 })).logs || [];
+      const autoRetryLogs = allLogs.filter(log => log && log.type === 'ticket:auto_retry');
+      assert(allLogs.length > 0,
+        `5d: diagnostic logs are readable (${allLogs.length}); observed types: ${[...new Set(allLogs.map(l => l && l.type))].join(',')}`);
+      // Exactly ONE retry happens across the whole suite, so a single entry suite-wide
+      // is the same statement as "one per retry" and does not depend on which field
+      // carries the ticket id.
+      assert(autoRetryLogs.length === 1,
+        `5d: exactly one auto-retry audit entry exists across every ticket (${autoRetryLogs.length})`);
+      const entry = autoRetryLogs[0];
+      const detail = JSON.stringify(entry);
+      assert(detail.includes(String(eligibleRuns[0].id)) && detail.includes(String(eligibleRuns[1].id)),
+        `5d: naming the run it replaced and the run it created (${detail.slice(0, 300)})`);
+      assert(detail.includes('auto_retry'),
+        '5d: attributed to the runtime rather than an operator');
+      // The runs themselves also record which side of the retry they were on.
+      const retriedLog = allLogs.filter(log => log && log.type === 'run:failed_auto_retried');
+      assert(retriedLog.length === 1,
+        `5d: exactly one run is recorded as failed-and-retried (${retriedLog.length})`);
+
       // ── 6. RESTART DOES NOT RETRY SETTLED FAILURES ───────────────────────────
       // Auto-retry belongs to the failure path, not to startup convergence. A runtime
       // that retried on boot would multiply every historical failure on every deploy.
@@ -304,8 +418,8 @@ async function main() {
         label: 'auto retry bounds',
         assertions: assert.count(),
         scenarios: scenariosRun,
-        minAssertions: 25,
-        minScenarios: 7
+        minAssertions: 45,
+        minScenarios: 10
       });
       console.log(`\nPASS: auto retry bounds — ${scenariosRun} scenarios, ${assert.count()} assertions (PostgreSQL-native)`);
     }, { schemaSlug: 'auto_retry' });

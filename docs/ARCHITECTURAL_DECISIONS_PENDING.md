@@ -3857,18 +3857,32 @@ fault-injection seam to production source. That was judged not worth new product
 surface (the A24 precedent), so it is recorded as an uncovered branch rather than counted
 as tested.
 
-**Consequence for A20 — `auto-retry-test.js` is still NOT retired.** A26 gives its
-`runtime failure with mutation never retries` scenario a destination
-(`run-mutation-evidence-test.js` scenario 2), but three of its assertions still have none:
+**Consequence for A20 — `auto-retry-test.js` is still NOT retired, on ONE assertion.**
 
-| Unmapped assertion | Needs |
-|--------------------|-------|
-| verification failure never retries (`verification_failed`) | a failing postcondition fixture |
-| provider failure never retries (`provider_failed`) | a provider-fault fixture |
-| ticket-level triage blocks auto-retry | a ticket carrying triage before its run fails |
-| exactly one `ticket:auto_retry` audit log entry | an assertion on the system log |
+| Historical assertion | Destination |
+|----------------------|-------------|
+| default off; no finite ceiling; bounded single retry; provenance; policy snapshot; exhausted run triaged | `auto-retry-bounds-test.js` 2–4 |
+| authority/protected never retries | `auto-retry-bounds-test.js` 5 |
+| provider failure never retries | `auto-retry-bounds-test.js` 5b |
+| ticket-level triage blocks auto-retry | `auto-retry-bounds-test.js` 5c |
+| exactly one `ticket:auto_retry` audit entry | `auto-retry-bounds-test.js` 5d |
+| startup must not retry old failures | `auto-retry-bounds-test.js` 6 |
+| runtime failure WITH a mutation never retries | `run-mutation-evidence-test.js` 2 |
+| **verification failure never retries** | **NONE** |
 
-Retire it when those four have destinations, not before.
+**Why the last one is still open, stated rather than papered over.** The property holds
+*structurally* — a postcondition failure terminalizes through `completeAgentRun`, which
+never reaches the retry hook in `failAgentRun` — but a fixture that actually produces a
+`verification_failed` run was not found: an objective naming a folder, left undone,
+**completed** rather than failing verification. Asserting the property against a fixture
+that does not reproduce it would be worse than leaving it recorded, so it is recorded.
+
+Closing it needs a deterministic postcondition failure. `postcondition-completion-test.js`
+induces blocked-operation and completion-deferral shapes but not this one, so the first
+task is establishing which objective or workflow shape reliably fails verification —
+the same "find the truthful fixture first" discipline A25 needed for `runtime_failed`.
+
+Retire `auto-retry-test.js` when that lands, not before.
 
 ---
 
