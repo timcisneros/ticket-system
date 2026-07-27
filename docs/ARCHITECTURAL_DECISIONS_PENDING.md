@@ -2611,7 +2611,28 @@ load. Recording it beats a hasty fix at the end of a session.
 distinction the tranche above exists to protect. The retry belongs at the transaction
 boundary, below the latch.
 
-### Harness defect — pid-modulo test ports collide (2026-07-26)
+### OPEN — surviving mutation `authority-denial-loses-its-rule` (2026-07-26)
+
+Found by the **first full 32-mutation run of the session** (earlier tranches ran targeted
+subsets). `timeline-authority-evidence-test.js` does not detect the removal of
+`rule: 'protected_path'` from the denial in `server.js` (~6528).
+
+**Not caused by the port, deadlock, or diagnostics changes** — none of them touch
+authority denial — but it has no established green baseline either, so it is recorded as
+newly *observed*, not as newly *broken*.
+
+The puzzle is that the suite looks correct: it asserts the STRUCTURED field
+(`details.rule === 'protected_path'`, line 146) precisely to avoid a prose substring
+check, and production has exactly one site emitting that rule. So `details.rule` is
+evidently populated from somewhere other than the mutated return — a persisted event
+payload or a projection default are the obvious candidates.
+
+**Do not "fix" this by making the assertion stricter until that is understood.** The
+recurring A20 lesson applies: identify which layer actually supplies the value before
+judging the suite. This is the seventh time a surprising mutation result has pointed at a
+second source rather than a coverage hole.
+
+### Harness defect — RESOLVED: pid-modulo test ports collide (2026-07-26)
 
 Found while validating the event-record-limit tranche. The checkpoint failed once on
 `lease-renewal-resume-safety-test.js` with `server did not start`, then passed on a
@@ -2637,11 +2658,15 @@ suite starts — the failure observed was `provider-response-recovery` immediate
 followed by `lease-renewal`, whose ranges overlap. The symptom is misleading: the suite
 reports "server did not start" when the server started fine and could not bind.
 
-**Deliberately NOT fixed in that tranche.** The right fix is a shared helper that
-obtains an OS-assigned free port (bind `:0`, read it, close, hand it over) rather than
-disjoint hand-tuned ranges, and it touches eight files. Folding an eight-file harness
-change into a durable-evidence tranche would blend two unrelated things and leave both
-less reviewable. It is test infrastructure only and needs its own validation pass.
+**FIXED** in `b85cd53`. `scripts/test-port.js` replaces the arithmetic with the
+allocator the OS already provides: bind port 0, ask what you got. Two concurrent probes
+cannot receive the same port. Callers needing several ports get them from one call so the
+probes are open simultaneously and cannot alias — the old `PORT_1 + 1` scheme assumed the
+neighbouring port was free. `release-checkpoint-coverage-test.js` now fails if any
+checkpoint suite reintroduces pid-modulo or a hard-coded base/listen port, and exercises
+the facility itself so the guard cannot point at something broken; verified it catches a
+deliberate reintroduction. Validated by running all eight affected suites concurrently
+three times (24/24), which is exactly the contention the old scheme lost.
 
 **Do not "fix" this with retries or by widening timeouts** — the same standing rule as
 the concurrency escalation. The cause is known; suppressing the symptom would discard a
