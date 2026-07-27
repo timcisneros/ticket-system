@@ -3032,9 +3032,49 @@ backpressure is involved.
   a historical run's authority. So the run's recorded execution-semantics snapshot
   carried mutating = 8.
 
-**The open question is why the recorded snapshot diverges from the constant, and only
-under load.** That is where the next session should start; it is a production-evidence
-question (what a run records about its own limits), not a test question.
+**CORRECTION (2026-07-27, later): the durable snapshot is NOT implicated.** Tracing the
+message to its source settles it — `createModelResponseContractViolationError`
+(`server.js` ~10600) renders the PROCESS CONSTANTS directly:
+
+```js
+`(${MAX_AGENT_ACTIONS_PER_RESPONSE} total / ${MAX_MUTATING_ACTIONS_PER_RESPONSE} mutating)`
+```
+
+It never consults the run, `runtimeLimitsSnapshot.semantics`, hydration, or
+`resolveRunActionCaps`. So "8 mutating" in that message means
+`MAX_MUTATING_ACTIONS_PER_RESPONSE` was literally **8 in the server process**, and the
+corrective-feedback text agreeing with it is a consequence, not corroboration of a
+snapshot fault. My earlier entry inferred a `run_semantics_snapshot` divergence from the
+two agreeing; that inference was wrong, and any fix aimed at the snapshot or at
+`resolveRunActionCaps` would have been aimed at a layer this evidence does not implicate.
+
+**What that leaves.** The constant is `env AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE || 2`,
+so the server process saw that variable set to `8`. Repository search finds it set in
+exactly two places, neither of which can reach this suite:
+
+| Site | Why it cannot be the source |
+|------|-----------------------------|
+| `agent-regression-test.js:1374` sets `'8'` | orphaned — not in the checkpoint |
+| `execution-semantics-persistence-test.js:133` sets a per-case value | runs AFTER this suite in `POSTGRES_INTEGRATION_SCRIPTS` |
+
+Both set it only in a spawned child's `env`, which cannot affect a sibling suite's
+process. No `.env` entry, no shell export.
+
+**Not reproduced on demand.** Three rounds of the suite under deliberate concurrent load
+from its checkpoint neighbours all passed. All three real failures occurred in a
+clean-worktree checkpoint; in-tree checkpoints have not shown it.
+
+**Boundary capture extended** so the next occurrence is decisive rather than inferential.
+On failure the suite now additionally reports the env this test process saw, the env it
+passed to the server, and the admitted run's RECORDED semantics — which separates the
+four candidates (ambient env, env propagation, recorded snapshot, rendering) in one line
+each.
+
+**No production change was made, and no regression suite was written.** The requested
+regression would pin snapshot-integrity properties that this evidence shows are not
+where the defect lives; writing it would create the appearance of a fix without one.
+Confirming the real mechanism needs one more captured occurrence — which the extended
+capture now makes self-describing.
 
 **Nothing was changed.** Per the standing rule the failure was diagnosed, not weakened —
 no retry, no relaxed assertion, no widened timeout. The suite passes standalone and on

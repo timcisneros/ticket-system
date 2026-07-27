@@ -48,6 +48,7 @@ const RESET = 'MCV_RESET';
 
 function assert(c, m) { if (!c) throw new Error(m); }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+let serverEnvMutatingCap = null;
 
 // Read-only health probe used by the first-failure diagnostics below, so a latched or
 // backpressured deployment is distinguishable from a genuine feedback change.
@@ -142,6 +143,7 @@ async function main() {
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  serverEnvMutatingCap = process.env.AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE;
   let out = '';
   server.stdout.on('data', c => { out += c; });
   server.stderr.on('data', c => { out += c; });
@@ -240,6 +242,21 @@ async function main() {
         console.error(`  [request ${index}] bytes=${text.length} feedbackMatches=${JSON.stringify(feedback)}`);
       });
       console.error(`  health: ${JSON.stringify(await healthSnapshot())}`);
+      // BOUNDARY VALUES. The failure message renders the PROCESS CONSTANTS
+      // (MAX_AGENT_ACTIONS_PER_RESPONSE / MAX_MUTATING_ACTIONS_PER_RESPONSE), so a wrong
+      // number there means the constant itself was wrong in the server process — not a
+      // snapshot, hydration or rendering fault. These three lines separate the four
+      // candidate boundaries: the env this test process saw, the env it passed to the
+      // server, and what the admitted run durably RECORDED.
+      console.error(`  test-process env AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE=${JSON.stringify(process.env.AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE)}`);
+      console.error(`  server env passed: ${JSON.stringify(serverEnvMutatingCap)}`);
+      try {
+        const snap = oversizedRun && oversizedRun.runtimeLimitsSnapshot;
+        const semantics = snap && snap.semantics;
+        console.error(`  recorded semantics: total=${semantics && semantics.maxActionsPerResponse} mutating=${semantics && semantics.maxMutatingActionsPerResponse}`);
+      } catch (error) {
+        console.error(`  recorded semantics unavailable: ${error && error.message}`);
+      }
       console.error('  ── end diagnostics ──\n');
     }
     assert(/at most 8 total action/.test(secondOversizedRequest) && /at most 2 mutating action/.test(secondOversizedRequest),
