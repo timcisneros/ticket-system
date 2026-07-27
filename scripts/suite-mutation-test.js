@@ -262,8 +262,10 @@ const MUTATIONS = Object.freeze([
     suite: 'event-record-limit-containment-test.js',
     file: 'server.js',
     contract: 'a genuine evidence-persistence failure latches and fails closed',
-    find: '      if (!error.statusCode) error.statusCode = 413;\n      throw error;\n    }\n    if (!evidencePersistenceFailure) evidencePersistenceFailure = error;',
-    replace: '      if (!error.statusCode) error.statusCode = 413;\n      throw error;\n    }\n    if (false) evidencePersistenceFailure = error;',
+    // Anchored on the assignment plus the readiness clear, which together are unique to
+    // appendEvent — the same assignment also appears in the shutdown path at ~26802.
+    find: '    if (!evidencePersistenceFailure) evidencePersistenceFailure = error;\n    serverReady = false;',
+    replace: '    if (false) evidencePersistenceFailure = error;\n    serverReady = false;',
     expect: 'an internal evidence-persistence failure leaves the process reporting itself healthy'
   },
   {
