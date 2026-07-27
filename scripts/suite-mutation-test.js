@@ -308,6 +308,21 @@ const MUTATIONS = Object.freeze([
     expect: 'a later turn no longer knows what the earlier turn did'
   },
   {
+    // The fold is protected by TWO layers that both key off `evidenceKey`: the replay
+    // pass skips a key the event pass already used, and `addEntry` merges entries
+    // sharing a `dedupeKey` derived from it. Removing either alone leaves the other
+    // folding — both earlier aims survived for that reason. Changing how the replay side
+    // COMPUTES the key defeats both at once, and is the realistic regression: someone
+    // alters the key format on one side only.
+    name: 'timeline-double-reports-operations',
+    suite: 'timeline-receipt-projection-test.js',
+    file: 'server.js',
+    contract: 'an operation recorded in both the event journal and replay renders once',
+    find: '      const evidenceKey = `${run.id}:${operationInfo.operation}:${operationInfo.path}:${receipt && receipt.timestamp ? receipt.timestamp : item.startedAt || index}`;',
+    replace: '      const evidenceKey = `${run.id}:${operationInfo.operation}:${operationInfo.path}:${index}:${receipt && receipt.timestamp ? receipt.timestamp : item.startedAt || index}`;',
+    expect: 'the timeline reports the same operation twice'
+  },
+  {
     // Collapses the two 503s into one. A momentarily full but HEALTHY deployment would
     // tell callers the deployment cannot record evidence at all, and an operator would
     // restart a system that only needed a second.

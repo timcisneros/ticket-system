@@ -154,7 +154,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'operational-summary-readonly-test.js',
   // A20 — replaces the JSON-era tm2-evidence-preservation-test.js. Proves later model
   // turns are told truthfully what earlier turns did and why they were asked again.
-  'carried-evidence-preservation-test.js'
+  'carried-evidence-preservation-test.js',
+  // A20 — completes ticket-timeline-authority-visibility-test.js: receipt dedupe across
+  // the event journal and replay, triage projection, and template provenance.
+  'timeline-receipt-projection-test.js'
 ]);
 
 function runCheckpoint() {

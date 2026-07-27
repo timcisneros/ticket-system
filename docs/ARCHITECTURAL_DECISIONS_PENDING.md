@@ -3006,7 +3006,60 @@ the liveness incident undiagnosable for three tranches.
 checkpoint and passed on the immediately following one at the same commit, plus 3/3
 standalone.
 
-### The remaining 67 — sequencing
+### Timeline cluster COMPLETE — RETIRED `ticket-timeline-authority-visibility-test.js` (2026-07-27)
+
+Its authority half moved to `timeline-authority-evidence-test.js` in an earlier tranche;
+the remaining half is now `timeline-receipt-projection-test.js` — **32 assertions, 6
+scenarios, registered**. Every live assertion has a destination, so the historical file
+is deleted.
+
+**The central contract is DEDUPLICATION**, and it exists because the same operation is
+durably recorded in TWO places: the append-only `workspace.operation` event and the run's
+replay snapshot `workspaceOperations`. Both survive a crash and both are authoritative
+for different questions. If the fold breaks, the timeline double-reports every operation
+— an operator auditing what an agent touched sees twice the activity that occurred, with
+no indication which half is real.
+
+| Scenario | Contract |
+|----------|----------|
+| 1 | one operation in both sources renders exactly once, keeping its receipt identity |
+| 2 | **positive control** — four genuinely distinct reads render as four entries, including one that exists ONLY in replay |
+| 3 | source labels are DERIVED: a receipted read is `embedded_receipt`, an unreceipted one is not, and receipt metadata (hash, size) survives |
+| 4 | a committed mutation projects one `operation_history` entry carrying the durable `historyId` linking back to the ledger |
+| 5 | triage projects at ticket and run level, and resolution states `statusUnchangedByResolution` — a reviewed failure is still a failure |
+| 6 | provenance names template version, id and exact trigger; fabricated provenance is refused by referential integrity |
+
+**`legacyUnversioned` is retired as obsolete, with evidence.** The historical suite
+asserted that an unversioned template source "renders safely". That state is no longer
+reachable: the runtime throws a data-integrity error for a `process_template` source
+missing `templateVersion`, and the store enforces a foreign key from the ticket to the
+trigger that produced it. Scenario 6 pins the replacement behaviour — fabricated
+provenance is refused at the data layer, not judged at render time — so the retirement
+rests on what the runtime does rather than on the assertion's absence.
+
+**The mutation took three aims, and the first two survived for the same reason.** This is
+the ninth instance of the standing lesson and the most instructive so far:
+
+1. Removing the replay pass's `workspaceEventKeys` guard — **survived**. `addEntry` still
+   folded the duplicate, because both entries derive the same `dedupeKey`.
+2. Making the replay entry's `dedupeKey` unique — **survived**. The `workspaceEventKeys`
+   guard skipped the item before `addEntry` ever saw it.
+3. Changing how the replay side COMPUTES `evidenceKey` — **killed**. Both guards key off
+   that one value, so altering it defeats both at once.
+
+Neither guard is redundant and neither is sufficient alone to expose the regression
+through outcomes: they are two layers over a single shared key. **The mutation had to
+target the key, not either consumer of it.** Tuning the assertions after the first
+survival would have produced a suite that fails for the wrong reason.
+
+*(Fixture facts learned by failing, each now recorded in the suite: operation receipts are
+written with `recordOperationReceipt` and outcomes are `succeeded`/`failed`/`refused`, not
+`committed`; workspace receipts require a `mutationFingerprint`; the returned shape is
+`{record, event, inserted}`; and the projection's durable link is `details.historyId`,
+derived from the record, rather than `receipt.operationId`, which is only whatever the
+caller placed in the receipt document.)*
+
+### The remaining 66 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the
