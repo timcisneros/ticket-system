@@ -752,6 +752,10 @@ function projectOperationReceipt(envelope, intentRecord = null) {
     : actionOperationReceiptProjection(envelope);
 }
 
+// Transaction-level conflicts PostgreSQL resolves by aborting one side and expects the
+// caller to retry: serialization failure, deadlock, and lock-timeout.
+const RETRYABLE_TRANSACTION_CODES = new Set(['40001', '40P01', '55P03']);
+
 class PostgresRuntimeStore {
   constructor({
     connectionString,
@@ -4405,7 +4409,40 @@ class PostgresRuntimeStore {
 
   async appendEvent(event, { client = null } = {}) {
     const execute = connection => this._appendEvent(connection, event);
-    return client ? execute(client) : this.withTransaction(execute);
+    // A caller-supplied client means the CALLER owns the transaction: its earlier
+    // statements are not ours to replay, so a retry here could re-run half a unit of
+    // work. Only the self-owned transaction is safely replayable.
+    if (client) return execute(client);
+    return this._retryTransientTransaction(() => this.withTransaction(execute));
+  }
+
+  // Bounded retry for PostgreSQL's genuinely transient transaction conflicts. These
+  // abort the whole transaction — nothing committed — so replaying appends the event
+  // exactly once and cannot duplicate it.
+  //
+  // WHY THIS EXISTS. A deadlock is a routine condition PostgreSQL expects the loser to
+  // retry. Without this, a single 40P01 propagates to the server's `appendEvent`, which
+  // cannot classify it as request-scoped and therefore latches
+  // `evidencePersistenceFailure`, stops both schedulers, and leaves every pending run
+  // unleased until restart. One transient conflict took the whole deployment down.
+  //
+  // Deliberately NOT retried: statement timeout (57014) and connection failures, which
+  // signal genuine overload or loss rather than a resolvable conflict — retrying those
+  // compounds the problem. When retries are exhausted the original error is rethrown, so
+  // a persistent inability to record evidence still fails closed exactly as before.
+  async _retryTransientTransaction(run, { attempts = 4 } = {}) {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await run();
+      } catch (error) {
+        const code = error && error.code ? String(error.code) : null;
+        if (attempt >= attempts || !RETRYABLE_TRANSACTION_CODES.has(code)) throw error;
+        // Exponential backoff with jitter so two conflicting writers do not retry in
+        // lockstep and immediately re-conflict.
+        const backoffMs = Math.min(120, 8 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 12);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+      }
+    }
   }
 
   async _appendEvent(client, event) {

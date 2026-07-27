@@ -269,6 +269,18 @@ const MUTATIONS = Object.freeze([
     expect: 'an internal evidence-persistence failure leaves the process reporting itself healthy'
   },
   {
+    // Removes the transient-conflict retry, restoring the captured root cause of the
+    // runtime liveness incident: one routine 40P01 reaches the server, which latches
+    // evidence persistence and stops every scheduler.
+    name: 'transient-conflict-not-retried',
+    suite: 'event-append-lock-order-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'a self-owned evidence append retries PostgreSQL transient transaction conflicts',
+    find: '    return this._retryTransientTransaction(() => this.withTransaction(execute));',
+    replace: '    return this.withTransaction(execute);',
+    expect: 'a routine deadlock surfaces as an evidence-persistence failure'
+  },
+  {
     // Restores the lock-order inversion: the chain tip is taken before the run row, so a
     // concurrent evidence writer holding the run row deadlocks instead of waiting.
     name: 'event-append-restores-lock-inversion',

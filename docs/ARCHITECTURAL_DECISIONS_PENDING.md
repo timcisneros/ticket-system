@@ -2506,7 +2506,7 @@ implement is flagged in place and linked to the open defect above rather than de
 retirement on a name search, and the document that would have "confirmed" the mechanism
 was gone was itself stale. Two independent stale sources agreeing is not corroboration.)*
 
-### OPEN — runtime progress/liveness: admitted runs fail to reach terminal (2026-07-26)
+### RESOLVED — runtime progress/liveness: admitted runs fail to reach terminal (2026-07-27)
 
 **Status: OPEN and UNRESOLVED. No cause is claimed.** It has not reproduced since, but
 nothing was changed that is known to address it, so this stays open.
@@ -2570,7 +2570,55 @@ than overwriting it. Exposed at `/api/runtime/status` as `eventPersistence` and 
 by the liveness diagnostics. Verified end to end against an injected failure. Codes and
 ids only — no payload contents, no secrets.
 
-**Hunt status (2026-07-27): the cause has NOT been captured.** The latch did not recur
+#### ROOT CAUSE CAPTURED AND FIXED (2026-07-27)
+
+The armed provenance caught it on a clean-worktree checkpoint:
+
+```json
+{"latched":true,"firstFailure":{
+  "channel":"event_append","operation":"appendEvent",
+  "eventType":"scheduler.run_skipped","runId":22,"ticketId":21,
+  "code":"40P01","message":"deadlock detected","routine":"DeadLockReport",
+  "kind":"deadlock_detected","retryable":true},"subsequentFailures":0}
+```
+
+**A routine deadlock was taking the whole deployment down.** `40P01` aborts one
+transaction and PostgreSQL expects the loser to retry. Nothing retried it, so it reached
+the server's `appendEvent`, which cannot classify it as request-scoped and therefore
+latched `evidencePersistenceFailure`, stopped both schedulers, and left every pending run
+unleased until restart. One transient conflict, one dead deployment.
+
+Note this is a **different** deadlock from the chain-tip inversion fixed in `85f0802` —
+that fix was correct and remains, but it was never the whole story. The general defect was
+never the specific lock pair; it was that a retryable condition was treated as permanent.
+
+**The fix: bounded retry where the transaction is provably replayable.**
+`PostgresRuntimeStore.appendEvent` retries `40001`, `40P01` and `55P03` with exponential
+backoff and jitter — **only when it owns the transaction**. A caller-supplied `client`
+means the caller owns it and its earlier statements are not ours to replay, so that path
+is never retried. Because these codes abort the entire transaction, nothing committed and
+a replay appends the event exactly once.
+
+Deliberately **not** retried: statement timeout (`57014`) and connection failures, which
+signal genuine overload or loss rather than a resolvable conflict — retrying those
+compounds the problem. On exhaustion the original error is rethrown, so a persistent
+inability to record evidence still fails closed exactly as before.
+
+**Validation.** `event-append-lock-order-test.js` scenario 5 forces a real deadlock with
+`store.appendEvent` as a participant and requires it to succeed; scenario 1 independently
+proves that interleaving genuinely deadlocks at the SQL level, so a pass is a retry and
+not an absent conflict. Mutation `transient-conflict-not-retried` removes the retry and is
+killed with the captured error verbatim — `(40P01: deadlock detected)`. Fail-closed
+behaviour is unchanged: `evidence-failure-treated-as-client-error` still kills against
+`event-record-limit-containment-test.js`.
+
+**The instrumentation is what solved this.** Three hypotheses preceded it and all three
+were wrong. The incident only moved once the repository could state which operation
+failed and how PostgreSQL classified it.
+
+#### Hunt log (superseded by the capture above)
+
+**Hunt status (2026-07-27): the cause had NOT yet been captured at this point.** The latch did not recur
 across the checkpoints run after the instrumentation landed. Two other intermittent
 failures surfaced during the hunt and were separated out rather than confused with it:
 

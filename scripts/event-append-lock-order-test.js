@@ -219,12 +219,64 @@ async function main() {
     assert(verifyCurrentRunEventChain(parallelEvents).chainValid,
       '4: and the hash chain verifies across all of them');
 
+    // ── 5. A transient deadlock is retried, not surfaced as a persistence failure ──
+    // The captured root cause of the runtime liveness incident: a 40P01 on an evidence
+    // append reached the server, which cannot classify it as request-scoped, so it
+    // latched `evidencePersistenceFailure` and stopped both schedulers. A deadlock is a
+    // routine condition PostgreSQL expects the loser to retry.
+    //
+    // This forces a genuine deadlock with `store.appendEvent` as one participant and
+    // requires it to SUCCEED. Scenario 1 already proved this interleaving really does
+    // deadlock at the SQL level, so a pass here is a retry, not an absent conflict.
+    scenariosRun += 1;
+    const victim = await makeRun('victim');
+    const blocker = await store.pool.connect();
+    let victimError = null;
+    let victimEvent = null;
+    try {
+      await blocker.query('BEGIN');
+      // Blocker takes the chain tip first — the order the appender needs second.
+      await blocker.query(
+        `SELECT next_seq FROM ${store.table('run_event_chain_tips')} WHERE run_id = $1 FOR UPDATE`,
+        [victim.run.id]);
+
+      // The appender takes the run row, then blocks on the chain tip.
+      const appendPromise = store.appendEvent({
+        type: 'lock.retried', ticketId: victim.ticket.id, runId: victim.run.id,
+        payload: { marker: `retried-${STAMP}` }
+      }).then(event => { victimEvent = event; }).catch(error => { victimError = error; });
+
+      await sleep(500);
+      // Blocker now wants the run row the appender holds → cycle → PostgreSQL aborts one.
+      await blocker.query(
+        `SELECT id FROM ${store.table('runs')} WHERE id = $1 FOR UPDATE`, [victim.run.id]
+      ).catch(() => { /* the blocker may be the victim; either way the cycle is real */ });
+      await blocker.query('COMMIT').catch(() => blocker.query('ROLLBACK').catch(() => {}));
+      await appendPromise;
+    } finally {
+      try { await blocker.query('ROLLBACK'); } catch (_) { /* settled */ }
+      blocker.release();
+    }
+    assert(victimError === null,
+      `5: a transient deadlock on an evidence append is retried, not raised ` +
+      `(${victimError && victimError.code}: ${victimError && victimError.message})`);
+    assert(victimEvent && victimEvent.type === 'lock.retried',
+      '5: the retried append returned its event');
+
+    const victimEvents = (await store.listTicketEvents(victim.ticket.id, { limit: 200 })).events
+      .filter(event => event.runId === victim.run.id);
+    const retried = victimEvents.filter(event => event.type === 'lock.retried');
+    assert(retried.length === 1,
+      `5: the retry appended the event exactly once — a rolled-back transaction cannot duplicate (${retried.length})`);
+    assert(verifyCurrentRunEventChain(victimEvents).chainValid,
+      '5: the chain still verifies after a retried append');
+
     assertScenariosExecuted({
       label: 'event append lock order',
       assertions: assert.count(),
       scenarios: scenariosRun,
-      minAssertions: 15,
-      minScenarios: 4
+      minAssertions: 19,
+      minScenarios: 5
     });
     console.log(`\nPASS: event append lock order — ${scenariosRun} scenarios, ${assert.count()} assertions (PostgreSQL-native)`);
   }, { schemaSlug: 'lock_order' });
