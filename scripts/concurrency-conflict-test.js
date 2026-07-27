@@ -52,6 +52,59 @@ const CROSS_TICKET_DELETE_PERMISSION = 'workspace.delete.cross_ticket_artifact';
 const results = {};
 let hardFailures = 0;
 
+// Set once the server is up so a failure can describe WHY a run stalled. This suite has
+// intermittently reported that a run "did not reach terminal" while saying nothing about
+// what the run was doing — queued, leased, executing, blocked on evidence, or abandoned.
+// That gap is what turned one occurrence into an undiagnosable incident. See A20,
+// "runtime progress/liveness". Diagnostics only: this never changes a verdict, never
+// retries, and never extends a timeout.
+let diagnosticContext = null;
+let capturedDiagnostics = false;
+
+function setDiagnosticContext(context) {
+  diagnosticContext = context;
+}
+
+async function captureLivenessDiagnostics(label) {
+  if (!diagnosticContext || capturedDiagnostics) return;
+  capturedDiagnostics = true;
+  const { store, server, cookie } = diagnosticContext;
+  console.log(`\n  ── liveness diagnostics (first hard failure: ${label}) ──`);
+  try {
+    const status = await server.request('GET', '/api/runtime/status', { cookie });
+    if (status.statusCode === 200) {
+      const runtime = JSON.parse(status.body);
+      console.log('  scheduler:      ', JSON.stringify(runtime.scheduler));
+      console.log('  leaseOwner:     ', runtime.leaseOwner);
+      console.log('  concurrency:    ', JSON.stringify(runtime.concurrencyLimits));
+      console.log('  counts:         ', JSON.stringify(runtime.counts));
+      console.log('  pendingRuns:    ', (runtime.pendingRuns || []).length);
+      console.log('  runningRuns:    ', (runtime.runningRuns || []).length);
+      console.log('  expiredLeases:  ', JSON.stringify((runtime.expiredLeases || []).map(r => r.id)));
+    } else {
+      console.log('  runtime status unavailable: HTTP', status.statusCode, String(status.body).slice(0, 200));
+    }
+    console.log('  health:         ', JSON.stringify((await server.request('GET', '/health')).body));
+  } catch (error) {
+    console.log('  runtime status capture failed:', error && error.message);
+  }
+  try {
+    const page = await store.listRuns({ limit: 50 });
+    for (const run of (page.runs || []).filter(r => !['completed', 'failed', 'interrupted'].includes(r.status))) {
+      const events = (await store.listTicketEvents(run.ticketId, { limit: 50 })).events
+        .filter(event => event.runId === run.id);
+      console.log(`  run ${run.id}: status=${run.status} phase=${run.currentPhase} revision=${run.revision} ` +
+        `ticket=${run.ticketId} lease=${run.leaseOwner || 'none'} expires=${run.leaseExpiresAt || 'n/a'} ` +
+        `heartbeat=${run.lastHeartbeatAt || 'n/a'}`);
+      console.log(`         ticketStatus=${(await store.getTicket(run.ticketId)).status} ` +
+        `lastEvents=${events.slice(-6).map(event => event.type).join(' → ') || 'none'}`);
+    }
+  } catch (error) {
+    console.log('  run-state capture failed:', error && error.message);
+  }
+  console.log('  ── end diagnostics ──\n');
+}
+
 function record(name, verdict, detail) {
   results[name] = { verdict, detail: detail || null };
   // FAIL, OBSERVED_UNSAFE and NOT_PROVEN all fail the harness. See the header: a
@@ -59,7 +112,14 @@ function record(name, verdict, detail) {
   const isHard = verdict === 'FAIL' || verdict === 'OBSERVED_UNSAFE' || verdict === 'NOT_PROVEN';
   if (isHard) hardFailures += 1;
   console.log(`  ${isHard ? '✗' : '·'} ${name}: ${verdict}${detail ? ' — ' + detail : ''}`);
+  // Capture on the FIRST hard failure only: later scenarios inherit the same broken
+  // state, so a snapshot per failure would bury the one that matters.
+  if (isHard && diagnosticContext && !capturedDiagnostics) {
+    pendingDiagnostics = pendingDiagnostics.then(() => captureLivenessDiagnostics(name));
+  }
 }
+
+let pendingDiagnostics = Promise.resolve();
 
 function softAssert(name, condition, detailIfFail, detailIfPass) {
   record(name, condition ? 'PASS' : 'FAIL', condition ? (detailIfPass || null) : detailIfFail);
@@ -139,6 +199,8 @@ async function main() {
       });
       const cookie = await server.login();
       const restrictedCookie = await server.login('restricted', RESTRICTED_PASSWORD);
+      // Arm failure-time capture now that there is something to interrogate.
+      setDiagnosticContext({ store, server, cookie });
 
       // ── Store-backed observation helpers ───────────────────────────────────
       const objectiveWith = (tag, plan) => `concurrency ${tag} ${STAMP} #ACTIONS=${encodeActions(plan)}`;
@@ -643,6 +705,9 @@ async function main() {
       }
 
       console.log('\nSummary');
+      // Let any failure-time capture finish before the summary, so the diagnostics
+      // appear with the failure rather than after the verdict.
+      await pendingDiagnostics;
       console.log('-'.repeat(60));
       for (const [name, r] of Object.entries(results)) console.log(`  ${name}: ${r.verdict}`);
       const observedUnsafe = Object.values(results).filter(r => r.verdict === 'OBSERVED_UNSAFE').length;

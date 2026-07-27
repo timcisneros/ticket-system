@@ -2506,59 +2506,70 @@ implement is flagged in place and linked to the open defect above rather than de
 retirement on a name search, and the document that would have "confirmed" the mechanism
 was gone was itself stale. Two independent stale sources agreeing is not corroboration.)*
 
-### OPEN PRODUCTION DEFECT — runs fail to reach terminal under bounded concurrency (2026-07-26)
+### OPEN — runtime progress/liveness: admitted runs fail to reach terminal (2026-07-26)
 
-**This is escalation step 3 for `concurrency-conflict-test.js`,** per the rule recorded
-when the flake was first hit. The suite failed again during clean-worktree validation of
-`8638c51`, and this time not marginally: **10 hard failures, 7 not-proven, 16 scenarios**.
-The bounded-burst drain added in `25fd221` was never claimed as a cure; it is now
-definitively not one.
+**Status: OPEN and UNRESOLVED. No cause is claimed.** It has not reproduced since, but
+nothing was changed that is known to address it, so this stays open.
 
-**Captured evidence (from the failing run):**
+**The incident.** During clean-worktree validation of `8638c51`,
+`concurrency-conflict-test.js` failed with **10 hard failures and 7 not-proven across 16
+scenarios** — escalation step 3, after the bounded-burst drain in `25fd221` (never
+claimed as a cure, and definitively not one).
 
 ```
 ✗ double rerun: FAIL — newRuns=2 stillRunning=0 r1=200 r2=200
 ✗ stop vs rerun: NOT_PROVEN — base run did not reach terminal
 ✗ allocated/dynamic non-overlap: FAIL — bothOk=null filesOk=false noFalseConflict=true
-✗ same-agent different-path runs isolated: NOT_PROVEN — base runs did not reach terminal
 ✗ same-agent same-file conflict blocked: FAIL — statuses=[null,null] attributed=false cleanWrites=0
-✗ same-agent rerun isolation: NOT_PROVEN — base runs did not reach terminal
 ✗ same-agent failure isolation: NOT_PROVEN — owner setup run did not complete (null)
 ✗ permitted cross-ticket delete: NOT_PROVEN — owner run did not complete (null)
-✗ non-permitted cross-ticket delete blocked: NOT_PROVEN — owner run did not complete (null)
 ✗ non-cross-ticket delete allowed without permission: NOT_PROVEN — run did not reach terminal
 ```
 
-The signature is consistent and specific: **runs do not reach a terminal status at all**
-(`statuses=[null,null]`, `did not complete (null)`). This is a *progress* failure, not a
-correctness failure — the suite is not observing wrong conflict decisions, it is
-observing no decision, because the work never finishes.
+The signature is **progress, not correctness**: runs do not reach a terminal status at
+all (`statuses=[null,null]`, `did not complete (null)`). The suite is not observing wrong
+conflict decisions; it is observing no decision, because the work never finishes.
 
-**Ruled out — the tidy explanation does not hold.** The obvious hypothesis was that this
-is the deadlock defect below: a deadlock latches `evidencePersistenceFailure`, the
-schedulers stop, and runs stall forever. That would explain everything. **It is not
-supported by the evidence:** the failing log contains no `deadlock`, `degraded`,
-`EVENT_PERSISTENCE_UNAVAILABLE`, or 503 signature anywhere. Two distinct problems
-surfaced in the same validation pass and must be investigated separately. Recorded
-explicitly because the unified story is attractive and wrong.
+**Explicitly ruled out.** The attractive explanation was the `_appendEvent` deadlock
+resolved below: a 40P01 latches `evidencePersistenceFailure`, the schedulers stop, and
+runs stall forever. **The evidence does not support it** — the failing log contains no
+`deadlock`, `degraded`, `EVENT_PERSISTENCE_UNAVAILABLE` or 503 signature anywhere. Two
+distinct problems surfaced in the same validation pass.
 
-**What must be captured next, per the escalation rule.** The rule requires blocked run
-states, scheduler state, leases, and admission counts, and the current suite reports
-none of them — it says a run did not reach terminal without saying what it was doing.
-`/api/runtime/status` already returns exactly the needed shape (`scheduler.running`,
-`concurrencyLimits.maxActiveRuns`, `localProcess.admittedRuns` / `startingRuns`,
-`activeRuns`, `pendingRuns`, `runningRuns`, `expiredLeases`). **Immediate next action:
-dump that snapshot plus the blocked runs' `status`/`leaseOwner`/`leaseExpiresAt` on
-failure.** That is diagnostic capture on the failure path only, which the rule asks for —
-it is not a retry and must not become one.
+**Validation evidence since the port and deadlock fixes** (recorded as evidence, *not* as
+a cure — see below):
 
-**Still forbidden:** retries, softening `NOT_PROVEN`, broad timeout multiplication, or
-moving the suite out of the checkpoint. Three tranches have now been tempted by each.
+| Round | Result | `concurrency-conflict` |
+|-------|--------|------------------------|
+| in-tree checkpoint (port fix) | 84/84 PASSED | 0 hard failures |
+| in-tree checkpoint (deadlock fix) | 85/85 PASSED | 0 hard failures |
+| clean worktree × 4 | 85/85 PASSED each | 0 hard failures each |
 
-*(Not done in this session: the diagnostic capture is a change to a suite that only
-misbehaves under checkpoint load, and there was not enough remaining budget to validate
-it honestly. Recording it beats landing an unvalidated edit to the one suite whose
-signal is already hard to trust.)*
+**Why this is not "fixed".** Six consecutive green runs do not establish a cause, and the
+original failure was itself intermittent across many previously green runs. Neither fix
+targeted run admission or scheduling, and the deadlock was explicitly ruled out by
+evidence. Declaring victory here would repeat the `25fd221` mistake of treating a quiet
+period as a cure.
+
+**What changed instead: the next occurrence will be diagnosable.** The suite reported
+that a run "did not reach terminal" while saying nothing about what the run was doing —
+that gap is what made one occurrence undiagnosable. It now captures, on the **first** hard
+failure only (later scenarios inherit the same broken state):
+
+* scheduler ownership, running flag and cadence; deployment and local-process concurrency
+  limits; admitted/starting run counts (including local-model slots);
+* pending / running / expired-lease counts and the expired-lease run ids;
+* `/health`, so a latched evidence failure is distinguished immediately;
+* for every non-terminal run: status, phase, revision, ticket id, lease owner, lease
+  expiry, last heartbeat, owning ticket status, and its last six event types — enough to
+  tell queued from leased from executing from blocked-on-evidence from abandoned.
+
+Verified by forcing a hard failure and confirming the block emits, then reverting. **This
+is diagnostics only** — it never changes a verdict, never retries, and never extends a
+timeout.
+
+**Still forbidden:** retries, softening `NOT_PROVEN`, broad timeout increases, or moving
+the suite out of the checkpoint. Four tranches have now been tempted by each.
 
 ### RESOLVED — a PostgreSQL deadlock degraded the whole process (2026-07-26)
 
