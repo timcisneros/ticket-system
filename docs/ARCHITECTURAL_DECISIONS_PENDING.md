@@ -2560,6 +2560,35 @@ yet in evidence. The diagnostics now additionally issue one evidence-dependent r
 when health is degraded and record the resulting 503 body, which carries
 `Event persistence is unavailable: <cause>` — the single missing fact.
 
+**Latch provenance is now armed (`f60d00e`).** `recordEvidencePersistenceLatch` captures
+the FIRST failure only — timestamp, channel, operation, event type, run and ticket id,
+PostgreSQL code, routine, constraint, a bounded sanitized message, and a classification
+of transient (serialization / deadlock / lock_not_available / statement timeout /
+connection / too-many-connections) versus permanent (integrity / data exception /
+syntax-access / application validation). Later failures are counted separately rather
+than overwriting it. Exposed at `/api/runtime/status` as `eventPersistence` and printed
+by the liveness diagnostics. Verified end to end against an injected failure. Codes and
+ids only — no payload contents, no secrets.
+
+**Hunt status (2026-07-27): the cause has NOT been captured.** The latch did not recur
+across the checkpoints run after the instrumentation landed. Two other intermittent
+failures surfaced during the hunt and were separated out rather than confused with it:
+
+| Observed | Disposition |
+|----------|-------------|
+| `timeline-authority-evidence-test.js` — determinism assertion | **My fixture defect**, fixed in `f60d00e`. It demanded identical entry lists across repeated reads while terminal evidence was still landing, so legitimate projection GROWTH read as nondeterminism. Now asserts the real contract: already-reported entries are never rewritten or dropped. |
+| `delegated-run-logging-containment-test.js` — "the run:completed echo insert was attempted and rejected" | **New, unexplained, load-dependent.** Passes 3/3 standalone. Recorded here so it is not mistaken for the latch; it has its own signature and no evidence links it. |
+| `mutation-admission-contract-test.js` | Not a flake — it correctly caught the provenance refactor moving the inline `evidencePersistenceFailure = error` assignment it pins in source. Restructured so the assignment stays at the call site. |
+
+**Known candidate, explicitly NOT acted on.** The pool sets `statement_timeout` to 30s and
+there is no global `lock_timeout`. Since `85f0802` converted the chain-tip deadlock into a
+lock WAIT, a sufficiently contended append could now exceed the statement timeout and
+raise `57014` — a transient condition that `appendEvent` would latch on, because its
+non-latching branch covers only `POSTGRES_RECORD_TOO_LARGE`/`TypeError`/`RangeError`.
+That is a plausible route into the latch and the classification table above would mark it
+`retryable: true`. **It remains a hypothesis.** The previous two hypotheses in this
+incident were both wrong, so nothing is being changed until provenance names the code.
+
 **Do not treat this as fixed, and do not widen `appendEvent`'s non-latching branch.** The
 latch is behaving exactly as designed; something is legitimately failing to persist
 evidence, and the correct fix is at whatever is failing, not at the containment that
