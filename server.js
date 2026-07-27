@@ -13471,7 +13471,14 @@ async function runAutoRetryAfterFailureIfPolicyAllows(failedRun, assessment) {
       predecessorRunId: failedRun.id,
       runDraft: prepared.run,
       runEventPayload: buildRunCreatedEventPayload
-    }, options.persistence || options);
+      // A25: this call passed a second argument `options.persistence || options`,
+      // but this function has no `options` parameter and none is in scope, so the
+      // reference threw ReferenceError on EVERY eligible retry. The throw was
+      // swallowed by the catch below and reported as `retry_creation_failed`, so
+      // bounded automatic retry silently never happened and the run fell through to
+      // triage as if it had been ineligible. `createRetryRun` takes one argument;
+      // the second was never meaningful.
+    });
     newRun = created && Array.isArray(created.runs) ? created.runs[0] || null : null;
     if (newRun) {
       broadcastTicketChange();

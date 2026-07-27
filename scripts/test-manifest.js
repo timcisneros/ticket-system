@@ -97,6 +97,9 @@ const TESTS = Object.freeze([
   { file: "artifact-projection-status-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "assignment-audit-test.js", status: "required" },
   { file: "attempt-usage-visibility-test.js", status: "orphaned", reason: "cutover-orphan" },
+  // A26: partially superseded by auto-retry-bounds-test.js. RETAINED because its
+  // "runtime failure with mutation never retries" scenario has no destination
+  // while the mutated-run guard is inert. Retire it when A26 is implemented.
   { file: "auto-retry-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "batch-workload-validation-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "bounded-transition-test.js", status: "required" },
@@ -131,6 +134,7 @@ const TESTS = Object.freeze([
   { file: "workspace-error-containment-test.js", status: "required" },
   { file: "rerun-admission-gate-test.js", status: "required" },
   { file: "provider-input-privacy-test.js", status: "required" },
+  { file: "auto-retry-bounds-test.js", status: "required" },
   { file: "event-chain-restart-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "event-integrity-negative-test.js", status: "required" },
   { file: "evidence-truthfulness-contract-test.js", status: "required" },

@@ -175,7 +175,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'rerun-admission-gate-test.js',
   // A24 — the provider-input privacy boundary: workspace-relative paths leave this
   // machine, host filesystem locations do not, and the durable record keeps both.
-  'provider-input-privacy-test.js'
+  'provider-input-privacy-test.js',
+  // A25 — bounded automatic retry: default-off, ceiling-bounded, and allowed only for
+  // the runtime_failed classification. The feature had never worked; see A25.
+  'auto-retry-bounds-test.js'
 ]);
 
 function runCheckpoint() {

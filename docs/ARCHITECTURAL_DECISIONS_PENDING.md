@@ -52,6 +52,8 @@ the defect can cause, not how hard it is to fix.
 | A22 | Resume after a committed workspace operation fails on an idempotency conflict | **High** | **Implemented 2026-07-26** — see entry | Correctness / recovery |
 | A23 | Deterministic crash-seam coverage was incomplete | Medium | **Closed 2026-07-26** — all nine seams driven | Verification gap |
 | A24 | Absolute host filesystem paths disclosed to the model provider | **High** | **Implemented 2026-07-27** — see entry | Privacy / disclosure |
+| A25 | Bounded automatic retry never executed — `ReferenceError` swallowed | **High** | **Implemented 2026-07-27** — see entry | Correctness / dead feature |
+| A26 | `countRunMutatingOperations` always returns 0; the mutated-run retry guard is inert | **High** | **Open — implementation required** | Correctness / safety |
 
 ### Sequencing
 
@@ -3700,6 +3702,100 @@ Recommended order:
 The manifest makes progress measurable: `node scripts/test-manifest.js` reports the orphan
 count directly, and it can only fall by a suite being repaired and registered, or retired with
 a reason.
+
+---
+
+### A25. Bounded automatic retry never executed
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Implemented 2026-07-27.** One-line correction; `auto-retry-bounds-test.js` registered (29 assertions, 7 scenarios) |
+| **Severity** | **High** — an operator-enabled policy did nothing, and the record looked identical to the policy being off |
+| **Discovered by** | Building the A20 replacement for `auto-retry-test.js` |
+| **Evidence** | Read-only probe: eligible ticket, `{autoRetry: true, maxAttempts: 2}`, `runtime_failed`, no mutations → **1 run**, triaged |
+
+**Proven behavior (before).** A ticket meeting every documented eligibility condition
+produced exactly one run and fell into triage, indistinguishable from a ticket with
+auto-retry switched off.
+
+**Mechanism.** `runAutoRetryAfterFailureIfPolicyAllows(failedRun, assessment)` called:
+
+```js
+const created = await getTicketRunLifecycleRepository().createRetryRun({ … },
+  options.persistence || options);
+```
+
+The function has **no `options` parameter**, and no `options` binding exists in its scope
+(the only declarations in the file are locals inside unrelated route handlers). Every
+eligible retry therefore threw `ReferenceError: options is not defined`, which the
+surrounding `catch` swallowed into `{ retried: false, reason: 'retry_creation_failed' }`.
+The caller then built triage after the fact, producing exactly the shape an ineligible
+run produces.
+
+`createRetryRun` accepts **one** argument; the second was never meaningful. Removing it is
+the whole fix.
+
+**Why nothing noticed.** The failure was caught, the run still terminalized correctly, the
+triage was still written, and the only observable difference was a run that did not exist.
+`auto-retry-test.js` — the one suite that counted runs per ticket — has been orphaned
+since the PostgreSQL cutover. This is the **fifth** time in A20 that a suite exposed a
+live production defect the moment it could run again.
+
+**Behavior change.** Deployments with `executionPolicy.autoRetry: true` and a finite
+`maxAttempts` will now actually retry eligible runtime failures once per available
+attempt. That is the documented intent, but it is a change in observable behavior for any
+ticket already carrying that policy.
+
+---
+
+### A26. `countRunMutatingOperations` always returns 0
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open — implementation required.** Recorded, not fixed |
+| **Severity** | **High** — a run that mutated the workspace is automatically retried, and finalized replays record `no_mutations` for runs that mutated |
+| **Discovered by** | A25's probe: a ticket whose run wrote a file and then failed on a step limit was retried |
+| **Evidence** | Source, plus an observed retry of a run whose write landed on disk |
+
+**Mechanism.**
+
+```js
+function countRunMutatingOperations(runId, history = null) {
+  history = Array.isArray(history) ? history : [];   // null → []
+  return history.filter(record => record.runId === runId && isActualWorkspaceMutation(record)).length;
+}
+```
+
+Called with one argument it can only return **0**. It never loads history. Both live call
+sites call it that way:
+
+| Call site | Consequence of a constant 0 |
+|-----------|------------------------------|
+| `failAgentRun` | the `mutationCount === 0` half of auto-retry eligibility is inert, so **a run that already mutated the workspace is retried** |
+| `buildFinalizedRunReplayState` | `mutationCount: 0` and `mutationOutcome: 'no_mutations'` are written into the finalized replay of runs that DID mutate |
+
+**Observed.** A ticket whose run wrote `mutated-*.txt` and then failed on the execution
+step limit produced a second, automatic run. The file was on disk; the guard that exists
+to prevent exactly that retry did not fire.
+
+**Why this is the dangerous half of A25.** Retrying an unmutated failure repeats nothing.
+Retrying a run that already applied part of its intended change re-enters a workspace the
+previous attempt left half-modified — which is the scenario `isAutoRetryableReason` was
+written to exclude.
+
+**Why it is NOT fixed here.** The second call site writes `mutationOutcome` into every
+finalized replay snapshot. Correcting the helper changes durable evidence values across
+the whole checkpoint (`replay-snapshot-storage-test.js`,
+`required-replay-evidence-test.js`, `run-consequence-mutation-test.js` and others assert
+against those records), and it overlaps A16's territory. That is a separate tranche with
+its own validation, not a rider on this one.
+
+**Consequence for A20.** `auto-retry-test.js` is **retained as orphaned, not retired**.
+`auto-retry-bounds-test.js` covers its eligibility, bounding, provenance and
+classification properties, but its `runtime failure with mutation never retries` scenario
+has **no destination** while this defect is open, and A20's rule is that a historical
+suite is retired only when every live property it guards has one. Retiring it now would
+delete the only recorded statement of the property this entry exists to restore.
 
 ---
 

@@ -687,6 +687,39 @@ const MUTATIONS = Object.freeze([
     find: "  let output = String(text === undefined || text === null ? '' : text);",
     replace: "  return String(text === undefined || text === null ? '' : text);\n  let output = '';",
     expect: 'the absolute workspace root is sent to the model again'
+  },
+  {
+    name: 'auto-retry-ignores-policy-flag',
+    suite: 'auto-retry-bounds-test.js',
+    file: 'server.js',
+    contract: 'automatic retry happens only when the ticket policy asks for it',
+    // Default-off is the whole safety position of the feature: a deployment that never
+    // opted in must never see the runtime start work by itself.
+    find: "  if (policy.autoRetry !== true) return { eligible: false, reason: 'auto_retry_disabled' };",
+    replace: "  if (false) return { eligible: false, reason: 'auto_retry_disabled' };",
+    expect: 'a ticket with auto-retry off is retried anyway'
+  },
+  {
+    name: 'auto-retry-ignores-attempt-ceiling',
+    suite: 'auto-retry-bounds-test.js',
+    file: 'server.js',
+    contract: 'automatic retry stops at the ticket attempt ceiling',
+    // An off-by-one rather than a deletion: retries still stop eventually, just one
+    // attempt late. "It terminated" is not the contract; the boundary is.
+    find: "  if (attemptCount >= maxAttempts) return { eligible: false, reason: 'max_attempts_exhausted' };",
+    replace: "  if (attemptCount > maxAttempts) return { eligible: false, reason: 'max_attempts_exhausted' };",
+    expect: 'a ticket at its ceiling is retried one more time'
+  },
+  {
+    name: 'auto-retry-accepts-any-failure-reason',
+    suite: 'auto-retry-bounds-test.js',
+    file: 'server.js',
+    contract: 'only a runtime failure is automatically retryable',
+    // The classification gate. With it gone a policy refusal is retried, which is the
+    // runtime re-attempting something it was told it may never do.
+    find: "  return prospectiveReasonCode === 'runtime_failed';",
+    replace: '  return true;',
+    expect: 'a path-traversal refusal is automatically retried'
   }
 ]);
 
