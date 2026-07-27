@@ -7438,7 +7438,7 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     outcome: classifyRunOperationalOutcome(run),
     outcomeLabel: displayOperationalOutcome(
       classifyRunOperationalOutcome(run),
-      countRunMutatingOperations(run.id, suppliedOperations || undefined)
+      countRunMutatingOperations(run.id, suppliedOperations)
     ),
     createdAt: run.createdAt || null,
     startedAt: run.startedAt || null,
@@ -9200,6 +9200,11 @@ function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns 
 
 function isActualWorkspaceMutation(record) {
   if (record.error) return false;
+  // The store's own verdict on whether the operation committed. A refused mutation and
+  // one that failed before its effect both carry a non-succeeded outcome, so this is
+  // what separates "was asked for" from "took effect" without re-deriving it. Records
+  // predating the outcome projection fall through to the per-operation checks below.
+  if (record.outcome !== undefined && record.outcome !== null && record.outcome !== 'succeeded') return false;
   if (!AGENT_MUTATING_OPERATIONS.includes(record.operation)) return false;
 
   if (record.operation === 'createFolder') {
@@ -9222,10 +9227,47 @@ function isActualWorkspaceMutation(record) {
 }
 
 function countRunMutatingOperations(runId, history = null) {
-  history = Array.isArray(history) ? history : [];
-  return history.filter(record =>
-    record.runId === runId && isActualWorkspaceMutation(record)
-  ).length;
+  const records = Array.isArray(history) ? history : [];
+  // A committed operation counts ONCE. Receipts are keyed by a stable operation key,
+  // and reconciliation can surface a second record for the same key (A20's
+  // `after_first_workspace_target_effect` path), so counting rows would double-count a
+  // single effect that was recovered rather than repeated.
+  const counted = new Set();
+  for (const record of records) {
+    if (!record || record.runId !== runId) continue;
+    if (!isActualWorkspaceMutation(record)) continue;
+    counted.add(record.operationKey || `id:${record.id}`);
+  }
+  return counted.size;
+}
+
+// ── Authoritative committed-mutation evidence (A26) ─────────────────────────
+// What a run actually changed is established by its committed operation receipts —
+// the same records `readAllRunOperations` serves to operation reconciliation, run
+// consequence and the operator surfaces. Deliberately NOT inferred from the requested
+// operation name, a planned action, a refused or failed operation, a replay entry
+// without a receipt, or the workspace itself (which cannot separate this run's changes
+// from what was already there).
+//
+// EXPLICITLY ASYNCHRONOUS, AND NOT OPTIONAL. The previous contract was a synchronous
+// helper taking an optional history array that defaulted to `[]`, so calling it with
+// only a run id could not return anything except 0. Four production call sites did
+// exactly that, which is how a run that mutated the workspace was recorded as
+// `no_mutations` and admitted to automatic retry.
+//
+// FAILS CLOSED. When the receipts cannot be read the count is `null`, never 0.
+// "We could not tell" must never read as "it changed nothing", because both consumers
+// treat 0 as permission: to retry, and to attest an unmutated run.
+async function resolveRunMutationEvidence(runId) {
+  try {
+    const operations = await readAllRunOperations(runId);
+    return { count: countRunMutatingOperations(runId, operations), available: true };
+  } catch (error) {
+    appendSystemLog('run:mutation_evidence_unavailable',
+      `Could not establish the committed mutation count for run #${runId}: ${error && error.message ? error.message : error}`,
+      null, { runId, error: error && error.message ? error.message : String(error) });
+    return { count: null, available: false };
+  }
 }
 
 function groupBy(items, keyFn) {
@@ -11710,7 +11752,12 @@ async function persistRunTriage(runId, triage) {
 }
 
 async function buildFinalizedRunReplayState(run, status, failureReason = null, mutationCount = null, failure = null, finalizedAt = null) {
-  const effectiveMutationCount = mutationCount !== null ? mutationCount : countRunMutatingOperations(run.id);
+  // A26: a supplied count is already authoritative (the caller resolved it from the
+  // same receipts). Otherwise resolve it here rather than defaulting to zero.
+  const mutationEvidence = mutationCount !== null
+    ? { count: mutationCount, available: true }
+    : await resolveRunMutationEvidence(run.id);
+  const effectiveMutationCount = mutationEvidence.available ? mutationEvidence.count : null;
   const effectiveFinalizedAt = finalizedAt || new Date().toISOString();
   const snapshot = await readRunReplaySnapshot(run) || run.replaySnapshot || {};
   const browserEvidence = classifyBrowserEvidence(run, snapshot);
@@ -11729,7 +11776,14 @@ async function buildFinalizedRunReplayState(run, status, failureReason = null, m
     terminalStatus: status,
     failureReason: failureReason ? sanitizeLogMessage(failureReason) : null,
     failure: failure ? sanitizeSnapshotValue(failure) : null,
-    mutationOutcome: effectiveMutationCount === 0 ? 'no_mutations' : status === 'completed' ? 'all_intended' : 'partial_mutations',
+    // `unknown` is a truthful third state, not a degraded 'no_mutations'. A replay
+    // asserting a run changed nothing is evidence an operator acts on; it must never be
+    // produced by an unreadable receipt table.
+    mutationOutcome: !mutationEvidence.available
+      ? 'unknown'
+      : effectiveMutationCount === 0
+        ? 'no_mutations'
+        : status === 'completed' ? 'all_intended' : 'partial_mutations',
     mutationCount: effectiveMutationCount,
     browserEvidenceStatus: browserEvidence.status,
     browserEvidenceDetail: browserEvidence.detail,
@@ -13415,8 +13469,15 @@ function isAutoRetryableReason(prospectiveReasonCode, mutationCount) {
 // Decide retry eligibility without mutating ticket/run state. The failed run is
 // terminalized before retry creation so a new run can never precede its durable
 // predecessor state.
-async function assessAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationCount) {
+async function assessAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mutationEvidence) {
   if (!failedRun) return { eligible: false, reason: 'no_run' };
+  // A26 fail-closed: if the committed-mutation evidence could not be read we cannot
+  // tell whether this run already changed the workspace, and a retry would re-enter a
+  // possibly half-modified workspace. Refuse rather than assume it changed nothing.
+  if (!mutationEvidence || mutationEvidence.available !== true) {
+    return { eligible: false, reason: 'mutation_evidence_unavailable' };
+  }
+  const mutationCount = mutationEvidence.count;
   const ticket = await getTicketById(failedRun.ticketId);
   if (!ticket) return { eligible: false, reason: 'ticket_missing' };
 
@@ -13704,7 +13765,7 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
   const failure = buildFailureMetadata(error, 'failed', message);
 
   if (error && error.code === 'RUN_LIMIT_EXCEEDED' && error.limitType === 'step') {
-    const mutationCount = countRunMutatingOperations(run.id);
+    const { count: mutationCount } = await resolveRunMutationEvidence(run.id);
     if (mutationCount > 0) {
       message = `${message} The model performed ${mutationCount} successful workspace mutation${mutationCount === 1 ? '' : 's'} but did not signal completion before the limit was reached.`;
     }
@@ -13721,11 +13782,15 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
   if (run.status === 'interrupted') return run;
   await ensureFailedRunReplaySnapshot(projectedFailedRun, message);
   await completeRunPostconditionCheck(run.id);
-  const mutationCount = countRunMutatingOperations(run.id);
+  // A26: resolved from committed receipts, and `available: false` rather than 0 when
+  // they cannot be read. Both the retry decision and the finalized replay below use
+  // this same value, so they can never disagree about what the run changed.
+  const mutationEvidence = await resolveRunMutationEvidence(run.id);
+  const mutationCount = mutationEvidence.available ? mutationEvidence.count : null;
   // Decide retry eligibility before the terminal bundle, but create a retry only
   // after this run is terminal. That ordering keeps one authoritative predecessor
   // and prevents run creation from returning the still-running predecessor.
-  const autoRetryAssessment = await assessAutoRetryAfterFailureIfPolicyAllows(projectedFailedRun, failure, mutationCount);
+  const autoRetryAssessment = await assessAutoRetryAfterFailureIfPolicyAllows(projectedFailedRun, failure, mutationEvidence);
   let triage = autoRetryAssessment.eligible
     ? null
     : await buildRunTriage(projectedFailedRun, {
@@ -13837,7 +13902,10 @@ async function completeAgentRunUnlocked(run) {
   await assertRunEvidencePersistenceIntact(run);
   const completedRun = await commitRunTerminalization(run, {
     status: 'completed',
-    mutationCount: countRunMutatingOperations(run.id),
+    // A26: null means "resolve from committed receipts", which is the only authority.
+    // This site previously passed a synchronous helper that could only return 0, so
+    // every COMPLETED run's finalized replay claimed `no_mutations` as well.
+    mutationCount: null,
     beforeReplayEvents: verificationEvents
   });
   appendRunLog(completedRun, 'run:completed', `Agent run completed${allocationLogSuffix(completedRun)}`, null, {

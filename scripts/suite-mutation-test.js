@@ -720,6 +720,55 @@ const MUTATIONS = Object.freeze([
     find: "  return prospectiveReasonCode === 'runtime_failed';",
     replace: '  return true;',
     expect: 'a path-traversal refusal is automatically retried'
+  },
+  {
+    name: 'committed-mutations-ignored',
+    suite: 'run-mutation-evidence-test.js',
+    file: 'server.js',
+    contract: 'a run\'s committed mutations are counted from its operation receipts',
+    // Restores A26 exactly: the evidence boundary reports zero regardless of what
+    // committed. Both consumers then agree on a falsehood — the replay attests
+    // `no_mutations` and the retry guard admits a run that already changed the
+    // workspace.
+    find: '    return { count: countRunMutatingOperations(runId, operations), available: true };',
+    replace: '    return { count: 0, available: true };',
+    expect: 'a run with two committed mutations records none and is retried'
+  },
+  {
+    name: 'uncommitted-mutations-counted',
+    suite: 'run-mutation-evidence-test.js',
+    file: 'server.js',
+    contract: 'only an operation that actually committed counts as a mutation',
+    // RE-AIMED TWICE, and the reason is worth keeping. Dropping the store's `outcome`
+    // verdict alone SURVIVED; dropping the recorded `error` alone SURVIVED too. A
+    // receipt for a mutation that failed before its effect carries BOTH, and either
+    // one excludes it, so each attempt left the contract standing on the other layer.
+    // Non-committed mutations are excluded two deep — good for the runtime, and a
+    // warning for testing it: a mutation that removes one exclusion proves nothing
+    // about whether the exclusion is covered. This removes the whole non-committed
+    // carve-out, which is the contract.
+    find: '  if (record.error) return false;\n'
+      + '  // The store\'s own verdict on whether the operation committed. A refused mutation and\n'
+      + '  // one that failed before its effect both carry a non-succeeded outcome, so this is\n'
+      + '  // what separates "was asked for" from "took effect" without re-deriving it. Records\n'
+      + '  // predating the outcome projection fall through to the per-operation checks below.\n'
+      + "  if (record.outcome !== undefined && record.outcome !== null && record.outcome !== 'succeeded') return false;",
+    replace: '  if (false) return false;',
+    expect: 'a mutation that failed before its effect inflates the count'
+  },
+  {
+    name: 'divergent-receipt-accepted-for-committed-key',
+    suite: 'run-mutation-evidence-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'one committed operation cannot acquire a second, divergent receipt',
+    // The layer that actually prevents double-counting is the store's idempotency
+    // guard, not the counting helper: the helper's de-duplication is defence in depth
+    // over a table that already cannot hold two rows for one operation key. This
+    // mutation removes the real control, so a replayed effect could be recorded twice.
+    find: '        if (matches) return { record: existing, event: null, inserted: false };\n'
+      + '        throw new IdempotencyConflictError(id, key);',
+    replace: '        return { record: existing, event: null, inserted: false };',
+    expect: 'a second, divergent receipt for a committed operation is accepted silently'
   }
 ]);
 

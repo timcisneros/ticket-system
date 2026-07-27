@@ -53,7 +53,7 @@ the defect can cause, not how hard it is to fix.
 | A23 | Deterministic crash-seam coverage was incomplete | Medium | **Closed 2026-07-26** — all nine seams driven | Verification gap |
 | A24 | Absolute host filesystem paths disclosed to the model provider | **High** | **Implemented 2026-07-27** — see entry | Privacy / disclosure |
 | A25 | Bounded automatic retry never executed — `ReferenceError` swallowed | **High** | **Implemented 2026-07-27** — see entry | Correctness / dead feature |
-| A26 | `countRunMutatingOperations` always returns 0; the mutated-run retry guard is inert | **High** | **Open — implementation required** | Correctness / safety |
+| A26 | `countRunMutatingOperations` always returns 0; the mutated-run retry guard is inert | **High** | **Implemented 2026-07-27** — see entry | Correctness / safety |
 
 ### Sequencing
 
@@ -3752,8 +3752,8 @@ ticket already carrying that policy.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Open — implementation required.** Recorded, not fixed |
-| **Severity** | **High** — a run that mutated the workspace is automatically retried, and finalized replays record `no_mutations` for runs that mutated |
+| **Status** | **Implemented 2026-07-27.** One authority for both consumers; `run-mutation-evidence-test.js` registered (55 assertions, 9 scenarios) |
+| **Severity** | **High** — a run that mutated the workspace was automatically retried, and finalized replays recorded `no_mutations` for runs that mutated |
 | **Discovered by** | A25's probe: a ticket whose run wrote a file and then failed on a step limit was retried |
 | **Evidence** | Source, plus an observed retry of a run whose write landed on disk |
 
@@ -3783,19 +3783,92 @@ Retrying a run that already applied part of its intended change re-enters a work
 previous attempt left half-modified — which is the scenario `isAutoRetryableReason` was
 written to exclude.
 
-**Why it is NOT fixed here.** The second call site writes `mutationOutcome` into every
-finalized replay snapshot. Correcting the helper changes durable evidence values across
-the whole checkpoint (`replay-snapshot-storage-test.js`,
-`required-replay-evidence-test.js`, `run-consequence-mutation-test.js` and others assert
-against those records), and it overlaps A16's territory. That is a separate tranche with
-its own validation, not a rider on this one.
+**It was worse than first recorded.** The inventory found **four** zero-argument call
+sites, not two, and one more passing `suppliedOperations || undefined` (which defaults to
+the same empty array). One of them is `completeAgentRun`, so **every COMPLETED run's
+finalized replay also claimed `no_mutations`**, regardless of what it wrote — not only
+failures.
 
-**Consequence for A20.** `auto-retry-test.js` is **retained as orphaned, not retired**.
-`auto-retry-bounds-test.js` covers its eligibility, bounding, provenance and
-classification properties, but its `runtime failure with mutation never retries` scenario
-has **no destination** while this defect is open, and A20's rule is that a historical
-suite is retired only when every live property it guards has one. Retiring it now would
-delete the only recorded statement of the property this entry exists to restore.
+**The authoritative source.** `readAllRunOperations` — the committed operation receipts,
+the same records operation reconciliation, run consequence and the operator surfaces
+already read. A probe confirmed the disagreement directly: a run that wrote `alpha.txt`
+and created `beta-dir` had `runConsequence.mutations` listing both (A16's path, correct)
+while the finalized replay said `mutationCount: 0, mutationOutcome: 'no_mutations'`. Two
+durable authorities, one question, opposite answers.
+
+Not inferred from the requested operation name, a planned action, a refused or failed
+operation, a replay entry without a receipt, or the workspace itself — the last cannot
+separate this run's changes from what was already there.
+
+**The correction.**
+
+- `resolveRunMutationEvidence(runId)` is **explicitly asynchronous** and returns
+  `{ count, available }`. The optional-history parameter that silently defaulted to `[]`
+  is gone from every production path.
+- Both consumers — the retry assessment and `buildFinalizedRunReplayState` — derive from
+  it, so they cannot disagree.
+- **Fails closed.** When receipts cannot be read, `count` is `null` and `available` is
+  `false`; the replay records `mutationOutcome: 'unknown'` (a truthful third state, not a
+  degraded `no_mutations`) and `assessAutoRetryAfterFailureIfPolicyAllows` refuses with
+  `mutation_evidence_unavailable`. "We could not tell" must never read as "it changed
+  nothing", because both consumers treat 0 as permission.
+- **One committed operation counts once**, de-duplicated by operation key, so a
+  reconciled effect surfacing under the same key cannot inflate the total.
+
+**Classification, as observed rather than assumed:**
+
+| Class | Durable shape | Counted? |
+|-------|---------------|----------|
+| committed mutation | receipt, `outcome: succeeded` | yes, once |
+| successful read | **no receipt** — reads are replay evidence, not a commit path | no |
+| policy-refused mutation | **no receipt** — refused before the operation is prepared | no |
+| mutation failing before its effect | receipt with a non-`succeeded` outcome AND an error | no |
+| reconciled committed effect | same operation key | once |
+| divergent duplicate | **refused by the store** with `IdempotencyConflictError` | cannot exist |
+
+Two of those were corrections found while writing the suite: a policy refusal and a read
+leave no receipt at all, so assertions written against "a receipt with a failed outcome"
+were wrong about the mechanism even though right about the outcome.
+
+**Mutations — and a defence-in-depth lesson that cost two re-aims.**
+
+| Mutation | Result |
+|----------|--------|
+| `committed-mutations-ignored` (evidence boundary returns 0) | killed — scenario 1, the replay records 0 of 2 |
+| `uncommitted-mutations-counted` (whole non-committed carve-out) | killed — scenario 4, the count inflates to 2 |
+| `divergent-receipt-accepted-for-committed-key` (store idempotency guard) | killed — scenario 7 |
+
+`uncommitted-mutations-counted` **survived twice** before landing. Removing the store's
+`outcome` verdict alone survived; removing the recorded `error` alone survived too. A
+receipt for a mutation that failed before its effect carries **both**, and either one
+excludes it. That is defence in depth in the runtime and a warning for testing it: a
+mutation removing one exclusion proves nothing about whether the exclusion is covered.
+The fifth such finding in A20.
+
+The de-duplication in the counting helper is likewise **defence in depth, not the
+control**: the operation-receipt table cannot hold two rows for one key, so the layer that
+actually prevents double counting is the store's idempotency guard — which is where the
+third mutation is aimed and what scenario 7 asserts.
+
+**Known gap, stated rather than assumed.** The `available: false` branch is fail-closed by
+construction but is **not covered behaviorally**. Reaching it requires the receipt read to
+fail, which no checkpoint-reachable condition produces; proving it would mean adding a
+fault-injection seam to production source. That was judged not worth new production
+surface (the A24 precedent), so it is recorded as an uncovered branch rather than counted
+as tested.
+
+**Consequence for A20 — `auto-retry-test.js` is still NOT retired.** A26 gives its
+`runtime failure with mutation never retries` scenario a destination
+(`run-mutation-evidence-test.js` scenario 2), but three of its assertions still have none:
+
+| Unmapped assertion | Needs |
+|--------------------|-------|
+| verification failure never retries (`verification_failed`) | a failing postcondition fixture |
+| provider failure never retries (`provider_failed`) | a provider-fault fixture |
+| ticket-level triage blocks auto-retry | a ticket carrying triage before its run fails |
+| exactly one `ticket:auto_retry` audit log entry | an assertion on the system log |
+
+Retire it when those four have destinations, not before.
 
 ---
 

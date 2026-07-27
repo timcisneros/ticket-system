@@ -178,7 +178,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'provider-input-privacy-test.js',
   // A25 — bounded automatic retry: default-off, ceiling-bounded, and allowed only for
   // the runtime_failed classification. The feature had never worked; see A25.
-  'auto-retry-bounds-test.js'
+  'auto-retry-bounds-test.js',
+  // A26 — committed-mutation evidence: one authority for the retry decision and the
+  // finalized replay, counted from receipts, once per operation, failing closed.
+  'run-mutation-evidence-test.js'
 ]);
 
 function runCheckpoint() {
