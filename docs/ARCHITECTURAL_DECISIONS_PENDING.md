@@ -2253,8 +2253,10 @@ re-attempts one refusal afterwards to rule out order-dependent behaviour.
 **The verification refusal is RESOLVED — the assertion was real, the fixture was wrong,
 twice.** It was previously recorded here as unreproducible. Reading
 `isRunVerificationRequired` settled it: verification is required only when *all* of
-  * the run's policy snapshot says `when_declared` — `'always'` returns **false**, which
-    is why the first fixture was accepted;
+  * ~~the run's policy snapshot says `when_declared`~~ — **this was wrong, see the
+    verification-contract cluster below**: `normalizeExecutionPolicy` pins
+    `requireVerification`, so that check can never fail and the policy value is
+    irrelevant. The first fixture was accepted for the same reason as the second;
   * the run is a **workflow** run with a `workflowId`; and
   * `normalizeVerificationContractSnapshot` returns non-null, which requires the
     snapshot to carry its **own** `workflowId` — the second fixture omitted it, so the
@@ -2269,10 +2271,9 @@ Guessing a third time would have been worse than the recorded gap.
 live policy — correctly, since editing a policy after the fact must not retroactively
 change what a finished run proved.)*
 
-*(Noted, not chased: `requireVerification: 'always'` makes verification **less** binding
-than `'when_declared'`, because `isRunVerificationRequired` returns false for it
-outright. That reads as either a naming trap or a real defect. It is outside this
-tranche's scope and no suite depends on the current behaviour.)*
+*(The `'always'` note previously recorded here was wrong and is superseded by the
+verification-contract cluster below: `'always'` is not a weaker mode, it is not a mode
+at all.)*
 
 **`startup-state-convergence-test.js`.** `run.terminalized` and the ticket's
 finalization are separate durable steps; a process that dies between them leaves a
@@ -2322,7 +2323,98 @@ this is a **named successor that is not yet registered**, not proven coverage. R
 the historical file does not lose the contract, but it does not currently run either;
 it is tracked in the orphan list below and must be repaired before A20 closes.
 
-### The remaining 72 — sequencing
+### Verification-contract cluster — RETIRED `verification-contract-reconciliation-test.js` (2026-07-26)
+
+**Replaced by `verification-contract-authority-test.js` — 27 assertions, 6 scenarios,
+registered.** The historical suite asserted the right contract against a runtime that no
+longer exists: it copied `data/*.json` into a temp directory and read `runs.json` back.
+
+**The contract.** When a run finishes, whose definition of "verified" applies — the
+workflow as it exists now, or as it existed when the run started? It must be the latter.
+A workflow is mutable operator configuration; a run is a durable claim about work that
+already happened. If verification read live state, editing a workflow would retroactively
+change what past runs proved, in **both** directions.
+
+**The mechanism, carried over from the historical suite because it is the right one.**
+Each scenario crashes at `before_run.snapshot_finalized` — after execution, before
+terminalization — mutates the workflow while the process is down, then restarts. The
+snapshot and the live catalog now disagree on purpose, so which one recovery used is
+directly observable:
+
+| Scenario | Live workflow becomes | Run must be | Reading live state would give |
+|----------|----------------------|-------------|-------------------------------|
+| relaxed | postconditions removed | **failed** (it violated the original) | passed — a laundered failure |
+| stricter | a requirement the run never had | **completed** (it met the original) | failed — a retroactive conviction |
+
+Neither a blanket pass nor a blanket fail satisfies both, which is what makes the pair a
+control structure rather than two similar assertions.
+
+#### `requireVerification` — SETTLED: not a defect, and not a switch
+
+The open question from the previous tranche is closed by reading
+`normalizeExecutionPolicy`, which **hardcodes** `requireVerification: 'when_declared'`
+and never reads the caller's value.
+
+* **Is `always` intended to require verification?** No. `'always'` is not a supported
+  value and never was. Nothing in the repository outside test fixtures ever sets any
+  other value; no UI field, API parameter, or document offers one. The value in my own
+  earlier fixture was invented by the fixture.
+* **Why does `when_declared` with a valid contract require verification while `always`
+  does not?** It doesn't — that framing was wrong. Both normalize to the same constant.
+  What actually governs is `isRunVerificationRequired`'s remaining conditions: a
+  **workflow** run, with a `workflowId`, whose captured contract survives
+  `normalizeVerificationContractSnapshot` (which requires the snapshot to carry its own
+  `workflowId`) and declares at least one postcondition. Verification is required by
+  **durable per-run evidence**, never by a policy string.
+* **Classification: intended semantics, with a real but narrow naming/configuration
+  trap.** The behavior is correct — letting a policy field force verification on or off
+  would let mutable configuration override durable evidence, which is exactly what the
+  reconciliation half of this suite exists to prevent. The trap is that the field *looks*
+  configurable and is silently discarded.
+
+**The correction that follows.** The previous tranche recorded that `'always'` returns
+false from the policy check — wrong. The check `requireVerification !== 'when_declared'`
+is **provably dead**, because its input is pinned. Both of my earlier fixtures failed for
+the same single reason: no valid captured contract. That is now corrected above.
+
+**Production change (isolated, behavior-preserving except at one boundary).**
+`SUPPORTED_REQUIRE_VERIFICATION` names the constant, `normalizeExecutionPolicy`
+documents that it pins rather than derives, and `assertSupportedRequireVerification`
+**refuses** any other value at the two surfaces that store a raw, unnormalized policy —
+process-template create and draft. Those are the only places an author can express a
+verification preference, and until now they would be silently downgraded to something
+weaker than they asked for and never told. Everywhere else is untouched, so reading
+historical snapshots cannot break.
+
+**What the suite now makes the repository answer.**
+
+| Question | Answer, pinned by |
+|----------|-------------------|
+| when is verification required | scenarios 3-5: a captured contract with ≥1 postcondition, nothing else |
+| which durable snapshot governs | `run.verificationContractSnapshot`, asserted captured **before** the crash |
+| snapshot or mutable current state | scenarios 1-2, in both directions |
+| absent / empty / identity-less snapshot | scenarios 4-5: all three mean *not required* |
+| manual completion while unresolved | scenario 3: refused, with verification named |
+| startup convergence while unresolved | scenarios 1-2: reconciled to the snapshot's verdict, not deferred |
+| what records the outcome | `run.postconditions_checked` carrying `contractSource: 'run_snapshot'`, plus `run.verification_passed` / `run.verification_failed`, and the replay snapshot |
+
+**Controls.** Scenario 3 is the positive control for the gate — without it, 4 and 5
+would be satisfied by a runtime that never requires verification at all. Scenario 6
+pairs its refusal with two acceptances (the supported value, and omission), so a guard
+that broke the endpoint outright would fail.
+
+**Mutations — both killed.**
+
+| Mutation | Removes | Result |
+|----------|---------|--------|
+| `verification-honours-relaxed-live-contract` | verifying from the captured postconditions | killed — the relaxed scenario reconciles as passing |
+| `template-policy-silently-downgraded` | the raw-policy boundary guard | killed — the unsupported value is accepted |
+
+*(Note the first mutation is aimed at the semantics, not the field: it leaves
+`contractSource: 'run_snapshot'` in place and still lies. A suite that only checked the
+label would not have caught it.)*
+
+### The remaining 71 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

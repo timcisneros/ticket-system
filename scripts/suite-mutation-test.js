@@ -216,6 +216,29 @@ const MUTATIONS = Object.freeze([
     expect: 'a ticket completes with declared verification and no passing verdict'
   },
   {
+    // The core of the whole cluster: verification must read the run's captured
+    // contract. Emptying the postcondition list is exactly what a runtime honouring a
+    // RELAXED live workflow would see — the laundering direction.
+    name: 'verification-honours-relaxed-live-contract',
+    suite: 'verification-contract-authority-test.js',
+    file: 'server.js',
+    contract: 'postconditions are verified from the run-start snapshot, not from current workflow state',
+    find: '    postconditions: capturedContract.postconditions',
+    replace: '    postconditions: []',
+    expect: 'a run that violated its original contract is reconciled as passing'
+  },
+  {
+    // The misleading-configuration guard. Without it a template author asking for a
+    // stronger verification mode is silently downgraded and never told.
+    name: 'template-policy-silently-downgraded',
+    suite: 'verification-contract-authority-test.js',
+    file: 'server.js',
+    contract: 'a template declaring an unsupported requireVerification is refused, not silently normalized',
+    find: '  try { assertSupportedRequireVerification(tt.executionPolicy); }\n  catch (error) { reply.code(400); return { error: error.message }; }',
+    replace: '  // guard removed',
+    expect: 'an unsupported requireVerification is accepted and silently downgraded'
+  },
+  {
     name: 'completion-ignores-unresolved-triage',
     suite: 'completion-admission-test.js',
     file: 'server.js',

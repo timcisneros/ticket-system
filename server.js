@@ -129,9 +129,17 @@ const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
 const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed'];
 const TRIAGE_REASON_CODES = ['verification_failed', 'authority_blocked', 'runtime_failed', 'provider_failed', 'model_contract_failed', 'stopped', 'objective_ambiguous', 'runtime_budget_insufficient', 'unknown'];
 const TRIAGE_REQUIRED_DECISIONS = ['review_failure', 'approve_retry', 'change_scope', 'fix_input', 'manual_recovery', 'clarify_objective', 'none'];
+// `requireVerification` has exactly ONE supported value, and it is not a switch.
+// Verification is required when the RUN's captured verification contract declares
+// postconditions (see isRunVerificationRequired) — a durable per-run fact, not a
+// policy string. The field is retained in every policy snapshot for shape stability
+// and is pinned by normalizeExecutionPolicy; assertSupportedRequireVerification
+// rejects any other value at the surfaces that store a raw, unnormalized policy so an
+// author learns immediately instead of being silently downgraded.
+const SUPPORTED_REQUIRE_VERIFICATION = 'when_declared';
 const DEFAULT_EXECUTION_POLICY = Object.freeze({
   mode: 'assisted',
-  requireVerification: 'when_declared',
+  requireVerification: SUPPORTED_REQUIRE_VERIFICATION,
   autoRetry: false,
   maxAttempts: null,
   maxRuntimeMs: null,
@@ -3125,11 +3133,29 @@ function runWorkspaceScope(run) {
   return run && run.executionWorkspaceType === 'main_owned_paths' ? 'owned_paths' : 'shared';
 }
 
+// Guards the raw-policy surfaces (process-template create and draft), which store the
+// policy unnormalized and normalize only at trigger time. Without this, a template
+// author writing `requireVerification: 'always'` would be silently downgraded to
+// `when_declared` — weaker than they asked for — and would never find out.
+function assertSupportedRequireVerification(policy) {
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return;
+  const value = policy.requireVerification;
+  if (value === undefined || value === SUPPORTED_REQUIRE_VERIFICATION) return;
+  throw new TypeError(
+    `executionPolicy.requireVerification only supports '${SUPPORTED_REQUIRE_VERIFICATION}' ` +
+    `(received ${JSON.stringify(value)}). Verification is required when the run's workflow ` +
+    'declares postconditions; no policy value can force it on or off.'
+  );
+}
+
 function normalizeExecutionPolicy(policy, workspaceScope = 'shared') {
   const source = policy && typeof policy === 'object' && !Array.isArray(policy) ? policy : {};
   return {
     mode: source.mode === 'manual' ? 'manual' : 'assisted',
-    requireVerification: 'when_declared',
+    // Pinned, not derived from `source`: see SUPPORTED_REQUIRE_VERIFICATION. A value
+    // supplied here is deliberately ignored rather than honoured, because honouring it
+    // would let a policy string override durable per-run verification evidence.
+    requireVerification: SUPPORTED_REQUIRE_VERIFICATION,
     // Strict boolean opt-in. Default-off; has effect only when maxAttempts is a
     // finite positive integer (enforced by the auto-retry gate, not here).
     autoRetry: source.autoRetry === true,
@@ -21976,6 +22002,8 @@ fastify.post('/api/process-templates', { preHandler: fastify.requireAuth }, asyn
   const { name, tt } = normalizeProcessTemplateInput(body);
   if (!name) { reply.code(400); return { error: 'Template name is required' }; }
   if (!tt) { reply.code(400); return { error: 'ticketTemplate object is required' }; }
+  try { assertSupportedRequireVerification(tt.executionPolicy); }
+  catch (error) { reply.code(400); return { error: error.message }; }
   const actor = actorFromRequest(request);
   const changedBy = actor.username || (actor.userId != null ? String(actor.userId) : 'system');
   try {
@@ -22096,6 +22124,10 @@ fastify.post('/api/process-templates/:id/versions/draft', { preHandler: fastify.
   if (!template) { reply.code(404); return { error: 'Process template not found' }; }
   const body = request.body || {};
   const changedBy = actorFromRequest(request).username || String(request.session.userId);
+  if (body.ticketTemplate && typeof body.ticketTemplate === 'object' && !Array.isArray(body.ticketTemplate)) {
+    try { assertSupportedRequireVerification(body.ticketTemplate.executionPolicy); }
+    catch (error) { reply.code(400); return { error: error.message }; }
+  }
   try {
     const result = await repository.createProcessTemplateDraft({
       templateId: template.id,

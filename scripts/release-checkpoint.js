@@ -137,7 +137,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // what an operator may mark completed, and what startup concludes about
   // tickets whose runs already finished.
   'completion-admission-test.js',
-  'startup-state-convergence-test.js'
+  'startup-state-convergence-test.js',
+  // A20 — replaces the JSON-era verification-contract-reconciliation-test.js.
+  'verification-contract-authority-test.js'
 ]);
 
 function runCheckpoint() {
