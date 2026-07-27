@@ -49,6 +49,17 @@ const RESET = 'MCV_RESET';
 function assert(c, m) { if (!c) throw new Error(m); }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Read-only health probe used by the first-failure diagnostics below, so a latched or
+// backpressured deployment is distinguishable from a genuine feedback change.
+async function healthSnapshot() {
+  try {
+    const response = await fetch(`http://127.0.0.1:${PORT}/health`);
+    return { status: response.status, body: (await response.text()).slice(0, 120) };
+  } catch (error) {
+    return { error: error && error.message };
+  }
+}
+
 const folders = names => names.map(p => ({ operation: 'createFolder', args: { path: p } }));
 const A_TO_Z = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
@@ -210,9 +221,30 @@ async function main() {
       'durable snapshot must reconstruct the streak to the threshold (recovery-durability evidence)');
 
     // ── Scenario 5: corrective feedback names BOTH effective limits ──
-    const secondOversizedRequest = provider.requestBodies(OVERSIZED)[1] || '';
+    const oversizedBodies = provider.requestBodies(OVERSIZED);
+    const secondOversizedRequest = oversizedBodies[1] || '';
+    // FIRST-FAILURE CAPTURE. This assertion reads the SECOND provider request, and has
+    // failed twice under checkpoint load while passing standalone. The summary line alone
+    // cannot distinguish "the corrective feedback changed" from "the second request was
+    // never captured", so record the actual inputs before failing. Diagnostics only: no
+    // retry, no timeout change, no weakened condition. See A20.
+    if (!/at most 8 total action/.test(secondOversizedRequest) ||
+        !/at most 2 mutating action/.test(secondOversizedRequest)) {
+      console.error('\n  ── corrective-feedback diagnostics ──');
+      console.error(`  captured OVERSIZED requests: ${oversizedBodies.length}`);
+      console.error(`  run status: ${oversized && oversized.status} error: ${oversized && oversized.error}`);
+      console.error(`  violation events: ${oversizedViolations.length} streak: ${reconstructActionContractViolationStreak(oversizedSnap)}`);
+      oversizedBodies.forEach((body, index) => {
+        const text = String(body || '');
+        const feedback = text.match(/at most[^"]{0,120}/g);
+        console.error(`  [request ${index}] bytes=${text.length} feedbackMatches=${JSON.stringify(feedback)}`);
+      });
+      console.error(`  health: ${JSON.stringify(await healthSnapshot())}`);
+      console.error('  ── end diagnostics ──\n');
+    }
     assert(/at most 8 total action/.test(secondOversizedRequest) && /at most 2 mutating action/.test(secondOversizedRequest),
-      'corrective feedback must state both the total (8) and mutating (2) limits, single-sourced from the constants');
+      `corrective feedback must state both the total (8) and mutating (2) limits, single-sourced from the constants ` +
+      `(captured ${oversizedBodies.length} request(s))`);
 
     // ── Scenario 2: two excessive-mutating responses → same bounded behavior ──
     const mutating = await waitTerminal(mutatingRun.id);

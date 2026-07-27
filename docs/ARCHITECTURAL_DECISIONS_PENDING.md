@@ -2987,7 +2987,7 @@ health, no `Evidence persistence latched` line, no `EVENT_PERSISTENCE_UNAVAILABL
 | Suite | Symptom | Standalone |
 |-------|---------|-----------|
 | `delegated-run-logging-containment-test.js` | "the run:completed echo insert was attempted and rejected" | 3/3 pass |
-| `model-contract-violation-test.js` | "corrective feedback must state both the total (8) and mutating (2) limits" | 3/3 pass |
+| `model-contract-violation-test.js` | "corrective feedback must state both the total (8) and mutating (2) limits" | 3/3 pass; **RECURRED 2026-07-27** |
 
 **What they have in common:** both drive real agent runs against a model stub and assert
 on the CONTENT of runtime-generated feedback at a particular turn. That is the class most
@@ -3002,9 +3002,33 @@ moment of failure rather than reasoning from the summary line. Neither currently
 what the run was doing when the assertion failed, which is precisely the gap that made
 the liveness incident undiagnosable for three tranches.
 
-**Evidence so far:** `model-contract-violation-test.js` failed on one clean-worktree
-checkpoint and passed on the immediately following one at the same commit, plus 3/3
-standalone.
+**`model-contract-violation-test.js` has now RECURRED** — same suite, same assertion
+(line ~214), on the clean-worktree validation of `a853eaf`, with no latch signature
+again. Per the standing rule it was diagnosed rather than weakened, and the first thing
+diagnosis needed was inputs the suite did not record.
+
+**What the assertion actually reads:** `provider.requestBodies(OVERSIZED)[1]` — the
+SECOND provider request for that scenario, defaulting to `''` when absent. So the summary
+line cannot distinguish two very different causes:
+
+* the corrective feedback genuinely changed or lost a limit; or
+* the second request was never captured, in which case the empty default fails both
+  regexes and the message blames the feedback.
+
+The immediately preceding assertions pass (`oversizedViolations.length === 2`, streak 2),
+which means two model responses WERE processed — so the second cause is the more likely
+one and the message is actively misleading.
+
+**First-failure capture added (diagnostics only — no retry, no timeout change, no
+weakened condition).** On failure the suite now records: how many requests were captured,
+the run's status and error, the violation count and reconstructed streak, per-request
+byte length and every `at most …` fragment found, and a `/health` snapshot so a latched
+or backpressured deployment is ruled in or out. The assertion message now also states the
+captured count.
+
+This is the same discipline that resolved the evidence-latch defect after three wrong
+hypotheses: make the repository able to state which input failed before theorising about
+why.
 
 ### Timeline cluster COMPLETE — RETIRED `ticket-timeline-authority-visibility-test.js` (2026-07-27)
 
