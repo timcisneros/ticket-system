@@ -172,13 +172,17 @@ const MUTATIONS = Object.freeze([
     suite: 'timeline-authority-evidence-test.js',
     file: 'server.js',
     contract: 'a timeline authority denial names the rule that refused it',
-    // Strip the rule from the denial. The entry still appears and the run still
-    // fails, so a suite asserting only "a denial exists" stays green while the
-    // operator surface can no longer say WHY anything was refused.
-    find: `      return {
-        rule: 'protected_path',`,
-    replace: `      return {
-        rule: null,`,
+    // RE-AIMED. This previously stripped the rule from `createWorkspaceViolationItem`
+    // (~6528), which feeds `run.violation_detected` — a DIFFERENT evidence channel. The
+    // timeline reads `rule: payload.rule` off the durable `authority.denied` event, so
+    // the mutation changed a layer the projection never consults and survived. It now
+    // targets the call that actually builds that payload.
+    //
+    // The denial still happens and the entry still appears; only the structured
+    // attribution is lost, so a suite asserting merely "a denial exists" stays green
+    // while the operator surface can no longer say WHY anything was refused.
+    find: `      const evidence = buildAuthorityEvidence(run, operation, pathItem.path, 'denied', 'protected_path', matchedProtectedPattern);`,
+    replace: `      const evidence = buildAuthorityEvidence(run, operation, pathItem.path, 'denied', null, matchedProtectedPattern);`,
     expect: 'the timeline shows a refusal it cannot attribute to any rule'
   },
   {

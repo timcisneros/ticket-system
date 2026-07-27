@@ -2530,11 +2530,40 @@ The signature is **progress, not correctness**: runs do not reach a terminal sta
 all (`statuses=[null,null]`, `did not complete (null)`). The suite is not observing wrong
 conflict decisions; it is observing no decision, because the work never finishes.
 
-**Explicitly ruled out.** The attractive explanation was the `_appendEvent` deadlock
-resolved below: a 40P01 latches `evidencePersistenceFailure`, the schedulers stop, and
-runs stall forever. **The evidence does not support it** — the failing log contains no
-`deadlock`, `degraded`, `EVENT_PERSISTENCE_UNAVAILABLE` or 503 signature anywhere. Two
-distinct problems surfaced in the same validation pass.
+**CORRECTION (2026-07-26, later the same day): the mechanism IS the evidence-persistence
+latch.** The first occurrence was recorded here as "no deadlock, degraded-health or 503
+signature explained it". That rule-out was **absence of evidence, not evidence of
+absence** — the suite printed no health state at all, so a latch could never have shown
+up in its output. The very first run with the new diagnostics armed caught it:
+
+```
+scheduler:  {"running":false,"intervalMs":200}
+health:     {"status":"degraded","ready":false}
+counts:     {"active":1,"pending":1,"running":0,"expiredLeases":0}
+run 23: status=pending phase=planning revision=1 ticket=21 lease=none heartbeat=n/a
+        ticketStatus=in_progress lastEvents=run.created
+```
+
+`evidencePersistenceFailure` is latched, **both schedulers are stopped**, and the run
+therefore sits `pending` and unclaimed forever with no lease. Every downstream
+`NOT_PROVEN — did not reach terminal` follows from that single fact. The scenarios were
+never racing; they were waiting on a scheduler that had been shut down.
+
+This retroactively explains the whole incident class, including the original occurrence:
+the symptom "admitted runs never reach terminal" is what a latched deployment looks like
+from the outside.
+
+**What is still unknown: WHAT latches it.** The 40P01 deadlock fixed in `85f0802` was one
+route into the latch, and it is closed — this recurrence proves it was not the only one.
+The server's stderr is not captured in the checkpoint log, so the underlying error is not
+yet in evidence. The diagnostics now additionally issue one evidence-dependent request
+when health is degraded and record the resulting 503 body, which carries
+`Event persistence is unavailable: <cause>` — the single missing fact.
+
+**Do not treat this as fixed, and do not widen `appendEvent`'s non-latching branch.** The
+latch is behaving exactly as designed; something is legitimately failing to persist
+evidence, and the correct fix is at whatever is failing, not at the containment that
+reports it.
 
 **Validation evidence since the port and deadlock fixes** (recorded as evidence, *not* as
 a cure — see below):
@@ -2545,11 +2574,10 @@ a cure — see below):
 | in-tree checkpoint (deadlock fix) | 85/85 PASSED | 0 hard failures |
 | clean worktree × 4 | 85/85 PASSED each | 0 hard failures each |
 
-**Why this is not "fixed".** Six consecutive green runs do not establish a cause, and the
-original failure was itself intermittent across many previously green runs. Neither fix
-targeted run admission or scheduling, and the deadlock was explicitly ruled out by
-evidence. Declaring victory here would repeat the `25fd221` mistake of treating a quiet
-period as a cure.
+**Why the quiet period meant nothing.** Six consecutive green runs did not establish a
+cause, and the failure recurred on the very next checkpoint after they were recorded —
+vindicating the decision not to claim a cure. Treating a quiet period as a fix would have
+been the `25fd221` mistake a second time.
 
 **What changed instead: the next occurrence will be diagnosable.** The suite reported
 that a run "did not reach terminal" while saying nothing about what the run was doing —
@@ -2611,26 +2639,55 @@ load. Recording it beats a hasty fix at the end of a session.
 distinction the tranche above exists to protect. The retry belongs at the transaction
 boundary, below the latch.
 
-### OPEN — surviving mutation `authority-denial-loses-its-rule` (2026-07-26)
+### RESOLVED — surviving mutation `authority-denial-loses-its-rule` (2026-07-26)
 
-Found by the **first full 32-mutation run of the session** (earlier tranches ran targeted
-subsets). `timeline-authority-evidence-test.js` does not detect the removal of
-`rule: 'protected_path'` from the denial in `server.js` (~6528).
+Surfaced by the first full 32-mutation run of the session (earlier tranches ran targeted
+subsets). **The suite was correct; the mutation was aimed at the wrong evidence channel.**
 
-**Not caused by the port, deadlock, or diagnostics changes** — none of them touch
-authority denial — but it has no established green baseline either, so it is recorded as
-newly *observed*, not as newly *broken*.
+**The traced path.** `timeline-authority-evidence-test.js` asserts `details.rule` on the
+timeline's `authority.denied` entry. That value comes from exactly one place:
 
-The puzzle is that the suite looks correct: it asserts the STRUCTURED field
-(`details.rule === 'protected_path'`, line 146) precisely to avoid a prose substring
-check, and production has exactly one site emitting that rule. So `details.rule` is
-evidently populated from somewhere other than the mutated return — a persisted event
-payload or a projection default are the obvious candidates.
+```
+buildAuthorityEvidence(run, operation, path, 'denied', 'protected_path', …)   server.js 12302
+  → recordAuthorityEvidence → durable `authority.denied` event, payload = evidence
+    → timeline folding: details.rule = payload.rule || null              server.js 8233
+```
 
-**Do not "fix" this by making the assertion stricter until that is understood.** The
-recurring A20 lesson applies: identify which layer actually supplies the value before
-judging the suite. This is the seventh time a surprising mutation result has pointed at a
-second source rather than a coverage hole.
+The mutation had been stripping `rule: 'protected_path'` from
+`createWorkspaceViolationItem` (~6528). That function feeds `run.violation_detected`
+(6580) — **a different evidence channel that the authority entry never consults.** So the
+mutation changed a real, live layer and the projection was legitimately unaffected. Not
+defense-in-depth over one field, and not a fallback inference: two separate channels, one
+of which the assertion does not read.
+
+**No inference was found.** The timeline does not reconstruct the rule from prose,
+operation type, or path shape — `payload.rule || null` is the whole derivation, so the
+evidence-authority contract is intact and nothing needed fixing in production.
+
+**Disposition: re-aimed at the layer responsible for the projection.** The mutation now
+nulls the rule at 12302. The denial still occurs and the entry still appears; only the
+structured attribution is lost. It is killed **by the attribution assertion itself** —
+`1: the entry names the protected-path rule structurally (got null)` — not by a
+neighbouring field or a determinism check changing.
+
+**Three properties, now independently falsifiable.** The suite previously carried the
+distinction only as a comment, which no run could check:
+
+| Property | Assertion |
+|----------|-----------|
+| exact structured attribution | `details.rule === 'protected_path'`, identity not substring, plus a type check |
+| prose is not attribution | the entry independently carries human-readable text mentioning the refusal, and the rule is asserted to be a discrete token rather than that prose reused |
+| deterministic projection | the rule and the full entry list are identical across repeated reads |
+
+The prose assertion is the point: because the summary genuinely contains "protected", a
+substring check over the entry would pass with the structured rule stripped. Asserting
+both separately keeps that trap visible instead of relying on a comment.
+
+**Mutation baseline is now 32/32 killed** — fully green for the first time this session.
+
+*(Eighth instance of the standing lesson, with a twist worth keeping: the surprise was
+not a second source for one field but a second CHANNEL for one concept. "Which layer
+executes?" had to become "which layer does the assertion actually read?")*
 
 ### Harness defect — RESOLVED: pid-modulo test ports collide (2026-07-26)
 

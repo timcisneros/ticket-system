@@ -139,12 +139,28 @@ async function main() {
         `1: the refusal appears exactly once as an authority denial (got ${authorityEntries.length})`);
       const authorityEntry = authorityEntries[0];
       const details = authorityEntry.details || {};
-      // Asserted on the STRUCTURED rule, not on prose: the summary text still contains
-      // the word "protected" even when the rule field is stripped, so a substring check
-      // passes while the operator surface loses its attribution. The mutation test
-      // proved that.
+      // THREE SEPARABLE PROPERTIES, asserted independently so a mutation that removes
+      // structured attribution fails on ATTRIBUTION and not merely on some neighbouring
+      // field changing.
+      //
+      // (a) EXACT STRUCTURED ATTRIBUTION. Identity, not a substring: the operator surface
+      //     must carry a machine-readable rule an integrator can branch on.
       assert(details.rule === 'protected_path',
         `1: the entry names the protected-path rule structurally (got ${JSON.stringify(details.rule)})`);
+      assert(typeof details.rule === 'string',
+        `1: the rule is a structured string, not an object or inferred flag (got ${typeof details.rule})`);
+
+      // (b) PROSE IS NOT ATTRIBUTION, and this proves the two cannot be confused. The
+      //     human-readable text independently mentions the protection, so a substring
+      //     check over the entry would pass even with the structured rule stripped —
+      //     which is exactly why (a) is written as an identity test. Asserting the prose
+      //     separately keeps that distinction visible and falsifiable rather than a
+      //     comment nobody can check.
+      const proseBlob = `${authorityEntry.title || ''} ${authorityEntry.summary || ''} ${details.reason || ''}`;
+      assert(/protected|\.env/i.test(proseBlob),
+        `1: the entry also carries human-readable prose about the refusal (got ${JSON.stringify(proseBlob)})`);
+      assert(details.rule !== proseBlob && !/\s/.test(details.rule),
+        '1: the structured rule is a discrete token, not the prose sentence reused as attribution');
       assert(/\.env/.test(JSON.stringify(details) + String(authorityEntry.summary || '')),
         '1: the entry names the target it refused');
       assert(authorityEntry.runId === denied.run.id,
@@ -163,6 +179,21 @@ async function main() {
         `1: the blocked workspace attempt folded into the authority entry rather than double-reporting (got ${deniedWorkspaceEntries.length})`);
       assert(deniedEntries.filter(entry => entry.type === 'authority.allowed').length === 0,
         '1: a refused attempt records no allowed-authority entry');
+
+      // (c) DETERMINISTIC PROJECTION. The timeline is a read-only projection, so the same
+      //     durable evidence must fold to the same entries every time. A projection that
+      //     re-derived attribution per read — from prose, operation type, or path shape —
+      //     could drift between reads; identical output across reads is the observable
+      //     that rules that out.
+      const secondRead = await timelineOf(denied.ticket.id);
+      const secondAuthority = secondRead.filter(entry => entry.type === 'authority.denied');
+      assert(secondAuthority.length === 1,
+        `1: the denial still appears exactly once on a repeated read (got ${secondAuthority.length})`);
+      assert(secondAuthority[0].details.rule === 'protected_path',
+        `1: the structured rule is identical on a repeated read (got ${JSON.stringify(secondAuthority[0].details.rule)})`);
+      assert(JSON.stringify(secondRead.map(entry => [entry.id, entry.type, entry.status])) ===
+             JSON.stringify(deniedEntries.map(entry => [entry.id, entry.type, entry.status])),
+        '1: the whole projection is deterministic across repeated reads');
 
       // Evidence truthfulness: no receipt may claim the write succeeded.
       const deniedOps = await store.listRunOperations(denied.run.id, { limit: 100 });
@@ -232,7 +263,7 @@ async function main() {
         label: 'timeline authority evidence',
         assertions: assert.count(),
         scenarios: scenariosRun,
-        minAssertions: 20,
+        minAssertions: 26,
         minScenarios: 5
       });
       console.log(`\nPASS: timeline authority evidence — ${scenariosRun} scenarios, ${assert.count()} assertions (PostgreSQL-native)`);

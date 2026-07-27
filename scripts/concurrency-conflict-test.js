@@ -84,7 +84,22 @@ async function captureLivenessDiagnostics(label) {
     } else {
       console.log('  runtime status unavailable: HTTP', status.statusCode, String(status.body).slice(0, 200));
     }
-    console.log('  health:         ', JSON.stringify((await server.request('GET', '/health')).body));
+    const health = await server.request('GET', '/health');
+    console.log('  health:         ', String(health.body));
+    // A degraded health check says THAT evidence persistence latched but not WHY. The
+    // 503 raised by any evidence-dependent request carries the original failure message
+    // (`Event persistence is unavailable: <cause>`), which is the one fact that turns
+    // this incident from "runs stall" into a diagnosable root cause.
+    if (health.statusCode !== 200) {
+      const probe = await server.request('POST', '/tickets', {
+        cookie,
+        form: {
+          objective: `liveness diagnostic probe ${Date.now()}`,
+          assignmentTargetType: 'agent', assignmentTargetId: '1', assignmentMode: 'individual'
+        }
+      });
+      console.log('  latch cause:    ', `HTTP ${probe.statusCode} ${String(probe.body).slice(0, 400)}`);
+    }
   } catch (error) {
     console.log('  runtime status capture failed:', error && error.message);
   }
