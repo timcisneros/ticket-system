@@ -281,6 +281,18 @@ const MUTATIONS = Object.freeze([
     expect: 'a routine deadlock surfaces as an evidence-persistence failure'
   },
   {
+    // Opens the deployment-wide operational picture to any authenticated principal.
+    // The endpoint still answers and still returns correct data, so only a suite that
+    // exercises a principal WITHOUT ops:read notices.
+    name: 'ops-summary-permission-open',
+    suite: 'operational-summary-readonly-test.js',
+    file: 'server.js',
+    contract: 'the operational summary API is gated on ops:read',
+    find: "  if (!hasPermission(request.session.userId, 'ops:read')) { reply.code(403); return { error: 'Permission denied' }; }\n  return { ok: true, summary: await buildOperationalSummary() };",
+    replace: '  return { ok: true, summary: await buildOperationalSummary() };',
+    expect: 'a principal without ops:read receives the deployment-wide summary'
+  },
+  {
     // Collapses the two 503s into one. A momentarily full but HEALTHY deployment would
     // tell callers the deployment cannot record evidence at all, and an operator would
     // restart a system that only needed a second.

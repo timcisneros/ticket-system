@@ -148,7 +148,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'event-append-lock-order-test.js',
   // A20 — replaces the JSON-era event-journal-admission-recovery-test.js. Pins the
   // recoverable-backpressure versus latched-failure distinction on the admission side.
-  'mutation-admission-backpressure-test.js'
+  'mutation-admission-backpressure-test.js',
+  // A20 — replaces the JSON-era operational-transparency-test.js. Pins that the
+  // deployment-wide operational summary is ops:read-gated and writes nothing.
+  'operational-summary-readonly-test.js'
 ]);
 
 function runCheckpoint() {

@@ -2873,7 +2873,50 @@ exists to rule out. The latch server now runs at default capacity and the probe 
 | `backpressure-reported-as-fatal` | the recoverable code on a full queue | killed — transient fullness reported as a persistence failure |
 | `backpressure-omits-retry-after` | the retry signal | killed — a recoverable refusal gives the caller nothing to act on |
 
-### The remaining 69 — sequencing
+### Transparency cluster — RETIRED `operational-transparency-test.js` (2026-07-27)
+
+**Replaced by `operational-summary-readonly-test.js` — 38 assertions, 5 scenarios,
+registered.** The historical suite seeded `data/*.json` and diffed those files to prove
+nothing was written. `/ops` and `/api/ops/summary` are live and unchanged in intent.
+
+**Two properties make the broadest read in the system safe**, and both are covered:
+
+1. **Permission-gated on `ops:read`, on BOTH surfaces.** The negative control is a
+   principal holding a *different* permission (`ticket:create`), which is what proves the
+   gate keys off `ops:read` specifically rather than "is authenticated" or "has any
+   permission". Anonymous access is checked too, and neither refusal leaks the state it
+   withheld.
+2. **Reading writes nothing.** This is the hard one and the reason the suite exists:
+   read-only is not enforced by any type or route flag — it is a property of what
+   `buildOperationalSummary` happens to call. A future contributor adding a repository
+   call that records an access log, touches a projection, or lazily materializes a cache
+   would break it **silently**, because the response would look identical.
+
+The proof is a durable census (tickets, runs, events, logs with ids, statuses, revisions
+and sequences) taken across four repeated reads of both surfaces, as a dashboard poll
+would. Refused reads are censused separately — a rejected request that logged an access
+record would still be a write on an observability path.
+
+**Two controls make the stillness meaningful.** A census that never changes proves
+nothing if the census is blind: scenario 4 performs a real mutation and requires both the
+census and the summary's own counters to move. Scenario 3 additionally proves the census
+is stable with **no reads at all** before attributing any later change to the reads.
+Scenario 5 pins that the summary is a projection rather than a new ledger — reading it
+emits no events and records no summary artefact.
+
+*(Fixture lesson, and it is the same trap as the startup-convergence suite: the first run
+failed the read-only assertion because the seeded PENDING run was executed by the
+scheduler's first tick, so ticket and run reached terminal states mid-suite and the census
+attributed that background progress to the reads. `RUNTIME_SCHEDULER_INTERVAL_MS` does not
+suppress the first tick. The run now holds an unexpired lease so it cannot be claimed.
+Reading a "read-only violated" failure at face value would have produced a fabricated
+production defect.)*
+
+**Mutation `ops-summary-permission-open`** removes the `ops:read` check. The endpoint
+still answers with correct data, so only the principal-without-permission scenario
+notices. Killed.
+
+### The remaining 68 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the
