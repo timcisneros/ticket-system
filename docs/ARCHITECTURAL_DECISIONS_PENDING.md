@@ -2977,6 +2977,54 @@ prior results into the next request. The first turn's operations still execute, 
 still records them, and later model calls still occur — only the model's knowledge is
 gone. Killed, with the run failing to converge exactly as the contract predicts.
 
+### OPEN — model-contract mutating cap resolves to 8 instead of 2 (2026-07-27)
+
+**The armed diagnostics named it on the first recurrence.** `model-contract-violation-test.js`
+failed a third time during clean-worktree validation of `49092e3`, and this time the
+suite reported its own inputs:
+
+```
+captured OVERSIZED requests: 2
+run status: failed error: ... rejected by the per-response action limits (8 total / 8 mutating) ...
+violation events: 2 streak: 2
+[request 1] feedbackMatches=["... at most 8 total action(s) and at most 8 mutating action(s) ..."]
+health: 200 {"status":"ok","ready":true}
+```
+
+**It is NOT a missing request** — the hypothesis the previous entry called most likely.
+Two requests were captured and the second DOES carry corrective feedback. The feedback is
+simply wrong: it states **8 mutating** where the suite expects **2**, and the run's own
+failure message agrees (`8 total / 8 mutating`). Health is clean, so no latch or
+backpressure is involved.
+
+**What is established:**
+
+* `MAX_AGENT_ACTIONS_PER_RESPONSE` is hard-coded 8; `MAX_MUTATING_ACTIONS_PER_RESPONSE`
+  is `env AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE || 2`.
+* That variable is set **nowhere** — not in `.env`, not in the shell, not in the suite's
+  child env. So the process constant is 2.
+* Yet the enforced and reported mutating cap was 8, equal to the total. The mutating
+  ceiling collapsed onto the total.
+* `resolveRunActionCaps` prefers what the RUN RECORDED (`run_semantics_snapshot`) over the
+  live constants — deliberately, so changing the environment cannot retroactively rewrite
+  a historical run's authority. So the run's recorded execution-semantics snapshot
+  carried mutating = 8.
+
+**The open question is why the recorded snapshot diverges from the constant, and only
+under load.** That is where the next session should start; it is a production-evidence
+question (what a run records about its own limits), not a test question.
+
+**Nothing was changed.** Per the standing rule the failure was diagnosed, not weakened —
+no retry, no relaxed assertion, no widened timeout. The suite passes standalone and on
+checkpoint reruns, so it is not blocking, and its diagnostics now make each occurrence
+self-describing.
+
+*(This is the second time armed first-failure capture converted an "intermittent,
+unexplainable" suite into a specific claim about production state — and the second time
+the leading hypothesis beforehand was wrong.)*
+
+### OPEN — load-dependent suite failures under checkpoint (2026-07-27)
+
 ### OPEN — load-dependent suite failures under checkpoint (2026-07-27)
 
 Two suites have now each failed **once** under checkpoint load and passed repeatedly
