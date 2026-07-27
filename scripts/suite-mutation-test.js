@@ -323,6 +323,19 @@ const MUTATIONS = Object.freeze([
     expect: 'the timeline reports the same operation twice'
   },
   {
+    // Narrows preflight to the FIRST action only, so a batch whose invalid action comes
+    // later passes admission and executes its valid prefix before failing. The rejection
+    // is still recorded and the corrected turn still recovers — the only difference is a
+    // real folder left behind by a batch the runtime calls rejected.
+    name: 'preflight-executes-valid-prefix',
+    suite: 'action-batch-preflight-test.js',
+    file: 'server.js',
+    contract: 'the whole action batch is validated before any action executes',
+    find: '      const invalidActions = validateWorkspaceActionBatch(actions);',
+    replace: '      const invalidActions = validateWorkspaceActionBatch(actions).filter(item => item.actionIndex === 0);',
+    expect: 'a valid prefix executes before the invalid action is rejected'
+  },
+  {
     // Collapses the two 503s into one. A momentarily full but HEALTHY deployment would
     // tell callers the deployment cannot record evidence at all, and an operator would
     // restart a system that only needed a second.

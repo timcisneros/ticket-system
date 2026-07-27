@@ -3083,7 +3083,44 @@ written with `recordOperationReceipt` and outcomes are `succeeded`/`failed`/`ref
 derived from the record, rather than `receipt.operationId`, which is only whatever the
 caller placed in the receipt document.)*
 
-### The remaining 66 — sequencing
+### Preflight cluster — RETIRED `invalid-action-preflight-recovery-test.js` (2026-07-27)
+
+**Replaced by `action-batch-preflight-test.js` — 23 assertions, 6 scenarios, registered.**
+
+**The contract is ATOMICITY OF ADMISSION:** the entire action batch is validated before
+any action executes, so one invalid argument rejects the whole batch. If validation ran
+per action during execution, `[createFolder ok, createFolder ""]` would create the first
+folder and only then reject the second — leaving a workspace half-modified by a batch the
+runtime calls *rejected*, with no receipt explaining the leftover. "Rejected" would mean
+"partially applied", which is worse for an operator than either executing or refusing
+cleanly.
+
+| Scenario | Contract |
+|----------|----------|
+| 0 | the VALID action preceding the invalid one leaves no filesystem effect, no receipt, no replay execution |
+| 1 | hard floor: all three state-driven turns were reached and the run recovered to completion |
+| 2 | `workspace.invalid_action_args` names the operation, the action INDEX (1, not the valid 0), the reason, and `rejectedBatch`/`executed:false` — in both replay and the append-only journal |
+| 3 | the next turn is told the batch was rejected, that nothing ran, and which action to fix |
+| 4 | mixed-phase batches are refused via `execution.phase_violation` with no mutation and no receipt |
+| 5 | **positive control** — the corrected single-phase batch executes and is the run's ONLY receipt |
+
+**The provider is state-driven.** Each branch is reachable only if the runtime delivered
+the matching corrective evidence, so a runtime that rejects silently cannot finish the
+run and the suite fails hard rather than passing vacuously.
+
+**Mutation `preflight-executes-valid-prefix`** narrows preflight to the first action only,
+so a batch whose invalid action comes later passes admission and executes its prefix.
+Killed.
+
+*(Assertion-ordering lesson: the hard floor originally ran first, so the mutation failed
+with "the run didn't reach three turns" — true, but naming the symptom rather than the
+defect. The leftover prefix is observable however the run ended, so it is checked FIRST
+and the failure now names the actual contract. Worth noting the mutation also collapses
+the conversation, because corrective evidence is what drives the provider's next branch —
+that coupling is inherent to a state-driven stub and is a strength, but it means the
+ordering of assertions determines which truth gets reported.)*
+
+### The remaining 65 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

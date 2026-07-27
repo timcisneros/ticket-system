@@ -157,7 +157,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'carried-evidence-preservation-test.js',
   // A20 — completes ticket-timeline-authority-visibility-test.js: receipt dedupe across
   // the event journal and replay, triage projection, and template provenance.
-  'timeline-receipt-projection-test.js'
+  'timeline-receipt-projection-test.js',
+  // A20 — replaces the JSON-era invalid-action-preflight-recovery-test.js. Pins that the
+  // whole action batch is validated before any action executes.
+  'action-batch-preflight-test.js'
 ]);
 
 function runCheckpoint() {
