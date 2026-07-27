@@ -3310,12 +3310,34 @@ environment, which has not been established here; (c) a narrow test-only seam in
 normal terminalization with persisted browser evidence — the remaining option, and it
 should be justified by (a) being impossible rather than by convenience.
 
-**Recommended next step:** verify whether a headless browser is actually available to the
-suite environment (`docs/BROWSER_ENVIRONMENT.md`). If it is, route (b) gives a faithful
-fixture with text/DOM operations only and no seam is needed. If it is not, route (c) is
-justified and should persist `browserOperations` through `completeActionReceipt` — the
-production write path — so only the *triggering* of terminalization is test-only, never
-the evidence or the verdict.
+**ENVIRONMENT VERIFICATION — RESULT (2026-07-27). Route (c) is justified.**
+
+| Check | Result |
+|-------|--------|
+| chromium on PATH | present at `/usr/bin/chromium-browser` |
+| `BROWSER_ENGINE_EXECUTABLE` set | **no** |
+| runtime auto-discovery of a system chromium | **none** — `configuredExecutable()` reads only that env var |
+| `getEngineStatus()` as the runtime sees it | `{configured:false, executableExists:false, available:false, version:null}` |
+| browser suites registered in the release checkpoint | **none** |
+
+So although a chromium binary exists on this machine, the runtime reports the engine
+**unavailable**, and no checkpoint suite launches it. Route (b) would require setting
+`BROWSER_ENGINE_EXECUTABLE` in the checkpoint environment — a deployment/config change
+that a test must not silently depend on, and one no existing registered suite establishes
+as reliable. **That is the reason the public path cannot be used in the checkpoint
+environment**, recorded here as the objective requires.
+
+**Therefore route (c):** a narrow test-only seam that triggers normal terminal evaluation
+for a persisted browser run. Its constraints, restated so the next tranche cannot drift:
+persist browser operations through `completeActionReceipt` with `replayKey:
+'browserOperations'` — the production write path — and let `buildRunEvaluation` /
+`buildFinalizedRunReplayState` produce the verdict. Only the ACT of initiating
+terminalization may be test-specific. Never call `classifyBrowserEvidence` directly as the
+primary proof, never write the verdict, never build operations in memory only.
+
+*(If `BROWSER_ENGINE_EXECUTABLE` is later configured for the checkpoint and a registered
+browser suite demonstrates reliable launch, route (b) becomes preferable and this seam
+should be revisited.)*
 
 **Scenario matrix (already designed, reusable):** no ops → `objective_unverified`;
 blocked navigate carrying text+DOM evidence → `target_blocked_or_redirected`, which is the
