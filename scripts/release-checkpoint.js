@@ -160,7 +160,11 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'timeline-receipt-projection-test.js',
   // A20 — replaces the JSON-era invalid-action-preflight-recovery-test.js. Pins that the
   // whole action batch is validated before any action executes.
-  'action-batch-preflight-test.js'
+  'action-batch-preflight-test.js',
+  // A20 — replaces the JSON-era browser-evidence-audit-test.js. Pins the durable
+  // browser-evidence verdict in both places the runtime writes it, so a model's claim
+  // of success can never stand in for captured page text or DOM observation.
+  'browser-evidence-verdict-test.js'
 ]);
 
 function runCheckpoint() {

@@ -575,6 +575,31 @@ const MUTATIONS = Object.freeze([
     find: '    fromStatus: previousStatus,',
     replace: '    fromStatus: status,',
     expect: 'the transition log claims it came from where it went'
+  },
+  {
+    name: 'browser-page-text-not-evidence',
+    suite: 'browser-evidence-verdict-test.js',
+    file: 'server.js',
+    contract: 'captured page text is sufficient browser evidence on its own',
+    // Aimed at the ACTIVE sufficiency boundary, one branch at a time. The run still
+    // starts, still persists its browser operations, still terminalizes and still
+    // writes a finalized replay — only the durable verdict is wrong, which is the
+    // one thing this suite exists to notice.
+    find: '  const hasContentEvidence = hasReadPageText || maxElementCount >= 3 || hasScreenshot;',
+    replace: '  const hasContentEvidence = maxElementCount >= 3 || hasScreenshot;',
+    expect: 'a run that read the page text is reported as having insufficient evidence'
+  },
+  {
+    name: 'browser-dom-observation-not-evidence',
+    suite: 'browser-evidence-verdict-test.js',
+    file: 'server.js',
+    contract: 'a DOM observation of at least three elements is sufficient browser evidence on its own',
+    // The other half of the same boundary, kept separate on purpose: a suite whose
+    // sufficient run captured BOTH text and a DOM inventory would stay green through
+    // either branch being removed, because the surviving branch would carry it.
+    find: '  const hasContentEvidence = hasReadPageText || maxElementCount >= 3 || hasScreenshot;',
+    replace: '  const hasContentEvidence = hasReadPageText || hasScreenshot;',
+    expect: 'a run that observed the page structure is reported as having insufficient evidence'
   }
 ]);
 

@@ -3230,7 +3230,12 @@ the conversation, because corrective evidence is what drives the provider's next
 that coupling is inherent to a state-driven stub and is a strength, but it means the
 ordering of assertions determines which truth gets reported.)*
 
-### Next cluster — `browser-evidence-audit-test.js` (ANALYZED, NOT BUILT, 2026-07-27)
+### Browser-evidence cluster — RETIRED `browser-evidence-audit-test.js` (2026-07-27)
+
+The analysis below was recorded before the tranche was built and is retained because it
+is the runtime semantics record. The disposition is at the end of this section: the
+replacement is `browser-evidence-verdict-test.js`, registered, and **the test-only
+terminalization seam this analysis concluded was necessary turned out not to be.**
 
 Disposition: **REPLACE**. `classifyBrowserEvidence` (`server.js` ~6206) is live and has no
 registered coverage. Full semantics recorded here so the next tranche starts from the
@@ -3355,7 +3360,98 @@ the verdict, which is what the objective requires.
 runtime semantics is the expensive part of this cluster and it is done; the fixture is a
 short hop from the startup-convergence pattern.
 
-### The remaining 65 — sequencing
+### BUILT — `browser-evidence-verdict-test.js` (13 scenarios, 181 assertions), 2026-07-27
+
+Registered. `browser-evidence-audit-test.js` is retired from disk; the manifest orphan
+count falls to 64.
+
+**CORRECTION — the terminal-evaluation seam is NOT needed, and was not shipped.**
+
+Everything above about the environment stands: chromium exists on this machine, the
+runtime reports the engine unavailable, and no checkpoint suite launches one. What was
+wrong is the inference drawn from it — that reaching `buildRunEvaluation` therefore
+required a test-only route into terminalization. It does not. The reasoning missed a
+state the runtime passes through on every run:
+
+> A run held at its **first model call** is `running`, its replay snapshot is already
+> initialized (`createRunReplaySnapshot` runs before the provider call), and it has
+> captured nothing yet. That is precisely the state browser evidence needs to be
+> attached to — and the run then terminalizes **through its own normal path**.
+
+So the fixture holds each run there with a provider stub that blocks until the suite
+releases it by name, persists that run's operations through `completeActionReceipt`
+with `replayKey: 'browserOperations'` — the same repository call
+`recordBrowserOperationEvidence` makes — and releases the gate. The runtime completes
+the run and writes both verdicts itself. **No production source changed.**
+
+The seam *was* built first (a doubly-gated `POST /__test__/runs/:id/terminal-evaluation`
+calling `commitRunTerminalization`), proved to work, and was then removed once the
+gated-provider fixture showed it redundant. Recorded because the general lesson is worth
+more than this cluster: *a seam justified by "the public path cannot reach X" should be
+re-tested against the states the runtime already passes through on the way to X.* The
+blocked branch was `getOrCreateBrowserSession`, which is reached only when the model
+proposes a browser action — and a run that never gets a model response never proposes
+one.
+
+**Every live assertion of the retired suite is mapped:**
+
+| Retired assertion | Successor |
+|-------------------|-----------|
+| non-browser run → `not_applicable`, and its replay gains no `browserOperations` | scenario 2 |
+| `/sorry/` navigation → `target_blocked_or_redirected`, detail names the URL | scenario 4 |
+| `readPageText` content → `evidence_available`, in run AND replay | scenario 6 |
+| low `observe` → insufficient | scenario 8, tightened to the exact status |
+| no browser operations → `objective_unverified` | scenario 3 |
+| terminal status independent of the evidence verdict | scenario 1 (every run completes; four of the six verdicts are not `evidence_available`) |
+| exactly five allowed browser operations, none mutating | scenario 11 |
+
+Three of those were **weakened** in the original and are not ported that way. Its
+low-observe and completion-versus-evidence checks accepted
+`browser_evidence_insufficient` **or** `objective_unverified`, which is precisely the
+distinction this classifier turns on; the replacement asserts one status. And the
+original **skipped with exit 0** when no browser engine was found — which, in this
+environment, is what it would always have done.
+
+**What the replacement adds that the original had no way to assert:**
+
+- **Precedence.** A run whose navigation was blocked *and* which carried page text and a
+  7-element DOM inventory — evidence sufficient on its own — still reports
+  `target_blocked_or_redirected`. A classifier checking content first would call that run
+  verified while it never reached the target.
+- **The two sufficiency branches, separated.** The page-text run carries no `observe`;
+  the DOM run carries no `readPageText`. Either branch alone decides its run, which is
+  what makes the two mutations below independently meaningful.
+- **A claim is not evidence, stated as a runtime property.** The stub answers *every* run
+  identically — "objective addressed; finishing", `complete: true` — so the only thing
+  differing between scenarios is what was captured. Four of the six browser runs durably
+  record that completion claim and do **not** report `evidence_available`.
+- **Attribution.** A second browser target runs concurrently with sufficient evidence; the
+  run with none stays `objective_unverified`. Each run carries exactly its own operations
+  and receipts. And offering one run's evidence under another ticket's ownership is
+  **refused by the production write path** — asserted before terminalization, so the
+  refusal comes from the store's ownership check rather than from the finalized-snapshot
+  guard that would refuse everything afterwards.
+- **Hydration.** Both verdicts and both explanations are re-read after a full runtime
+  restart, and the restarted runtime still serves the evaluation over the operator API.
+- **The privacy contract.** No screenshot operation, no screenshot artifact material, and
+  no verdict justified by one — `evidence_available` is reached twice, by text and by DOM,
+  and never by an image.
+
+**Two mutations, both killed, each on its own branch:**
+
+| Mutation | Contract removed | Failed on |
+|----------|------------------|-----------|
+| `browser-page-text-not-evidence` | captured page text is sufficient on its own | scenario 6 — the page-text run reports insufficient |
+| `browser-dom-observation-not-evidence` | a ≥3-element DOM observation is sufficient on its own | scenario 7 — the DOM run reports insufficient |
+
+Both leave the run, the receipts, the terminalization and the finalized replay intact and
+change only the durable verdict, which is the point: the suite fails because the record is
+wrong, not because the fixture broke. Keeping the two sufficient runs disjoint is what
+makes that true — a single run carrying both text and a DOM inventory would survive either
+mutation on the strength of the other branch, which is the same defence-in-depth trap A20
+has now hit four times.
+
+### The remaining 64 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

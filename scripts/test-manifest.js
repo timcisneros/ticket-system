@@ -103,7 +103,7 @@ const TESTS = Object.freeze([
   { file: "bounded-watcher-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "bounded-worker-pool-test.js", status: "required" },
   { file: "browser-environment-test.js", status: "orphaned", reason: "cutover-orphan" },
-  { file: "browser-evidence-audit-test.js", status: "orphaned", reason: "cutover-orphan" },
+  { file: "browser-evidence-verdict-test.js", status: "required" },
   { file: "browser-read-result-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "browser-target-regression-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "budget-visibility-test.js", status: "orphaned", reason: "cutover-orphan" },
