@@ -2977,6 +2977,35 @@ prior results into the next request. The first turn's operations still execute, 
 still records them, and later model calls still occur — only the model's knowledge is
 gone. Killed, with the run failing to converge exactly as the contract predicts.
 
+### OPEN — load-dependent suite failures under checkpoint (2026-07-27)
+
+Two suites have now each failed **once** under checkpoint load and passed repeatedly
+standalone. Recorded together because they share a shape, and kept separate from the
+resolved liveness defect because **neither shows a latch signature** — no `degraded`
+health, no `Evidence persistence latched` line, no `EVENT_PERSISTENCE_UNAVAILABLE`.
+
+| Suite | Symptom | Standalone |
+|-------|---------|-----------|
+| `delegated-run-logging-containment-test.js` | "the run:completed echo insert was attempted and rejected" | 3/3 pass |
+| `model-contract-violation-test.js` | "corrective feedback must state both the total (8) and mutating (2) limits" | 3/3 pass |
+
+**What they have in common:** both drive real agent runs against a model stub and assert
+on the CONTENT of runtime-generated feedback at a particular turn. That is the class most
+sensitive to timing — a turn arriving in a different order, or a run settling later than
+the assertion expects, changes the observed text without any contract being violated.
+
+**Do not preemptively weaken either.** No retries, no softened assertions, no widened
+timeouts — the same standing rule as the liveness escalation, which was vindicated when
+the "quiet period" there turned out not to be a fix. If either recurs, apply the
+first-failure discipline that solved the liveness incident: capture the state at the
+moment of failure rather than reasoning from the summary line. Neither currently reports
+what the run was doing when the assertion failed, which is precisely the gap that made
+the liveness incident undiagnosable for three tranches.
+
+**Evidence so far:** `model-contract-violation-test.js` failed on one clean-worktree
+checkpoint and passed on the immediately following one at the same commit, plus 3/3
+standalone.
+
 ### The remaining 67 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
