@@ -2414,51 +2414,135 @@ that broke the endpoint outright would fail.
 `contractSource: 'run_snapshot'` in place and still lies. A suite that only checked the
 label would not have caught it.)*
 
-### Next cluster — event-journal record limits (ANALYZED, NOT YET BUILT, 2026-07-26)
+### Event-journal record limits — RETIRED `event-journal-record-rejection-test.js` (2026-07-26)
 
-Triage of the remaining evidence/receipt orphans picked out
-`event-journal-record-rejection-test.js` (25 assertions) and
-`event-journal-admission-recovery-test.js` (28) as the highest-risk coherent pair. The
-analysis below is recorded so the next tranche does not have to repeat it.
+**Replaced by `event-record-limit-containment-test.js` — 29 assertions, 5 scenarios,
+registered.** The historical names are all gone (`EVENT_JOURNAL_MAX_RECORD_BYTES`,
+`EVENT_RECORD_TOO_LARGE`, `event.record_rejected`, `oversizedRejections`) but the
+contract survived under PostgreSQL names, so this is a replacement. A name search alone
+would have retired a live contract.
 
-**The mechanism was renamed, not removed — disposition is REPLACE, not retire.** A
-first pass looked like retirement: `EVENT_JOURNAL_MAX_RECORD_BYTES`,
-`EVENT_RECORD_TOO_LARGE`, `event.record_rejected` and `oversizedRejections` appear
-nowhere in the runtime. But the contract is live under PostgreSQL names —
-`PostgresRuntimeStore.assertJsonRecord` throws a `RangeError` with
-`code: 'POSTGRES_RECORD_TOO_LARGE'`, and `appendEvent` (server.js ~4927) maps it to
-**413**. Do not retire these as obsolete on a name search.
+**The load-bearing distinction.** Two failures look alike and demand opposite responses:
 
-**The contract is worth keeping and has a natural negative control.** That handler has
-two branches sitting side by side: `POSTGRES_RECORD_TOO_LARGE` (plus `TypeError` /
-`RangeError`) rethrows request-scoped, while **every other** error latches
-`evidencePersistenceFailure`, clears `serverReady`, and stops both schedulers. So
-"an oversized record fails only the affected request/run and does not degrade the
-process" is testable against a real, adjacent, opposite behaviour rather than against
-nothing. The historical assertions also cover terminal evidence ordering
-(`run.evaluation_completed` → `run.consequence_recorded` → `run.terminalized`) and an
-intact run event-hash chain, both of which still exist.
+| | Cause | Correct response | Wrong response would mean |
+|-|-------|------------------|---------------------------|
+| Request-scoped rejection | caller sent an unstorable record | fail the request, keep running | any client can degrade the deployment |
+| Internal evidence-persistence failure | system cannot record what it is doing | latch, stop schedulers, refuse work | the runtime mutates the world unable to record it |
 
-**The blocker to solve first.** `maxJsonRecordBytes` defaults to 2 MB and is the ONE
-`PostgresRuntimeStore` option server.js does not expose (`POSTGRES_POOL_MAX`,
-`POSTGRES_STATEMENT_TIMEOUT_MS`, `MAX_ACTIVE_RUNS` and the rest all read env). That
-omission is very likely *why* this contract silently lost coverage at the cutover: the
-JSON-era suite set the limit to 1024 bytes and the replacement has no equivalent knob.
-Either add the missing env option — consistent with every adjacent line, default
-unchanged — or drive a >2 MB payload through the HTTP surface, which first requires
-checking the Fastify body limit. **The env knob is the recommended route**, and it should
-be justified as testability parity rather than smuggled in as a test-only hook.
+Scenarios 4 and 5 are the **same server surface with opposite containment**, which is
+what makes either meaningful: a runtime that never latches passes 4 and fails 5; one
+that latches on anything passes 5 and fails 4. Scenario 5 injects the failure narrowly —
+a trigger on one standalone evidence append, the path that runs through the server's own
+`appendEvent` wrapper where the latch lives — so it proves containment rather than
+merely breaking the database. Observed: `/health` → 503 `degraded`, later work refused
+503, and the refused work verified absent rather than silently performed.
 
-**Also found: a stale durability document.** `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`
-(~line 45-56) still describes the JSON journal as current — `FileHandle.sync()` as the
-durable acknowledgement boundary, compact `event.record_rejected` evidence, and a
-process-fatal latch on write/sync failure. The latch survived the cutover; the file
-handle and the rejection event name did not. The repository currently promises
-durability behaviour it does not implement, which is exactly the class of drift A20
-exists to close. Correct it in the same tranche that rebuilds the suites, so the
-document and the runtime are settled together.
+#### Configuration-seam decision — recorded, NOT hidden in the migration
 
-### The remaining 71 — sequencing
+`maxJsonRecordBytes` (2 MiB) is a `PostgresRuntimeStore` option `server.js` does not
+expose. The previous tranche recommended adding an env option. **That recommendation is
+withdrawn: no production configuration surface was added.** The real default is
+exercisable directly through the store, so the convenience knob was never needed, and
+adding a production surface only to make a test convenient is the wrong trade.
+
+**But the investigation found something the knob would have hidden.** Fastify's default
+body limit is **1 MiB — below** the store's 2 MiB. So:
+
+* an oversized request body is refused as `FST_ERR_CTP_BODY_TOO_LARGE`, **not**
+  `POSTGRES_RECORD_TOO_LARGE`; the two 413s come from different layers;
+* `appendEvent`'s `POSTGRES_RECORD_TOO_LARGE` → 413 mapping is **unreachable from any
+  request-body path**. It is live only for records the server accumulates server-side
+  (evaluation, consequence, replay documents);
+* the historical suite set the record limit to 1024 bytes so the store rule fired first.
+  Today's ordering inverts that, which is why the contract could not be migrated as
+  written.
+
+The suite asserts the HTTP boundary for what it actually is rather than pretending it
+reaches the store rule, and covers the store rule directly where it is truthfully
+observable. **Consequence for coverage, stated plainly:** a mutation collapsing
+`appendEvent`'s request-scoped branch into the latching branch SURVIVES this suite,
+because no reachable HTTP path delivers an oversized record to that wrapper. It was
+removed rather than left in the registry as a false claim. Closing it honestly requires
+driving a server-accumulated >2 MiB evidence document — worth doing, not done here.
+
+**Mutations — two killed, both on active layers.**
+
+| Mutation | Removes | Result |
+|----------|---------|--------|
+| `oversized-record-partially-persisted` | the size check's rejection | killed — the oversized record is stored |
+| `evidence-failure-treated-as-client-error` | the latch on a genuine failure | killed — the process reports itself merely `starting`, never `degraded` |
+
+#### OPEN DEFECT — rejected records leave no durable evidence
+
+`docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md` promised that an individual oversized
+event is "represented by compact `event.record_rejected` evidence". **PostgreSQL
+implements no such thing.** A rejected record rolls back completely and leaves no trace;
+the `oversizedRejections` metric on `/api/runtime/status` no longer exists either.
+
+Scenario 3 proves the rollback is clean — no partial write, no consumed chain position —
+which is correct as far as it goes. What is missing is the *positive* half: an operator
+cannot discover that a record was ever refused. Evidence of refusal is exactly the kind
+of thing this repository treats as load-bearing everywhere else (`authority.denied`,
+`action.rejected`, `run.verification_failed` all exist precisely so a refusal is
+visible).
+
+**Not silently rewritten as though it never existed**, per the governance rule: the
+promise is recorded here and the document now points at this entry. Deciding whether to
+reinstate the evidence or formally withdraw the promise is a separate decision — it is
+an evidence-completeness question, not a test-migration question.
+
+#### Documentation truthfulness — `RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md` reconciled
+
+The document described the JSON journal as current throughout, including the flatly
+false "PostgreSQL ... is not yet the active server backend". Reconciled: the authority
+table now names PostgreSQL relations instead of `data/*.json` paths; the durable
+acknowledgement boundary is transaction commit rather than `FileHandle.sync()`; the two
+failure classes above are stated explicitly with their codes and status codes; the limit
+ordering is documented; and the storage-boundary section no longer describes a local
+append-only file as the shared-storage limitation. The one promise PostgreSQL does not
+implement is flagged in place and linked to the open defect above rather than deleted.
+
+*(Worth noting how close this came to a wrong disposition: the cluster was queued as a
+retirement on a name search, and the document that would have "confirmed" the mechanism
+was gone was itself stale. Two independent stale sources agreeing is not corroboration.)*
+
+### Harness defect — pid-modulo test ports collide (2026-07-26)
+
+Found while validating the event-record-limit tranche. The checkpoint failed once on
+`lease-renewal-resume-safety-test.js` with `server did not start`, then passed on a
+rerun and passes standalone. **Unlike the `concurrency-conflict-test.js` flake, this one
+has an identified mechanism** and should not be filed alongside it.
+
+Eight suites derive a fixed port from their own pid, and the ranges **overlap heavily**:
+
+| Suite | Range |
+|-------|-------|
+| `page-render-regression-test.js` | 3400–4399 — spans every other range |
+| `lease-renewal-resume-safety-test.js` | 3600–3799 |
+| `postgres-startup-recovery-test.js` | 3620–3769 |
+| `provider-response-recovery-postgres-test.js` | 3660–3779 |
+| `model-contract-violation-test.js` | 3680–3799 |
+| `model-contract-violation-recovery-test.js` | 3700–3799 |
+| `execution-semantics-persistence-test.js` | 3810–3929 |
+| `workspace-snapshot-recovery-test.js` | 3940–3989 |
+
+`process.pid % N` is not collision-free, pids of sequentially spawned suites are
+adjacent, and a previous suite's server child can still hold its port while the next
+suite starts — the failure observed was `provider-response-recovery` immediately
+followed by `lease-renewal`, whose ranges overlap. The symptom is misleading: the suite
+reports "server did not start" when the server started fine and could not bind.
+
+**Deliberately NOT fixed in that tranche.** The right fix is a shared helper that
+obtains an OS-assigned free port (bind `:0`, read it, close, hand it over) rather than
+disjoint hand-tuned ranges, and it touches eight files. Folding an eight-file harness
+change into a durable-evidence tranche would blend two unrelated things and leave both
+less reviewable. It is test infrastructure only and needs its own validation pass.
+
+**Do not "fix" this with retries or by widening timeouts** — the same standing rule as
+the concurrency escalation. The cause is known; suppressing the symptom would discard a
+real diagnosis.
+
+### The remaining 70 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

@@ -139,7 +139,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'completion-admission-test.js',
   'startup-state-convergence-test.js',
   // A20 — replaces the JSON-era verification-contract-reconciliation-test.js.
-  'verification-contract-authority-test.js'
+  'verification-contract-authority-test.js',
+  // A20 — replaces the JSON-era event-journal-record-rejection-test.js. Covers the
+  // request-scoped rejection / latched evidence-failure distinction end to end.
+  'event-record-limit-containment-test.js'
 ]);
 
 function runCheckpoint() {

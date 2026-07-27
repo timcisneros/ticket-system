@@ -239,6 +239,30 @@ const MUTATIONS = Object.freeze([
     expect: 'an unsupported requireVerification is accepted and silently downgraded'
   },
   {
+    // Partial persistence: the oversized record is written anyway, after the size check
+    // has already reported it as too large. This is the failure the store's transaction
+    // boundary exists to prevent.
+    name: 'oversized-record-partially-persisted',
+    suite: 'event-record-limit-containment-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'a record exceeding the limit is rejected without being stored',
+    find: '      const error = new RangeError(`${label} exceeds the configured maximum of ${this.maxJsonRecordBytes} bytes`);',
+    replace: '      const error = new RangeError(`${label} exceeds the configured maximum of ${this.maxJsonRecordBytes} bytes`); return record;',
+    expect: 'an oversized record is accepted and stored instead of rejected'
+  },
+  {
+    // The same distinction collapsed the other way: a genuine internal
+    // evidence-persistence failure is reported as a client error and the runtime keeps
+    // going, mutating the world while unable to record any of it.
+    name: 'evidence-failure-treated-as-client-error',
+    suite: 'event-record-limit-containment-test.js',
+    file: 'server.js',
+    contract: 'a genuine evidence-persistence failure latches and fails closed',
+    find: '      if (!error.statusCode) error.statusCode = 413;\n      throw error;\n    }\n    if (!evidencePersistenceFailure) evidencePersistenceFailure = error;',
+    replace: '      if (!error.statusCode) error.statusCode = 413;\n      throw error;\n    }\n    if (false) evidencePersistenceFailure = error;',
+    expect: 'an internal evidence-persistence failure leaves the process reporting itself healthy'
+  },
+  {
     name: 'completion-ignores-unresolved-triage',
     suite: 'completion-admission-test.js',
     file: 'server.js',
