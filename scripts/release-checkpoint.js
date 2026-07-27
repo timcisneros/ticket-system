@@ -142,7 +142,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'verification-contract-authority-test.js',
   // A20 — replaces the JSON-era event-journal-record-rejection-test.js. Covers the
   // request-scoped rejection / latched evidence-failure distinction end to end.
-  'event-record-limit-containment-test.js'
+  'event-record-limit-containment-test.js',
+  // Lock-order regression for the _appendEvent deadlock: pins that every evidence
+  // writer takes the run row before the event chain tip.
+  'event-append-lock-order-test.js'
 ]);
 
 function runCheckpoint() {

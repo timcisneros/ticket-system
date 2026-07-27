@@ -2560,7 +2560,7 @@ misbehaves under checkpoint load, and there was not enough remaining budget to v
 it honestly. Recording it beats landing an unvalidated edit to the one suite whose
 signal is already hard to trust.)*
 
-### OPEN PRODUCTION DEFECT — a PostgreSQL deadlock degrades the whole process (2026-07-26)
+### RESOLVED — a PostgreSQL deadlock degraded the whole process (2026-07-26)
 
 Found during clean-worktree validation of `8638c51`, and it matters precisely because of
 what that same tranche just documented.

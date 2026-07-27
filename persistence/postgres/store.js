@@ -4412,6 +4412,24 @@ class PostgresRuntimeStore {
     const runId = nullablePositiveSafeInteger(event && event.runId, 'event.runId');
     let chain = null;
     if (runId !== null) {
+      // Take the run row BEFORE the chain tip, in the same mode the events foreign key
+      // will need anyway. Without this the two evidence paths acquire the same pair of
+      // locks in opposite orders and deadlock:
+      //
+      //   caller-locked path   runs FOR UPDATE ............ then chain tip FOR UPDATE
+      //   standalone append    chain tip FOR UPDATE ....... then runs FOR KEY SHARE
+      //                                                    (the events FK check)
+      //
+      // FOR UPDATE and FOR KEY SHARE conflict, so that pair is a genuine cycle and
+      // PostgreSQL resolves it with SQLSTATE 40P01. Acquiring the run row first makes
+      // every evidence writer follow one order, so a concurrent append WAITS instead of
+      // deadlocking. FOR KEY SHARE is deliberately the weakest lock that serves: it does
+      // not serialize concurrent appends against each other, which continue to order
+      // themselves on the chain tip exactly as before.
+      await client.query(
+        `SELECT 1 FROM ${this.table('runs')} WHERE id = $1 FOR KEY SHARE`,
+        [runId]
+      );
       await client.query(
         `INSERT INTO ${this.table('run_event_chain_tips')} (run_id, next_seq, previous_hash)
          VALUES ($1, 0, NULL) ON CONFLICT (run_id) DO NOTHING`,

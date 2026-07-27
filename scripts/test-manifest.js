@@ -114,6 +114,7 @@ const TESTS = Object.freeze([
   { file: "startup-state-convergence-test.js", status: "required" },
   { file: "verification-contract-authority-test.js", status: "required" },
   { file: "event-record-limit-containment-test.js", status: "required" },
+  { file: "event-append-lock-order-test.js", status: "required" },
   { file: "complete-flag-truncation-guard-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "concurrency-conflict-test.js", status: "required" },
   { file: "debug-reset-contamination-test.js", status: "orphaned", reason: "cutover-orphan" },
