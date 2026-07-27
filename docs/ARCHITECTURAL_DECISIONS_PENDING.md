@@ -51,6 +51,7 @@ the defect can cause, not how hard it is to fix.
 | A21 | Ticket reassignment silently discarded; audit trail asserts otherwise | **High** | **Implemented 2026-07-26** — see entry | Correctness / truthfulness |
 | A22 | Resume after a committed workspace operation fails on an idempotency conflict | **High** | **Implemented 2026-07-26** — see entry | Correctness / recovery |
 | A23 | Deterministic crash-seam coverage was incomplete | Medium | **Closed 2026-07-26** — all nine seams driven | Verification gap |
+| A24 | Absolute host filesystem paths disclosed to the model provider | **High** | **Implemented 2026-07-27** — see entry | Privacy / disclosure |
 
 ### Sequencing
 
@@ -3701,6 +3702,107 @@ count directly, and it can only fall by a suite being repaired and registered, o
 a reason.
 
 ---
+
+### A24. Absolute host filesystem paths disclosed to the model provider
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Implemented 2026-07-27.** Redaction at the provider-input boundary; `provider-input-privacy-test.js` registered (40 assertions, 8 scenarios) |
+| **Severity** | **High** — every model request disclosed the host filesystem layout to an external provider |
+| **Discovered by** | `workspace-error-containment-test.js` — the ENOENT message it asserts against carries the absolute path |
+| **Evidence** | Read-only probe capturing complete provider request bodies, before and after |
+
+**Description.**
+
+The defect was reported as *recoverable filesystem errors carry the raw Node message,
+including the absolute host path*. That is true, and it is the narrow case. Capturing
+whole provider request bodies showed the disclosure was never confined to error text:
+
+| Provider-bound field | When | Contains |
+|----------------------|------|----------|
+| `runtimeEnvelope.workspaceRoot` | every request | absolute host root |
+| `runtimeEnvelope.mainWorkspaceRoot` | every request | absolute host root |
+| `initialWorkspaceSnapshot.targetScope.root` | every request | absolute host root |
+| `currentWorkspaceSnapshot.targetScope.root` | every request | absolute host root |
+| `previousActionResults[].error` | after a filesystem failure | absolute host path of the attempted file |
+
+**4 of 4 captured requests carried the absolute root, before any error occurred.**
+Sanitizing the error message alone would have fixed one field of five and left the
+disclosure fully intact — and the reported defect would have looked closed.
+
+An off-machine model therefore received the deployment's filesystem layout: a developer
+home directory, a temporary directory, or a production workspace path, on every turn of
+every run.
+
+**Decision — redact at the SEND boundary, not per field and not in the prompt builder.**
+
+`callModelProviderWithRunEvidence` receives the assembled input for every provider call
+— agent and browser alike — and is the last point before the wire.
+`redactProviderInput` replaces every known host workspace root
+(`run.workspaceRoot`, `run.mainWorkspaceRoot`, `workspaceProvider.root`) with the stable
+token `<workspace-root>`.
+
+Per-field redaction was rejected for a reason the evidence makes concrete: three of the
+five disclosing fields are not error channels at all, and any prompt field added later
+would reintroduce the disclosure by simply forgetting to opt in. A boundary cannot forget.
+
+**Why the send path rather than the prompt builder — an implementation attempt that was
+withdrawn.** The first version wrapped `buildAgentPrompt`, splitting the renderer into
+`buildAgentPromptMessages`. That broke `organization-guidance-test.js`, which extracts
+the `buildAgentPrompt` body from `server.js` as TEXT and greps it; two further registered
+suites (`phase-gated-catalog-behavioral-test.js`,
+`workspace-snapshot-availability-test.js`) couple to the same function by name or offset.
+Rather than edit three source-coupled suites to accommodate a rename, the redaction moved
+to the send path — which is a strictly better boundary anyway:
+
+- it covers **every** provider call, including any future builder, not just this one;
+- it is the same value the provider-request replay evidence is recorded from, so the
+  durable record of what was sent matches what was actually sent, instead of attesting a
+  payload that was never written to the wire.
+
+The source-extraction coupling itself is pre-existing (the A13 family) and is left as it
+is; it was the signal that pointed at the better boundary, not a problem this entry
+opened.
+
+**The placeholder is a token, not a deletion.** The prompt contract refers to
+`runtimeEnvelope.workspaceRoot` by name when instructing the model never to use it in a
+path; deleting the field would leave that instruction pointing at nothing.
+
+**Meaning was strengthened, not traded away.** Carried failures now include `errorCode`
+and `failureKind` alongside the message, which they did not before. After redaction the
+prose is no longer the only thing distinguishing *the file is missing*
+(`WORKSPACE_FS_ENOENT`) from *the path is the wrong type*
+(`WORKSPACE_PATH_TYPE_CONFLICT`), and it must not become so. This mirrors the shape the
+workspace-snapshot failure path already used — `error: failure.code` plus `errorKind` —
+which was the in-repository precedent for what correct looks like here.
+
+**Operator diagnostics are deliberately untouched.** Replay snapshots, run logs and
+events keep the raw message and the real absolute root. That evidence is local, behind
+the operator's session, and it is what someone diagnosing a path fault needs. Scenario 7
+of the suite asserts the durable record still contains the real root and is NOT redacted
+— a fix that quietly blinded the operator too would be a different defect, not a smaller
+one.
+
+**Scope: which channels were genuinely shared.**
+
+| Channel | Finding | Action |
+|---------|---------|--------|
+| `previousActionResults[].error` | raw `fs` message, absolute path — the reported defect | covered by the boundary; `errorCode`/`failureKind` added |
+| `runtimeEnvelope.workspaceRoot` / `mainWorkspaceRoot` | absolute, every request, by design | covered by the boundary |
+| `initialWorkspaceSnapshot` / `currentWorkspaceSnapshot` `.targetScope.root` | absolute, every request | covered by the boundary |
+| `priorFailureContext.reason` (`run.error` verbatim) | **same raw-message pattern**, provider-bound | covered by the boundary. No current failure path was shown to put an absolute path there — `workspace_error` never terminates a run, and the terminal `protected_path` messages carry no path — so it was NOT separately rewritten |
+| workspace-snapshot failure `error` | already `failure.code` + `errorKind`, no message | unchanged; it is the precedent |
+| browser runs | URLs already redacted through `redactBrowserUrl`; no filesystem paths | unchanged |
+
+`priorFailureContext` is the case the instruction to avoid speculative broadening
+applies to: the pattern is genuinely shared, but the disclosure is not demonstrable
+today. The boundary covers it either way, which is the argument for putting the fix
+there rather than in five places.
+
+**Mutation.** `prompt-carries-raw-host-paths` makes the redaction return its input
+unchanged. The runs still start, still fail recoverably, still carry evidence forward and
+still complete; the suite fails on the disclosure assertion with everything else about
+the run intact — which is what makes it a privacy regression rather than a broken run.
 
 ### A19. No canonical runtime replay-snapshot validator exists
 

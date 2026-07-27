@@ -674,6 +674,19 @@ const MUTATIONS = Object.freeze([
     find: '      executionPolicy: { ...currentTicket.executionPolicy, maxAttempts: nextValue },',
     replace: '      executionPolicy: { maxAttempts: nextValue },',
     expect: 'setting the ceiling resets every other execution-policy field'
+  },
+  {
+    name: 'prompt-carries-raw-host-paths',
+    suite: 'provider-input-privacy-test.js',
+    file: 'server.js',
+    contract: 'provider input carries workspace-relative paths, never host locations',
+    // Aimed at the redaction itself rather than at any one prompt field, because the
+    // disclosure was never confined to one field. The runs still start, still fail
+    // recoverably, still carry their evidence forward and still complete — the suite
+    // fails on the disclosure, with everything else about the run intact.
+    find: "  let output = String(text === undefined || text === null ? '' : text);",
+    replace: "  return String(text === undefined || text === null ? '' : text);\n  let output = '';",
+    expect: 'the absolute workspace root is sent to the model again'
   }
 ]);
 

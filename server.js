@@ -10702,7 +10702,62 @@ async function callModelProviderWithRunTimeout(run, agent, input, startedAtMs, l
   }
 }
 
+// ── Provider-input privacy boundary (A24) ───────────────────────────────────
+// Everything handed to a provider leaves this machine. The model needs the
+// workspace-RELATIVE path, a stable error code and a failure classification to correct
+// itself; it never needs the host filesystem location of the workspace.
+//
+// Applied HERE — where the request is sent — rather than inside the prompt builder,
+// for two reasons. It is the last point before the wire, so a future field, a future
+// prompt shape or a second builder cannot route around it. And it is the same value the
+// provider-request replay evidence is recorded from, so the durable record of what was
+// sent matches what was actually sent instead of claiming a payload we never wrote.
+//
+// The disclosure was never confined to error text. A probe of complete provider request
+// bodies found the absolute root in FOUR fields on EVERY request —
+// `runtimeEnvelope.workspaceRoot`, `runtimeEnvelope.mainWorkspaceRoot`,
+// `initialWorkspaceSnapshot.targetScope.root`, `currentWorkspaceSnapshot.targetScope.root`
+// — plus `previousActionResults[].error` after a filesystem failure. Redacting per field
+// would have fixed one of five and could be undone by any new field forgetting to opt in.
+//
+// The root becomes a stable readable token rather than being deleted, because the prompt
+// contract refers to `runtimeEnvelope.workspaceRoot` by name when telling the model never
+// to use it in a path; removing the field would leave that instruction pointing at nothing.
+//
+// Durable workspace evidence is deliberately NOT redacted: replay operations, run logs
+// and events keep the raw message and the real root. That stays on this machine behind
+// the operator's session and is what diagnosing a path fault requires.
+const PROVIDER_WORKSPACE_ROOT_TOKEN = '<workspace-root>';
+
+function collectHostWorkspaceRoots(run) {
+  const roots = [
+    run && run.workspaceRoot,
+    run && run.mainWorkspaceRoot,
+    workspaceProvider && workspaceProvider.root
+  ].filter(value => typeof value === 'string' && value.trim().length > 0);
+  // Longest first, so a root nested inside another is replaced before its parent.
+  return [...new Set(roots)].sort((a, b) => b.length - a.length);
+}
+
+function redactHostWorkspacePaths(text, roots) {
+  let output = String(text === undefined || text === null ? '' : text);
+  for (const root of roots) {
+    if (!output.includes(root)) continue;
+    output = output.split(root).join(PROVIDER_WORKSPACE_ROOT_TOKEN);
+  }
+  return output;
+}
+
+function redactProviderInput(run, input) {
+  const roots = collectHostWorkspaceRoots(run);
+  if (roots.length === 0 || !Array.isArray(input)) return input;
+  return input.map(message => (message && typeof message.content === 'string'
+    ? { ...message, content: redactHostWorkspacePaths(message.content, roots) }
+    : message));
+}
+
 async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, limits, options = {}) {
+  input = redactProviderInput(run, input);
   const slot = String(options.slot || '').trim();
   if (!slot) throw new TypeError('A stable provider evidence slot is required');
   const requestStartedAt = Date.now();
@@ -19939,9 +19994,19 @@ async function runAgentTicket(runId) {
             step,
             limits
           );
+          // Corrective evidence for the next model turn. The stable code and the
+          // failure classification are carried explicitly rather than left to be
+          // inferred from the message: the boundary redaction above rewrites host
+          // paths out of that message, and "the file is missing" must stay
+          // distinguishable from "the path is the wrong type" however it is worded.
           actionResults.push(canRetryPriorOwnerConflict
             ? { action, ...buildPriorArtifactOwnerRetryResult(error, ticket) }
-            : { action, error: error.message });
+            : {
+                action,
+                error: error.message,
+                ...(error.code ? { errorCode: error.code } : {}),
+                ...(error.failureKind ? { failureKind: error.failureKind } : {})
+              });
           if (!error._operationEvidenceRecorded && (error.workspaceAction || (operation && AGENT_ALLOWED_OPERATIONS.includes(operation.operation)))) {
             // INVARIANT: Error replay entry shape must remain structurally
             // compatible with the success replay entry above (line ~2717).

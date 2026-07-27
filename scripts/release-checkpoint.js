@@ -172,7 +172,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // A20 — replaces the three JSON-era rerun-gate orphans. The only coverage of what
   // may start new work after a run stops: unresolved ticket triage and the attempt
   // ceiling, on the rerun, retry and reopen paths.
-  'rerun-admission-gate-test.js'
+  'rerun-admission-gate-test.js',
+  // A24 — the provider-input privacy boundary: workspace-relative paths leave this
+  // machine, host filesystem locations do not, and the durable record keeps both.
+  'provider-input-privacy-test.js'
 ]);
 
 function runCheckpoint() {
