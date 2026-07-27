@@ -44,6 +44,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
+const { allocateTestPort } = require('./test-port');
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -52,7 +53,7 @@ if (!DATABASE_URL) {
 }
 
 const SCHEMA = `ws_recovery_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
-const PORT = String(3940 + (process.pid % 50));
+let PORT = null;
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-recovery-'));
 const LEASE_MS = 4000;
 
@@ -191,6 +192,9 @@ function request(method, urlPath, { form = null, cookie = null } = {}) {
 }
 
 async function main() {
+  // OS-allocated ephemeral port: see scripts/test-port.js. Fixed or pid-derived
+  // ports collided across suites and surfaced as a misleading start failure.
+  PORT = String(await allocateTestPort());
   const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
   await store.migrate();
   const provider = await startMockProvider();

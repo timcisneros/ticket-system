@@ -8,6 +8,7 @@ const path = require('path');
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 const { createTempWorkspaceRoot, removeTempWorkspaceRoot } = require('./test-workspace');
 const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
+const { allocateTestPort } = require('./test-port');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -18,8 +19,8 @@ if (!DATABASE_URL) {
 
 const SCHEMA = `page_render_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
 const WORKSPACE_ROOT = createTempWorkspaceRoot('page-render-postgres');
-const PORT = process.env.PAGE_RENDER_TEST_PORT || String(3400 + (process.pid % 1000));
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+let PORT = null;
+let BASE_URL = null;
 const SESSION_SECRET = 'page-render-regression-session-secret-0123456789abcdef0123456789abcdef';
 
 function assert(condition, message) {
@@ -242,6 +243,10 @@ async function assertAddressConflictExitsCleanly(env) {
 }
 
 async function main() {
+  // OS-allocated ephemeral port: see scripts/test-port.js. Fixed or pid-derived
+  // ports collided across suites and surfaced as a misleading start failure.
+  PORT = String(await allocateTestPort());
+  BASE_URL = `http://127.0.0.1:${PORT}`;
   const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
   let server = null;
   try {

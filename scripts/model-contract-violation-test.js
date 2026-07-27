@@ -30,6 +30,7 @@ const ROOT = path.resolve(__dirname, '..');
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 const { reconstructActionContractViolationStreak } = require('../runtime/action-contract-streak');
+const { allocateTestPort } = require('./test-port');
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -38,7 +39,7 @@ if (!DATABASE_URL) {
 }
 
 const SCHEMA = `model_contract_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
-const PORT = String(3680 + (process.pid % 120));
+let PORT = null;
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'model-contract-ws-'));
 
 const OVERSIZED = 'MCV_OVERSIZED';
@@ -105,6 +106,9 @@ async function allEvents(store, runId) {
 }
 
 async function main() {
+  // OS-allocated ephemeral port: see scripts/test-port.js. Fixed or pid-derived
+  // ports collided across suites and surfaced as a misleading start failure.
+  PORT = String(await allocateTestPort());
   const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
   await store.migrate();
   const provider = await startMockProvider();

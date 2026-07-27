@@ -39,6 +39,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
+const { allocateTestPort } = require('./test-port');
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -47,8 +48,8 @@ if (!DATABASE_URL) {
 }
 
 const SCHEMA = `exec_semantics_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
-const PORT = String(3810 + (process.pid % 120));
-const BASE = `http://127.0.0.1:${PORT}`;
+let PORT = null;
+let BASE = null;
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-semantics-ws-'));
 
 // Run-start defaults, then a deliberately different value after the restart. The
@@ -193,6 +194,10 @@ function extractSection(bundle, heading) {
 }
 
 async function main() {
+  // OS-allocated ephemeral port: see scripts/test-port.js. Fixed or pid-derived
+  // ports collided across suites and surfaced as a misleading start failure.
+  PORT = String(await allocateTestPort());
+  BASE = `http://127.0.0.1:${PORT}`;
   const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
   await store.migrate();
   const provider = await startMockProvider();

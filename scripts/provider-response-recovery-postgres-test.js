@@ -27,6 +27,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
+const { allocateTestPorts } = require('./test-port');
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -38,8 +39,8 @@ const SCHEMA = `provider_recovery_${process.pid}_${crypto.randomBytes(4).toStrin
 // Each boot gets its own port: the crashed (SIGKILLed) boot-1 server can leave a
 // stale pooled connection on its port in the test process, so reusing it for
 // boot 2 makes readiness fetches hang. Distinct ports sidestep it entirely.
-const PORT_1 = Number(process.env.PORT || 3660 + (process.pid % 120));
-const PORT_2 = PORT_1 + 1;
+let PORT_1 = null;
+let PORT_2 = null;
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-recovery-ws-'));
 const LEASE_MS = 2500;
 const FOLDER = 'recovered-folder';
@@ -118,6 +119,10 @@ async function allEvents(store, runId) {
 }
 
 async function main() {
+  // Two OS-allocated ephemeral ports from ONE call, so the probes are open
+  // simultaneously and cannot alias. The old scheme used PORT_1 + 1, which
+  // assumed the neighbouring port was free.
+  [PORT_1, PORT_2] = await allocateTestPorts(2);
   const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
   await store.migrate();
   const provider = await startMockProvider();

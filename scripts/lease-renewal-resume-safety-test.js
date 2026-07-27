@@ -29,6 +29,7 @@ const ROOT = path.resolve(__dirname, '..');
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 const { reconstructAgentRecoveryState, RECOVERY_STATE } = require('../runtime/recovery-state');
+const { allocateTestPort } = require('./test-port');
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -37,7 +38,7 @@ if (!DATABASE_URL) {
 }
 
 const SCHEMA = `lease_renewal_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
-const PORT = process.env.PORT || String(3600 + (process.pid % 200));
+let PORT = null;
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-renewal-ws-'));
 const LEASE_MS = 2000;
 const MODEL_CALL_DELAY_MS = 5000; // ~2.5x the lease: guarantees mid-call expiry without renewal
@@ -84,6 +85,9 @@ function startMockProvider() {
 }
 
 async function main() {
+  // OS-allocated ephemeral port: see scripts/test-port.js. Fixed or pid-derived
+  // ports collided across suites and surfaced as a misleading start failure.
+  PORT = String(await allocateTestPort());
   const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
   await store.migrate();
   const provider = await startMockProvider();

@@ -145,6 +145,52 @@ for (const entry of TESTS) {
 assert.equal(REQUIRED_TESTS.length + ORPHANED_TESTS.length + EXCLUDED_TESTS.length, TESTS.length,
   'every manifest entry must be required, orphaned, or excluded');
 
+// 7. No checkpoint suite may derive its listen port from a collision-prone constant.
+//    Eight suites once used `process.pid % N` over overlapping hand-picked ranges;
+//    `page-render-regression-test.js` alone spanned 3400-4399, covering all the others.
+//    That produced a checkpoint failure reported as "server did not start" when the
+//    server had started fine and could not bind. The OS allocates ports without
+//    collisions — see scripts/test-port.js — and arithmetic does not, so the arithmetic
+//    is banned rather than re-tuned. A wider range would only make the collision rarer
+//    and therefore harder to diagnose.
+const PORT_DERIVATIONS = [
+  { pattern: /process\.pid\s*%/, label: 'a pid-modulo port derivation' },
+  { pattern: /\bPORT\b\s*=\s*(?:String\(|Number\()?\s*3\d{3}\s*[+)]/, label: 'a hard-coded base port' },
+  { pattern: /listen\(\s*3\d{3}\s*[,)]/, label: 'a hard-coded listen port' }
+];
+
+for (const file of [...CHECKPOINT_TEST_SCRIPTS, ...POSTGRES_INTEGRATION_SCRIPTS]) {
+  // This file states the banned patterns literally, so it matches itself.
+  if (file === 'release-checkpoint-coverage-test.js') continue;
+  const source = fs.readFileSync(path.join(ROOT, 'scripts', file), 'utf8');
+  for (const { pattern, label } of PORT_DERIVATIONS) {
+    assert.ok(!pattern.test(source),
+      `${file}: uses ${label}. Checkpoint suites must take ports from ` +
+      `scripts/test-port.js (allocateTestPort / allocateTestPorts), which asks the OS ` +
+      'for a free port instead of guessing one.');
+  }
+}
+
+// The guard is worthless if the facility it points at does not work, so exercise it:
+// a request for several ports must return that many DISTINCT, bindable ports.
+const { allocateTestPorts } = require('./test-port');
+(async () => {
+  const ports = await allocateTestPorts(4);
+  assert.equal(ports.length, 4, 'allocateTestPorts returns the requested count');
+  assert.equal(new Set(ports).size, 4, 'allocateTestPorts returns distinct ports');
+  assert.ok(ports.every(port => Number.isInteger(port) && port > 1024),
+    'allocateTestPorts returns usable non-privileged ports');
+  const net = require('net');
+  await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(ports[0], '127.0.0.1', () => server.close(resolve));
+  });
+})().catch(error => {
+  console.error(`FAIL: release checkpoint coverage — test-port facility: ${error.message}`);
+  process.exit(1);
+});
+
 const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 assert.match(packageJson.scripts['test:persistence:postgres'], /postgres-persistence-integration-test\.js/);
 assert.match(packageJson.scripts['test:cutover:postgres'], /postgres-runtime-cutover-test\.js/);

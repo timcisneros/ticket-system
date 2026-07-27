@@ -30,6 +30,7 @@ const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
 const { seedTerminalRun } = require('./postgres-operator-fixture');
 const { verifyCurrentRunEventChain } = require('../runtime/event-integrity');
+const { allocateTestPort } = require('./test-port');
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -38,7 +39,7 @@ if (!DATABASE_URL) {
 }
 
 const SCHEMA = `startup_recovery_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
-const PORT = process.env.PORT || String(3620 + (process.pid % 150));
+let PORT = null;
 const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-recovery-ws-'));
 
 function assert(c, m) { if (!c) throw new Error(m); }
@@ -101,6 +102,9 @@ async function stop(handle) {
 const LEASE_OWNER = 'startup-recovery-seed';
 
 async function main() {
+  // OS-allocated ephemeral port: see scripts/test-port.js. Fixed or pid-derived
+  // ports collided across suites and surfaced as a misleading start failure.
+  PORT = String(await allocateTestPort());
   const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
   await store.migrate();
 
