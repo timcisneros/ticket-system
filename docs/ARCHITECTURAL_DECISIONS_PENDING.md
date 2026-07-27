@@ -2506,6 +2506,46 @@ implement is flagged in place and linked to the open defect above rather than de
 retirement on a name search, and the document that would have "confirmed" the mechanism
 was gone was itself stale. Two independent stale sources agreeing is not corroboration.)*
 
+### OPEN PRODUCTION DEFECT — a PostgreSQL deadlock degrades the whole process (2026-07-26)
+
+Found during clean-worktree validation of `8638c51`, and it matters precisely because of
+what that same tranche just documented.
+
+**Observed.** `run-diagnostics-bundle-test.js` failed with `error: deadlock detected`,
+thrown from `PostgresRuntimeStore._appendEvent` inside `withTransaction`, while the
+suite's own server was running against the same schema. Not reproducible standalone (3
+clean runs); it needs the checkpoint's concurrency, like the
+`concurrency-conflict-test.js` flake. **Unlike that one, the mechanism is identified.**
+
+**Mechanism.** `_appendEvent` takes `run_event_chain_tips` (`INSERT ... ON CONFLICT DO
+NOTHING`, then `SELECT ... FOR UPDATE`) inside a transaction that has usually already
+locked the `runs` row via `transitionRun`. Two concurrent evidence-writing transactions
+acquiring the run row and the chain tip in opposite orders deadlock. PostgreSQL resolves
+this the normal way: it aborts one side with SQLSTATE `40P01`.
+
+**Why this is a defect and not just a flake.** A deadlock is a *routine, retryable*
+condition in PostgreSQL — the aborted transaction is expected to be retried. This
+runtime does not retry it, and worse, `40P01` is a generic `Error`: it is neither
+`POSTGRES_RECORD_TOO_LARGE` nor a `TypeError`/`RangeError`, so in server-level
+`appendEvent` it falls through to the **latching** branch. Per the containment contract
+just pinned by `event-record-limit-containment-test.js`, that means it sets
+`evidencePersistenceFailure`, clears readiness, stops both schedulers, and refuses all
+further evidence-dependent work with 503.
+
+So a transient, self-resolving database condition takes the deployment into
+fail-closed degraded state requiring a restart. The fail-closed behaviour is correct for
+a genuine inability to persist evidence; a deadlock is not that.
+
+**Not fixed here.** The fix is a real production change with design choices —
+bounded retry on `40P01` at the store transaction boundary, and/or a consistent lock
+order between `runs` and `run_event_chain_tips` — and it needs its own validation under
+load. Recording it beats a hasty fix at the end of a session.
+
+**Do not classify deadlock as request-scoped to make this go away.** Widening
+`appendEvent`'s non-latching branch to swallow generic errors would break the exact
+distinction the tranche above exists to protect. The retry belongs at the transaction
+boundary, below the latch.
+
 ### Harness defect — pid-modulo test ports collide (2026-07-26)
 
 Found while validating the event-record-limit tranche. The checkpoint failed once on
