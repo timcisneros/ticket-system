@@ -2824,7 +2824,56 @@ three times (24/24), which is exactly the contention the old scheme lost.
 the concurrency escalation. The cause is known; suppressing the symptom would discard a
 real diagnosis.
 
-### The remaining 70 — sequencing
+### Admission cluster — RETIRED `event-journal-admission-recovery-test.js` (2026-07-27)
+
+**Replaced by `mutation-admission-backpressure-test.js` — 27 assertions, 6 scenarios,
+registered.** The historical suite drove a `.sync-control` file to stall
+`FileHandle.sync()` on `events.jsonl`. That mechanism is gone; the contract survived
+under PostgreSQL names — `EVENT_ADMISSION_BACKPRESSURED` became
+`MUTATION_ADMISSION_BACKPRESSURED`, and the journal metrics became
+`mutationAdmission.getMetrics()` (`backend: 'postgres'`).
+
+**The load-bearing distinction, and it mirrors the record-limit cluster on the admission
+side rather than the append side.** Two refusals share HTTP 503 and mean opposites:
+
+| Refusal | Code | Retry-After | Meaning |
+|---------|------|-------------|---------|
+| backpressure | `MUTATION_ADMISSION_BACKPRESSURED` | `1` | healthy, momentarily full; capacity returns by itself |
+| latched failure | `EVENT_PERSISTENCE_UNAVAILABLE` | none | cannot record evidence; retrying is futile |
+
+Telling an operator to retry in one second when the deployment needs a restart is the
+failure this prevents; the reverse — treating momentary fullness as fatal — would take
+down a healthy system under load. The runtime checks the fatal condition **first**, and
+scenario 6 pins that precedence explicitly.
+
+**Covered:** refusal happens in the `onRequest` hook, so refused work leaves no state at
+all (checked per objective, not in aggregate); admitted work is not lost to the pressure;
+capacity recovers automatically with no restart; only routes declaring
+`config.mutationAdmission` are gated, so session login and read-only diagnostics survive
+pressure — an operator must not lose the ability to log in and inspect a system exactly
+when it is loaded; and the latch records provenance naming the operation that caused it.
+
+**Scenario 1 is the positive control.** Every other scenario asserts a refusal, and a
+server refusing all mutations would satisfy them all.
+
+**No configuration surface was added.** `MUTATION_ADMISSION_MAX_OUTSTANDING` is already
+production-configurable, so capacity 1 makes backpressure reachable natively — the
+opposite of the record-size limit, which is not env-configurable and is therefore covered
+directly at the store.
+
+*(Fixture lesson: scenario 6 first ran its latch server at capacity 1 too, and the health
+probe caught `backpressured` before the latch landed — the exact confusion the scenario
+exists to rule out. The latch server now runs at default capacity and the probe waits for
+`degraded` specifically rather than "any non-200".)*
+
+**Mutations — both killed.**
+
+| Mutation | Removes | Result |
+|----------|---------|--------|
+| `backpressure-reported-as-fatal` | the recoverable code on a full queue | killed — transient fullness reported as a persistence failure |
+| `backpressure-omits-retry-after` | the retry signal | killed — a recoverable refusal gives the caller nothing to act on |
+
+### The remaining 69 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

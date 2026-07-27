@@ -281,6 +281,29 @@ const MUTATIONS = Object.freeze([
     expect: 'a routine deadlock surfaces as an evidence-persistence failure'
   },
   {
+    // Collapses the two 503s into one. A momentarily full but HEALTHY deployment would
+    // tell callers the deployment cannot record evidence at all, and an operator would
+    // restart a system that only needed a second.
+    name: 'backpressure-reported-as-fatal',
+    suite: 'mutation-admission-backpressure-test.js',
+    file: 'server.js',
+    contract: 'a full admission queue is refused as recoverable, not as a persistence failure',
+    find: `        code: 'MUTATION_ADMISSION_BACKPRESSURED'`,
+    replace: `        code: 'EVENT_PERSISTENCE_UNAVAILABLE'`,
+    expect: 'transient fullness is reported with the fatal persistence code'
+  },
+  {
+    // Removes the Retry-After that makes the refusal actionable. The caller is told to
+    // go away with no indication the condition clears by itself.
+    name: 'backpressure-omits-retry-after',
+    suite: 'mutation-admission-backpressure-test.js',
+    file: 'server.js',
+    contract: 'a backpressure refusal tells the caller to retry',
+    find: "      reply.header('Retry-After', '1');\n      reply.code(503);",
+    replace: '      reply.code(503);',
+    expect: 'a recoverable refusal gives the caller no retry signal'
+  },
+  {
     // Restores the lock-order inversion: the chain tip is taken before the run row, so a
     // concurrent evidence writer holding the run row deadlocks instead of waiting.
     name: 'event-append-restores-lock-inversion',

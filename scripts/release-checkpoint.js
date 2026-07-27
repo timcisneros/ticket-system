@@ -145,7 +145,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'event-record-limit-containment-test.js',
   // Lock-order regression for the _appendEvent deadlock: pins that every evidence
   // writer takes the run row before the event chain tip.
-  'event-append-lock-order-test.js'
+  'event-append-lock-order-test.js',
+  // A20 — replaces the JSON-era event-journal-admission-recovery-test.js. Pins the
+  // recoverable-backpressure versus latched-failure distinction on the admission side.
+  'mutation-admission-backpressure-test.js'
 ]);
 
 function runCheckpoint() {
