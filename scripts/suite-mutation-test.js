@@ -293,6 +293,21 @@ const MUTATIONS = Object.freeze([
     expect: 'a principal without ops:read receives the deployment-wide summary'
   },
   {
+    // The composition layer that carries prior-turn evidence into the next request.
+    // Everything else keeps working — the first turn's operations still execute, replay
+    // still records them, and later model calls still happen — but the model is no
+    // longer told what it already did, so a bounded run cannot converge.
+    name: 'carried-evidence-dropped-from-prompt',
+    suite: 'carried-evidence-preservation-test.js',
+    file: 'server.js',
+    contract: 'each model turn is told what the previous turn did and why it was asked again',
+    find: `  if (Array.isArray(previousActionResults) && previousActionResults.length > 0) {
+    compact.previousActionResults = previousActionResults;
+  }`,
+    replace: '  // carried evidence removed',
+    expect: 'a later turn no longer knows what the earlier turn did'
+  },
+  {
     // Collapses the two 503s into one. A momentarily full but HEALTHY deployment would
     // tell callers the deployment cannot record evidence at all, and an operator would
     // restart a system that only needed a second.

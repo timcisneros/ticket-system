@@ -2916,40 +2916,68 @@ production defect.)*
 still answers with correct data, so only the principal-without-permission scenario
 notices. Killed.
 
-### Next cluster — `tm2-evidence-preservation-test.js` (ANALYZED, NOT BUILT, 2026-07-27)
+### Evidence-carry cluster — RETIRED `tm2-evidence-preservation-test.js` (2026-07-27)
 
-Recorded so the next tranche does not repeat the triage.
+**Replaced by `carried-evidence-preservation-test.js` — 43 assertions, 8 scenarios,
+registered.** A replacement, not a retirement: `previousActionResults` and
+`model:no_progress` are live production mechanisms and that orphan was the only file in
+the repository referencing either.
 
-**Disposition: REPLACE.** The contract is live and covered by nothing else —
-`previousActionResults` appears at 6 production sites and `no_progress` at 12, and
-`tm2-evidence-preservation-test.js` is the ONLY file in the repository mentioning either.
-Retiring it would drop the contract entirely.
+**The contract: what a later model turn is told about earlier turns must be TRUE.** A run
+is a conversation. If the account of what just happened is missing, stale, or belongs to
+another run, the model re-does completed work and loops until a runtime limit kills it,
+and replay gives no explanation.
 
-**What it guards:** evidence accumulated across model turns is preserved and fed forward.
-A multi-turn run must (a) record every parsed model plan in the durable replay snapshot,
-(b) carry prior action results into the NEXT prompt as `previousActionResults`, including
-the actual operation and its returned entries, (c) surface a `model:no_progress` warning
-into the following prompt when a turn achieved nothing, and (d) record the read and write
-operations plus the no_progress event in replay, terminalizing as completed.
+**The provider is driven by prompt state, not a call counter, and that IS the positive
+control.** Each response is chosen by inspecting the `previousActionResults` it just
+received:
 
-This is the "does the model actually see what already happened" contract. Without it a
-run can loop repeating work it already did, and the replay would not show why.
+| Prior evidence seen | Response |
+|---|---|
+| none | listDirectory on a MISSING path **and** on the real one |
+| a listing, no warning | listDirectory on the real path again (redundant) |
+| a `model:no_progress` warning | writeFile, complete |
 
-**Why it is not built here:** it needs a deterministic three-turn provider stub whose
-responses depend on accumulated workspace state — a substantially larger fixture than the
-single-response stubs used elsewhere in A20. Attempting it at the end of a session is how
-mis-fixtured assertions get written; the session's record shows several caught only by
-mutation testing.
+A counter-driven stub would advance regardless and pass against a runtime carrying
+nothing. Here turn 3 is **unreachable** unless the warning was genuinely delivered, so a
+runtime that drops carried evidence cannot finish the run at all — the suite fails hard
+rather than passing vacuously. The mutation confirms it: with the carry removed, the run
+dies at the no-progress threshold.
 
-**Build notes for the next tranche:** model on the preload pattern in
-`resume-obvious-postcondition-test.js` (branch on workspace state rather than call
-count, so the stub cannot drift out of step with the runtime); assert on the STRUCTURED
-replay snapshot rather than prompt substrings where possible, since prompt text is prose
-and substring checks were shown to be non-falsifiable elsewhere in A20; and mutate the
-layer that composes `previousActionResults` into the prompt, not the layer that records
-the operation.
+**Outcomes are pinned as the runtime actually represents them**, discovered rather than
+assumed: an unsuccessful inspection is carried as `result.status: 'not_found'` with empty
+entries — **not** an `error` field, which is what the JSON-era suite implied. Turn 1
+inspects a missing and a real path in one response, so a single carried set contains an
+unsuccessful and a successful outcome differing only in their recorded result. Turn 2
+repeats a path, which is what lets the runtime name the repetition in
+`repeatedListPaths`.
 
-### The remaining 68 — sequencing
+**Three runtime facts learned by failing, each now recorded in the suite:**
+
+1. **Phase separation is enforced.** A response mixing inspection and mutation is refused
+   as `execution.phase_violation` and executes **nothing**. The first fixture emitted
+   `createFolder + listDirectory` and looped to its step limit having performed no
+   operation — the carried evidence contained only the violation warning.
+2. **`previousActionResults` means the PREVIOUS turn, not a transcript.** `actionResults`
+   is reset per turn (`server.js` ~19293). Pinned explicitly so a future change to
+   cumulative history is a deliberate decision rather than silent drift.
+3. **`recordRunEvent` writes to the REPLAY SNAPSHOT and the run log, not the ticket
+   journal.** The durable no-progress decision lives in `snapshot.events`.
+
+**Cross-run isolation is scoped correctly.** A concurrent decoy run on another ticket
+executes throughout. The leak assertion covers *carried evidence*, not the raw prompt:
+both runs share one workspace, so the decoy's file legitimately appears in the subject's
+workspace snapshot — that is the filesystem described truthfully. Leakage would be the
+decoy's operation records appearing in the subject's `previousActionResults`. The first
+version asserted on the raw body and failed for that reason; taking it at face value
+would have produced a fabricated isolation defect.
+
+**Mutation `carried-evidence-dropped-from-prompt`** removes the composition that carries
+prior results into the next request. The first turn's operations still execute, replay
+still records them, and later model calls still occur — only the model's knowledge is
+gone. Killed, with the run failing to converge exactly as the contract predicts.
+
+### The remaining 67 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

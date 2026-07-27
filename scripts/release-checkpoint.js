@@ -151,7 +151,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'mutation-admission-backpressure-test.js',
   // A20 — replaces the JSON-era operational-transparency-test.js. Pins that the
   // deployment-wide operational summary is ops:read-gated and writes nothing.
-  'operational-summary-readonly-test.js'
+  'operational-summary-readonly-test.js',
+  // A20 — replaces the JSON-era tm2-evidence-preservation-test.js. Proves later model
+  // turns are told truthfully what earlier turns did and why they were asked again.
+  'carried-evidence-preservation-test.js'
 ]);
 
 function runCheckpoint() {
