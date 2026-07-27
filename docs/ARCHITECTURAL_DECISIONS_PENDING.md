@@ -2414,6 +2414,50 @@ that broke the endpoint outright would fail.
 `contractSource: 'run_snapshot'` in place and still lies. A suite that only checked the
 label would not have caught it.)*
 
+### Next cluster — event-journal record limits (ANALYZED, NOT YET BUILT, 2026-07-26)
+
+Triage of the remaining evidence/receipt orphans picked out
+`event-journal-record-rejection-test.js` (25 assertions) and
+`event-journal-admission-recovery-test.js` (28) as the highest-risk coherent pair. The
+analysis below is recorded so the next tranche does not have to repeat it.
+
+**The mechanism was renamed, not removed — disposition is REPLACE, not retire.** A
+first pass looked like retirement: `EVENT_JOURNAL_MAX_RECORD_BYTES`,
+`EVENT_RECORD_TOO_LARGE`, `event.record_rejected` and `oversizedRejections` appear
+nowhere in the runtime. But the contract is live under PostgreSQL names —
+`PostgresRuntimeStore.assertJsonRecord` throws a `RangeError` with
+`code: 'POSTGRES_RECORD_TOO_LARGE'`, and `appendEvent` (server.js ~4927) maps it to
+**413**. Do not retire these as obsolete on a name search.
+
+**The contract is worth keeping and has a natural negative control.** That handler has
+two branches sitting side by side: `POSTGRES_RECORD_TOO_LARGE` (plus `TypeError` /
+`RangeError`) rethrows request-scoped, while **every other** error latches
+`evidencePersistenceFailure`, clears `serverReady`, and stops both schedulers. So
+"an oversized record fails only the affected request/run and does not degrade the
+process" is testable against a real, adjacent, opposite behaviour rather than against
+nothing. The historical assertions also cover terminal evidence ordering
+(`run.evaluation_completed` → `run.consequence_recorded` → `run.terminalized`) and an
+intact run event-hash chain, both of which still exist.
+
+**The blocker to solve first.** `maxJsonRecordBytes` defaults to 2 MB and is the ONE
+`PostgresRuntimeStore` option server.js does not expose (`POSTGRES_POOL_MAX`,
+`POSTGRES_STATEMENT_TIMEOUT_MS`, `MAX_ACTIVE_RUNS` and the rest all read env). That
+omission is very likely *why* this contract silently lost coverage at the cutover: the
+JSON-era suite set the limit to 1024 bytes and the replacement has no equivalent knob.
+Either add the missing env option — consistent with every adjacent line, default
+unchanged — or drive a >2 MB payload through the HTTP surface, which first requires
+checking the Fastify body limit. **The env knob is the recommended route**, and it should
+be justified as testability parity rather than smuggled in as a test-only hook.
+
+**Also found: a stale durability document.** `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`
+(~line 45-56) still describes the JSON journal as current — `FileHandle.sync()` as the
+durable acknowledgement boundary, compact `event.record_rejected` evidence, and a
+process-fatal latch on write/sync failure. The latch survived the cutover; the file
+handle and the rejection event name did not. The repository currently promises
+durability behaviour it does not implement, which is exactly the class of drift A20
+exists to close. Correct it in the same tranche that rebuilds the suites, so the
+document and the runtime are settled together.
+
 ### The remaining 71 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
