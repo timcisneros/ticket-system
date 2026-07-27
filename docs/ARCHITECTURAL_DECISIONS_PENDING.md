@@ -2916,6 +2916,39 @@ production defect.)*
 still answers with correct data, so only the principal-without-permission scenario
 notices. Killed.
 
+### Next cluster — `tm2-evidence-preservation-test.js` (ANALYZED, NOT BUILT, 2026-07-27)
+
+Recorded so the next tranche does not repeat the triage.
+
+**Disposition: REPLACE.** The contract is live and covered by nothing else —
+`previousActionResults` appears at 6 production sites and `no_progress` at 12, and
+`tm2-evidence-preservation-test.js` is the ONLY file in the repository mentioning either.
+Retiring it would drop the contract entirely.
+
+**What it guards:** evidence accumulated across model turns is preserved and fed forward.
+A multi-turn run must (a) record every parsed model plan in the durable replay snapshot,
+(b) carry prior action results into the NEXT prompt as `previousActionResults`, including
+the actual operation and its returned entries, (c) surface a `model:no_progress` warning
+into the following prompt when a turn achieved nothing, and (d) record the read and write
+operations plus the no_progress event in replay, terminalizing as completed.
+
+This is the "does the model actually see what already happened" contract. Without it a
+run can loop repeating work it already did, and the replay would not show why.
+
+**Why it is not built here:** it needs a deterministic three-turn provider stub whose
+responses depend on accumulated workspace state — a substantially larger fixture than the
+single-response stubs used elsewhere in A20. Attempting it at the end of a session is how
+mis-fixtured assertions get written; the session's record shows several caught only by
+mutation testing.
+
+**Build notes for the next tranche:** model on the preload pattern in
+`resume-obvious-postcondition-test.js` (branch on workspace state rather than call
+count, so the stub cannot drift out of step with the runtime); assert on the STRUCTURED
+replay snapshot rather than prompt substrings where possible, since prompt text is prose
+and substring checks were shown to be non-falsifiable elsewhere in A20; and mutate the
+layer that composes `previousActionResults` into the prompt, not the layer that records
+the operation.
+
 ### The remaining 68 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
