@@ -637,6 +637,43 @@ const MUTATIONS = Object.freeze([
     find: "    return createStructuredWorkspaceError(error.message, 'WORKSPACE_FS_ENOENT', 'workspace_error', {",
     replace: "    return createStructuredWorkspaceError(error.message, 'WORKSPACE_FS_ENOENT', 'protected_path', {",
     expect: 'a missing file is reported as a blocked policy refusal and fails the run'
+  },
+  {
+    name: 'triage-gate-never-fires',
+    suite: 'rerun-admission-gate-test.js',
+    file: 'server.js',
+    contract: 'unresolved ticket triage blocks every path to a new run',
+    // Aimed at the shared predicate rather than at one route. Three call sites consult
+    // it — rerun, retry and createRunsForTicket — so mutating a single route would only
+    // prove that route reads it, and the other two doors would stay shut by accident.
+    find: '  return !!(ticket && ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt);',
+    replace: '  return false;',
+    expect: 'a ticket with an outstanding human decision can be rerun and retried anyway'
+  },
+  {
+    name: 'attempt-ceiling-off-by-one',
+    suite: 'rerun-admission-gate-test.js',
+    file: 'server.js',
+    contract: 'a ticket that has used maxAttempts runs may not be rerun again',
+    // Deliberately an off-by-one rather than a deletion: the ceiling still exists,
+    // still reports, and still refuses eventually — it just grants one attempt more
+    // than the policy allows. A suite asserting only "some rerun is eventually
+    // refused" would stay green through it.
+    find: '  if (attemptCount >= maxAttempts) {',
+    replace: '  if (attemptCount > maxAttempts) {',
+    expect: 'a ticket at exactly its ceiling is granted one extra attempt'
+  },
+  {
+    name: 'ceiling-edit-drops-other-policy-fields',
+    suite: 'rerun-admission-gate-test.js',
+    file: 'server.js',
+    contract: 'editing maxAttempts changes only maxAttempts',
+    // The ceiling still lands correctly, so an operator editing it sees exactly what
+    // they asked for while the rest of the execution policy is silently reset to its
+    // defaults. Nothing in the response reveals it.
+    find: '      executionPolicy: { ...currentTicket.executionPolicy, maxAttempts: nextValue },',
+    replace: '      executionPolicy: { maxAttempts: nextValue },',
+    expect: 'setting the ceiling resets every other execution-policy field'
   }
 ]);
 

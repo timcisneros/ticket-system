@@ -3573,7 +3573,112 @@ intended. Not changed here, because the current text is what the retired suites 
 replacement both assert against, and changing it silently would move a contract while
 claiming to cover it.
 
-### The remaining 59 — sequencing
+### Rerun-admission cluster — RETIRED three orphans (2026-07-27)
+
+**Replaced by `rerun-admission-gate-test.js` — 65 assertions, 9 scenarios, registered.**
+Orphan backlog 59 → 56.
+
+Retired: `ticket-triage-rerun-hardening-test.js`, `manual-rerun-attempt-ceiling-test.js`,
+`max-attempts-control-test.js`.
+
+**THE CONTRACT — what may start new work after a ticket has stopped.** Two things may
+refuse, and they are the only bounds on repeating failing work:
+
+| Bound | Enforced in | Lifted by |
+|-------|-------------|-----------|
+| unresolved ticket triage | `hasUnresolvedTicketTriage`, consulted by rerun, retry and `createRunsForTicket` | resolving the triage |
+| `executionPolicy.maxAttempts` | `validateManualRerun` — the ONLY site, counting runs that exist | raising or clearing the ceiling |
+
+**Neither had registered coverage.** The refusal strings `Manual rerun rejected` and
+`unresolved ticket-level triage`, and the ceiling-edit route, appeared only in the three
+orphans.
+
+**Every refusal is asserted twice — the status AND the run count read from the store.**
+A gate that returns 409 and creates a run anyway is indistinguishable from a working gate
+by its response alone, and that is the failure mode an operator would never see.
+
+**THE MOST USEFUL FINDING: the triage gate is two layers deep, and only the outer layer
+explains itself.**
+
+The `triage-gate-never-fires` mutation makes `hasUnresolvedTicketTriage` return `false`
+— disabling all three call sites at once. It is killed, but **not where it was aimed**.
+The rerun is still refused, because the store's own `reopenTicket` raises
+`TICKET_TRIAGE_REQUIRED` underneath the route, *with the identical message text*. So the
+rerun scenario passes through the mutation, and what actually fails is the retry
+scenario, where the surviving refusal degrades to a bare `409 Conflict`.
+
+> The gate holds without the predicate. What does not hold is the refusal remaining
+> **legible** — and an unexplained 409 is one an operator cannot act on.
+
+A suite asserting only "the rerun was refused" would have stayed green through the
+removal of the entire route-level gate. Every refusal in the replacement therefore
+asserts the reason text, not just the status. This is the fourth time in A20 that a
+mutation landing somewhere unexpected meant defence in depth rather than a coverage hole,
+and the first time the surviving layer was materially *worse* than the one removed.
+
+**Historical assertion mapping:**
+
+| Retired assertion | Successor |
+|-------------------|-----------|
+| blocked ticket with unresolved triage: rerun 409 | scenario 6, on runtime-produced triage |
+| retry on a run whose parent ticket has unresolved triage: 409 | scenario 8 |
+| PATCH status → open on a triaged ticket creates no run | scenario 6 |
+| resolved triage: rerun allowed again | scenario 7 |
+| non-triaged ticket: rerun still works | scenario 1 (positive control) |
+| below-ceiling rerun allowed, creating exactly one run | scenario 1 |
+| rerun at `maxAttempts` rejected 409, creating no run | scenario 2 |
+| unauthorized ceiling edit 403, policy unchanged | scenario 4 |
+| ceiling edit preserves other policy fields, creates no run | scenario 4 |
+| the rerun guard reads the updated ceiling | scenario 3 |
+
+**Improved rather than ported literally.** The retired ceiling suite compared the policy
+against a hard-coded field list, which silently stops covering any field the policy
+gains. The replacement snapshots the policy **as the runtime normalized and stored it**
+before the edit and diffs every key, plus asserts the key count is unchanged so the edit
+cannot introduce a field either. (The first draft of this suite hard-coded field names
+too, and failed against `verificationTiming` — a field that does not exist. That is the
+same fragility, caught immediately.)
+
+**Where the triage comes from.** Scenario 5 is fully public: an ambiguous objective makes
+`createRunsForTicket` block the ticket through `blockTicketForObjectiveAmbiguity`, with
+required triage and zero runs, no test involvement. Scenario 8 needs a state the public
+API cannot reach in one step — a FAILED run whose parent ticket *also* carries unresolved
+ticket-level triage — and seeds it through `transitionTicketState`, the same repository
+call `blockTicketForNoModelRoute` makes, with the same patch and event type. The
+triage-producing paths themselves are covered by `ticket-feasibility-gate-test.js` and
+`runtime-feasibility-test.js`.
+
+**Three mutations, three layers, all killed:**
+
+| Mutation | Layer | Failed on |
+|----------|-------|-----------|
+| `triage-gate-never-fires` | the shared predicate, not one route | scenario 8 — the refusal loses its reason |
+| `attempt-ceiling-off-by-one` | `validateManualRerun` | scenario 2 — one extra attempt is granted |
+| `ceiling-edit-drops-other-policy-fields` | the ceiling-edit route | scenario 4 — every other policy field resets |
+
+The second is an off-by-one rather than a deletion on purpose: the ceiling still exists,
+still reports and still refuses eventually. A suite asserting "some rerun is eventually
+refused" survives it; one asserting the exact boundary does not.
+
+**`auto-retry-test.js` is deliberately NOT in this cluster, and here is where the next
+tranche should start.** Bounded automatic retry is the *automatic* counterpart of the
+same admission question and is live (`assessAutoRetryAfterFailureIfPolicyAllows`,
+`runAutoRetryAfterFailureIfPolicyAllows`), gated on `autoRetry === true`, a finite
+`maxAttempts`, no ticket triage, an individual-agent ticket, `mutationCount === 0`, and
+a prospective triage reason code of exactly `runtime_failed`.
+
+That last condition is the blocker, and it is a real one rather than an omission.
+`runtime_failed` is the **fallback** reason code (`buildRunTriage`: assigned only when no
+structured `failureKind` matched), so inducing it deterministically means finding a
+failure path that carries no failure kind at all. Every convenient failure does carry
+one: traversal → `protected_path` → `authority_blocked`; provider faults →
+`provider_error` → `provider_failed`; malformed model output →
+`MODEL_RESPONSE_CONTRACT_VIOLATION` → `model_contract_failed`. Identifying a deterministic
+`runtime_failed` producer is the first task of that tranche, not an afterthought inside
+this one — driving the retry with the wrong reason code would exercise the *ineligible*
+branch while appearing to cover the eligible one.
+
+### The remaining 56 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the

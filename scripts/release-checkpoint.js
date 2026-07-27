@@ -168,7 +168,11 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // A20 — replaces the five JSON-era er* recoverable-error orphans. Pins the one
   // discriminator that separates an environmental workspace failure (contained, the
   // model gets one more turn) from a policy refusal (terminal, recorded as blocked).
-  'workspace-error-containment-test.js'
+  'workspace-error-containment-test.js',
+  // A20 — replaces the three JSON-era rerun-gate orphans. The only coverage of what
+  // may start new work after a run stops: unresolved ticket triage and the attempt
+  // ceiling, on the rerun, retry and reopen paths.
+  'rerun-admission-gate-test.js'
 ]);
 
 function runCheckpoint() {
