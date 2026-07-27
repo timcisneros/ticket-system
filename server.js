@@ -4819,6 +4819,73 @@ function createLogTimestamp() {
 }
 
 let evidencePersistenceFailure = null;
+// Structured provenance for the FIRST latch only. The latch is process-wide and
+// terminal, so the error that set it is the only one that explains the outage —
+// everything after is a downstream "persistence unavailable". Without this the
+// repository could report THAT evidence persistence failed but never WHICH operation
+// failed or how PostgreSQL classified it, which is what made the liveness incident
+// undiagnosable. Codes and ids only: no payload contents, no secrets.
+let evidencePersistenceProvenance = null;
+let evidencePersistenceSubsequentFailures = 0;
+
+// PostgreSQL classes that are transient by contract. Recorded (not acted on here) so a
+// latch caused by a retryable condition is distinguishable from a permanent one.
+const TRANSIENT_POSTGRES_CODES = Object.freeze({
+  '40001': 'serialization_failure',
+  '40P01': 'deadlock_detected',
+  '55P03': 'lock_not_available',
+  '57014': 'statement_timeout',
+  '08000': 'connection_exception',
+  '08003': 'connection_does_not_exist',
+  '08006': 'connection_failure',
+  '53300': 'too_many_connections'
+});
+
+function classifyPersistenceError(error) {
+  const code = error && error.code ? String(error.code) : null;
+  if (code && TRANSIENT_POSTGRES_CODES[code]) {
+    return { kind: TRANSIENT_POSTGRES_CODES[code], retryable: true };
+  }
+  if (code && /^23/.test(code)) return { kind: 'integrity_constraint', retryable: false };
+  if (code && /^22/.test(code)) return { kind: 'data_exception', retryable: false };
+  if (code && /^42/.test(code)) return { kind: 'syntax_or_access_rule', retryable: false };
+  if (error instanceof TypeError || error instanceof RangeError) {
+    return { kind: 'application_validation', retryable: false };
+  }
+  return { kind: code ? 'unclassified_postgres' : 'application_error', retryable: false };
+}
+
+// Keyed on the PROVENANCE record, not on `evidencePersistenceFailure`, so the caller
+// can keep its own inline `evidencePersistenceFailure = error` assignment — the
+// fail-closed sequence that `mutation-admission-contract-test.js` pins in source.
+function recordEvidencePersistenceLatch(error, context) {
+  if (evidencePersistenceProvenance) {
+    evidencePersistenceSubsequentFailures += 1;
+    return;
+  }
+  const classification = classifyPersistenceError(error);
+  evidencePersistenceProvenance = {
+    at: new Date().toISOString(),
+    channel: context.channel,
+    operation: context.operation || null,
+    eventType: context.eventType || null,
+    runId: context.runId === undefined ? null : context.runId,
+    ticketId: context.ticketId === undefined ? null : context.ticketId,
+    code: error && error.code ? String(error.code) : null,
+    name: error && error.name ? String(error.name) : null,
+    // Bounded and sanitized: PostgreSQL messages for these classes carry relation and
+    // constraint names, not row payloads.
+    message: error && error.message ? String(error.message).slice(0, 300) : null,
+    routine: error && error.routine ? String(error.routine) : null,
+    constraint: error && error.constraint ? String(error.constraint) : null,
+    kind: classification.kind,
+    retryable: classification.retryable
+  };
+  console.error(`Evidence persistence latched [${classification.kind}] ` +
+    `code=${evidencePersistenceProvenance.code} channel=${context.channel} ` +
+    `event=${context.eventType || 'n/a'} run=${context.runId || 'n/a'}: ` +
+    `${evidencePersistenceProvenance.message}`);
+}
 const mutationAdmission = createMutationAdmissionController(MUTATION_ADMISSION_OPTIONS);
 const mutationAdmissionContext = new AsyncLocalStorage();
 
@@ -4928,6 +4995,13 @@ async function appendEvent(event = {}) {
       if (!error.statusCode) error.statusCode = 413;
       throw error;
     }
+    recordEvidencePersistenceLatch(error, {
+      channel: 'event_append',
+      operation: 'appendEvent',
+      eventType: typeof event.type === 'string' ? event.type : null,
+      runId: event.runId === undefined ? null : event.runId,
+      ticketId: event.ticketId === undefined ? null : event.ticketId
+    });
     if (!evidencePersistenceFailure) evidencePersistenceFailure = error;
     serverReady = false;
     if (runtimeScheduler && runtimeScheduler.isRunning()) runtimeScheduler.stop();
@@ -5358,6 +5432,8 @@ async function hydrateRunReplaySnapshots(runs, { limit = getRuntimeSchedulerCand
 
 async function resetDebugEventState() {
   evidencePersistenceFailure = null;
+  evidencePersistenceProvenance = null;
+  evidencePersistenceSubsequentFailures = 0;
 }
 
 function getRunLeaseDurationMs() {
@@ -7452,6 +7528,13 @@ async function getRuntimeStatusSnapshot({ afterId = 0, limit = 50 } = {}) {
       intervalMs: getPositiveIntegerEnv('RUNTIME_SCHEDULER_INTERVAL_MS', 500)
     },
     leaseOwner: RUN_LEASE_OWNER,
+    // Operator-visible latch provenance: which operation stopped the deployment, and
+    // whether PostgreSQL considered that failure transient.
+    eventPersistence: {
+      latched: Boolean(evidencePersistenceFailure),
+      firstFailure: evidencePersistenceProvenance,
+      subsequentFailures: evidencePersistenceSubsequentFailures
+    },
     concurrencyLimits: {
       scope: 'deployment',
       maxActiveRuns: getMaxActiveRunsLimit(runtimeLimitsConfig),

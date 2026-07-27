@@ -81,6 +81,9 @@ async function captureLivenessDiagnostics(label) {
       console.log('  pendingRuns:    ', (runtime.pendingRuns || []).length);
       console.log('  runningRuns:    ', (runtime.runningRuns || []).length);
       console.log('  expiredLeases:  ', JSON.stringify((runtime.expiredLeases || []).map(r => r.id)));
+      // The whole point of the hunt: WHICH operation latched evidence persistence, and
+      // whether PostgreSQL classified that failure as transient.
+      console.log('  eventPersistence:', JSON.stringify(runtime.eventPersistence));
     } else {
       console.log('  runtime status unavailable: HTTP', status.statusCode, String(status.body).slice(0, 200));
     }
