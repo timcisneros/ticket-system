@@ -197,14 +197,19 @@ async function main() {
       // entry lists and failed under checkpoint load for that reason, which was a fixture
       // defect, not a projection defect. The real contract is that a projection never
       // rewrites what it has already reported.
-      const firstById = new Map(deniedEntries.map(entry => [entry.id, entry]));
-      const changed = secondRead.filter(entry => {
-        const before = firstById.get(entry.id);
-        return before && JSON.stringify([before.type, before.status, before.details && before.details.rule]) !==
-                         JSON.stringify([entry.type, entry.status, entry.details && entry.details.rule]);
-      });
-      assert(changed.length === 0,
-        `1: entries already reported are never rewritten on a later read (${changed.length} changed)`);
+      // Scoped to the AUTHORITY entry this suite owns. A blanket "no entry ever changes"
+      // check is wrong twice over: the projection legitimately GROWS as terminal evidence
+      // lands, and `addEntry` deliberately ENRICHES an existing entry when a
+      // higher-priority source arrives for the same dedupe key, merging its details. Both
+      // are designed behaviour. What must never drift is the authority decision itself.
+      const firstAuthority = authorityEntry;
+      const secondAuthority2 = secondAuthority[0];
+      assert(secondAuthority2.id === firstAuthority.id && secondAuthority2.type === firstAuthority.type,
+        '1: the authority entry keeps its identity across reads');
+      assert(secondAuthority2.status === firstAuthority.status,
+        `1: and its decision (${firstAuthority.status} → ${secondAuthority2.status})`);
+      assert(secondAuthority2.details.rule === firstAuthority.details.rule,
+        `1: and its structured attribution (${firstAuthority.details.rule} → ${secondAuthority2.details.rule})`);
       assert(deniedEntries.every(entry => secondRead.some(later => later.id === entry.id)),
         '1: no previously reported entry disappears from a later read');
 

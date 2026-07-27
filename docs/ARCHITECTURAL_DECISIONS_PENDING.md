@@ -2977,6 +2977,28 @@ prior results into the next request. The first turn's operations still execute, 
 still records them, and later model calls still occur — only the model's knowledge is
 gone. Killed, with the run failing to converge exactly as the contract predicts.
 
+### Correction — timeline determinism assertion was over-strict, twice (2026-07-27)
+
+An assertion I added in `fb93128` failed under checkpoint load a second time, in a second
+way. Recorded because the pattern is the point.
+
+* **First over-reach:** it required identical entry LISTS across repeated reads. The
+  projection legitimately GROWS as terminal evidence lands, so it failed on growth.
+  Narrowed to "already-reported entries are never rewritten".
+* **Second over-reach:** that narrowed form still failed, because `addEntry` deliberately
+  ENRICHES an existing entry when a higher-priority source arrives for the same dedupe
+  key, merging details and keeping the stronger source. Designed behaviour — and the same
+  mechanism the receipt tranche relies on.
+
+Now scoped to the authority entry this suite owns: its identity, decision, and structured
+`rule` must not drift. Growth and enrichment elsewhere are permitted because they are what
+the projection is designed to do. The attribution mutation still kills.
+
+**The lesson:** "deterministic projection" is not "byte-identical output". A projection
+that merges evidence from several durable sources is deterministic *given the same
+inputs*, and its inputs keep arriving. Two failures were needed to state that precisely,
+and both were my assertion being wrong rather than the runtime.
+
 ### OPEN — model-contract mutating cap resolves to 8 instead of 2 (2026-07-27)
 
 **The armed diagnostics named it on the first recurrence.** `model-contract-violation-test.js`
