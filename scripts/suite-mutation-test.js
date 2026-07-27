@@ -600,6 +600,43 @@ const MUTATIONS = Object.freeze([
     find: '  const hasContentEvidence = hasReadPageText || maxElementCount >= 3 || hasScreenshot;',
     replace: '  const hasContentEvidence = hasReadPageText || hasScreenshot;',
     expect: 'a run that observed the page structure is reported as having insufficient evidence'
+  },
+  {
+    name: 'recoverable-workspace-error-terminates-run',
+    suite: 'workspace-error-containment-test.js',
+    file: 'server.js',
+    contract: 'an environmental workspace failure does not end the run',
+    // The carve-out stops matching, so every failure is terminal. A missing file the
+    // model could have worked around now kills the run — the regression the five
+    // retired er* suites were written for.
+    find: "          if (error.failureKind !== 'workspace_error') {",
+    replace: "          if (error.failureKind !== 'no-such-failure-kind') {",
+    expect: 'a readFile on a missing path fails the run instead of being reported back'
+  },
+  {
+    name: 'policy-refusal-treated-as-recoverable',
+    suite: 'workspace-error-containment-test.js',
+    file: 'server.js',
+    contract: 'a policy refusal ends the run rather than being handed back as feedback',
+    // The other direction of the same discriminator, and the more dangerous one: a
+    // refused path escape becomes ordinary feedback, the model is asked again, and a
+    // containment boundary turns into a retry loop.
+    find: "          if (error.failureKind !== 'workspace_error') {",
+    replace: "          if (error.failureKind === 'no-such-failure-kind') {",
+    expect: 'a path escaping the workspace root leaves the run alive for another turn'
+  },
+  {
+    name: 'missing-file-classified-as-policy-refusal',
+    suite: 'workspace-error-containment-test.js',
+    file: 'server.js',
+    contract: 'a missing file is an environmental failure, not a policy refusal',
+    // Aimed one layer below the branch above: the CLASSIFIER. The discriminator is
+    // untouched and still correct; it is simply told the wrong thing. The run dies and
+    // the record calls a missing file "blocked", which is what an operator would read
+    // as an authorization decision that never happened.
+    find: "    return createStructuredWorkspaceError(error.message, 'WORKSPACE_FS_ENOENT', 'workspace_error', {",
+    replace: "    return createStructuredWorkspaceError(error.message, 'WORKSPACE_FS_ENOENT', 'protected_path', {",
+    expect: 'a missing file is reported as a blocked policy refusal and fails the run'
   }
 ]);
 

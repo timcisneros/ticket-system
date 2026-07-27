@@ -164,7 +164,11 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // A20 — replaces the JSON-era browser-evidence-audit-test.js. Pins the durable
   // browser-evidence verdict in both places the runtime writes it, so a model's claim
   // of success can never stand in for captured page text or DOM observation.
-  'browser-evidence-verdict-test.js'
+  'browser-evidence-verdict-test.js',
+  // A20 — replaces the five JSON-era er* recoverable-error orphans. Pins the one
+  // discriminator that separates an environmental workspace failure (contained, the
+  // model gets one more turn) from a policy refusal (terminal, recorded as blocked).
+  'workspace-error-containment-test.js'
 ]);
 
 function runCheckpoint() {

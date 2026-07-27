@@ -3451,7 +3451,129 @@ makes that true — a single run carrying both text and a DOM inventory would su
 mutation on the strength of the other branch, which is the same defence-in-depth trap A20
 has now hit four times.
 
-### The remaining 64 — sequencing
+### Workspace-error cluster — RETIRED five `er*` orphans (2026-07-27)
+
+**Replaced by `workspace-error-containment-test.js` — 160 assertions, 10 scenarios,
+registered.** Orphan backlog 64 → 59.
+
+Retired together: `er1-readfile-recoverable-test.js`,
+`er2-createfolder-existing-file-recoverable-test.js`,
+`er2a-readfile-notafile-recoverable-test.js`,
+`er2b-writefile-notafile-recoverable-test.js`,
+`er2c-listdirectory-not-enoent-recoverable-test.js`.
+
+**They were five suites for one property, and that is why all five rotted together.**
+Each spawned its own server, seeded its own `DATA_DIR`, and asserted one shape of the
+same contract. Nothing tied them to each other, so nothing noticed when the cutover
+killed the whole family at once.
+
+**THE CONTRACT — the runtime must tell two kinds of failure apart:**
+
+| Class | `failureKind` | Required behavior |
+|-------|---------------|-------------------|
+| Environmental | `workspace_error` | run CONTINUES; failure recorded with `blocked: false`; reported back to the model |
+| Policy | `protected_path` | run FAILS; recorded with `blocked: true`; **no further turn** |
+
+The discriminator is one line in the action loop:
+`if (error.failureKind !== 'workspace_error') throw error;` (`server.js` ~20015).
+
+**It had no registered coverage of any kind.** Before this suite, no registered file in
+the repository referenced `workspace_error`, `WORKSPACE_FS_ENOENT` or
+`WORKSPACE_PATH_TYPE_CONFLICT` — only the five orphans did.
+
+**Both directions are defects, and the second is the worse one.** Treating environmental
+failure as terminal kills runs on a missing file the model could have worked around —
+the regression the er* family was written for. Treating a policy refusal as recoverable
+hands a refused request back to the model as ordinary feedback and lets it keep trying,
+turning a containment boundary into a retry loop. `workspace-authority-gate-test.js`
+proves protected paths are *refused*; nothing proved the refusal was **terminal**.
+
+**Live shapes, verified against the runtime before anything was written:**
+
+| Shape | Classification site | Contained? |
+|-------|--------------------|-----------|
+| `readFile` on a missing path | `createStructuredWorkspaceFsError` → `WORKSPACE_FS_ENOENT` | yes |
+| `readFile` on a directory | `WORKSPACE_PATH_TYPE_CONFLICT` | yes |
+| `writeFile` onto a directory | `WORKSPACE_PATH_TYPE_CONFLICT` | yes |
+| `createFolder` where a file exists | `WORKSPACE_PATH_TYPE_CONFLICT` | yes |
+| `listDirectory` on a file (ENOTDIR) | wrapped in the `listDirectory` catch | yes |
+| `readFile` escaping the root | `WORKSPACE_PATH_TRAVERSAL` / `protected_path` | **no** |
+| `writeFile` to a hidden path | `WORKSPACE_HIDDEN_PATH` / `protected_path` | **no** |
+
+*(`listDirectory` on a missing path is not an error at all — it returns
+`status: 'not_found'`, already covered by `carried-evidence-preservation-test.js`.)*
+
+**Historical assertion mapping — every live property has a destination:**
+
+| Retired assertion | Successor |
+|-------------------|-----------|
+| run completed / `terminalStatus` completed after a recoverable error | scenario 1, for all five shapes |
+| exactly one failed operation of that shape, carrying an error | scenario 3 |
+| `blocked === false` on a recoverable failure | scenario 3 |
+| no `run:step_limit` event | scenario 1 |
+| the follow-up action executed and its file exists | scenario 2 |
+| traversal: run failed, `terminalStatus` failed, `blocked === true` | scenario 6 |
+
+One historical assertion is **not** ported as written: er2/er2a/er2b/er2c each required the
+recovery action to be a `listDirectory`. Which operation the model chooses next is
+fixture detail, not contract; the live property is that a further action executed at all,
+which scenario 2 asserts through its durable receipt and its filesystem effect.
+
+**What the replacement adds that the originals could not:**
+
+- **The failure is REPORTED, not merely survived.** Scenario 4 asserts the structured
+  `previousActionResults` the runtime actually sent: the failed operation, the path it
+  attempted, and a non-empty reason — and no `result` alongside it. The stub is
+  state-driven, so a runtime that contains the error but says nothing cannot finish the
+  run at all.
+- **The refusal is terminal, proved by absence of both consequences.** Scenario 7
+  requires the policy runs to have received exactly one model turn and to have left no
+  follow-up file. A suite asserting only "the run failed" would survive the boundary
+  being downgraded to feedback if the retry happened to fail too.
+- **Containment reaches the filesystem.** Scenario 8 re-checks the workspace: the
+  directory a `writeFile` targeted is still a directory with its contents intact, the
+  file a `createFolder` targeted still holds its original bytes, the missing path was
+  not created, the hidden path was never written, and nothing landed outside the root.
+  "The run survived" is not the same as "nothing half-happened".
+- **A positive control.** One case reads a file that exists. Without it every assertion
+  above is satisfied by a runtime that fails every operation, because *contained* would
+  be indistinguishable from *broken*.
+- **No vacuous exit.** No skip path, no `NOT_PROVEN`, every wait throws on timeout, and
+  `assertScenariosExecuted` enforces a floor. The historical suites had none of this.
+
+**Three mutations, all killed, aimed at two different layers:**
+
+| Mutation | Layer | Failed on |
+|----------|-------|-----------|
+| `recoverable-workspace-error-terminates-run` | the discriminator branch | scenario 1 — a missing file kills the run |
+| `policy-refusal-treated-as-recoverable` | the same branch, inverted | scenario 6 — a path escape completes |
+| `missing-file-classified-as-policy-refusal` | the CLASSIFIER below it | scenario 1 — the branch is still correct, it is told the wrong thing |
+
+The third exists because the first two only prove the branch reads `failureKind`. It
+leaves the branch untouched and mislabels ENOENT upstream, so the run dies *and* the
+durable record calls a missing file "blocked" — which an operator would read as an
+authorization decision that never happened.
+
+**Assertion ordering was corrected, and the lesson is the same one the preflight tranche
+recorded.** The first version asserted the exact model-turn count in the hard floor, so
+two of the three mutations failed with *"expected 2 turns, got 1"* — true, and a
+description of the symptom rather than of the defect. The run's terminal status is
+observable however the conversation went, so it is checked first; the exact turn counts
+moved to the scenarios where they are the property under test.
+
+**Observation, recorded not fixed: the ENOENT message handed to the model contains the
+absolute host path.** `previousActionResults` carries the raw `fs` message, e.g.
+`ENOENT: no such file or directory, lstat '/tmp/tstharness-ws-69nVwM/absent.txt'`. The
+model is given the workspace root's real filesystem location, and that text goes to the
+external provider. Other surfaces redact deliberately — browser runs redact URLs and
+model prose — so this is an inconsistency rather than an established position. It is out
+of this cluster's scope and needs its own disposition: either the error is sanitized to
+the workspace-relative path before it reaches the prompt, or the disclosure is stated as
+intended. Not changed here, because the current text is what the retired suites and the
+replacement both assert against, and changing it silently would move a contract while
+claiming to cover it.
+
+### The remaining 59 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the
