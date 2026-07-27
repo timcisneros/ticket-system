@@ -3230,6 +3230,56 @@ the conversation, because corrective evidence is what drives the provider's next
 that coupling is inherent to a state-driven stub and is a strength, but it means the
 ordering of assertions determines which truth gets reported.)*
 
+### Next cluster — `browser-evidence-audit-test.js` (ANALYZED, NOT BUILT, 2026-07-27)
+
+Disposition: **REPLACE**. `classifyBrowserEvidence` (`server.js` ~6206) is live and has no
+registered coverage. Full semantics recorded here so the next tranche starts from the
+runtime rather than from the historical suite.
+
+**Gate:** `isBrowserRun(run)` requires `run.targetRef.kind === 'browser'` AND
+`run.browserTargetSnapshot`. Anything else → `not_applicable`.
+
+**Inputs:** `snapshot.browserOperations` and `snapshot.parsedModelPlans` only.
+
+**Decision order (first match wins):**
+
+| # | Condition | Status |
+|---|-----------|--------|
+| 1 | `browserOperations` empty | `objective_unverified` |
+| 2 | any `navigate` whose `receipt.metadata.finalUrl` contains `/sorry/`, `/captcha`, `/login`, `/signin`, `/403`, `/blocked` | `target_blocked_or_redirected` |
+| 3 | `readPageText` with `status==='ok'` and `receipt.metadata.bytes > 0`, **or** `observe` with `receipt.metadata.elementCount >= 3`, **or** `screenshot` with `status==='ok'` | `evidence_available` |
+| 4 | otherwise | `browser_evidence_insufficient` (detail differs when a plan had `complete: true`) |
+
+**The load-bearing property** is that step 3 requires REAL captured content. `complete:
+true` alone lands in step 4, and a bare `navigate` record does not satisfy step 3 — the
+model claiming success cannot manufacture evidence. Note `objective_unverified` is
+reached only via step 1 (no operations at all), so a suite must not expect it from a
+run that navigated but captured nothing; that case is `browser_evidence_insufficient`.
+
+**Durable path:** the verdict flows into `buildRunEvaluation` (~6169) → the run's
+`runEvaluation`, and `buildFinalizedRunReplayState` (~11661) → the finalized replay. Both
+are observable from the store after terminalization, so the suite can assert the DURABLE
+classification rather than calling the classifier directly.
+
+**Privacy contract respected by construction:** `evidence_available` is reachable through
+`readPageText` bytes or `observe` elementCount ≥ 3 — no screenshot fixture is needed or
+permitted. A negative assertion that no screenshot material appears keeps read-only text/DOM
+evidence distinct from forbidden image evidence.
+
+**Fixture route (avoids driving a real browser):** seed a run with a `targetRef`/
+`browserTargetSnapshot` plus a crafted replay snapshot, then finalize it through startup
+convergence — the mechanism `startup-state-convergence-test.js` already exercises — and
+read the durable evaluation. Cross-run isolation is proved by finalizing a second browser
+run whose evidence would satisfy the first.
+
+**Mutation target:** the step-3 predicate (`hasContentEvidence`), e.g. treating a bare
+navigate as content. That leaves the run and replay structurally valid and changes only
+the verdict, which is what the objective requires.
+
+**Not built here:** the session's context budget ran out at this point. Recording the
+runtime semantics is the expensive part of this cluster and it is done; the fixture is a
+short hop from the startup-convergence pattern.
+
 ### The remaining 65 — sequencing
 
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
