@@ -2506,6 +2506,60 @@ implement is flagged in place and linked to the open defect above rather than de
 retirement on a name search, and the document that would have "confirmed" the mechanism
 was gone was itself stale. Two independent stale sources agreeing is not corroboration.)*
 
+### OPEN PRODUCTION DEFECT — runs fail to reach terminal under bounded concurrency (2026-07-26)
+
+**This is escalation step 3 for `concurrency-conflict-test.js`,** per the rule recorded
+when the flake was first hit. The suite failed again during clean-worktree validation of
+`8638c51`, and this time not marginally: **10 hard failures, 7 not-proven, 16 scenarios**.
+The bounded-burst drain added in `25fd221` was never claimed as a cure; it is now
+definitively not one.
+
+**Captured evidence (from the failing run):**
+
+```
+✗ double rerun: FAIL — newRuns=2 stillRunning=0 r1=200 r2=200
+✗ stop vs rerun: NOT_PROVEN — base run did not reach terminal
+✗ allocated/dynamic non-overlap: FAIL — bothOk=null filesOk=false noFalseConflict=true
+✗ same-agent different-path runs isolated: NOT_PROVEN — base runs did not reach terminal
+✗ same-agent same-file conflict blocked: FAIL — statuses=[null,null] attributed=false cleanWrites=0
+✗ same-agent rerun isolation: NOT_PROVEN — base runs did not reach terminal
+✗ same-agent failure isolation: NOT_PROVEN — owner setup run did not complete (null)
+✗ permitted cross-ticket delete: NOT_PROVEN — owner run did not complete (null)
+✗ non-permitted cross-ticket delete blocked: NOT_PROVEN — owner run did not complete (null)
+✗ non-cross-ticket delete allowed without permission: NOT_PROVEN — run did not reach terminal
+```
+
+The signature is consistent and specific: **runs do not reach a terminal status at all**
+(`statuses=[null,null]`, `did not complete (null)`). This is a *progress* failure, not a
+correctness failure — the suite is not observing wrong conflict decisions, it is
+observing no decision, because the work never finishes.
+
+**Ruled out — the tidy explanation does not hold.** The obvious hypothesis was that this
+is the deadlock defect below: a deadlock latches `evidencePersistenceFailure`, the
+schedulers stop, and runs stall forever. That would explain everything. **It is not
+supported by the evidence:** the failing log contains no `deadlock`, `degraded`,
+`EVENT_PERSISTENCE_UNAVAILABLE`, or 503 signature anywhere. Two distinct problems
+surfaced in the same validation pass and must be investigated separately. Recorded
+explicitly because the unified story is attractive and wrong.
+
+**What must be captured next, per the escalation rule.** The rule requires blocked run
+states, scheduler state, leases, and admission counts, and the current suite reports
+none of them — it says a run did not reach terminal without saying what it was doing.
+`/api/runtime/status` already returns exactly the needed shape (`scheduler.running`,
+`concurrencyLimits.maxActiveRuns`, `localProcess.admittedRuns` / `startingRuns`,
+`activeRuns`, `pendingRuns`, `runningRuns`, `expiredLeases`). **Immediate next action:
+dump that snapshot plus the blocked runs' `status`/`leaseOwner`/`leaseExpiresAt` on
+failure.** That is diagnostic capture on the failure path only, which the rule asks for —
+it is not a retry and must not become one.
+
+**Still forbidden:** retries, softening `NOT_PROVEN`, broad timeout multiplication, or
+moving the suite out of the checkpoint. Three tranches have now been tempted by each.
+
+*(Not done in this session: the diagnostic capture is a change to a suite that only
+misbehaves under checkpoint load, and there was not enough remaining budget to validate
+it honestly. Recording it beats landing an unvalidated edit to the one suite whose
+signal is already hard to trust.)*
+
 ### OPEN PRODUCTION DEFECT — a PostgreSQL deadlock degrades the whole process (2026-07-26)
 
 Found during clean-worktree validation of `8638c51`, and it matters precisely because of
