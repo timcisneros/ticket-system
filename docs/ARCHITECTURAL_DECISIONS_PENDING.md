@@ -3266,11 +3266,30 @@ classification rather than calling the classifier directly.
 permitted. A negative assertion that no screenshot material appears keeps read-only text/DOM
 evidence distinct from forbidden image evidence.
 
-**Fixture route (avoids driving a real browser):** seed a run with a `targetRef`/
-`browserTargetSnapshot` plus a crafted replay snapshot, then finalize it through startup
-convergence — the mechanism `startup-state-convergence-test.js` already exercises — and
-read the durable evaluation. Cross-run isolation is proved by finalizing a second browser
-run whose evidence would satisfy the first.
+**Fixture route — the startup-convergence idea was TRIED AND DOES NOT WORK.** Seeding a
+browser-target run, terminalizing it with `store.transitionRun`, attaching a crafted
+replay snapshot and letting startup convergence finalize it leaves `run.runEvaluation`
+**unset**: convergence calls `finalizeTicketForRun`, which settles the TICKET, and never
+runs the run's terminal evaluation builders. A suite written that way times out waiting
+for an evaluation that is never built.
+
+The verdict is written by `buildRunEvaluation` (~6169) and `buildFinalizedRunReplayState`
+(~11661), both invoked on the runtime's own terminalization path. So the next attempt must
+either (a) drive a real run to terminalization through the runtime with a stubbed provider
+— the pattern `carried-evidence-preservation-test.js` uses — while giving the ticket a
+browser `targetRef`, or (b) find an operator-reachable route that re-derives the
+evaluation. Option (a) is the known-good shape; the open question is whether a browser
+run can be driven without a live browser process, since `isBrowserRun` needs
+`targetRef.kind === 'browser'` AND `browserTargetSnapshot` on the RUN, which the runtime
+populates from the ticket's target.
+
+**Scenario matrix (already designed, reusable):** no ops → `objective_unverified`;
+blocked navigate carrying text+DOM evidence → `target_blocked_or_redirected`, which is the
+precedence proof; `readPageText` bytes → `evidence_available`; `observe` elementCount 3 →
+`evidence_available`; navigate + `observe` 2 + `complete: true` → `browser_evidence_insufficient`,
+which is the "a claim is not evidence" proof; non-browser run → `not_applicable`. Assert
+BOTH `runEvaluation.browserEvidence.status` and the finalized replay's
+`browserEvidenceStatus`.
 
 **Mutation target:** the step-3 predicate (`hasContentEvidence`), e.g. treating a bare
 navigate as content. That leaves the run and replay structurally valid and changes only
