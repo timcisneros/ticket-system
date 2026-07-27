@@ -774,6 +774,8 @@ class PostgresRuntimeStore {
     this.schema = String(schema || 'ticket_system');
     this.schemaSql = quoteIdentifier(this.schema);
     this.lockTimeoutMs = positiveSafeInteger(lockTimeoutMs, 'lockTimeoutMs');
+    // Count of transaction retries absorbed by _retryTransientTransaction.
+    this.transientConflictRetries = 0;
     this.maxQueryRows = positiveSafeInteger(maxQueryRows, 'maxQueryRows');
     this.maxEligibleRunIds = positiveSafeInteger(maxEligibleRunIds, 'maxEligibleRunIds');
     this.maxJsonRecordBytes = positiveSafeInteger(maxJsonRecordBytes, 'maxJsonRecordBytes');
@@ -4437,6 +4439,11 @@ class PostgresRuntimeStore {
       } catch (error) {
         const code = error && error.code ? String(error.code) : null;
         if (attempt >= attempts || !RETRYABLE_TRANSACTION_CODES.has(code)) throw error;
+        // Observable so callers can distinguish "no conflict arose" from "a conflict
+        // arose and was absorbed". Without this the retry hides lock-ordering
+        // regressions: the append still succeeds, so nothing reports that the ordering
+        // guarantee was lost. Prevention and recovery are separate contracts.
+        this.transientConflictRetries += 1;
         // Exponential backoff with jitter so two conflicting writers do not retry in
         // lockstep and immediately re-conflict.
         const backoffMs = Math.min(120, 8 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 12);

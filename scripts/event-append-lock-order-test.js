@@ -131,6 +131,7 @@ async function main() {
     // appended — that is a plain wait, not a cycle, and the mutation survived it.
     scenariosRun += 1;
     const subject = await makeRun('subject');
+    const conflictsBeforeSubject = store.transientConflictRetries;
     const holder = await store.pool.connect();
     let appendError = null;
     let holderError = null;
@@ -173,6 +174,14 @@ async function main() {
       `2: the concurrent append succeeded once the run row was released (${appendError && appendError.message})`);
     assert(appended && appended.type === 'lock.concurrent',
       '2: and it returned the appended event');
+    // THE ORDERING CONTRACT ITSELF, not merely its symptom. The retry added for the
+    // liveness fix absorbs deadlocks, so "the append succeeded" no longer proves the
+    // locks were taken in a consistent order — it only proves the safety net works.
+    // Requiring ZERO absorbed conflicts separates prevention from recovery, and is what
+    // makes a lock-order regression detectable again.
+    assert(store.transientConflictRetries === conflictsBeforeSubject,
+      `2: the correctly ordered interleaving raised NO transaction conflict at all ` +
+      `(${store.transientConflictRetries - conflictsBeforeSubject} absorbed by retry)`);
 
     // ── 3. Nothing lost, nothing duplicated, chain still verifiable ─────────
     scenariosRun += 1;
@@ -230,6 +239,7 @@ async function main() {
     // deadlock at the SQL level, so a pass here is a retry, not an absent conflict.
     scenariosRun += 1;
     const victim = await makeRun('victim');
+    const conflictsBeforeVictim = store.transientConflictRetries;
     const blocker = await store.pool.connect();
     let victimError = null;
     let victimEvent = null;
@@ -270,12 +280,17 @@ async function main() {
       `5: the retry appended the event exactly once — a rolled-back transaction cannot duplicate (${retried.length})`);
     assert(verifyCurrentRunEventChain(victimEvents).chainValid,
       '5: the chain still verifies after a retried append');
+    // Proves the success above was a RETRY and not simply an absent conflict — the same
+    // observable that makes scenario 2 meaningful, used in the opposite direction.
+    assert(store.transientConflictRetries > conflictsBeforeVictim,
+      `5: a real transaction conflict was absorbed, so this is recovery rather than luck ` +
+      `(${store.transientConflictRetries - conflictsBeforeVictim} retries)`);
 
     assertScenariosExecuted({
       label: 'event append lock order',
       assertions: assert.count(),
       scenarios: scenariosRun,
-      minAssertions: 19,
+      minAssertions: 21,
       minScenarios: 5
     });
     console.log(`\nPASS: event append lock order — ${scenariosRun} scenarios, ${assert.count()} assertions (PostgreSQL-native)`);
