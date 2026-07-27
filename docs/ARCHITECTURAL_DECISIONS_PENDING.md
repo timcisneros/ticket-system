@@ -3283,6 +3283,40 @@ run can be driven without a live browser process, since `isBrowserRun` needs
 `targetRef.kind === 'browser'` AND `browserTargetSnapshot` on the RUN, which the runtime
 populates from the ticket's target.
 
+**FIXTURE SEAM PROBE — RESULT (2026-07-27).** The two boundaries are now traced:
+
+* **`browserTargetSnapshot`** is set on the run at creation from the ticket's browser
+  target (`server.js` ~14084, `normalizeBrowserTargetSnapshot`). A run only satisfies
+  `isBrowserRun` if it carries BOTH that snapshot and `targetRef.kind === 'browser'`.
+* **`browserOperations`** are not written by the suite anywhere in production — they are
+  appended during execution through the non-terminal evidence repository:
+  `completeActionReceipt({ …, replayKey: 'browserOperations', replayItem: evidence })`
+  (`server.js` ~17051). That is a real repository path a fixture could use.
+
+**But the public path cannot construct this fixture without a live browser.** Once
+`isBrowserRun(run)` is true, execution routes to the browser path, and
+`getOrCreateBrowserSession` (~17066) requires `run.browserTargetSnapshot.status === 'active'`
+and then calls `createBrowserSession(...)` — an actual browser process. A stub *provider*
+does not help: the provider is the model, not the browser. So:
+
+> A run cannot both satisfy `isBrowserRun` and reach the runtime's terminalization
+> builders unless a real browser session is created.
+
+That is the finding, recorded rather than worked around. The three routes the objective
+allowed resolve as: (a) preferred — real agent run with stub provider — **not possible**,
+because the browser branch demands a session; (b) local browser-target harness against a
+deterministic page — possible in principle, but requires a browser process in the test
+environment, which has not been established here; (c) a narrow test-only seam invoking
+normal terminalization with persisted browser evidence — the remaining option, and it
+should be justified by (a) being impossible rather than by convenience.
+
+**Recommended next step:** verify whether a headless browser is actually available to the
+suite environment (`docs/BROWSER_ENVIRONMENT.md`). If it is, route (b) gives a faithful
+fixture with text/DOM operations only and no seam is needed. If it is not, route (c) is
+justified and should persist `browserOperations` through `completeActionReceipt` — the
+production write path — so only the *triggering* of terminalization is test-only, never
+the evidence or the verdict.
+
 **Scenario matrix (already designed, reusable):** no ops → `objective_unverified`;
 blocked navigate carrying text+DOM evidence → `target_blocked_or_redirected`, which is the
 precedence proof; `readPageText` bytes → `evidence_available`; `observe` elementCount 3 →
