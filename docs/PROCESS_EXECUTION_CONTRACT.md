@@ -1,10 +1,12 @@
-# Bounded process execution contract — Tranche 2A0
+# Bounded process execution contract — Tranche 2A1
 
-Tranche 2A0 freezes executable-authority version 3 and the private immutable launch-plan
-contract. It does not provide a launcher, sandbox capability probe, materializer, or
-executor and cannot start a process. Version-1 and version-2 process-policy snapshots
-remain readable historical records and are permanently non-executable. A valid
-version-3 snapshot is necessary but not sufficient for future execution.
+Tranche 2A0 froze executable-authority version 3 and the private immutable launch-plan
+contract. Tranche 2A1 adds the trusted immutable execution-input materializer described
+in `docs/PROCESS_INPUT_MATERIALIZER.md`. It still provides no rootfs registry, sandbox
+capability probe, launcher, or executor and cannot start a process. Version-1 and
+version-2 process-policy snapshots remain readable historical records and are
+permanently non-executable. A valid version-3 snapshot and a materialized input are
+necessary but not sufficient for future execution.
 
 ## Authority
 
@@ -543,24 +545,25 @@ stream. Process output remains evidence and can never alter the prior authority 
 ## Immutable execution-input materialization
 
 Neither process authority nor a launch plan contains a mutable host workspace path. A
-future trusted materializer will run while holding the runtime mutation boundary and will:
+dedicated Rust materializer now runs while holding the PostgreSQL workspace-root mutation
+boundary and:
 
 - include only authorized regular files;
 - reject symlinks and special files;
-- exclude configured protected paths;
+- apply the separately versioned process-input exclusion policy;
 - enforce the snapshotted file-count and byte bounds;
-- create a launcher-private immutable tree;
+- create a service-owned sealed read-only tree;
 - hash a canonical file manifest; and
-- verify the source against the copied manifest before releasing the mutation boundary.
+- rescan and verify the source against the copied manifest before releasing the boundary.
 
-The materializer is not implemented in 2A0. Its trusted output descriptor is:
+Its trusted output descriptor is:
 
 ```json
 {
-  "id": "runtime-generated-opaque-id",
+  "id": "snapshot-lowercase-random-hex",
   "runId": 123,
   "policySnapshotHash": "lowercase-sha256",
-  "materializerGeneration": "materializer-001",
+  "materializerGeneration": "materializer-v1-lowercase-sha256",
   "manifestSha256": "lowercase-sha256",
   "fileCount": 123,
   "totalBytes": 456789
@@ -568,10 +571,13 @@ The materializer is not implemented in 2A0. Its trusted output descriptor is:
 ```
 
 The descriptor is bounded by the selected profile's immutable filesystem policy and
-bound to the run, process-policy snapshot, and sandbox-approved materializer generation.
-Tranche 2A1 must maintain a trusted registry mapping the opaque ID to a launcher-private
-immutable tree and revalidate every descriptor field. The descriptor is not a path and
-cannot select a mutable source location.
+bound to the run, process-policy snapshot, operation, and current materializer
+generation. A service-owned durable registry maps the opaque ID to sealed private state
+and `getSnapshot` revalidates every ownership field, manifest, count, and byte total.
+The descriptor is not a path and cannot select a mutable source location. The exact
+configuration, protocol, generation derivation, traversal/race rules, manifest, registry,
+sealing sequence, failures, and cross-UID release proof are specified in
+`docs/PROCESS_INPUT_MATERIALIZER.md`.
 
 ## Private launch-plan contract
 
@@ -695,7 +701,8 @@ mounts, no inherited sockets, and syscall filtering for external network familie
 host connection paths. The contract deliberately does not require denial of unnamed
 operation-local IPC such as Unix `socketpair`; that is not external communication and may
 be required by a configured runtime. Standard input remains disabled, no PTY may be
-allocated, and detached execution is forbidden. No enforcement exists in 2A0.
+allocated, and detached execution is forbidden. Process sandbox enforcement remains
+absent in 2A1.
 
 ## Future authenticated launcher boundary
 
@@ -722,12 +729,9 @@ No untrusted code may run before membership and every limit are active.
 
 ## Remaining tranche sequence
 
-- **2A1:** trusted immutable execution-input materializer and protected-path manifest.
 - **2A2:** rootfs deployment mapping, retention, manifest verification, and capability
   health contract.
 - **2A3:** launcher protocol/server and pre-execution cgroup barrier, still not connected
   to model dispatch.
-- **2A4:** kernel-backed namespace, filesystem, network, seccomp, cgroup/resource and
-  adversarial enforcement validation.
 - **2B:** connect authorized dispatch, durable start/terminal evidence, bounded output
   artifacts, cancellation/recovery, and execution idempotency.

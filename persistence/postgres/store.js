@@ -6188,6 +6188,14 @@ class PostgresRuntimeStore {
     }
   }
 
+  // The workspace-wide materialization boundary is the root-exclusive member
+  // of the same hierarchical advisory-lock family used by every path mutation.
+  // Normal mutations hold this root resource shared; materialization holds it
+  // exclusive across every PostgreSQL-connected runtime process.
+  async withWorkspaceMutationBoundary({ targetId }, operation) {
+    return this.withTargetOperationLock({ targetId, paths: [''] }, operation);
+  }
+
   async claimPendingRun({ leaseOwner, leaseDurationMs, eligibleRunIds = null, claimPayload = {} }) {
     const owner = String(leaseOwner || '').trim();
     if (!owner) throw new TypeError('leaseOwner is required');

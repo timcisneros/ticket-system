@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "excludedBasenames": [
+    ".git",
+    ".env",
+    ".local-artifacts",
+    ".local-data",
+    "ARCHIVE",
+    "artifacts",
+    "data",
+    "node_modules",
+    "replay-snapshots",
+    "runtime-state"
+  ],
+  "excludedBasenamePrefixes": [
+    ".env."
+  ],
+  "excludedPathPrefixes": [
+    ".runtime",
+    ".ticket-system",
+    "tmp/materializer",
+    "var/run"
+  ],
+  "excludedSuffixes": [
+    ".sock",
+    ".swp",
+    ".swo",
+    ".tmp",
+    "~"
+  ]
+}

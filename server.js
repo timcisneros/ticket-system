@@ -68,6 +68,7 @@ const {
   assertRunTerminalizationRepository,
   assertTicketRunLifecycleRepository,
   assertNonTerminalEvidenceRepository,
+  assertWorkspaceMutationBoundaryRepository,
   assertWorkspaceOwnershipRepository,
   assertOperatorRecoveryRepository,
   assertRunReplayRepository,
@@ -1633,6 +1634,7 @@ let runPhaseRepository = null;
 let runTerminalizationRepository = null;
 let ticketRunLifecycleRepository = null;
 let nonTerminalEvidenceRepository = null;
+let workspaceMutationBoundaryRepository = null;
 let workspaceOwnershipRepository = null;
 let operatorRecoveryRepository = null;
 let runReplayRepository = null;
@@ -6043,6 +6045,13 @@ function getNonTerminalEvidenceRepository() {
   if (nonTerminalEvidenceRepository) return nonTerminalEvidenceRepository;
   nonTerminalEvidenceRepository = assertNonTerminalEvidenceRepository(postgresRuntimeStore);
   return nonTerminalEvidenceRepository;
+}
+
+function getWorkspaceMutationBoundaryRepository() {
+  if (workspaceMutationBoundaryRepository) return workspaceMutationBoundaryRepository;
+  workspaceMutationBoundaryRepository =
+    assertWorkspaceMutationBoundaryRepository(postgresRuntimeStore);
+  return workspaceMutationBoundaryRepository;
 }
 
 function getWorkspaceOwnershipRepository() {
@@ -20919,7 +20928,9 @@ function applyWorkspaceFixture(fixtureId) {
 async function resetDebugData(changedBy = 'system') {
   await resetDebugEventState();
   const result = await postgresRuntimeStore.resetDevelopmentState({ changedBy });
-  clearWorkspaceRoot();
+  await getWorkspaceMutationBoundaryRepository().withWorkspaceMutationBoundary({
+    targetId: workspaceProvider.id
+  }, async () => clearWorkspaceRoot());
   runningRunKeys.clear();
   startingRunIds.clear();
   startingLocalModelRunIds.clear();
@@ -25591,41 +25602,46 @@ function workspaceApi(request, reply, permission, operation) {
   }
 }
 
-function operatorWorkspaceMutationApi(request, reply, operationName, args, affectedPaths, operation) {
+async function operatorWorkspaceMutationApi(request, reply, operationName, args, affectedPaths, operation) {
   if (!hasPermission(request.session.userId, 'workspace:write')) {
     reply.code(403);
     return { error: 'Permission denied' };
   }
 
   const requestedBy = request.user ? request.user.username : String(request.session.userId);
-  const preState = captureOperatorWorkspaceState(affectedPaths);
-  let result = null;
-  let error = null;
+  return getWorkspaceMutationBoundaryRepository().withTargetOperationLock({
+    targetId: workspaceProvider.id,
+    paths: affectedPaths
+  }, async () => {
+    const preState = captureOperatorWorkspaceState(affectedPaths);
+    let result = null;
+    let error = null;
 
-  try {
-    result = operation();
-    return result;
-  } catch (operationError) {
-    error = operationError;
-    reply.code(400);
-    return { error: error.message || 'Workspace operation failed' };
-  } finally {
-    const postState = captureOperatorWorkspaceState(affectedPaths);
-    appendSystemLog('workspace:operator_mutation', `Operator workspace ${operationName} by ${requestedBy}`, {
-      operation: operationName,
-      args: sanitizeSnapshotValue(args),
-      targetId: workspaceProvider.id,
-      targetKind: workspaceProvider.kind,
-      targetScope: workspaceProvider.scope
-    }, {
-      source: 'operator_workspace_api',
-      requestedBy,
-      preState,
-      postState,
-      result: result ? sanitizeSnapshotValue(result) : null,
-      error: error ? (error.message || String(error)) : null
-    });
-  }
+    try {
+      result = operation();
+      return result;
+    } catch (operationError) {
+      error = operationError;
+      reply.code(400);
+      return { error: error.message || 'Workspace operation failed' };
+    } finally {
+      const postState = captureOperatorWorkspaceState(affectedPaths);
+      await appendSystemLog('workspace:operator_mutation', `Operator workspace ${operationName} by ${requestedBy}`, {
+        operation: operationName,
+        args: sanitizeSnapshotValue(args),
+        targetId: workspaceProvider.id,
+        targetKind: workspaceProvider.kind,
+        targetScope: workspaceProvider.scope
+      }, {
+        source: 'operator_workspace_api',
+        requestedBy,
+        preState,
+        postState,
+        result: result ? sanitizeSnapshotValue(result) : null,
+        error: error ? (error.message || String(error)) : null
+      });
+    }
+  });
 }
 
 fastify.get('/workspace', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -25723,21 +25739,25 @@ fastify.post('/api/workspace/fixture', { preHandler: fastify.requireAuth }, asyn
       return { error: 'Unknown workspace fixture' };
     }
 
-    const requestedBy = request.user ? request.user.username : String(request.session.userId);
-    const preState = captureWorkspaceRootListing();
-    applyWorkspaceFixture(fixtureId);
-    const postState = captureWorkspaceRootListing();
-    appendSystemLog('workspace:fixture', `Workspace fixture reset: ${fixture.name}`, {
-      operation: 'resetWorkspaceFixture',
-      args: { fixtureId, workspaceRoot: workspaceProvider.root }
-    }, {
-      source: 'operator_workspace_fixture',
-      requestedBy,
-      preState,
-      postState
-    });
+    return await getWorkspaceMutationBoundaryRepository().withWorkspaceMutationBoundary({
+      targetId: workspaceProvider.id
+    }, async () => {
+      const requestedBy = request.user ? request.user.username : String(request.session.userId);
+      const preState = captureWorkspaceRootListing();
+      applyWorkspaceFixture(fixtureId);
+      const postState = captureWorkspaceRootListing();
+      await appendSystemLog('workspace:fixture', `Workspace fixture reset: ${fixture.name}`, {
+        operation: 'resetWorkspaceFixture',
+        args: { fixtureId, workspaceRoot: workspaceProvider.root }
+      }, {
+        source: 'operator_workspace_fixture',
+        requestedBy,
+        preState,
+        postState
+      });
 
-    return workspaceProvider.list('');
+      return workspaceProvider.list('');
+    });
   } catch (error) {
     reply.code(400);
     return { error: error.message || 'Workspace fixture reset failed' };

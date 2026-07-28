@@ -41,6 +41,7 @@ lerna-debug.log*
 dist
 dist-ssr
 *.local
+native/process-materializer/target/
 
 # TypeScript
 *.tsbuildinfo

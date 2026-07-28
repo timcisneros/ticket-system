@@ -4860,11 +4860,15 @@ referenced. Live host system directories and operator home directories cannot su
 An operator deployment mapping from rootfs ID to installed path is outside model input and
 outside live dispatch authority.
 
-**Execution input:** no mutable host workspace path appears in authority or launch plans.
-A later trusted materializer must hold the runtime mutation boundary, copy only authorized
-regular files, reject symlinks/special files, exclude protected paths, enforce file/byte
-bounds, create a launcher-private immutable tree, hash a canonical manifest, and verify
-source-versus-copy before release. Tranche 2A0 defines only its opaque descriptor.
+**Execution input (implemented in Tranche 2A1):** no mutable host workspace path appears
+in authority or launch plans. The Rust materializer holds the existing PostgreSQL
+workspace-root advisory-lock boundary, copies only regular files with descriptor-relative
+`openat2` traversal, rejects links and special files, applies a separate versioned
+read-exclusion policy, enforces file/byte bounds, creates a service-owned sealed tree,
+hashes the canonical output manifest, and rescans identity/type/size/content before
+publication. Its canonical fsynced private registry binds the opaque descriptor to the
+run, ticket, operation, policy hash, allocation, generation, manifest, and counts.
+`docs/PROCESS_INPUT_MATERIALIZER.md` is the governing design.
 
 **Read-only first launch:** `inputMode` is `materialized_read_only`; writable roots are
 empty and cannot be enabled. Writable process effects require a later independent
@@ -4893,8 +4897,8 @@ processPolicySnapshot}` context, derives operation identity from `(runId, operat
 and binds the workspace descriptor to the run, policy hash, and capability-approved
 materializer generation. The launch hash also binds the launcher protocol, launcher,
 sandbox backend, seccomp policy, rootfs-registry, and materializer generations. Tranche
-2A1 must provide a trusted opaque-workspace registry and revalidate every descriptor
-field; this entry does not authorize its implementation.
+2A1 now provides the trusted opaque-workspace registry and exact `getSnapshot`
+revalidation; launch-plan construction remains disconnected from dispatch.
 
 Launcher capacity is a pre-start `failed_to_start` cause and cannot be represented as
 `resource_limit_exceeded`, which is reserved for enforcement against an established
@@ -4906,9 +4910,15 @@ size of 2,097,152 bytes, no client host mount paths, raw sandbox options, raw cg
 or unsandboxed fallback. The mandatory barrier is create cgroup → set every limit → create blocked child
 → move and verify membership → release → execute.
 
-**Remaining sequence:** 2A1 materializer; 2A2 rootfs mapping/retention/capability health;
-2A3 authenticated launcher protocol and cgroup barrier; 2A4 kernel containment and
-adversarial proof; 2B dispatch/evidence/output/cancellation/recovery/execution idempotency.
+**Cross-UID release gate:** sealed ownership is not proven by same-UID chmod. The
+dedicated Linux test uses distinct materializer, runtime, and unauthorized UIDs and is
+mandatory whenever process execution is enabled. The present development host has
+neither root access nor subordinate UID mappings, so this proof is locally blocked and
+must not be reported as executed.
+
+**Remaining sequence:** 2A2 rootfs mapping/retention/capability health; 2A3 enforceable
+launcher and kernel containment; 2B
+dispatch/evidence/output/cancellation/recovery/execution idempotency.
 
 ---
 

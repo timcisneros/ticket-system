@@ -32,6 +32,17 @@ for (const required of [
   assert.equal(all.includes(required), true, `checkpoint must include ${required}`);
 }
 
+for (const materializerGate of [
+  'process-materializer-contract-test.js',
+  'process-materializer-native-test.js',
+  'process-materializer-linux-test.js',
+  'process-materializer-cross-uid-test.js',
+  'process-workspace-mutation-boundary-test.js'
+]) {
+  assert.equal(all.includes(materializerGate), true,
+    `process-input materialization releases must include ${materializerGate}`);
+}
+
 // A10 — the fourteen restored PostgreSQL runtime integrity suites are MANDATORY.
 //
 // This list is the anti-rot guard, not bookkeeping. These suites were orphaned by the
@@ -196,5 +207,6 @@ assert.match(packageJson.scripts['test:persistence:postgres'], /postgres-persist
 assert.match(packageJson.scripts['test:cutover:postgres'], /postgres-runtime-cutover-test\.js/);
 assert.match(packageJson.scripts['test:page-render:postgres'], /page-render-regression-test\.js/);
 assert.match(packageJson.scripts['checkpoint:release'], /release-checkpoint\.js/);
+assert.match(packageJson.scripts['test:materializer'], /process-materializer-cross-uid-test\.js/);
 
 console.log('PASS: release checkpoint coverage — current deterministic and real-Postgres boundaries are mandatory');

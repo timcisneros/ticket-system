@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "socketPath": "/run/ticket-system-process/materializer.sock",
+  "sealedSnapshotRoot": "/var/lib/ticket-system/process-inputs",
+  "allowedClientUid": 1000,
+  "inputPolicyPath": "/etc/ticket-system/process-input-policy.json",
+  "workspaceAllocations": [
+    {
+      "id": "primary-workspace",
+      "sourceRoot": "/srv/ticket-system/workspace"
+    }
+  ],
+  "protectedHostPaths": {
+    "runtimeData": [
+      "/var/lib/ticket-system/runtime"
+    ],
+    "artifacts": [
+      "/var/lib/ticket-system/artifacts"
+    ],
+    "database": [
+      "/run/postgresql"
+    ]
+  }
+}
