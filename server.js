@@ -31,6 +31,18 @@ const {
   resolveRunActionCaps,
   countResponseRejections
 } = require('./runtime/execution-semantics');
+const {
+  PROCESS_AUTHORITY_RULE,
+  PROCESS_OPERATION,
+  buildProcessPolicySnapshot,
+  isProcessContractFeatureEnabled,
+  normalizeProcessPolicySnapshot,
+  parseProcessOperationRequest,
+  processAuthorityReferences,
+  processResolutionError,
+  refuseProcessOperation,
+  resolveProcessOperationRequest
+} = require('./runtime/process-execution-contract');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -169,6 +181,7 @@ console.log(`persistence-backend=${RUNTIME_PERSISTENCE_BACKEND}`);
 
 const AGENT_ALLOWED_OPERATIONS = ['listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_BROWSER_OPERATIONS = ['navigate', 'observe', 'readPageText', 'screenshot', 'wait'];
+const AGENT_PROCESS_OPERATIONS = [PROCESS_OPERATION];
 // Navigation changes browser-session state and screenshots create artifacts. Pure
 // observation and bounded waits do not need to reserve worst-case event capacity
 // for the duration of the operation; their evidence append waits on record-sized capacity.
@@ -185,12 +198,16 @@ const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICA
 // adds a provider request before direct execution, so unrelated runs and their
 // request budgets retain the established behavior unless explicitly enabled.
 const MODEL_CONTRACT_COMPILER_ENABLED = process.env.ENABLE_MODEL_CONTRACT_COMPILER === 'true';
+// Tranche 0 freezes the request/authority/evidence contract only. The value is
+// captured in each run's immutable processPolicySnapshot; no live dispatch reads
+// this flag and no target/profile grants are created here.
+const PROCESS_EXECUTION_CONTRACT_ENABLED = isProcessContractFeatureEnabled();
 const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
   ...(AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED ? ['createWorkflowDraft'] : []),
   'createWorkflowDraftIntent'
 ];
 const AGENT_HANDOFF_OPERATIONS = ['createHandoffTask'];
-const AGENT_DIRECT_OPERATIONS = [...AGENT_ALLOWED_OPERATIONS, ...AGENT_WORKFLOW_DRAFT_OPERATIONS, ...AGENT_HANDOFF_OPERATIONS];
+const AGENT_DIRECT_OPERATIONS = [...AGENT_ALLOWED_OPERATIONS, ...AGENT_WORKFLOW_DRAFT_OPERATIONS, ...AGENT_HANDOFF_OPERATIONS, ...AGENT_PROCESS_OPERATIONS];
 const AGENT_MUTATING_OPERATIONS = ['createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_OPERATION_ARGS = {
   listDirectory: ['path'],
@@ -284,7 +301,7 @@ const EXECUTION_PHASES = ['planning', 'inspection', 'mutation', 'verification', 
 const PHASE_OPERATIONS = {
   planning: [],
   inspection: ['listDirectory', 'readFile', ...AGENT_BROWSER_OPERATIONS],
-  mutation: ['writeFile', 'createFolder', 'renamePath', 'deletePath', 'createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask'],
+  mutation: ['writeFile', 'createFolder', 'renamePath', 'deletePath', 'createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask', ...AGENT_PROCESS_OPERATIONS],
   verification: ['listDirectory', 'readFile', ...AGENT_BROWSER_OPERATIONS],
   terminalization: []
 };
@@ -1338,6 +1355,16 @@ const ACTIONS_CATALOG = [
     errorShape: { error: 'string' },
     authorityConstraints: 'Planner may create one validated writeFile handoff to one existing executor agent; runtime executes directly through workspace authority',
     provenanceSurface: 'Run replay snapshot handoffTasks, authorityChecks, workspaceOperations, PostgreSQL operation receipts, run.evaluation, run.consequence'
+  },
+  {
+    name: PROCESS_OPERATION, displayName: 'Run Process (Contract Only)', category: 'process', type: 'agentAction', invoker: 'agent', mutating: false,
+    requestShape: { targetId: 'string', profileId: 'string', operationId: 'string' },
+    inputSchema: { targetId: 'string', profileId: 'string', operationId: 'string' },
+    optionalShape: null,
+    responseShape: { disposition: 'disabled|policy_denied|unsupported', terminalOutcome: 'policy_denied|null' },
+    errorShape: { error: 'string', code: 'string' },
+    authorityConstraints: PROCESS_AUTHORITY_RULE.join(' ') + ' Tranche 0 has no executor.',
+    provenanceSurface: 'Immutable run processPolicySnapshot; authorityChecks; processOperations replay evidence; process.operation_resolution event'
   },
   {
     name: 'providerModelCall', displayName: 'Provider/Model Call', category: 'provider', invoker: 'agent', mutating: false,
@@ -10022,6 +10049,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
   const targetProvider = getRunWorkspaceProvider(run);
   const target = getTargetProviderDescriptor(targetProvider);
   const browserRun = isBrowserRun(run);
+  const processAuthority = processAuthorityReferences(run.processPolicySnapshot);
   return {
     version: 1,
     runId: run.id,
@@ -10033,9 +10061,15 @@ function createReplaySnapshotBase(run, overrides = {}) {
       mutatingOperations: [],
       requiredArgs: BROWSER_OPERATION_ARGS
     } : {
-      allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
+      allowedOperations: [
+        ...AGENT_ALLOWED_OPERATIONS,
+        ...(processAuthority.length > 0 ? AGENT_PROCESS_OPERATIONS : [])
+      ],
       mutatingOperations: [...AGENT_MUTATING_OPERATIONS],
-      requiredArgs: AGENT_OPERATION_ARGS
+      requiredArgs: AGENT_OPERATION_ARGS,
+      ...(processAuthority.length > 0
+        ? { processRequiredArgs: { [PROCESS_OPERATION]: ['targetId', 'profileId', 'operationId'] } }
+        : {})
     },
     workspaceRoot: run.workspaceRoot || workspaceProvider.root,
     mainWorkspaceRoot: run.mainWorkspaceRoot || workspaceProvider.root,
@@ -10045,6 +10079,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     targetProvider: target,
     executionWorkspaceType: run.executionWorkspaceType || 'main',
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
+    processPolicySnapshot: normalizeProcessPolicySnapshot(run.processPolicySnapshot),
     verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
     workTypeId: run.workTypeId || null,
     workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
@@ -12569,7 +12604,61 @@ function buildEffectiveRuntimeConfigSnapshot(agent, runtimeLimitsSnapshot = null
   };
 }
 
-async function assertAgentOperationAllowed(run, agent, operation, step) {
+async function authorizeProcessOperation(run, args, step) {
+  const action = { operation: PROCESS_OPERATION, args };
+  const resolution = resolveProcessOperationRequest(action, run.processPolicySnapshot);
+  const request = resolution.request.args;
+  const authorityEvidence = {
+    ...buildAuthorityEvidence(
+      run,
+      PROCESS_OPERATION,
+      null,
+      resolution.authorityStatus,
+      resolution.disposition === 'disabled' ? 'process_capability' : 'process_policy_snapshot',
+      resolution.message
+    ),
+    targetId: request.targetId,
+    profileId: request.profileId,
+    operationId: request.operationId,
+    policySnapshotHash: resolution.policySnapshotHash,
+    disposition: resolution.disposition,
+    terminalOutcome: resolution.terminalOutcome,
+    authorityRule: [...PROCESS_AUTHORITY_RULE]
+  };
+  await recordAuthorityEvidence(run, authorityEvidence);
+  const processEvidence = {
+    operationId: request.operationId,
+    runId: run.id,
+    ticketId: run.ticketId,
+    targetId: request.targetId,
+    profileId: request.profileId,
+    policySnapshotHash: resolution.policySnapshotHash,
+    terminalOutcome: resolution.terminalOutcome,
+    enforcementCause: {
+      kind: 'contract_resolution',
+      disposition: resolution.disposition,
+      errorCode: resolution.code,
+      authorityStatus: resolution.authorityStatus
+    }
+  };
+  await recordNonTerminalRunEvidence(run, {
+    category: 'process-operation',
+    slot: `agent:${step}:${request.operationId}:resolution`,
+    replayKey: 'processOperations',
+    replayItem: processEvidence,
+    eventType: 'process.operation_resolution',
+    stepId: String(step),
+    eventPayload: processEvidence
+  });
+  if (resolution.authorityStatus !== 'allowed') throw processResolutionError(resolution);
+  return resolution;
+}
+
+async function assertAgentOperationAllowed(run, agent, operation, step, args = {}) {
+  if (operation === PROCESS_OPERATION) {
+    await authorizeProcessOperation(run, args, step);
+    return;
+  }
   const configKeyByOperation = {
     createWorkflowDraft: 'allowCanonicalWorkflowDraft',
     createWorkflowDraftIntent: 'allowWorkflowDraftIntent',
@@ -14221,6 +14310,14 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
       ticket.executionPolicy,
       usesOwnedScope ? 'owned_paths' : 'shared'
     ),
+    // Tranche 0 has no target/profile catalog, so admission can capture only the
+    // feature state and an empty grant set. Future configuration resolution must
+    // populate this run-scoped snapshot here, never at action dispatch.
+    processPolicySnapshot: buildProcessPolicySnapshot({
+      capabilityEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED,
+      grants: [],
+      capturedAt: now
+    }),
     runtimeLimitsSnapshot,
     verificationContractSnapshot: buildVerificationContractSnapshot(workflow, now),
     acceptanceCriteriaSnapshot: (typeof ticket.acceptanceCriteria === 'string' && ticket.acceptanceCriteria.trim()) ? ticket.acceptanceCriteria.trim() : null,
@@ -14265,6 +14362,7 @@ function buildRunCreatedEventPayload(run) {
     capabilityId: run.capabilityId,
     workflowId: run.workflowId,
     executionPolicySnapshot: run.executionPolicySnapshot,
+    processPolicySnapshot: normalizeProcessPolicySnapshot(run.processPolicySnapshot),
     runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
     verificationContractSnapshot: run.verificationContractSnapshot,
     acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
@@ -14489,7 +14587,9 @@ async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLim
 
   const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
   const effectiveConfig = agent ? getAgentEffectiveRuntimeConfig(agent) : {};
+  const processTargets = processAuthorityReferences(run.processPolicySnapshot);
   const filteredOps = AGENT_DIRECT_OPERATIONS.filter(op => {
+    if (op === PROCESS_OPERATION) return processTargets.length > 0;
     for (const [configKey, operationName] of Object.entries(disabledConfigToOps)) {
       if (op === operationName && effectiveConfig[configKey] === false) return false;
     }
@@ -14512,6 +14612,7 @@ async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLim
     allocationItem: getRunAllocationItem(run),
     allocationSubtask: run.allocationSubtask || null,
     ownedOutputPaths: getRunOwnedOutputPaths(run),
+    ...(processTargets.length > 0 ? { processTargets } : {}),
     allowedOperations: filteredOps,
     maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
     maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,
@@ -14535,6 +14636,9 @@ async function buildSimulationRuntimeEnvelope(ticket, agent) {
 
   const effectiveConfig = agent ? getAgentEffectiveRuntimeConfig(agent) : {};
   const filteredOps = AGENT_DIRECT_OPERATIONS.filter(op => {
+    // Simulations are not admitted runs and therefore have no immutable process
+    // authority snapshot. A live feature flag alone must not advertise authority.
+    if (op === PROCESS_OPERATION) return false;
     for (const [configKey, operationName] of Object.entries(disabledConfigToOps)) {
       if (op === operationName && effectiveConfig[configKey] === false) return false;
     }
@@ -15709,6 +15813,8 @@ function parseAgentDirectAction(action) {
     error.code = 'AGENT_ACTION_MALFORMED';
     throw error;
   }
+
+  if (operation === PROCESS_OPERATION) return parseProcessOperationRequest(action);
 
   if (AGENT_ALLOWED_OPERATIONS.includes(operation)) return parseWorkspaceOperation(action);
 
@@ -18730,6 +18836,7 @@ async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rer
   const currentPhaseAllowedOps = getAllowedOperationsForPhase(currentPhase).filter(op => baseAllowedOps.includes(op));
   const includeWorkflowDraftPromptGuidance = isWorkflowDraftPromptObjective(ticket.objective);
   const includeHandoffPromptGuidance = isHandoffPromptObjective(ticket.objective);
+  const includeProcessPromptGuidance = baseAllowedOps.includes(PROCESS_OPERATION);
   const workflowDraftArgShape = AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED && includeWorkflowDraftPromptGuidance
     ? ',"workflow":"for createWorkflowDraft only"'
     : '';
@@ -18777,6 +18884,14 @@ async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rer
   const handoffArgReminder = includeHandoffPromptGuidance
     ? 'createHandoffTask args: { "executor":"agent name", "operation":"writeFile", "args":{"path":"relative/path","content":"exact content"} }.'
     : null;
+  const processGuidance = includeProcessPromptGuidance
+    ? [
+        ...PROCESS_AUTHORITY_RULE,
+        'For runProcess, select only a targetId/profileId pair listed in runtimeEnvelope.processTargets.',
+        'runProcess args must be exactly {"targetId":"existing target","profileId":"existing profile","operationId":"stable operation identity"}.',
+        'Never supply a command, executable path, arguments, environment values, working directory, shell syntax, redirection, pipeline, timeout, resource limit, background option, or detached option.'
+      ]
+    : [];
 
   return [
     {
@@ -18805,13 +18920,16 @@ async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rer
         'If you already performed inspection (listDirectory or readFile) and are now in the mutation phase, do not emit listDirectory or readFile again unless you are explicitly verifying results.',
         ...workflowDraftIntentGuidance,
         ...handoffGuidance,
+        ...processGuidance,
         ...canonicalWorkflowDraftGuidance,
         ...buildProfileGuidance(ticket.objective),
         ...buildTransitionGuidance(actionResults),
         'If runtimeEnvelope.ownedOutputPaths is not empty, all create/write/rename/delete actions must stay inside those owned paths.',
         'If runtimeEnvelope.allocationSubtask is present, perform that subtask and put all output under your owned paths.',
         'Each action must be exactly {"operation":"operationName","args":{...}} with no extra fields.',
-        'Required args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}. Use path "" only for the workspace root in listDirectory.',
+        'Required args: listDirectory {path}; readFile {path}; createFolder {path}; writeFile {path,content}; renamePath {path,nextPath}; deletePath {path}.' +
+          (includeProcessPromptGuidance ? '; runProcess {targetId,profileId,operationId}.' : '') +
+          ' Use path "" only for the workspace root in listDirectory.',
         ...(workflowDraftIntentArgReminder ? [workflowDraftIntentArgReminder] : []),
         ...(handoffArgReminder ? [handoffArgReminder] : []),
         'Respond only as JSON with this shape (the operation field lists the full operation vocabulary/schema, not the operations allowed in your current phase):',
@@ -19860,7 +19978,9 @@ async function runAgentTicket(runId) {
           await assertLiveRunLease(run.id);
           assertRunNotTimedOut(run, runStartedAtMs, limits);
           operation = isBrowserRun(run) ? parseBrowserDirectAction(run, action) : parseAgentDirectAction(action);
-          if (!isBrowserRun(run)) await assertAgentOperationAllowed(run, agent, operation.operation, step);
+          if (!isBrowserRun(run)) {
+            await assertAgentOperationAllowed(run, agent, operation.operation, step, operation.args);
+          }
 
           // Report budget limits: listDirectory and readFile
           if (operation.operation === 'listDirectory' && limits.maxListDirectoryPerRun != null) {
@@ -19907,6 +20027,11 @@ async function runAgentTicket(runId) {
                 actionIndex
               }
             });
+          } else if (operation.operation === PROCESS_OPERATION) {
+            // Authority was resolved and recorded immediately above. Tranche 0
+            // deliberately terminates here: this seam has no executor and cannot
+            // resolve or launch an executable.
+            result = refuseProcessOperation(operation, run.processPolicySnapshot);
           } else {
             result = await executeWorkspaceOperation(run, action, step, {
               slot: `agent:${step}:${actionIndex}`,

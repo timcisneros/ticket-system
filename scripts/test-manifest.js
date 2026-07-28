@@ -186,6 +186,8 @@ const TESTS = Object.freeze([
   { file: "postgres-startup-recovery-test.js", status: "required" },
   { file: "prefix-truncation-regression-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "prior-artifact-owner-retry-test.js", status: "orphaned", reason: "cutover-orphan" },
+  { file: "process-execution-contract-test.js", status: "required" },
+  { file: "process-execution-runtime-test.js", status: "required" },
   { file: "process-template-append-only-version-store-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "process-template-disable-pause-controls-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "process-template-state-observability-test.js", status: "orphaned", reason: "cutover-orphan" },
