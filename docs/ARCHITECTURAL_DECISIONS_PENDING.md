@@ -4810,6 +4810,28 @@ fail-closed change.
 
 ---
 
+## Process Profile Phase Snapshot Representation
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open — deliberately deferred by process-execution Tranche 0 on 2026-07-27 |
+| **Boundary** | Blocks Tranche 1 profile admission/advertising; does not block the executor-free Tranche 0 contract |
+| **Evidence** | `docs/PROCESS_EXECUTION_CONTRACT.md`; `runtime/process-execution-contract.js`; `server.js` `PHASE_OPERATIONS` |
+| **Decision required** | Choose the versioned per-profile phase/effect representation captured in `run.processPolicySnapshot` and its exact phase-authorization mapping |
+
+**Frozen rule:** a process profile declares its permitted runtime phase or effect
+classification; the run snapshot captures it; the envelope advertises `runProcess` in a
+phase only when a snapshotted profile permits that phase; and authorization rechecks the
+selected profile against the current phase.
+
+Tranche 0 intentionally defines no profiles or grants and assigns `runProcess` to no global
+phase. Before Tranche 1 can admit a profile, it must decide whether snapshots store explicit
+runtime phases or a stable effect classification mapped to phases, version that schema,
+and prove envelope filtering and authorization use the same captured value. Live target
+configuration must not participate after admission.
+
+---
+
 ## Workspace Operation Error Handling
 
 | Field | Value |

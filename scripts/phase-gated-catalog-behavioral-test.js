@@ -175,6 +175,19 @@ function testTransitionGuidanceAfterInspection() {
   console.log('  ✓ transition-guidance-after-inspection: fires after inspection, not after mutation');
 }
 
+// ── Test 6: process phase is profile-scoped, not global ───────────
+function testProcessHasNoGlobalPhaseClassification() {
+  const ctx = loadFunctions();
+  for (const [phase, operations] of Object.entries(ctx.PHASE_OPERATIONS)) {
+    assert(!operations.includes('runProcess'),
+      `runProcess must not be globally classified in ${phase}`);
+    assert(!operations.includes('...AGENT_PROCESS_OPERATIONS'),
+      `process operation spread must not be globally classified in ${phase}`);
+  }
+
+  console.log('  ✓ process-profile-phase: runProcess has no global phase classification');
+}
+
 // ── Main ─────────────────────────────────────────────────────────
 function main() {
   console.log('Phase-Gated Catalog Behavioral Test Suite');
@@ -185,7 +198,8 @@ function main() {
     testCatalogExposesMutationsAfterInspection,
     testCatalogIncludesInspectionInPlanning,
     testPromptIncludesPhaseGatedList,
-    testTransitionGuidanceAfterInspection
+    testTransitionGuidanceAfterInspection,
+    testProcessHasNoGlobalPhaseClassification
   ];
 
   let passed = 0;

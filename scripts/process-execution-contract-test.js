@@ -7,11 +7,16 @@ const path = require('path');
 const {
   PROCESS_AUTHORITY_RULE,
   PROCESS_EVIDENCE_CONTRACT,
+  PROCESS_IDENTIFIER_MAX_LENGTH,
+  PROCESS_INLINE_OUTPUT_MAX_BYTES,
   PROCESS_OPERATION,
+  PROCESS_PHASE_AUTHORITY_RULE,
   PROCESS_PRE_EXECUTION_EVIDENCE_FIELDS,
   PROCESS_TERMINAL_EVIDENCE_FIELDS,
   PROCESS_TERMINAL_OUTCOMES,
+  buildProcessOperationIdentity,
   buildProcessPolicySnapshot,
+  classifyProcessOperationIdReuse,
   isProcessContractFeatureEnabled,
   normalizeProcessPolicySnapshot,
   parseProcessOperationRequest,
@@ -53,6 +58,66 @@ const request = {
 };
 
 equal(parseProcessOperationRequest(request), request, 'well-formed runProcess request parses');
+
+for (const field of ['targetId', 'profileId', 'operationId']) {
+  for (const invalidValue of [
+    '',
+    '   ',
+    ` ${request.args[field]}`,
+    `${request.args[field]} `,
+    `${request.args[field]}\u0000`,
+    'UPPERCASE',
+    'slash/value',
+    'value:scope',
+    `a${'b'.repeat(PROCESS_IDENTIFIER_MAX_LENGTH)}`
+  ]) {
+    throwsCode(
+      () => parseProcessOperationRequest({
+        ...request,
+        args: { ...request.args, [field]: invalidValue }
+      }),
+      'PROCESS_REQUEST_MALFORMED',
+      `${field} rejects invalid identifier ${JSON.stringify(invalidValue)}`
+    );
+  }
+}
+const maximumIdentifier = `a${'b'.repeat(PROCESS_IDENTIFIER_MAX_LENGTH - 1)}`;
+equal(
+  parseProcessOperationRequest({
+    ...request,
+    args: { ...request.args, operationId: maximumIdentifier }
+  }).args.operationId,
+  maximumIdentifier,
+  'identifier at the maximum length is accepted without normalization'
+);
+
+const operationIdentity = buildProcessOperationIdentity(41, request.args.operationId);
+equal(buildProcessOperationIdentity(41, request.args.operationId), operationIdentity,
+  'run-scoped operation identity is deterministic');
+ok(buildProcessOperationIdentity(42, request.args.operationId) !== operationIdentity,
+  'the same operationId in another run has a distinct identity');
+equal(classifyProcessOperationIdReuse({
+  runId: 41,
+  requested: request.args
+}).status, 'new', 'first use of an operationId is new');
+equal(classifyProcessOperationIdReuse({
+  runId: 41,
+  requested: request.args,
+  existing: { ...request.args }
+}), {
+  status: 'idempotent_replay',
+  identity: operationIdentity,
+  request: request.args
+}, 'an exact repeated request has the same run-scoped canonical identity');
+throwsCode(
+  () => classifyProcessOperationIdReuse({
+    runId: 41,
+    requested: { ...request.args, profileId: 'different-profile' },
+    existing: request.args
+  }),
+  'PROCESS_OPERATION_ID_CONFLICT',
+  'conflicting reuse of one run-scoped operationId is rejected'
+);
 
 const enabledSnapshot = buildProcessPolicySnapshot({
   capabilityEnabled: true,
@@ -134,10 +199,24 @@ throwsCode(
   'enabling and authorizing the contract still cannot execute a process'
 );
 const contractSource = fs.readFileSync(path.join(ROOT, 'runtime/process-execution-contract.js'), 'utf8');
+const serverSource = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
 ok(!/require\s*\(\s*['"]child_process['"]\s*\)/.test(contractSource),
   'process contract imports no child_process API');
 ok(!/\b(?:spawn|execFile|exec)\s*\(/.test(contractSource),
   'process contract contains no process-launch call');
+const phaseCatalogSource = serverSource.match(/const PHASE_OPERATIONS = \{[\s\S]*?\n\};/);
+ok(Boolean(phaseCatalogSource) &&
+  !phaseCatalogSource[0].includes('runProcess') &&
+  !phaseCatalogSource[0].includes('AGENT_PROCESS_OPERATIONS'),
+'runProcess has no contradictory global phase catalog classification');
+const processCatalogSource = serverSource.match(
+  /name: PROCESS_OPERATION,[\s\S]*?provenanceSurface: 'Immutable run processPolicySnapshot[^']*'/
+);
+ok(Boolean(processCatalogSource) && !/\bmutating\s*:/.test(processCatalogSource[0]),
+  'runProcess has no global mutating boolean classification');
+ok(serverSource.includes('slot: `${operationIdentity}:resolution`') &&
+  !serverSource.includes('request.operationId}:resolution'),
+'evidence slots use the canonical run-scoped identity instead of raw operationId interpolation');
 
 for (const outcome of PROCESS_TERMINAL_OUTCOMES) {
   equal(validateProcessTerminalOutcome(outcome), outcome, `terminal outcome ${outcome} is accepted`);
@@ -158,9 +237,13 @@ const evidence = validateProcessEvidenceRecord({
   ticketId: 2,
   targetId: 'trusted-target',
   profileId: 'readonly-profile',
-  declaredEnvironmentVariableNames: ['SAFE_NAME', 'SECRET_NAME'],
   policySnapshotHash: enabledSnapshot.snapshotHash,
-  terminalOutcome: 'policy_denied'
+  terminalOutcome: 'policy_denied',
+  enforcementCause: {
+    kind: 'contract_resolution',
+    disposition: 'policy_denied',
+    errorCode: 'PROCESS_TARGET_UNKNOWN'
+  }
 });
 ok(Object.isFrozen(evidence), 'validated process evidence is immutable in memory');
 assert.throws(
@@ -169,6 +252,120 @@ assert.throws(
 );
 passed += 1;
 console.log('  ok secret environment values are outside the evidence schema');
+
+const preExecutionEvidence = {
+  operationId: 'operation-002',
+  runId: 1,
+  ticketId: 2,
+  targetId: 'trusted-target',
+  profileId: 'readonly-profile',
+  resolvedExecutable: '/trusted/bin/tool',
+  argumentVector: ['--bounded', 'value'],
+  workingDirectory: '/trusted/work',
+  declaredEnvironmentVariableNames: ['PATH', 'SAFE_NAME'],
+  policySnapshotHash: enabledSnapshot.snapshotHash,
+  startedAt: '2026-07-27T12:00:01.000Z'
+};
+equal(validateProcessEvidenceRecord(preExecutionEvidence), preExecutionEvidence,
+  'complete pre-execution evidence satisfies the structural contract');
+
+const completedEvidence = {
+  ...preExecutionEvidence,
+  finishedAt: '2026-07-27T12:00:02.000Z',
+  durationMs: 1000,
+  pid: 123,
+  processGroupId: 123,
+  exitCode: 0,
+  terminalOutcome: 'completed',
+  stdoutByteCount: 5,
+  stderrByteCount: 0,
+  stdoutTruncated: false,
+  stderrTruncated: false,
+  stdoutInline: 'done'
+};
+equal(validateProcessEvidenceRecord(completedEvidence), completedEvidence,
+  'well-formed completed evidence satisfies the structural contract');
+
+const terminalEvidenceByOutcome = {
+  completed: completedEvidence,
+  failed_to_start: {
+    ...preExecutionEvidence,
+    finishedAt: '2026-07-27T12:00:02.000Z',
+    durationMs: 1,
+    terminalOutcome: 'failed_to_start',
+    enforcementCause: { kind: 'start_error' }
+  },
+  exited_nonzero: { ...completedEvidence, terminalOutcome: 'exited_nonzero', exitCode: 2 },
+  signaled: {
+    ...completedEvidence,
+    terminalOutcome: 'signaled',
+    exitCode: null,
+    terminatingSignal: 'SIGTERM'
+  },
+  timed_out: {
+    ...completedEvidence,
+    terminalOutcome: 'timed_out',
+    enforcementCause: { kind: 'timeout' }
+  },
+  cancelled: {
+    ...completedEvidence,
+    terminalOutcome: 'cancelled',
+    enforcementCause: { kind: 'cancellation' }
+  },
+  output_limit_exceeded: {
+    ...completedEvidence,
+    terminalOutcome: 'output_limit_exceeded',
+    enforcementCause: { kind: 'output_limit' }
+  },
+  policy_denied: evidence,
+  runtime_interrupted: {
+    ...completedEvidence,
+    terminalOutcome: 'runtime_interrupted',
+    enforcementCause: { kind: 'runtime_interruption' }
+  }
+};
+for (const outcome of PROCESS_TERMINAL_OUTCOMES) {
+  equal(validateProcessEvidenceRecord(terminalEvidenceByOutcome[outcome]),
+    terminalEvidenceByOutcome[outcome],
+    `terminal evidence schema accepts a well-formed ${outcome} record`);
+}
+
+const malformedEvidenceCases = [
+  [{ ...preExecutionEvidence, runId: '1' }, 'string runId'],
+  [{ ...preExecutionEvidence, durationMs: -1 }, 'negative integer'],
+  [{ ...preExecutionEvidence, startedAt: 'not-a-timestamp' }, 'invalid timestamp'],
+  [{ ...preExecutionEvidence, argumentVector: ['ok', 1] }, 'non-string argument'],
+  [{ ...preExecutionEvidence, declaredEnvironmentVariableNames: ['SAFE=value'] }, 'environment value in names'],
+  [{ ...preExecutionEvidence, declaredEnvironmentVariableNames: ['SAFE', 'SAFE'] }, 'duplicate environment name'],
+  [{ ...preExecutionEvidence, terminalOutcome: null, stdoutTruncated: 'false' }, 'non-boolean truncation state'],
+  [{ ...preExecutionEvidence, terminalOutcome: undefined }, 'undefined instead of absent or null'],
+  [{ ...preExecutionEvidence, stdoutInline: 'inline', stdoutArtifactRef: 'artifact:stdout' }, 'dual stdout storage'],
+  [{ ...completedEvidence, stdoutInline: 'x'.repeat(PROCESS_INLINE_OUTPUT_MAX_BYTES + 1) }, 'unbounded inline output'],
+  [{ ...completedEvidence, stdoutInline: null, stdoutArtifactRef: '' }, 'empty artifact reference'],
+  [Object.fromEntries(Object.entries(preExecutionEvidence).filter(([key]) => key !== 'resolvedExecutable')), 'missing pre-execution field'],
+  [{ ...evidence, resolvedExecutable: '/must/not/resolve' }, 'policy denial with resolved executable'],
+  [{ ...completedEvidence, exitCode: 2 }, 'completed with nonzero exit'],
+  [{ ...completedEvidence, terminalOutcome: 'exited_nonzero', exitCode: 0 }, 'nonzero outcome with zero exit'],
+  [{ ...completedEvidence, terminalOutcome: 'signaled', exitCode: null, terminatingSignal: null }, 'signaled without signal'],
+  [{
+    ...completedEvidence,
+    terminalOutcome: 'failed_to_start',
+    pid: 123,
+    exitCode: null,
+    stdoutByteCount: null,
+    stderrByteCount: null,
+    stdoutTruncated: null,
+    stderrTruncated: null,
+    enforcementCause: { kind: 'start_error' }
+  }, 'failed-to-start with PID'],
+  [{ ...completedEvidence, terminalOutcome: 'timed_out', enforcementCause: null }, 'timeout without cause'],
+  [{ ...evidence, enforcementCause: { kind: 'denial', environment: { SECRET_NAME: 'secret' } } }, 'nested environment values']
+];
+for (const [malformed, label] of malformedEvidenceCases) {
+  assert.throws(() => validateProcessEvidenceRecord(malformed), TypeError);
+  passed += 1;
+  console.log(`  ok malformed evidence is rejected: ${label}`);
+}
 
 const mutableConfiguration = [{
   targetId: 'historical-target',
@@ -210,5 +407,11 @@ equal(PROCESS_AUTHORITY_RULE, [
   'The target configuration grants authority.',
   'Process output is evidence, not authority.'
 ], 'authority rule is exact');
+equal(PROCESS_PHASE_AUTHORITY_RULE, [
+  'A process profile declares its permitted runtime phase or effect classification.',
+  'The run snapshot captures that classification.',
+  'The runtime envelope may advertise runProcess in a phase only when at least one snapshotted profile is permitted in that phase.',
+  'Authorization must also verify that the selected profile is permitted in the current phase.'
+], 'future profile-scoped phase authority rule is exact');
 
 console.log(`\nPASS: process execution Tranche 0 contract — ${passed} assertions`);

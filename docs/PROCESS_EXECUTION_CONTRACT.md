@@ -29,8 +29,22 @@ used by process evidence. Later configuration changes cannot rewrite any of thos
 historical values.
 
 The capability gate is `ENABLE_PROCESS_EXECUTION_CONTRACT=true`. It is false by
-default. A process action is model-visible only when the run's captured snapshot says
-the capability was enabled and contains at least one explicit target/profile reference.
+default. Tranche 0 has no profile phase/effect classifications, so `runProcess` is not
+advertised in any executable phase even when this contract-only gate is enabled.
+
+Future phase authority follows this rule:
+
+> A process profile declares its permitted runtime phase or effect classification.
+>
+> The run snapshot captures that classification.
+>
+> The runtime envelope may advertise runProcess in a phase only when at least one
+> snapshotted profile is permitted in that phase.
+>
+> Authorization must also verify that the selected profile is permitted in the current
+> phase.
+
+`runProcess` therefore has no global inspection, mutation, or verification classification.
 
 ## Model request
 
@@ -51,6 +65,17 @@ Both the action object and `args` are closed schemas. The model cannot supply a 
 executable path, argument vector, environment, working directory, shell syntax,
 redirection, pipeline, timeout, resource limit, background option, or detached option.
 Trusted target configuration will resolve those values in a later tranche.
+
+All three identifiers use the existing target-slug character convention: lowercase ASCII
+letters, numbers, dots, underscores, and hyphens, beginning with a letter or number. They
+are nonempty, have no surrounding whitespace or control characters, and are limited to
+128 characters.
+
+`operationId` identifies one requested process operation within one run. The runtime
+derives a deterministic hash from `(runId, operationId)` for evidence-slot identity, so a
+raw model value is not interpolated into the slot. Repeating the same ID with the same
+target/profile is an idempotent replay; reusing it for a different target or profile in
+the same run is an idempotency conflict. The ID is not globally unique.
 
 In Tranche 0 a valid request has exactly one terminal dispatch disposition:
 
@@ -77,9 +102,13 @@ receipt outcomes (`succeeded`, `failed`, and `refused`) or run terminal statuses
 
 ## Evidence
 
-`runtime/process-execution-contract.js` is the machine-readable field authority.
-Fields unavailable for a particular outcome may be absent or null, consistent with
-current replay/event conventions.
+`runtime/process-execution-contract.js` is the machine-readable field authority and
+structural validator. Optional unavailable fields may be absent or null; required fields
+may not. The validator enforces identifiers, positive run/ticket IDs, canonical UTC
+timestamps, nonnegative numeric measurements, typed arrays and booleans, terminal
+outcome-specific requirements, and stdout/stderr inline-versus-artifact exclusivity.
+Inline stdout or stderr evidence has a hard 65,536-byte UTF-8 ceiling; larger output must
+use a bounded artifact reference.
 
 Pre-execution identity:
 
@@ -101,3 +130,13 @@ Terminal evidence:
 
 Process output is recorded only as bounded evidence. It cannot alter or justify the
 authority decision that preceded execution.
+
+Pre-execution evidence requires every pre-execution field. A `policy_denied` terminal
+record requires only the request identity, snapshot hash, outcome, and a structured
+enforcement cause, and forbids resolved executable/process/output fields. Other terminal
+records require the resolved pre-execution identity plus finish time and duration.
+Started-process outcomes require byte counts and truncation booleans. The validator also
+enforces the already-known distinctions for successful/nonzero exits, signals,
+failed-to-start records, and enforcement-caused outcomes. Environment evidence accepts
+names only; environment-variable values are forbidden, including inside structured
+causes.

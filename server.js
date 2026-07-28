@@ -34,14 +34,16 @@ const {
 const {
   PROCESS_AUTHORITY_RULE,
   PROCESS_OPERATION,
+  PROCESS_PHASE_AUTHORITY_RULE,
+  buildProcessOperationIdentity,
   buildProcessPolicySnapshot,
   isProcessContractFeatureEnabled,
   normalizeProcessPolicySnapshot,
   parseProcessOperationRequest,
-  processAuthorityReferences,
   processResolutionError,
   refuseProcessOperation,
-  resolveProcessOperationRequest
+  resolveProcessOperationRequest,
+  validateProcessEvidenceRecord
 } = require('./runtime/process-execution-contract');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
@@ -301,7 +303,7 @@ const EXECUTION_PHASES = ['planning', 'inspection', 'mutation', 'verification', 
 const PHASE_OPERATIONS = {
   planning: [],
   inspection: ['listDirectory', 'readFile', ...AGENT_BROWSER_OPERATIONS],
-  mutation: ['writeFile', 'createFolder', 'renamePath', 'deletePath', 'createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask', ...AGENT_PROCESS_OPERATIONS],
+  mutation: ['writeFile', 'createFolder', 'renamePath', 'deletePath', 'createWorkflowDraft', 'createWorkflowDraftIntent', 'createHandoffTask'],
   verification: ['listDirectory', 'readFile', ...AGENT_BROWSER_OPERATIONS],
   terminalization: []
 };
@@ -1357,13 +1359,14 @@ const ACTIONS_CATALOG = [
     provenanceSurface: 'Run replay snapshot handoffTasks, authorityChecks, workspaceOperations, PostgreSQL operation receipts, run.evaluation, run.consequence'
   },
   {
-    name: PROCESS_OPERATION, displayName: 'Run Process (Contract Only)', category: 'process', type: 'agentAction', invoker: 'agent', mutating: false,
+    name: PROCESS_OPERATION, displayName: 'Run Process (Contract Only)', category: 'process', type: 'agentAction', invoker: 'agent',
+    effectClassification: 'selected_profile_snapshot',
     requestShape: { targetId: 'string', profileId: 'string', operationId: 'string' },
     inputSchema: { targetId: 'string', profileId: 'string', operationId: 'string' },
     optionalShape: null,
     responseShape: { disposition: 'disabled|policy_denied|unsupported', terminalOutcome: 'policy_denied|null' },
     errorShape: { error: 'string', code: 'string' },
-    authorityConstraints: PROCESS_AUTHORITY_RULE.join(' ') + ' Tranche 0 has no executor.',
+    authorityConstraints: [...PROCESS_AUTHORITY_RULE, ...PROCESS_PHASE_AUTHORITY_RULE].join(' ') + ' Tranche 0 has no executor.',
     provenanceSurface: 'Immutable run processPolicySnapshot; authorityChecks; processOperations replay evidence; process.operation_resolution event'
   },
   {
@@ -10049,7 +10052,6 @@ function createReplaySnapshotBase(run, overrides = {}) {
   const targetProvider = getRunWorkspaceProvider(run);
   const target = getTargetProviderDescriptor(targetProvider);
   const browserRun = isBrowserRun(run);
-  const processAuthority = processAuthorityReferences(run.processPolicySnapshot);
   return {
     version: 1,
     runId: run.id,
@@ -10061,15 +10063,9 @@ function createReplaySnapshotBase(run, overrides = {}) {
       mutatingOperations: [],
       requiredArgs: BROWSER_OPERATION_ARGS
     } : {
-      allowedOperations: [
-        ...AGENT_ALLOWED_OPERATIONS,
-        ...(processAuthority.length > 0 ? AGENT_PROCESS_OPERATIONS : [])
-      ],
+      allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
       mutatingOperations: [...AGENT_MUTATING_OPERATIONS],
-      requiredArgs: AGENT_OPERATION_ARGS,
-      ...(processAuthority.length > 0
-        ? { processRequiredArgs: { [PROCESS_OPERATION]: ['targetId', 'profileId', 'operationId'] } }
-        : {})
+      requiredArgs: AGENT_OPERATION_ARGS
     },
     workspaceRoot: run.workspaceRoot || workspaceProvider.root,
     mainWorkspaceRoot: run.mainWorkspaceRoot || workspaceProvider.root,
@@ -12626,7 +12622,7 @@ async function authorizeProcessOperation(run, args, step) {
     authorityRule: [...PROCESS_AUTHORITY_RULE]
   };
   await recordAuthorityEvidence(run, authorityEvidence);
-  const processEvidence = {
+  const processEvidenceRecord = {
     operationId: request.operationId,
     runId: run.id,
     ticketId: run.ticketId,
@@ -12641,9 +12637,13 @@ async function authorizeProcessOperation(run, args, step) {
       authorityStatus: resolution.authorityStatus
     }
   };
+  const processEvidence = resolution.terminalOutcome === null
+    ? processEvidenceRecord
+    : validateProcessEvidenceRecord(processEvidenceRecord);
+  const operationIdentity = buildProcessOperationIdentity(run.id, request.operationId);
   await recordNonTerminalRunEvidence(run, {
     category: 'process-operation',
-    slot: `agent:${step}:${request.operationId}:resolution`,
+    slot: `${operationIdentity}:resolution`,
     replayKey: 'processOperations',
     replayItem: processEvidence,
     eventType: 'process.operation_resolution',
@@ -14587,9 +14587,10 @@ async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLim
 
   const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
   const effectiveConfig = agent ? getAgentEffectiveRuntimeConfig(agent) : {};
-  const processTargets = processAuthorityReferences(run.processPolicySnapshot);
   const filteredOps = AGENT_DIRECT_OPERATIONS.filter(op => {
-    if (op === PROCESS_OPERATION) return processTargets.length > 0;
+    // Tranche 0 has no snapshotted profile phase/effect classifications, so the
+    // contract operation is not advertised in any executable phase.
+    if (op === PROCESS_OPERATION) return false;
     for (const [configKey, operationName] of Object.entries(disabledConfigToOps)) {
       if (op === operationName && effectiveConfig[configKey] === false) return false;
     }
@@ -14612,7 +14613,6 @@ async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLim
     allocationItem: getRunAllocationItem(run),
     allocationSubtask: run.allocationSubtask || null,
     ownedOutputPaths: getRunOwnedOutputPaths(run),
-    ...(processTargets.length > 0 ? { processTargets } : {}),
     allowedOperations: filteredOps,
     maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
     maxMutatingActionsPerResponse: MAX_MUTATING_ACTIONS_PER_RESPONSE,

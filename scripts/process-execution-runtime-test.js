@@ -113,7 +113,7 @@ async function main() {
         };
       }
 
-      const processRun = await runPlan('policy-denied', {
+      const processRun = await runPlan('phase-unclassified', {
         message: 'Request the configured process contract target.',
         actions: [{
           operation: 'runProcess',
@@ -125,10 +125,8 @@ async function main() {
         }],
         complete: true
       });
-      assert(processRun.run.status === 'failed', 'enabled contract with no grant fails closed');
-      assert(processRun.run.errorCode === 'PROCESS_TARGET_UNKNOWN' ||
-        /not granted/i.test(String(processRun.run.error || '')),
-      'runtime preserves the typed unknown-target refusal');
+      assert(processRun.run.status === 'failed',
+        'enabled contract with no profile phase grant fails closed');
       assert(processRun.run.processPolicySnapshot.capabilityEnabled === true,
         'run records the enabled feature state at admission');
       assert(processRun.run.processPolicySnapshot.grants.length === 0,
@@ -137,18 +135,17 @@ async function main() {
         processRun.run.processPolicySnapshot.snapshotHash,
       'replay retains the exact admitted process-policy snapshot');
       assert(!processRun.replay.runtimeEnvelope.allowedOperations.includes('runProcess'),
-        'runProcess is not advertised without an explicit snapshot grant');
-      const denial = processRun.events.find(event => event.type === 'authority.denied');
-      assert(Boolean(denial) && denial.payload.rule === 'process_policy_snapshot',
-        'unknown target records an append-only process-policy authority denial');
-      const resolutionEvent = processRun.events.find(event => event.type === 'process.operation_resolution');
-      assert(Boolean(resolutionEvent) &&
-        resolutionEvent.payload.enforcementCause.errorCode === 'PROCESS_TARGET_UNKNOWN',
-      'typed process resolution is recorded in the append-only event chain');
-      assert(Array.isArray(processRun.replay.processOperations) &&
-        processRun.replay.processOperations.length === 1 &&
-        processRun.replay.processOperations[0].terminalOutcome === 'policy_denied',
-      'replay records one policy-denied process operation');
+        'runProcess is not advertised without a snapshotted profile phase grant');
+      const phaseViolation = processRun.events.find(event =>
+        event.type === 'execution.phase_violation' &&
+        event.payload &&
+        event.payload.actions.some(action => action.operation === 'runProcess'));
+      assert(Boolean(phaseViolation) && phaseViolation.payload.inferredPhase === 'mixed',
+        'unclassified runProcess request records an append-only phase violation');
+      assert(!processRun.events.some(event => event.type === 'process.operation_resolution'),
+        'unclassified runProcess cannot reach process authorization or dispatch');
+      assert(!Object.prototype.hasOwnProperty.call(processRun.replay, 'processOperations'),
+        'unclassified runProcess records no false process execution evidence');
       assert(processRun.operations.length === 0,
         'refused process contract creates no target-operation receipt or effect claim');
 
