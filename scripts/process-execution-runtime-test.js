@@ -9,13 +9,14 @@ const { withHarness, createAsserter, sleep } = require('./postgres-test-harness'
 const STAMP = Date.now();
 const assert = createAsserter();
 
-function encodePlan(plan) {
-  return Buffer.from(JSON.stringify(plan), 'utf8').toString('base64url');
+function encodePlans(plans) {
+  return Buffer.from(JSON.stringify(plans), 'utf8').toString('base64url');
 }
 
 function createFetchStub() {
   const preloadPath = path.join(os.tmpdir(), `process-contract-stub-${process.pid}-${STAMP}.js`);
   fs.writeFileSync(preloadPath, `
+const planIndexes = new Map();
 function response(plan) {
   return {
     ok: true,
@@ -37,12 +38,51 @@ global.fetch = async function(_url, options = {}) {
       .map(item => item && item.content ? String(item.content) : '')
       .join('\\n');
   } catch (_) {}
-  const match = combined.match(/#PLAN=([A-Za-z0-9_-]+=*)/);
+  const match = combined.match(/#PLANS=([A-Za-z0-9_-]+=*)/);
   if (!match) return response({ message: 'no plan', actions: [], complete: true });
-  return response(JSON.parse(Buffer.from(match[1], 'base64url').toString('utf8')));
+  const plans = JSON.parse(Buffer.from(match[1], 'base64url').toString('utf8'));
+  const index = planIndexes.get(match[1]) || 0;
+  planIndexes.set(match[1], index + 1);
+  return response(plans[Math.min(index, plans.length - 1)]);
 };
 `);
   return preloadPath;
+}
+
+function createCatalogFile() {
+  const catalogPath = path.join(os.tmpdir(), `process-targets-${process.pid}-${STAMP}.json`);
+  fs.writeFileSync(catalogPath, JSON.stringify({
+    version: 1,
+    targets: [{
+      id: 'ticket-system-local',
+      profiles: [{
+        id: 'inspection-check',
+        allowedPhases: ['inspection'],
+        executable: '/usr/bin/node',
+        arguments: ['--check', 'server.js'],
+        workingDirectory: '.',
+        environment: { CI: '1' },
+        limits: {
+          wallTimeMs: 30000,
+          maxOutputBytes: 1048576,
+          maxProcesses: 8
+        }
+      }, {
+        id: 'verification-check',
+        allowedPhases: ['verification'],
+        executable: '/usr/bin/node',
+        arguments: ['--check', 'server.js'],
+        workingDirectory: '.',
+        environment: { CI: '1' },
+        limits: {
+          wallTimeMs: 30000,
+          maxOutputBytes: 1048576,
+          maxProcesses: 8
+        }
+      }]
+    }]
+  }, null, 2));
+  return catalogPath;
 }
 
 async function waitFor(fn, timeoutMs, label) {
@@ -57,28 +97,45 @@ async function waitFor(fn, timeoutMs, label) {
 
 async function main() {
   const preloadPath = createFetchStub();
+  const catalogPath = createCatalogFile();
+  const catalogSource = fs.readFileSync(catalogPath, 'utf8');
   try {
     await withHarness('process execution runtime contract', async ({ store, workspaceRoot, startServer }) => {
-      const agent = (await store.createConfiguredAgent({
-        value: {
-          name: `ProcessContract-${STAMP}`,
-          provider: 'openai',
-          model: 'gpt-4.1-mini',
-          apiKey: 'test-key-process-contract'
-        },
-        groupIds: [],
-        changedBy: 'process-execution-runtime-test'
-      })).agent;
-      const server = await startServer({
+      async function createAgent(name, processProfileGrants) {
+        return (await store.createConfiguredAgent({
+          value: {
+            name: `${name}-${STAMP}`,
+            provider: 'openai',
+            model: 'gpt-4.1-mini',
+            apiKey: 'test-key-process-contract',
+            runtimeConfig: { processProfileGrants }
+          },
+          groupIds: [],
+          changedBy: 'process-execution-runtime-test'
+        })).agent;
+      }
+      const grantedAgent = await createAgent('ProcessGranted', [{
+        targetId: 'ticket-system-local',
+        profileIds: ['inspection-check', 'verification-check']
+      }]);
+      const ungrantedAgent = await createAgent('ProcessUngranted', []);
+      const invalidGrantAgent = await createAgent('ProcessInvalidGrant', [{
+        targetId: 'missing-target',
+        profileIds: ['inspection-check']
+      }]);
+
+      let server = await startServer({
         NODE_OPTIONS: `--require ${preloadPath}`,
         ENABLE_PROCESS_EXECUTION_CONTRACT: 'true',
+        PROCESS_TARGET_CATALOG_FILE: catalogPath,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000'
       });
-      const cookie = await server.login();
+      let cookie = await server.login();
+      fs.writeFileSync(path.join(workspaceRoot, 'inspection.txt'), 'inspection fixture');
 
-      async function runPlan(label, plan) {
-        const objective = `process-contract ${label} ${STAMP} #PLAN=${encodePlan(plan)}`;
+      async function runPlans(label, agent, plans) {
+        const objective = `process-contract ${label} ${STAMP} #PLANS=${encodePlans(plans)}`;
         const created = await server.request('POST', '/tickets', {
           cookie,
           form: {
@@ -113,64 +170,287 @@ async function main() {
         };
       }
 
-      const processRun = await runPlan('phase-unclassified', {
-        message: 'Request the configured process contract target.',
-        actions: [{
-          operation: 'runProcess',
-          args: {
-            targetId: 'local-workspace',
-            profileId: 'ungranted-profile',
-            operationId: `process-operation-${STAMP}`
-          }
-        }],
-        complete: true
+      const inspectionPlan = {
+        message: 'Enter inspection phase.',
+        actions: [{ operation: 'readFile', args: { path: 'inspection.txt' } }],
+        complete: false
+      };
+      const operationId = `process-operation-${STAMP}`;
+      const exactRequest = {
+        operation: 'runProcess',
+        args: {
+          targetId: 'ticket-system-local',
+          profileId: 'inspection-check',
+          operationId
+        }
+      };
+      const authorized = await runPlans('authorized-replay', grantedAgent, [
+        inspectionPlan,
+        {
+          message: 'Request the authorized inspection profile twice.',
+          actions: [exactRequest, structuredClone(exactRequest)],
+          complete: true
+        }
+      ]);
+      assert(authorized.run.status === 'failed',
+        'authorized process request terminates because the executor is unavailable');
+      assert(authorized.run.processPolicySnapshot.version === 2,
+        'admission stores a version-2 process policy snapshot');
+      assert(authorized.run.processPolicySnapshot.profiles.length === 2,
+        'exact trusted grants resolve both selected profiles and no others');
+      const inspectionProfile = authorized.run.processPolicySnapshot.profiles.find(profile =>
+        profile.profileId === 'inspection-check');
+      assert(inspectionProfile.executable === '/usr/bin/node' &&
+        inspectionProfile.arguments.join(' ') === '--check server.js' &&
+        inspectionProfile.environment.CI === '1',
+      'run snapshot contains complete resolved profile authority');
+      assert(inspectionProfile.executionPolicy.shell === false &&
+        inspectionProfile.executionPolicy.stdin === 'disabled' &&
+        inspectionProfile.executionPolicy.detached === false &&
+        inspectionProfile.executionPolicy.networkAccess === 'none' &&
+        inspectionProfile.executionPolicy.environmentMode === 'replace',
+      'run snapshot makes all fixed execution policy values explicit');
+      assert(authorized.replay.processPolicySnapshot.snapshotHash ===
+        authorized.run.processPolicySnapshot.snapshotHash,
+      'replay retains the exact admitted process snapshot and hash');
+
+      const runtimeEnvelopes = (authorized.replay.providerRequests || []).flatMap(request =>
+        request && request.body && Array.isArray(request.body.input)
+          ? request.body.input.map(item => {
+              try {
+                const parsed = JSON.parse(item.content);
+                return parsed.runtimeEnvelope || null;
+              } catch (_) {
+                return null;
+              }
+            }).filter(Boolean)
+          : []);
+      const inspectionEnvelope = runtimeEnvelopes.find(envelope =>
+        envelope.currentPhase === 'inspection');
+      assert(Boolean(inspectionEnvelope) &&
+        JSON.stringify(inspectionEnvelope.processTargets) === JSON.stringify([{
+          targetId: 'ticket-system-local',
+          profileIds: ['inspection-check']
+        }]) &&
+        JSON.stringify(inspectionEnvelope.processOperation) === JSON.stringify({
+          requiredArgs: ['targetId', 'profileId', 'operationId']
+        }),
+      'inspection envelope advertises only profiles permitted in inspection');
+      const providerEvidence = JSON.stringify(inspectionEnvelope);
+      for (const hiddenValue of ['/usr/bin/node', '--check', '1048576']) {
+        assert(!providerEvidence.includes(hiddenValue),
+          `model envelope does not expose trusted authority material ${hiddenValue}`);
+      }
+
+      const resolutions = authorized.events.filter(event =>
+        event.type === 'process.operation_resolution');
+      assert(resolutions.length === 1,
+        'exact operation-ID replay appends no duplicate resolution event');
+      assert((authorized.replay.processOperations || []).length === 1,
+        'exact operation-ID replay appends no duplicate replay resolution');
+      const allowed = authorized.events.find(event =>
+        event.type === 'authority.allowed' &&
+        event.payload && event.payload.operationId === operationId);
+      assert(Boolean(allowed) && allowed.payload.runtimePhase === 'inspection',
+        'authorized request records authority.allowed in the selected runtime phase');
+      const failedEvent = authorized.events.find(event =>
+        event.type === 'run.failed' || event.type === 'run:failed');
+      assert(authorized.events.some(event =>
+        JSON.stringify(event.payload || {}).includes('PROCESS_EXECUTOR_UNAVAILABLE')) ||
+        (failedEvent && JSON.stringify(failedEvent).includes('PROCESS_EXECUTOR_UNAVAILABLE')),
+      'authorized request terminates with PROCESS_EXECUTOR_UNAVAILABLE');
+      assert(!authorized.operations.some(operation =>
+        operation && operation.operation === 'runProcess'),
+      'authorized request creates no process target-operation receipt');
+      assert(!authorized.events.some(event =>
+        ['process.started', 'process.output', 'process.completed'].includes(event.type)),
+      'authorization creates no process-start, PID, or output evidence');
+
+      const wrongPhase = await runPlans('wrong-phase', grantedAgent, [
+        inspectionPlan,
+        {
+          message: 'Request a verification-only profile during inspection.',
+          actions: [{
+            operation: 'runProcess',
+            args: {
+              targetId: 'ticket-system-local',
+              profileId: 'verification-check',
+              operationId: `wrong-phase-${STAMP}`
+            }
+          }],
+          complete: true
+        }
+      ]);
+      assert(wrongPhase.events.some(event =>
+        event.type === 'authority.denied' &&
+        event.payload && event.payload.disposition === 'policy_denied' &&
+        event.payload.runtimePhase === 'inspection'),
+      'wrong-phase request records authority.denied');
+      assert(wrongPhase.events.some(event =>
+        event.type === 'process.operation_resolution' &&
+        event.payload && event.payload.enforcementCause &&
+        event.payload.enforcementCause.errorCode === 'PROCESS_PHASE_DENIED'),
+      'wrong-phase profile produces PROCESS_PHASE_DENIED rather than unknown profile');
+
+      const unknownTarget = await runPlans('unknown-target', grantedAgent, [
+        inspectionPlan,
+        {
+          message: 'Request an unknown target.',
+          actions: [{
+            operation: 'runProcess',
+            args: {
+              targetId: 'unknown-target',
+              profileId: 'inspection-check',
+              operationId: `unknown-target-${STAMP}`
+            }
+          }],
+          complete: true
+        }
+      ]);
+      assert(unknownTarget.events.some(event =>
+        event.type === 'process.operation_resolution' &&
+        event.payload.enforcementCause.errorCode === 'PROCESS_TARGET_UNKNOWN'),
+      'unknown process target remains a distinct typed denial');
+
+      const unknownProfile = await runPlans('unknown-profile', grantedAgent, [
+        inspectionPlan,
+        {
+          message: 'Request an unknown profile.',
+          actions: [{
+            operation: 'runProcess',
+            args: {
+              targetId: 'ticket-system-local',
+              profileId: 'unknown-profile',
+              operationId: `unknown-profile-${STAMP}`
+            }
+          }],
+          complete: true
+        }
+      ]);
+      assert(unknownProfile.events.some(event =>
+        event.type === 'process.operation_resolution' &&
+        event.payload.enforcementCause.errorCode === 'PROCESS_PROFILE_UNKNOWN'),
+      'unknown process profile remains a distinct typed denial');
+
+      const conflictId = `conflict-${STAMP}`;
+      const conflict = await runPlans('operation-conflict', grantedAgent, [
+        inspectionPlan,
+        {
+          message: 'Attempt conflicting reuse.',
+          actions: [{
+            operation: 'runProcess',
+            args: {
+              targetId: 'ticket-system-local',
+              profileId: 'inspection-check',
+              operationId: conflictId
+            }
+          }, {
+            operation: 'runProcess',
+            args: {
+              targetId: 'ticket-system-local',
+              profileId: 'verification-check',
+              operationId: conflictId
+            }
+          }],
+          complete: true
+        }
+      ]);
+      assert((conflict.replay.processOperations || []).length === 1,
+        'conflicting operation-ID reuse cannot append a second resolution');
+      assert(conflict.events.some(event =>
+        JSON.stringify(event.payload || {}).includes('PROCESS_OPERATION_ID_CONFLICT')),
+      'conflicting operation-ID reuse terminates with PROCESS_OPERATION_ID_CONFLICT');
+
+      const originalSnapshot = JSON.stringify(authorized.run.processPolicySnapshot);
+      const originalHash = authorized.run.processPolicySnapshot.snapshotHash;
+      fs.writeFileSync(catalogPath, JSON.stringify({ version: 1, targets: [] }));
+      await store.updateConfiguredAgent({
+        agentId: grantedAgent.id,
+        expectedRevision: grantedAgent.revision,
+        value: {
+          ...grantedAgent,
+          runtimeConfig: { processProfileGrants: [] }
+        },
+        groupIds: [],
+        changedBy: 'process-execution-runtime-test'
       });
-      assert(processRun.run.status === 'failed',
-        'enabled contract with no profile phase grant fails closed');
-      assert(processRun.run.processPolicySnapshot.capabilityEnabled === true,
-        'run records the enabled feature state at admission');
-      assert(processRun.run.processPolicySnapshot.grants.length === 0,
-        'enabled feature snapshot records no implicit grants');
-      assert(processRun.replay.processPolicySnapshot.snapshotHash ===
-        processRun.run.processPolicySnapshot.snapshotHash,
-      'replay retains the exact admitted process-policy snapshot');
-      assert(!processRun.replay.runtimeEnvelope.allowedOperations.includes('runProcess'),
-        'runProcess is not advertised without a snapshotted profile phase grant');
-      const phaseViolation = processRun.events.find(event =>
-        event.type === 'execution.phase_violation' &&
-        event.payload &&
-        event.payload.actions.some(action => action.operation === 'runProcess'));
-      assert(Boolean(phaseViolation) && phaseViolation.payload.inferredPhase === 'mixed',
-        'unclassified runProcess request records an append-only phase violation');
-      assert(!processRun.events.some(event => event.type === 'process.operation_resolution'),
-        'unclassified runProcess cannot reach process authorization or dispatch');
-      assert(!Object.prototype.hasOwnProperty.call(processRun.replay, 'processOperations'),
-        'unclassified runProcess records no false process execution evidence');
-      assert(processRun.operations.length === 0,
-        'refused process contract creates no target-operation receipt or effect claim');
+      const reread = await store.getRun(authorized.run.id);
+      assert(JSON.stringify(reread.processPolicySnapshot) === originalSnapshot &&
+        reread.processPolicySnapshot.snapshotHash === originalHash,
+      'later catalog and agent-grant mutation cannot rewrite an admitted run snapshot');
+
+      const invalidObjective = `process-contract invalid-grant ${STAMP}`;
+      const invalidAdmission = await server.request('POST', '/tickets', {
+        cookie,
+        form: {
+          objective: invalidObjective,
+          assignmentTargetType: 'agent',
+          assignmentTargetId: String(invalidGrantAgent.id),
+          assignmentMode: 'individual'
+        }
+      });
+      assert(invalidAdmission.statusCode >= 400,
+        'unknown trusted target grant fails closed during admission');
+      const invalidTicket = (await store.listTickets({ limit: 100 })).tickets.find(ticket =>
+        ticket.objective === invalidObjective);
+      const invalidRuns = invalidTicket
+        ? (await store.listRunsForTicket({ ticketId: invalidTicket.id, limit: 10 })).runs
+        : [];
+      assert(invalidRuns.length === 0,
+        'invalid trusted grant creates no run with partial authority');
 
       const outputPath = `process-contract-fs-control-${STAMP}.txt`;
-      const filesystemRun = await runPlan('filesystem-control', {
+      const filesystem = await runPlans('filesystem-control', ungrantedAgent, [{
         message: 'Write the filesystem positive control.',
         actions: [{
           operation: 'writeFile',
           args: { path: outputPath, content: 'filesystem-unchanged' }
         }],
         complete: true
-      });
-      assert(filesystemRun.run.status === 'completed',
-        'ordinary filesystem operation remains executable with process contract enabled');
+      }]);
+      assert(filesystem.run.status === 'completed',
+        'ordinary filesystem behavior remains unchanged');
       assert(fs.readFileSync(path.join(workspaceRoot, outputPath), 'utf8') === 'filesystem-unchanged',
-        'ordinary filesystem operation preserves its target behavior');
-      assert(!filesystemRun.replay.runtimeEnvelope.allowedOperations.includes('runProcess'),
-        'filesystem run receives no implicit process operation');
-      assert(!Object.prototype.hasOwnProperty.call(filesystemRun.replay, 'processOperations'),
-        'filesystem replay receives no process-operation evidence');
+        'ordinary filesystem operation still produces its expected effect');
+      assert(filesystem.run.processPolicySnapshot.profiles.length === 0 &&
+        !JSON.stringify(filesystem.replay.providerRequests || []).includes('runProcess'),
+      'an ungranted existing agent receives no implicit process authority');
+
+      fs.writeFileSync(catalogPath, catalogSource);
+      await server.stop();
+      const disabledAgent = await createAgent('ProcessFeatureDisabled', [{
+        targetId: 'ticket-system-local',
+        profileIds: ['inspection-check']
+      }]);
+      server = await startServer({
+        NODE_OPTIONS: `--require ${preloadPath}`,
+        ENABLE_PROCESS_EXECUTION_CONTRACT: 'false',
+        PROCESS_TARGET_CATALOG_FILE: catalogPath,
+        RUNTIME_SCHEDULER_INTERVAL_MS: '200',
+        RUN_LEASE_DURATION_MS: '60000'
+      });
+      cookie = await server.login();
+      const disabledPath = `process-contract-disabled-${STAMP}.txt`;
+      const disabled = await runPlans('feature-disabled', disabledAgent, [{
+        message: 'Write the feature-disabled positive control.',
+        actions: [{
+          operation: 'writeFile',
+          args: { path: disabledPath, content: 'disabled' }
+        }],
+        complete: true
+      }]);
+      assert(disabled.run.processPolicySnapshot.capabilityEnabled === false &&
+        disabled.run.processPolicySnapshot.profiles.length === 0,
+      'feature-disabled admission stores no process authority despite configured grants');
+      assert(!JSON.stringify(disabled.replay.providerRequests || []).includes('runProcess'),
+        'feature-disabled model envelopes never advertise runProcess');
 
       console.log(`\nPASS: process execution runtime contract — ${assert.count()} assertions (PostgreSQL-native)`);
     }, { schemaSlug: 'process_execution_runtime' });
   } finally {
-    try { fs.unlinkSync(preloadPath); } catch (_) { /* best effort */ }
+    for (const filePath of [preloadPath, catalogPath]) {
+      try { fs.unlinkSync(filePath); } catch (_) { /* best effort */ }
+    }
   }
 }
 

@@ -14,10 +14,12 @@ const {
   PROCESS_PRE_EXECUTION_EVIDENCE_FIELDS,
   PROCESS_TERMINAL_EVIDENCE_FIELDS,
   PROCESS_TERMINAL_OUTCOMES,
+  buildHistoricalProcessPolicySnapshotV1,
   buildProcessOperationIdentity,
   buildProcessPolicySnapshot,
   classifyProcessOperationIdReuse,
   isProcessContractFeatureEnabled,
+  historicalProcessGrantReferences,
   normalizeProcessPolicySnapshot,
   parseProcessOperationRequest,
   processAuthorityReferences,
@@ -121,14 +123,30 @@ throwsCode(
 
 const enabledSnapshot = buildProcessPolicySnapshot({
   capabilityEnabled: true,
-  grants: [{ targetId: 'trusted-target', profileIds: ['readonly-profile'] }],
+  profiles: [{
+    targetId: 'trusted-target',
+    profileId: 'readonly-profile',
+    allowedPhases: ['inspection'],
+    executable: '/trusted/bin/tool',
+    arguments: ['--bounded'],
+    workingDirectory: '.',
+    environment: { CI: '1' },
+    limits: { wallTimeMs: 1000, maxOutputBytes: 1024, maxProcesses: 1 },
+    executionPolicy: {
+      shell: false,
+      stdin: 'disabled',
+      detached: false,
+      networkAccess: 'none',
+      environmentMode: 'replace'
+    }
+  }],
   capturedAt: '2026-07-27T12:00:00.000Z'
 });
 equal(
   resolveProcessOperationRequest({
     ...request,
     args: { ...request.args, targetId: 'unknown-target' }
-  }, enabledSnapshot).code,
+  }, enabledSnapshot, 'inspection').code,
   'PROCESS_TARGET_UNKNOWN',
   'unknown target is deterministically policy-denied'
 );
@@ -136,7 +154,7 @@ equal(
   resolveProcessOperationRequest({
     ...request,
     args: { ...request.args, profileId: 'unknown-profile' }
-  }, enabledSnapshot).code,
+  }, enabledSnapshot, 'inspection').code,
   'PROCESS_PROFILE_UNKNOWN',
   'unknown profile is deterministically policy-denied'
 );
@@ -176,34 +194,35 @@ throwsCode(
 equal(isProcessContractFeatureEnabled({}), false, 'process contract capability is disabled by default');
 const defaultSnapshot = buildProcessPolicySnapshot({
   capabilityEnabled: isProcessContractFeatureEnabled({}),
-  grants: [],
+  profiles: [],
   capturedAt: '2026-07-27T12:00:00.000Z'
 });
-equal(resolveProcessOperationRequest(request, defaultSnapshot).disposition, 'disabled',
+equal(resolveProcessOperationRequest(request, defaultSnapshot, 'inspection').disposition, 'disabled',
   'default snapshot resolves runProcess as disabled');
 const featureOnlySnapshot = buildProcessPolicySnapshot({
   capabilityEnabled: true,
-  grants: [],
+  profiles: [],
   capturedAt: '2026-07-27T12:00:00.000Z'
 });
 equal(processAuthorityReferences(featureOnlySnapshot), [],
   'enabling the contract grants no target or profile authority');
-equal(resolveProcessOperationRequest(request, featureOnlySnapshot).code, 'PROCESS_TARGET_UNKNOWN',
+equal(resolveProcessOperationRequest(request, featureOnlySnapshot, 'inspection').code, 'PROCESS_TARGET_UNKNOWN',
   'an existing non-process target cannot become process authority implicitly');
 
-equal(resolveProcessOperationRequest(request, enabledSnapshot).disposition, 'unsupported',
+equal(resolveProcessOperationRequest(request, enabledSnapshot, 'inspection').disposition, 'unsupported',
   'authorized request resolves as unsupported because no executor exists');
 throwsCode(
-  () => refuseProcessOperation(request, enabledSnapshot),
+  () => refuseProcessOperation(request, enabledSnapshot, 'inspection'),
   'PROCESS_EXECUTOR_UNAVAILABLE',
   'enabling and authorizing the contract still cannot execute a process'
 );
 const contractSource = fs.readFileSync(path.join(ROOT, 'runtime/process-execution-contract.js'), 'utf8');
+const targetCatalogSource = fs.readFileSync(path.join(ROOT, 'runtime/process-target-catalog.js'), 'utf8');
 const serverSource = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-ok(!/require\s*\(\s*['"]child_process['"]\s*\)/.test(contractSource),
-  'process contract imports no child_process API');
-ok(!/\b(?:spawn|execFile|exec)\s*\(/.test(contractSource),
-  'process contract contains no process-launch call');
+ok(!/require\s*\(\s*['"]child_process['"]\s*\)/.test(contractSource + targetCatalogSource),
+  'process contract and catalog import no child_process API');
+ok(!/\b(?:spawn|execFile|exec)\s*\(/.test(contractSource + targetCatalogSource),
+  'process contract and catalog contain no process-launch call');
 const phaseCatalogSource = serverSource.match(/const PHASE_OPERATIONS = \{[\s\S]*?\n\};/);
 ok(Boolean(phaseCatalogSource) &&
   !phaseCatalogSource[0].includes('runProcess') &&
@@ -368,24 +387,26 @@ for (const [malformed, label] of malformedEvidenceCases) {
 }
 
 const mutableConfiguration = [{
+  ...JSON.parse(JSON.stringify(enabledSnapshot.profiles[0])),
   targetId: 'historical-target',
-  profileIds: ['historical-profile']
+  profileId: 'historical-profile',
+  arguments: ['--historical']
 }];
 const historicalSnapshot = buildProcessPolicySnapshot({
   capabilityEnabled: true,
-  grants: mutableConfiguration,
+  profiles: mutableConfiguration,
   capturedAt: '2026-07-27T12:30:00.000Z'
 });
 const historicalHash = historicalSnapshot.snapshotHash;
 mutableConfiguration[0].targetId = 'changed-target';
-mutableConfiguration[0].profileIds[0] = 'changed-profile';
-mutableConfiguration.push({ targetId: 'new-target', profileIds: ['new-profile'] });
+mutableConfiguration[0].profileId = 'changed-profile';
+mutableConfiguration[0].arguments[0] = '--changed';
 equal(historicalSnapshot.snapshotHash, historicalHash,
   'later configuration mutation does not change historical snapshot hash');
 equal(processAuthorityReferences(historicalSnapshot), [{
   targetId: 'historical-target',
   profileIds: ['historical-profile']
-}], 'later configuration mutation does not change historical grants');
+}], 'later configuration mutation does not change historical resolved authority');
 equal(
   resolveProcessOperationRequest({
     operation: PROCESS_OPERATION,
@@ -394,12 +415,29 @@ equal(
       profileId: 'historical-profile',
       operationId: 'historical-operation'
     }
-  }, historicalSnapshot).disposition,
+  }, historicalSnapshot, 'inspection').disposition,
   'unsupported',
   'historical request continues to resolve from its captured snapshot'
 );
 equal(normalizeProcessPolicySnapshot(JSON.parse(JSON.stringify(historicalSnapshot))), historicalSnapshot,
   'historical process policy snapshot survives persistence round-trip');
+
+const versionOneSnapshot = buildHistoricalProcessPolicySnapshotV1({
+  capabilityEnabled: true,
+  grants: [{ targetId: 'historical-target', profileIds: ['historical-profile'] }],
+  capturedAt: '2026-07-27T12:00:00.000Z'
+});
+equal(normalizeProcessPolicySnapshot(JSON.parse(JSON.stringify(versionOneSnapshot))), versionOneSnapshot,
+  'version-1 historical grant-reference snapshots remain readable');
+equal(historicalProcessGrantReferences(versionOneSnapshot), [{
+  targetId: 'historical-target',
+  profileIds: ['historical-profile']
+}], 'version-1 historical grant references remain inspectable');
+equal(processAuthorityReferences(versionOneSnapshot, 'inspection'), [],
+  'version-1 historical snapshots receive no executable authority');
+equal(resolveProcessOperationRequest(request, versionOneSnapshot, 'inspection').code,
+  'PROCESS_TARGET_UNKNOWN',
+  'version-1 references are not reinterpreted through any live catalog');
 
 equal(PROCESS_AUTHORITY_RULE, [
   'The model requests an existing process profile.',
@@ -408,10 +446,10 @@ equal(PROCESS_AUTHORITY_RULE, [
   'Process output is evidence, not authority.'
 ], 'authority rule is exact');
 equal(PROCESS_PHASE_AUTHORITY_RULE, [
-  'A process profile declares its permitted runtime phase or effect classification.',
-  'The run snapshot captures that classification.',
+  'A process profile declares its permitted runtime phase.',
+  'The run snapshot captures that declaration.',
   'The runtime envelope may advertise runProcess in a phase only when at least one snapshotted profile is permitted in that phase.',
-  'Authorization must also verify that the selected profile is permitted in the current phase.'
-], 'future profile-scoped phase authority rule is exact');
+  'Authorization rechecks the selected profile against the current phase.'
+], 'profile-scoped phase authority rule is exact');
 
-console.log(`\nPASS: process execution Tranche 0 contract — ${passed} assertions`);
+console.log(`\nPASS: process execution Tranche 1 contract — ${passed} assertions`);

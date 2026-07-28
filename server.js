@@ -37,14 +37,20 @@ const {
   PROCESS_PHASE_AUTHORITY_RULE,
   buildProcessOperationIdentity,
   buildProcessPolicySnapshot,
+  classifyProcessOperationIdReuse,
   isProcessContractFeatureEnabled,
   normalizeProcessPolicySnapshot,
   parseProcessOperationRequest,
+  processAuthorityReferences,
   processResolutionError,
-  refuseProcessOperation,
   resolveProcessOperationRequest,
   validateProcessEvidenceRecord
 } = require('./runtime/process-execution-contract');
+const {
+  loadProcessTargetCatalog,
+  normalizeProcessProfileGrants,
+  resolveProcessProfileGrants
+} = require('./runtime/process-target-catalog');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -131,6 +137,9 @@ const SESSION_PURGE_INTERVAL_MS = getPositiveIntegerEnv('SESSION_PURGE_INTERVAL_
 const SESSION_PURGE_BATCH_SIZE = getPositiveIntegerEnv('SESSION_PURGE_BATCH_SIZE', 1000);
 const MIN_SCHEDULE_EVERY_SECONDS = 60;
 const PROTECTED_PATHS_FILE = path.join(__dirname, 'config', 'protected-paths.json');
+const PROCESS_TARGET_CATALOG_FILE = path.resolve(
+  process.env.PROCESS_TARGET_CATALOG_FILE || path.join(__dirname, 'config', 'process-targets.json')
+);
 function resolveSessionSecret() {
   const configured = String(process.env.SESSION_SECRET || '').trim();
   if (!configured) throw new Error('SESSION_SECRET is required so sessions remain valid across server processes');
@@ -200,10 +209,11 @@ const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICA
 // adds a provider request before direct execution, so unrelated runs and their
 // request budgets retain the established behavior unless explicitly enabled.
 const MODEL_CONTRACT_COMPILER_ENABLED = process.env.ENABLE_MODEL_CONTRACT_COMPILER === 'true';
-// Tranche 0 freezes the request/authority/evidence contract only. The value is
-// captured in each run's immutable processPolicySnapshot; no live dispatch reads
-// this flag and no target/profile grants are created here.
+// Process capability is default-off. The trusted catalog is validated once at
+// startup and is consulted only while admitting a run; dispatch reads only the
+// resulting immutable run snapshot.
 const PROCESS_EXECUTION_CONTRACT_ENABLED = isProcessContractFeatureEnabled();
+const PROCESS_TARGET_CATALOG = loadProcessTargetCatalog(PROCESS_TARGET_CATALOG_FILE);
 const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
   ...(AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED ? ['createWorkflowDraft'] : []),
   'createWorkflowDraftIntent'
@@ -832,7 +842,7 @@ function isEffectivelyEmptyDirectory(provider, dirPath) {
 
 // ── Phase-aware execution helpers ─────────────────────────────────
 
-function inferPhaseFromActions(actions) {
+function inferPhaseFromActions(run, actions) {
   const ops = actions.map(a => {
     if (a && typeof a === 'object' && a.operation) return a.operation;
     if (a && typeof a === 'object' && a.op) return a.op;
@@ -843,6 +853,14 @@ function inferPhaseFromActions(actions) {
 
   const phases = new Set();
   for (const op of ops) {
+    // Process phase is profile-scoped, never a global catalog assignment.
+    // Treat the request as belonging to the run's current response phase so it
+    // reaches snapshot authorization, which makes wrong-phase requests produce
+    // PROCESS_PHASE_DENIED instead of a contradictory global phase result.
+    if (op === PROCESS_OPERATION) {
+      phases.add(run.currentPhase || 'planning');
+      continue;
+    }
     for (const [phase, allowed] of Object.entries(PHASE_OPERATIONS)) {
       if (allowed.includes(op)) phases.add(phase);
     }
@@ -866,7 +884,7 @@ function isPhaseTransitionAllowed(currentPhase, nextPhase) {
 
 function checkPhaseCompliance(run, actions) {
   const currentPhase = run.currentPhase || 'planning';
-  let inferredPhase = inferPhaseFromActions(actions);
+  let inferredPhase = inferPhaseFromActions(run, actions);
 
   // Disambiguate inspection vs verification based on current phase.
   // readFile/listDirectory after mutation is verification, not inspection.
@@ -1360,13 +1378,13 @@ const ACTIONS_CATALOG = [
   },
   {
     name: PROCESS_OPERATION, displayName: 'Run Process (Contract Only)', category: 'process', type: 'agentAction', invoker: 'agent',
-    effectClassification: 'selected_profile_snapshot',
+    phaseAuthority: 'selected_profile_snapshot.allowedPhases',
     requestShape: { targetId: 'string', profileId: 'string', operationId: 'string' },
     inputSchema: { targetId: 'string', profileId: 'string', operationId: 'string' },
     optionalShape: null,
     responseShape: { disposition: 'disabled|policy_denied|unsupported', terminalOutcome: 'policy_denied|null' },
     errorShape: { error: 'string', code: 'string' },
-    authorityConstraints: [...PROCESS_AUTHORITY_RULE, ...PROCESS_PHASE_AUTHORITY_RULE].join(' ') + ' Tranche 0 has no executor.',
+    authorityConstraints: [...PROCESS_AUTHORITY_RULE, ...PROCESS_PHASE_AUTHORITY_RULE].join(' ') + ' Tranche 1 has no executor.',
     provenanceSurface: 'Immutable run processPolicySnapshot; authorityChecks; processOperations replay evidence; process.operation_resolution event'
   },
   {
@@ -12548,7 +12566,7 @@ async function checkWorkspaceMutationAuthority(run, operation, args, operationKe
   );
 }
 
-function normalizeAgentRuntimeConfig(agent) {
+function normalizeAgentRuntimeFeatureFlags(agent) {
   const KEYS = ['allowHandoffTask', 'allowWorkflowDraftIntent', 'allowCanonicalWorkflowDraft'];
   const result = {};
   for (const key of KEYS) {
@@ -12566,6 +12584,15 @@ function normalizeAgentRuntimeConfig(agent) {
     }
   }
   return result;
+}
+
+function normalizeAgentRuntimeConfig(agent) {
+  return {
+    ...normalizeAgentRuntimeFeatureFlags(agent),
+    processProfileGrants: normalizeProcessProfileGrants(
+      agent && agent.runtimeConfig ? agent.runtimeConfig.processProfileGrants : []
+    )
+  };
 }
 
 function getAgentEffectiveRuntimeConfig(agent) {
@@ -12594,15 +12621,46 @@ function buildEffectiveRuntimeConfigSnapshot(agent, runtimeLimitsSnapshot = null
 
   return {
     effectiveConfig,
-    agentConfig: agent && agent.runtimeConfig ? { ...agent.runtimeConfig } : null,
-    configSources,
+    agentConfig: agent && agent.runtimeConfig
+      ? JSON.parse(JSON.stringify(agent.runtimeConfig))
+      : null,
+    configSources: {
+      ...configSources,
+      processProfileGrants: agent && agent.runtimeConfig &&
+        Object.hasOwn(agent.runtimeConfig, 'processProfileGrants') ? 'agent' : 'default'
+    },
     runtimeLimits
   };
 }
 
 async function authorizeProcessOperation(run, args, step) {
   const action = { operation: PROCESS_OPERATION, args };
-  const resolution = resolveProcessOperationRequest(action, run.processPolicySnapshot);
+  const parsed = parseProcessOperationRequest(action);
+  const operationIdentity = buildProcessOperationIdentity(run.id, parsed.args.operationId);
+  const replayRecord = await getRunReplayRepository().readRunReplay(run.id);
+  const processOperations = replayRecord && replayRecord.snapshot &&
+    Array.isArray(replayRecord.snapshot.processOperations)
+    ? replayRecord.snapshot.processOperations
+    : [];
+  const existing = processOperations.find(item =>
+    item && item.operationId === parsed.args.operationId) || null;
+  const reuse = classifyProcessOperationIdReuse({
+    runId: run.id,
+    requested: parsed.args,
+    existing: existing
+      ? {
+          operationId: existing.operationId,
+          targetId: existing.targetId,
+          profileId: existing.profileId
+        }
+      : null
+  });
+  const resolution = resolveProcessOperationRequest(
+    parsed,
+    run.processPolicySnapshot,
+    run.currentPhase || 'planning'
+  );
+  if (reuse.status === 'idempotent_replay') return resolution;
   const request = resolution.request.args;
   const authorityEvidence = {
     ...buildAuthorityEvidence(
@@ -12619,9 +12677,10 @@ async function authorizeProcessOperation(run, args, step) {
     policySnapshotHash: resolution.policySnapshotHash,
     disposition: resolution.disposition,
     terminalOutcome: resolution.terminalOutcome,
+    runtimePhase: run.currentPhase || 'planning',
     authorityRule: [...PROCESS_AUTHORITY_RULE]
   };
-  await recordAuthorityEvidence(run, authorityEvidence);
+  await recordAuthorityEvidence(run, authorityEvidence, `authority:${operationIdentity}`);
   const processEvidenceRecord = {
     operationId: request.operationId,
     runId: run.id,
@@ -12634,13 +12693,13 @@ async function authorizeProcessOperation(run, args, step) {
       kind: 'contract_resolution',
       disposition: resolution.disposition,
       errorCode: resolution.code,
-      authorityStatus: resolution.authorityStatus
+      authorityStatus: resolution.authorityStatus,
+      runtimePhase: run.currentPhase || 'planning'
     }
   };
   const processEvidence = resolution.terminalOutcome === null
     ? processEvidenceRecord
     : validateProcessEvidenceRecord(processEvidenceRecord);
-  const operationIdentity = buildProcessOperationIdentity(run.id, request.operationId);
   await recordNonTerminalRunEvidence(run, {
     category: 'process-operation',
     slot: `${operationIdentity}:resolution`,
@@ -12650,13 +12709,13 @@ async function authorizeProcessOperation(run, args, step) {
     stepId: String(step),
     eventPayload: processEvidence
   });
-  if (resolution.authorityStatus !== 'allowed') throw processResolutionError(resolution);
   return resolution;
 }
 
 async function assertAgentOperationAllowed(run, agent, operation, step, args = {}) {
   if (operation === PROCESS_OPERATION) {
-    await authorizeProcessOperation(run, args, step);
+    const resolution = await authorizeProcessOperation(run, args, step);
+    throw processResolutionError(resolution);
     return;
   }
   const configKeyByOperation = {
@@ -12667,7 +12726,7 @@ async function assertAgentOperationAllowed(run, agent, operation, step, args = {
   const configKey = configKeyByOperation[operation];
   if (!configKey) return;
 
-  const cfg = getAgentEffectiveRuntimeConfig(agent);
+  const cfg = normalizeAgentRuntimeFeatureFlags(agent);
   const allowed = cfg[configKey];
   if (allowed !== false) return;
 
@@ -14285,6 +14344,13 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     ticket.executionMode === 'workflow' ? null : ticket.objective,
     { workflow: Boolean(workflow) }
   )).snapshot;
+  const processProfiles = resolveProcessProfileGrants({
+    capabilityEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED && ticket.executionMode !== 'workflow',
+    catalog: PROCESS_TARGET_CATALOG,
+    grants: ticket.executionMode === 'workflow'
+      ? []
+      : getAgentEffectiveRuntimeConfig(agent).processProfileGrants
+  });
   // Routing decision (r1.28): dispatch-policy + immutable snapshot. With no applicable policy this
   // is a no-op recording the agent's own provider/model (execution behavior unchanged). If a policy
   // permits no provider, refuse via triage rather than guessing — no run is created.
@@ -14310,12 +14376,11 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
       ticket.executionPolicy,
       usesOwnedScope ? 'owned_paths' : 'shared'
     ),
-    // Tranche 0 has no target/profile catalog, so admission can capture only the
-    // feature state and an empty grant set. Future configuration resolution must
-    // populate this run-scoped snapshot here, never at action dispatch.
+    // Complete process authority is resolved from trusted configuration exactly
+    // once. Dispatch must never reread the live catalog or agent grants.
     processPolicySnapshot: buildProcessPolicySnapshot({
-      capabilityEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED,
-      grants: [],
+      capabilityEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED && ticket.executionMode !== 'workflow',
+      profiles: processProfiles,
       capturedAt: now
     }),
     runtimeLimitsSnapshot,
@@ -14586,11 +14651,13 @@ async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLim
   };
 
   const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
-  const effectiveConfig = agent ? getAgentEffectiveRuntimeConfig(agent) : {};
+  const effectiveConfig = agent ? normalizeAgentRuntimeFeatureFlags(agent) : {};
+  const processTargets = processAuthorityReferences(
+    run.processPolicySnapshot,
+    run.currentPhase || 'planning'
+  );
   const filteredOps = AGENT_DIRECT_OPERATIONS.filter(op => {
-    // Tranche 0 has no snapshotted profile phase/effect classifications, so the
-    // contract operation is not advertised in any executable phase.
-    if (op === PROCESS_OPERATION) return false;
+    if (op === PROCESS_OPERATION) return processTargets.length > 0;
     for (const [configKey, operationName] of Object.entries(disabledConfigToOps)) {
       if (op === operationName && effectiveConfig[configKey] === false) return false;
     }
@@ -14619,7 +14686,13 @@ async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLim
     currentStep: step,
     maxExecutionSteps: limits.maxExecutionSteps,
     workloadProfile: profile || null,
-    currentPhase: run.currentPhase || 'planning'
+    currentPhase: run.currentPhase || 'planning',
+    ...(processTargets.length > 0 ? {
+      processTargets,
+      processOperation: {
+        requiredArgs: ['targetId', 'profileId', 'operationId']
+      }
+    } : {})
   };
 }
 
@@ -14634,7 +14707,7 @@ async function buildSimulationRuntimeEnvelope(ticket, agent) {
     allowCanonicalWorkflowDraft: 'createWorkflowDraft'
   };
 
-  const effectiveConfig = agent ? getAgentEffectiveRuntimeConfig(agent) : {};
+  const effectiveConfig = agent ? normalizeAgentRuntimeFeatureFlags(agent) : {};
   const filteredOps = AGENT_DIRECT_OPERATIONS.filter(op => {
     // Simulations are not admitted runs and therefore have no immutable process
     // authority snapshot. A live feature flag alone must not advertise authority.
@@ -18833,7 +18906,9 @@ async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rer
   // JSON schema enum) is distinct from the operations usable in the current phase.
   const operationVocabulary = baseAllowedOps;
   const allowedOperationList = operationVocabulary.join('|');
-  const currentPhaseAllowedOps = getAllowedOperationsForPhase(currentPhase).filter(op => baseAllowedOps.includes(op));
+  const currentPhaseAllowedOps = getAllowedOperationsForPhase(currentPhase)
+    .filter(op => baseAllowedOps.includes(op));
+  if (baseAllowedOps.includes(PROCESS_OPERATION)) currentPhaseAllowedOps.push(PROCESS_OPERATION);
   const includeWorkflowDraftPromptGuidance = isWorkflowDraftPromptObjective(ticket.objective);
   const includeHandoffPromptGuidance = isHandoffPromptObjective(ticket.objective);
   const includeProcessPromptGuidance = baseAllowedOps.includes(PROCESS_OPERATION);
@@ -19875,6 +19950,27 @@ async function runAgentTicket(runId) {
         continue;
       }
 
+      // Process requests are terminal in Tranche 1 because no executor exists.
+      // Resolve every process request in the batch before any workspace action so
+      // replay/conflict semantics are durable without permitting an earlier
+      // filesystem effect. Exact repeats reuse the first resolution; conflicts
+      // take precedence over the executor-unavailable terminal result.
+      const processResolutionErrors = [];
+      for (const action of actions.filter(candidate =>
+        candidate && candidate.operation === PROCESS_OPERATION)) {
+        try {
+          const resolution = await authorizeProcessOperation(run, action.args, step);
+          processResolutionErrors.push(processResolutionError(resolution));
+        } catch (error) {
+          processResolutionErrors.push(error);
+        }
+      }
+      if (processResolutionErrors.length > 0) {
+        throw processResolutionErrors.find(error =>
+          error && error.code === 'PROCESS_OPERATION_ID_CONFLICT') ||
+          processResolutionErrors[0];
+      }
+
       // An accepted compiled contract is an execution constraint, not just a
       // mutation-count estimate. Reject any mutation outside its exact operation
       // and target set before the phase or authority layers can execute it.
@@ -20028,10 +20124,10 @@ async function runAgentTicket(runId) {
               }
             });
           } else if (operation.operation === PROCESS_OPERATION) {
-            // Authority was resolved and recorded immediately above. Tranche 0
-            // deliberately terminates here: this seam has no executor and cannot
-            // resolve or launch an executable.
-            result = refuseProcessOperation(operation, run.processPolicySnapshot);
+            // The batch preflight above always terminalizes process requests.
+            // This fail-closed guard has no executor and cannot launch anything.
+            const resolution = await authorizeProcessOperation(run, operation.args, step);
+            throw processResolutionError(resolution);
           } else {
             result = await executeWorkspaceOperation(run, action, step, {
               slot: `agent:${step}:${actionIndex}`,

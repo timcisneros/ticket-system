@@ -4814,21 +4814,22 @@ fail-closed change.
 
 | Field | Value |
 |-------|-------|
-| **Status** | Open — deliberately deferred by process-execution Tranche 0 on 2026-07-27 |
-| **Boundary** | Blocks Tranche 1 profile admission/advertising; does not block the executor-free Tranche 0 contract |
+| **Status** | Resolved — explicit snapshotted runtime phases implemented by process-execution Tranche 1 on 2026-07-27 |
+| **Boundary** | No longer blocks profile admission/advertising; later effect classification must not replace phase authority |
 | **Evidence** | `docs/PROCESS_EXECUTION_CONTRACT.md`; `runtime/process-execution-contract.js`; `server.js` `PHASE_OPERATIONS` |
-| **Decision required** | Choose the versioned per-profile phase/effect representation captured in `run.processPolicySnapshot` and its exact phase-authorization mapping |
+| **Decision** | Store a nonempty canonical `allowedPhases` array on each resolved version-2 profile; accepted values are `inspection`, `mutation`, and `verification` |
 
-**Frozen rule:** a process profile declares its permitted runtime phase or effect
-classification; the run snapshot captures it; the envelope advertises `runProcess` in a
-phase only when a snapshotted profile permits that phase; and authorization rechecks the
-selected profile against the current phase.
+**Resolved rule:** a process profile declares its permitted runtime phase; the run
+snapshot captures that declaration; the envelope advertises `runProcess` in a phase only
+when a snapshotted profile permits that phase; and authorization rechecks the selected
+profile against the current phase.
 
-Tranche 0 intentionally defines no profiles or grants and assigns `runProcess` to no global
-phase. Before Tranche 1 can admit a profile, it must decide whether snapshots store explicit
-runtime phases or a stable effect classification mapped to phases, version that schema,
-and prove envelope filtering and authorization use the same captured value. Live target
-configuration must not participate after admission.
+Version-2 snapshots store explicit, deduplicated, canonically ordered `allowedPhases`.
+Envelope filtering and dispatch authorization use only that captured array. `runProcess`
+remains absent from all global phase catalogs. Effect classification may later inform
+sandbox or workspace permissions, but it cannot determine phase authority. Live target
+configuration does not participate after admission. Version-1 historical reference
+snapshots remain readable but receive no executable authority.
 
 ---
 

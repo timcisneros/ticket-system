@@ -25,6 +25,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'organization-guidance-test.js',
   'phase-gated-catalog-behavioral-test.js',
   'process-execution-contract-test.js',
+  'process-target-catalog-test.js',
   'postgres-persistence-contract-test.js',
   'recovery-state-reconstruction-test.js',
   'run-decision-graph-projection-test.js',
