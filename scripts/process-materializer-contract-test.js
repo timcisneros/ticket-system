@@ -343,9 +343,9 @@ async function main() {
     'PROCESS_WORKSPACE_MUTATION_BOUNDARY_UNAVAILABLE',
     'workspace mutation-boundary failure is typed and fail-closed'
   );
-  ok(PROCESS_MATERIALIZER_FAILURE_CODES.length === 21 &&
-    new Set(PROCESS_MATERIALIZER_FAILURE_CODES).size === 21,
-  'all twenty-one materializer failures are stable and unique');
+  ok(PROCESS_MATERIALIZER_FAILURE_CODES.length === 24 &&
+    new Set(PROCESS_MATERIALIZER_FAILURE_CODES).size === 24,
+  'all twenty-four materializer failures are stable and unique');
   ok(!PROCESS_MATERIALIZER_FAILURE_CODES.includes('PROCESS_EXECUTOR_UNAVAILABLE'),
     'materialization failures do not claim process execution');
 

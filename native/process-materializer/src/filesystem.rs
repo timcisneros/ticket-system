@@ -69,6 +69,38 @@ impl PinnedDirectory {
         Ok(unsafe { File::from_raw_fd(descriptor) })
     }
 
+    pub fn open_child_directory(&self, name: &str) -> Result<Self> {
+        crate::contract::validate_identifier(name, "descriptor-relative directory")?;
+        let name = CString::new(name).map_err(|_| {
+            MaterializerError::new(
+                PROCESS_INPUT_PATH_INVALID,
+                "descriptor-relative directory contains a NUL",
+            )
+        })?;
+        let descriptor = unsafe {
+            libc::openat(
+                self.descriptor.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if descriptor < 0 {
+            return Err(storage(std::io::Error::last_os_error()));
+        }
+        let descriptor = unsafe { File::from_raw_fd(descriptor) };
+        let stat = file_stat(descriptor.as_raw_fd())?;
+        Ok(Self {
+            descriptor,
+            identity: DirectoryIdentity {
+                device: stat.st_dev,
+                inode: stat.st_ino,
+                owner_uid: stat.st_uid,
+                owner_gid: stat.st_gid,
+                mode: stat.st_mode & 0o7777,
+            },
+        })
+    }
+
     pub fn identity(&self) -> DirectoryIdentity {
         self.identity
     }

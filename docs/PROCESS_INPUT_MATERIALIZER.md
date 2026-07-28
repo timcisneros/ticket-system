@@ -51,6 +51,9 @@ The closed version-1 service configuration is:
   "socketPath": "/run/ticket-system-process/materializer/materializer.sock",
   "sealedSnapshotRoot": "/var/lib/ticket-system/process-inputs",
   "allowedClientUid": 1000,
+  "launcherClientUid": 62004,
+  "runtimeClientGid": 62002,
+  "handoffGid": 62005,
   "inputPolicyPath": "/etc/ticket-system/process-input-policy.json",
   "workspaceAllocations": [
     {
@@ -74,11 +77,14 @@ The sealed root may not equal, contain, or be contained by a source root, runtim
 path, artifact path, database path, or the socket. Every source root is also checked
 against the sealed-storage boundary after filesystem resolution.
 
-The deployment must pre-provision the sealed root and the `0750` socket directory with
-the materializer service as owner. The service never creates or chmods either trusted
-top-level root. It rejects group- or world-writable sealed storage, requires socket
-directory mode `0750`, and rejects symbolic or magic links in every path component.
-Only the service's internal state directories and `0660` socket entry are created.
+The deployment must pre-provision the sealed root for the dedicated
+`ticket-system-process-handoff` group and the `0750` socket directory for the
+`ticket-system-runtime` group, both with the materializer service as owner. The runtime
+group and handoff group must be distinct. The service never creates or chmods either
+trusted top-level root. It rejects group- or world-writable sealed storage, requires
+socket-directory mode `0750`, and rejects symbolic or magic links in every path
+component. Only descriptor-relative internal state and the `0660` socket entry are
+created.
 
 At startup each workspace allocation, the sealed root, and the socket directory are
 opened from `/` with `openat2` and `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS |
@@ -90,8 +96,10 @@ relative to the retained state descriptor, and socket creation is relative to th
 retained socket-directory descriptor. Replacing a configured pathname cannot redirect a
 running generation.
 
-Each connection is authenticated with Linux `SO_PEERCRED` against the exact configured
-service UID.
+Each connection is authenticated with Linux `SO_PEERCRED`. The runtime UID may call
+`health`, `materialize`, and `getSnapshot`; the launcher UID may call only `health` and
+`acquireSnapshot`. Cross-principal operations fail with
+`PROCESS_SNAPSHOT_PRINCIPAL_UNAUTHORIZED`.
 The Node process only receives the socket path and a trusted allocation ID; it cannot
 name a source root, sealed root, staging path, or final host path.
 
@@ -101,7 +109,7 @@ Messages use a four-byte unsigned big-endian length followed by UTF-8 JSON. Vers
 has a 2,097,152-byte maximum. The length is rejected before payload allocation.
 Envelopes and bodies are closed and reject unknown fields.
 
-An unauthorized peer is rejected before the service reads its request frame. The only
+An unauthorized peer is rejected before the service parses its request frame. The only
 uncorrelated response is:
 
 ```json
@@ -117,13 +125,18 @@ uncorrelated response is:
 ```
 
 `requestId: null` is invalid for every other response. Every authenticated response
-echoes the exact request ID. The refusal never includes the rejected numeric UID.
+echoes the exact request ID. The refusal never includes the rejected numeric UID. After
+writing the refusal, the service drains at most one bounded frame without parsing it;
+this prevents unread Unix-stream bytes from replacing the typed response with `EPIPE`
+without using the payload to discover a request ID.
 
 The only operations are:
 
 - `health` with body `{}`; returns the materializer-generation record.
 - `materialize` with the body below; returns a public descriptor.
 - `getSnapshot` with expected ownership fields; returns the same public descriptor.
+- `acquireSnapshot` with the complete launcher ownership tuple; returns a private
+  descriptor authority result plus exactly two `SCM_RIGHTS` descriptors.
 
 The exact materialization body is:
 
@@ -364,8 +377,13 @@ The only public descriptor is:
 }
 ```
 
-No host path or private registry field is returned. Tranche 2A2 must consume a trusted
-registry lookup rather than allowing the runtime to translate this ID into a path.
+No host path or private registry field is returned. Tranche 2A3 adds the launcher-only
+`acquireSnapshot` operation. It accepts the complete expected run/ticket/operation,
+policy, filesystem-policy, generation, manifest, count, and byte tuple; revalidates the
+sealed record/tree/manifest; and passes exactly the read-only tree and manifest
+descriptors with `SCM_RIGHTS`. Node never receives those descriptors. The runtime cannot
+acquire them, the launcher cannot materialize, and neither principal can provide a host
+path.
 
 ## Failures and release proof
 
@@ -391,6 +409,9 @@ The stable failures are:
 - `PROCESS_INPUT_SNAPSHOT_MISMATCH`
 - `PROCESS_INPUT_REGISTRY_INVALID`
 - `PROCESS_INPUT_GENERATION_MISMATCH`
+- `PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE`
+- `PROCESS_SNAPSHOT_DESCRIPTOR_INVALID`
+- `PROCESS_SNAPSHOT_PRINCIPAL_UNAUTHORIZED`
 
 No failure returns a public descriptor.
 
@@ -404,9 +425,11 @@ The deployment examples are:
 The tmpfiles example pre-provisions the root-owned
 `/run/ticket-system-process` parent and the service-owned
 `/run/ticket-system-process/materializer` and
-`/var/lib/ticket-system/process-inputs` roots as `0750`. The service-owned roots use the
-dedicated `ticket-system-materializer` user with the `ticket-system-runtime` group. It also pins
-root-owned `0640` configuration and input-policy files. The unit uses a fixed absolute
+`/var/lib/ticket-system/process-inputs` roots as `0750`. The socket root uses the runtime
+group; sealed state uses the separate handoff group shared only with the launcher. The
+materializer has the handoff group as its primary group and the runtime group only as a
+supplementary socket/workspace access group. Deployment also pins root-owned `0640`
+configuration and input-policy files. The unit uses a fixed absolute
 binary and configuration path, no shell or environment file, and exposes only the
 workspace read path plus the two required write roots. This hardens the trusted
 materializer service; it does not claim to sandbox future executed code.

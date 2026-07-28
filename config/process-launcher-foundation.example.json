@@ -5,8 +5,10 @@
   "allowedClientUid": 62002,
   "launcherServiceUid": 62004,
   "materializerServiceUid": 62001,
+  "runtimeClientGid": 62002,
+  "handoffGid": 62005,
   "trustedRootfsOwnerUid": 0,
-  "delegatedCgroupRoot": "/sys/fs/cgroup/ticket-system-process",
+  "materializerSocketPath": "/run/ticket-system-process/materializer/materializer.sock",
   "healthValidityMs": 30000,
   "rootfsRegistry": [
     {
@@ -21,8 +23,14 @@
     "binaryPath": "/usr/bin/bwrap",
     "binarySha256": "0000000000000000000000000000000000000000000000000000000000000000"
   },
-  "seccompPolicyPath": "/etc/ticket-system/process-seccomp-v1.bpf",
+  "seccompPolicyPath": "/etc/ticket-system/process-seccomp-v1.json",
   "seccompPolicySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "containmentProbe": {
+    "rootfsId": "node-24-fedora-runtime-v1",
+    "executablePath": "/usr/bin/process-containment-probe",
+    "executableSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "format": "elf"
+  },
   "protectedHostPaths": {
     "runtimeData": [
       "/var/lib/ticket-system/runtime"

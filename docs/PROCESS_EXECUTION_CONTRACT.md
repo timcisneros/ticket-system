@@ -420,28 +420,34 @@ version-2 requests retain their executor-unavailable compatibility behavior, but
 permanently unable to create launch plans. No process-start evidence, PID, output,
 operation receipt, launch plan, or effect claim is created.
 
-The future sandbox capability descriptor is closed and time-bounded:
+Tranche 2A3's private active containment descriptor is closed and time-bounded:
 
 ```json
 {
   "version": 1,
-  "status": "healthy",
-  "generationId": "sandbox-generation-001",
+  "status": "containment_verified",
+  "generationId": "sandbox-containment-v1-lowercase-sha256",
   "launcherProtocolVersion": 1,
   "launcherIdentityHash": "lowercase-sha256",
   "sandboxBackendIdentityHash": "lowercase-sha256",
   "seccompPolicyHash": "lowercase-sha256",
-  "rootfsRegistryGeneration": "rootfs-registry-001",
-  "materializerGeneration": "materializer-001",
+  "rootfsRegistryGeneration": "rootfs-registry-v1-lowercase-sha256",
+  "materializerGeneration": "materializer-v1-lowercase-sha256",
+  "delegatedCgroupIdentityHash": "lowercase-sha256",
+  "containmentProbeHash": "lowercase-sha256",
   "verifiedAt": "canonical UTC timestamp",
-  "validUntil": "canonical UTC timestamp"
+  "expiresAt": "canonical UTC timestamp",
+  "readyForExecution": true
 }
 ```
 
 Generation identifiers use the process identifier contract. Protocol versions are
 positive and at most 16. Validity is positive and at most five minutes, and the
-descriptor is healthy only between `verifiedAt` and `validUntil`. Tranche 2A0 defines
-validation only; it does not probe or produce this descriptor.
+descriptor is usable by the private launcher only between `verifiedAt` and `expiresAt`.
+It is produced only after the active 2A3 cgroup, namespace, network, seccomp, output,
+timeout, tree-death, resource, and fixed Node probes pass. It remains private:
+`CURRENT_PROCESS_SANDBOX_CAPABILITY` is still `null`, so it cannot authorize model
+dispatch in this tranche.
 
 `operationId` identifies one process request within a run; it is not globally unique.
 The runtime hashes `(runId, operationId)` for evidence identity and looks up prior
@@ -507,9 +513,10 @@ The frozen process outcomes remain:
 }
 ```
 
-Allowed causes are `memory`, `process_count`, `cpu`, `open_files`, `file_size`, and
+Allowed causes are `memory`, `process_count`, `open_files`, `file_size`, and
 `temporary_storage`. A resource-limit outcome requires an established process identity
-and ownership identity.
+and ownership identity. `cpuQuotaMicrosPer100ms` is a cgroup rate throttle, not a total
+CPU budget; throttling is recorded but is never a terminal `cpu` cause.
 
 Launcher capacity is a pre-start refusal instead:
 
@@ -622,13 +629,15 @@ generation can produce version-1 launch-plan material:
   "policySnapshotHash": "lowercase-sha256",
   "runtimePhase": "verification",
   "sandboxCapability": {
-    "generationId": "sandbox-generation-001",
+    "generationId": "sandbox-containment-v1-lowercase-sha256",
     "launcherProtocolVersion": 1,
     "launcherIdentityHash": "lowercase-sha256",
     "sandboxBackendIdentityHash": "lowercase-sha256",
     "seccompPolicyHash": "lowercase-sha256",
-    "rootfsRegistryGeneration": "rootfs-registry-001",
-    "materializerGeneration": "materializer-001"
+    "rootfsRegistryGeneration": "rootfs-registry-v1-lowercase-sha256",
+    "materializerGeneration": "materializer-v1-lowercase-sha256",
+    "delegatedCgroupIdentityHash": "lowercase-sha256",
+    "containmentProbeHash": "lowercase-sha256"
   },
   "runtimeRootfs": {
     "id": "node-24-fedora-runtime-v1",
@@ -710,25 +719,16 @@ be required by a configured runtime. Standard input remains disabled, no PTY may
 allocated, and detached execution is forbidden. Process sandbox enforcement remains
 absent in 2A1.
 
-## Verified launcher foundation and future authenticated launcher boundary
+## Verified launcher, active containment, and dispatch boundary
 
-Tranche 2A2 implements the verification-only Rust foundation documented in
-`docs/PROCESS_LAUNCHER_FOUNDATION.md`. It pins and completely verifies rootfs manifests,
-ELF identities, the Bubblewrap binary, the seccomp policy, the delegated cgroup
-directory, and static Linux prerequisite presence. Its closed, bounded, authenticated
-protocol exposes only `health`, `getRootfs`, and `verifyExecutable`. The private,
-time-bounded prerequisite generation has `readyForExecution: false`; it is not a healthy
-sandbox capability.
+Tranche 2A3 extends the verified Rust foundation documented in
+`docs/PROCESS_LAUNCHER_FOUNDATION.md`. The authenticated, bounded protocol now includes
+private `launch`, `getOperation`, and `cancelOperation` in addition to rootfs and ELF
+verification. Node supplies no host mount path, raw Bubblewrap/seccomp option, raw cgroup
+name, PID, command string, or shell. The launcher obtains sealed workspace descriptors
+directly from the materializer with `SCM_RIGHTS`.
 
-The future launcher execution protocol will use the launcher-owned
-`/run/ticket-system-process/launcher` directory with mode `0750`, a socket owned by the
-launcher service and ticket-system service group with mode `0660`, and `SO_PEERCRED`
-validation against the exact configured ticket-system service UID. It will accept only
-closed bounded versioned messages no larger than 2,097,152 bytes and reject
-client-provided host mount paths, raw Bubblewrap options, and raw cgroup names. It has no
-unsandboxed fallback.
-
-Its pre-execution barrier is:
+The enforced pre-execution barrier is:
 
 ```text
 create operation cgroup
@@ -744,7 +744,5 @@ No untrusted code may run before membership and every limit are active.
 
 ## Remaining tranche sequence
 
-- **2A3:** launcher protocol/server and pre-execution cgroup barrier, still not connected
-  to model dispatch.
 - **2B:** connect authorized dispatch, durable start/terminal evidence, bounded output
   artifacts, cancellation/recovery, and execution idempotency.

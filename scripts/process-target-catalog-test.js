@@ -277,6 +277,8 @@ rejects(value => { value.targets[0].profiles[0].environment = { 'BAD-NAME': 'x' 
   'invalid environment names are rejected');
 rejects(value => { value.targets[0].profiles[0].environment = { API_TOKEN: 'x' }; },
   'secret-bearing environment names are rejected');
+rejects(value => { value.targets[0].profiles[0].environment = { LANG: 'C' }; },
+  'profiles cannot override launcher-owned deterministic environment names');
 rejects(value => {
   value.targets[0].profiles[0].environment = {
     SAFE: 'x'.repeat(PROCESS_PROFILE_BOUNDS.maxEnvironmentValueBytes + 1)

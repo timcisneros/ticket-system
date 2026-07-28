@@ -7,11 +7,27 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+
+mod cgroup;
+mod executor;
+mod launch_contract;
+mod materializer_client;
+mod seccomp;
+
+use cgroup::DelegatedCgroup;
+use executor::{ExecutionControl, ExecutionInputs};
+pub use launch_contract::ContainmentCapability as ProcessContainmentCapability;
+use launch_contract::{
+    ContainmentCapability, LaunchBody, LaunchPlan, OperationBody, OperationStatus,
+};
+use materializer_client::{AcquireSnapshotRequest, MaterializerClient};
+use seccomp::{SECCOMP_POLICY_SCHEMA_VERSION, SeccompPolicy};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const ROOTFS_MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -55,6 +71,37 @@ pub const PROCESS_SANDBOX_PREREQUISITES_UNAVAILABLE: FailureCode =
     "PROCESS_SANDBOX_PREREQUISITES_UNAVAILABLE";
 pub const PROCESS_SANDBOX_PREREQUISITES_EXPIRED: FailureCode =
     "PROCESS_SANDBOX_PREREQUISITES_EXPIRED";
+pub const PROCESS_CONTAINMENT_UNAVAILABLE: FailureCode = "PROCESS_CONTAINMENT_UNAVAILABLE";
+pub const PROCESS_CONTAINMENT_GENERATION_MISMATCH: FailureCode =
+    "PROCESS_CONTAINMENT_GENERATION_MISMATCH";
+pub const PROCESS_CONTAINMENT_EXPIRED: FailureCode = "PROCESS_CONTAINMENT_EXPIRED";
+pub const PROCESS_LAUNCH_PLAN_INVALID: FailureCode = "PROCESS_LAUNCH_PLAN_INVALID";
+pub const PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE: FailureCode =
+    "PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE";
+pub const PROCESS_SNAPSHOT_DESCRIPTOR_INVALID: FailureCode = "PROCESS_SNAPSHOT_DESCRIPTOR_INVALID";
+pub const PROCESS_SNAPSHOT_PRINCIPAL_UNAUTHORIZED: FailureCode =
+    "PROCESS_SNAPSHOT_PRINCIPAL_UNAUTHORIZED";
+pub const PROCESS_CGROUP_DELEGATION_UNAVAILABLE: FailureCode =
+    "PROCESS_CGROUP_DELEGATION_UNAVAILABLE";
+pub const PROCESS_CGROUP_CONTROLLER_UNAVAILABLE: FailureCode =
+    "PROCESS_CGROUP_CONTROLLER_UNAVAILABLE";
+pub const PROCESS_CGROUP_LIMIT_UNAVAILABLE: FailureCode = "PROCESS_CGROUP_LIMIT_UNAVAILABLE";
+pub const PROCESS_CGROUP_MEMBERSHIP_FAILED: FailureCode = "PROCESS_CGROUP_MEMBERSHIP_FAILED";
+pub const PROCESS_CGROUP_TERMINATION_FAILED: FailureCode = "PROCESS_CGROUP_TERMINATION_FAILED";
+pub const PROCESS_NAMESPACE_UNAVAILABLE: FailureCode = "PROCESS_NAMESPACE_UNAVAILABLE";
+pub const PROCESS_MOUNT_LAYOUT_INVALID: FailureCode = "PROCESS_MOUNT_LAYOUT_INVALID";
+pub const PROCESS_NETWORK_ISOLATION_UNAVAILABLE: FailureCode =
+    "PROCESS_NETWORK_ISOLATION_UNAVAILABLE";
+pub const PROCESS_SECCOMP_INSTALLATION_FAILED: FailureCode = "PROCESS_SECCOMP_INSTALLATION_FAILED";
+pub const PROCESS_ENVIRONMENT_INVALID: FailureCode = "PROCESS_ENVIRONMENT_INVALID";
+pub const PROCESS_FAILED_TO_START: FailureCode = "PROCESS_FAILED_TO_START";
+pub const PROCESS_OUTPUT_LIMIT_EXCEEDED: FailureCode = "PROCESS_OUTPUT_LIMIT_EXCEEDED";
+pub const PROCESS_WALL_TIME_EXCEEDED: FailureCode = "PROCESS_WALL_TIME_EXCEEDED";
+pub const PROCESS_RESOURCE_LIMIT_EXCEEDED: FailureCode = "PROCESS_RESOURCE_LIMIT_EXCEEDED";
+pub const PROCESS_OPERATION_NOT_FOUND: FailureCode = "PROCESS_OPERATION_NOT_FOUND";
+pub const PROCESS_OPERATION_ALREADY_ACTIVE: FailureCode = "PROCESS_OPERATION_ALREADY_ACTIVE";
+pub const PROCESS_OPERATION_TERMINATION_FAILED: FailureCode =
+    "PROCESS_OPERATION_TERMINATION_FAILED";
 
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
@@ -98,14 +145,26 @@ pub struct ServiceConfig {
     pub allowed_client_uid: u32,
     pub launcher_service_uid: u32,
     pub materializer_service_uid: u32,
+    pub runtime_client_gid: u32,
+    pub handoff_gid: u32,
     pub trusted_rootfs_owner_uid: u32,
-    pub delegated_cgroup_root: String,
+    pub materializer_socket_path: String,
     pub health_validity_ms: u64,
     pub rootfs_registry: Vec<RootfsConfiguration>,
     pub sandbox_backend: SandboxBackendConfiguration,
     pub seccomp_policy_path: String,
     pub seccomp_policy_sha256: String,
+    pub containment_probe: ContainmentProbeConfiguration,
     pub protected_host_paths: ProtectedHostPaths,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContainmentProbeConfiguration {
+    pub rootfs_id: String,
+    pub executable_path: String,
+    pub executable_sha256: String,
+    pub format: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +243,9 @@ enum ProtocolOperation {
     Health,
     GetRootfs,
     VerifyExecutable,
+    Launch,
+    GetOperation,
+    CancelOperation,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,6 +385,13 @@ struct VerifiedRootfs {
 }
 
 #[derive(Debug)]
+struct OperationRecord {
+    control: Arc<ExecutionControl>,
+    state: String,
+    result: Option<launch_contract::ExecutionResult>,
+}
+
+#[derive(Debug)]
 pub struct FoundationService {
     config: ServiceConfig,
     _state_root: PinnedDirectory,
@@ -331,9 +400,12 @@ pub struct FoundationService {
     socket_name: String,
     backend: PinnedFile,
     seccomp_policy: PinnedFile,
-    _delegated_cgroup_root: PinnedDirectory,
+    seccomp_contract: SeccompPolicy,
+    delegated_cgroup: DelegatedCgroup,
+    materializer: MaterializerClient,
     rootfs: BTreeMap<String, VerifiedRootfs>,
-    health: FoundationHealth,
+    health: ContainmentCapability,
+    operations: Mutex<BTreeMap<String, OperationRecord>>,
 }
 
 impl ServiceConfig {
@@ -390,7 +462,10 @@ impl ServiceConfig {
         for (label, value) in [
             ("socketPath", self.socket_path.as_str()),
             ("stateRoot", self.state_root.as_str()),
-            ("delegatedCgroupRoot", self.delegated_cgroup_root.as_str()),
+            (
+                "materializerSocketPath",
+                self.materializer_socket_path.as_str(),
+            ),
             (
                 "sandboxBackend.binaryPath",
                 self.sandbox_backend.binary_path.as_str(),
@@ -399,16 +474,15 @@ impl ServiceConfig {
         ] {
             validate_host_path(Path::new(value), label)?;
         }
-        if !Path::new(&self.delegated_cgroup_root).starts_with("/sys/fs/cgroup/") {
-            return Err(FoundationError::new(
-                PROCESS_SANDBOX_PREREQUISITES_UNAVAILABLE,
-                "delegatedCgroupRoot must name a dedicated directory below /sys/fs/cgroup",
-            ));
-        }
         if self.launcher_service_uid != unsafe { libc::geteuid() } {
             return Err(FoundationError::new(
                 PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE,
                 "launcherServiceUid must equal the effective launcher service UID",
+            ));
+        }
+        if self.runtime_client_gid == self.handoff_gid {
+            return Err(protocol(
+                "runtime client and sealed-descriptor handoff groups must be distinct",
             ));
         }
         let distinct = [
@@ -479,6 +553,12 @@ impl ServiceConfig {
                 ));
             }
         }
+        if !ids.contains(self.containment_probe.rootfs_id.as_str()) {
+            return Err(FoundationError::new(
+                PROCESS_ROOTFS_UNKNOWN,
+                "containmentProbe references an unknown rootfs",
+            ));
+        }
         if self.sandbox_backend.kind != "bubblewrap" {
             return Err(FoundationError::new(
                 PROCESS_SANDBOX_BACKEND_INVALID,
@@ -490,6 +570,21 @@ impl ServiceConfig {
             "sandboxBackend.binarySha256",
         )?;
         validate_sha256(&self.seccomp_policy_sha256, "seccompPolicySha256")?;
+        validate_identifier(
+            &self.containment_probe.rootfs_id,
+            "containmentProbe.rootfsId",
+        )?;
+        validate_executable_path(&self.containment_probe.executable_path)?;
+        validate_sha256(
+            &self.containment_probe.executable_sha256,
+            "containmentProbe.executableSha256",
+        )?;
+        if self.containment_probe.format != "elf" {
+            return Err(FoundationError::new(
+                PROCESS_EXECUTABLE_FORMAT_UNSUPPORTED,
+                "containmentProbe.format must be elf",
+            ));
+        }
         for paths in [
             &self.protected_host_paths.runtime_data,
             &self.protected_host_paths.materializer_state,
@@ -512,17 +607,23 @@ impl ServiceConfig {
 impl FoundationService {
     pub fn new(mut config: ServiceConfig) -> Result<Self> {
         config.canonicalize()?;
+        if unsafe { libc::getegid() } != config.handoff_gid {
+            return Err(FoundationError::new(
+                PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE,
+                "launcher effective group must equal the configured sealed-descriptor handoff group",
+            ));
+        }
         let state_root = PinnedDirectory::open_absolute(
             Path::new(&config.state_root),
             PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE,
         )?;
-        validate_service_directory(&state_root, "launcher state root", 0o750)?;
-        let (socket_directory, socket_name) = pin_socket_directory(&config)?;
-        let delegated_cgroup_root = PinnedDirectory::open_absolute(
-            Path::new(&config.delegated_cgroup_root),
-            PROCESS_SANDBOX_PREREQUISITES_UNAVAILABLE,
+        validate_service_directory(
+            &state_root,
+            "launcher state root",
+            0o750,
+            config.handoff_gid,
         )?;
-        validate_cgroup_v2_directory(&delegated_cgroup_root)?;
+        let (socket_directory, socket_name) = pin_socket_directory(&config)?;
         let instance_lock = acquire_instance_lock(&state_root)?;
 
         let backend = PinnedFile::open_absolute(
@@ -561,8 +662,14 @@ impl FoundationService {
                 "seccomp policy hash does not match trusted configuration",
             ));
         }
+        let seccomp_contract = SeccompPolicy::parse_canonical(&seccomp_policy.read_all()?)?;
 
         let rootfs = verify_rootfs_registry(&config, &state_root, &socket_directory)?;
+        validate_containment_rootfs_mountpoints(
+            rootfs
+                .get(&config.containment_probe.rootfs_id)
+                .expect("containment probe rootfs reference validated"),
+        )?;
         let launcher_identity_hash = hash_current_binary()?;
         let rootfs_registry_generation = derive_rootfs_registry_generation(
             &config,
@@ -575,34 +682,40 @@ impl FoundationService {
         for verified in rootfs.values_mut() {
             verified.authority.rootfs_registry_generation = rootfs_registry_generation.clone();
         }
-        let host_prerequisites = inspect_host_prerequisites()?;
-        let host_prerequisite_identity_hash =
-            sha256_json(&(host_prerequisites.clone(), delegated_cgroup_root.identity))?;
+        inspect_host_prerequisites()?;
+        let delegated_cgroup = DelegatedCgroup::discover_and_activate()?;
+        let materializer = MaterializerClient::new(
+            config.materializer_socket_path.clone(),
+            config.materializer_service_uid,
+        );
+        let materializer_health = materializer.health()?;
         let verified_seconds = unix_time()?;
-        let health = FoundationHealth {
+        let placeholder_health = ContainmentCapability {
             version: 1,
-            status: "foundation_verified".into(),
+            status: "containment_verifying".into(),
+            generation_id: "sandbox-containment-v1-placeholder".into(),
             launcher_protocol_version: PROTOCOL_VERSION,
-            launcher_identity_hash,
+            launcher_identity_hash: launcher_identity_hash.clone(),
             sandbox_backend_identity_hash: backend.sha256.clone(),
             seccomp_policy_hash: seccomp_policy.sha256.clone(),
-            rootfs_registry_generation,
-            host_prerequisite_identity_hash,
+            rootfs_registry_generation: rootfs_registry_generation.clone(),
+            materializer_generation: materializer_health.materializer_generation.clone(),
+            delegated_cgroup_identity_hash: delegated_cgroup.identity_hash()?,
+            containment_probe_hash: "0".repeat(64),
             verified_at: canonical_utc(verified_seconds)?,
             expires_at: canonical_utc(
                 verified_seconds
                     .checked_add((config.health_validity_ms / 1000) as i64)
                     .ok_or_else(|| {
                         FoundationError::new(
-                            PROCESS_SANDBOX_PREREQUISITES_UNAVAILABLE,
-                            "prerequisite expiry overflows the system clock",
+                            PROCESS_CONTAINMENT_UNAVAILABLE,
+                            "containment expiry overflows the system clock",
                         )
                     })?,
             )?,
             ready_for_execution: false,
-            host_prerequisites,
         };
-        Ok(Self {
+        let mut service = Self {
             config,
             _state_root: state_root,
             _instance_lock: instance_lock,
@@ -610,17 +723,41 @@ impl FoundationService {
             socket_name,
             backend,
             seccomp_policy,
-            _delegated_cgroup_root: delegated_cgroup_root,
+            seccomp_contract,
+            delegated_cgroup,
+            materializer,
             rootfs,
-            health,
-        })
+            health: placeholder_health,
+            operations: Mutex::new(BTreeMap::new()),
+        };
+        let containment_probe_hash = service.run_active_containment_probe()?;
+        let generation_material = serde_json::json!({
+            "launcherProtocolVersion": PROTOCOL_VERSION,
+            "launcherIdentityHash": launcher_identity_hash,
+            "sandboxBackendIdentityHash": service.backend.sha256.clone(),
+            "seccompPolicyHash": service.seccomp_policy.sha256.clone(),
+            "rootfsRegistryGeneration": rootfs_registry_generation,
+            "materializerGeneration": materializer_health.materializer_generation.clone(),
+            "delegatedCgroupIdentityHash": service.delegated_cgroup.identity_hash()?,
+            "containmentProbeHash": containment_probe_hash.clone(),
+            "mountPlanVersion": executor::MOUNT_PLAN_VERSION,
+            "seccompPolicySchemaVersion": SECCOMP_POLICY_SCHEMA_VERSION
+        });
+        service.health.status = "containment_verified".into();
+        service.health.generation_id = format!(
+            "sandbox-containment-v1-{}",
+            sha256_json(&generation_material)?
+        );
+        service.health.containment_probe_hash = containment_probe_hash;
+        service.health.ready_for_execution = true;
+        Ok(service)
     }
 
-    pub fn health(&self) -> Result<FoundationHealth> {
+    pub fn health(&self) -> Result<ContainmentCapability> {
         if canonical_utc(unix_time()?)? >= self.health.expires_at {
             return Err(FoundationError::new(
-                PROCESS_SANDBOX_PREREQUISITES_EXPIRED,
-                "Launcher foundation prerequisite verification has expired",
+                PROCESS_CONTAINMENT_EXPIRED,
+                "Active containment verification has expired",
             ));
         }
         self.validate_pinned_authority()?;
@@ -638,15 +775,20 @@ impl FoundationService {
         })?;
         fs::set_permissions(&socket_path, fs::Permissions::from_mode(SOCKET_MODE))
             .map_err(unavailable)?;
+        chown_group(&socket_path, self.config.runtime_client_gid)?;
+        let service = Arc::new(self);
         for connection in listener.incoming() {
             match connection {
                 Ok(stream) => {
-                    if let Err(error) = handle_connection(&self, stream) {
-                        eprintln!(
-                            "launcher foundation request failed: {}: {}",
-                            error.code, error.message
-                        );
-                    }
+                    let service = service.clone();
+                    std::thread::spawn(move || {
+                        if let Err(error) = handle_connection(&service, stream) {
+                            eprintln!(
+                                "launcher foundation request failed: {}: {}",
+                                error.code, error.message
+                            );
+                        }
+                    });
                 }
                 Err(error) => {
                     return Err(FoundationError::new(
@@ -666,6 +808,13 @@ impl FoundationService {
             .revalidate(PROCESS_SECCOMP_POLICY_INVALID, "seccomp policy")?;
         for rootfs in self.rootfs.values() {
             rootfs.revalidate_identity()?;
+        }
+        let materializer = self.materializer.health()?;
+        if materializer.materializer_generation != self.health.materializer_generation {
+            return Err(FoundationError::new(
+                PROCESS_CONTAINMENT_GENERATION_MISMATCH,
+                "materializer generation changed after containment verification",
+            ));
         }
         Ok(())
     }
@@ -736,6 +885,489 @@ impl FoundationService {
             rootfs_registry_generation: self.health.rootfs_registry_generation.clone(),
         })
     }
+
+    fn launch(&self, body: LaunchBody) -> Result<launch_contract::ExecutionResult> {
+        let capability = self.health()?;
+        if body.containment_generation_id != capability.generation_id {
+            return Err(FoundationError::new(
+                PROCESS_CONTAINMENT_GENERATION_MISMATCH,
+                "launch request does not name the current containment generation",
+            ));
+        }
+        body.launch_plan.validate(&capability)?;
+        let plan = body.launch_plan;
+        let executable = VerifyExecutableBody {
+            rootfs_id: plan.runtime_rootfs.id.clone(),
+            rootfs_manifest_sha256: plan.runtime_rootfs.manifest_sha256.clone(),
+            executable_path: plan.executable_identity.path.clone(),
+            executable_sha256: plan.executable_identity.sha256.clone(),
+            format: plan.executable_identity.format.clone(),
+        };
+        self.verify_executable(&executable)?;
+        let rootfs = self.rootfs.get(&plan.runtime_rootfs.id).ok_or_else(|| {
+            FoundationError::new(PROCESS_ROOTFS_UNKNOWN, "launch rootfs is unavailable")
+        })?;
+        let control = Arc::new(ExecutionControl::new());
+        {
+            let mut operations = self.operations.lock().map_err(operation_lock)?;
+            if let Some(existing) = operations.get(&plan.operation_identity) {
+                if existing.state == "active" {
+                    return Err(FoundationError::new(
+                        PROCESS_OPERATION_ALREADY_ACTIVE,
+                        "process operation is already active",
+                    ));
+                }
+                if let Some(result) = &existing.result {
+                    return Ok(result.clone());
+                }
+            }
+            operations.insert(
+                plan.operation_identity.clone(),
+                OperationRecord {
+                    control: control.clone(),
+                    state: "active".into(),
+                    result: None,
+                },
+            );
+        }
+        let filesystem_policy_hash = plan.filesystem_policy_hash()?;
+        let acquisition = AcquireSnapshotRequest {
+            snapshot_id: &plan.workspace_snapshot.id,
+            expected_run_id: plan.run_id,
+            expected_ticket_id: plan.ticket_id,
+            expected_operation_id: &plan.operation_id,
+            expected_operation_identity: &plan.operation_identity,
+            expected_policy_snapshot_hash: &plan.policy_snapshot_hash,
+            expected_materializer_generation: &plan.workspace_snapshot.materializer_generation,
+            expected_filesystem_policy_hash: &filesystem_policy_hash,
+            expected_manifest_sha256: &plan.workspace_snapshot.manifest_sha256,
+            expected_file_count: plan.workspace_snapshot.file_count,
+            expected_total_bytes: plan.workspace_snapshot.total_bytes,
+        };
+        let execution = (|| {
+            let workspace = self.materializer.acquire(&acquisition)?;
+            executor::execute(ExecutionInputs {
+                plan: &plan,
+                backend: &self.backend.descriptor,
+                rootfs,
+                workspace,
+                seccomp_policy: &self.seccomp_contract,
+                cgroup: &self.delegated_cgroup,
+                control: control.clone(),
+                retain_trusted_output: false,
+                require_live_seccomp_observation: false,
+            })
+            .map(|artifacts| artifacts.result)
+        })();
+        let mut operations = self.operations.lock().map_err(operation_lock)?;
+        match execution {
+            Ok(result) => {
+                operations.insert(
+                    plan.operation_identity,
+                    OperationRecord {
+                        control,
+                        state: "terminal".into(),
+                        result: Some(result.clone()),
+                    },
+                );
+                Ok(result)
+            }
+            Err(error) => {
+                operations.remove(&plan.operation_identity);
+                Err(error)
+            }
+        }
+    }
+
+    fn get_operation(&self, body: OperationBody) -> Result<OperationStatus> {
+        validate_operation_identity_text(&body.operation_identity)?;
+        let operations = self.operations.lock().map_err(operation_lock)?;
+        let record = operations.get(&body.operation_identity).ok_or_else(|| {
+            FoundationError::new(
+                PROCESS_OPERATION_NOT_FOUND,
+                "process operation is not present in launcher memory",
+            )
+        })?;
+        Ok(OperationStatus {
+            operation_identity: body.operation_identity,
+            state: record.state.clone(),
+            result: record.result.clone(),
+        })
+    }
+
+    fn cancel_operation(&self, body: OperationBody) -> Result<OperationStatus> {
+        validate_operation_identity_text(&body.operation_identity)?;
+        let operations = self.operations.lock().map_err(operation_lock)?;
+        let record = operations.get(&body.operation_identity).ok_or_else(|| {
+            FoundationError::new(
+                PROCESS_OPERATION_NOT_FOUND,
+                "process operation is not present in launcher memory",
+            )
+        })?;
+        if record.state == "active" {
+            record
+                .control
+                .cancel
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        Ok(OperationStatus {
+            operation_identity: body.operation_identity,
+            state: record.state.clone(),
+            result: record.result.clone(),
+        })
+    }
+
+    fn run_active_containment_probe(&self) -> Result<String> {
+        let probe = &self.config.containment_probe;
+        let rootfs = self.rootfs.get(&probe.rootfs_id).ok_or_else(|| {
+            FoundationError::new(
+                PROCESS_ROOTFS_UNKNOWN,
+                "containment probe rootfs is unavailable",
+            )
+        })?;
+        self.verify_executable(&VerifyExecutableBody {
+            rootfs_id: probe.rootfs_id.clone(),
+            rootfs_manifest_sha256: rootfs.config.manifest_sha256.clone(),
+            executable_path: probe.executable_path.clone(),
+            executable_sha256: probe.executable_sha256.clone(),
+            format: probe.format.clone(),
+        })?;
+        let probe_root = self._state_root.proc_path().join("containment-probe-input");
+        if probe_root.exists() {
+            make_launcher_tree_writable(&probe_root)?;
+            fs::remove_dir_all(&probe_root).map_err(unavailable)?;
+        }
+        fs::create_dir(&probe_root).map_err(unavailable)?;
+        fs::set_permissions(&probe_root, fs::Permissions::from_mode(0o700)).map_err(unavailable)?;
+        let tree_path = probe_root.join("tree");
+        fs::create_dir(&tree_path).map_err(unavailable)?;
+        fs::set_permissions(&tree_path, fs::Permissions::from_mode(0o550)).map_err(unavailable)?;
+        let source_bytes = b"const containmentProbe = true;\n";
+        fs::write(tree_path.join("server.js"), source_bytes).map_err(unavailable)?;
+        fs::set_permissions(
+            tree_path.join("server.js"),
+            fs::Permissions::from_mode(0o440),
+        )
+        .map_err(unavailable)?;
+        let source_hash = sha256_bytes(source_bytes);
+        let manifest_bytes = format!(
+            "{{\"entries\":[{{\"mode\":\"0440\",\"path\":\"server.js\",\
+             \"sha256\":\"{source_hash}\",\"size\":{},\"type\":\"regular_file\"}}],\
+             \"version\":1}}",
+            source_bytes.len()
+        );
+        let manifest_path = probe_root.join("manifest.json");
+        fs::write(&manifest_path, &manifest_bytes).map_err(unavailable)?;
+        fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o440))
+            .map_err(unavailable)?;
+        let manifest_hash = sha256_bytes(manifest_bytes.as_bytes());
+        let mut observations = Vec::new();
+        for (index, mode, expected, wall_time, output, processes, memory) in [
+            (
+                1_u64,
+                "inspect",
+                "completed",
+                10_000,
+                65_536,
+                16,
+                134_217_728,
+            ),
+            (
+                2,
+                "output",
+                "output_limit_exceeded",
+                10_000,
+                4_096,
+                16,
+                134_217_728,
+            ),
+            (3, "sleep", "timed_out", 3_000, 65_536, 16, 134_217_728),
+            (
+                4,
+                "descendants",
+                "timed_out",
+                3_000,
+                65_536,
+                16,
+                134_217_728,
+            ),
+            (
+                5,
+                "pids",
+                "resource_limit_exceeded",
+                10_000,
+                65_536,
+                8,
+                134_217_728,
+            ),
+            (
+                6,
+                "memory",
+                "resource_limit_exceeded",
+                10_000,
+                65_536,
+                16,
+                33_554_432,
+            ),
+            (
+                7,
+                "threads",
+                "resource_limit_exceeded",
+                10_000,
+                65_536,
+                8,
+                134_217_728,
+            ),
+            (
+                8,
+                "file-size",
+                "exited_nonzero",
+                10_000,
+                65_536,
+                16,
+                134_217_728,
+            ),
+            (
+                9,
+                "temporary-storage",
+                "timed_out",
+                3_000,
+                65_536,
+                16,
+                134_217_728,
+            ),
+            (
+                10,
+                "open-files",
+                "timed_out",
+                3_000,
+                65_536,
+                16,
+                134_217_728,
+            ),
+            (11, "cpu", "timed_out", 3_000, 65_536, 16, 134_217_728),
+            (
+                12,
+                "node-compatibility",
+                "completed",
+                10_000,
+                65_536,
+                16,
+                268_435_456,
+            ),
+        ] {
+            let plan = self.probe_launch_plan(
+                index,
+                mode,
+                &manifest_hash,
+                wall_time,
+                output,
+                processes,
+                memory,
+                source_bytes.len() as u64,
+            )?;
+            let workspace = materializer_client::AcquiredSnapshot {
+                tree: File::open(&tree_path).map_err(unavailable)?,
+                manifest: File::open(&manifest_path).map_err(unavailable)?,
+            };
+            let artifacts = executor::execute(ExecutionInputs {
+                plan: &plan,
+                backend: &self.backend.descriptor,
+                rootfs,
+                workspace,
+                seccomp_policy: &self.seccomp_contract,
+                cgroup: &self.delegated_cgroup,
+                control: Arc::new(ExecutionControl::new()),
+                retain_trusted_output: true,
+                require_live_seccomp_observation: true,
+            })?;
+            if artifacts.result.terminal_outcome != expected {
+                return Err(FoundationError::new(
+                    PROCESS_CONTAINMENT_UNAVAILABLE,
+                    format!(
+                        "active containment probe {mode} expected {expected}, got {} \
+                         (exit={:?}, signal={:?})",
+                        artifacts.result.terminal_outcome,
+                        artifacts.result.exit_code,
+                        artifacts.result.signal,
+                    ) + &format!(
+                        "; stderr={}",
+                        String::from_utf8_lossy(&artifacts.trusted_stderr)
+                    ),
+                ));
+            }
+            if mode == "inspect" {
+                validate_inspection_probe(&artifacts)?;
+            }
+            if mode == "cpu"
+                && (artifacts.result.cpu_throttled_events == 0
+                    || artifacts.result.resource_cause.is_some())
+            {
+                return Err(FoundationError::new(
+                    PROCESS_CONTAINMENT_UNAVAILABLE,
+                    "CPU quota probe did not throttle or produced false terminal attribution",
+                ));
+            }
+            if mode == "file-size"
+                && (artifacts.result.resource_cause.is_some()
+                    || !String::from_utf8_lossy(&artifacts.trusted_stdout)
+                        .contains("\"fileSizeLimited\":true"))
+            {
+                return Err(FoundationError::new(
+                    PROCESS_CONTAINMENT_UNAVAILABLE,
+                    "RLIMIT_FSIZE probe was not enforced or was falsely attributed",
+                ));
+            }
+            if mode == "temporary-storage"
+                && !String::from_utf8_lossy(&artifacts.trusted_stdout)
+                    .contains("\"temporaryStorageLimited\":true")
+            {
+                return Err(FoundationError::new(
+                    PROCESS_CONTAINMENT_UNAVAILABLE,
+                    "private tmpfs capacity probe did not reach the enforced boundary",
+                ));
+            }
+            if mode == "open-files"
+                && !String::from_utf8_lossy(&artifacts.trusted_stdout)
+                    .contains("\"openFilesLimited\":true")
+            {
+                return Err(FoundationError::new(
+                    PROCESS_CONTAINMENT_UNAVAILABLE,
+                    "RLIMIT_NOFILE probe did not reach the enforced boundary",
+                ));
+            }
+            if matches!(mode, "pids" | "threads")
+                && artifacts.result.resource_cause.as_deref() != Some("process_count")
+            {
+                return Err(FoundationError::new(
+                    PROCESS_CONTAINMENT_UNAVAILABLE,
+                    "pids.max probe did not produce direct process-count attribution",
+                ));
+            }
+            if mode == "memory" && artifacts.result.resource_cause.as_deref() != Some("memory") {
+                return Err(FoundationError::new(
+                    PROCESS_CONTAINMENT_UNAVAILABLE,
+                    "memory.max probe did not produce direct OOM attribution",
+                ));
+            }
+            observations.push(serde_json::json!({
+                "mode": mode,
+                "terminalOutcome": artifacts.result.terminal_outcome,
+                "resourceCause": artifacts.result.resource_cause,
+                "enforcementCause": artifacts.result.enforcement_cause,
+                "namespaceEvidence": {
+                    "mount": artifacts.namespaces.mount_isolated,
+                    "pid": artifacts.namespaces.pid_isolated,
+                    "network": artifacts.namespaces.network_isolated,
+                    "ipc": artifacts.namespaces.ipc_isolated,
+                    "uts": artifacts.namespaces.uts_isolated,
+                    "cgroup": artifacts.namespaces.cgroup_isolated
+                },
+                "seccompMode": artifacts.seccomp_mode
+            }));
+        }
+        fs::set_permissions(&probe_root, fs::Permissions::from_mode(0o700)).map_err(unavailable)?;
+        sha256_json(&serde_json::json!({
+            "probe": self.config.containment_probe,
+            "mountPlanVersion": executor::MOUNT_PLAN_VERSION,
+            "seccompPolicy": self.seccomp_contract,
+            "delegatedCgroupIdentity": self.delegated_cgroup.identity(),
+            "observations": observations
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn probe_launch_plan(
+        &self,
+        index: u64,
+        mode: &str,
+        manifest_hash: &str,
+        wall_time_ms: u64,
+        max_output_bytes: u64,
+        max_processes: u64,
+        memory_bytes: u64,
+        workspace_bytes: u64,
+    ) -> Result<LaunchPlan> {
+        let operation_id = format!("containment-probe-{index}");
+        let operation_identity = launch_contract::build_operation_identity(index, &operation_id)?;
+        let rootfs = self
+            .rootfs
+            .get(&self.config.containment_probe.rootfs_id)
+            .expect("probe rootfs validated");
+        Ok(LaunchPlan {
+            version: 1,
+            operation_id,
+            operation_identity,
+            run_id: index,
+            ticket_id: index,
+            target_id: "launcher-probe".into(),
+            profile_id: mode.into(),
+            policy_snapshot_hash: "1".repeat(64),
+            runtime_phase: "verification".into(),
+            sandbox_capability: launch_contract::SandboxCapabilityProjection {
+                generation_id: self.health.generation_id.clone(),
+                launcher_protocol_version: PROTOCOL_VERSION,
+                launcher_identity_hash: self.health.launcher_identity_hash.clone(),
+                sandbox_backend_identity_hash: self.backend.sha256.clone(),
+                seccomp_policy_hash: self.seccomp_policy.sha256.clone(),
+                rootfs_registry_generation: rootfs.authority.rootfs_registry_generation.clone(),
+                materializer_generation: self.health.materializer_generation.clone(),
+                delegated_cgroup_identity_hash: self.delegated_cgroup.identity_hash()?,
+                containment_probe_hash: self.health.containment_probe_hash.clone(),
+            },
+            runtime_rootfs: launch_contract::RuntimeRootfs {
+                id: self.config.containment_probe.rootfs_id.clone(),
+                manifest_sha256: rootfs.config.manifest_sha256.clone(),
+            },
+            executable_identity: launch_contract::ExecutableIdentity {
+                path: self.config.containment_probe.executable_path.clone(),
+                sha256: self.config.containment_probe.executable_sha256.clone(),
+                format: "elf".into(),
+            },
+            arguments: vec![mode.into()],
+            working_directory: ".".into(),
+            environment: BTreeMap::new(),
+            workspace_snapshot: launch_contract::WorkspaceSnapshot {
+                id: "containment-probe-input".into(),
+                run_id: index,
+                policy_snapshot_hash: "1".repeat(64),
+                materializer_generation: self.health.materializer_generation.clone(),
+                manifest_sha256: manifest_hash.into(),
+                file_count: 1,
+                total_bytes: workspace_bytes,
+            },
+            filesystem_policy: launch_contract::FilesystemPolicy {
+                input_mode: "materialized_read_only".into(),
+                writable_roots: vec![],
+                allow_symlinks: false,
+                allow_special_files: false,
+                max_input_files: 1,
+                max_input_bytes: workspace_bytes,
+            },
+            limits: launch_contract::ProcessLimits {
+                wall_time_ms,
+                max_output_bytes,
+                max_processes,
+                memory_bytes,
+                cpu_quota_micros_per_100ms: 50_000,
+                max_open_files: 64,
+                max_file_bytes: if mode == "file-size" {
+                    1_048_576
+                } else {
+                    16_777_216
+                },
+                max_temp_bytes: 8_388_608,
+            },
+            execution_policy: launch_contract::ExecutionPolicy {
+                shell: false,
+                stdin: "disabled".into(),
+                detached: false,
+                network_access: "none".into(),
+                environment_mode: "replace".into(),
+            },
+            launch_plan_hash: "0".repeat(64),
+        })
+    }
 }
 
 impl VerifiedRootfs {
@@ -793,6 +1425,10 @@ impl PinnedDirectory {
         }
         Ok(())
     }
+
+    fn proc_path(&self) -> PathBuf {
+        PathBuf::from(format!("/proc/self/fd/{}", self.descriptor.as_raw_fd()))
+    }
 }
 
 impl PinnedFile {
@@ -834,6 +1470,22 @@ impl PinnedFile {
         }
         Ok(())
     }
+
+    fn read_all(&self) -> Result<Vec<u8>> {
+        let mut file = self.descriptor.try_clone().map_err(unavailable)?;
+        file.rewind().map_err(unavailable)?;
+        let mut bytes = Vec::new();
+        file.take(self.maximum_bytes + 1)
+            .read_to_end(&mut bytes)
+            .map_err(unavailable)?;
+        if bytes.len() as u64 > self.maximum_bytes {
+            return Err(FoundationError::new(
+                PROCESS_SECCOMP_POLICY_INVALID,
+                "trusted file exceeds its pinned byte ceiling",
+            ));
+        }
+        Ok(bytes)
+    }
 }
 
 fn handle_connection(service: &FoundationService, mut stream: UnixStream) -> Result<()> {
@@ -854,6 +1506,7 @@ fn handle_connection(service: &FoundationService, mut stream: UnixStream) -> Res
             },
         };
         let _ = write_response(&mut stream, &response);
+        drain_rejected_frame(&mut stream);
         return Err(FoundationError::new(
             PROCESS_LAUNCHER_CLIENT_UNAUTHORIZED,
             "Launcher foundation client is not authorized",
@@ -897,6 +1550,27 @@ fn handle_connection(service: &FoundationService, mut stream: UnixStream) -> Res
     }
 }
 
+fn drain_rejected_frame(stream: &mut UnixStream) {
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let mut header = [0_u8; 4];
+    if stream.read_exact(&mut header).is_err() {
+        return;
+    }
+    let length = u32::from_be_bytes(header) as usize;
+    if length == 0 || length > MAX_MESSAGE_BYTES {
+        return;
+    }
+    let mut remaining = length;
+    let mut buffer = [0_u8; 8192];
+    while remaining > 0 {
+        let requested = remaining.min(buffer.len());
+        match stream.read(&mut buffer[..requested]) {
+            Ok(0) | Err(_) => return,
+            Ok(read) => remaining -= read,
+        }
+    }
+}
+
 fn dispatch(service: &FoundationService, request: &RequestEnvelope) -> Result<Value> {
     match request.operation {
         ProtocolOperation::Health => {
@@ -911,6 +1585,18 @@ fn dispatch(service: &FoundationService, request: &RequestEnvelope) -> Result<Va
             let body = parse_body::<VerifyExecutableBody>(&request.body)?;
             serde_json::to_value(service.verify_executable(&body)?).map_err(protocol_json)
         }
+        ProtocolOperation::Launch => {
+            let body = parse_body::<LaunchBody>(&request.body)?;
+            serde_json::to_value(service.launch(body)?).map_err(protocol_json)
+        }
+        ProtocolOperation::GetOperation => {
+            let body = parse_body::<OperationBody>(&request.body)?;
+            serde_json::to_value(service.get_operation(body)?).map_err(protocol_json)
+        }
+        ProtocolOperation::CancelOperation => {
+            let body = parse_body::<OperationBody>(&request.body)?;
+            serde_json::to_value(service.cancel_operation(body)?).map_err(protocol_json)
+        }
     }
 }
 
@@ -921,6 +1607,24 @@ fn parse_body<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T> {
             format!("launcher request body is invalid: {error}"),
         )
     })
+}
+
+fn validate_containment_rootfs_mountpoints(rootfs: &VerifiedRootfs) -> Result<()> {
+    for required in ["dev", "proc", "tmp", "workspace"] {
+        if !rootfs.manifest.entries.iter().any(|entry| {
+            matches!(
+                entry,
+                RootfsManifestEntry::Directory { path, mode }
+                    if path == required && mode == "0555"
+            )
+        }) {
+            return Err(FoundationError::new(
+                PROCESS_MOUNT_LAYOUT_INVALID,
+                format!("containment rootfs is missing the immutable /{required} mountpoint"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn verify_rootfs_registry(
@@ -1408,7 +2112,12 @@ fn pin_socket_directory(config: &ServiceConfig) -> Result<(PinnedDirectory, Stri
         .ok_or_else(|| protocol("socketPath must end in one exact UTF-8 entry"))?;
     let directory =
         PinnedDirectory::open_absolute(parent, PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE)?;
-    validate_service_directory(&directory, "launcher socket directory", 0o750)?;
+    validate_service_directory(
+        &directory,
+        "launcher socket directory",
+        0o750,
+        config.runtime_client_gid,
+    )?;
     Ok((directory, name.to_owned()))
 }
 
@@ -1416,13 +2125,33 @@ fn validate_service_directory(
     directory: &PinnedDirectory,
     label: &str,
     exact_mode: u32,
+    expected_gid: u32,
 ) -> Result<()> {
     if directory.identity.owner_uid != unsafe { libc::geteuid() }
+        || directory.identity.owner_gid != expected_gid
         || directory.identity.mode != exact_mode
     {
         return Err(FoundationError::new(
             PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE,
-            format!("{label} must be service-owned with mode {exact_mode:04o}"),
+            format!(
+                "{label} must be service-owned by the configured group with mode {exact_mode:04o}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn chown_group(path: &Path, gid: u32) -> Result<()> {
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| protocol("launcher socket path contains a NUL byte"))?;
+    let status = unsafe { libc::chown(path.as_ptr(), u32::MAX, gid) };
+    if status != 0 {
+        return Err(FoundationError::new(
+            PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE,
+            format!(
+                "cannot assign launcher socket to the runtime client group: {}",
+                std::io::Error::last_os_error()
+            ),
         ));
     }
     Ok(())
@@ -1433,19 +2162,6 @@ fn validate_rootfs_directory(directory: &PinnedDirectory, trusted_uid: u32) -> R
         return Err(FoundationError::new(
             PROCESS_ROOTFS_UNAVAILABLE,
             "rootfs must be trusted-owner-owned and not group- or world-writable",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_cgroup_v2_directory(directory: &PinnedDirectory) -> Result<()> {
-    let mut statfs: libc::statfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstatfs(directory.descriptor.as_raw_fd(), &mut statfs) } != 0
-        || statfs.f_type != CGROUP2_SUPER_MAGIC
-    {
-        return Err(FoundationError::new(
-            PROCESS_SANDBOX_PREREQUISITES_UNAVAILABLE,
-            "delegatedCgroupRoot is not on the cgroup v2 unified hierarchy",
         ));
     }
     Ok(())
@@ -1922,7 +2638,7 @@ fn validate_executable_mode(mode: u32) -> Result<()> {
     Ok(())
 }
 
-fn verify_elf_identity(
+pub(crate) fn verify_elf_identity(
     root: &PinnedDirectory,
     relative: &str,
     expected_size: u64,
@@ -2169,15 +2885,68 @@ fn hash_current_binary() -> Result<String> {
     .1)
 }
 
-fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+pub(crate) fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     serde_json::to_vec(value).map_err(protocol_json)
 }
 
-fn sha256_json<T: Serialize>(value: &T) -> Result<String> {
+pub(crate) fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    let value = serde_json::to_value(value).map_err(protocol_json)?;
+    Ok(canonical_json_value_bytes(&value))
+}
+
+pub(crate) fn canonical_json_value_bytes(value: &Value) -> Vec<u8> {
+    fn write(value: &Value, output: &mut Vec<u8>) {
+        match value {
+            Value::Null => output.extend_from_slice(b"null"),
+            Value::Bool(value) => output.extend_from_slice(value.to_string().as_bytes()),
+            Value::Number(value) => output.extend_from_slice(value.to_string().as_bytes()),
+            Value::String(value) => {
+                output.extend_from_slice(
+                    serde_json::to_string(value)
+                        .expect("serializing canonical string")
+                        .as_bytes(),
+                );
+            }
+            Value::Array(values) => {
+                output.push(b'[');
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        output.push(b',');
+                    }
+                    write(value, output);
+                }
+                output.push(b']');
+            }
+            Value::Object(values) => {
+                output.push(b'{');
+                let mut values: Vec<_> = values.iter().collect();
+                values.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+                for (index, (key, value)) in values.into_iter().enumerate() {
+                    if index > 0 {
+                        output.push(b',');
+                    }
+                    output.extend_from_slice(
+                        serde_json::to_string(key)
+                            .expect("serializing canonical key")
+                            .as_bytes(),
+                    );
+                    output.push(b':');
+                    write(value, output);
+                }
+                output.push(b'}');
+            }
+        }
+    }
+    let mut output = Vec::new();
+    write(value, &mut output);
+    output
+}
+
+pub(crate) fn sha256_json<T: Serialize>(value: &T) -> Result<String> {
     Ok(sha256_bytes(&canonical_json(value)?))
 }
 
-fn sha256_bytes(bytes: &[u8]) -> String {
+pub(crate) fn sha256_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
@@ -2247,7 +3016,7 @@ fn unix_time() -> Result<i64> {
     Ok(value)
 }
 
-fn canonical_utc(seconds: i64) -> Result<String> {
+pub(crate) fn canonical_utc(seconds: i64) -> Result<String> {
     let mut broken_down: libc::tm = unsafe { std::mem::zeroed() };
     if unsafe { libc::gmtime_r(&seconds, &mut broken_down) }.is_null() {
         return Err(prerequisite_message("system UTC clock cannot be converted"));
@@ -2265,6 +3034,85 @@ fn canonical_utc(seconds: i64) -> Result<String> {
 
 fn protocol(message: impl Into<String>) -> FoundationError {
     FoundationError::new(PROCESS_LAUNCHER_PROTOCOL_INVALID, message)
+}
+
+fn operation_lock<T>(_: std::sync::PoisonError<T>) -> FoundationError {
+    FoundationError::new(
+        PROCESS_CONTAINMENT_UNAVAILABLE,
+        "launcher operation registry lock is poisoned",
+    )
+}
+
+fn validate_operation_identity_text(value: &str) -> Result<()> {
+    let hash = value.strip_prefix("process-operation:").ok_or_else(|| {
+        FoundationError::new(
+            PROCESS_LAUNCH_PLAN_INVALID,
+            "operationIdentity must use the process-operation prefix",
+        )
+    })?;
+    validate_sha256(hash, "operationIdentity hash")
+}
+
+fn make_launcher_tree_writable(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(unavailable)?;
+        for entry in fs::read_dir(path).map_err(unavailable)? {
+            let entry = entry.map_err(unavailable)?;
+            if entry.path().is_dir() {
+                make_launcher_tree_writable(&entry.path())?;
+            } else {
+                fs::set_permissions(entry.path(), fs::Permissions::from_mode(0o600))
+                    .map_err(unavailable)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_inspection_probe(artifacts: &executor::ExecutionArtifacts) -> Result<()> {
+    if artifacts.seccomp_mode != 2
+        || !artifacts.namespaces.mount_isolated
+        || !artifacts.namespaces.pid_isolated
+        || !artifacts.namespaces.network_isolated
+        || !artifacts.namespaces.ipc_isolated
+        || !artifacts.namespaces.uts_isolated
+        || !artifacts.namespaces.cgroup_isolated
+    {
+        return Err(FoundationError::new(
+            PROCESS_CONTAINMENT_UNAVAILABLE,
+            "active inspection probe did not retain host-observed namespace/seccomp evidence",
+        ));
+    }
+    let output: Value = serde_json::from_slice(&artifacts.trusted_stdout).map_err(|error| {
+        FoundationError::new(
+            PROCESS_CONTAINMENT_UNAVAILABLE,
+            format!("active inspection probe output is invalid: {error}"),
+        )
+    })?;
+    let required = [
+        "rootfsReadOnly",
+        "workspaceReadOnly",
+        "hostPathsAbsent",
+        "procPrivate",
+        "networkDenied",
+        "unixDenied",
+        "netlinkDenied",
+        "dnsDenied",
+        "seccompDenied",
+        "environmentClean",
+        "stdinDisabled",
+        "fileDescriptorsClean",
+    ];
+    if required
+        .iter()
+        .any(|field| output.get(*field) != Some(&Value::Bool(true)))
+    {
+        return Err(FoundationError::new(
+            PROCESS_CONTAINMENT_UNAVAILABLE,
+            "active inspection probe reported an unenforced containment boundary",
+        ));
+    }
+    Ok(())
 }
 
 fn protocol_io(error: std::io::Error) -> FoundationError {
@@ -2360,8 +3208,11 @@ mod tests {
             allowed_client_uid: launcher_uid + 1,
             launcher_service_uid: launcher_uid,
             materializer_service_uid: launcher_uid + 2,
+            runtime_client_gid: unsafe { libc::getegid() }.saturating_add(1),
+            handoff_gid: unsafe { libc::getegid() },
             trusted_rootfs_owner_uid: launcher_uid + 3,
-            delegated_cgroup_root: "/sys/fs/cgroup/ticket-system-process".into(),
+            materializer_socket_path: "/run/ticket-system-process/materializer/materializer.sock"
+                .into(),
             health_validity_ms: 30_000,
             rootfs_registry: vec![RootfsConfiguration {
                 id: "node-24-fedora-runtime-v1".into(),
@@ -2377,8 +3228,14 @@ mod tests {
                 binary_path: "/usr/bin/bwrap".into(),
                 binary_sha256: sha(),
             },
-            seccomp_policy_path: "/etc/ticket-system/process-seccomp-v1.bpf".into(),
+            seccomp_policy_path: "/etc/ticket-system/process-seccomp-v1.json".into(),
             seccomp_policy_sha256: sha(),
+            containment_probe: ContainmentProbeConfiguration {
+                rootfs_id: "node-24-fedora-runtime-v1".into(),
+                executable_path: "/usr/bin/node".into(),
+                executable_sha256: sha(),
+                format: "elf".into(),
+            },
             protected_host_paths: ProtectedHostPaths {
                 runtime_data: vec!["/var/lib/ticket-system/runtime".into()],
                 materializer_state: vec!["/var/lib/ticket-system/process-inputs".into()],
@@ -2510,6 +3367,7 @@ mod tests {
                 manifest_sha256: sha(),
             });
         }
+        exact.containment_probe.rootfs_id = "runtime-00".into();
         exact.validate().unwrap();
         exact.rootfs_registry.push(RootfsConfiguration {
             id: "runtime-over".into(),
@@ -2541,10 +3399,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_operation_has_no_execution_variant() {
-        for operation in [
-            "launch", "execute", "spawn", "cancel", "signal", "output", "attach",
-        ] {
+    fn protocol_exposes_only_bounded_execution_lifecycle() {
+        for operation in ["execute", "spawn", "cancel", "signal", "output", "attach"] {
             let value = serde_json::json!({
                 "version": 1,
                 "requestId": "request-1",
@@ -2552,6 +3408,15 @@ mod tests {
                 "body": {}
             });
             assert!(serde_json::from_value::<RequestEnvelope>(value).is_err());
+        }
+        for operation in ["launch", "getOperation", "cancelOperation"] {
+            let value = serde_json::json!({
+                "version": 1,
+                "requestId": "request-1",
+                "operation": operation,
+                "body": {}
+            });
+            assert!(serde_json::from_value::<RequestEnvelope>(value).is_ok());
         }
     }
 

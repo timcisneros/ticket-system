@@ -7,7 +7,8 @@ ConditionPathIsDirectory=/var/lib/ticket-system/process-inputs
 [Service]
 Type=simple
 User=ticket-system-materializer
-Group=ticket-system-runtime
+Group=ticket-system-process-handoff
+SupplementaryGroups=ticket-system-runtime
 ExecStart=/usr/libexec/ticket-system/ticket-system-process-materializer /etc/ticket-system/process-materializer.json
 Environment=LANG=C.UTF-8
 UMask=0027

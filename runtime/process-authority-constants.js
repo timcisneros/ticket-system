@@ -24,6 +24,12 @@ const PROCESS_EXECUTION_POLICY = Object.freeze({
   environmentMode: 'replace'
 });
 
+const PROCESS_LAUNCHER_ENVIRONMENT = Object.freeze({
+  LANG: 'C.UTF-8',
+  LC_ALL: 'C.UTF-8',
+  TMPDIR: '/tmp'
+});
+
 const PROCESS_NETWORK_ACCESS_NONE_MEANING =
   'The process and its descendants cannot communicate with anything outside their operation sandbox.';
 
@@ -57,14 +63,13 @@ const PROCESS_PROFILE_HARD_LIMITS = Object.freeze({
 const PROCESS_RESOURCE_LIMIT_CAUSES = Object.freeze([
   'memory',
   'process_count',
-  'cpu',
   'open_files',
   'file_size',
   'temporary_storage'
 ]);
 
 const PROCESS_SANDBOX_CAPABILITY_VERSION = 1;
-const PROCESS_SANDBOX_CAPABILITY_STATUS = 'healthy';
+const PROCESS_SANDBOX_CAPABILITY_STATUS = 'containment_verified';
 const PROCESS_SANDBOX_CAPABILITY_MAX_VALIDITY_MS = 5 * 60 * 1000;
 const PROCESS_SANDBOX_LAUNCHER_PROTOCOL_MAX_VERSION = 16;
 
@@ -116,6 +121,7 @@ module.exports = {
   PROCESS_FILESYSTEM_POLICY_HARD_LIMITS,
   PROCESS_IDENTIFIER_MAX_LENGTH,
   PROCESS_IDENTIFIER_PATTERN,
+  PROCESS_LAUNCHER_ENVIRONMENT,
   PROCESS_NETWORK_ACCESS_NONE_MEANING,
   PROCESS_PROFILE_HARD_LIMITS,
   PROCESS_RESOLUTION_RUNTIME_PHASES,

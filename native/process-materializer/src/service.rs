@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs::{self, File};
-use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::io::{Read, Seek, Write};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -15,19 +16,21 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
-    EmptyBody, ErrorDocument, ErrorResponse, GetSnapshotBody, MANIFEST_SCHEMA_VERSION,
-    MAX_MESSAGE_BYTES, MaterializeBody, MaterializerError, MaterializerGeneration,
-    PROCESS_INPUT_GENERATION_MISMATCH, PROCESS_INPUT_MANIFEST_INVALID,
+    AcquireSnapshotBody, EmptyBody, ErrorDocument, ErrorResponse, GetSnapshotBody,
+    MANIFEST_SCHEMA_VERSION, MAX_MESSAGE_BYTES, MaterializeBody, MaterializerError,
+    MaterializerGeneration, PROCESS_INPUT_GENERATION_MISMATCH, PROCESS_INPUT_MANIFEST_INVALID,
     PROCESS_INPUT_REGISTRY_INVALID, PROCESS_INPUT_SNAPSHOT_MISMATCH,
     PROCESS_INPUT_SNAPSHOT_NOT_FOUND, PROCESS_INPUT_SNAPSHOT_SEAL_FAILED,
     PROCESS_INPUT_SOURCE_CHANGED, PROCESS_INPUT_STORAGE_UNAVAILABLE,
     PROCESS_MATERIALIZER_ALREADY_RUNNING, PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED,
     PROCESS_MATERIALIZER_PROTOCOL_INVALID, PROCESS_MATERIALIZER_REQUEST_INVALID,
-    PROCESS_MATERIALIZER_UNAVAILABLE, PROCESS_WORKSPACE_ALLOCATION_UNKNOWN, PROTOCOL_VERSION,
-    ProcessInputPolicy, ProtocolOperation, REGISTRY_SCHEMA_VERSION, RegistryRecord,
-    RequestEnvelope, Result, ServiceConfig, SuccessResponse, WorkspaceSnapshotDescriptor,
-    canonical_struct_json, filesystem_policy_hash, sha256_bytes, validate_get_snapshot_body,
-    validate_identifier, validate_materialize_body, validate_sha256,
+    PROCESS_MATERIALIZER_UNAVAILABLE, PROCESS_SNAPSHOT_DESCRIPTOR_INVALID,
+    PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE, PROCESS_SNAPSHOT_PRINCIPAL_UNAUTHORIZED,
+    PROCESS_WORKSPACE_ALLOCATION_UNKNOWN, PROTOCOL_VERSION, ProcessInputPolicy, ProtocolOperation,
+    REGISTRY_SCHEMA_VERSION, RegistryRecord, RequestEnvelope, Result, ServiceConfig,
+    SnapshotDescriptorAuthority, SuccessResponse, WorkspaceSnapshotDescriptor,
+    canonical_struct_json, filesystem_policy_hash, sha256_bytes, validate_acquire_snapshot_body,
+    validate_get_snapshot_body, validate_identifier, validate_materialize_body, validate_sha256,
 };
 use crate::filesystem::{
     PinnedDirectory, materialize_source_tree_from_descriptor, physical_directories_overlap,
@@ -37,6 +40,7 @@ use crate::filesystem::{
 
 const SOCKET_MODE: u32 = 0o660;
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+const HANDOFF_DIRECTORY_MODE: u32 = 0o710;
 const REGISTRY_FILE_MODE: u32 = 0o440;
 const PROTOCOL_IO_TIMEOUT: Duration = Duration::from_secs(120);
 const INSTANCE_LOCK_NAME: &str = "materializer-instance.lock";
@@ -59,6 +63,7 @@ struct ServiceState {
     socket_name: String,
     staging: PathBuf,
     sealed: PathBuf,
+    sealed_directory: PinnedDirectory,
     registry: PathBuf,
     quarantine: PathBuf,
     records: Mutex<BTreeMap<String, RegistryRecord>>,
@@ -68,10 +73,21 @@ struct ServiceState {
 impl MaterializerService {
     pub fn new(config: ServiceConfig) -> Result<Self> {
         config.validate()?;
+        if unsafe { libc::getegid() } != config.handoff_gid {
+            return Err(MaterializerError::new(
+                PROCESS_MATERIALIZER_UNAVAILABLE,
+                "materializer effective group must equal the configured sealed-descriptor handoff group",
+            ));
+        }
         let input_policy = ProcessInputPolicy::load(&config.input_policy_path)?;
         let allocations = pin_workspace_allocations(&config)?;
         let sealed_root = PinnedDirectory::open_absolute(Path::new(&config.sealed_snapshot_root))?;
-        validate_service_owned_root(&sealed_root, "sealedSnapshotRoot", None)?;
+        validate_service_owned_root(
+            &sealed_root,
+            "sealedSnapshotRoot",
+            Some(0o750),
+            Some(config.handoff_gid),
+        )?;
         let (socket_directory, socket_name) = pin_socket_directory(&config)?;
         validate_existing_socket_entry(&socket_directory, &socket_name)?;
         validate_physical_boundaries(&config, &allocations, &sealed_root, &socket_directory)?;
@@ -84,6 +100,9 @@ impl MaterializerService {
         for directory in [&staging, &sealed, &registry, &quarantine] {
             create_private_directory(directory)?;
         }
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(HANDOFF_DIRECTORY_MODE))
+            .map_err(storage)?;
+        let sealed_directory = sealed_root.open_child_directory("sealed")?;
         clear_abandoned_staging(&staging)?;
         let generation = derive_generation(&config, &input_policy, &allocations)?;
         let records = load_and_validate_registry(&registry, &sealed)?;
@@ -98,6 +117,7 @@ impl MaterializerService {
             socket_name,
             staging,
             sealed,
+            sealed_directory,
             registry,
             quarantine,
             records: Mutex::new(records),
@@ -127,6 +147,7 @@ impl MaterializerService {
         })?;
         fs::set_permissions(&socket_path, fs::Permissions::from_mode(SOCKET_MODE))
             .map_err(storage)?;
+        chown_group(&socket_path, self.state.config.runtime_client_gid)?;
         for connection in listener.incoming() {
             match connection {
                 Ok(stream) => {
@@ -196,6 +217,17 @@ fn acquire_instance_lock(sealed_root: &PinnedDirectory) -> Result<File> {
     Ok(file)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientPrincipal {
+    Runtime,
+    Launcher,
+}
+
+struct DispatchResponse {
+    value: Value,
+    descriptors: Vec<File>,
+}
+
 fn handle_connection(state: &ServiceState, mut stream: UnixStream) -> Result<()> {
     stream
         .set_read_timeout(Some(PROTOCOL_IO_TIMEOUT))
@@ -204,12 +236,20 @@ fn handle_connection(state: &ServiceState, mut stream: UnixStream) -> Result<()>
         .set_write_timeout(Some(PROTOCOL_IO_TIMEOUT))
         .map_err(protocol)?;
     let peer_uid = peer_uid(&stream)?;
-    if peer_uid != state.config.allowed_client_uid {
+    let principal = if peer_uid == state.config.allowed_client_uid {
+        Some(ClientPrincipal::Runtime)
+    } else if peer_uid == state.config.launcher_client_uid {
+        Some(ClientPrincipal::Launcher)
+    } else {
+        None
+    };
+    if principal.is_none() {
         let error = MaterializerError::new(
             PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED,
             "Materializer client is not authorized",
         );
         let _ = write_response(&mut stream, &pre_authentication_error_response());
+        drain_rejected_frame(&mut stream);
         return Err(error);
     }
     let request_bytes = read_frame(&mut stream)?;
@@ -232,39 +272,106 @@ fn handle_connection(state: &ServiceState, mut stream: UnixStream) -> Result<()>
         return Ok(());
     }
 
-    let response = match dispatch(state, &envelope) {
-        Ok(result) => serde_json::to_value(SuccessResponse {
-            version: PROTOCOL_VERSION,
-            request_id: envelope.request_id.clone(),
-            ok: true,
-            result,
-        })
-        .map_err(protocol)?,
+    let response = match dispatch(state, principal.expect("principal checked"), &envelope) {
+        Ok(result) => {
+            let response = serde_json::to_value(SuccessResponse {
+                version: PROTOCOL_VERSION,
+                request_id: envelope.request_id.clone(),
+                ok: true,
+                result: result.value,
+            })
+            .map_err(protocol)?;
+            write_response(&mut stream, &response)?;
+            if !result.descriptors.is_empty() {
+                send_descriptors(&stream, &result.descriptors)?;
+            }
+            return Ok(());
+        }
         Err(error) => serde_json::to_value(error_response(Some(&envelope.request_id), &error))
             .map_err(protocol)?,
     };
     write_response(&mut stream, &response)
 }
 
-fn dispatch(state: &ServiceState, envelope: &RequestEnvelope) -> Result<Value> {
+fn drain_rejected_frame(stream: &mut UnixStream) {
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let mut header = [0_u8; 4];
+    if stream.read_exact(&mut header).is_err() {
+        return;
+    }
+    let length = u32::from_be_bytes(header) as usize;
+    if length == 0 || length > MAX_MESSAGE_BYTES {
+        return;
+    }
+    let mut remaining = length;
+    let mut buffer = [0_u8; 8192];
+    while remaining > 0 {
+        let requested = remaining.min(buffer.len());
+        match stream.read(&mut buffer[..requested]) {
+            Ok(0) | Err(_) => return,
+            Ok(read) => remaining -= read,
+        }
+    }
+}
+
+fn dispatch(
+    state: &ServiceState,
+    principal: ClientPrincipal,
+    envelope: &RequestEnvelope,
+) -> Result<DispatchResponse> {
     match envelope.operation {
         ProtocolOperation::Health => {
             parse_body::<EmptyBody>(&envelope.body)?;
-            serde_json::to_value(&state.generation).map_err(protocol)
+            Ok(DispatchResponse {
+                value: serde_json::to_value(&state.generation).map_err(protocol)?,
+                descriptors: vec![],
+            })
         }
         ProtocolOperation::Materialize => {
+            require_principal(principal, ClientPrincipal::Runtime, "materialize")?;
             let body: MaterializeBody = parse_body(&envelope.body)?;
             validate_materialize_body(&body)?;
             let descriptor = materialize(state, &body)?;
-            serde_json::to_value(descriptor).map_err(protocol)
+            Ok(DispatchResponse {
+                value: serde_json::to_value(descriptor).map_err(protocol)?,
+                descriptors: vec![],
+            })
         }
         ProtocolOperation::GetSnapshot => {
+            require_principal(principal, ClientPrincipal::Runtime, "getSnapshot")?;
             let body: GetSnapshotBody = parse_body(&envelope.body)?;
             validate_get_snapshot_body(&body)?;
             let descriptor = get_snapshot(state, &body)?;
-            serde_json::to_value(descriptor).map_err(protocol)
+            Ok(DispatchResponse {
+                value: serde_json::to_value(descriptor).map_err(protocol)?,
+                descriptors: vec![],
+            })
+        }
+        ProtocolOperation::AcquireSnapshot => {
+            require_principal(principal, ClientPrincipal::Launcher, "acquireSnapshot")?;
+            let body: AcquireSnapshotBody = parse_body(&envelope.body)?;
+            validate_acquire_snapshot_body(&body)?;
+            let (authority, descriptors) = acquire_snapshot(state, &body)?;
+            Ok(DispatchResponse {
+                value: serde_json::to_value(authority).map_err(protocol)?,
+                descriptors,
+            })
         }
     }
+}
+
+fn require_principal(
+    actual: ClientPrincipal,
+    expected: ClientPrincipal,
+    operation: &str,
+) -> Result<()> {
+    if actual != expected {
+        return Err(MaterializerError::new(
+            PROCESS_SNAPSHOT_PRINCIPAL_UNAUTHORIZED,
+            format!("Materializer principal is not authorized for {operation}"),
+        ));
+    }
+    Ok(())
 }
 
 fn materialize(
@@ -293,7 +400,12 @@ fn materialize(
         )
     })?;
     validate_pinned_source_identity(allocation)?;
-    validate_service_owned_root(&state._sealed_root, "sealedSnapshotRoot", None)?;
+    validate_service_owned_root(
+        &state._sealed_root,
+        "sealedSnapshotRoot",
+        Some(0o750),
+        Some(state.config.handoff_gid),
+    )?;
 
     {
         let records = state.records.lock().map_err(registry_lock)?;
@@ -369,6 +481,11 @@ fn materialize(
             format!("atomic snapshot publication failed: {error}"),
         )
     })?;
+    fs::set_permissions(
+        &final_root,
+        fs::Permissions::from_mode(HANDOFF_DIRECTORY_MODE),
+    )
+    .map_err(storage)?;
     sync_directory(&state.sealed)?;
 
     let request_filesystem_policy_hash = filesystem_policy_hash(&request.filesystem_policy)?;
@@ -437,6 +554,129 @@ fn get_snapshot(
         ));
     }
     validate_and_project_record(state, record)
+}
+
+fn acquire_snapshot(
+    state: &ServiceState,
+    request: &AcquireSnapshotBody,
+) -> Result<(SnapshotDescriptorAuthority, Vec<File>)> {
+    if request.expected_materializer_generation != state.generation.materializer_generation {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_GENERATION_MISMATCH,
+            "acquireSnapshot does not name the current materializer generation",
+        ));
+    }
+    let records = state.records.lock().map_err(registry_lock)?;
+    let record = records.get(&request.snapshot_id).ok_or_else(|| {
+        MaterializerError::new(
+            PROCESS_INPUT_SNAPSHOT_NOT_FOUND,
+            "sealed process-input snapshot was not found",
+        )
+    })?;
+    let matches = record.state == "sealed"
+        && record.run_id == request.expected_run_id
+        && record.ticket_id == request.expected_ticket_id
+        && record.operation_id == request.expected_operation_id
+        && record.operation_identity == request.expected_operation_identity
+        && record.policy_snapshot_hash == request.expected_policy_snapshot_hash
+        && record.materializer_generation == request.expected_materializer_generation
+        && record.filesystem_policy_hash == request.expected_filesystem_policy_hash
+        && record.manifest_sha256 == request.expected_manifest_sha256
+        && record.file_count == request.expected_file_count
+        && record.total_bytes == request.expected_total_bytes;
+    if !matches {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_SNAPSHOT_MISMATCH,
+            "sealed process-input snapshot does not match the complete launcher authority tuple",
+        ));
+    }
+    validate_registry_record(record)?;
+    validate_record_storage(&state.sealed, record)?;
+
+    let snapshot = state
+        .sealed_directory
+        .open_child_directory(&record.snapshot_id)
+        .map_err(|error| {
+            MaterializerError::new(
+                PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE,
+                format!("cannot open sealed snapshot descriptor: {}", error.message),
+            )
+        })?;
+    let tree = snapshot.open_child_directory("tree").map_err(|error| {
+        MaterializerError::new(
+            PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE,
+            format!("cannot open sealed tree descriptor: {}", error.message),
+        )
+    })?;
+    let manifest_name = CString::new("manifest.json").expect("static name contains no NUL");
+    let manifest_fd = unsafe {
+        libc::openat(
+            snapshot.raw_fd(),
+            manifest_name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if manifest_fd < 0 {
+        return Err(MaterializerError::new(
+            PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE,
+            format!(
+                "cannot open sealed manifest descriptor: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    let mut manifest = unsafe { File::from_raw_fd(manifest_fd) };
+    let metadata = manifest.metadata().map_err(|error| {
+        MaterializerError::new(
+            PROCESS_SNAPSHOT_DESCRIPTOR_INVALID,
+            format!("cannot inspect sealed manifest descriptor: {error}"),
+        )
+    })?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o222 != 0
+        || metadata.len() > MAX_MESSAGE_BYTES as u64
+    {
+        return Err(MaterializerError::new(
+            PROCESS_SNAPSHOT_DESCRIPTOR_INVALID,
+            "sealed manifest descriptor has invalid type, ownership, mode, or size",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    manifest.read_to_end(&mut bytes).map_err(|error| {
+        MaterializerError::new(
+            PROCESS_SNAPSHOT_DESCRIPTOR_INVALID,
+            format!("cannot read sealed manifest descriptor: {error}"),
+        )
+    })?;
+    if sha256_bytes(&bytes) != record.manifest_sha256 {
+        return Err(MaterializerError::new(
+            PROCESS_SNAPSHOT_DESCRIPTOR_INVALID,
+            "sealed manifest descriptor hash does not match the registry",
+        ));
+    }
+    manifest.rewind().map_err(|error| {
+        MaterializerError::new(
+            PROCESS_SNAPSHOT_DESCRIPTOR_INVALID,
+            format!("cannot rewind sealed manifest descriptor: {error}"),
+        )
+    })?;
+    let tree = tree.duplicate().map_err(|error| {
+        MaterializerError::new(
+            PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE,
+            format!("cannot duplicate sealed tree descriptor: {}", error.message),
+        )
+    })?;
+    Ok((
+        SnapshotDescriptorAuthority {
+            snapshot_id: record.snapshot_id.clone(),
+            manifest_sha256: record.manifest_sha256.clone(),
+            file_count: record.file_count,
+            total_bytes: record.total_bytes,
+            descriptor_count: 2,
+        },
+        vec![tree, manifest],
+    ))
 }
 
 fn validate_and_project_record(
@@ -794,6 +1034,7 @@ fn validate_service_owned_root(
     root: &PinnedDirectory,
     label: &str,
     exact_mode: Option<u32>,
+    expected_gid: Option<u32>,
 ) -> Result<()> {
     let identity = root.current_identity()?;
     if identity != root.identity() {
@@ -807,6 +1048,12 @@ fn validate_service_owned_root(
         return Err(MaterializerError::new(
             PROCESS_INPUT_STORAGE_UNAVAILABLE,
             format!("{label} must be owned by the materializer service UID"),
+        ));
+    }
+    if expected_gid.is_some_and(|gid| identity.owner_gid != gid) {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_STORAGE_UNAVAILABLE,
+            format!("{label} has an unexpected service group"),
         ));
     }
     if identity.mode & 0o022 != 0 {
@@ -855,7 +1102,12 @@ fn pin_socket_directory(config: &ServiceConfig) -> Result<(PinnedDirectory, Stri
             )
         })?;
     let directory = PinnedDirectory::open_absolute(parent)?;
-    validate_service_owned_root(&directory, "materializer socket directory", Some(0o750))?;
+    validate_service_owned_root(
+        &directory,
+        "materializer socket directory",
+        Some(0o750),
+        Some(config.runtime_client_gid),
+    )?;
     Ok((directory, name.to_owned()))
 }
 
@@ -974,7 +1226,12 @@ fn quarantine_unregistered_tree(state: &ServiceState, snapshot_id: &str) -> Resu
 }
 
 fn prepare_socket_path(directory: &PinnedDirectory, socket_name: &str) -> Result<PathBuf> {
-    validate_service_owned_root(directory, "materializer socket directory", Some(0o750))?;
+    validate_service_owned_root(
+        directory,
+        "materializer socket directory",
+        Some(0o750),
+        None,
+    )?;
     let socket_path = PathBuf::from(socket_name);
     match fs::symlink_metadata(&socket_path) {
         Ok(metadata)
@@ -998,6 +1255,26 @@ fn prepare_socket_path(directory: &PinnedDirectory, socket_name: &str) -> Result
         Err(error) => return Err(storage(error)),
     }
     Ok(socket_path)
+}
+
+fn chown_group(path: &Path, gid: u32) -> Result<()> {
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        MaterializerError::new(
+            PROCESS_MATERIALIZER_UNAVAILABLE,
+            "socket path contains a NUL byte",
+        )
+    })?;
+    let status = unsafe { libc::chown(path.as_ptr(), u32::MAX, gid) };
+    if status != 0 {
+        return Err(MaterializerError::new(
+            PROCESS_MATERIALIZER_UNAVAILABLE,
+            format!(
+                "cannot assign materializer socket to the runtime client group: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_existing_socket_entry(directory: &PinnedDirectory, socket_name: &str) -> Result<()> {
@@ -1085,6 +1362,64 @@ fn write_response<T: Serialize>(stream: &mut UnixStream, response: &T) -> Result
                 format!("cannot write bounded response frame: {error}"),
             )
         })
+}
+
+fn send_descriptors(stream: &UnixStream, descriptors: &[File]) -> Result<()> {
+    if descriptors.is_empty() || descriptors.len() > 2 {
+        return Err(MaterializerError::new(
+            PROCESS_SNAPSHOT_DESCRIPTOR_INVALID,
+            "snapshot descriptor response must contain exactly one tree and one manifest",
+        ));
+    }
+    let raw: Vec<RawFd> = descriptors.iter().map(AsRawFd::as_raw_fd).collect();
+    let mut marker = [b'D'];
+    let mut iovec = libc::iovec {
+        iov_base: marker.as_mut_ptr().cast(),
+        iov_len: marker.len(),
+    };
+    let control_length = unsafe {
+        libc::CMSG_SPACE(
+            u32::try_from(raw.len() * std::mem::size_of::<RawFd>())
+                .expect("two descriptors fit in u32"),
+        ) as usize
+    };
+    let mut control = vec![0_u8; control_length];
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iovec;
+    message.msg_iovlen = 1;
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen = control.len();
+    unsafe {
+        let header = libc::CMSG_FIRSTHDR(&message);
+        if header.is_null() {
+            return Err(MaterializerError::new(
+                PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE,
+                "cannot construct snapshot descriptor control message",
+            ));
+        }
+        (*header).cmsg_level = libc::SOL_SOCKET;
+        (*header).cmsg_type = libc::SCM_RIGHTS;
+        (*header).cmsg_len = libc::CMSG_LEN(
+            u32::try_from(raw.len() * std::mem::size_of::<RawFd>())
+                .expect("two descriptors fit in u32"),
+        ) as usize;
+        std::ptr::copy_nonoverlapping(
+            raw.as_ptr().cast::<u8>(),
+            libc::CMSG_DATA(header),
+            raw.len() * std::mem::size_of::<RawFd>(),
+        );
+        message.msg_controllen = (*header).cmsg_len;
+        if libc::sendmsg(stream.as_raw_fd(), &message, libc::MSG_NOSIGNAL) != 1 {
+            return Err(MaterializerError::new(
+                PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE,
+                format!(
+                    "cannot transfer sealed snapshot descriptors: {}",
+                    std::io::Error::last_os_error()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn error_response(request_id: Option<&str>, error: &MaterializerError) -> ErrorResponse {
@@ -1240,6 +1575,9 @@ mod tests {
                 .into(),
             sealed_snapshot_root: sealed.to_string_lossy().into(),
             allowed_client_uid: unsafe { libc::geteuid() },
+            launcher_client_uid: unsafe { libc::geteuid() }.saturating_add(1),
+            runtime_client_gid: unsafe { libc::getegid() }.saturating_add(1),
+            handoff_gid: unsafe { libc::getegid() },
             input_policy_path: policy_path.to_string_lossy().into(),
             workspace_allocations: vec![crate::contract::WorkspaceAllocation {
                 id: "primary-workspace".into(),

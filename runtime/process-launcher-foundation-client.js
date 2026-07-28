@@ -9,9 +9,13 @@ const {
   PROCESS_LAUNCHER_FOUNDATION_PROTOCOL_VERSION,
   ProcessLauncherFoundationError,
   buildGetRootfsRequest,
+  buildLauncherLaunchRequest,
+  buildLauncherOperationRequest,
   buildVerifyExecutableRequest,
+  normalizeContainmentHealth,
   normalizeExecutableAuthority,
-  normalizeFoundationHealth,
+  normalizePrivateExecutionResult,
+  normalizePrivateOperationStatus,
   normalizeProcessLauncherFoundationClientConfig,
   normalizeRootfsAuthority
 } = require('./process-launcher-foundation-contract');
@@ -105,7 +109,7 @@ class ProcessLauncherFoundationClient {
   }
 
   async health(options) {
-    return normalizeFoundationHealth(await this.#request('health', {}), options);
+    return normalizeContainmentHealth(await this.#request('health', {}), options);
   }
 
   async getRootfs(request) {
@@ -127,6 +131,30 @@ class ProcessLauncherFoundationClient {
     );
   }
 
+  async launch(request, authority) {
+    const normalized = buildLauncherLaunchRequest(request, authority);
+    return normalizePrivateExecutionResult(
+      await this.#request('launch', normalized),
+      normalized.launchPlan.operationIdentity
+    );
+  }
+
+  async getOperation(request) {
+    const normalized = buildLauncherOperationRequest(request);
+    return normalizePrivateOperationStatus(
+      await this.#request('getOperation', normalized),
+      normalized.operationIdentity
+    );
+  }
+
+  async cancelOperation(request) {
+    const normalized = buildLauncherOperationRequest(request);
+    return normalizePrivateOperationStatus(
+      await this.#request('cancelOperation', normalized),
+      normalized.operationIdentity
+    );
+  }
+
   #request(operation, body) {
     const requestId = `request-${crypto.randomBytes(24).toString('hex')}`;
     const frame = encodeFrame({
@@ -141,6 +169,7 @@ class ProcessLauncherFoundationClient {
       let header = Buffer.alloc(0);
       let payload = null;
       let received = 0;
+      let deferredWriteError = null;
       const settle = (error, value) => {
         if (settled) return;
         settled = true;
@@ -160,7 +189,13 @@ class ProcessLauncherFoundationClient {
         'Launcher foundation request timed out',
         'PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE'
       )));
-      socket.once('error', settle);
+      socket.once('error', error => {
+        if (error && error.code === 'EPIPE') {
+          deferredWriteError = error;
+          return;
+        }
+        settle(error);
+      });
       socket.once('connect', () => socket.write(frame));
       socket.on('data', chunk => {
         if (settled) return;
@@ -198,7 +233,14 @@ class ProcessLauncherFoundationClient {
       });
       socket.once('end', () => {
         if (!settled) {
-          settle(new ProcessLauncherFoundationError(
+          settle(deferredWriteError || new ProcessLauncherFoundationError(
+            'Launcher foundation closed before a complete response'
+          ));
+        }
+      });
+      socket.once('close', () => {
+        if (!settled) {
+          settle(deferredWriteError || new ProcessLauncherFoundationError(
             'Launcher foundation closed before a complete response'
           ));
         }

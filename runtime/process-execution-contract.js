@@ -207,8 +207,11 @@ function normalizeProcessSandboxCapabilityDescriptor(value, {
     'seccompPolicyHash',
     'rootfsRegistryGeneration',
     'materializerGeneration',
+    'delegatedCgroupIdentityHash',
+    'containmentProbeHash',
     'verifiedAt',
-    'validUntil'
+    'expiresAt',
+    'readyForExecution'
   ];
   const unexpected = Object.keys(value).find(key => !allowedKeys.includes(key));
   if (unexpected) {
@@ -227,6 +230,11 @@ function normalizeProcessSandboxCapabilityDescriptor(value, {
   if (value.status !== PROCESS_SANDBOX_CAPABILITY_STATUS) {
     throw new TypeError(
       `process sandbox capability.status must be ${PROCESS_SANDBOX_CAPABILITY_STATUS}`
+    );
+  }
+  if (value.readyForExecution !== true) {
+    throw new TypeError(
+      'process sandbox capability.readyForExecution must be true only after active containment proof'
     );
   }
   const generationId = processIdentifier(
@@ -252,7 +260,9 @@ function normalizeProcessSandboxCapabilityDescriptor(value, {
   for (const key of [
     'launcherIdentityHash',
     'sandboxBackendIdentityHash',
-    'seccompPolicyHash'
+    'seccompPolicyHash',
+    'delegatedCgroupIdentityHash',
+    'containmentProbeHash'
   ]) {
     if (typeof value[key] !== 'string' || !PROCESS_SHA256_PATTERN.test(value[key])) {
       throw new TypeError(`process sandbox capability.${key} must be a lowercase SHA-256 hash`);
@@ -262,13 +272,13 @@ function normalizeProcessSandboxCapabilityDescriptor(value, {
     value.verifiedAt,
     'process sandbox capability.verifiedAt'
   );
-  const validUntil = processContractTimestamp(
-    value.validUntil,
-    'process sandbox capability.validUntil'
+  const expiresAt = processContractTimestamp(
+    value.expiresAt,
+    'process sandbox capability.expiresAt'
   );
   const observed = processContractTimestamp(observedAt, 'sandbox capability observedAt');
   const verifiedTime = Date.parse(verifiedAt);
-  const validUntilTime = Date.parse(validUntil);
+  const validUntilTime = Date.parse(expiresAt);
   const observedTime = Date.parse(observed);
   if (validUntilTime <= verifiedTime ||
       validUntilTime - verifiedTime > PROCESS_SANDBOX_CAPABILITY_MAX_VALIDITY_MS) {
@@ -290,8 +300,11 @@ function normalizeProcessSandboxCapabilityDescriptor(value, {
     seccompPolicyHash: value.seccompPolicyHash,
     rootfsRegistryGeneration,
     materializerGeneration,
+    delegatedCgroupIdentityHash: value.delegatedCgroupIdentityHash,
+    containmentProbeHash: value.containmentProbeHash,
     verifiedAt,
-    validUntil
+    expiresAt,
+    readyForExecution: true
   });
 }
 
@@ -304,7 +317,9 @@ function projectProcessSandboxCapabilityGeneration(value, options = {}) {
     sandboxBackendIdentityHash: capability.sandboxBackendIdentityHash,
     seccompPolicyHash: capability.seccompPolicyHash,
     rootfsRegistryGeneration: capability.rootfsRegistryGeneration,
-    materializerGeneration: capability.materializerGeneration
+    materializerGeneration: capability.materializerGeneration,
+    delegatedCgroupIdentityHash: capability.delegatedCgroupIdentityHash,
+    containmentProbeHash: capability.containmentProbeHash
   });
 }
 

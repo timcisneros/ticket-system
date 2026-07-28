@@ -10,10 +10,14 @@ const {
   PROCESS_SANDBOX_PREREQUISITE_STATUS,
   ProcessLauncherFoundationError,
   buildGetRootfsRequest,
+  buildLauncherOperationRequest,
   buildProcessSandboxPrerequisiteDescriptor,
   buildVerifyExecutableRequest,
+  normalizeContainmentHealth,
   normalizeExecutableAuthority,
   normalizeFoundationHealth,
+  normalizePrivateExecutionResult,
+  normalizePrivateOperationStatus,
   normalizeProcessSandboxPrerequisiteDescriptor,
   normalizeRootfsAuthority
 } = require('../runtime/process-launcher-foundation-contract');
@@ -75,6 +79,26 @@ function health(overrides = {}) {
       noNewPrivs: 'statically_present',
       activeContainmentProof: 'not_proven_until_2a3'
     },
+    ...overrides
+  };
+}
+
+function containmentHealth(overrides = {}) {
+  return {
+    version: 1,
+    status: 'containment_verified',
+    generationId: `sandbox-containment-v1-${'a'.repeat(64)}`,
+    launcherProtocolVersion: 1,
+    launcherIdentityHash: '1'.repeat(64),
+    sandboxBackendIdentityHash: '2'.repeat(64),
+    seccompPolicyHash: '3'.repeat(64),
+    rootfsRegistryGeneration: `rootfs-registry-v1-${'4'.repeat(64)}`,
+    materializerGeneration: `materializer-v1-${'5'.repeat(64)}`,
+    delegatedCgroupIdentityHash: '8'.repeat(64),
+    containmentProbeHash: '9'.repeat(64),
+    verifiedAt: '2026-07-28T10:00:00.000Z',
+    expiresAt: '2026-07-28T10:01:00.000Z',
+    readyForExecution: true,
     ...overrides
   };
 }
@@ -159,6 +183,19 @@ throwsCode(
   }, { observedAt }),
   'PROCESS_SANDBOX_PREREQUISITES_UNAVAILABLE',
   'prerequisite descriptor rejects a mismatched generation'
+);
+
+equal(
+  normalizeContainmentHealth(containmentHealth(), { observedAt }),
+  containmentHealth(),
+  'active containment health uses the closed time-bounded execution descriptor'
+);
+throwsCode(
+  () => normalizeContainmentHealth(containmentHealth({
+    readyForExecution: false
+  }), { observedAt }),
+  'PROCESS_CONTAINMENT_UNAVAILABLE',
+  'containment health cannot omit active execution readiness'
 );
 
 equal(buildGetRootfsRequest({
@@ -246,6 +283,51 @@ throwsCode(() => parseResponse(Buffer.from(JSON.stringify({
 })), 'request-1'), 'PROCESS_LAUNCHER_PROTOCOL_INVALID',
 'null correlation is forbidden for ordinary typed failures');
 
+const operationIdentity = `process-operation:${'a'.repeat(64)}`;
+equal(buildLauncherOperationRequest({ operationIdentity }), { operationIdentity },
+  'get/cancel request accepts only one canonical operation identity');
+throwsCode(() => buildLauncherOperationRequest({
+  operationIdentity,
+  pid: 123
+}), 'PROCESS_LAUNCHER_PROTOCOL_INVALID',
+'operation lookup rejects a client-selected PID');
+const privateResult = {
+  operationIdentity,
+  terminalOutcome: 'completed',
+  startedAt: '2026-07-28T10:00:00.000Z',
+  endedAt: '2026-07-28T10:00:01.000Z',
+  durationMs: 1000,
+  exitCode: 0,
+  signal: null,
+  stdoutBytes: 1,
+  stderrBytes: 2,
+  combinedOutputBytes: 3,
+  stdoutSha256: 'a'.repeat(64),
+  stderrSha256: 'b'.repeat(64),
+  resourceCause: null,
+  enforcementCause: null,
+  cpuThrottledEvents: 2,
+  launcherEnvironment: {
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TMPDIR: '/tmp'
+  }
+};
+equal(normalizePrivateExecutionResult(privateResult, operationIdentity), privateResult,
+  'bounded private terminal result validates exact stream counts and fixed environment');
+equal(normalizePrivateOperationStatus({
+  operationIdentity,
+  state: 'terminal',
+  result: privateResult
+}, operationIdentity).result, privateResult,
+'private operation lookup binds its terminal result to the requested identity');
+throwsCode(() => normalizePrivateExecutionResult({
+  ...privateResult,
+  resourceCause: 'cpu',
+  terminalOutcome: 'resource_limit_exceeded'
+}), 'PROCESS_LAUNCHER_PROTOCOL_INVALID',
+'CPU throttling cannot be misreported as a terminal resource cause');
+
 equal(CURRENT_PROCESS_SANDBOX_CAPABILITY, null,
   'runtime sandbox capability remains null');
 ok(!fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8')
@@ -269,7 +351,7 @@ ok(new ProcessLauncherFoundationError('x') instanceof Error,
       async health(options) {
         equal(options, { observedAt },
           'trusted inspection passes one observation time to launcher validation');
-        return health();
+        return containmentHealth();
       }
     },
     materializerClient: {
@@ -279,8 +361,8 @@ ok(new ProcessLauncherFoundationError('x') instanceof Error,
     },
     observedAt
   });
-  equal(inspected, descriptor,
-    'trusted inspection binds exact live materializer and launcher generations');
+  equal(inspected, containmentHealth(),
+    'trusted inspection returns the exact active containment generation');
   console.log(`\nPASS: process launcher foundation contract — ${passed} assertions`);
 })().catch(error => {
   console.error(error);

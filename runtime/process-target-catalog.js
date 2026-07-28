@@ -8,6 +8,7 @@ const {
   PROCESS_EXECUTION_POLICY,
   PROCESS_FILESYSTEM_POLICY,
   PROCESS_FILESYSTEM_POLICY_HARD_LIMITS,
+  PROCESS_LAUNCHER_ENVIRONMENT,
   PROCESS_PROFILE_HARD_LIMITS,
   PROCESS_RUNTIME_PHASES,
   PROCESS_SHA256_PATTERN,
@@ -194,6 +195,9 @@ function normalizeEnvironment(value, label) {
   for (const [name, literal] of entries.sort(([left], [right]) =>
     compareCanonicalStrings(left, right))) {
     if (!ENVIRONMENT_NAME_PATTERN.test(name)) fail(`${label} contains invalid variable name: ${name}`);
+    if (Object.hasOwn(PROCESS_LAUNCHER_ENVIRONMENT, name)) {
+      fail(`${label} cannot override launcher-owned variable: ${name}`);
+    }
     if (CONSERVATIVE_SENSITIVE_ENVIRONMENT_NAME_DENYLIST.test(name)) {
       fail(`${label} variable name is denied by the conservative sensitive-name pattern: ${name}`);
     }

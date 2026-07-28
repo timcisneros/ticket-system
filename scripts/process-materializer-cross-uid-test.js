@@ -18,7 +18,9 @@ const BINARY = path.join(
 const SERVICE_UID = 61001;
 const RUNTIME_UID = 61002;
 const UNAUTHORIZED_UID = 61003;
-const SHARED_GID = 61000;
+const LAUNCHER_UID = 61004;
+const RUNTIME_GID = 61000;
+const HANDOFF_GID = 61005;
 let passed = 0;
 
 function ok(value, message) {
@@ -45,9 +47,12 @@ async function waitFor(predicate, timeoutMs = 10000) {
 }
 
 function setpriv(uid, command, commandArguments) {
+  const primaryGroup = uid === SERVICE_UID || uid === LAUNCHER_UID
+    ? HANDOFF_GID
+    : RUNTIME_GID;
   return [
     '--reuid', String(uid),
-    '--regid', String(SHARED_GID),
+    '--regid', String(primaryGroup),
     '--clear-groups',
     command,
     ...commandArguments
@@ -110,23 +115,23 @@ async function main() {
   let service = null;
   try {
     fs.mkdirSync(source, { mode: 0o750 });
-    fs.chownSync(source, RUNTIME_UID, SHARED_GID);
+    fs.chownSync(source, RUNTIME_UID, RUNTIME_GID);
     fs.mkdirSync(sealed, { mode: 0o750 });
-    fs.chownSync(sealed, SERVICE_UID, SHARED_GID);
+    fs.chownSync(sealed, SERVICE_UID, HANDOFF_GID);
     fs.chmodSync(sealed, 0o750);
     fs.mkdirSync(path.dirname(socket), { mode: 0o750 });
-    fs.chownSync(path.dirname(socket), SERVICE_UID, SHARED_GID);
+    fs.chownSync(path.dirname(socket), SERVICE_UID, RUNTIME_GID);
     fs.chmodSync(path.dirname(socket), 0o750);
     ok(fs.statSync(sealed).uid === SERVICE_UID &&
-      fs.statSync(sealed).gid === SHARED_GID &&
+      fs.statSync(sealed).gid === HANDOFF_GID &&
       (fs.statSync(sealed).mode & 0o7777) === 0o750,
     'sealed state root is pre-provisioned with the deployment ownership and mode');
     ok(fs.statSync(path.dirname(socket)).uid === SERVICE_UID &&
-      fs.statSync(path.dirname(socket)).gid === SHARED_GID &&
+      fs.statSync(path.dirname(socket)).gid === RUNTIME_GID &&
       (fs.statSync(path.dirname(socket)).mode & 0o7777) === 0o750,
     'socket directory is pre-provisioned with the deployment ownership and mode');
     fs.writeFileSync(path.join(source, 'input.txt'), 'cross uid input\n', { mode: 0o640 });
-    fs.chownSync(path.join(source, 'input.txt'), RUNTIME_UID, SHARED_GID);
+    fs.chownSync(path.join(source, 'input.txt'), RUNTIME_UID, RUNTIME_GID);
     fs.copyFileSync(path.join(ROOT, 'config/process-input-policy.json'), policy);
     fs.chmodSync(policy, 0o644);
     writeJson(config, {
@@ -134,6 +139,9 @@ async function main() {
       socketPath: socket,
       sealedSnapshotRoot: sealed,
       allowedClientUid: RUNTIME_UID,
+      launcherClientUid: LAUNCHER_UID,
+      runtimeClientGid: RUNTIME_GID,
+      handoffGid: HANDOFF_GID,
       inputPolicyPath: policy,
       workspaceAllocations: [{
         id: 'primary-workspace',
@@ -168,7 +176,7 @@ async function main() {
       },
       operation: 'health'
     });
-    fs.chownSync(healthFile, RUNTIME_UID, SHARED_GID);
+    fs.chownSync(healthFile, RUNTIME_UID, RUNTIME_GID);
     const healthResult = runClient(RUNTIME_UID, clientScript, healthFile);
     ok(healthResult.status === 0,
       `runtime UID can authenticate and read health metadata (${healthResult.stderr.trim()})`);
@@ -201,7 +209,7 @@ async function main() {
         }
       }
     });
-    fs.chownSync(requestFile, RUNTIME_UID, SHARED_GID);
+    fs.chownSync(requestFile, RUNTIME_UID, RUNTIME_GID);
     const materializeResult = runClient(RUNTIME_UID, clientScript, requestFile);
     ok(materializeResult.status === 0,
       `runtime UID can request materialization (${materializeResult.stderr.trim()})`);
@@ -257,7 +265,7 @@ async function main() {
         operationIdentity: buildProcessOperationIdentity(123, deviceOperationId)
       }
     });
-    fs.chownSync(deviceRequestFile, RUNTIME_UID, SHARED_GID);
+    fs.chownSync(deviceRequestFile, RUNTIME_UID, RUNTIME_GID);
     const deviceResult = runClient(RUNTIME_UID, clientScript, deviceRequestFile);
     ok(deviceResult.status !== 0 &&
       deviceResult.stderr.includes('PROCESS_INPUT_SPECIAL_FILE_REJECTED'),

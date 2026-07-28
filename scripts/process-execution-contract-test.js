@@ -77,7 +77,7 @@ function sandboxCapability(overrides = {}) {
   const now = Date.now();
   return {
     version: 1,
-    status: 'healthy',
+    status: 'containment_verified',
     generationId: 'sandbox-generation-001',
     launcherProtocolVersion: 1,
     launcherIdentityHash: 'c'.repeat(64),
@@ -85,8 +85,11 @@ function sandboxCapability(overrides = {}) {
     seccompPolicyHash: 'e'.repeat(64),
     rootfsRegistryGeneration: 'rootfs-registry-001',
     materializerGeneration: 'materializer-001',
+    delegatedCgroupIdentityHash: 'f'.repeat(64),
+    containmentProbeHash: 'a'.repeat(64),
     verifiedAt: new Date(now - 1000).toISOString(),
-    validUntil: new Date(now + 240000).toISOString(),
+    expiresAt: new Date(now + 240000).toISOString(),
+    readyForExecution: true,
     ...overrides
   };
 }
@@ -270,7 +273,7 @@ for (const [label, capability] of [
     'stale',
     sandboxCapability({
       verifiedAt: new Date(Date.now() - 300000).toISOString(),
-      validUntil: new Date(Date.now() - 1000).toISOString()
+      expiresAt: new Date(Date.now() - 1000).toISOString()
     })
   ]
 ]) {
@@ -601,7 +604,6 @@ for (const outcome of PROCESS_TERMINAL_OUTCOMES) {
 equal(PROCESS_RESOURCE_LIMIT_CAUSES, [
   'memory',
   'process_count',
-  'cpu',
   'open_files',
   'file_size',
   'temporary_storage'

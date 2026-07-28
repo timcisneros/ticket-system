@@ -3,6 +3,9 @@
   "socketPath": "/run/ticket-system-process/materializer/materializer.sock",
   "sealedSnapshotRoot": "/var/lib/ticket-system/process-inputs",
   "allowedClientUid": 1000,
+  "launcherClientUid": 62004,
+  "runtimeClientGid": 62002,
+  "handoffGid": 62005,
   "inputPolicyPath": "/etc/ticket-system/process-input-policy.json",
   "workspaceAllocations": [
     {

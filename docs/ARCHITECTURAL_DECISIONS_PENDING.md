@@ -4837,8 +4837,8 @@ snapshots remain readable but receive no executable authority.
 
 | Field | Value |
 |-------|-------|
-| **Status** | Resolved through Tranche 2A2 on 2026-07-28; active enforcement remains 2A3 |
-| **Boundary** | Materializer and launcher-foundation verification only; no sandbox launch or execution |
+| **Status** | Resolved through Tranche 2A3 on 2026-07-28; durable dispatch/lifecycle remains 2B |
+| **Boundary** | Private native execution and active containment only; no model dispatch or PostgreSQL process lifecycle |
 | **Evidence** | `docs/PROCESS_EXECUTION_CONTRACT.md`; `docs/PROCESS_INPUT_MATERIALIZER.md`; `docs/PROCESS_LAUNCHER_FOUNDATION.md`; `runtime/process-execution-contract.js`; `runtime/process-launch-plan.js`; `runtime/process-launcher-foundation-contract.js` |
 | **Decision** | Only a complete version-3 authority snapshot can produce a private immutable launch plan; versions 1 and 2 are permanently executor-free |
 
@@ -4855,7 +4855,7 @@ execution policy into the admitted run. Canonical JSON and the shared locale-ind
 comparator govern snapshot and launch-plan hashes.
 
 **Rootfs trust:** rootfs trees are root-owned, versioned, non-writable by the runtime and
-future launcher UID, manifest-verified before backend health, and retained while
+launcher UID, manifest-verified before containment health, and retained while
 referenced. Live host system directories and operator home directories cannot substitute.
 An operator deployment mapping from rootfs ID to installed path is outside model input and
 outside live dispatch authority.
@@ -4873,8 +4873,9 @@ directories by descriptor without following symbolic or magic links. Allocation 
 identity affects the materializer generation; configured paths cannot redirect a live
 generation. Sealed and socket roots are pre-provisioned through the checked-in
 systemd/tmpfiles boundary. The fixed pre-authentication refusal uses `requestId: null`
-and preserves `PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED` without reading an unauthorized
-payload or exposing the peer UID.
+and preserves `PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED`; one bounded frame is drained
+without parsing after the refusal is sent so transport reset cannot replace the typed
+result. The peer UID is never exposed.
 `docs/PROCESS_INPUT_MATERIALIZER.md` is the governing design.
 
 **Read-only first launch:** `inputMode` is `materialized_read_only`; writable roots are
@@ -4882,10 +4883,9 @@ empty and cannot be enabled. Writable process effects require a later independen
 authority and bounded-copy-out decision.
 
 **Network meaning:** `networkAccess: none` prohibits communication outside the operation
-sandbox. Future enforcement requires a network namespace, no host interfaces/socket
-mounts/inherited sockets, and syscall filtering for external network families and host
-connection paths. Unnamed operation-local IPC such as Unix `socketpair` is not frozen as
-forbidden.
+sandbox. Tranche 2A3 enforces a fresh network namespace, no host interfaces/socket
+mounts/inherited sockets, and a pinned seccomp policy denying external socket creation.
+Unnamed operation-local IPC such as Unix `socketpair` remains permitted.
 
 **Launch-plan boundary:** the plan is private runtime-to-launcher material, derived only
 from an immutable v3 run snapshot plus a trusted materialized-input descriptor. It is
@@ -4911,17 +4911,17 @@ Launcher capacity is a pre-start `failed_to_start` cause and cannot be represent
 `resource_limit_exceeded`, which is reserved for enforcement against an established
 process operation.
 
-**Future launcher protocol:** launcher-owned restricted Unix socket, `SO_PEERCRED`
+**Launcher protocol:** launcher-owned restricted Unix socket, `SO_PEERCRED`
 validation against the exact service UID, closed bounded messages with a fixed maximum
 size of 2,097,152 bytes, no client host mount paths, raw sandbox options, raw cgroup names,
 or unsandboxed fallback. The mandatory barrier is create cgroup → set every limit → create blocked child
 → move and verify membership → release → execute.
 
 **Cross-UID release gate:** sealed ownership is not proven by same-UID chmod. The
-dedicated Linux test uses distinct materializer, runtime, and unauthorized UIDs and is
-mandatory whenever process execution is enabled. The present development host has
-neither root access nor subordinate UID mappings, so this proof is locally blocked and
-must not be reported as executed.
+dedicated Linux test uses distinct launcher, materializer, runtime, trusted-rootfs, and
+unauthorized identities and is mandatory whenever process execution is enabled. On
+2026-07-28 the current host executed it successfully inside a systemd-delegated
+subordinate-UID namespace; the complete active gate passed 17 cross-UID assertions.
 
 **Tranche 2A2 resolution:** the materializer now holds a kernel lifetime lease before
 any staging, registry, or socket mutation. A separate Rust launcher-foundation service
@@ -4935,15 +4935,30 @@ and manifest schema. The runtime can form only a private, expiring
 deliberately incompatible with the healthy sandbox capability contract.
 `docs/PROCESS_LAUNCHER_FOUNDATION.md` is the governing design.
 
-The current host has static Linux prerequisites, including cgroup v2 and the required
-controllers, namespace handles, seccomp, `no_new_privs`, and Bubblewrap. The production
-seccomp policy and delegated ticket-system cgroup do not exist locally. Root/cross-UID
-deployment proof remains an explicit process-enabled release gate; subordinate ranges
-exist on this host, but `newuidmap` cannot install the multi-UID mapping and passwordless
-root is unavailable.
+**Tranche 2A3 resolution:** systemd `Delegate=cpu memory pids` supplies the actual
+service cgroup; the launcher derives it from `/proc/self/cgroup`, proves controller
+write/readback and blocked-child membership, and binds its physical identity into an
+expiring active generation. The materializer passes the exact sealed tree and manifest
+with launcher-only `SCM_RIGHTS`. A fixed Bubblewrap plan uses pinned rootfs/workspace
+descriptors, fresh mount/PID/network/IPC/UTS/user/cgroup namespaces, a private bounded
+tmpfs, a private `/proc` and `/dev`, cleared environment/capabilities, `/dev/null` stdin,
+and the pinned installed seccomp policy. Operation cgroups enforce tasks, memory/swap,
+and CPU rate; rlimits enforce descriptors/file size/core; streaming raw-byte monitors
+enforce combined output and monotonic wall time. Cancellation, timeout, output, and
+observed cgroup violations kill the whole tree and wait for `populated 0`.
 
-**Remaining sequence:** 2A3 enforceable launcher and kernel containment; 2B
-dispatch/evidence/output/cancellation/recovery/execution idempotency.
+The active fixture proves network/filesystem/process/seccomp/environment isolation,
+process/thread/memory/output/time/resource limits, double-fork/session resistance,
+launcher-crash descendant death, stale-cgroup restart cleanup, and the fixed
+`/usr/bin/node --check /workspace/server.js` compatibility profile. CPU quota is
+truthfully a throttle and no longer a terminal resource cause.
+`docs/PROCESS_LAUNCHER_FOUNDATION.md` is the governing design.
+
+The private generation is deliberately not assigned to
+`CURRENT_PROCESS_SANDBOX_CAPABILITY`; version-3 model requests remain sandbox-denied.
+
+**Remaining sequence:** 2B dispatch, durable evidence/output artifacts,
+PostgreSQL execution idempotency, cancellation/recovery, and completion integration.
 
 ---
 

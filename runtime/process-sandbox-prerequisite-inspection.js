@@ -1,15 +1,14 @@
 'use strict';
 
 const {
-  ProcessLauncherFoundationError,
-  buildProcessSandboxPrerequisiteDescriptor
+  ProcessLauncherFoundationError
 } = require('./process-launcher-foundation-contract');
 
 function assertClient(client, operation, label) {
   if (!client || typeof client !== 'object' || typeof client[operation] !== 'function') {
     throw new ProcessLauncherFoundationError(
       `${label} is unavailable`,
-      'PROCESS_SANDBOX_PREREQUISITES_UNAVAILABLE'
+      'PROCESS_CONTAINMENT_UNAVAILABLE'
     );
   }
   return client;
@@ -34,11 +33,14 @@ async function inspectProcessSandboxPrerequisites({
     launcher.health({ observedAt }),
     materializer.health()
   ]);
-  return buildProcessSandboxPrerequisiteDescriptor({
-    launcherHealth,
-    materializerHealth,
-    observedAt
-  });
+  if (launcherHealth.materializerGeneration !==
+      materializerHealth.materializerGeneration) {
+    throw new ProcessLauncherFoundationError(
+      'Launcher containment and materializer generations do not match',
+      'PROCESS_CONTAINMENT_GENERATION_MISMATCH'
+    );
+  }
+  return launcherHealth;
 }
 
 module.exports = {

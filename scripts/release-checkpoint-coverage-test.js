@@ -221,5 +221,7 @@ assert.match(packageJson.scripts['checkpoint:release'], /release-checkpoint\.js/
 assert.match(packageJson.scripts['test:materializer'], /process-materializer-cross-uid-test\.js/);
 assert.match(packageJson.scripts['test:launcher-foundation'],
   /process-launcher-foundation-cross-uid-test\.js/);
+assert.match(packageJson.scripts['test:launcher-containment'],
+  /PROCESS_CONTAINMENT_ACTIVE_REQUIRED=1/);
 
 console.log('PASS: release checkpoint coverage — current deterministic and real-Postgres boundaries are mandatory');

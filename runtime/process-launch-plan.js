@@ -39,7 +39,9 @@ const PROCESS_SANDBOX_GENERATION_KEYS = Object.freeze([
   'sandboxBackendIdentityHash',
   'seccompPolicyHash',
   'rootfsRegistryGeneration',
-  'materializerGeneration'
+  'materializerGeneration',
+  'delegatedCgroupIdentityHash',
+  'containmentProbeHash'
 ]);
 const PROCESS_LAUNCH_PLAN_KEYS = Object.freeze([
   'version',

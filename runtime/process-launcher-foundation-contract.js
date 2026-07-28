@@ -3,13 +3,19 @@
 const path = require('path');
 
 const {
+  PROCESS_LAUNCHER_ENVIRONMENT,
   PROCESS_SHA256_PATTERN,
   validateProcessIdentifier
 } = require('./process-authority-constants');
 const {
   canonicalizeProcessContractValue,
-  hashProcessContractValue
+  hashProcessContractValue,
+  normalizeProcessSandboxCapabilityDescriptor
 } = require('./process-execution-contract');
+const {
+  PROCESS_OPERATION_IDENTITY_PATTERN,
+  validateProcessLaunchPlan
+} = require('./process-launch-plan');
 const {
   normalizeMaterializerGeneration
 } = require('./process-materializer-contract');
@@ -20,7 +26,7 @@ const PROCESS_LAUNCHER_FOUNDATION_MAX_MESSAGE_BYTES = 2_097_152;
 const PROCESS_LAUNCHER_FOUNDATION_DEFAULT_TIMEOUT_MS = 30_000;
 const PROCESS_LAUNCHER_FOUNDATION_MAX_TIMEOUT_MS = 300_000;
 const PROCESS_LAUNCHER_FOUNDATION_DEFAULT_SOCKET_PATH =
-  '/run/ticket-system-process/launcher.sock';
+  '/run/ticket-system-process/launcher/launcher.sock';
 const PROCESS_SANDBOX_PREREQUISITE_VERSION = 1;
 const PROCESS_SANDBOX_PREREQUISITE_STATUS = 'prerequisites_verified';
 const PROCESS_SANDBOX_PREREQUISITE_MAX_VALIDITY_MS = 300_000;
@@ -42,7 +48,75 @@ const PROCESS_LAUNCHER_FOUNDATION_FAILURE_CODES = Object.freeze([
   'PROCESS_SANDBOX_BACKEND_INVALID',
   'PROCESS_SECCOMP_POLICY_INVALID',
   'PROCESS_SANDBOX_PREREQUISITES_UNAVAILABLE',
-  'PROCESS_SANDBOX_PREREQUISITES_EXPIRED'
+  'PROCESS_SANDBOX_PREREQUISITES_EXPIRED',
+  'PROCESS_CONTAINMENT_UNAVAILABLE',
+  'PROCESS_CONTAINMENT_GENERATION_MISMATCH',
+  'PROCESS_CONTAINMENT_EXPIRED',
+  'PROCESS_LAUNCH_PLAN_INVALID',
+  'PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE',
+  'PROCESS_SNAPSHOT_DESCRIPTOR_INVALID',
+  'PROCESS_SNAPSHOT_PRINCIPAL_UNAUTHORIZED',
+  'PROCESS_CGROUP_DELEGATION_UNAVAILABLE',
+  'PROCESS_CGROUP_CONTROLLER_UNAVAILABLE',
+  'PROCESS_CGROUP_LIMIT_UNAVAILABLE',
+  'PROCESS_CGROUP_MEMBERSHIP_FAILED',
+  'PROCESS_CGROUP_TERMINATION_FAILED',
+  'PROCESS_NAMESPACE_UNAVAILABLE',
+  'PROCESS_MOUNT_LAYOUT_INVALID',
+  'PROCESS_NETWORK_ISOLATION_UNAVAILABLE',
+  'PROCESS_SECCOMP_INSTALLATION_FAILED',
+  'PROCESS_ENVIRONMENT_INVALID',
+  'PROCESS_FAILED_TO_START',
+  'PROCESS_OUTPUT_LIMIT_EXCEEDED',
+  'PROCESS_WALL_TIME_EXCEEDED',
+  'PROCESS_RESOURCE_LIMIT_EXCEEDED',
+  'PROCESS_OPERATION_NOT_FOUND',
+  'PROCESS_OPERATION_ALREADY_ACTIVE',
+  'PROCESS_OPERATION_TERMINATION_FAILED'
+]);
+
+const EXECUTION_RESULT_KEYS = Object.freeze([
+  'operationIdentity',
+  'terminalOutcome',
+  'startedAt',
+  'endedAt',
+  'durationMs',
+  'exitCode',
+  'signal',
+  'stdoutBytes',
+  'stderrBytes',
+  'combinedOutputBytes',
+  'stdoutSha256',
+  'stderrSha256',
+  'resourceCause',
+  'enforcementCause',
+  'cpuThrottledEvents',
+  'launcherEnvironment'
+]);
+const OPERATION_STATUS_KEYS = Object.freeze([
+  'operationIdentity',
+  'state',
+  'result'
+]);
+const LAUNCH_REQUEST_KEYS = Object.freeze([
+  'launchPlan',
+  'containmentGenerationId'
+]);
+const PROCESS_PRIVATE_TERMINAL_OUTCOMES = Object.freeze([
+  'completed',
+  'exited_nonzero',
+  'signaled',
+  'timed_out',
+  'cancelled',
+  'output_limit_exceeded',
+  'resource_limit_exceeded'
+]);
+const PROCESS_PRIVATE_RESOURCE_CAUSES = Object.freeze([
+  'memory',
+  'process_count',
+  'open_files',
+  'file_size',
+  'temporary_storage'
 ]);
 
 const FOUNDATION_HEALTH_KEYS = Object.freeze([
@@ -454,6 +528,185 @@ function normalizeProcessSandboxPrerequisiteDescriptor(value, options) {
   return deepFreeze({ ...value });
 }
 
+function normalizeContainmentHealth(value, options) {
+  try {
+    return normalizeProcessSandboxCapabilityDescriptor(value, options);
+  } catch (error) {
+    const code = /expired|currently valid/.test(error.message)
+      ? 'PROCESS_CONTAINMENT_EXPIRED'
+      : 'PROCESS_CONTAINMENT_UNAVAILABLE';
+    fail(`Launcher containment health is invalid: ${error.message}`, code);
+  }
+}
+
+function buildLauncherLaunchRequest(value, {
+  launchAuthorityContext,
+  sandboxCapability
+} = {}) {
+  closed(value, LAUNCH_REQUEST_KEYS, 'launcher launch request');
+  const capability = normalizeContainmentHealth(sandboxCapability);
+  const launchPlan = validateProcessLaunchPlan(value.launchPlan, {
+    launchAuthorityContext,
+    sandboxCapability: capability
+  });
+  const generationId = identifier(
+    value.containmentGenerationId,
+    'containmentGenerationId'
+  );
+  if (generationId !== capability.generationId ||
+      launchPlan.sandboxCapability.generationId !== generationId) {
+    fail(
+      'launch request does not bind the exact active containment generation',
+      'PROCESS_CONTAINMENT_GENERATION_MISMATCH'
+    );
+  }
+  return deepFreeze({
+    launchPlan,
+    containmentGenerationId: generationId
+  });
+}
+
+function buildLauncherOperationRequest(value) {
+  closed(value, ['operationIdentity'], 'launcher operation request');
+  if (typeof value.operationIdentity !== 'string' ||
+      !PROCESS_OPERATION_IDENTITY_PATTERN.test(value.operationIdentity)) {
+    fail('operationIdentity must be a canonical process-operation identity');
+  }
+  return Object.freeze({ operationIdentity: value.operationIdentity });
+}
+
+function nullableInteger(value, label, { minimum = 0 } = {}) {
+  if (value === null) return null;
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    fail(`${label} must be null or a safe integer no smaller than ${minimum}`);
+  }
+  return value;
+}
+
+function normalizeLauncherEnvironment(value) {
+  const keys = Object.keys(PROCESS_LAUNCHER_ENVIRONMENT);
+  closed(value, keys, 'launcher-added environment');
+  if (keys.some(key => value[key] !== PROCESS_LAUNCHER_ENVIRONMENT[key])) {
+    fail(
+      'launcher-added environment must be the fixed LANG, LC_ALL, and TMPDIR values',
+      'PROCESS_ENVIRONMENT_INVALID'
+    );
+  }
+  return deepFreeze({ ...PROCESS_LAUNCHER_ENVIRONMENT });
+}
+
+function normalizePrivateExecutionResult(value, expectedOperationIdentity) {
+  closed(value, EXECUTION_RESULT_KEYS, 'private process execution result');
+  if (typeof value.operationIdentity !== 'string' ||
+      !PROCESS_OPERATION_IDENTITY_PATTERN.test(value.operationIdentity) ||
+      (expectedOperationIdentity !== undefined &&
+       value.operationIdentity !== expectedOperationIdentity)) {
+    fail('private execution result operationIdentity is invalid or mismatched');
+  }
+  if (!PROCESS_PRIVATE_TERMINAL_OUTCOMES.includes(value.terminalOutcome)) {
+    fail('private execution result terminalOutcome is unsupported');
+  }
+  const startedAt = timestamp(value.startedAt, 'private execution result.startedAt');
+  const endedAt = timestamp(value.endedAt, 'private execution result.endedAt');
+  if (Date.parse(endedAt) < Date.parse(startedAt)) {
+    fail('private execution result endedAt precedes startedAt');
+  }
+  const durationMs = nonnegativeInteger(
+    value.durationMs,
+    'private execution result.durationMs'
+  );
+  const exitCode = nullableInteger(value.exitCode, 'private execution result.exitCode');
+  const signal = nullableInteger(value.signal, 'private execution result.signal', {
+    minimum: 1
+  });
+  const stdoutBytes = nonnegativeInteger(
+    value.stdoutBytes,
+    'private execution result.stdoutBytes'
+  );
+  const stderrBytes = nonnegativeInteger(
+    value.stderrBytes,
+    'private execution result.stderrBytes'
+  );
+  const combinedOutputBytes = nonnegativeInteger(
+    value.combinedOutputBytes,
+    'private execution result.combinedOutputBytes'
+  );
+  if (combinedOutputBytes !== stdoutBytes + stderrBytes) {
+    fail('private execution result combinedOutputBytes must equal both stream counts');
+  }
+  const resourceCause = value.resourceCause === null
+    ? null
+    : (() => {
+        if (!PROCESS_PRIVATE_RESOURCE_CAUSES.includes(value.resourceCause)) {
+          fail('private execution result resourceCause is unsupported');
+        }
+        return value.resourceCause;
+      })();
+  if ((value.terminalOutcome === 'resource_limit_exceeded') !==
+      (resourceCause !== null)) {
+    fail('private execution result resource cause contradicts terminalOutcome');
+  }
+  if (value.enforcementCause !== null &&
+      (typeof value.enforcementCause !== 'string' ||
+       value.enforcementCause.length === 0 ||
+       value.enforcementCause.length > 128 ||
+       /[\u0000-\u001f\u007f-\u009f]/.test(value.enforcementCause))) {
+    fail('private execution result enforcementCause is invalid');
+  }
+  if (value.terminalOutcome === 'completed' && exitCode !== 0 ||
+      value.terminalOutcome === 'exited_nonzero' &&
+        (exitCode === null || exitCode === 0) ||
+      value.terminalOutcome === 'signaled' && signal === null) {
+    fail('private execution result exit or signal claim contradicts terminalOutcome');
+  }
+  return deepFreeze({
+    operationIdentity: value.operationIdentity,
+    terminalOutcome: value.terminalOutcome,
+    startedAt,
+    endedAt,
+    durationMs,
+    exitCode,
+    signal,
+    stdoutBytes,
+    stderrBytes,
+    combinedOutputBytes,
+    stdoutSha256: sha256(value.stdoutSha256, 'private execution result.stdoutSha256'),
+    stderrSha256: sha256(value.stderrSha256, 'private execution result.stderrSha256'),
+    resourceCause,
+    enforcementCause: value.enforcementCause,
+    cpuThrottledEvents: nonnegativeInteger(
+      value.cpuThrottledEvents,
+      'private execution result.cpuThrottledEvents'
+    ),
+    launcherEnvironment: normalizeLauncherEnvironment(value.launcherEnvironment)
+  });
+}
+
+function normalizePrivateOperationStatus(value, expectedOperationIdentity) {
+  closed(value, OPERATION_STATUS_KEYS, 'private process operation status');
+  const request = buildLauncherOperationRequest({
+    operationIdentity: value.operationIdentity
+  });
+  if (expectedOperationIdentity !== undefined &&
+      request.operationIdentity !== expectedOperationIdentity) {
+    fail('private operation status does not match the requested operation');
+  }
+  if (!['active', 'terminal'].includes(value.state)) {
+    fail('private operation status state must be active or terminal');
+  }
+  if (value.state === 'active' && value.result !== null ||
+      value.state === 'terminal' && value.result === null) {
+    fail('private operation status state and result contradict one another');
+  }
+  return deepFreeze({
+    operationIdentity: request.operationIdentity,
+    state: value.state,
+    result: value.result === null
+      ? null
+      : normalizePrivateExecutionResult(value.result, request.operationIdentity)
+  });
+}
+
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const item of Object.values(value)) deepFreeze(item);
@@ -466,6 +719,7 @@ function canonicalJson(value) {
 
 module.exports = {
   EXECUTABLE_AUTHORITY_KEYS,
+  EXECUTION_RESULT_KEYS,
   FOUNDATION_HEALTH_KEYS,
   HOST_PREREQUISITE_KEYS,
   PROCESS_LAUNCHER_FOUNDATION_DEFAULT_SOCKET_PATH,
@@ -480,14 +734,21 @@ module.exports = {
   PROCESS_SANDBOX_PREREQUISITE_STATUS,
   PROCESS_SANDBOX_PREREQUISITE_VERSION,
   ProcessLauncherFoundationError,
+  PROCESS_PRIVATE_RESOURCE_CAUSES,
+  PROCESS_PRIVATE_TERMINAL_OUTCOMES,
   ROOTFS_AUTHORITY_KEYS,
   buildGetRootfsRequest,
+  buildLauncherLaunchRequest,
+  buildLauncherOperationRequest,
   buildProcessSandboxPrerequisiteDescriptor,
   buildVerifyExecutableRequest,
   canonicalJson,
   normalizeExecutableAuthority,
+  normalizeContainmentHealth,
   normalizeFoundationHealth,
   normalizeProcessLauncherFoundationClientConfig,
   normalizeProcessSandboxPrerequisiteDescriptor,
+  normalizePrivateExecutionResult,
+  normalizePrivateOperationStatus,
   normalizeRootfsAuthority
 };

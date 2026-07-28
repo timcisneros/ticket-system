@@ -7,7 +7,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const {
   buildProcessOperationIdentity
@@ -76,6 +76,7 @@ function createFixture(label = 'main') {
   fs.mkdirSync(sealed, { mode: 0o750 });
   fs.chmodSync(sealed, 0o750);
   fs.mkdirSync(path.dirname(socket), { recursive: true, mode: 0o750 });
+  fs.chownSync(path.dirname(socket), process.getuid(), process.getgid() + 10);
   fs.chmodSync(path.dirname(socket), 0o750);
   writeJson(policy, JSON.parse(fs.readFileSync(
     path.join(ROOT, 'config/process-input-policy.json'),
@@ -86,6 +87,9 @@ function createFixture(label = 'main') {
     socketPath: socket,
     sealedSnapshotRoot: sealed,
     allowedClientUid: process.getuid(),
+    launcherClientUid: process.getuid() + 1,
+    runtimeClientGid: process.getgid() + 10,
+    handoffGid: process.getgid(),
     inputPolicyPath: policy,
     workspaceAllocations: [{
       id: 'primary-workspace',
@@ -900,7 +904,34 @@ function canonicalJson(value) {
   ).join(',')}}`;
 }
 
-main().catch(error => {
+async function run() {
+  if (!process.argv.includes('--inside-user-namespace') && process.getuid() !== 0) {
+    const result = spawnSync('unshare', [
+      '--user',
+      '--map-auto',
+      '--map-root-user',
+      process.execPath,
+      __filename,
+      '--inside-user-namespace'
+    ], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: 300000,
+      env: process.env
+    });
+    process.stdout.write(result.stdout || '');
+    process.stderr.write(result.stderr || '');
+    if (result.status !== 0) {
+      throw new Error(
+        `materializer Linux integrity namespace failed with status ${result.status}`
+      );
+    }
+    return;
+  }
+  await main();
+}
+
+run().catch(error => {
   console.error(error);
   process.exit(1);
 });

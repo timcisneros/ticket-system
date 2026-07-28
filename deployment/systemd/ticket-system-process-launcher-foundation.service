@@ -4,19 +4,23 @@ After=local-fs.target
 ConditionPathIsDirectory=/run/ticket-system-process/launcher
 ConditionPathIsDirectory=/var/lib/ticket-system/process-launcher
 ConditionPathIsDirectory=/var/lib/ticket-system/runtime-rootfs
-ConditionPathIsDirectory=/sys/fs/cgroup/ticket-system-process
 ConditionPathExists=/etc/ticket-system/process-launcher-foundation.json
-ConditionPathExists=/etc/ticket-system/process-seccomp-v1.bpf
+ConditionPathExists=/etc/ticket-system/process-seccomp-v1.json
 
 [Service]
 Type=simple
 User=ticket-system-launcher
-Group=ticket-system-runtime
+Group=ticket-system-process-handoff
+SupplementaryGroups=ticket-system-runtime
 ExecStart=/usr/libexec/ticket-system/ticket-system-process-launcher-foundation /etc/ticket-system/process-launcher-foundation.json
 Environment=LANG=C.UTF-8
 UMask=0027
 Restart=on-failure
 RestartSec=2s
+KillMode=control-group
+TimeoutStopSec=15s
+Delegate=cpu memory pids
+TasksMax=infinity
 NoNewPrivileges=true
 PrivateDevices=true
 PrivateTmp=true
@@ -24,16 +28,14 @@ ProtectHome=true
 ProtectSystem=strict
 ReadOnlyPaths=/usr/bin/bwrap
 ReadOnlyPaths=/etc/ticket-system/process-launcher-foundation.json
-ReadOnlyPaths=/etc/ticket-system/process-seccomp-v1.bpf
+ReadOnlyPaths=/etc/ticket-system/process-seccomp-v1.json
 ReadOnlyPaths=/var/lib/ticket-system/runtime-rootfs
-ReadOnlyPaths=/sys/fs/cgroup/ticket-system-process
 ReadWritePaths=/run/ticket-system-process/launcher
 ReadWritePaths=/var/lib/ticket-system/process-launcher
 RestrictAddressFamilies=AF_UNIX
 CapabilityBoundingSet=
 AmbientCapabilities=
 LockPersonality=true
-MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=multi-user.target

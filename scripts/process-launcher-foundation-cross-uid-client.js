@@ -14,9 +14,13 @@ async function main() {
   else if (input.operation === 'getRootfs') result = await client.getRootfs(input.request);
   else if (input.operation === 'verifyExecutable') {
     result = await client.verifyExecutable(input.request);
-  } else {
-    throw new Error('unsupported test client operation');
-  }
+  } else if (input.operation === 'launch') {
+    result = await client.launch(input.request, input.authority);
+  } else if (input.operation === 'getOperation') {
+    result = await client.getOperation(input.request);
+  } else if (input.operation === 'cancelOperation') {
+    result = await client.cancelOperation(input.request);
+  } else throw new Error('unsupported test client operation');
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 

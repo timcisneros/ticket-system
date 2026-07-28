@@ -25,8 +25,9 @@ function ok(value, message) {
 }
 
 ok(service.includes('User=ticket-system-materializer') &&
-  service.includes('Group=ticket-system-runtime'),
-'systemd unit uses the dedicated materializer user and runtime group');
+  service.includes('Group=ticket-system-process-handoff') &&
+  service.includes('SupplementaryGroups=ticket-system-runtime'),
+'systemd unit separates descriptor handoff from runtime socket access');
 ok(service.includes(
   'ExecStart=/usr/libexec/ticket-system/ticket-system-process-materializer ' +
   '/etc/ticket-system/process-materializer.json'
@@ -47,7 +48,7 @@ ok(tmpfiles.includes(
   'ticket-system-materializer ticket-system-runtime -'
 ) && tmpfiles.includes(
   'd /var/lib/ticket-system/process-inputs 0750 ' +
-  'ticket-system-materializer ticket-system-runtime -'
+  'ticket-system-materializer ticket-system-process-handoff -'
 ), 'tmpfiles pre-provisions socket and sealed roots with exact ownership and modes');
 ok(tmpfiles.includes(
   'z /etc/ticket-system/process-materializer.json 0640 root ticket-system-runtime -'

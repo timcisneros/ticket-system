@@ -49,6 +49,11 @@ pub const PROCESS_INPUT_SNAPSHOT_NOT_FOUND: FailureCode = "PROCESS_INPUT_SNAPSHO
 pub const PROCESS_INPUT_SNAPSHOT_MISMATCH: FailureCode = "PROCESS_INPUT_SNAPSHOT_MISMATCH";
 pub const PROCESS_INPUT_REGISTRY_INVALID: FailureCode = "PROCESS_INPUT_REGISTRY_INVALID";
 pub const PROCESS_INPUT_GENERATION_MISMATCH: FailureCode = "PROCESS_INPUT_GENERATION_MISMATCH";
+pub const PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE: FailureCode =
+    "PROCESS_SNAPSHOT_DESCRIPTOR_UNAVAILABLE";
+pub const PROCESS_SNAPSHOT_DESCRIPTOR_INVALID: FailureCode = "PROCESS_SNAPSHOT_DESCRIPTOR_INVALID";
+pub const PROCESS_SNAPSHOT_PRINCIPAL_UNAUTHORIZED: FailureCode =
+    "PROCESS_SNAPSHOT_PRINCIPAL_UNAUTHORIZED";
 
 #[derive(Debug, Clone)]
 pub struct MaterializerError {
@@ -82,6 +87,9 @@ pub struct ServiceConfig {
     pub socket_path: String,
     pub sealed_snapshot_root: String,
     pub allowed_client_uid: u32,
+    pub launcher_client_uid: u32,
+    pub runtime_client_gid: u32,
+    pub handoff_gid: u32,
     pub input_policy_path: String,
     pub workspace_allocations: Vec<WorkspaceAllocation>,
     pub protected_host_paths: ProtectedHostPaths,
@@ -137,6 +145,7 @@ pub enum ProtocolOperation {
     Health,
     Materialize,
     GetSnapshot,
+    AcquireSnapshot,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +187,32 @@ pub struct GetSnapshotBody {
     pub expected_policy_snapshot_hash: String,
     pub expected_materializer_generation: String,
     pub expected_filesystem_policy_hash: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcquireSnapshotBody {
+    pub snapshot_id: String,
+    pub expected_run_id: u64,
+    pub expected_ticket_id: u64,
+    pub expected_operation_id: String,
+    pub expected_operation_identity: String,
+    pub expected_policy_snapshot_hash: String,
+    pub expected_materializer_generation: String,
+    pub expected_filesystem_policy_hash: String,
+    pub expected_manifest_sha256: String,
+    pub expected_file_count: u64,
+    pub expected_total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SnapshotDescriptorAuthority {
+    pub snapshot_id: String,
+    pub manifest_sha256: String,
+    pub file_count: u64,
+    pub total_bytes: u64,
+    pub descriptor_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -322,6 +357,18 @@ impl ServiceConfig {
         validate_host_path_text(&self.socket_path, "socketPath")?;
         validate_host_path_text(&self.sealed_snapshot_root, "sealedSnapshotRoot")?;
         validate_host_path_text(&self.input_policy_path, "inputPolicyPath")?;
+        if self.allowed_client_uid == self.launcher_client_uid {
+            return Err(MaterializerError::new(
+                PROCESS_MATERIALIZER_REQUEST_INVALID,
+                "runtime and launcher client UIDs must be distinct",
+            ));
+        }
+        if self.runtime_client_gid == self.handoff_gid {
+            return Err(MaterializerError::new(
+                PROCESS_MATERIALIZER_REQUEST_INVALID,
+                "runtime client and sealed-descriptor handoff groups must be distinct",
+            ));
+        }
         if self.workspace_allocations.is_empty()
             || self.workspace_allocations.len() > MAX_WORKSPACE_ALLOCATIONS
         {
@@ -489,6 +536,46 @@ pub fn validate_get_snapshot_body(body: &GetSnapshotBody) -> Result<()> {
         &body.expected_filesystem_policy_hash,
         "expectedFilesystemPolicyHash",
     )?;
+    let expected = build_operation_identity(body.expected_run_id, &body.expected_operation_id)?;
+    if body.expected_operation_identity != expected {
+        return Err(MaterializerError::new(
+            PROCESS_MATERIALIZER_REQUEST_INVALID,
+            "expectedOperationIdentity does not match expectedRunId and expectedOperationId",
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_acquire_snapshot_body(body: &AcquireSnapshotBody) -> Result<()> {
+    validate_identifier(&body.snapshot_id, "snapshotId")?;
+    validate_positive_id(body.expected_run_id, "expectedRunId")?;
+    validate_positive_id(body.expected_ticket_id, "expectedTicketId")?;
+    validate_identifier(&body.expected_operation_id, "expectedOperationId")?;
+    validate_sha256(
+        &body.expected_policy_snapshot_hash,
+        "expectedPolicySnapshotHash",
+    )?;
+    validate_identifier(
+        &body.expected_materializer_generation,
+        "expectedMaterializerGeneration",
+    )?;
+    validate_sha256(
+        &body.expected_filesystem_policy_hash,
+        "expectedFilesystemPolicyHash",
+    )?;
+    validate_sha256(&body.expected_manifest_sha256, "expectedManifestSha256")?;
+    if body.expected_file_count > MAX_INPUT_FILES_HARD {
+        return Err(MaterializerError::new(
+            PROCESS_MATERIALIZER_REQUEST_INVALID,
+            "expectedFileCount exceeds the hard process-input ceiling",
+        ));
+    }
+    if body.expected_total_bytes > MAX_INPUT_BYTES_HARD {
+        return Err(MaterializerError::new(
+            PROCESS_MATERIALIZER_REQUEST_INVALID,
+            "expectedTotalBytes exceeds the hard process-input ceiling",
+        ));
+    }
     let expected = build_operation_identity(body.expected_run_id, &body.expected_operation_id)?;
     if body.expected_operation_identity != expected {
         return Err(MaterializerError::new(
@@ -872,6 +959,9 @@ mod tests {
             socket_path: "/run/ticket-system-process/materializer/materializer.sock".into(),
             sealed_snapshot_root: "/var/lib/ticket-system/process-inputs".into(),
             allowed_client_uid: 1000,
+            launcher_client_uid: 1001,
+            runtime_client_gid: 1002,
+            handoff_gid: 1003,
             input_policy_path: "/etc/ticket-system/process-input-policy.json".into(),
             workspace_allocations: vec![WorkspaceAllocation {
                 id: "primary-workspace".into(),

@@ -27,8 +27,9 @@ function ok(value, message) {
 }
 
 ok(service.includes('User=ticket-system-launcher') &&
-  service.includes('Group=ticket-system-runtime'),
-'launcher unit uses a dedicated service UID and the runtime client group');
+  service.includes('Group=ticket-system-process-handoff') &&
+  service.includes('SupplementaryGroups=ticket-system-runtime'),
+'launcher unit separates sealed-descriptor handoff from runtime socket access');
 ok(service.includes(
   'ExecStart=/usr/libexec/ticket-system/ticket-system-process-launcher-foundation ' +
   '/etc/ticket-system/process-launcher-foundation.json'
@@ -42,18 +43,26 @@ ok(service.includes('NoNewPrivileges=true') &&
   service.includes('RestrictAddressFamilies=AF_UNIX') &&
   service.includes('Restart=on-failure'),
 'launcher foundation unit applies bounded trusted-service hardening');
+ok(service.includes('Delegate=cpu memory pids') &&
+  service.includes('TasksMax=infinity') &&
+  service.includes('KillMode=control-group') &&
+  !service.includes('MemoryDenyWriteExecute=true') &&
+  !service.includes('ReadOnlyPaths=/sys/fs/cgroup'),
+'launcher unit delegates the real service cgroup and avoids inherited policy not in the snapshot');
 ok(tmpfiles.includes(
   'd /run/ticket-system-process/launcher 0750 ticket-system-launcher ticket-system-runtime -'
 ) && tmpfiles.includes(
   'd /var/lib/ticket-system/process-launcher 0750 ' +
-  'ticket-system-launcher ticket-system-runtime -'
+  'ticket-system-launcher ticket-system-process-handoff -'
 ), 'launcher socket and state roots are pre-provisioned with exact ownership and mode');
 ok(tmpfiles.includes(
   'd /var/lib/ticket-system/runtime-rootfs 0555 root root -'
 ) && tmpfiles.includes(
-  'z /etc/ticket-system/process-seccomp-v1.bpf 0440 root ticket-system-runtime -'
+  'z /etc/ticket-system/process-seccomp-v1.json 0440 root ticket-system-runtime -'
 ), 'deployment pins root-owned rootfs and seccomp authority boundaries');
 ok(configuration.sandboxBackend.kind === 'bubblewrap' &&
+  configuration.runtimeClientGid === 62002 &&
+  configuration.handoffGid === 62005 &&
   configuration.sandboxBackend.binaryPath === '/usr/bin/bwrap' &&
   configuration.rootfsRegistry[0].rootPath.startsWith(
     '/var/lib/ticket-system/runtime-rootfs/'
@@ -65,4 +74,4 @@ ok(!/\b(?:launch|execute|spawn|cancel|signal|output|attach)\b/i.test(
   JSON.stringify(configuration)
 ), 'deployment configuration contains no execution operation or arguments');
 
-console.log(`\nPASS: launcher foundation deployment boundary — ${passed} assertions`);
+console.log(`\nPASS: process launcher deployment boundary — ${passed} assertions`);

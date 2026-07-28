@@ -95,7 +95,7 @@ function sandboxCapability(overrides = {}) {
   const now = Date.now();
   return {
     version: 1,
-    status: 'healthy',
+    status: 'containment_verified',
     generationId: 'sandbox-generation-001',
     launcherProtocolVersion: 1,
     launcherIdentityHash: 'd'.repeat(64),
@@ -103,8 +103,11 @@ function sandboxCapability(overrides = {}) {
     seccompPolicyHash: 'f'.repeat(64),
     rootfsRegistryGeneration: 'rootfs-registry-001',
     materializerGeneration: 'materializer-001',
+    delegatedCgroupIdentityHash: '1'.repeat(64),
+    containmentProbeHash: '2'.repeat(64),
     verifiedAt: new Date(now - 1000).toISOString(),
-    validUntil: new Date(now + 240000).toISOString(),
+    expiresAt: new Date(now + 240000).toISOString(),
+    readyForExecution: true,
     ...overrides
   };
 }
@@ -175,7 +178,9 @@ equal(plan.sandboxCapability, {
   sandboxBackendIdentityHash: healthySandbox.sandboxBackendIdentityHash,
   seccompPolicyHash: healthySandbox.seccompPolicyHash,
   rootfsRegistryGeneration: healthySandbox.rootfsRegistryGeneration,
-  materializerGeneration: healthySandbox.materializerGeneration
+  materializerGeneration: healthySandbox.materializerGeneration,
+  delegatedCgroupIdentityHash: healthySandbox.delegatedCgroupIdentityHash,
+  containmentProbeHash: healthySandbox.containmentProbeHash
 }, 'launch plan contains only the closed sandbox enforcement-generation projection');
 equal(validateProcessLaunchPlan(plan, {
   launchAuthorityContext,
@@ -287,7 +292,7 @@ for (const [label, capability] of [
     'stale',
     sandboxCapability({
       verifiedAt: new Date(Date.now() - 300000).toISOString(),
-      validUntil: new Date(Date.now() - 1000).toISOString()
+      expiresAt: new Date(Date.now() - 1000).toISOString()
     })
   ]
 ]) {

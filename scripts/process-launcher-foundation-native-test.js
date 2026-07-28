@@ -41,23 +41,40 @@ run('launcher native rootfs, manifest, identity, and protocol tests', 'cargo', [
   'test', '--manifest-path', MANIFEST
 ]);
 
-const native = ['src/lib.rs', 'src/main.rs'].map(file =>
+const native = [
+  'src/lib.rs',
+  'src/main.rs',
+  'src/cgroup.rs',
+  'src/executor.rs',
+  'src/launch_contract.rs',
+  'src/materializer_client.rs',
+  'src/seccomp.rs'
+].map(file =>
   fs.readFileSync(path.join(ROOT, 'native/process-launcher', file), 'utf8')
 ).join('\n');
-assert.ok(!/\b(?:Command::new|posix_spawn|fork\s*\(|execv|execve|system\s*\()\b/.test(native),
-  'launcher foundation invokes no child process, shell, or configured executable');
+assert.ok(!/\b(?:Command::new|posix_spawn|system\s*\()\b/.test(native) &&
+  !/(?:["'](?:\/bin\/sh|\/bin\/bash)["'][\s\S]{0,80}["']-c["'])/.test(native),
+  'native launcher invokes no shell or command-string process API');
 passed += 1;
-console.log('  ok launcher foundation has no process-launch primitive');
-assert.ok(!/\b(?:bwrap\s+--|systemd-run|unshare\s|nsenter|clone3?\s*\(|seccomp_load|cgroup\.procs)\b/
-  .test(native),
-'launcher foundation performs no sandbox, namespace, seccomp, or cgroup mutation');
+console.log('  ok launcher has no shell or command-string process API');
+assert.match(native, /fexecve/);
+assert.match(native, /cgroup\.procs/);
+assert.match(native, /--unshare-pid/);
+assert.match(native, /--unshare-net/);
+assert.match(native, /--seccomp/);
+assert.match(native, /verify_pre_execution_gate/);
+assert.match(native, /F_DUPFD_CLOEXEC/);
+assert.match(native, /struct ChildGuard/);
 passed += 1;
-console.log('  ok launcher foundation performs prerequisite inspection only');
-assert.ok(!/\b(?:Launch|Execute|Spawn|Cancel|Signal|Output|Attach)\b/.test(
-  native.match(/enum ProtocolOperation \{[\s\S]*?\}/)[0]
-), 'launcher protocol contains only health, getRootfs, and verifyExecutable');
+console.log('  ok launcher contains the collision-free blocked-child containment sequence');
+const operations = native.match(/enum ProtocolOperation \{[\s\S]*?\}/)[0];
+assert.ok(/\bLaunch\b/.test(operations) &&
+  /\bGetOperation\b/.test(operations) &&
+  /\bCancelOperation\b/.test(operations) &&
+  !/\b(?:Execute|Spawn|Signal|Output|Attach)\b/.test(operations),
+'launcher protocol exposes only the bounded lifecycle, not generic execution');
 passed += 1;
-console.log('  ok launcher protocol exposes no lifecycle operation');
+console.log('  ok launcher protocol is a bounded launch lifecycle');
 
 const productionNode = [
   'runtime/process-launcher-foundation-contract.js',
@@ -65,13 +82,13 @@ const productionNode = [
   'runtime/process-sandbox-prerequisite-inspection.js'
 ].map(file => fs.readFileSync(path.join(ROOT, file), 'utf8')).join('\n');
 assert.ok(!/require\(['"]child_process['"]\)|\b(?:spawn|exec|execFile)\s*\(/.test(productionNode),
-  'production launcher foundation client cannot spawn a service or executable');
+  'production launcher client cannot spawn a service or executable');
 passed += 1;
-console.log('  ok production launcher client has no process-launch API');
+console.log('  ok production launcher client never spawns the native service');
 assert.match(
   fs.readFileSync(path.join(ROOT, 'runtime/process-execution-contract.js'), 'utf8'),
   /const CURRENT_PROCESS_SANDBOX_CAPABILITY = null;/,
-  '2A2 keeps runtime execution capability unavailable'
+  '2A3 keeps model/runtime execution capability unavailable'
 );
 passed += 1;
 console.log('  ok current runtime sandbox capability remains null');
