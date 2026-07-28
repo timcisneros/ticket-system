@@ -5,6 +5,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { withHarness, createAsserter, sleep } = require('./postgres-test-harness');
+const {
+  buildProcessOperationResolutionRecord,
+  resolveProcessOperationRequest,
+  restoreProcessOperationResolution
+} = require('../runtime/process-execution-contract');
 
 const STAMP = Date.now();
 const assert = createAsserter();
@@ -246,13 +251,21 @@ async function main() {
         event.type === 'process.operation_resolution');
       assert(resolutions.length === 1,
         'exact operation-ID replay appends no duplicate resolution event');
+      assert(resolutions[0].payload.code === 'PROCESS_EXECUTOR_UNAVAILABLE' &&
+        resolutions[0].payload.disposition === 'unsupported' &&
+        resolutions[0].payload.authorityStatus === 'allowed' &&
+        resolutions[0].payload.terminalOutcome === null &&
+        resolutions[0].payload.runtimePhase === 'inspection' &&
+        resolutions[0].payload.policySnapshotHash ===
+          authorized.run.processPolicySnapshot.snapshotHash,
+      'persisted resolution stores the complete original executor-unavailable result');
       assert((authorized.replay.processOperations || []).length === 1,
         'exact operation-ID replay appends no duplicate replay resolution');
-      const allowed = authorized.events.find(event =>
+      const allowedEvents = authorized.events.filter(event =>
         event.type === 'authority.allowed' &&
         event.payload && event.payload.operationId === operationId);
-      assert(Boolean(allowed) && allowed.payload.runtimePhase === 'inspection',
-        'authorized request records authority.allowed in the selected runtime phase');
+      assert(allowedEvents.length === 1 && allowedEvents[0].payload.runtimePhase === 'inspection',
+        'exact replay retains one authority.allowed event in the original runtime phase');
       const failedEvent = authorized.events.find(event =>
         event.type === 'run.failed' || event.type === 'run:failed');
       assert(authorized.events.some(event =>
@@ -291,6 +304,109 @@ async function main() {
         event.payload && event.payload.enforcementCause &&
         event.payload.enforcementCause.errorCode === 'PROCESS_PHASE_DENIED'),
       'wrong-phase profile produces PROCESS_PHASE_DENIED rather than unknown profile');
+
+      async function persistResolutionThenAdvancePhase({
+        label,
+        action,
+        originalPhase,
+        laterPhase
+      }) {
+        const ticket = await store.createTicket({
+          status: 'open',
+          title: `process persisted replay ${label} ${STAMP}`
+        });
+        const pending = await store.createRun({
+          ticketId: ticket.id,
+          agentId: grantedAgent.id,
+          status: 'pending',
+          executionMode: 'agent',
+          currentPhase: 'planning',
+          processPolicySnapshot: authorized.run.processPolicySnapshot
+        });
+        const leaseOwner = `process-replay-${label}-${STAMP}`;
+        await store.claimPendingRun({
+          leaseOwner,
+          leaseDurationMs: 60000,
+          eligibleRunIds: [pending.id]
+        });
+        await store.startClaimedRun({
+          runId: pending.id,
+          leaseOwner,
+          leaseDurationMs: 60000
+        });
+        const admittedPhase = await store.advanceRunPhase({
+          runId: pending.id,
+          leaseOwner,
+          fromPhase: 'planning',
+          toPhase: originalPhase,
+          stepId: '1',
+          reason: 'persist original process resolution'
+        });
+        const resolution = resolveProcessOperationRequest(
+          action,
+          authorized.run.processPolicySnapshot,
+          admittedPhase.run.currentPhase
+        );
+        const record = buildProcessOperationResolutionRecord({
+          resolution,
+          runId: pending.id,
+          ticketId: ticket.id
+        });
+        await store.initializeRunReplay({
+          runId: pending.id,
+          ticketId: ticket.id,
+          snapshot: {
+            processPolicySnapshot: authorized.run.processPolicySnapshot,
+            processOperations: [record]
+          }
+        });
+        const advanced = await store.advanceRunPhase({
+          runId: pending.id,
+          leaseOwner,
+          fromPhase: originalPhase,
+          toPhase: laterPhase,
+          stepId: '2',
+          reason: 'prove process resolution replay ignores later phase'
+        });
+        const replay = (await store.readRunReplay(pending.id)).snapshot;
+        const restored = restoreProcessOperationResolution(replay.processOperations[0], action);
+        return { advanced: advanced.run, record: replay.processOperations[0], restored };
+      }
+
+      const persistedAllowed = await persistResolutionThenAdvancePhase({
+        label: 'allowed',
+        action: exactRequest,
+        originalPhase: 'inspection',
+        laterPhase: 'verification'
+      });
+      assert(persistedAllowed.advanced.currentPhase === 'verification' &&
+        persistedAllowed.restored.code === 'PROCESS_EXECUTOR_UNAVAILABLE' &&
+        persistedAllowed.restored.runtimePhase === 'inspection' &&
+        persistedAllowed.restored.policySnapshotHash ===
+          authorized.run.processPolicySnapshot.snapshotHash,
+      'PostgreSQL replay preserves authorized/executor-unavailable resolution after phase changes to denial');
+
+      const persistedDeniedRequest = {
+        operation: 'runProcess',
+        args: {
+          targetId: 'ticket-system-local',
+          profileId: 'verification-check',
+          operationId: `persisted-denied-${STAMP}`
+        }
+      };
+      const persistedDenied = await persistResolutionThenAdvancePhase({
+        label: 'denied',
+        action: persistedDeniedRequest,
+        originalPhase: 'inspection',
+        laterPhase: 'verification'
+      });
+      assert(persistedDenied.advanced.currentPhase === 'verification' &&
+        persistedDenied.restored.code === 'PROCESS_PHASE_DENIED' &&
+        persistedDenied.restored.authorityStatus === 'denied' &&
+        persistedDenied.restored.runtimePhase === 'inspection' &&
+        persistedDenied.restored.policySnapshotHash ===
+          authorized.run.processPolicySnapshot.snapshotHash,
+      'PostgreSQL replay preserves phase denial after phase changes to permission');
 
       const unknownTarget = await runPlans('unknown-target', grantedAgent, [
         inspectionPlan,

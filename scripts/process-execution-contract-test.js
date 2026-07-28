@@ -16,6 +16,7 @@ const {
   PROCESS_TERMINAL_OUTCOMES,
   buildHistoricalProcessPolicySnapshotV1,
   buildProcessOperationIdentity,
+  buildProcessOperationResolutionRecord,
   buildProcessPolicySnapshot,
   classifyProcessOperationIdReuse,
   isProcessContractFeatureEnabled,
@@ -25,7 +26,9 @@ const {
   processAuthorityReferences,
   refuseProcessOperation,
   resolveProcessOperationRequest,
+  restoreProcessOperationResolution,
   validateProcessEvidenceRecord,
+  validateProcessOperationResolutionRecord,
   validateProcessTerminalOutcome
 } = require('../runtime/process-execution-contract');
 
@@ -211,6 +214,82 @@ equal(resolveProcessOperationRequest(request, featureOnlySnapshot, 'inspection')
 
 equal(resolveProcessOperationRequest(request, enabledSnapshot, 'inspection').disposition, 'unsupported',
   'authorized request resolves as unsupported because no executor exists');
+const authorizedResolution = resolveProcessOperationRequest(request, enabledSnapshot, 'inspection');
+const persistedAuthorizedResolution = buildProcessOperationResolutionRecord({
+  resolution: authorizedResolution,
+  runId: 41,
+  ticketId: 2
+});
+equal(Object.keys(persistedAuthorizedResolution), [
+  'operationId',
+  'runId',
+  'ticketId',
+  'targetId',
+  'profileId',
+  'disposition',
+  'code',
+  'authorityStatus',
+  'terminalOutcome',
+  'runtimePhase',
+  'policySnapshotHash',
+  'message',
+  'enforcementCause'
+], 'persisted process resolution carries every reconstruction field');
+equal(restoreProcessOperationResolution(persistedAuthorizedResolution, request),
+  authorizedResolution,
+  'same-phase exact replay reconstructs the original authorized resolution');
+const authorizedReplayAfterDeniedPhase = restoreProcessOperationResolution(
+  persistedAuthorizedResolution,
+  request
+);
+equal({
+  code: authorizedReplayAfterDeniedPhase.code,
+  runtimePhase: authorizedReplayAfterDeniedPhase.runtimePhase,
+  policySnapshotHash: authorizedReplayAfterDeniedPhase.policySnapshotHash
+}, {
+  code: 'PROCESS_EXECUTOR_UNAVAILABLE',
+  runtimePhase: 'inspection',
+  policySnapshotHash: enabledSnapshot.snapshotHash
+}, 'authorized replay preserves its original phase and hash when a later phase would deny it');
+
+const phaseDeniedResolution = resolveProcessOperationRequest(request, enabledSnapshot, 'verification');
+const persistedPhaseDeniedResolution = buildProcessOperationResolutionRecord({
+  resolution: phaseDeniedResolution,
+  runId: 41,
+  ticketId: 2
+});
+const deniedReplayAfterPermittedPhase = restoreProcessOperationResolution(
+  persistedPhaseDeniedResolution,
+  request
+);
+equal({
+  code: deniedReplayAfterPermittedPhase.code,
+  authorityStatus: deniedReplayAfterPermittedPhase.authorityStatus,
+  runtimePhase: deniedReplayAfterPermittedPhase.runtimePhase,
+  policySnapshotHash: deniedReplayAfterPermittedPhase.policySnapshotHash
+}, {
+  code: 'PROCESS_PHASE_DENIED',
+  authorityStatus: 'denied',
+  runtimePhase: 'verification',
+  policySnapshotHash: enabledSnapshot.snapshotHash
+}, 'phase-denied replay remains denied when a later phase would permit the profile');
+assert.throws(
+  () => validateProcessOperationResolutionRecord({
+    ...persistedAuthorizedResolution,
+    authorityStatus: 'denied'
+  }),
+  TypeError
+);
+passed += 1;
+console.log('  ok malformed persisted resolution cannot contradict its typed code');
+throwsCode(
+  () => restoreProcessOperationResolution(persistedAuthorizedResolution, {
+    ...request,
+    args: { ...request.args, profileId: 'different-profile' }
+  }),
+  'PROCESS_OPERATION_ID_CONFLICT',
+  'persisted exact-replay reconstruction retains typed conflicting-reuse rejection'
+);
 throwsCode(
   () => refuseProcessOperation(request, enabledSnapshot, 'inspection'),
   'PROCESS_EXECUTOR_UNAVAILABLE',

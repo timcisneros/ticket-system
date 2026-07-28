@@ -36,6 +36,7 @@ const {
   PROCESS_OPERATION,
   PROCESS_PHASE_AUTHORITY_RULE,
   buildProcessOperationIdentity,
+  buildProcessOperationResolutionRecord,
   buildProcessPolicySnapshot,
   classifyProcessOperationIdReuse,
   isProcessContractFeatureEnabled,
@@ -44,7 +45,7 @@ const {
   processAuthorityReferences,
   processResolutionError,
   resolveProcessOperationRequest,
-  validateProcessEvidenceRecord
+  restoreProcessOperationResolution
 } = require('./runtime/process-execution-contract');
 const {
   loadProcessTargetCatalog,
@@ -12655,12 +12656,14 @@ async function authorizeProcessOperation(run, args, step) {
         }
       : null
   });
+  if (reuse.status === 'idempotent_replay') {
+    return restoreProcessOperationResolution(existing, parsed);
+  }
   const resolution = resolveProcessOperationRequest(
     parsed,
     run.processPolicySnapshot,
     run.currentPhase || 'planning'
   );
-  if (reuse.status === 'idempotent_replay') return resolution;
   const request = resolution.request.args;
   const authorityEvidence = {
     ...buildAuthorityEvidence(
@@ -12677,29 +12680,15 @@ async function authorizeProcessOperation(run, args, step) {
     policySnapshotHash: resolution.policySnapshotHash,
     disposition: resolution.disposition,
     terminalOutcome: resolution.terminalOutcome,
-    runtimePhase: run.currentPhase || 'planning',
+    runtimePhase: resolution.runtimePhase,
     authorityRule: [...PROCESS_AUTHORITY_RULE]
   };
   await recordAuthorityEvidence(run, authorityEvidence, `authority:${operationIdentity}`);
-  const processEvidenceRecord = {
-    operationId: request.operationId,
+  const processEvidence = buildProcessOperationResolutionRecord({
+    resolution,
     runId: run.id,
-    ticketId: run.ticketId,
-    targetId: request.targetId,
-    profileId: request.profileId,
-    policySnapshotHash: resolution.policySnapshotHash,
-    terminalOutcome: resolution.terminalOutcome,
-    enforcementCause: {
-      kind: 'contract_resolution',
-      disposition: resolution.disposition,
-      errorCode: resolution.code,
-      authorityStatus: resolution.authorityStatus,
-      runtimePhase: run.currentPhase || 'planning'
-    }
-  };
-  const processEvidence = resolution.terminalOutcome === null
-    ? processEvidenceRecord
-    : validateProcessEvidenceRecord(processEvidenceRecord);
+    ticketId: run.ticketId
+  });
   await recordNonTerminalRunEvidence(run, {
     category: 'process-operation',
     slot: `${operationIdentity}:resolution`,

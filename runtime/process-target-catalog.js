@@ -3,18 +3,14 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  processIdentifier
-} = require('./process-execution-contract');
+  PROCESS_AUTHORITY_CARDINALITY_LIMITS,
+  PROCESS_EXECUTION_POLICY,
+  PROCESS_RUNTIME_PHASES,
+  compareCanonicalStrings,
+  validateProcessIdentifier
+} = require('./process-authority-constants');
 
 const PROCESS_TARGET_CATALOG_VERSION = 1;
-const PROCESS_RUNTIME_PHASES = Object.freeze(['inspection', 'mutation', 'verification']);
-const PROCESS_EXECUTION_POLICY = Object.freeze({
-  shell: false,
-  stdin: 'disabled',
-  detached: false,
-  networkAccess: 'none',
-  environmentMode: 'replace'
-});
 const PROCESS_PROFILE_BOUNDS = Object.freeze({
   maxExecutableBytes: 4096,
   maxArgumentCount: 128,
@@ -33,7 +29,7 @@ const SHELL_INTERPRETER_BASENAMES = new Set([
   'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'
 ]);
 const ENVIRONMENT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const SENSITIVE_ENVIRONMENT_NAME_PATTERN =
+const CONSERVATIVE_SENSITIVE_ENVIRONMENT_NAME_DENYLIST =
   /(?:^|_)(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|CREDENTIALS?)(?:_|$)/i;
 
 class ProcessTargetCatalogError extends Error {
@@ -152,10 +148,11 @@ function normalizeEnvironment(value, label) {
     fail(`${label} exceeds the ${PROCESS_PROFILE_BOUNDS.maxEnvironmentEntries}-entry limit`);
   }
   const normalized = {};
-  for (const [name, literal] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [name, literal] of entries.sort(([left], [right]) =>
+    compareCanonicalStrings(left, right))) {
     if (!ENVIRONMENT_NAME_PATTERN.test(name)) fail(`${label} contains invalid variable name: ${name}`);
-    if (SENSITIVE_ENVIRONMENT_NAME_PATTERN.test(name)) {
-      fail(`${label} may not contain secret-bearing variable names: ${name}`);
+    if (CONSERVATIVE_SENSITIVE_ENVIRONMENT_NAME_DENYLIST.test(name)) {
+      fail(`${label} variable name is denied by the conservative sensitive-name pattern: ${name}`);
     }
     normalized[name] = boundedString(
       literal,
@@ -190,7 +187,7 @@ function normalizeProfile(value, label) {
   ], label);
   let id;
   try {
-    id = processIdentifier(value.id, `${label}.id`);
+    id = validateProcessIdentifier(value.id, `${label}.id`);
   } catch (error) {
     fail(error.message);
   }
@@ -212,31 +209,51 @@ function validateProcessTargetCatalog(value) {
     fail(`process target catalog.version must be ${PROCESS_TARGET_CATALOG_VERSION}`);
   }
   if (!Array.isArray(value.targets)) fail('process target catalog.targets must be an array');
+  if (value.targets.length > PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxTargetsPerCatalog) {
+    fail(
+      `process target catalog.targets exceeds the ` +
+      `${PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxTargetsPerCatalog}-target limit`
+    );
+  }
+  let totalProfileCount = 0;
   const targets = value.targets.map((target, targetIndex) => {
     const label = `process target catalog.targets[${targetIndex}]`;
     plainObject(target, label);
     onlyKeys(target, ['id', 'profiles'], label);
     let id;
     try {
-      id = processIdentifier(target.id, `${label}.id`);
+      id = validateProcessIdentifier(target.id, `${label}.id`);
     } catch (error) {
       fail(error.message);
     }
     if (!Array.isArray(target.profiles)) fail(`${label}.profiles must be an array`);
+    if (target.profiles.length > PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxProfilesPerTarget) {
+      fail(
+        `${label}.profiles exceeds the ` +
+        `${PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxProfilesPerTarget}-profile limit`
+      );
+    }
+    totalProfileCount += target.profiles.length;
+    if (totalProfileCount > PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxTotalProfilesPerCatalog) {
+      fail(
+        `process target catalog exceeds the ` +
+        `${PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxTotalProfilesPerCatalog}-profile total limit`
+      );
+    }
     const profiles = target.profiles.map((profile, profileIndex) =>
       normalizeProfile(profile, `${label}.profiles[${profileIndex}]`));
     const profileIds = profiles.map(profile => profile.id);
     if (new Set(profileIds).size !== profileIds.length) {
       fail(`${label}.profiles must have unique ids`);
     }
-    profiles.sort((left, right) => left.id.localeCompare(right.id));
+    profiles.sort((left, right) => compareCanonicalStrings(left.id, right.id));
     return { id, profiles };
   });
   const targetIds = targets.map(target => target.id);
   if (new Set(targetIds).size !== targetIds.length) {
     fail('process target catalog.targets must have unique ids');
   }
-  targets.sort((left, right) => left.id.localeCompare(right.id));
+  targets.sort((left, right) => compareCanonicalStrings(left.id, right.id));
   return deepFreeze({ version: PROCESS_TARGET_CATALOG_VERSION, targets });
 }
 
@@ -248,13 +265,20 @@ function normalizeProcessProfileGrants(value) {
       'PROCESS_PROFILE_GRANTS_INVALID'
     );
   }
+  if (value.length > PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxGrantEntriesPerAgent) {
+    throw new ProcessTargetCatalogError(
+      `runtimeConfig.processProfileGrants exceeds the ` +
+      `${PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxGrantEntriesPerAgent}-entry limit`,
+      'PROCESS_PROFILE_GRANTS_INVALID'
+    );
+  }
   const grants = value.map((grant, index) => {
     const label = `runtimeConfig.processProfileGrants[${index}]`;
     plainObject(grant, label);
     onlyKeys(grant, ['targetId', 'profileIds'], label);
     let targetId;
     try {
-      targetId = processIdentifier(grant.targetId, `${label}.targetId`);
+      targetId = validateProcessIdentifier(grant.targetId, `${label}.targetId`);
     } catch (error) {
       throw new ProcessTargetCatalogError(error.message, 'PROCESS_PROFILE_GRANTS_INVALID');
     }
@@ -264,10 +288,17 @@ function normalizeProcessProfileGrants(value) {
         'PROCESS_PROFILE_GRANTS_INVALID'
       );
     }
+    if (grant.profileIds.length > PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxProfileIdsPerGrant) {
+      throw new ProcessTargetCatalogError(
+        `${label}.profileIds exceeds the ` +
+        `${PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxProfileIdsPerGrant}-profile limit`,
+        'PROCESS_PROFILE_GRANTS_INVALID'
+      );
+    }
     let profileIds;
     try {
       profileIds = grant.profileIds.map((profileId, profileIndex) =>
-        processIdentifier(profileId, `${label}.profileIds[${profileIndex}]`));
+        validateProcessIdentifier(profileId, `${label}.profileIds[${profileIndex}]`));
     } catch (error) {
       throw new ProcessTargetCatalogError(error.message, 'PROCESS_PROFILE_GRANTS_INVALID');
     }
@@ -277,7 +308,7 @@ function normalizeProcessProfileGrants(value) {
         'PROCESS_PROFILE_GRANTS_INVALID'
       );
     }
-    profileIds.sort();
+    profileIds.sort(compareCanonicalStrings);
     return { targetId, profileIds };
   });
   const targetIds = grants.map(grant => grant.targetId);
@@ -287,7 +318,7 @@ function normalizeProcessProfileGrants(value) {
       'PROCESS_PROFILE_GRANTS_INVALID'
     );
   }
-  grants.sort((left, right) => left.targetId.localeCompare(right.targetId));
+  grants.sort((left, right) => compareCanonicalStrings(left.targetId, right.targetId));
   return deepFreeze(grants);
 }
 
@@ -328,10 +359,18 @@ function resolveProcessProfileGrants({ capabilityEnabled, catalog, grants }) {
         limits: { ...profile.limits },
         executionPolicy: { ...PROCESS_EXECUTION_POLICY }
       });
+      if (profiles.length > PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxResolvedProfilesPerSnapshot) {
+        throw new ProcessTargetCatalogError(
+          `Resolved process profile authority exceeds the ` +
+          `${PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxResolvedProfilesPerSnapshot}-profile limit`,
+          'PROCESS_PROFILE_GRANTS_INVALID'
+        );
+      }
     }
   }
   profiles.sort((left, right) =>
-    left.targetId.localeCompare(right.targetId) || left.profileId.localeCompare(right.profileId));
+    compareCanonicalStrings(left.targetId, right.targetId) ||
+    compareCanonicalStrings(left.profileId, right.profileId));
   return profiles;
 }
 
@@ -360,6 +399,7 @@ function loadProcessTargetCatalog(filePath) {
 }
 
 module.exports = {
+  PROCESS_AUTHORITY_CARDINALITY_LIMITS,
   PROCESS_EXECUTION_POLICY,
   PROCESS_PROFILE_BOUNDS,
   PROCESS_PROFILE_HARD_LIMITS,

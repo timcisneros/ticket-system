@@ -1,14 +1,24 @@
 'use strict';
 
 const crypto = require('crypto');
+const {
+  PROCESS_AUTHORITY_CARDINALITY_LIMITS,
+  PROCESS_EXECUTION_POLICY,
+  PROCESS_IDENTIFIER_MAX_LENGTH,
+  PROCESS_RESOLUTION_RUNTIME_PHASES,
+  PROCESS_RUNTIME_PHASES,
+  compareCanonicalStrings,
+  validateProcessIdentifier
+} = require('./process-authority-constants');
+const {
+  validateProcessTargetCatalog
+} = require('./process-target-catalog');
 
 const PROCESS_CONTRACT_VERSION = 1;
 const PROCESS_POLICY_SNAPSHOT_VERSION = 2;
 const PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION = 1;
 const PROCESS_OPERATION = 'runProcess';
 const PROCESS_FEATURE_ENV = 'ENABLE_PROCESS_EXECUTION_CONTRACT';
-const PROCESS_IDENTIFIER_MAX_LENGTH = 128;
-const PROCESS_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const PROCESS_INLINE_OUTPUT_MAX_BYTES = 64 * 1024;
 const PROCESS_ARTIFACT_REFERENCE_MAX_LENGTH = 2048;
 
@@ -25,7 +35,6 @@ const PROCESS_PHASE_AUTHORITY_RULE = Object.freeze([
   'The runtime envelope may advertise runProcess in a phase only when at least one snapshotted profile is permitted in that phase.',
   'Authorization rechecks the selected profile against the current phase.'
 ]);
-const PROCESS_RUNTIME_PHASES = Object.freeze(['inspection', 'mutation', 'verification']);
 
 const PROCESS_TERMINAL_OUTCOMES = Object.freeze([
   'completed',
@@ -135,7 +144,7 @@ function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {
     return Object.fromEntries(
-      Object.keys(value).sort().map(key => [key, canonicalize(value[key])])
+      Object.keys(value).sort(compareCanonicalStrings).map(key => [key, canonicalize(value[key])])
     );
   }
   return value;
@@ -146,29 +155,15 @@ function sha256Json(value) {
 }
 
 function processIdentifier(value, label, { request = false } = {}) {
-  const fail = message => {
-    if (!request) throw new TypeError(message);
-    throw new ProcessContractError(message, {
+  try {
+    return validateProcessIdentifier(value, label);
+  } catch (error) {
+    if (!request) throw error;
+    throw new ProcessContractError(error.message, {
       code: 'PROCESS_REQUEST_MALFORMED',
       details: { field: label }
     });
-  };
-  if (typeof value !== 'string' || value.length === 0) {
-    return fail(`${label} must be a non-empty string`);
   }
-  if (value !== value.trim()) {
-    return fail(`${label} must not have surrounding whitespace`);
-  }
-  if (value.length > PROCESS_IDENTIFIER_MAX_LENGTH) {
-    return fail(`${label} must not exceed ${PROCESS_IDENTIFIER_MAX_LENGTH} characters`);
-  }
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) {
-    return fail(`${label} must not contain control characters`);
-  }
-  if (!PROCESS_IDENTIFIER_PATTERN.test(value)) {
-    return fail(`${label} must use lowercase letters, numbers, dots, underscores, or hyphens and start with a letter or number`);
-  }
-  return value;
 }
 
 function assertOnlyKeys(value, allowedKeys, label) {
@@ -266,7 +261,7 @@ function normalizeGrant(grant, label) {
   if (!Array.isArray(grant.profileIds)) throw new TypeError(`${label}.profileIds must be an array`);
   const profileIds = [...new Set(grant.profileIds.map((profileId, index) => {
     return processIdentifier(profileId, `${label}.profileIds[${index}]`);
-  }))].sort();
+  }))].sort(compareCanonicalStrings);
   if (profileIds.length === 0) throw new TypeError(`${label}.profileIds must not be empty`);
   return { targetId, profileIds };
 }
@@ -290,11 +285,8 @@ function buildHistoricalProcessPolicySnapshotV1({
   if (!Array.isArray(grants)) throw new TypeError('processPolicySnapshot.grants must be an array');
   normalizeCapturedAt(capturedAt);
   const normalizedGrants = grants.map((grant, index) => normalizeGrant(grant, `processPolicySnapshot.grants[${index}]`));
-  normalizedGrants.sort((left, right) => {
-    if (left.targetId < right.targetId) return -1;
-    if (left.targetId > right.targetId) return 1;
-    return 0;
-  });
+  normalizedGrants.sort((left, right) =>
+    compareCanonicalStrings(left.targetId, right.targetId));
   if (new Set(normalizedGrants.map(grant => grant.targetId)).size !== normalizedGrants.length) {
     throw new TypeError('processPolicySnapshot.grants targetId values must be unique');
   }
@@ -314,18 +306,12 @@ function normalizeExecutionPolicy(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError(`${label} must be an object`);
   }
-  const expected = {
-    shell: false,
-    stdin: 'disabled',
-    detached: false,
-    networkAccess: 'none',
-    environmentMode: 'replace'
-  };
+  const expected = PROCESS_EXECUTION_POLICY;
   const unexpected = Object.keys(value).find(key => !Object.hasOwn(expected, key));
   if (unexpected || Object.keys(expected).some(key => value[key] !== expected[key])) {
     throw new TypeError(`${label} must contain the fixed Tranche 1 execution policy`);
   }
-  return expected;
+  return { ...expected };
 }
 
 function normalizeResolvedProfile(profile, label) {
@@ -342,7 +328,6 @@ function normalizeResolvedProfile(profile, label) {
   const profileId = processIdentifier(profile.profileId, `${label}.profileId`);
   // Reuse the catalog validator when reading persisted snapshots so a valid
   // hash cannot turn malformed authority material into dispatch authority.
-  const { validateProcessTargetCatalog } = require('./process-target-catalog');
   const validated = validateProcessTargetCatalog({
     version: 1,
     targets: [{
@@ -380,11 +365,18 @@ function buildProcessPolicySnapshot({
     throw new TypeError('processPolicySnapshot.capabilityEnabled must be a boolean');
   }
   if (!Array.isArray(profiles)) throw new TypeError('processPolicySnapshot.profiles must be an array');
+  if (profiles.length > PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxResolvedProfilesPerSnapshot) {
+    throw new RangeError(
+      `processPolicySnapshot.profiles exceeds the ` +
+      `${PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxResolvedProfilesPerSnapshot}-profile limit`
+    );
+  }
   normalizeCapturedAt(capturedAt);
   const normalizedProfiles = profiles.map((profile, index) =>
     normalizeResolvedProfile(profile, `processPolicySnapshot.profiles[${index}]`));
   normalizedProfiles.sort((left, right) =>
-    left.targetId.localeCompare(right.targetId) || left.profileId.localeCompare(right.profileId));
+    compareCanonicalStrings(left.targetId, right.targetId) ||
+    compareCanonicalStrings(left.profileId, right.profileId));
   const identities = normalizedProfiles.map(profile => `${profile.targetId}\0${profile.profileId}`);
   if (new Set(identities).size !== identities.length) {
     throw new TypeError('processPolicySnapshot.profiles target/profile values must be unique');
@@ -447,7 +439,9 @@ function processResolution({
   code,
   message,
   request,
-  snapshot,
+  snapshot = null,
+  policySnapshotHash = snapshot ? snapshot.snapshotHash : null,
+  runtimePhase = null,
   authorityStatus,
   terminalOutcome = null
 }) {
@@ -458,7 +452,8 @@ function processResolution({
     authorityStatus,
     terminalOutcome,
     request,
-    policySnapshotHash: snapshot ? snapshot.snapshotHash : null
+    policySnapshotHash,
+    runtimePhase
   });
 }
 
@@ -472,6 +467,7 @@ function resolveProcessOperationRequest(action, policySnapshot, currentPhase = n
       message: 'runProcess is disabled by the run process-policy snapshot',
       request,
       snapshot,
+      runtimePhase: currentPhase,
       authorityStatus: 'denied',
       terminalOutcome: 'policy_denied'
     });
@@ -485,6 +481,7 @@ function resolveProcessOperationRequest(action, policySnapshot, currentPhase = n
       message: `Process target is not granted by the run snapshot: ${request.args.targetId}`,
       request,
       snapshot,
+      runtimePhase: currentPhase,
       authorityStatus: 'denied',
       terminalOutcome: 'policy_denied'
     });
@@ -497,6 +494,7 @@ function resolveProcessOperationRequest(action, policySnapshot, currentPhase = n
       message: `Process profile is not granted for target ${request.args.targetId}: ${request.args.profileId}`,
       request,
       snapshot,
+      runtimePhase: currentPhase,
       authorityStatus: 'denied',
       terminalOutcome: 'policy_denied'
     });
@@ -508,6 +506,7 @@ function resolveProcessOperationRequest(action, policySnapshot, currentPhase = n
       message: `Process profile ${request.args.targetId}/${request.args.profileId} is not permitted in runtime phase ${String(currentPhase)}`,
       request,
       snapshot,
+      runtimePhase: currentPhase,
       authorityStatus: 'denied',
       terminalOutcome: 'policy_denied'
     });
@@ -518,7 +517,155 @@ function resolveProcessOperationRequest(action, policySnapshot, currentPhase = n
     message: 'runProcess is authorized by the immutable run snapshot but has no executor in Tranche 1',
     request,
     snapshot,
+    runtimePhase: currentPhase,
     authorityStatus: 'allowed'
+  });
+}
+
+const PROCESS_RESOLUTION_AUTHORITIES = Object.freeze({
+  PROCESS_CAPABILITY_DISABLED: Object.freeze({
+    disposition: 'disabled',
+    authorityStatus: 'denied',
+    terminalOutcome: 'policy_denied'
+  }),
+  PROCESS_TARGET_UNKNOWN: Object.freeze({
+    disposition: 'policy_denied',
+    authorityStatus: 'denied',
+    terminalOutcome: 'policy_denied'
+  }),
+  PROCESS_PROFILE_UNKNOWN: Object.freeze({
+    disposition: 'policy_denied',
+    authorityStatus: 'denied',
+    terminalOutcome: 'policy_denied'
+  }),
+  PROCESS_PHASE_DENIED: Object.freeze({
+    disposition: 'policy_denied',
+    authorityStatus: 'denied',
+    terminalOutcome: 'policy_denied'
+  }),
+  PROCESS_EXECUTOR_UNAVAILABLE: Object.freeze({
+    disposition: 'unsupported',
+    authorityStatus: 'allowed',
+    terminalOutcome: null
+  })
+});
+
+function validateProcessOperationResolutionRecord(value) {
+  validatePlainObject(value, 'process operation resolution');
+  const allowedKeys = [
+    'operationId', 'runId', 'ticketId', 'targetId', 'profileId',
+    'disposition', 'code', 'authorityStatus', 'terminalOutcome',
+    'runtimePhase', 'policySnapshotHash', 'message', 'enforcementCause'
+  ];
+  const unexpected = Object.keys(value).find(key => !allowedKeys.includes(key));
+  if (unexpected) {
+    throw new TypeError(`process operation resolution includes unsupported field: ${unexpected}`);
+  }
+  for (const key of allowedKeys) {
+    if (!hasOwn(value, key)) throw new TypeError(`process operation resolution.${key} is required`);
+  }
+  processIdentifier(value.operationId, 'process operation resolution.operationId');
+  processIdentifier(value.targetId, 'process operation resolution.targetId');
+  processIdentifier(value.profileId, 'process operation resolution.profileId');
+  validateNonnegativeInteger(value.runId, 'process operation resolution.runId', { positive: true });
+  validateNonnegativeInteger(value.ticketId, 'process operation resolution.ticketId', { positive: true });
+  const expected = PROCESS_RESOLUTION_AUTHORITIES[value.code];
+  if (!expected) {
+    throw new TypeError(`Unsupported process operation resolution code: ${String(value.code)}`);
+  }
+  for (const key of ['disposition', 'authorityStatus', 'terminalOutcome']) {
+    if (value[key] !== expected[key]) {
+      throw new TypeError(
+        `process operation resolution.${key} is inconsistent with ${value.code}`
+      );
+    }
+  }
+  if (!PROCESS_RESOLUTION_RUNTIME_PHASES.includes(value.runtimePhase)) {
+    throw new TypeError(
+      `process operation resolution.runtimePhase must be one of ` +
+      PROCESS_RESOLUTION_RUNTIME_PHASES.join(', ')
+    );
+  }
+  if (typeof value.policySnapshotHash !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(value.policySnapshotHash)) {
+    throw new TypeError(
+      'process operation resolution.policySnapshotHash must be a lowercase SHA-256 hash'
+    );
+  }
+  if (typeof value.message !== 'string' || value.message.length === 0 ||
+      value.message.length > 2048 || /[\u0000-\u001f\u007f-\u009f]/.test(value.message)) {
+    throw new TypeError('process operation resolution.message must be a bounded single-line string');
+  }
+  validatePlainObject(value.enforcementCause, 'process operation resolution.enforcementCause');
+  const expectedCause = {
+    kind: 'contract_resolution',
+    disposition: value.disposition,
+    errorCode: value.code,
+    authorityStatus: value.authorityStatus,
+    runtimePhase: value.runtimePhase
+  };
+  if (Object.keys(value.enforcementCause).length !== Object.keys(expectedCause).length ||
+      Object.entries(expectedCause).some(([key, item]) => value.enforcementCause[key] !== item)) {
+    throw new TypeError(
+      'process operation resolution.enforcementCause must match the persisted resolution fields'
+    );
+  }
+  return deepFreeze(JSON.parse(JSON.stringify(value)));
+}
+
+function buildProcessOperationResolutionRecord({
+  resolution,
+  runId,
+  ticketId
+} = {}) {
+  if (!resolution || typeof resolution !== 'object' || !resolution.request) {
+    throw new TypeError('resolution is required');
+  }
+  const request = parseProcessOperationRequest(resolution.request).args;
+  return validateProcessOperationResolutionRecord({
+    operationId: request.operationId,
+    runId,
+    ticketId,
+    targetId: request.targetId,
+    profileId: request.profileId,
+    disposition: resolution.disposition,
+    code: resolution.code,
+    authorityStatus: resolution.authorityStatus,
+    terminalOutcome: resolution.terminalOutcome,
+    runtimePhase: resolution.runtimePhase,
+    policySnapshotHash: resolution.policySnapshotHash,
+    message: resolution.message,
+    enforcementCause: {
+      kind: 'contract_resolution',
+      disposition: resolution.disposition,
+      errorCode: resolution.code,
+      authorityStatus: resolution.authorityStatus,
+      runtimePhase: resolution.runtimePhase
+    }
+  });
+}
+
+function restoreProcessOperationResolution(value, action) {
+  const persisted = validateProcessOperationResolutionRecord(value);
+  const request = parseProcessOperationRequest(action);
+  classifyProcessOperationIdReuse({
+    runId: persisted.runId,
+    requested: request.args,
+    existing: {
+      operationId: persisted.operationId,
+      targetId: persisted.targetId,
+      profileId: persisted.profileId
+    }
+  });
+  return processResolution({
+    disposition: persisted.disposition,
+    code: persisted.code,
+    message: persisted.message,
+    request,
+    policySnapshotHash: persisted.policySnapshotHash,
+    runtimePhase: persisted.runtimePhase,
+    authorityStatus: persisted.authorityStatus,
+    terminalOutcome: persisted.terminalOutcome
   });
 }
 
@@ -535,7 +682,8 @@ function processResolutionError(resolution) {
       targetId: resolution.request && resolution.request.args.targetId,
       profileId: resolution.request && resolution.request.args.profileId,
       operationId: resolution.request && resolution.request.args.operationId,
-      policySnapshotHash: resolution.policySnapshotHash
+      policySnapshotHash: resolution.policySnapshotHash,
+      runtimePhase: resolution.runtimePhase
     }
   });
 }
@@ -785,9 +933,11 @@ function validateProcessEvidenceRecord(value) {
 }
 
 module.exports = {
+  PROCESS_AUTHORITY_CARDINALITY_LIMITS,
   PROCESS_AUTHORITY_RULE,
   PROCESS_CONTRACT_VERSION,
   PROCESS_EVIDENCE_CONTRACT,
+  PROCESS_EXECUTION_POLICY,
   PROCESS_FEATURE_ENV,
   PROCESS_IDENTIFIER_MAX_LENGTH,
   PROCESS_INLINE_OUTPUT_MAX_BYTES,
@@ -801,6 +951,7 @@ module.exports = {
   PROCESS_TERMINAL_OUTCOMES,
   ProcessContractError,
   buildProcessOperationIdentity,
+  buildProcessOperationResolutionRecord,
   buildProcessPolicySnapshot,
   buildHistoricalProcessPolicySnapshotV1,
   classifyProcessOperationIdReuse,
@@ -813,6 +964,8 @@ module.exports = {
   processResolutionError,
   refuseProcessOperation,
   resolveProcessOperationRequest,
+  restoreProcessOperationResolution,
   validateProcessEvidenceRecord,
+  validateProcessOperationResolutionRecord,
   validateProcessTerminalOutcome
 };

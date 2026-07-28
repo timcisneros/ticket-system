@@ -95,8 +95,11 @@ rejected.
 `environment` is a replacement map of at most 64 literal string values, each at most
 16,384 UTF-8 bytes. Variable names use the platform-independent
 `[A-Za-z_][A-Za-z0-9_]*` form. Ambient inheritance and secret-reference fields do not
-exist. Secret-bearing variable names are rejected. Process profile configuration must
-not contain secrets because literal values are intentionally frozen in the run snapshot.
+exist. A conservative sensitive-name denylist rejects names containing common secret,
+token, password, API-key, private-key, or credential markers as defense in depth. This
+name heuristic cannot determine whether an arbitrary literal value is sensitive.
+Trusted operators must not put secrets in process-profile literal environment values
+because those values are intentionally frozen in the run snapshot.
 
 All limits are required positive safe integers. The hard ceilings are:
 
@@ -105,6 +108,19 @@ All limits are required positive safe integers. The hard ceilings are:
 - `maxProcesses`: 64
 
 Zero, omission, infinity, and values above these ceilings are rejected.
+
+Authority configuration and snapshots also have fixed cardinality ceilings:
+
+- targets per catalog: 64
+- profiles per target: 64
+- total profiles per catalog: 256
+- grant entries per configured agent: 32
+- profile IDs per grant entry: 32
+- resolved profiles per version-2 run snapshot: 128
+
+The catalog, configured-agent grant normalizer, admission grant resolver, snapshot
+builder, and persisted snapshot reader all enforce the applicable ceilings. A matching
+snapshot hash does not make an oversized snapshot authoritative.
 
 ## Exact grant assignment
 
@@ -165,9 +181,12 @@ Newly admitted runs store this canonical version-2 shape:
 }
 ```
 
-Targets, profiles, phases, and environment keys are canonicalized before hashing. The
-fixed execution policy is authority for a future executor, not a claim that Tranche 1
-provides kernel enforcement.
+Targets, profiles, phases, grant references, and environment keys are canonicalized
+before hashing with one locale-independent ordinal string comparator. The runtime phase
+list, fixed execution policy, identifier rules, comparator, and authority cardinality
+ceilings live in the dependency-neutral
+`runtime/process-authority-constants.js` module. The fixed execution policy is authority
+for a future executor, not a claim that Tranche 1 provides kernel enforcement.
 
 Version-1 Tranche 0 grant-reference snapshots remain readable as historical policy. They
 are never resolved through the live catalog and expose no executable authority. Stored
@@ -231,9 +250,42 @@ or effect claim is created.
 `operationId` identifies one process request within a run; it is not globally unique.
 The runtime hashes `(runId, operationId)` for evidence identity and looks up prior
 `processOperations` replay evidence before appending. Repeating the same ID, target, and
-profile is request-resolution replay and appends no duplicate resolution. Reusing the ID
-for a different target or profile fails with `PROCESS_OPERATION_ID_CONFLICT`. This is not
-execution idempotency because no executor exists.
+profile is request-resolution replay and appends no duplicate authority or resolution
+evidence. Exact replay returns the original persisted resolution without checking the
+run's later phase again. Reusing the ID for a different target or profile fails with
+`PROCESS_OPERATION_ID_CONFLICT`. This is not execution idempotency because no executor
+exists.
+
+Each `process.operation_resolution` replay item persists this closed reconstruction
+shape:
+
+```json
+{
+  "operationId": "stable-operation-id",
+  "runId": 123,
+  "ticketId": 45,
+  "targetId": "ticket-system-local",
+  "profileId": "syntax-check",
+  "disposition": "unsupported",
+  "code": "PROCESS_EXECUTOR_UNAVAILABLE",
+  "authorityStatus": "allowed",
+  "terminalOutcome": null,
+  "runtimePhase": "verification",
+  "policySnapshotHash": "lowercase-sha256",
+  "message": "stable resolution message",
+  "enforcementCause": {
+    "kind": "contract_resolution",
+    "disposition": "unsupported",
+    "errorCode": "PROCESS_EXECUTOR_UNAVAILABLE",
+    "authorityStatus": "allowed",
+    "runtimePhase": "verification"
+  }
+}
+```
+
+`runId` and `ticketId` retain evidence ownership. The remaining fields reconstruct the
+typed original result exactly. The redundant `enforcementCause` projection is validated
+against the top-level fields for existing event consumers; it cannot override them.
 
 ## Terminal outcome and future evidence contracts
 
