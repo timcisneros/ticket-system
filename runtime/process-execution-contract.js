@@ -13,6 +13,10 @@ const {
   PROCESS_RESOLUTION_RUNTIME_PHASES,
   PROCESS_RESOURCE_LIMIT_CAUSES,
   PROCESS_RUNTIME_PHASES,
+  PROCESS_SANDBOX_CAPABILITY_MAX_VALIDITY_MS,
+  PROCESS_SANDBOX_CAPABILITY_STATUS,
+  PROCESS_SANDBOX_CAPABILITY_VERSION,
+  PROCESS_SANDBOX_LAUNCHER_PROTOCOL_MAX_VERSION,
   PROCESS_SHA256_PATTERN,
   compareCanonicalStrings,
   validateProcessIdentifier
@@ -29,6 +33,7 @@ const PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION = 1;
 const PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2 = 2;
 const PROCESS_OPERATION = 'runProcess';
 const PROCESS_FEATURE_ENV = 'ENABLE_PROCESS_EXECUTION_CONTRACT';
+const CURRENT_PROCESS_SANDBOX_CAPABILITY = null;
 const PROCESS_INLINE_OUTPUT_MAX_BYTES = 64 * 1024;
 const PROCESS_ARTIFACT_REFERENCE_MAX_LENGTH = 2048;
 
@@ -178,6 +183,129 @@ function processIdentifier(value, label, { request = false } = {}) {
       details: { field: label }
     });
   }
+}
+
+function processContractTimestamp(value, label) {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value)) ||
+      new Date(value).toISOString() !== value) {
+    throw new TypeError(`${label} must be a canonical UTC ISO timestamp`);
+  }
+  return value;
+}
+
+function normalizeProcessSandboxCapabilityDescriptor(value, {
+  observedAt = new Date().toISOString()
+} = {}) {
+  validatePlainObject(value, 'process sandbox capability');
+  const allowedKeys = [
+    'version',
+    'status',
+    'generationId',
+    'launcherProtocolVersion',
+    'launcherIdentityHash',
+    'sandboxBackendIdentityHash',
+    'seccompPolicyHash',
+    'rootfsRegistryGeneration',
+    'materializerGeneration',
+    'verifiedAt',
+    'validUntil'
+  ];
+  const unexpected = Object.keys(value).find(key => !allowedKeys.includes(key));
+  if (unexpected) {
+    throw new TypeError(`process sandbox capability includes unsupported field: ${unexpected}`);
+  }
+  for (const key of allowedKeys) {
+    if (!Object.hasOwn(value, key)) {
+      throw new TypeError(`process sandbox capability.${key} is required`);
+    }
+  }
+  if (value.version !== PROCESS_SANDBOX_CAPABILITY_VERSION) {
+    throw new TypeError(
+      `process sandbox capability.version must be ${PROCESS_SANDBOX_CAPABILITY_VERSION}`
+    );
+  }
+  if (value.status !== PROCESS_SANDBOX_CAPABILITY_STATUS) {
+    throw new TypeError(
+      `process sandbox capability.status must be ${PROCESS_SANDBOX_CAPABILITY_STATUS}`
+    );
+  }
+  const generationId = processIdentifier(
+    value.generationId,
+    'process sandbox capability.generationId'
+  );
+  const rootfsRegistryGeneration = processIdentifier(
+    value.rootfsRegistryGeneration,
+    'process sandbox capability.rootfsRegistryGeneration'
+  );
+  const materializerGeneration = processIdentifier(
+    value.materializerGeneration,
+    'process sandbox capability.materializerGeneration'
+  );
+  if (!Number.isSafeInteger(value.launcherProtocolVersion) ||
+      value.launcherProtocolVersion <= 0 ||
+      value.launcherProtocolVersion > PROCESS_SANDBOX_LAUNCHER_PROTOCOL_MAX_VERSION) {
+    throw new TypeError(
+      `process sandbox capability.launcherProtocolVersion must be a positive safe integer ` +
+      `no greater than ${PROCESS_SANDBOX_LAUNCHER_PROTOCOL_MAX_VERSION}`
+    );
+  }
+  for (const key of [
+    'launcherIdentityHash',
+    'sandboxBackendIdentityHash',
+    'seccompPolicyHash'
+  ]) {
+    if (typeof value[key] !== 'string' || !PROCESS_SHA256_PATTERN.test(value[key])) {
+      throw new TypeError(`process sandbox capability.${key} must be a lowercase SHA-256 hash`);
+    }
+  }
+  const verifiedAt = processContractTimestamp(
+    value.verifiedAt,
+    'process sandbox capability.verifiedAt'
+  );
+  const validUntil = processContractTimestamp(
+    value.validUntil,
+    'process sandbox capability.validUntil'
+  );
+  const observed = processContractTimestamp(observedAt, 'sandbox capability observedAt');
+  const verifiedTime = Date.parse(verifiedAt);
+  const validUntilTime = Date.parse(validUntil);
+  const observedTime = Date.parse(observed);
+  if (validUntilTime <= verifiedTime ||
+      validUntilTime - verifiedTime > PROCESS_SANDBOX_CAPABILITY_MAX_VALIDITY_MS) {
+    throw new TypeError(
+      `process sandbox capability validity must be positive and no longer than ` +
+      `${PROCESS_SANDBOX_CAPABILITY_MAX_VALIDITY_MS}ms`
+    );
+  }
+  if (observedTime < verifiedTime || observedTime >= validUntilTime) {
+    throw new TypeError('process sandbox capability is not currently valid');
+  }
+  return deepFreeze({
+    version: PROCESS_SANDBOX_CAPABILITY_VERSION,
+    status: PROCESS_SANDBOX_CAPABILITY_STATUS,
+    generationId,
+    launcherProtocolVersion: value.launcherProtocolVersion,
+    launcherIdentityHash: value.launcherIdentityHash,
+    sandboxBackendIdentityHash: value.sandboxBackendIdentityHash,
+    seccompPolicyHash: value.seccompPolicyHash,
+    rootfsRegistryGeneration,
+    materializerGeneration,
+    verifiedAt,
+    validUntil
+  });
+}
+
+function projectProcessSandboxCapabilityGeneration(value, options = {}) {
+  const capability = normalizeProcessSandboxCapabilityDescriptor(value, options);
+  return deepFreeze({
+    generationId: capability.generationId,
+    launcherProtocolVersion: capability.launcherProtocolVersion,
+    launcherIdentityHash: capability.launcherIdentityHash,
+    sandboxBackendIdentityHash: capability.sandboxBackendIdentityHash,
+    seccompPolicyHash: capability.seccompPolicyHash,
+    rootfsRegistryGeneration: capability.rootfsRegistryGeneration,
+    materializerGeneration: capability.materializerGeneration
+  });
 }
 
 function assertOnlyKeys(value, allowedKeys, label) {
@@ -579,7 +707,12 @@ function processResolution({
   });
 }
 
-function resolveProcessOperationRequest(action, policySnapshot, currentPhase = null) {
+function resolveProcessOperationRequest(
+  action,
+  policySnapshot,
+  currentPhase = null,
+  sandboxCapability = CURRENT_PROCESS_SANDBOX_CAPABILITY
+) {
   const request = parseProcessOperationRequest(action);
   const snapshot = normalizeProcessPolicySnapshot(policySnapshot);
   if (!snapshot || !snapshot.capabilityEnabled) {
@@ -593,6 +726,23 @@ function resolveProcessOperationRequest(action, policySnapshot, currentPhase = n
       authorityStatus: 'denied',
       terminalOutcome: 'policy_denied'
     });
+  }
+  if (snapshot.version === PROCESS_POLICY_SNAPSHOT_VERSION) {
+    try {
+      normalizeProcessSandboxCapabilityDescriptor(sandboxCapability);
+    } catch (_) {
+      return processResolution({
+        disposition: 'policy_denied',
+        code: 'PROCESS_SANDBOX_UNAVAILABLE',
+        message:
+          'runProcess version-3 authority is denied because no current healthy sandbox capability generation is available',
+        request,
+        snapshot,
+        runtimePhase: currentPhase,
+        authorityStatus: 'denied',
+        terminalOutcome: 'policy_denied'
+      });
+    }
   }
   const profiles = [
     PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2,
@@ -664,6 +814,11 @@ const PROCESS_RESOLUTION_AUTHORITIES = Object.freeze({
     terminalOutcome: 'policy_denied'
   }),
   PROCESS_PHASE_DENIED: Object.freeze({
+    disposition: 'policy_denied',
+    authorityStatus: 'denied',
+    terminalOutcome: 'policy_denied'
+  }),
+  PROCESS_SANDBOX_UNAVAILABLE: Object.freeze({
     disposition: 'policy_denied',
     authorityStatus: 'denied',
     terminalOutcome: 'policy_denied'
@@ -815,8 +970,15 @@ function processResolutionError(resolution) {
 
 // Executor-free terminal dispatch seam. It deliberately has no executor argument and
 // always throws one of the contract's typed disabled/denied/unsupported failures.
-function refuseProcessOperation(action, policySnapshot, currentPhase = null) {
-  throw processResolutionError(resolveProcessOperationRequest(action, policySnapshot, currentPhase));
+function refuseProcessOperation(
+  action,
+  policySnapshot,
+  currentPhase = null,
+  sandboxCapability = CURRENT_PROCESS_SANDBOX_CAPABILITY
+) {
+  throw processResolutionError(
+    resolveProcessOperationRequest(action, policySnapshot, currentPhase, sandboxCapability)
+  );
 }
 
 function validateProcessTerminalOutcome(value) {
@@ -838,6 +1000,18 @@ function validateProcessResourceLimitCause(value) {
     );
   }
   return deepFreeze({ kind: 'resource_limit', cause: value.cause });
+}
+
+function validateProcessFailedToStartCause(value) {
+  validatePlainObject(value, 'process failed-to-start cause');
+  if (Object.keys(value).length !== 1 ||
+      !['start_error', 'launcher_capacity'].includes(value.kind)) {
+    throw new TypeError(
+      'process failed-to-start cause must be exactly ' +
+      '{kind:"start_error"} or {kind:"launcher_capacity"}'
+    );
+  }
+  return deepFreeze({ kind: value.kind });
 }
 
 function hasOwn(value, key) {
@@ -1052,6 +1226,7 @@ function validateProcessEvidenceRecord(value) {
       forbidEvidenceValue(value, 'enforcementCause', terminalOutcome);
     } else if (terminalOutcome === 'failed_to_start') {
       requiredEvidenceField(value, 'enforcementCause');
+      validateProcessFailedToStartCause(value.enforcementCause);
       for (const key of [
         'pid', 'processGroupId', 'exitCode', 'terminatingSignal',
         'stdoutByteCount', 'stderrByteCount', 'stdoutTruncated', 'stderrTruncated',
@@ -1061,6 +1236,8 @@ function validateProcessEvidenceRecord(value) {
       requiredEvidenceField(value, 'enforcementCause');
       if (terminalOutcome === 'resource_limit_exceeded') {
         validateProcessResourceLimitCause(value.enforcementCause);
+        requiredEvidenceField(value, 'pid');
+        requiredEvidenceField(value, 'processGroupId');
       }
     }
   }
@@ -1075,6 +1252,7 @@ function validateProcessEvidenceRecord(value) {
 }
 
 module.exports = {
+  CURRENT_PROCESS_SANDBOX_CAPABILITY,
   PROCESS_AUTHORITY_CARDINALITY_LIMITS,
   PROCESS_AUTHORITY_RULE,
   PROCESS_CONTRACT_VERSION,
@@ -1095,6 +1273,10 @@ module.exports = {
   PROCESS_PROFILE_HARD_LIMITS,
   PROCESS_RESOURCE_LIMIT_CAUSES,
   PROCESS_RUNTIME_PHASES,
+  PROCESS_SANDBOX_CAPABILITY_MAX_VALIDITY_MS,
+  PROCESS_SANDBOX_CAPABILITY_STATUS,
+  PROCESS_SANDBOX_CAPABILITY_VERSION,
+  PROCESS_SANDBOX_LAUNCHER_PROTOCOL_MAX_VERSION,
   PROCESS_PRE_EXECUTION_EVIDENCE_FIELDS,
   PROCESS_TERMINAL_EVIDENCE_FIELDS,
   PROCESS_TERMINAL_OUTCOMES,
@@ -1109,14 +1291,17 @@ module.exports = {
   hashProcessContractValue,
   isProcessContractFeatureEnabled,
   normalizeProcessPolicySnapshot,
+  normalizeProcessSandboxCapabilityDescriptor,
   parseProcessOperationRequest,
   processIdentifier,
   processAuthorityReferences,
   processResolutionError,
+  projectProcessSandboxCapabilityGeneration,
   refuseProcessOperation,
   resolveProcessOperationRequest,
   restoreProcessOperationResolution,
   validateProcessEvidenceRecord,
+  validateProcessFailedToStartCause,
   validateProcessOperationResolutionRecord,
   validateProcessResourceLimitCause,
   validateProcessTerminalOutcome

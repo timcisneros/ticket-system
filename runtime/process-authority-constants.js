@@ -60,9 +60,13 @@ const PROCESS_RESOURCE_LIMIT_CAUSES = Object.freeze([
   'cpu',
   'open_files',
   'file_size',
-  'temporary_storage',
-  'launcher_capacity'
+  'temporary_storage'
 ]);
+
+const PROCESS_SANDBOX_CAPABILITY_VERSION = 1;
+const PROCESS_SANDBOX_CAPABILITY_STATUS = 'healthy';
+const PROCESS_SANDBOX_CAPABILITY_MAX_VALIDITY_MS = 5 * 60 * 1000;
+const PROCESS_SANDBOX_LAUNCHER_PROTOCOL_MAX_VERSION = 16;
 
 // These are authority-size ceilings, not executor resource limits. They keep
 // trusted configuration, admission work, persisted snapshots, and hashing
@@ -117,6 +121,10 @@ module.exports = {
   PROCESS_RESOLUTION_RUNTIME_PHASES,
   PROCESS_RESOURCE_LIMIT_CAUSES,
   PROCESS_RUNTIME_PHASES,
+  PROCESS_SANDBOX_CAPABILITY_MAX_VALIDITY_MS,
+  PROCESS_SANDBOX_CAPABILITY_STATUS,
+  PROCESS_SANDBOX_CAPABILITY_VERSION,
+  PROCESS_SANDBOX_LAUNCHER_PROTOCOL_MAX_VERSION,
   PROCESS_SHA256_PATTERN,
   compareCanonicalStrings,
   validateProcessIdentifier

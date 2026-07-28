@@ -639,6 +639,45 @@ async function main() {
         !JSON.stringify(versionThree.replay.providerRequests || []).includes('/usr/bin/node') &&
         !JSON.stringify(versionThree.replay.providerRequests || []).includes('node-24-fedora-runtime-v1'),
       'version-3 authority and launch material remain absent from model envelopes');
+      const hiddenVersionThree = await runPlans(
+        'version-three-hidden-direct-denial',
+        versionThreeAgent,
+        [{
+          message: 'Attempt a hidden version-three request.',
+          actions: [{
+            operation: 'runProcess',
+            args: {
+              targetId: 'ticket-system-local',
+              profileId: 'inspection-check',
+              operationId: 'hidden-v3-operation'
+            }
+          }],
+          complete: false
+        }]
+      );
+      const hiddenResolution = hiddenVersionThree.events.find(event =>
+        event.type === 'process.operation_resolution');
+      assert(hiddenVersionThree.run.status === 'failed' &&
+        hiddenResolution &&
+        hiddenResolution.payload.code === 'PROCESS_SANDBOX_UNAVAILABLE' &&
+        hiddenResolution.payload.disposition === 'policy_denied' &&
+        hiddenResolution.payload.authorityStatus === 'denied' &&
+        hiddenResolution.payload.terminalOutcome === 'policy_denied',
+      'hidden direct version-3 request fails closed as sandbox unavailable');
+      assert(hiddenVersionThree.events.some(event =>
+        event.type === 'authority.denied' &&
+        event.payload &&
+        event.payload.operationId === 'hidden-v3-operation') &&
+        !hiddenVersionThree.events.some(event =>
+          event.type === 'authority.allowed' &&
+          event.payload &&
+          event.payload.operationId === 'hidden-v3-operation'),
+      'version-3 sandbox refusal records authority.denied and no authority.allowed');
+      assert(hiddenVersionThree.operations.length === 0 &&
+        !JSON.stringify(hiddenVersionThree.replay).match(
+          /launchPlanHash|"pid"|stdoutByteCount|stderrByteCount|process-start/i
+        ),
+      'version-3 sandbox refusal creates no launch, receipt, PID, or output evidence');
 
       console.log(`\nPASS: process execution runtime contract — ${assert.count()} assertions (PostgreSQL-native)`);
     }, { schemaSlug: 'process_execution_runtime' });

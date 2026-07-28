@@ -5,6 +5,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const {
+  CURRENT_PROCESS_SANDBOX_CAPABILITY,
   PROCESS_AUTHORITY_RULE,
   PROCESS_EVIDENCE_CONTRACT,
   PROCESS_IDENTIFIER_MAX_LENGTH,
@@ -26,12 +27,14 @@ const {
   isProcessContractFeatureEnabled,
   historicalProcessGrantReferences,
   normalizeProcessPolicySnapshot,
+  normalizeProcessSandboxCapabilityDescriptor,
   parseProcessOperationRequest,
   processAuthorityReferences,
   refuseProcessOperation,
   resolveProcessOperationRequest,
   restoreProcessOperationResolution,
   validateProcessEvidenceRecord,
+  validateProcessFailedToStartCause,
   validateProcessOperationResolutionRecord,
   validateProcessResourceLimitCause,
   validateProcessTerminalOutcome
@@ -66,6 +69,27 @@ const request = {
     operationId: 'operation-001'
   }
 };
+
+equal(CURRENT_PROCESS_SANDBOX_CAPABILITY, null,
+  'current runtime sandbox capability remains permanently unavailable in this tranche');
+
+function sandboxCapability(overrides = {}) {
+  const now = Date.now();
+  return {
+    version: 1,
+    status: 'healthy',
+    generationId: 'sandbox-generation-001',
+    launcherProtocolVersion: 1,
+    launcherIdentityHash: 'c'.repeat(64),
+    sandboxBackendIdentityHash: 'd'.repeat(64),
+    seccompPolicyHash: 'e'.repeat(64),
+    rootfsRegistryGeneration: 'rootfs-registry-001',
+    materializerGeneration: 'materializer-001',
+    verifiedAt: new Date(now - 1000).toISOString(),
+    validUntil: new Date(now + 240000).toISOString(),
+    ...overrides
+  };
+}
 
 equal(parseProcessOperationRequest(request), request, 'well-formed runProcess request parses');
 
@@ -208,9 +232,75 @@ equal(
 );
 equal(processAuthorityReferences(versionThreeSnapshot, 'inspection'), [],
   'version-3 snapshot alone does not advertise model-dispatchable authority');
-equal(resolveProcessOperationRequest(request, versionThreeSnapshot, 'inspection').code,
+const versionThreeUnavailable = resolveProcessOperationRequest(
+  request,
+  versionThreeSnapshot,
+  'inspection'
+);
+equal({
+  code: versionThreeUnavailable.code,
+  disposition: versionThreeUnavailable.disposition,
+  authorityStatus: versionThreeUnavailable.authorityStatus,
+  terminalOutcome: versionThreeUnavailable.terminalOutcome
+}, {
+  code: 'PROCESS_SANDBOX_UNAVAILABLE',
+  disposition: 'policy_denied',
+  authorityStatus: 'denied',
+  terminalOutcome: 'policy_denied'
+}, 'direct version-3 resolution fails closed before sandbox health');
+const persistedVersionThreeUnavailable = buildProcessOperationResolutionRecord({
+  resolution: versionThreeUnavailable,
+  runId: 42,
+  ticketId: 3
+});
+equal({
+  code: persistedVersionThreeUnavailable.code,
+  authorityStatus: persistedVersionThreeUnavailable.authorityStatus,
+  terminalOutcome: persistedVersionThreeUnavailable.terminalOutcome
+}, {
+  code: 'PROCESS_SANDBOX_UNAVAILABLE',
+  authorityStatus: 'denied',
+  terminalOutcome: 'policy_denied'
+}, 'version-3 sandbox denial persists as denied authority');
+for (const [label, capability] of [
+  ['missing', null],
+  ['malformed', { ...sandboxCapability(), unsupported: true }],
+  ['unhealthy', { ...sandboxCapability(), status: 'unhealthy' }],
+  [
+    'stale',
+    sandboxCapability({
+      verifiedAt: new Date(Date.now() - 300000).toISOString(),
+      validUntil: new Date(Date.now() - 1000).toISOString()
+    })
+  ]
+]) {
+  equal(
+    resolveProcessOperationRequest(
+      request,
+      versionThreeSnapshot,
+      'inspection',
+      capability
+    ).code,
+    'PROCESS_SANDBOX_UNAVAILABLE',
+    `${label} sandbox capability cannot authorize version-3 authority`
+  );
+}
+const healthySandbox = sandboxCapability();
+equal(
+  normalizeProcessSandboxCapabilityDescriptor(healthySandbox),
+  healthySandbox,
+  'healthy sandbox capability descriptor satisfies the closed contract'
+);
+equal(
+  resolveProcessOperationRequest(
+    request,
+    versionThreeSnapshot,
+    'inspection',
+    healthySandbox
+  ).code,
   'PROCESS_EXECUTOR_UNAVAILABLE',
-  'direct version-3 resolution remains executor-free');
+  'a healthy fixture generation reaches only the still executor-free refusal'
+);
 equal(
   resolveProcessOperationRequest({
     ...request,
@@ -361,6 +451,11 @@ throwsCode(
   'PROCESS_EXECUTOR_UNAVAILABLE',
   'enabling and authorizing the contract still cannot execute a process'
 );
+throwsCode(
+  () => refuseProcessOperation(request, versionThreeSnapshot, 'inspection'),
+  'PROCESS_SANDBOX_UNAVAILABLE',
+  'version-3 refusal remains fail-closed without sandbox health'
+);
 const contractSource = fs.readFileSync(path.join(ROOT, 'runtime/process-execution-contract.js'), 'utf8');
 const targetCatalogSource = fs.readFileSync(path.join(ROOT, 'runtime/process-target-catalog.js'), 'utf8');
 const launchPlanSource = fs.readFileSync(path.join(ROOT, 'runtime/process-launch-plan.js'), 'utf8');
@@ -462,7 +557,7 @@ const terminalEvidenceByOutcome = {
     finishedAt: '2026-07-27T12:00:02.000Z',
     durationMs: 1,
     terminalOutcome: 'failed_to_start',
-    enforcementCause: { kind: 'start_error' }
+    enforcementCause: { kind: 'launcher_capacity' }
   },
   exited_nonzero: { ...completedEvidence, terminalOutcome: 'exited_nonzero', exitCode: 2 },
   signaled: {
@@ -509,8 +604,7 @@ equal(PROCESS_RESOURCE_LIMIT_CAUSES, [
   'cpu',
   'open_files',
   'file_size',
-  'temporary_storage',
-  'launcher_capacity'
+  'temporary_storage'
 ], 'resource-limit causes are a frozen structured taxonomy');
 for (const cause of PROCESS_RESOURCE_LIMIT_CAUSES) {
   equal(validateProcessResourceLimitCause({
@@ -531,6 +625,20 @@ for (const malformedCause of [
   assert.throws(() => validateProcessResourceLimitCause(malformedCause), TypeError);
   passed += 1;
   console.log(`  ok malformed resource-limit cause is rejected: ${JSON.stringify(malformedCause)}`);
+}
+for (const cause of [{ kind: 'start_error' }, { kind: 'launcher_capacity' }]) {
+  equal(validateProcessFailedToStartCause(cause), cause,
+    `failed-to-start cause ${cause.kind} is accepted`);
+}
+for (const malformedCause of [
+  { kind: 'launcher_capacity', cause: 'memory' },
+  { kind: 'resource_limit', cause: 'launcher_capacity' },
+  { kind: 'unknown' },
+  {}
+]) {
+  assert.throws(() => validateProcessFailedToStartCause(malformedCause), TypeError);
+  passed += 1;
+  console.log(`  ok malformed failed-to-start cause is rejected: ${JSON.stringify(malformedCause)}`);
 }
 
 const malformedEvidenceCases = [
@@ -561,6 +669,27 @@ const malformedEvidenceCases = [
     stderrTruncated: null,
     enforcementCause: { kind: 'start_error' }
   }, 'failed-to-start with PID'],
+  [{
+    ...terminalEvidenceByOutcome.failed_to_start,
+    enforcementCause: { kind: 'resource_limit', cause: 'launcher_capacity' }
+  }, 'launcher capacity cannot be a resource-limit cause'],
+  [{
+    ...completedEvidence,
+    terminalOutcome: 'resource_limit_exceeded',
+    enforcementCause: { kind: 'resource_limit', cause: 'launcher_capacity' }
+  }, 'resource-limit outcome cannot claim launcher capacity'],
+  [{
+    ...terminalEvidenceByOutcome.failed_to_start,
+    stdoutByteCount: 0
+  }, 'launcher-capacity refusal cannot claim output'],
+  [{
+    ...terminalEvidenceByOutcome.failed_to_start,
+    processGroupId: 123
+  }, 'launcher-capacity refusal cannot claim process ownership'],
+  [{
+    ...terminalEvidenceByOutcome.resource_limit_exceeded,
+    pid: null
+  }, 'resource-limit outcome requires an established process identity'],
   [{ ...completedEvidence, terminalOutcome: 'timed_out', enforcementCause: null }, 'timeout without cause'],
   [{ ...evidence, enforcementCause: { kind: 'denial', environment: { SECRET_NAME: 'secret' } } }, 'nested environment values']
 ];

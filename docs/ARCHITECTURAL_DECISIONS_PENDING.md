@@ -4837,7 +4837,7 @@ snapshots remain readable but receive no executable authority.
 
 | Field | Value |
 |-------|-------|
-| **Status** | Resolved for Tranche 2A0 on 2026-07-27 |
+| **Status** | Resolved for Tranche 2A0; integrity-corrected on 2026-07-27 |
 | **Boundary** | Contract-only; no materializer, capability probe, launcher, sandbox, or execution |
 | **Evidence** | `docs/PROCESS_EXECUTION_CONTRACT.md`; `runtime/process-authority-constants.js`; `runtime/process-target-catalog.js`; `runtime/process-execution-contract.js`; `runtime/process-launch-plan.js` |
 | **Decision** | Only a complete version-3 authority snapshot can produce a private immutable launch plan; versions 1 and 2 are permanently executor-free |
@@ -4881,6 +4881,24 @@ from an immutable v3 run snapshot plus a trusted materialized-input descriptor. 
 closed, bounded, versioned, canonically hashed, deeply frozen, and absent from the model
 envelope. Version 3 remains non-dispatchable until a future healthy sandbox capability
 generation is an additional gate.
+
+**Integrity correction:** absence from the model envelope is not itself
+non-dispatchability. Version-3 resolution now fails closed as
+`PROCESS_SANDBOX_UNAVAILABLE` with denied authority unless a closed, healthy, time-bounded
+sandbox capability descriptor is supplied. The current runtime supplies none. Historical
+version 2 retains only its executor-unavailable compatibility refusal.
+
+The private builder now accepts a closed `{runId, ticketId, currentPhase,
+processPolicySnapshot}` context, derives operation identity from `(runId, operationId)`,
+and binds the workspace descriptor to the run, policy hash, and capability-approved
+materializer generation. The launch hash also binds the launcher protocol, launcher,
+sandbox backend, seccomp policy, rootfs-registry, and materializer generations. Tranche
+2A1 must provide a trusted opaque-workspace registry and revalidate every descriptor
+field; this entry does not authorize its implementation.
+
+Launcher capacity is a pre-start `failed_to_start` cause and cannot be represented as
+`resource_limit_exceeded`, which is reserved for enforcement against an established
+process operation.
 
 **Future launcher protocol:** launcher-owned restricted Unix socket, `SO_PEERCRED`
 validation against the exact service UID, closed bounded messages with a fixed maximum

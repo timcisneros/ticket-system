@@ -396,11 +396,50 @@ target from unknown profile, checks `allowedPhases` against `run.currentPhase`, 
 - `PROCESS_TARGET_UNKNOWN`
 - `PROCESS_PROFILE_UNKNOWN`
 - `PROCESS_PHASE_DENIED`
+- `PROCESS_SANDBOX_UNAVAILABLE`
 - `PROCESS_EXECUTOR_UNAVAILABLE`
 
-Successful authorization always records `authority.allowed` before terminating with
-`PROCESS_EXECUTOR_UNAVAILABLE`. No process-start evidence, PID, output, operation receipt,
-or effect claim is created.
+Version-3 resolution has an additional mandatory sandbox-capability gate. The current
+runtime capability value is permanently `null` in this tranche, so a hidden or direct
+version-3 request resolves exactly as:
+
+```json
+{
+  "code": "PROCESS_SANDBOX_UNAVAILABLE",
+  "disposition": "policy_denied",
+  "authorityStatus": "denied",
+  "terminalOutcome": "policy_denied"
+}
+```
+
+It records `authority.denied`, never `authority.allowed`. Missing, malformed, unhealthy,
+future-dated, or stale capability data has the same fail-closed result. Historical
+version-2 requests retain their executor-unavailable compatibility behavior, but remain
+permanently unable to create launch plans. No process-start evidence, PID, output,
+operation receipt, launch plan, or effect claim is created.
+
+The future sandbox capability descriptor is closed and time-bounded:
+
+```json
+{
+  "version": 1,
+  "status": "healthy",
+  "generationId": "sandbox-generation-001",
+  "launcherProtocolVersion": 1,
+  "launcherIdentityHash": "lowercase-sha256",
+  "sandboxBackendIdentityHash": "lowercase-sha256",
+  "seccompPolicyHash": "lowercase-sha256",
+  "rootfsRegistryGeneration": "rootfs-registry-001",
+  "materializerGeneration": "materializer-001",
+  "verifiedAt": "canonical UTC timestamp",
+  "validUntil": "canonical UTC timestamp"
+}
+```
+
+Generation identifiers use the process identifier contract. Protocol versions are
+positive and at most 16. Validity is positive and at most five minutes, and the
+descriptor is healthy only between `verifiedAt` and `validUntil`. Tranche 2A0 defines
+validation only; it does not probe or produce this descriptor.
 
 `operationId` identifies one process request within a run; it is not globally unique.
 The runtime hashes `(runId, operationId)` for evidence identity and looks up prior
@@ -466,9 +505,24 @@ The frozen process outcomes remain:
 }
 ```
 
-Allowed causes are `memory`, `process_count`, `cpu`, `open_files`, `file_size`,
-`temporary_storage`, and `launcher_capacity`. Tranche 2A0 defines but does not
-operationally classify them.
+Allowed causes are `memory`, `process_count`, `cpu`, `open_files`, `file_size`, and
+`temporary_storage`. A resource-limit outcome requires an established process identity
+and ownership identity.
+
+Launcher capacity is a pre-start refusal instead:
+
+```json
+{
+  "terminalOutcome": "failed_to_start",
+  "enforcementCause": {
+    "kind": "launcher_capacity"
+  }
+}
+```
+
+It retains request and resolved launch identity plus finish timestamp and duration, but
+forbids PID, process-group, exit, signal, stdout, and stderr claims. It cannot be encoded
+as `resource_limit_exceeded`.
 
 `runtime/process-execution-contract.js` remains the machine-readable future evidence
 field authority and structural validator. It enforces identifiers, positive run/ticket
@@ -504,23 +558,50 @@ The materializer is not implemented in 2A0. Its trusted output descriptor is:
 ```json
 {
   "id": "runtime-generated-opaque-id",
+  "runId": 123,
+  "policySnapshotHash": "lowercase-sha256",
+  "materializerGeneration": "materializer-001",
   "manifestSha256": "lowercase-sha256",
   "fileCount": 123,
   "totalBytes": 456789
 }
 ```
 
-The descriptor is bounded by the selected profile's immutable filesystem policy.
+The descriptor is bounded by the selected profile's immutable filesystem policy and
+bound to the run, process-policy snapshot, and sandbox-approved materializer generation.
+Tranche 2A1 must maintain a trusted registry mapping the opaque ID to a launcher-private
+immutable tree and revalidate every descriptor field. The descriptor is not a path and
+cannot select a mutable source location.
 
 ## Private launch-plan contract
 
 `runtime/process-launch-plan.js` is a pure builder and validator. It has no launcher
-client or side-effecting dependency. Only a valid, enabled version-3 run snapshot can
-produce version-1 launch-plan material:
+client or side-effecting dependency. The builder accepts one closed immutable
+launch-authority context:
+
+```json
+{
+  "runId": 123,
+  "ticketId": 45,
+  "currentPhase": "verification",
+  "processPolicySnapshot": {"version": 3}
+}
+```
+
+It validates positive run/ticket IDs, normalizes and copies the version-3 snapshot,
+validates the runtime phase, resolves the selected target/profile only from that
+snapshot, verifies the selected profile permits the phase, rejects extra fields, and
+deep-freezes the normalized context. The builder accepts `operationId`, not a precomputed
+operation identity, and derives
+`buildProcessOperationIdentity(context.runId, operationId)`.
+
+A valid context, a bound workspace descriptor, and a current healthy sandbox capability
+generation can produce version-1 launch-plan material:
 
 ```json
 {
   "version": 1,
+  "operationId": "operation-001",
   "operationIdentity": "process-operation:lowercase-sha256",
   "runId": 123,
   "ticketId": 45,
@@ -528,6 +609,15 @@ produce version-1 launch-plan material:
   "profileId": "syntax-check",
   "policySnapshotHash": "lowercase-sha256",
   "runtimePhase": "verification",
+  "sandboxCapability": {
+    "generationId": "sandbox-generation-001",
+    "launcherProtocolVersion": 1,
+    "launcherIdentityHash": "lowercase-sha256",
+    "sandboxBackendIdentityHash": "lowercase-sha256",
+    "seccompPolicyHash": "lowercase-sha256",
+    "rootfsRegistryGeneration": "rootfs-registry-001",
+    "materializerGeneration": "materializer-001"
+  },
   "runtimeRootfs": {
     "id": "node-24-fedora-runtime-v1",
     "manifestSha256": "lowercase-sha256"
@@ -542,6 +632,9 @@ produce version-1 launch-plan material:
   "environment": {"CI": "1"},
   "workspaceSnapshot": {
     "id": "runtime-generated-opaque-id",
+    "runId": 123,
+    "policySnapshotHash": "lowercase-sha256",
+    "materializerGeneration": "materializer-001",
     "manifestSha256": "lowercase-sha256",
     "fileCount": 123,
     "totalBytes": 456789
@@ -575,13 +668,18 @@ produce version-1 launch-plan material:
 }
 ```
 
-The caller supplies only operation/run/ticket/profile references, the exact process-policy
-hash and phase, and the trusted materializer descriptor. Executable, arguments,
-environment, filesystem, limits, and fixed execution policy are copied solely from the
-immutable run snapshot. The validator compares all material back to that snapshot, rejects
-extra fields and raw rootfs/workspace host paths, canonicalizes before hashing, and
-deep-freezes the result. Versions 1 and 2 return
-`PROCESS_POLICY_SNAPSHOT_NOT_EXECUTABLE`.
+The builder derives run ID, ticket ID, phase, policy hash, and operation identity rather
+than accepting duplicate free-standing values. Executable, arguments, environment,
+filesystem, limits, and fixed execution policy are copied solely from the immutable run
+snapshot. The validator recomputes the operation identity, rebuilds the plan from the
+same context, verifies workspace run/policy/materializer binding, and verifies the exact
+sandbox generation. A plan built under one sandbox generation cannot validate under
+another. All generation and workspace fields participate in `launchPlanHash`.
+
+The contract rejects extra fields, raw rootfs/workspace host paths, independently supplied
+operation identities, and authority expansion. Versions 1 and 2 return
+`PROCESS_POLICY_SNAPSHOT_NOT_EXECUTABLE`; missing or invalid sandbox health returns
+`PROCESS_SANDBOX_UNAVAILABLE`.
 
 Launch plans are private runtime-to-launcher material and never enter the model envelope.
 

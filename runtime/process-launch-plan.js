@@ -3,9 +3,11 @@
 const {
   PROCESS_POLICY_SNAPSHOT_VERSION,
   PROCESS_RUNTIME_PHASES,
+  buildProcessOperationIdentity,
   canonicalizeProcessContractValue,
   hashProcessContractValue,
-  normalizeProcessPolicySnapshot
+  normalizeProcessPolicySnapshot,
+  projectProcessSandboxCapabilityGeneration
 } = require('./process-execution-contract');
 const {
   PROCESS_SHA256_PATTERN,
@@ -15,8 +17,33 @@ const {
 
 const PROCESS_LAUNCH_PLAN_VERSION = 1;
 const PROCESS_OPERATION_IDENTITY_PATTERN = /^process-operation:[a-f0-9]{64}$/;
+const PROCESS_LAUNCH_AUTHORITY_CONTEXT_KEYS = Object.freeze([
+  'runId',
+  'ticketId',
+  'currentPhase',
+  'processPolicySnapshot'
+]);
+const PROCESS_WORKSPACE_SNAPSHOT_KEYS = Object.freeze([
+  'id',
+  'runId',
+  'policySnapshotHash',
+  'materializerGeneration',
+  'manifestSha256',
+  'fileCount',
+  'totalBytes'
+]);
+const PROCESS_SANDBOX_GENERATION_KEYS = Object.freeze([
+  'generationId',
+  'launcherProtocolVersion',
+  'launcherIdentityHash',
+  'sandboxBackendIdentityHash',
+  'seccompPolicyHash',
+  'rootfsRegistryGeneration',
+  'materializerGeneration'
+]);
 const PROCESS_LAUNCH_PLAN_KEYS = Object.freeze([
   'version',
+  'operationId',
   'operationIdentity',
   'runId',
   'ticketId',
@@ -24,6 +51,7 @@ const PROCESS_LAUNCH_PLAN_KEYS = Object.freeze([
   'profileId',
   'policySnapshotHash',
   'runtimePhase',
+  'sandboxCapability',
   'runtimeRootfs',
   'executableIdentity',
   'arguments',
@@ -68,6 +96,12 @@ function onlyKeys(value, allowed, label) {
   if (unexpected) fail(`${label} includes unsupported field: ${unexpected}`);
 }
 
+function requireKeys(value, required, label) {
+  for (const key of required) {
+    if (!Object.hasOwn(value, key)) fail(`${label}.${key} is required`);
+  }
+}
+
 function positiveInteger(value, label) {
   if (!Number.isSafeInteger(value) || value <= 0) {
     fail(`${label} must be a positive safe integer`);
@@ -97,15 +131,82 @@ function identifier(value, label) {
   }
 }
 
-function normalizeWorkspaceSnapshot(value, filesystemPolicy) {
-  plainObject(value, 'workspaceSnapshot');
-  onlyKeys(
-    value,
-    ['id', 'manifestSha256', 'fileCount', 'totalBytes'],
-    'workspaceSnapshot'
+function validateProcessLaunchAuthorityContext(value, { targetId, profileId } = {}) {
+  plainObject(value, 'process launch-authority context');
+  onlyKeys(value, PROCESS_LAUNCH_AUTHORITY_CONTEXT_KEYS, 'process launch-authority context');
+  requireKeys(value, PROCESS_LAUNCH_AUTHORITY_CONTEXT_KEYS, 'process launch-authority context');
+  const runId = positiveInteger(value.runId, 'process launch-authority context.runId');
+  const ticketId = positiveInteger(value.ticketId, 'process launch-authority context.ticketId');
+  if (!PROCESS_RUNTIME_PHASES.includes(value.currentPhase)) {
+    fail(
+      `process launch-authority context.currentPhase must be one of ` +
+      PROCESS_RUNTIME_PHASES.join(', '),
+      'PROCESS_PHASE_DENIED'
+    );
+  }
+  const snapshot = normalizeProcessPolicySnapshot(value.processPolicySnapshot);
+  if (!snapshot || snapshot.version !== PROCESS_POLICY_SNAPSHOT_VERSION) {
+    fail(
+      'Only a valid version-3 process policy snapshot can enter a launch-authority context',
+      'PROCESS_POLICY_SNAPSHOT_NOT_EXECUTABLE'
+    );
+  }
+  if (!snapshot.capabilityEnabled) {
+    fail(
+      'A disabled process policy snapshot cannot enter a launch-authority context',
+      'PROCESS_CAPABILITY_DISABLED'
+    );
+  }
+  const normalizedTargetId = identifier(targetId, 'targetId');
+  const normalizedProfileId = identifier(profileId, 'profileId');
+  const targetProfiles = snapshot.profiles.filter(
+    profile => profile.targetId === normalizedTargetId
   );
+  if (targetProfiles.length === 0) {
+    fail(
+      `Process target is not present in the version-3 snapshot: ${normalizedTargetId}`,
+      'PROCESS_TARGET_UNKNOWN'
+    );
+  }
+  const profile = targetProfiles.find(
+    candidate => candidate.profileId === normalizedProfileId
+  );
+  if (!profile) {
+    fail(
+      `Process profile is not present for target ${normalizedTargetId}: ${normalizedProfileId}`,
+      'PROCESS_PROFILE_UNKNOWN'
+    );
+  }
+  if (!profile.allowedPhases.includes(value.currentPhase)) {
+    fail(
+      `Process profile ${normalizedTargetId}/${normalizedProfileId} is not permitted in phase ` +
+      value.currentPhase,
+      'PROCESS_PHASE_DENIED'
+    );
+  }
+  return deepFreeze({
+    runId,
+    ticketId,
+    currentPhase: value.currentPhase,
+    processPolicySnapshot: snapshot
+  });
+}
+
+function normalizeWorkspaceSnapshot(value, { context, profile }, sandboxCapability) {
+  plainObject(value, 'workspaceSnapshot');
+  onlyKeys(value, PROCESS_WORKSPACE_SNAPSHOT_KEYS, 'workspaceSnapshot');
+  requireKeys(value, PROCESS_WORKSPACE_SNAPSHOT_KEYS, 'workspaceSnapshot');
   const normalized = {
     id: identifier(value.id, 'workspaceSnapshot.id'),
+    runId: positiveInteger(value.runId, 'workspaceSnapshot.runId'),
+    policySnapshotHash: sha256(
+      value.policySnapshotHash,
+      'workspaceSnapshot.policySnapshotHash'
+    ),
+    materializerGeneration: identifier(
+      value.materializerGeneration,
+      'workspaceSnapshot.materializerGeneration'
+    ),
     manifestSha256: sha256(
       value.manifestSha256,
       'workspaceSnapshot.manifestSha256'
@@ -113,17 +214,35 @@ function normalizeWorkspaceSnapshot(value, filesystemPolicy) {
     fileCount: nonnegativeInteger(value.fileCount, 'workspaceSnapshot.fileCount'),
     totalBytes: nonnegativeInteger(value.totalBytes, 'workspaceSnapshot.totalBytes')
   };
-  if (normalized.fileCount > filesystemPolicy.maxInputFiles) {
+  if (normalized.runId !== context.runId) {
+    fail(
+      'workspaceSnapshot.runId does not match the launch-authority context',
+      'PROCESS_WORKSPACE_SNAPSHOT_MISMATCH'
+    );
+  }
+  if (normalized.policySnapshotHash !== context.processPolicySnapshot.snapshotHash) {
+    fail(
+      'workspaceSnapshot.policySnapshotHash does not match the immutable run snapshot',
+      'PROCESS_WORKSPACE_SNAPSHOT_MISMATCH'
+    );
+  }
+  if (normalized.materializerGeneration !== sandboxCapability.materializerGeneration) {
+    fail(
+      'workspaceSnapshot.materializerGeneration does not match the sandbox capability generation',
+      'PROCESS_WORKSPACE_SNAPSHOT_MISMATCH'
+    );
+  }
+  if (normalized.fileCount > profile.filesystemPolicy.maxInputFiles) {
     fail(
       `workspaceSnapshot.fileCount exceeds profile policy maximum of ` +
-      filesystemPolicy.maxInputFiles,
+      profile.filesystemPolicy.maxInputFiles,
       'PROCESS_WORKSPACE_SNAPSHOT_INVALID'
     );
   }
-  if (normalized.totalBytes > filesystemPolicy.maxInputBytes) {
+  if (normalized.totalBytes > profile.filesystemPolicy.maxInputBytes) {
     fail(
       `workspaceSnapshot.totalBytes exceeds profile policy maximum of ` +
-      filesystemPolicy.maxInputBytes,
+      profile.filesystemPolicy.maxInputBytes,
       'PROCESS_WORKSPACE_SNAPSHOT_INVALID'
     );
   }
@@ -132,85 +251,65 @@ function normalizeWorkspaceSnapshot(value, filesystemPolicy) {
 
 function normalizeBuildInput(value) {
   plainObject(value, 'process launch-plan input');
-  onlyKeys(value, [
-    'policySnapshot',
-    'operationIdentity',
-    'runId',
-    'ticketId',
+  const keys = [
+    'launchAuthorityContext',
+    'operationId',
     'targetId',
     'profileId',
-    'policySnapshotHash',
-    'runtimePhase',
-    'workspaceSnapshot'
-  ], 'process launch-plan input');
+    'workspaceSnapshot',
+    'sandboxCapability'
+  ];
+  onlyKeys(value, keys, 'process launch-plan input');
+  requireKeys(value, keys, 'process launch-plan input');
   return value;
 }
 
-function resolveLaunchAuthority(input) {
-  const snapshot = normalizeProcessPolicySnapshot(input.policySnapshot);
-  if (!snapshot || snapshot.version !== PROCESS_POLICY_SNAPSHOT_VERSION) {
+function normalizeSandboxCapability(value) {
+  try {
+    return projectProcessSandboxCapabilityGeneration(value);
+  } catch (error) {
     fail(
-      'Only a valid version-3 process policy snapshot can produce a launch plan',
-      'PROCESS_POLICY_SNAPSHOT_NOT_EXECUTABLE'
+      `A current healthy sandbox capability generation is required: ${error.message}`,
+      'PROCESS_SANDBOX_UNAVAILABLE'
     );
   }
-  if (!snapshot.capabilityEnabled) {
-    fail(
-      'A disabled process policy snapshot cannot produce a launch plan',
-      'PROCESS_CAPABILITY_DISABLED'
-    );
-  }
-  if (input.policySnapshotHash !== snapshot.snapshotHash) {
-    fail(
-      'policySnapshotHash does not match the immutable run snapshot',
-      'PROCESS_POLICY_SNAPSHOT_MISMATCH'
-    );
-  }
-  const targetId = identifier(input.targetId, 'targetId');
-  const profileId = identifier(input.profileId, 'profileId');
-  const targetProfiles = snapshot.profiles.filter(profile => profile.targetId === targetId);
-  if (targetProfiles.length === 0) {
-    fail(`Process target is not present in the version-3 snapshot: ${targetId}`,
-      'PROCESS_TARGET_UNKNOWN');
-  }
-  const profile = targetProfiles.find(candidate => candidate.profileId === profileId);
-  if (!profile) {
-    fail(`Process profile is not present for target ${targetId}: ${profileId}`,
-      'PROCESS_PROFILE_UNKNOWN');
-  }
-  if (!PROCESS_RUNTIME_PHASES.includes(input.runtimePhase) ||
-      !profile.allowedPhases.includes(input.runtimePhase)) {
-    fail(
-      `Process profile ${targetId}/${profileId} is not permitted in phase ` +
-      String(input.runtimePhase),
-      'PROCESS_PHASE_DENIED'
-    );
-  }
-  return { snapshot, targetId, profileId, profile };
 }
 
 function buildProcessLaunchPlan(value) {
   const input = normalizeBuildInput(value);
-  if (typeof input.operationIdentity !== 'string' ||
-      !PROCESS_OPERATION_IDENTITY_PATTERN.test(input.operationIdentity)) {
-    fail('operationIdentity must be a canonical run-scoped process-operation hash');
-  }
-  const runId = positiveInteger(input.runId, 'runId');
-  const ticketId = positiveInteger(input.ticketId, 'ticketId');
-  const { snapshot, targetId, profileId, profile } = resolveLaunchAuthority(input);
+  const context = validateProcessLaunchAuthorityContext(
+    input.launchAuthorityContext,
+    { targetId: input.targetId, profileId: input.profileId }
+  );
+  const targetId = identifier(input.targetId, 'targetId');
+  const profileId = identifier(input.profileId, 'profileId');
+  const profile = context.processPolicySnapshot.profiles.find(
+    candidate => candidate.targetId === targetId && candidate.profileId === profileId
+  );
+  const authority = { context, targetId, profileId, profile };
+  const operationId = identifier(input.operationId, 'operationId');
+  const operationIdentity = buildProcessOperationIdentity(
+    context.runId,
+    operationId
+  );
+  const sandboxCapability = normalizeSandboxCapability(input.sandboxCapability);
   const workspaceSnapshot = normalizeWorkspaceSnapshot(
     input.workspaceSnapshot,
-    profile.filesystemPolicy
+    authority,
+    sandboxCapability
   );
+  const snapshot = context.processPolicySnapshot;
   const withoutHash = {
     version: PROCESS_LAUNCH_PLAN_VERSION,
-    operationIdentity: input.operationIdentity,
-    runId,
-    ticketId,
+    operationId,
+    operationIdentity,
+    runId: context.runId,
+    ticketId: context.ticketId,
     targetId,
     profileId,
     policySnapshotHash: snapshot.snapshotHash,
-    runtimePhase: input.runtimePhase,
+    runtimePhase: context.currentPhase,
+    sandboxCapability,
     runtimeRootfs: { ...profile.runtimeRootfs },
     executableIdentity: { ...profile.executableIdentity },
     arguments: [...profile.arguments],
@@ -233,31 +332,45 @@ function buildProcessLaunchPlan(value) {
   });
 }
 
-function validateProcessLaunchPlan(value, { policySnapshot } = {}) {
+function validateProcessLaunchPlan(value, {
+  launchAuthorityContext,
+  sandboxCapability
+} = {}) {
   plainObject(value, 'process launch plan');
   onlyKeys(value, PROCESS_LAUNCH_PLAN_KEYS, 'process launch plan');
-  for (const key of PROCESS_LAUNCH_PLAN_KEYS) {
-    if (!Object.hasOwn(value, key)) fail(`process launch plan.${key} is required`);
-  }
+  requireKeys(value, PROCESS_LAUNCH_PLAN_KEYS, 'process launch plan');
   if (value.version !== PROCESS_LAUNCH_PLAN_VERSION) {
     fail(`process launch plan.version must be ${PROCESS_LAUNCH_PLAN_VERSION}`);
   }
+  identifier(value.operationId, 'process launch plan.operationId');
+  if (typeof value.operationIdentity !== 'string' ||
+      !PROCESS_OPERATION_IDENTITY_PATTERN.test(value.operationIdentity)) {
+    fail('process launch plan.operationIdentity must be a canonical process-operation hash');
+  }
   sha256(value.launchPlanHash, 'process launch plan.launchPlanHash');
+  plainObject(value.sandboxCapability, 'process launch plan.sandboxCapability');
+  onlyKeys(
+    value.sandboxCapability,
+    PROCESS_SANDBOX_GENERATION_KEYS,
+    'process launch plan.sandboxCapability'
+  );
+  requireKeys(
+    value.sandboxCapability,
+    PROCESS_SANDBOX_GENERATION_KEYS,
+    'process launch plan.sandboxCapability'
+  );
   const expected = buildProcessLaunchPlan({
-    policySnapshot,
-    operationIdentity: value.operationIdentity,
-    runId: value.runId,
-    ticketId: value.ticketId,
+    launchAuthorityContext,
+    operationId: value.operationId,
     targetId: value.targetId,
     profileId: value.profileId,
-    policySnapshotHash: value.policySnapshotHash,
-    runtimePhase: value.runtimePhase,
-    workspaceSnapshot: value.workspaceSnapshot
+    workspaceSnapshot: value.workspaceSnapshot,
+    sandboxCapability
   });
   if (JSON.stringify(canonicalizeProcessContractValue(value)) !==
       JSON.stringify(canonicalizeProcessContractValue(expected))) {
     fail(
-      'process launch plan does not exactly match its immutable version-3 authority',
+      'process launch plan does not exactly match its immutable run and sandbox authority',
       'PROCESS_LAUNCH_PLAN_AUTHORITY_MISMATCH'
     );
   }
@@ -265,10 +378,14 @@ function validateProcessLaunchPlan(value, { policySnapshot } = {}) {
 }
 
 module.exports = {
+  PROCESS_LAUNCH_AUTHORITY_CONTEXT_KEYS,
   PROCESS_LAUNCH_PLAN_KEYS,
   PROCESS_LAUNCH_PLAN_VERSION,
   PROCESS_OPERATION_IDENTITY_PATTERN,
+  PROCESS_SANDBOX_GENERATION_KEYS,
+  PROCESS_WORKSPACE_SNAPSHOT_KEYS,
   ProcessLaunchPlanError,
   buildProcessLaunchPlan,
+  validateProcessLaunchAuthorityContext,
   validateProcessLaunchPlan
 };
