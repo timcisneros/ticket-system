@@ -157,6 +157,7 @@ pub(crate) struct ExecutionResult {
     pub combined_output_bytes: u64,
     pub stdout_sha256: String,
     pub stderr_sha256: String,
+    pub output_complete: bool,
     pub resource_cause: Option<String>,
     pub enforcement_cause: Option<String>,
     pub cpu_throttled_events: u64,
@@ -168,6 +169,9 @@ pub(crate) struct ExecutionResult {
 pub(crate) struct OperationStatus {
     pub operation_identity: String,
     pub state: String,
+    pub launcher_acceptance_identity: String,
+    pub terminal_result_hash: Option<String>,
+    pub output_available: bool,
     pub result: Option<ExecutionResult>,
 }
 

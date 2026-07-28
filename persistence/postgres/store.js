@@ -35,6 +35,7 @@ const RUN_STATUSES = new Set(['pending', 'running', 'completed', 'failed', 'inte
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'interrupted']);
 const RUN_RECOVERY_MODES = new Set(['lease_expiry', 'process_restart']);
 const OPERATION_OUTCOMES = new Set(['succeeded', 'failed', 'refused']);
+const PROCESS_OPERATION_STATES = new Set(['intent', 'active', 'finalizing', 'terminal']);
 const RUN_EXECUTION_PHASES = new Set(['planning', 'inspection', 'mutation', 'verification', 'terminalization']);
 const RUN_PHASE_TRANSITIONS = new Map([
   ['planning', new Set(['planning', 'inspection', 'mutation', 'verification'])],
@@ -92,6 +93,30 @@ class IdempotencyConflictError extends Error {
     this.code = 'IDEMPOTENCY_CONFLICT';
     this.runId = runId;
     this.idempotencyKey = idempotencyKey;
+  }
+}
+
+class ProcessExecutionIntentConflictError extends Error {
+  constructor(operationIdentity, current = null) {
+    super(`Process execution intent conflicts for ${operationIdentity}`);
+    this.name = 'ProcessExecutionIntentConflictError';
+    this.code = 'PROCESS_EXECUTION_INTENT_CONFLICT';
+    this.operationIdentity = operationIdentity;
+    this.current = current;
+  }
+}
+
+class ProcessExecutionStateError extends Error {
+  constructor(operationIdentity, expectedStates, current = null) {
+    super(
+      `Process execution ${operationIdentity} is ${current ? current.lifecycleState : 'missing'}; ` +
+      `expected ${expectedStates.join(' or ')}`
+    );
+    this.name = 'ProcessExecutionStateError';
+    this.code = 'PROCESS_EXECUTION_STATE_INVALID';
+    this.operationIdentity = operationIdentity;
+    this.expectedStates = expectedStates;
+    this.current = current;
   }
 }
 
@@ -578,6 +603,70 @@ function operationReceiptFromRow(row) {
   };
 }
 
+function processOperationFromRow(row) {
+  return {
+    operationIdentity: row.operation_identity,
+    runId: positiveSafeInteger(row.run_id, 'processOperation.runId'),
+    ticketId: positiveSafeInteger(row.ticket_id, 'processOperation.ticketId'),
+    actingAgentId: positiveSafeInteger(row.acting_agent_id, 'processOperation.actingAgentId'),
+    stepId: row.step_id,
+    runtimePhase: row.runtime_phase,
+    targetId: row.target_id,
+    profileId: row.profile_id,
+    policySnapshotHash: row.policy_snapshot_hash,
+    runtimeCapabilityGeneration: row.runtime_capability_generation,
+    launchPlanVersion: positiveSafeInteger(row.launch_plan_version, 'processOperation.launchPlanVersion'),
+    launchPlanHash: row.launch_plan_hash,
+    launchPlan: row.launch_plan,
+    workspaceSnapshotId: row.workspace_snapshot_id,
+    workspaceManifestHash: row.workspace_manifest_hash,
+    materializerGeneration: row.materializer_generation,
+    containmentGenerationId: row.containment_generation_id,
+    rootfsId: row.rootfs_id,
+    rootfsManifestHash: row.rootfs_manifest_hash,
+    executableIdentityHash: row.executable_identity_hash,
+    executionPolicyHash: row.execution_policy_hash,
+    filesystemPolicyHash: row.filesystem_policy_hash,
+    lifecycleState: row.lifecycle_state,
+    launcherAcceptanceIdentity: row.launcher_acceptance_identity,
+    dispatchClaimOwner: row.dispatch_claim_owner,
+    dispatchClaimExpiresAt: rowTimestamp(row.dispatch_claim_expires_at),
+    requestedAt: rowTimestamp(row.requested_at),
+    startedAt: rowTimestamp(row.started_at),
+    terminalAt: rowTimestamp(row.terminal_at),
+    terminalOutcome: row.terminal_outcome,
+    terminalResult: row.terminal_result,
+    terminalResultHash: row.terminal_result_hash,
+    exitCode: row.exit_code,
+    terminatingSignal: row.terminating_signal,
+    resourceCause: row.resource_cause,
+    stdoutByteCount: row.stdout_byte_count === null
+      ? null
+      : nonNegativeSafeInteger(row.stdout_byte_count, 'processOperation.stdoutByteCount'),
+    stdoutSha256: row.stdout_sha256,
+    stderrByteCount: row.stderr_byte_count === null
+      ? null
+      : nonNegativeSafeInteger(row.stderr_byte_count, 'processOperation.stderrByteCount'),
+    stderrSha256: row.stderr_sha256,
+    combinedOutputByteCount: row.combined_output_byte_count === null
+      ? null
+      : nonNegativeSafeInteger(
+        row.combined_output_byte_count,
+        'processOperation.combinedOutputByteCount'
+      ),
+    stdoutArtifact: row.stdout_artifact,
+    stderrArtifact: row.stderr_artifact,
+    requiredEvidenceState: row.required_evidence_state,
+    launcherOutputAcknowledged: row.launcher_output_acknowledged === true,
+    cancellationRequested: row.cancellation_requested === true,
+    cancellationRequestedAt: rowTimestamp(row.cancellation_requested_at),
+    cancellationReason: row.cancellation_reason,
+    lastReconciliationResult: row.last_reconciliation_result,
+    revision: positiveSafeInteger(row.revision, 'processOperation.revision'),
+    updatedAt: rowTimestamp(row.updated_at)
+  };
+}
+
 // Canonical prepared-intent projection (A22).
 //
 // The persisted intent document — `preState`, `args`, `authorityDecision`, `target` —
@@ -859,6 +948,7 @@ class PostgresRuntimeStore {
         'replay_snapshots',
         'operation_receipts',
         'target_operation_intents',
+        'process_operations',
         'operator_recovery_intents',
         'runtime_status_counts',
         'diagnostic_logs',
@@ -916,6 +1006,7 @@ class PostgresRuntimeStore {
         ['replay_snapshots', 'replay_snapshots_terminal_guard'],
         ['replay_snapshots', 'replay_snapshots_mutation_guard'],
         ['target_operation_intents', 'target_operation_intents_append_only'],
+        ['process_operations', 'process_operations_lifecycle_guard'],
         ['operator_recovery_intents', 'operator_recovery_intents_append_only'],
         ['tickets', 'tickets_runtime_status_count'],
         ['runs', 'runs_runtime_status_count'],
@@ -985,6 +1076,8 @@ class PostgresRuntimeStore {
         ['operation_receipts', 'operation_receipts_workspace_projection_shape'],
         ['operation_receipts', 'operation_receipts_identity_owner_unique'],
         ['target_operation_intents', 'target_operation_intents_operation_key_unique'],
+        ['process_operations', 'process_operations_pkey'],
+        ['process_operations', 'process_operations_run_ticket_fk'],
         ['operator_recovery_intents', 'operator_recovery_intents_original_owner_fk'],
         ['operator_recovery_intents', 'operator_recovery_intents_run_ticket_fk'],
         ['operator_recovery_intents', 'operator_recovery_intents_original_unique'],
@@ -5947,6 +6040,388 @@ class PostgresRuntimeStore {
     });
   }
 
+  async getProcessOperation(operationIdentity, { client = null, forUpdate = false } = {}) {
+    const identity = requiredString(operationIdentity, 'operationIdentity', 82);
+    if (!/^process-operation:[0-9a-f]{64}$/.test(identity)) {
+      throw new TypeError('operationIdentity must be a canonical process operation identity');
+    }
+    const connection = client || this.targetOperationClientStorage.getStore() || this.pool;
+    const result = await connection.query(
+      `SELECT * FROM ${this.table('process_operations')}
+       WHERE operation_identity = $1${forUpdate ? ' FOR UPDATE' : ''}`,
+      [identity]
+    );
+    return result.rowCount === 0 ? null : processOperationFromRow(result.rows[0]);
+  }
+
+  async listProcessOperationsForRun(runId, { states = null, client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const normalizedStates = states === null
+      ? null
+      : normalizeStatuses(states, PROCESS_OPERATION_STATES, 'process operation state');
+    const connection = client || this.targetOperationClientStorage.getStore() || this.pool;
+    const result = await connection.query(
+      `SELECT * FROM ${this.table('process_operations')}
+       WHERE run_id = $1
+         AND ($2::text[] IS NULL OR lifecycle_state = ANY($2::text[]))
+       ORDER BY requested_at, operation_identity`,
+      [id, normalizedStates]
+    );
+    return result.rows.map(processOperationFromRow);
+  }
+
+  async listNonterminalProcessOperations({ limit = 100, client = null } = {}) {
+    const boundedLimit = positiveSafeInteger(limit, 'limit');
+    if (boundedLimit > this.maxQueryRows) {
+      throw new RangeError(`limit exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    const connection = client || this.targetOperationClientStorage.getStore() || this.pool;
+    const result = await connection.query(
+      `SELECT * FROM ${this.table('process_operations')}
+       WHERE lifecycle_state <> 'terminal'
+       ORDER BY updated_at, operation_identity
+       LIMIT $1`,
+      [boundedLimit]
+    );
+    return result.rows.map(processOperationFromRow);
+  }
+
+  async listProcessOperationsRequiringReconciliation({
+    limit = 100,
+    client = null
+  } = {}) {
+    const boundedLimit = positiveSafeInteger(limit, 'limit');
+    if (boundedLimit > this.maxQueryRows) {
+      throw new RangeError(`limit exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    const connection = client || this.targetOperationClientStorage.getStore() || this.pool;
+    const result = await connection.query(
+      `SELECT * FROM ${this.table('process_operations')}
+       WHERE lifecycle_state <> 'terminal'
+          OR launcher_output_acknowledged = false
+       ORDER BY updated_at, operation_identity
+       LIMIT $1`,
+      [boundedLimit]
+    );
+    return result.rows.map(processOperationFromRow);
+  }
+
+  async isProcessExecutionSchemaAvailable() {
+    const result = await this.pool.query(
+      'SELECT to_regclass($1) IS NOT NULL AS available',
+      [`${this.schema}.process_operations`]
+    );
+    return result.rows[0] && result.rows[0].available === true;
+  }
+
+  async createProcessExecutionIntent(input, { client = null } = {}) {
+    const document = this.assertJsonRecord(input, 'process execution intent');
+    const operationIdentity = requiredString(
+      document.operationIdentity,
+      'operationIdentity',
+      82
+    );
+    if (!/^process-operation:[0-9a-f]{64}$/.test(operationIdentity)) {
+      throw new TypeError('operationIdentity must be a canonical process operation identity');
+    }
+    const runId = positiveSafeInteger(document.runId, 'runId');
+    const ticketId = positiveSafeInteger(document.ticketId, 'ticketId');
+    const actingAgentId = positiveSafeInteger(document.actingAgentId, 'actingAgentId');
+    const runtimePhase = requiredString(document.runtimePhase, 'runtimePhase');
+    if (!['inspection', 'mutation', 'verification'].includes(runtimePhase)) {
+      throw new TypeError('runtimePhase must be an executable runtime phase');
+    }
+    const targetId = requiredString(document.targetId, 'targetId', 128);
+    const profileId = requiredString(document.profileId, 'profileId', 128);
+    const sha256 = (value, label) => {
+      const normalized = requiredString(value, label, 64);
+      if (!/^[0-9a-f]{64}$/.test(normalized)) {
+        throw new TypeError(`${label} must be a lowercase SHA-256`);
+      }
+      return normalized;
+    };
+    const launchPlan = this.assertJsonRecord(document.launchPlan, 'launchPlan');
+    const launchPlanVersion = positiveSafeInteger(
+      document.launchPlanVersion,
+      'launchPlanVersion'
+    );
+    if (launchPlanVersion !== 1) throw new TypeError('launchPlanVersion must be 1');
+    const authority = {
+      operationIdentity,
+      runId,
+      ticketId,
+      actingAgentId,
+      stepId: optionalString(document.stepId),
+      runtimePhase,
+      targetId,
+      profileId,
+      policySnapshotHash: sha256(document.policySnapshotHash, 'policySnapshotHash'),
+      runtimeCapabilityGeneration: requiredString(
+        document.runtimeCapabilityGeneration,
+        'runtimeCapabilityGeneration',
+        83
+      ),
+      launchPlanVersion,
+      launchPlanHash: sha256(document.launchPlanHash, 'launchPlanHash'),
+      launchPlan,
+      workspaceSnapshotId: requiredString(
+        document.workspaceSnapshotId,
+        'workspaceSnapshotId',
+        128
+      ),
+      workspaceManifestHash: sha256(document.workspaceManifestHash, 'workspaceManifestHash'),
+      materializerGeneration: requiredString(
+        document.materializerGeneration,
+        'materializerGeneration',
+        128
+      ),
+      containmentGenerationId: requiredString(
+        document.containmentGenerationId,
+        'containmentGenerationId',
+        128
+      ),
+      rootfsId: requiredString(document.rootfsId, 'rootfsId', 128),
+      rootfsManifestHash: sha256(document.rootfsManifestHash, 'rootfsManifestHash'),
+      executableIdentityHash: sha256(
+        document.executableIdentityHash,
+        'executableIdentityHash'
+      ),
+      executionPolicyHash: sha256(document.executionPolicyHash, 'executionPolicyHash'),
+      filesystemPolicyHash: sha256(document.filesystemPolicyHash, 'filesystemPolicyHash')
+    };
+    const execute = async connection => {
+      await connection.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+        [`process-execution:${operationIdentity}`]
+      );
+      const inserted = await connection.query(
+        `INSERT INTO ${this.table('process_operations')} (
+          operation_identity, run_id, ticket_id, acting_agent_id, step_id, runtime_phase,
+          target_id, profile_id, policy_snapshot_hash, runtime_capability_generation,
+          launch_plan_version, launch_plan_hash, launch_plan,
+          workspace_snapshot_id, workspace_manifest_hash, materializer_generation,
+          containment_generation_id, rootfs_id, rootfs_manifest_hash,
+          executable_identity_hash, execution_policy_hash, filesystem_policy_hash
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14,
+          $15, $16, $17, $18, $19, $20, $21, $22
+        )
+        ON CONFLICT (operation_identity) DO NOTHING
+        RETURNING *`,
+        [
+          authority.operationIdentity,
+          authority.runId,
+          authority.ticketId,
+          authority.actingAgentId,
+          authority.stepId,
+          authority.runtimePhase,
+          authority.targetId,
+          authority.profileId,
+          authority.policySnapshotHash,
+          authority.runtimeCapabilityGeneration,
+          authority.launchPlanVersion,
+          authority.launchPlanHash,
+          JSON.stringify(authority.launchPlan),
+          authority.workspaceSnapshotId,
+          authority.workspaceManifestHash,
+          authority.materializerGeneration,
+          authority.containmentGenerationId,
+          authority.rootfsId,
+          authority.rootfsManifestHash,
+          authority.executableIdentityHash,
+          authority.executionPolicyHash,
+          authority.filesystemPolicyHash
+        ]
+      );
+      if (inserted.rowCount === 1) {
+        return { inserted: true, record: processOperationFromRow(inserted.rows[0]) };
+      }
+      const current = await this.getProcessOperation(operationIdentity, {
+        client: connection,
+        forUpdate: true
+      });
+      const exact = current &&
+        current.runId === authority.runId &&
+        current.ticketId === authority.ticketId &&
+        current.actingAgentId === authority.actingAgentId &&
+        current.stepId === authority.stepId &&
+        current.runtimePhase === authority.runtimePhase &&
+        current.targetId === authority.targetId &&
+        current.profileId === authority.profileId &&
+        current.policySnapshotHash === authority.policySnapshotHash &&
+        current.runtimeCapabilityGeneration === authority.runtimeCapabilityGeneration &&
+        current.launchPlanVersion === authority.launchPlanVersion &&
+        current.launchPlanHash === authority.launchPlanHash &&
+        canonicalJson(current.launchPlan) === canonicalJson(authority.launchPlan) &&
+        current.workspaceSnapshotId === authority.workspaceSnapshotId &&
+        current.workspaceManifestHash === authority.workspaceManifestHash &&
+        current.materializerGeneration === authority.materializerGeneration &&
+        current.containmentGenerationId === authority.containmentGenerationId &&
+        current.rootfsId === authority.rootfsId &&
+        current.rootfsManifestHash === authority.rootfsManifestHash &&
+        current.executableIdentityHash === authority.executableIdentityHash &&
+        current.executionPolicyHash === authority.executionPolicyHash &&
+        current.filesystemPolicyHash === authority.filesystemPolicyHash;
+      if (!exact) throw new ProcessExecutionIntentConflictError(operationIdentity, current);
+      return { inserted: false, record: current };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async transitionProcessOperation({
+    operationIdentity,
+    expectedStates,
+    expectedRevision = null,
+    changes
+  }, { client = null } = {}) {
+    const identity = requiredString(operationIdentity, 'operationIdentity', 82);
+    const states = normalizeStatuses(
+      expectedStates,
+      PROCESS_OPERATION_STATES,
+      'expected process operation state'
+    );
+    const patch = this.assertJsonRecord(changes, 'process operation changes');
+    const columns = new Map([
+      ['lifecycleState', ['lifecycle_state', value => {
+        const state = requiredString(value, 'lifecycleState');
+        if (!PROCESS_OPERATION_STATES.has(state)) throw new TypeError('Invalid lifecycleState');
+        return state;
+      }]],
+      ['launcherAcceptanceIdentity', ['launcher_acceptance_identity', optionalString]],
+      ['startedAt', ['started_at', value => value == null ? null : isoTimestamp(value, 'startedAt')]],
+      ['terminalAt', ['terminal_at', value => value == null ? null : isoTimestamp(value, 'terminalAt')]],
+      ['terminalOutcome', ['terminal_outcome', optionalString]],
+      ['terminalResult', ['terminal_result', value => value == null
+        ? null
+        : this.assertJsonRecord(value, 'terminalResult')]],
+      ['terminalResultHash', ['terminal_result_hash', optionalString]],
+      ['exitCode', ['exit_code', value => value == null ? null : Number(value)]],
+      ['terminatingSignal', ['terminating_signal', value => value == null ? null : Number(value)]],
+      ['resourceCause', ['resource_cause', optionalString]],
+      ['stdoutByteCount', ['stdout_byte_count', value => value == null
+        ? null
+        : nonNegativeSafeInteger(value, 'stdoutByteCount')]],
+      ['stdoutSha256', ['stdout_sha256', optionalString]],
+      ['stderrByteCount', ['stderr_byte_count', value => value == null
+        ? null
+        : nonNegativeSafeInteger(value, 'stderrByteCount')]],
+      ['stderrSha256', ['stderr_sha256', optionalString]],
+      ['combinedOutputByteCount', ['combined_output_byte_count', value => value == null
+        ? null
+        : nonNegativeSafeInteger(value, 'combinedOutputByteCount')]],
+      ['stdoutArtifact', ['stdout_artifact', value => value == null
+        ? null
+        : this.assertJsonRecord(value, 'stdoutArtifact')]],
+      ['stderrArtifact', ['stderr_artifact', value => value == null
+        ? null
+        : this.assertJsonRecord(value, 'stderrArtifact')]],
+      ['requiredEvidenceState', ['required_evidence_state', value => {
+        const state = requiredString(value, 'requiredEvidenceState');
+        if (!['pending', 'complete'].includes(state)) {
+          throw new TypeError('requiredEvidenceState must be pending or complete');
+        }
+        return state;
+      }]],
+      ['launcherOutputAcknowledged', ['launcher_output_acknowledged', value => value === true]],
+      ['cancellationRequested', ['cancellation_requested', value => value === true]],
+      ['cancellationRequestedAt', ['cancellation_requested_at', value => value == null
+        ? null
+        : isoTimestamp(value, 'cancellationRequestedAt')]],
+      ['cancellationReason', ['cancellation_reason', value => value == null
+        ? null
+        : requiredString(value, 'cancellationReason', 1024)]],
+      ['lastReconciliationResult', ['last_reconciliation_result', value => value == null
+        ? null
+        : this.assertJsonRecord(value, 'lastReconciliationResult')]]
+    ]);
+    const entries = Object.entries(patch);
+    if (entries.length === 0) throw new TypeError('process operation changes cannot be empty');
+    const assignments = [];
+    const values = [identity, states];
+    for (const [key, value] of entries) {
+      const definition = columns.get(key);
+      if (!definition) throw new TypeError(`Unsupported process operation change: ${key}`);
+      const [column, normalize] = definition;
+      values.push(normalize(value));
+      assignments.push(`${column} = $${values.length}${column.endsWith('_result') ||
+        column.endsWith('_artifact') ? '::jsonb' : ''}`);
+    }
+    const revision = expectedRevision === null
+      ? null
+      : positiveSafeInteger(expectedRevision, 'expectedRevision');
+    values.push(revision);
+    const revisionParameter = values.length;
+    const execute = async connection => {
+      const result = await connection.query(
+        `UPDATE ${this.table('process_operations')}
+         SET ${assignments.join(', ')},
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE operation_identity = $1
+           AND lifecycle_state = ANY($2::text[])
+           AND ($${revisionParameter}::bigint IS NULL OR revision = $${revisionParameter})
+         RETURNING *`,
+        values.map((value, index) => {
+          const key = index >= 2 && index - 2 < entries.length ? entries[index - 2][0] : null;
+          return key && ['terminalResult', 'stdoutArtifact', 'stderrArtifact',
+            'lastReconciliationResult'].includes(key) && value !== null
+            ? JSON.stringify(value)
+            : value;
+        })
+      );
+      if (result.rowCount === 1) return processOperationFromRow(result.rows[0]);
+      const current = await this.getProcessOperation(identity, {
+        client: connection,
+        forUpdate: true
+      });
+      throw new ProcessExecutionStateError(identity, states, current);
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async requestProcessOperationCancellation({
+    operationIdentity,
+    reason,
+    requestedAt = new Date().toISOString()
+  }) {
+    const current = await this.getProcessOperation(operationIdentity);
+    if (!current) {
+      throw new ProcessExecutionStateError(operationIdentity, [...PROCESS_OPERATION_STATES], null);
+    }
+    if (current.cancellationRequested) return current;
+    return this.transitionProcessOperation({
+      operationIdentity,
+      expectedStates: ['intent', 'active', 'finalizing'],
+      expectedRevision: current.revision,
+      changes: {
+        cancellationRequested: true,
+        cancellationRequestedAt: requestedAt,
+        cancellationReason: reason || 'process operation cancellation requested'
+      }
+    });
+  }
+
+  async withProcessOperationLock(operationIdentity, operation) {
+    if (typeof operation !== 'function') throw new TypeError('operation must be a function');
+    const identity = requiredString(operationIdentity, 'operationIdentity', 82);
+    if (!/^process-operation:[0-9a-f]{64}$/.test(identity)) {
+      throw new TypeError('operationIdentity must be a canonical process operation identity');
+    }
+    const resource = `process-execution:${identity}`;
+    const client = await this.pool.connect();
+    try {
+      await client.query("SELECT set_config('lock_timeout', $1, false)", [`${this.lockTimeoutMs}ms`]);
+      await client.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [resource]);
+      return await this.targetOperationClientStorage.run(client, () => operation(resource));
+    } finally {
+      try {
+        await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [resource]);
+      } catch (_) {}
+      try { await client.query("SELECT set_config('lock_timeout', '0', false)"); } catch (_) {}
+      client.release();
+    }
+  }
+
   async getOperatorRecovery(originalHistoryId, { client = null, forUpdate = false } = {}) {
     const id = positiveSafeInteger(originalHistoryId, 'originalHistoryId');
     const connection = client || this.pool;
@@ -6744,6 +7219,8 @@ module.exports = {
   OptimisticConcurrencyError,
   PostgresRuntimeIntegrityError,
   PostgresRuntimeStore,
+  ProcessExecutionIntentConflictError,
+  ProcessExecutionStateError,
   RunPhaseConflictError,
   StateTransitionConflictError,
   TriageConflictError,

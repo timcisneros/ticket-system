@@ -55,6 +55,28 @@ const {
   normalizeProcessProfileGrants,
   resolveProcessProfileGrants
 } = require('./runtime/process-target-catalog');
+const {
+  PROCESS_MATERIALIZER_DEFAULT_SOCKET_PATH,
+  PROCESS_MATERIALIZER_DEFAULT_TIMEOUT_MS
+} = require('./runtime/process-materializer-contract');
+const { ProcessMaterializerClient } = require('./runtime/process-materializer-client');
+const {
+  PROCESS_LAUNCHER_FOUNDATION_DEFAULT_SOCKET_PATH,
+  PROCESS_LAUNCHER_FOUNDATION_MAX_TIMEOUT_MS
+} = require('./runtime/process-launcher-foundation-contract');
+const {
+  ProcessLauncherFoundationClient
+} = require('./runtime/process-launcher-foundation-client');
+const {
+  ProcessOutputArtifactStore
+} = require('./runtime/process-output-artifact-store');
+const {
+  PROCESS_ENABLED_RELEASE_GATES,
+  ProcessRuntimeCapabilityResolver
+} = require('./runtime/process-runtime-capability');
+const {
+  ProcessExecutionController
+} = require('./runtime/process-execution-controller');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -81,7 +103,8 @@ const {
   assertPerformanceAnalyticsRepository,
   assertWorkContextRepository,
   assertConfiguredAgentRepository,
-  assertProcessTemplateProjectionRepository
+  assertProcessTemplateProjectionRepository,
+  assertProcessExecutionRepository
 } = require('./persistence/runtime-contracts');
 const { snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const {
@@ -295,6 +318,63 @@ const postgresRuntimeStore = new PostgresRuntimeStore({
   maxEligibleRunIds: getRuntimeSchedulerCandidateLimit(),
   defaultMaxActiveRuns: getPositiveIntegerEnv('MAX_ACTIVE_RUNS', DEFAULT_MAX_ACTIVE_RUNS),
   defaultLocalModelConcurrency: getPositiveIntegerEnv('LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY)
+});
+const processMaterializerClient = new ProcessMaterializerClient({
+  version: 1,
+  socketPath: String(
+    process.env.PROCESS_MATERIALIZER_SOCKET_PATH ||
+    PROCESS_MATERIALIZER_DEFAULT_SOCKET_PATH
+  ),
+  workspaceAllocationId: String(
+    process.env.PROCESS_WORKSPACE_ALLOCATION_ID || 'primary-workspace'
+  ),
+  timeoutMs: getPositiveIntegerEnv(
+    'PROCESS_MATERIALIZER_TIMEOUT_MS',
+    PROCESS_MATERIALIZER_DEFAULT_TIMEOUT_MS
+  )
+});
+const processLauncherClient = new ProcessLauncherFoundationClient({
+  version: 1,
+  socketPath: String(
+    process.env.PROCESS_LAUNCHER_SOCKET_PATH ||
+    PROCESS_LAUNCHER_FOUNDATION_DEFAULT_SOCKET_PATH
+  ),
+  timeoutMs: getPositiveIntegerEnv(
+    'PROCESS_LAUNCHER_TIMEOUT_MS',
+    PROCESS_LAUNCHER_FOUNDATION_MAX_TIMEOUT_MS
+  )
+});
+const processOutputArtifactStore = new ProcessOutputArtifactStore({
+  artifactRoot: ARTIFACT_ROOT
+});
+const processRuntimeCapabilityResolver = new ProcessRuntimeCapabilityResolver({
+  featureEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED,
+  repository: postgresRuntimeStore,
+  artifactStore: processOutputArtifactStore,
+  materializerClient: processMaterializerClient,
+  launcherClient: processLauncherClient,
+  releaseGates: PROCESS_ENABLED_RELEASE_GATES
+});
+const processExecutionController = new ProcessExecutionController({
+  repository: postgresRuntimeStore,
+  capabilityResolver: processRuntimeCapabilityResolver,
+  materializerClient: processMaterializerClient,
+  launcherClient: processLauncherClient,
+  artifactStore: processOutputArtifactStore,
+  workspaceTargetId: LOCAL_WORKSPACE_TARGET_ID,
+  faultCheckpoint: async (point, details) => {
+    if (!TEST_INTERRUPTION_POINT || TEST_INTERRUPTION_POINT !== point) return;
+    const record = details && details.operationIdentity
+      ? await postgresRuntimeStore.getProcessOperation(details.operationIdentity)
+      : null;
+    const run = record ? await postgresRuntimeStore.getRun(record.runId) : null;
+    await maybeTestInterrupt(run, point);
+  },
+  renewRunLease: (runId, operationIdentity) => heartbeatRunLease(runId, {
+    phase: 'process_operation_active',
+    operationIdentity
+  }),
+  shutdownSignal: () => shutdownPromise !== null
 });
 // Shared with the admin dashboard listing and the oquery CLI (runtime/authority-paths.js)
 // so the enforced rules and every operator-visible listing cannot drift.
@@ -1698,6 +1778,7 @@ function queuePrincipalCatalogMutation(operation) {
 }
 let processTemplateAuthorityRepository = null;
 let processTemplateProjectionRepository = null;
+let processExecutionRepository = null;
 const requestAuthorizationContext = new AsyncLocalStorage();
 const pageRenderCache = new Map();
 const pageRenderInFlight = new Map();
@@ -5789,6 +5870,12 @@ function getProcessTemplateAuthorityRepository() {
   return processTemplateAuthorityRepository;
 }
 
+function getProcessExecutionRepository() {
+  if (processExecutionRepository) return processExecutionRepository;
+  processExecutionRepository = assertProcessExecutionRepository(postgresRuntimeStore);
+  return processExecutionRepository;
+}
+
 async function listConfiguredAgentOptions(options = {}) {
   const page = await getConfiguredAgentRepository().listConfiguredAgents({
     ...options,
@@ -7207,6 +7294,7 @@ async function expireStaleRunLeases() {
       await interruptAgentRun(run, 'target operation effect requires explicit reconciliation');
       continue;
     }
+    await processExecutionController.reconcileRun(run);
     // Check if run is safe to resume before interrupting
     runEvents = await readAllRunScopedEvents(run.id);
     const resumeState = reconstructResumableState(run, runEvents);
@@ -10107,6 +10195,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     executionWorkspaceType: run.executionWorkspaceType || 'main',
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
     processPolicySnapshot: normalizeProcessPolicySnapshot(run.processPolicySnapshot),
+    processRuntimeCapabilitySnapshot: run.processRuntimeCapabilitySnapshot || null,
     verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
     workTypeId: run.workTypeId || null,
     workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
@@ -10135,6 +10224,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
     workflowActionPlans: [],
     workflowTicketPlans: [],
     workspaceOperations: [],
+    processExecutionLifecycle: [],
     ...(browserRun ? {
       browserOperations: [],
       browserTargetSnapshot: run.browserTargetSnapshot,
@@ -12646,7 +12736,10 @@ function buildEffectiveRuntimeConfigSnapshot(agent, runtimeLimitsSnapshot = null
   };
 }
 
-async function authorizeProcessOperation(run, args, step) {
+async function authorizeProcessOperation(run, args, step, {
+  sandboxCapability = null,
+  runtimeCapability = null
+} = {}) {
   const action = { operation: PROCESS_OPERATION, args };
   const parsed = parseProcessOperationRequest(action);
   const operationIdentity = buildProcessOperationIdentity(run.id, parsed.args.operationId);
@@ -12674,7 +12767,9 @@ async function authorizeProcessOperation(run, args, step) {
   const resolution = resolveProcessOperationRequest(
     parsed,
     run.processPolicySnapshot,
-    run.currentPhase || 'planning'
+    run.currentPhase || 'planning',
+    sandboxCapability,
+    runtimeCapability
   );
   const request = resolution.request.args;
   const authorityEvidence = {
@@ -12713,11 +12808,18 @@ async function authorizeProcessOperation(run, args, step) {
   return resolution;
 }
 
-async function assertAgentOperationAllowed(run, agent, operation, step, args = {}) {
+async function assertAgentOperationAllowed(run, agent, operation, step, args = {}, {
+  processDispatchAuthority = null
+} = {}) {
   if (operation === PROCESS_OPERATION) {
-    const resolution = await authorizeProcessOperation(run, args, step);
+    const resolution = await authorizeProcessOperation(run, args, step, {
+      sandboxCapability: processDispatchAuthority &&
+        processDispatchAuthority.sandboxCapability,
+      runtimeCapability: processDispatchAuthority &&
+        processDispatchAuthority.runtimeCapability
+    });
+    if (resolution.code === 'PROCESS_EXECUTION_AUTHORIZED') return resolution;
     throw processResolutionError(resolution);
-    return;
   }
   const configKeyByOperation = {
     createWorkflowDraft: 'allowCanonicalWorkflowDraft',
@@ -13501,6 +13603,11 @@ async function interruptAgentRun(run, reason, options = {}) {
 }
 
 async function interruptAgentRunUnlocked(run, reason, options = {}) {
+  // The launcher cgroup is the authoritative process-tree ownership unit.
+  // Never terminalize the owning run until every durable process operation is
+  // terminal and whole-tree cancellation has been observed through the
+  // launcher protocol.
+  await processExecutionController.cancelRunOperations(run, reason);
   const phase = await classifyInterruptionPhase(run);
   await ensureInterruptedRunReplaySnapshot(run, reason, phase);
   const projectedInterruptedRun = {
@@ -13756,6 +13863,17 @@ async function rerunTicketFromBeginningUnlocked(ticketId, changedBy = 'operator'
 }
 
 async function interruptStaleRunsOnStartup() {
+  const processRecords =
+    await getProcessExecutionRepository().listProcessOperationsRequiringReconciliation({
+      limit: getRuntimeSchedulerCandidateLimit()
+    });
+  const processRunIds = [...new Set(processRecords.map(record => record.runId))];
+  for (const runId of processRunIds) {
+    const processRun = await getRuntimeStateReadRepository().getRun(runId);
+    if (processRun && isTerminalRun(processRun)) {
+      await processExecutionController.reconcileRun(processRun);
+    }
+  }
   const [staleRuns, terminalRunsNeedingReconciliation] = await Promise.all([
     readAllRecoverableRuns('process_restart'),
     readRunsNeedingTerminalReconciliation()
@@ -13811,6 +13929,7 @@ async function interruptStaleRunsOnStartup() {
       interruptedCount++;
       continue;
     }
+    await processExecutionController.reconcileRun(run);
     runEvents = await readAllRunScopedEvents(run.id);
     const resumeState = reconstructResumableState(run, runEvents);
     if (resumeState && resumeState.safeToResumeExecution) {
@@ -14352,6 +14471,29 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
       ? []
       : getAgentEffectiveRuntimeConfig(agent).processProfileGrants
   });
+  const processPolicySnapshot = buildProcessPolicySnapshot({
+    version: PROCESS_TARGET_CATALOG.version === PROCESS_TARGET_CATALOG_HISTORICAL_VERSION
+      ? PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2
+      : PROCESS_POLICY_SNAPSHOT_VERSION,
+    capabilityEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED &&
+      ticket.executionMode !== 'workflow',
+    profiles: processProfiles,
+    capturedAt: now
+  });
+  let processRuntimeCapabilitySnapshot = null;
+  if (processPolicySnapshot.version === PROCESS_POLICY_SNAPSHOT_VERSION &&
+      processPolicySnapshot.capabilityEnabled &&
+      processPolicySnapshot.profiles.length > 0) {
+    try {
+      processRuntimeCapabilitySnapshot =
+        await processRuntimeCapabilityResolver.resolve(processPolicySnapshot);
+    } catch (_) {
+      // Admission remains fail-closed but does not prevent an otherwise valid
+      // non-process run. Without a frozen generation, process authority is not
+      // advertised and a hidden request is refused.
+      processRuntimeCapabilitySnapshot = null;
+    }
+  }
   // Routing decision (r1.28): dispatch-policy + immutable snapshot. With no applicable policy this
   // is a no-op recording the agent's own provider/model (execution behavior unchanged). If a policy
   // permits no provider, refuse via triage rather than guessing — no run is created.
@@ -14379,14 +14521,8 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     ),
     // Complete process authority is resolved from trusted configuration exactly
     // once. Dispatch must never reread the live catalog or agent grants.
-    processPolicySnapshot: buildProcessPolicySnapshot({
-      version: PROCESS_TARGET_CATALOG.version === PROCESS_TARGET_CATALOG_HISTORICAL_VERSION
-        ? PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2
-        : PROCESS_POLICY_SNAPSHOT_VERSION,
-      capabilityEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED && ticket.executionMode !== 'workflow',
-      profiles: processProfiles,
-      capturedAt: now
-    }),
+    processPolicySnapshot,
+    processRuntimeCapabilitySnapshot,
     runtimeLimitsSnapshot,
     verificationContractSnapshot: buildVerificationContractSnapshot(workflow, now),
     acceptanceCriteriaSnapshot: (typeof ticket.acceptanceCriteria === 'string' && ticket.acceptanceCriteria.trim()) ? ticket.acceptanceCriteria.trim() : null,
@@ -14432,6 +14568,7 @@ function buildRunCreatedEventPayload(run) {
     workflowId: run.workflowId,
     executionPolicySnapshot: run.executionPolicySnapshot,
     processPolicySnapshot: normalizeProcessPolicySnapshot(run.processPolicySnapshot),
+    processRuntimeCapabilitySnapshot: run.processRuntimeCapabilitySnapshot || null,
     runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
     verificationContractSnapshot: run.verificationContractSnapshot,
     acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
@@ -14656,10 +14793,22 @@ async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLim
 
   const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
   const effectiveConfig = agent ? normalizeAgentRuntimeFeatureFlags(agent) : {};
-  const processTargets = processAuthorityReferences(
-    run.processPolicySnapshot,
-    run.currentPhase || 'planning'
-  );
+  let processTargets = [];
+  if (run.processRuntimeCapabilitySnapshot &&
+      normalizeProcessPolicySnapshot(run.processPolicySnapshot).version ===
+        PROCESS_POLICY_SNAPSHOT_VERSION) {
+    try {
+      const currentProcessRuntimeCapability =
+        await processExecutionController.currentCapabilityForRun(run);
+      processTargets = processAuthorityReferences(
+        run.processPolicySnapshot,
+        run.currentPhase || 'planning',
+        currentProcessRuntimeCapability
+      );
+    } catch (_) {
+      processTargets = [];
+    }
+  }
   const filteredOps = AGENT_DIRECT_OPERATIONS.filter(op => {
     if (op === PROCESS_OPERATION) return processTargets.length > 0;
     for (const [configKey, operationName] of Object.entries(disabledConfigToOps)) {
@@ -19954,17 +20103,36 @@ async function runAgentTicket(runId) {
         continue;
       }
 
-      // Process requests are terminal in Tranche 1 because no executor exists.
-      // Resolve every process request in the batch before any workspace action so
-      // replay/conflict semantics are durable without permitting an earlier
-      // filesystem effect. Exact repeats reuse the first resolution; conflicts
-      // take precedence over the executor-unavailable terminal result.
+      // Resolve every process request before any other effect. A fresh runtime
+      // capability is required in addition to the run's immutable authority;
+      // the same generation is rechecked again immediately before submission.
       const processResolutionErrors = [];
+      let processDispatchAuthority = null;
+      if (actions.some(candidate =>
+        candidate && candidate.operation === PROCESS_OPERATION)) {
+        try {
+          const admitted = await processExecutionController.currentCapabilityForRun(run);
+          processDispatchAuthority =
+            await processRuntimeCapabilityResolver.resolveLaunchAuthority(
+              run.processPolicySnapshot,
+              admitted.generationId
+            );
+        } catch (_) {
+          processDispatchAuthority = null;
+        }
+      }
       for (const action of actions.filter(candidate =>
         candidate && candidate.operation === PROCESS_OPERATION)) {
         try {
-          const resolution = await authorizeProcessOperation(run, action.args, step);
-          processResolutionErrors.push(processResolutionError(resolution));
+          const resolution = await authorizeProcessOperation(run, action.args, step, {
+            sandboxCapability: processDispatchAuthority &&
+              processDispatchAuthority.sandboxCapability,
+            runtimeCapability: processDispatchAuthority &&
+              processDispatchAuthority.runtimeCapability
+          });
+          if (resolution.code !== 'PROCESS_EXECUTION_AUTHORIZED') {
+            processResolutionErrors.push(processResolutionError(resolution));
+          }
         } catch (error) {
           processResolutionErrors.push(error);
         }
@@ -20079,7 +20247,14 @@ async function runAgentTicket(runId) {
           assertRunNotTimedOut(run, runStartedAtMs, limits);
           operation = isBrowserRun(run) ? parseBrowserDirectAction(run, action) : parseAgentDirectAction(action);
           if (!isBrowserRun(run)) {
-            await assertAgentOperationAllowed(run, agent, operation.operation, step, operation.args);
+            await assertAgentOperationAllowed(
+              run,
+              agent,
+              operation.operation,
+              step,
+              operation.args,
+              { processDispatchAuthority }
+            );
           }
 
           // Report budget limits: listDirectory and readFile
@@ -20128,10 +20303,15 @@ async function runAgentTicket(runId) {
               }
             });
           } else if (operation.operation === PROCESS_OPERATION) {
-            // The batch preflight above always terminalizes process requests.
-            // This fail-closed guard has no executor and cannot launch anything.
-            const resolution = await authorizeProcessOperation(run, operation.args, step);
-            throw processResolutionError(resolution);
+            result = await processExecutionController.execute({
+              run,
+              action: {
+                operation: PROCESS_OPERATION,
+                args: operation.args
+              },
+              step,
+              observationDeadlineMs: runStartedAtMs + limits.maxRuntimeDurationMs
+            });
           } else {
             result = await executeWorkspaceOperation(run, action, step, {
               slot: `agent:${step}:${actionIndex}`,

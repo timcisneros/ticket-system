@@ -1,12 +1,13 @@
-# Bounded process execution contract — Tranche 2A1
+# Bounded process execution contract — Tranche 2 complete
 
-Tranche 2A0 froze executable-authority version 3 and the private immutable launch-plan
-contract. Tranche 2A1 adds the trusted immutable execution-input materializer described
-in `docs/PROCESS_INPUT_MATERIALIZER.md`. It still provides no rootfs registry, sandbox
-capability probe, launcher, or executor and cannot start a process. Version-1 and
-version-2 process-policy snapshots remain readable historical records and are
-permanently non-executable. A valid version-3 snapshot and a materialized input are
-necessary but not sufficient for future execution.
+Tranches 2A0–2A3 froze executable authority, immutable input, verified rootfs identity,
+and the native kernel-containment launcher. Tranche 2B connects only authorized
+version-3 requests to that launcher through a PostgreSQL-backed, exactly-once,
+recoverable lifecycle. Version-1 and version-2 process-policy snapshots remain readable
+historical records and are permanently non-executable. A version-3 snapshot is
+dispatchable only while the feature flag, lifecycle storage, artifact storage,
+materializer, rootfs authority, and fresh active-containment generation all resolve to
+one closed runtime capability.
 
 ## Authority
 
@@ -344,9 +345,10 @@ Catalog-version-2 admissions store complete resolved authority:
 ```
 
 All nested authority is deep-copied, canonically ordered with the shared ordinal
-comparator, hashed with canonical JSON, and deeply frozen. Version 3 remains
-non-dispatchable in 2A0. `processAuthorityReferences` does not project it into the model
-envelope; a future healthy sandbox-capability generation is an additional mandatory gate.
+comparator, hashed with canonical JSON, and deeply frozen. The snapshot alone is never
+dispatch authority. `processAuthorityReferences` projects version-3 target/profile
+references only when a current closed runtime capability is supplied and the profile
+permits the current phase.
 
 ## Model request and envelope
 
@@ -367,9 +369,7 @@ The model cannot supply a command, executable, arguments, environment, working d
 shell syntax, redirection, pipeline, timeout, resource limit, background option, or
 detached option.
 
-For existing historical compatibility, the runtime envelope can read an immutable
-version-2 snapshot
-and projects:
+The model-safe projection shape is:
 
 ```json
 {
@@ -385,9 +385,12 @@ and projects:
 }
 ```
 
-Version-3 snapshots do not produce this projection in 2A0. Executable paths,
-arguments, working directories, environment values, and limits never enter the model
-envelope.
+The live runtime advertises it only for version-3 snapshots while a fresh runtime
+capability of the same admitted generation is healthy. Historical version-2 snapshots
+remain readable by the contract and preserve their direct executor-unavailable refusal,
+but the live runtime does not advertise them as executable actions. Executable paths,
+arguments, working directories, environment values, limits, launch plans, and native
+identities never enter the model envelope.
 
 Dispatch parses the closed request, reads only the run snapshot, distinguishes unknown
 target from unknown profile, checks `allowedPhases` against `run.currentPhase`, records
@@ -401,9 +404,9 @@ target from unknown profile, checks `allowedPhases` against `run.currentPhase`, 
 - `PROCESS_SANDBOX_UNAVAILABLE`
 - `PROCESS_EXECUTOR_UNAVAILABLE`
 
-Version-3 resolution has an additional mandatory sandbox-capability gate. The current
-runtime capability value is permanently `null` in this tranche, so a hidden or direct
-version-3 request resolves exactly as:
+Version-3 resolution has mandatory current sandbox and runtime capability gates. With
+either gate missing, a hidden or direct request is denied. Missing sandbox health
+resolves exactly as:
 
 ```json
 {
@@ -415,10 +418,12 @@ version-3 request resolves exactly as:
 ```
 
 It records `authority.denied`, never `authority.allowed`. Missing, malformed, unhealthy,
-future-dated, or stale capability data has the same fail-closed result. Historical
-version-2 requests retain their executor-unavailable compatibility behavior, but remain
-permanently unable to create launch plans. No process-start evidence, PID, output,
-operation receipt, launch plan, or effect claim is created.
+future-dated, or stale sandbox data has the same fail-closed result. A healthy sandbox
+without matching runtime lifecycle capability is denied as
+`PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE`. Only exact current sandbox and runtime
+generations produce `PROCESS_EXECUTION_AUTHORIZED`; the controller still revalidates
+both immediately before launch. Historical version-2 requests retain their
+executor-unavailable compatibility behavior and can never create launch plans.
 
 Tranche 2A3's private active containment descriptor is closed and time-bounded:
 
@@ -445,18 +450,20 @@ Generation identifiers use the process identifier contract. Protocol versions ar
 positive and at most 16. Validity is positive and at most five minutes, and the
 descriptor is usable by the private launcher only between `verifiedAt` and `expiresAt`.
 It is produced only after the active 2A3 cgroup, namespace, network, seccomp, output,
-timeout, tree-death, resource, and fixed Node probes pass. It remains private:
-`CURRENT_PROCESS_SANDBOX_CAPABILITY` is still `null`, so it cannot authorize model
-dispatch in this tranche.
+timeout, tree-death, resource, and fixed Node probes pass. The static
+`CURRENT_PROCESS_SANDBOX_CAPABILITY` remains `null`; the runtime never trusts a mutable
+process-global health value. Tranche 2B instead resolves and expires native health for
+each admission, envelope, and new submission.
 
 `operationId` identifies one process request within a run; it is not globally unique.
-The runtime hashes `(runId, operationId)` for evidence identity and looks up prior
-`processOperations` replay evidence before appending. Repeating the same ID, target, and
-profile is request-resolution replay and appends no duplicate authority or resolution
-evidence. Exact replay returns the original persisted resolution without checking the
-run's later phase again. Reusing the ID for a different target or profile fails with
-`PROCESS_OPERATION_ID_CONFLICT`. This is not execution idempotency because no executor
-exists.
+The runtime hashes `(runId, operationId)` into the canonical process operation identity.
+Request-resolution evidence preserves the first authorization result exactly. Once
+execution intent exists, that operation identity is also the PostgreSQL and native
+launcher idempotency key. Exact retries reconcile the stored plan and operation;
+different target/profile reuse fails with `PROCESS_OPERATION_ID_CONFLICT`, and different
+launch authority under the same identity fails with
+`PROCESS_EXECUTION_INTENT_CONFLICT`. Neither runtime nor launcher may relaunch an
+accepted or terminal identity.
 
 Each `process.operation_resolution` replay item persists this closed reconstruction
 shape:
@@ -711,13 +718,12 @@ Launch plans are private runtime-to-launcher material and never enter the model 
 > The process and its descendants cannot communicate with anything outside their
 > operation sandbox.
 
-Future enforcement requires an isolated network namespace, no host interfaces or socket
-mounts, no inherited sockets, and syscall filtering for external network families and
-host connection paths. The contract deliberately does not require denial of unnamed
+Enforcement uses an isolated network namespace, no host interfaces or socket mounts, no
+inherited sockets, and syscall filtering for external network families and host
+connection paths. The contract deliberately does not require denial of unnamed
 operation-local IPC such as Unix `socketpair`; that is not external communication and may
 be required by a configured runtime. Standard input remains disabled, no PTY may be
-allocated, and detached execution is forbidden. Process sandbox enforcement remains
-absent in 2A1.
+allocated, and detached execution is forbidden.
 
 ## Verified launcher, active containment, and dispatch boundary
 
@@ -742,7 +748,133 @@ create operation cgroup
 
 No untrusted code may run before membership and every limit are active.
 
-## Remaining tranche sequence
+## Runtime capability and durable lifecycle
 
-- **2B:** connect authorized dispatch, durable start/terminal evidence, bounded output
-  artifacts, cancellation/recovery, and execution idempotency.
+The runtime capability is a closed, expiring descriptor:
+
+```json
+{
+  "version": 1,
+  "status": "runtime_verified",
+  "generationId": "process-runtime-v1-lowercase-sha256",
+  "controllerProtocolVersion": 1,
+  "databaseSchemaVersion": 29,
+  "artifactPublicationContractVersion": 1,
+  "containmentGenerationId": "sandbox-containment-v1-lowercase-sha256",
+  "materializerGeneration": "materializer-v1-lowercase-sha256",
+  "rootfsRegistryGeneration": "rootfs-registry-v1-lowercase-sha256",
+  "launcherProtocolVersion": 1,
+  "verifiedAt": "canonical UTC timestamp",
+  "expiresAt": "canonical UTC timestamp",
+  "readyForExecution": true
+}
+```
+
+The resolver requires the default-off feature flag, migration 029, writable artifact
+storage, current materializer health, current active containment health, matching
+materializer/rootfs/launcher generations, exact rootfs and ELF verification for every
+profile, and all mandatory process release gates. The stable generation hash covers
+controller protocol, database schema, artifact contract, containment, materializer,
+rootfs registry, and launcher protocol. Refreshing unchanged authority may extend
+expiry without changing the generation. Changed or expired authority refuses a new
+launch. Existing accepted operations remain launcher-owned and are reconciled rather
+than relaunched.
+
+Migration 029 adds one `process_operations` row per
+`process-operation:<sha256(runId,operationId)>`. Its immutable columns bind run, ticket,
+acting agent, step, phase, target/profile, policy and runtime generations, canonical
+private launch plan and hash, workspace/materializer, containment, rootfs/ELF, and fixed
+execution/filesystem policy hashes. It stores no host path, raw output, secret, ambient
+environment, cgroup path, or PID authority.
+
+The lifecycle is:
+
+```text
+intent → active → finalizing → terminal
+```
+
+- `intent` is committed before any launcher request.
+- `active` requires the launcher's durable acceptance identity.
+- `finalizing` contains one validated terminal-result hash and terminal facts while
+  artifacts or required evidence remain incomplete.
+- `terminal` requires complete artifacts where output is available and complete required
+  evidence.
+
+Cancellation is an orthogonal durable fact. Every transition is revision-guarded
+compare-and-set; a PostgreSQL transaction-scoped advisory lock serializes intent
+creation, and the existing session advisory-lock family serializes runtime reconciliation.
+A trigger makes authority immutable, forbids deletion and backward transitions, and
+requires the revision to advance exactly once.
+
+## Launcher durable registry and output transfer
+
+The launcher owns a bounded registry of 4,096 canonical, fsynced operation records under
+its pinned private state root. Acceptance is persisted before the blocked child is
+released. Each record binds operation identity, launch-plan hash, containment generation,
+workspace manifest, rootfs manifest, ELF hash, aggregate authority hash, acceptance
+identity, start facts, terminal facts/hash, and output acknowledgement. Exact replay
+returns the existing accepted, active, or terminal record; conflicting authority fails.
+Registry corruption or capacity exhaustion fails closed.
+
+After launcher restart, any accepted or active record without a durable terminal result
+becomes `runtime_interrupted`; it is never executed again. Terminal tombstones survive
+output cleanup so an operation identity cannot be reused. The authenticated protocol
+adds:
+
+```text
+readOutput(operationIdentity, stream, offset, maximumBytes,
+           expectedTotalBytes, expectedSha256)
+acknowledgeOutput(operationIdentity, terminalResultHash)
+```
+
+Only immutable terminal stdout/stderr are readable. Chunks are at most 65,536 raw bytes,
+base64-encoded on the wire, and bound to exact operation, stream, offset, total, and
+SHA-256 authority. No host path is returned. Acknowledgement persists the tombstone
+before private output deletion.
+
+The Node artifact publisher streams each output independently, computes raw byte count
+and SHA-256 again, writes a private temporary file, fsyncs it, removes write permission,
+and uses a no-replace hard-link publication. Artifacts live under an operation-identity
+hash, outside the child mount view. Empty streams produce the same immutable zero-byte
+artifact contract. PostgreSQL stores only artifact identity, relative artifact reference,
+count, and hash—not raw output.
+
+## Evidence, receipts, cancellation, and recovery
+
+The controller publishes idempotent append-only evidence for
+`process.intent_admitted`, `process.launcher_accepted`, `process.terminal`,
+`process.stdout_artifact`, `process.stderr_artifact`, and
+`process.cancellation_requested`. Each binds run/ticket/operation, launch plan, policy,
+runtime/containment/materializer generations, rootfs/ELF authority, workspace snapshot
+and manifest, terminal-result hash, and artifact counts/hashes. A generic
+`run_operations` receipt records `runProcess`, participates in replay and consequence
+reconstruction, and does not create special ticket-completion semantics.
+
+Output acknowledgement occurs only after artifacts, database terminal facts, required
+evidence, and the generic receipt are durable. Evidence or artifact failure leaves the
+row recoverably `finalizing`; it cannot be reported as successful.
+
+Run interruption and lease loss first durably request cancellation, call the exact
+launcher operation, observe whole-tree terminalization, finish output/evidence, and only
+then terminalize the run. Cancellation before launcher acceptance produces a truthful
+zero-output cancelled result without launch. Cancellation racing natural completion
+reconciles the launcher's single terminal result.
+
+Startup scans every nonterminal operation. `intent` queries the launcher before any
+submission and submits the exact stored plan only when no acceptance exists and current
+authority still permits it. `active` reattaches; `finalizing` completes artifacts and
+evidence; `terminal` repairs only acknowledgement/idempotent evidence. Launcher loss
+never fabricates exit facts or triggers a relaunch. Scheduler lease expiry uses the same
+cancellation path.
+
+The deterministic recovery gate interrupts each required crash boundary: after intent,
+after launcher acceptance, after child release, after launcher terminal, during stdout
+transfer, after artifact publication, after terminal-fact persistence, after required
+evidence, during cancellation, and during startup reconciliation. Each restart converges
+to one execution, one terminal row, one artifact pair, one receipt/evidence set, and one
+launcher acknowledgement.
+
+Tranche 2 is closed. Kernel containment and active proof completed the original sandbox
+work commonly associated with Tranche 4; this tranche completes the durable execution,
+idempotency, artifact, cancellation, and recovery work commonly associated with
+Tranche 3. Neither capability should be rebuilt as a parallel subsystem.

@@ -18,6 +18,7 @@ mod cgroup;
 mod executor;
 mod launch_contract;
 mod materializer_client;
+mod operation_registry;
 mod seccomp;
 
 use cgroup::DelegatedCgroup;
@@ -27,6 +28,7 @@ use launch_contract::{
     ContainmentCapability, LaunchBody, LaunchPlan, OperationBody, OperationStatus,
 };
 use materializer_client::{AcquireSnapshotRequest, MaterializerClient};
+use operation_registry::{OperationRegistry, OutputChunk};
 use seccomp::{SECCOMP_POLICY_SCHEMA_VERSION, SeccompPolicy};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -102,6 +104,13 @@ pub const PROCESS_OPERATION_NOT_FOUND: FailureCode = "PROCESS_OPERATION_NOT_FOUN
 pub const PROCESS_OPERATION_ALREADY_ACTIVE: FailureCode = "PROCESS_OPERATION_ALREADY_ACTIVE";
 pub const PROCESS_OPERATION_TERMINATION_FAILED: FailureCode =
     "PROCESS_OPERATION_TERMINATION_FAILED";
+pub const PROCESS_EXECUTION_INTENT_CONFLICT: FailureCode = "PROCESS_EXECUTION_INTENT_CONFLICT";
+pub const PROCESS_LAUNCHER_REGISTRY_INVALID: FailureCode = "PROCESS_LAUNCHER_REGISTRY_INVALID";
+pub const PROCESS_LAUNCHER_REGISTRY_FULL: FailureCode = "PROCESS_LAUNCHER_REGISTRY_FULL";
+pub const PROCESS_OUTPUT_UNAVAILABLE: FailureCode = "PROCESS_OUTPUT_UNAVAILABLE";
+pub const PROCESS_OUTPUT_CHUNK_INVALID: FailureCode = "PROCESS_OUTPUT_CHUNK_INVALID";
+pub const PROCESS_OUTPUT_ACKNOWLEDGEMENT_FAILED: FailureCode =
+    "PROCESS_OUTPUT_ACKNOWLEDGEMENT_FAILED";
 
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
@@ -246,6 +255,8 @@ enum ProtocolOperation {
     Launch,
     GetOperation,
     CancelOperation,
+    ReadOutput,
+    AcknowledgeOutput,
 }
 
 #[derive(Debug, Deserialize)]
@@ -267,6 +278,24 @@ struct VerifyExecutableBody {
     executable_path: String,
     executable_sha256: String,
     format: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReadOutputBody {
+    operation_identity: String,
+    stream: String,
+    offset: u64,
+    maximum_bytes: u64,
+    expected_total_bytes: u64,
+    expected_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AcknowledgeOutputBody {
+    operation_identity: String,
+    terminal_result_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -385,13 +414,6 @@ struct VerifiedRootfs {
 }
 
 #[derive(Debug)]
-struct OperationRecord {
-    control: Arc<ExecutionControl>,
-    state: String,
-    result: Option<launch_contract::ExecutionResult>,
-}
-
-#[derive(Debug)]
 pub struct FoundationService {
     config: ServiceConfig,
     _state_root: PinnedDirectory,
@@ -405,7 +427,8 @@ pub struct FoundationService {
     materializer: MaterializerClient,
     rootfs: BTreeMap<String, VerifiedRootfs>,
     health: ContainmentCapability,
-    operations: Mutex<BTreeMap<String, OperationRecord>>,
+    operation_controls: Mutex<BTreeMap<String, Arc<ExecutionControl>>>,
+    operation_registry: Mutex<OperationRegistry>,
 }
 
 impl ServiceConfig {
@@ -684,6 +707,14 @@ impl FoundationService {
         }
         inspect_host_prerequisites()?;
         let delegated_cgroup = DelegatedCgroup::discover_and_activate()?;
+        // DelegatedCgroup activation has already killed and removed stale
+        // operation cgroups. Only after whole-tree cleanup may accepted or
+        // active durable records be classified as launcher interruptions.
+        // Durable execution authority is rooted beneath the already pinned
+        // service-state descriptor. The configured pathname is never reopened
+        // after startup and cannot redirect this service generation.
+        let mut operation_registry = OperationRegistry::open(&state_root.proc_path())?;
+        operation_registry.interrupt_incomplete()?;
         let materializer = MaterializerClient::new(
             config.materializer_socket_path.clone(),
             config.materializer_service_uid,
@@ -728,7 +759,8 @@ impl FoundationService {
             materializer,
             rootfs,
             health: placeholder_health,
-            operations: Mutex::new(BTreeMap::new()),
+            operation_controls: Mutex::new(BTreeMap::new()),
+            operation_registry: Mutex::new(operation_registry),
         };
         let containment_probe_hash = service.run_active_containment_probe()?;
         let generation_material = serde_json::json!({
@@ -886,7 +918,7 @@ impl FoundationService {
         })
     }
 
-    fn launch(&self, body: LaunchBody) -> Result<launch_contract::ExecutionResult> {
+    fn launch(self: &Arc<Self>, body: LaunchBody) -> Result<OperationStatus> {
         let capability = self.health()?;
         if body.containment_generation_id != capability.generation_id {
             return Err(FoundationError::new(
@@ -904,32 +936,64 @@ impl FoundationService {
             format: plan.executable_identity.format.clone(),
         };
         self.verify_executable(&executable)?;
-        let rootfs = self.rootfs.get(&plan.runtime_rootfs.id).ok_or_else(|| {
+        self.rootfs.get(&plan.runtime_rootfs.id).ok_or_else(|| {
             FoundationError::new(PROCESS_ROOTFS_UNKNOWN, "launch rootfs is unavailable")
         })?;
         let control = Arc::new(ExecutionControl::new());
         {
-            let mut operations = self.operations.lock().map_err(operation_lock)?;
-            if let Some(existing) = operations.get(&plan.operation_identity) {
-                if existing.state == "active" {
-                    return Err(FoundationError::new(
-                        PROCESS_OPERATION_ALREADY_ACTIVE,
-                        "process operation is already active",
-                    ));
-                }
-                if let Some(result) = &existing.result {
-                    return Ok(result.clone());
-                }
+            let mut registry = self.operation_registry.lock().map_err(operation_lock)?;
+            let (_, inserted) = registry.accept(&plan, &body.containment_generation_id)?;
+            if !inserted {
+                return registry.status(&plan.operation_identity);
             }
-            operations.insert(
-                plan.operation_identity.clone(),
-                OperationRecord {
-                    control: control.clone(),
-                    state: "active".into(),
-                    result: None,
-                },
-            );
         }
+        {
+            let mut controls = self.operation_controls.lock().map_err(operation_lock)?;
+            controls.insert(plan.operation_identity.clone(), control.clone());
+        }
+        let operation_identity = plan.operation_identity.clone();
+        let service = Arc::clone(self);
+        let started = std::thread::Builder::new()
+            .name(format!(
+                "process-operation-{}",
+                &operation_identity["process-operation:".len()..][..12]
+            ))
+            .spawn(move || {
+                if let Err(error) = service.execute_accepted_operation(plan, control) {
+                    eprintln!(
+                        "accepted launcher operation finalization failed: {}: {}",
+                        error.code, error.message
+                    );
+                }
+            });
+        if let Err(error) = started {
+            self.operation_controls
+                .lock()
+                .map_err(operation_lock)?
+                .remove(&operation_identity);
+            let mut registry = self.operation_registry.lock().map_err(operation_lock)?;
+            registry.mark_infrastructure_terminal(
+                &operation_identity,
+                "failed_to_start",
+                "launcher_thread_capacity",
+            )?;
+            eprintln!("cannot start launcher operation monitor: {error}");
+            return registry.status(&operation_identity);
+        }
+        self.operation_registry
+            .lock()
+            .map_err(operation_lock)?
+            .status(&operation_identity)
+    }
+
+    fn execute_accepted_operation(
+        &self,
+        plan: LaunchPlan,
+        control: Arc<ExecutionControl>,
+    ) -> Result<()> {
+        let rootfs = self.rootfs.get(&plan.runtime_rootfs.id).ok_or_else(|| {
+            FoundationError::new(PROCESS_ROOTFS_UNKNOWN, "launch rootfs is unavailable")
+        })?;
         let filesystem_policy_hash = plan.filesystem_policy_hash()?;
         let acquisition = AcquireSnapshotRequest {
             snapshot_id: &plan.workspace_snapshot.id,
@@ -944,6 +1008,13 @@ impl FoundationService {
             expected_file_count: plan.workspace_snapshot.file_count,
             expected_total_bytes: plan.workspace_snapshot.total_bytes,
         };
+        let operation_identity = plan.operation_identity.clone();
+        let before_release = || {
+            self.operation_registry
+                .lock()
+                .map_err(operation_lock)?
+                .mark_active(&operation_identity)
+        };
         let execution = (|| {
             let workspace = self.materializer.acquire(&acquisition)?;
             executor::execute(ExecutionInputs {
@@ -954,67 +1025,120 @@ impl FoundationService {
                 seccomp_policy: &self.seccomp_contract,
                 cgroup: &self.delegated_cgroup,
                 control: control.clone(),
-                retain_trusted_output: false,
+                retain_trusted_output: true,
                 require_live_seccomp_observation: false,
+                before_release: Some(&before_release),
             })
-            .map(|artifacts| artifacts.result)
+            .map(|artifacts| {
+                (
+                    artifacts.result,
+                    artifacts.trusted_stdout,
+                    artifacts.trusted_stderr,
+                )
+            })
         })();
-        let mut operations = self.operations.lock().map_err(operation_lock)?;
+        self.operation_controls
+            .lock()
+            .map_err(operation_lock)?
+            .remove(&plan.operation_identity);
+        let mut registry = self.operation_registry.lock().map_err(operation_lock)?;
         match execution {
-            Ok(result) => {
-                operations.insert(
-                    plan.operation_identity,
-                    OperationRecord {
-                        control,
-                        state: "terminal".into(),
-                        result: Some(result.clone()),
-                    },
-                );
-                Ok(result)
+            Ok((result, stdout, stderr)) => {
+                registry.mark_terminal(&plan.operation_identity, result, &stdout, &stderr)?;
             }
             Err(error) => {
-                operations.remove(&plan.operation_identity);
-                Err(error)
+                let current = registry
+                    .get(&plan.operation_identity)
+                    .cloned()
+                    .ok_or_else(|| {
+                        FoundationError::new(
+                            PROCESS_LAUNCHER_REGISTRY_INVALID,
+                            "accepted launcher operation disappeared",
+                        )
+                    })?;
+                let ended_at = canonical_utc(unix_time()?)?;
+                let result = launch_contract::ExecutionResult {
+                    operation_identity: plan.operation_identity.clone(),
+                    terminal_outcome: if current.started_at.is_some() {
+                        "runtime_interrupted".into()
+                    } else {
+                        "failed_to_start".into()
+                    },
+                    started_at: current
+                        .started_at
+                        .clone()
+                        .unwrap_or_else(|| current.accepted_at.clone()),
+                    ended_at,
+                    duration_ms: 0,
+                    exit_code: None,
+                    signal: None,
+                    stdout_bytes: 0,
+                    stderr_bytes: 0,
+                    combined_output_bytes: 0,
+                    stdout_sha256: sha256_bytes(&[]),
+                    stderr_sha256: sha256_bytes(&[]),
+                    output_complete: false,
+                    resource_cause: None,
+                    enforcement_cause: Some(error.code.into()),
+                    cpu_throttled_events: 0,
+                    launcher_environment: BTreeMap::from([
+                        ("LANG".into(), "C.UTF-8".into()),
+                        ("LC_ALL".into(), "C.UTF-8".into()),
+                        ("TMPDIR".into(), "/tmp".into()),
+                    ]),
+                };
+                registry.mark_terminal(&plan.operation_identity, result, &[], &[])?;
             }
         }
+        Ok(())
     }
 
     fn get_operation(&self, body: OperationBody) -> Result<OperationStatus> {
         validate_operation_identity_text(&body.operation_identity)?;
-        let operations = self.operations.lock().map_err(operation_lock)?;
-        let record = operations.get(&body.operation_identity).ok_or_else(|| {
-            FoundationError::new(
-                PROCESS_OPERATION_NOT_FOUND,
-                "process operation is not present in launcher memory",
-            )
-        })?;
-        Ok(OperationStatus {
-            operation_identity: body.operation_identity,
-            state: record.state.clone(),
-            result: record.result.clone(),
-        })
+        self.operation_registry
+            .lock()
+            .map_err(operation_lock)?
+            .status(&body.operation_identity)
     }
 
     fn cancel_operation(&self, body: OperationBody) -> Result<OperationStatus> {
         validate_operation_identity_text(&body.operation_identity)?;
-        let operations = self.operations.lock().map_err(operation_lock)?;
-        let record = operations.get(&body.operation_identity).ok_or_else(|| {
-            FoundationError::new(
-                PROCESS_OPERATION_NOT_FOUND,
-                "process operation is not present in launcher memory",
-            )
-        })?;
-        if record.state == "active" {
-            record
-                .control
+        if let Some(control) = self
+            .operation_controls
+            .lock()
+            .map_err(operation_lock)?
+            .get(&body.operation_identity)
+        {
+            control
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Release);
         }
-        Ok(OperationStatus {
-            operation_identity: body.operation_identity,
-            state: record.state.clone(),
-            result: record.result.clone(),
-        })
+        self.get_operation(body)
+    }
+
+    fn read_output(&self, body: ReadOutputBody) -> Result<OutputChunk> {
+        validate_operation_identity_text(&body.operation_identity)?;
+        validate_sha256(&body.expected_sha256, "expectedSha256")?;
+        self.operation_registry
+            .lock()
+            .map_err(operation_lock)?
+            .read_output(
+                &body.operation_identity,
+                &body.stream,
+                body.offset,
+                body.maximum_bytes,
+                body.expected_total_bytes,
+                &body.expected_sha256,
+            )
+    }
+
+    fn acknowledge_output(&self, body: AcknowledgeOutputBody) -> Result<OperationStatus> {
+        validate_operation_identity_text(&body.operation_identity)?;
+        validate_sha256(&body.terminal_result_hash, "terminalResultHash")?;
+        self.operation_registry
+            .lock()
+            .map_err(operation_lock)?
+            .acknowledge(&body.operation_identity, &body.terminal_result_hash)
     }
 
     fn run_active_containment_probe(&self) -> Result<String> {
@@ -1180,6 +1304,7 @@ impl FoundationService {
                 control: Arc::new(ExecutionControl::new()),
                 retain_trusted_output: true,
                 require_live_seccomp_observation: true,
+                before_release: None,
             })?;
             if artifacts.result.terminal_outcome != expected {
                 return Err(FoundationError::new(
@@ -1488,7 +1613,7 @@ impl PinnedFile {
     }
 }
 
-fn handle_connection(service: &FoundationService, mut stream: UnixStream) -> Result<()> {
+fn handle_connection(service: &Arc<FoundationService>, mut stream: UnixStream) -> Result<()> {
     stream
         .set_read_timeout(Some(PROTOCOL_IO_TIMEOUT))
         .map_err(protocol_io)?;
@@ -1571,7 +1696,7 @@ fn drain_rejected_frame(stream: &mut UnixStream) {
     }
 }
 
-fn dispatch(service: &FoundationService, request: &RequestEnvelope) -> Result<Value> {
+fn dispatch(service: &Arc<FoundationService>, request: &RequestEnvelope) -> Result<Value> {
     match request.operation {
         ProtocolOperation::Health => {
             parse_body::<EmptyBody>(&request.body)?;
@@ -1596,6 +1721,14 @@ fn dispatch(service: &FoundationService, request: &RequestEnvelope) -> Result<Va
         ProtocolOperation::CancelOperation => {
             let body = parse_body::<OperationBody>(&request.body)?;
             serde_json::to_value(service.cancel_operation(body)?).map_err(protocol_json)
+        }
+        ProtocolOperation::ReadOutput => {
+            let body = parse_body::<ReadOutputBody>(&request.body)?;
+            serde_json::to_value(service.read_output(body)?).map_err(protocol_json)
+        }
+        ProtocolOperation::AcknowledgeOutput => {
+            let body = parse_body::<AcknowledgeOutputBody>(&request.body)?;
+            serde_json::to_value(service.acknowledge_output(body)?).map_err(protocol_json)
         }
     }
 }
@@ -2943,7 +3076,7 @@ pub(crate) fn canonical_json_value_bytes(value: &Value) -> Vec<u8> {
 }
 
 pub(crate) fn sha256_json<T: Serialize>(value: &T) -> Result<String> {
-    Ok(sha256_bytes(&canonical_json(value)?))
+    Ok(sha256_bytes(&canonical_json_bytes(value)?))
 }
 
 pub(crate) fn sha256_bytes(bytes: &[u8]) -> String {

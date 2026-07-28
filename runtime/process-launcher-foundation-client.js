@@ -11,11 +11,13 @@ const {
   buildGetRootfsRequest,
   buildLauncherLaunchRequest,
   buildLauncherOperationRequest,
+  buildLauncherOutputAcknowledgementRequest,
+  buildLauncherReadOutputRequest,
   buildVerifyExecutableRequest,
   normalizeContainmentHealth,
   normalizeExecutableAuthority,
-  normalizePrivateExecutionResult,
   normalizePrivateOperationStatus,
+  normalizeLauncherOutputChunk,
   normalizeProcessLauncherFoundationClientConfig,
   normalizeRootfsAuthority
 } = require('./process-launcher-foundation-contract');
@@ -133,7 +135,7 @@ class ProcessLauncherFoundationClient {
 
   async launch(request, authority) {
     const normalized = buildLauncherLaunchRequest(request, authority);
-    return normalizePrivateExecutionResult(
+    return normalizePrivateOperationStatus(
       await this.#request('launch', normalized),
       normalized.launchPlan.operationIdentity
     );
@@ -151,6 +153,22 @@ class ProcessLauncherFoundationClient {
     const normalized = buildLauncherOperationRequest(request);
     return normalizePrivateOperationStatus(
       await this.#request('cancelOperation', normalized),
+      normalized.operationIdentity
+    );
+  }
+
+  async readOutput(request) {
+    const normalized = buildLauncherReadOutputRequest(request);
+    return normalizeLauncherOutputChunk(
+      await this.#request('readOutput', normalized),
+      normalized
+    );
+  }
+
+  async acknowledgeOutput(request) {
+    const normalized = buildLauncherOutputAcknowledgementRequest(request);
+    return normalizePrivateOperationStatus(
+      await this.#request('acknowledgeOutput', normalized),
       normalized.operationIdentity
     );
   }

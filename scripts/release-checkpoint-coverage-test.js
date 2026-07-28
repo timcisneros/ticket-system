@@ -223,5 +223,15 @@ assert.match(packageJson.scripts['test:launcher-foundation'],
   /process-launcher-foundation-cross-uid-test\.js/);
 assert.match(packageJson.scripts['test:launcher-containment'],
   /PROCESS_CONTAINMENT_ACTIVE_REQUIRED=1/);
+for (const requiredRuntimeSuite of [
+  'process-runtime-capability-test.js',
+  'process-output-artifact-test.js',
+  'process-runtime-fault-recovery-test.js',
+  'process-runtime-lifecycle-postgres-test.js',
+  'process-runtime-dispatch-postgres-test.js'
+]) {
+  assert.ok(packageJson.scripts['test:process-runtime'].includes(requiredRuntimeSuite),
+    `test:process-runtime must include ${requiredRuntimeSuite}`);
+}
 
 console.log('PASS: release checkpoint coverage — current deterministic and real-Postgres boundaries are mandatory');

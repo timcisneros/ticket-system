@@ -94,11 +94,12 @@ async function main() {
     assert.equal(migrationResults.flat().filter(name => name === '026_local_connector_objects.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name => name === '027_run_agent_integrity.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name => name === '028_process_template_ticket_provenance.sql').length, 1);
+    assert.equal(migrationResults.flat().filter(name => name === '029_process_execution_lifecycle.sql').length, 1);
     assert.equal(await store.health(), true);
     assert.equal((await store.acquireRuntimeAuthority()).mode, 'shared_transactional');
     const emptyRuntimeIntegrity = await store.prepareRuntimePersistence();
-    assert.equal(emptyRuntimeIntegrity.checkedRelationCount, 41);
-    assert.equal(emptyRuntimeIntegrity.checkedIntegrityArtifactCount, 199);
+    assert.equal(emptyRuntimeIntegrity.checkedRelationCount, 42);
+    assert.equal(emptyRuntimeIntegrity.checkedIntegrityArtifactCount, 203);
     assert.equal(emptyRuntimeIntegrity.integrityMode, 'transactional_constraints');
 
     const initialRuntimeLimits = await store.getRuntimeLimitsConfig();
@@ -3235,8 +3236,8 @@ async function main() {
     await parentWaiter;
 
     const populatedRuntimeIntegrity = await store.prepareRuntimePersistence();
-    assert.equal(populatedRuntimeIntegrity.checkedRelationCount, 41);
-    assert.equal(populatedRuntimeIntegrity.checkedIntegrityArtifactCount, 199);
+    assert.equal(populatedRuntimeIntegrity.checkedRelationCount, 42);
+    assert.equal(populatedRuntimeIntegrity.checkedIntegrityArtifactCount, 203);
     assert.equal(populatedRuntimeIntegrity.integrityMode, 'transactional_constraints');
     assert.equal(await store.releaseRuntimeAuthority(), true);
 

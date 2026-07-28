@@ -53,6 +53,7 @@ const APPLICATION_STATE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '025_applicat
 const LOCAL_CONNECTOR_OBJECTS_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '026_local_connector_objects.sql');
 const RUN_AGENT_INTEGRITY_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '027_run_agent_integrity.sql');
 const PROCESS_TEMPLATE_TICKET_PROVENANCE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '028_process_template_ticket_provenance.sql');
+const PROCESS_EXECUTION_LIFECYCLE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '029_process_execution_lifecycle.sql');
 const APPLICATION_STATE_METHODS_PATH = path.join(ROOT, 'persistence', 'postgres', 'application-state-methods.js');
 const RUNTIME_BACKEND_PATH = path.join(ROOT, 'persistence', 'runtime-backend.js');
 const SERVER_PATH = path.join(ROOT, 'server.js');
@@ -85,6 +86,7 @@ const applicationStateMigration = fs.readFileSync(APPLICATION_STATE_MIGRATION_PA
 const localConnectorObjectsMigration = fs.readFileSync(LOCAL_CONNECTOR_OBJECTS_MIGRATION_PATH, 'utf8');
 const runAgentIntegrityMigration = fs.readFileSync(RUN_AGENT_INTEGRITY_MIGRATION_PATH, 'utf8');
 const processTemplateTicketProvenanceMigration = fs.readFileSync(PROCESS_TEMPLATE_TICKET_PROVENANCE_MIGRATION_PATH, 'utf8');
+const processExecutionLifecycleMigration = fs.readFileSync(PROCESS_EXECUTION_LIFECYCLE_MIGRATION_PATH, 'utf8');
 const applicationStateMethodsSource = fs.readFileSync(APPLICATION_STATE_METHODS_PATH, 'utf8');
 const runtimeBackendSource = fs.readFileSync(RUNTIME_BACKEND_PATH, 'utf8');
 const serverSource = fs.readFileSync(SERVER_PATH, 'utf8');
@@ -128,6 +130,28 @@ assert.match(packageJson.scripts['db:migrate'], /node --env-file-if-exists=\.env
 assert.match(envExampleSource, /^DATABASE_URL=/m, '.env.example must teach the PostgreSQL connection');
 assert.match(envExampleSource, /^SESSION_SECRET=/m, '.env.example must teach the session secret');
 assert.match(envExampleSource, /^# OPENAI_MODEL=/m, '.env.example must teach the OpenAI model setting');
+
+for (const requiredSql of [
+  'CREATE TABLE process_operations',
+  'operation_identity TEXT PRIMARY KEY',
+  "lifecycle_state IN ('intent', 'active', 'finalizing', 'terminal')",
+  'launch_plan JSONB NOT NULL',
+  'runtime_capability_generation TEXT NOT NULL',
+  'launcher_output_acknowledged BOOLEAN NOT NULL DEFAULT false',
+  'CREATE FUNCTION enforce_process_operation_lifecycle()',
+  'process operation authority is immutable',
+  'CREATE TRIGGER process_operations_lifecycle_guard'
+]) {
+  assert.ok(
+    processExecutionLifecycleMigration.includes(requiredSql),
+    `process execution lifecycle migration must include: ${requiredSql}`
+  );
+}
+assert.match(storeSource, /async createProcessExecutionIntent\(/);
+assert.match(storeSource, /pg_advisory_xact_lock\(hashtextextended\(\$1, 0\)\)/);
+assert.match(storeSource, /async withProcessOperationLock\(/);
+assert.match(storeSource, /pg_advisory_lock\(hashtextextended\(\$1, 0\)\)/);
+assert.match(storeSource, /async listProcessOperationsRequiringReconciliation\(/);
 
 assert.equal(normalizeWorkspacePath('./reports//daily.json'), 'reports/daily.json');
 assert.equal(normalizeWorkspacePath('.'), '');

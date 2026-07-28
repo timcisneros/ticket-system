@@ -33,7 +33,6 @@ const STATUS_FD: RawFd = 14;
 const CONSTRUCTION_GATE_FD: RawFd = 9;
 const MONITOR_INTERVAL: Duration = Duration::from_millis(5);
 const SETUP_TIMEOUT: Duration = Duration::from_secs(10);
-const TRUSTED_OUTPUT_CAPTURE_MAX: usize = 64 * 1024;
 pub(crate) const MOUNT_PLAN_VERSION: u32 = 1;
 
 #[derive(Debug)]
@@ -59,6 +58,11 @@ pub(crate) struct ExecutionInputs<'a> {
     pub control: Arc<ExecutionControl>,
     pub retain_trusted_output: bool,
     pub require_live_seccomp_observation: bool,
+    // Called only after the blocked child is inside the fully limited operation
+    // cgroup and the pre-execution gate has been verified, but before the gate
+    // is released. Durable launcher acceptance/start authority is committed
+    // here so no untrusted instruction can run first.
+    pub before_release: Option<&'a dyn Fn() -> Result<()>>,
 }
 
 pub(crate) struct ExecutionArtifacts {
@@ -252,6 +256,9 @@ fn execute_in_operation(
     operation.add_process(child)?;
     operation.verify_member(child)?;
     verify_pre_execution_gate(operation, child)?;
+    if let Some(before_release) = inputs.before_release {
+        before_release()?;
+    }
     write_one(construction.write)?;
     close_fd(construction.write);
 
@@ -458,6 +465,7 @@ fn execute_in_operation(
         combined_output_bytes: stdout.bytes.saturating_add(stderr.bytes),
         stdout_sha256: stdout.sha256,
         stderr_sha256: stderr.sha256,
+        output_complete: true,
         resource_cause,
         enforcement_cause,
         cpu_throttled_events: cgroup_events.cpu_throttled,
@@ -815,15 +823,36 @@ fn collect_output(
                 break;
             }
             let chunk = &buffer[..read];
-            bytes = bytes.saturating_add(read as u64);
-            hash.update(chunk);
-            let previous = combined.fetch_add(read as u64, Ordering::AcqRel);
-            if previous.saturating_add(read as u64) > limit {
-                exceeded.store(true, Ordering::Release);
+            let mut accepted = 0_usize;
+            loop {
+                let previous = combined.load(Ordering::Acquire);
+                if previous >= limit {
+                    break;
+                }
+                let remaining = limit - previous;
+                accepted = usize::try_from(remaining.min(read as u64)).unwrap_or(read);
+                if combined
+                    .compare_exchange(
+                        previous,
+                        previous.saturating_add(accepted as u64),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    break;
+                }
             }
-            if retain && retained.len() < TRUSTED_OUTPUT_CAPTURE_MAX {
-                let remaining = TRUSTED_OUTPUT_CAPTURE_MAX - retained.len();
-                retained.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            if accepted > 0 {
+                let accepted_chunk = &chunk[..accepted];
+                bytes = bytes.saturating_add(accepted as u64);
+                hash.update(accepted_chunk);
+                if retain {
+                    retained.extend_from_slice(accepted_chunk);
+                }
+            }
+            if accepted < read {
+                exceeded.store(true, Ordering::Release);
             }
         }
         Ok(CollectedOutput {

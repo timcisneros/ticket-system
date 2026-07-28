@@ -641,7 +641,7 @@ async function inside() {
     ), 'exact private launch replay');
     assert.deepStrictEqual(replay, nodeResult);
     passed += 1;
-    console.log('  ok exact private operation replay returns its in-memory terminal result');
+    console.log('  ok exact private operation replay returns its durable terminal result');
 
     const runtimeAcquire = requestFile(path.join(clients, 'runtime-acquire.json'), {
       client: {
@@ -874,6 +874,30 @@ async function inside() {
       restartedContainment.readyForExecution === true &&
       !fs.existsSync(crashCgroup),
     'launcher restart removes stale empty operation cgroups before publishing health');
+    const interruptedCrash = parseClient(clientRun(
+      RUNTIME_UID,
+      clientNode,
+      launcherClient,
+      requestFile(path.join(clients, 'get-crash-operation-after-restart.json'), {
+        client: { version: 1, socketPath: launcherSocket, timeoutMs: 120000 },
+        operation: 'getOperation',
+        request: { operationIdentity: crashIdentity }
+      })
+    ), 'interrupted operation after launcher restart');
+    ok(interruptedCrash.state === 'terminal' &&
+      interruptedCrash.result.terminalOutcome === 'runtime_interrupted' &&
+      interruptedCrash.result.exitCode === null &&
+      interruptedCrash.result.outputComplete === false,
+    'launcher restart preserves accepted identity as truthful infrastructure interruption');
+    const interruptedReplay = parseClient(clientRun(
+      RUNTIME_UID,
+      clientNode,
+      launcherClient,
+      crashLaunch
+    ), 'interrupted launch replay after restart');
+    ok(interruptedReplay.terminalOutcome === 'runtime_interrupted' &&
+      interruptedReplay.exitCode === null,
+    'durable launcher tombstone prevents execution replay after launcher restart');
 
     const sealedDirectoryIdentity = fs.statSync(path.join(sealed, 'sealed'));
     ok(sealedDirectoryIdentity.uid === MATERIALIZER_UID &&

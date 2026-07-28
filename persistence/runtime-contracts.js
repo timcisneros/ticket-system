@@ -24,7 +24,20 @@ const CONTRACTS = Object.freeze({
   performanceAnalytics: ['listPerformanceRunEvidence'],
   workContext: ['listWorkContexts', 'getWorkContextById', 'getWorkContextCounts', 'createWorkContext', 'updateWorkContext'],
   configuredAgent: ['listConfiguredAgents', 'getConfiguredAgentById', 'getConfiguredAgentByName', 'getConfiguredAgentsByIds', 'listConfiguredAgentsByGroup', 'listAgentGroupMemberships', 'createConfiguredAgent', 'updateConfiguredAgent', 'deleteConfiguredAgent', 'removeConfiguredAgentMembershipsForGroup'],
-  processTemplateProjection: ['listProcessTemplateStates', 'getProcessTemplateStateById', 'getProcessTemplateCounts', 'getProcessTemplateCountsByWorkContextIds', 'getProcessTemplateTriggerProvenance']
+  processTemplateProjection: ['listProcessTemplateStates', 'getProcessTemplateStateById', 'getProcessTemplateCounts', 'getProcessTemplateCountsByWorkContextIds', 'getProcessTemplateTriggerProvenance'],
+  processExecution: [
+    'isProcessExecutionSchemaAvailable',
+    'getProcessOperation',
+    'listProcessOperationsForRun',
+    'listNonterminalProcessOperations',
+    'listProcessOperationsRequiringReconciliation',
+    'createProcessExecutionIntent',
+    'transitionProcessOperation',
+    'requestProcessOperationCancellation',
+    'withProcessOperationLock',
+    'recordOperationReceipt',
+    'appendRunEvidence'
+  ]
 });
 
 function assertRepository(repository, contractName, label) {
@@ -72,5 +85,6 @@ module.exports = {
   assertPerformanceAnalyticsRepository: assertion('performanceAnalytics', 'performance analytics'),
   assertWorkContextRepository: assertion('workContext', 'work context'),
   assertConfiguredAgentRepository: assertion('configuredAgent', 'configured agent'),
-  assertProcessTemplateProjectionRepository: assertion('processTemplateProjection', 'process template projection')
+  assertProcessTemplateProjectionRepository: assertion('processTemplateProjection', 'process template projection'),
+  assertProcessExecutionRepository: assertion('processExecution', 'process execution')
 };

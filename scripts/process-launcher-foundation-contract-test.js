@@ -11,6 +11,8 @@ const {
   ProcessLauncherFoundationError,
   buildGetRootfsRequest,
   buildLauncherOperationRequest,
+  buildLauncherOutputAcknowledgementRequest,
+  buildLauncherReadOutputRequest,
   buildProcessSandboxPrerequisiteDescriptor,
   buildVerifyExecutableRequest,
   normalizeContainmentHealth,
@@ -18,6 +20,7 @@ const {
   normalizeFoundationHealth,
   normalizePrivateExecutionResult,
   normalizePrivateOperationStatus,
+  normalizeLauncherOutputChunk,
   normalizeProcessSandboxPrerequisiteDescriptor,
   normalizeRootfsAuthority
 } = require('../runtime/process-launcher-foundation-contract');
@@ -25,7 +28,8 @@ const {
   parseResponse
 } = require('../runtime/process-launcher-foundation-client');
 const {
-  CURRENT_PROCESS_SANDBOX_CAPABILITY
+  CURRENT_PROCESS_SANDBOX_CAPABILITY,
+  hashProcessContractValue
 } = require('../runtime/process-execution-contract');
 const {
   inspectProcessSandboxPrerequisites
@@ -291,6 +295,61 @@ throwsCode(() => buildLauncherOperationRequest({
   pid: 123
 }), 'PROCESS_LAUNCHER_PROTOCOL_INVALID',
 'operation lookup rejects a client-selected PID');
+const readOutputRequest = buildLauncherReadOutputRequest({
+  operationIdentity,
+  stream: 'stdout',
+  offset: 0,
+  maximumBytes: 65536,
+  expectedTotalBytes: 3,
+  expectedSha256: 'a'.repeat(64)
+});
+equal(readOutputRequest.maximumBytes, 65536,
+  'readOutput uses a bounded exact stream/offset/hash authority');
+throwsCode(() => buildLauncherReadOutputRequest({
+  ...readOutputRequest,
+  maximumBytes: 65537
+}), 'PROCESS_LAUNCHER_PROTOCOL_INVALID',
+'readOutput rejects a chunk larger than the launcher-owned ceiling');
+const normalizedChunk = normalizeLauncherOutputChunk({
+  operationIdentity,
+  stream: 'stdout',
+  offset: 0,
+  totalBytes: 3,
+  sha256: 'a'.repeat(64),
+  dataBase64: Buffer.from([0, 255, 1]).toString('base64'),
+  end: true
+}, {
+  ...readOutputRequest,
+  maximumBytes: 3
+});
+ok(Buffer.compare(normalizedChunk.bytes, Buffer.from([0, 255, 1])) === 0,
+  'readOutput preserves exact raw bytes through bounded base64 framing');
+throwsCode(() => normalizeLauncherOutputChunk({
+  operationIdentity,
+  stream: 'stderr',
+  offset: 0,
+  totalBytes: 3,
+  sha256: 'a'.repeat(64),
+  dataBase64: Buffer.from([0, 255, 1]).toString('base64'),
+  end: true
+}, {
+  ...readOutputRequest,
+  maximumBytes: 3
+}), 'PROCESS_OUTPUT_CHUNK_INVALID',
+'readOutput rejects cross-stream substitution');
+equal(buildLauncherOutputAcknowledgementRequest({
+  operationIdentity,
+  terminalResultHash: 'f'.repeat(64)
+}), {
+  operationIdentity,
+  terminalResultHash: 'f'.repeat(64)
+}, 'output acknowledgement binds the exact operation and terminal-result hash');
+throwsCode(() => buildLauncherOutputAcknowledgementRequest({
+  operationIdentity,
+  terminalResultHash: 'f'.repeat(64),
+  deletePath: '/host/output'
+}), 'PROCESS_LAUNCHER_PROTOCOL_INVALID',
+'output acknowledgement rejects host cleanup authority');
 const privateResult = {
   operationIdentity,
   terminalOutcome: 'completed',
@@ -304,6 +363,7 @@ const privateResult = {
   combinedOutputBytes: 3,
   stdoutSha256: 'a'.repeat(64),
   stderrSha256: 'b'.repeat(64),
+  outputComplete: true,
   resourceCause: null,
   enforcementCause: null,
   cpuThrottledEvents: 2,
@@ -318,6 +378,9 @@ equal(normalizePrivateExecutionResult(privateResult, operationIdentity), private
 equal(normalizePrivateOperationStatus({
   operationIdentity,
   state: 'terminal',
+  launcherAcceptanceIdentity: `process-launcher-acceptance:${'c'.repeat(64)}`,
+  terminalResultHash: hashProcessContractValue(privateResult),
+  outputAvailable: true,
   result: privateResult
 }, operationIdentity).result, privateResult,
 'private operation lookup binds its terminal result to the requested identity');
@@ -330,9 +393,11 @@ throwsCode(() => normalizePrivateExecutionResult({
 
 equal(CURRENT_PROCESS_SANDBOX_CAPABILITY, null,
   'runtime sandbox capability remains null');
-ok(!fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8')
-  .includes('process-launcher-foundation'),
-'launcher foundation remains disconnected from server and model dispatch');
+ok(fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8')
+  .includes('processExecutionController.execute') &&
+  fs.readFileSync(path.join(ROOT, 'runtime/process-execution-controller.js'), 'utf8')
+    .includes('resolveLaunchAuthority'),
+'model dispatch reaches the launcher only through the authorized runtime controller');
 for (const code of [
   'PROCESS_LAUNCHER_ALREADY_RUNNING',
   'PROCESS_ROOTFS_MANIFEST_MISMATCH',

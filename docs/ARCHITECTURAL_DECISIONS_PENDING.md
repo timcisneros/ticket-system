@@ -4837,8 +4837,8 @@ snapshots remain readable but receive no executable authority.
 
 | Field | Value |
 |-------|-------|
-| **Status** | Resolved through Tranche 2A3 on 2026-07-28; durable dispatch/lifecycle remains 2B |
-| **Boundary** | Private native execution and active containment only; no model dispatch or PostgreSQL process lifecycle |
+| **Status** | Resolved through Tranche 2B on 2026-07-28; original Tranche 2 is complete |
+| **Boundary** | Authorized version-3 dispatch only through fresh runtime capability, durable PostgreSQL lifecycle, and the proven native launcher |
 | **Evidence** | `docs/PROCESS_EXECUTION_CONTRACT.md`; `docs/PROCESS_INPUT_MATERIALIZER.md`; `docs/PROCESS_LAUNCHER_FOUNDATION.md`; `runtime/process-execution-contract.js`; `runtime/process-launch-plan.js`; `runtime/process-launcher-foundation-contract.js` |
 | **Decision** | Only a complete version-3 authority snapshot can produce a private immutable launch plan; versions 1 and 2 are permanently executor-free |
 
@@ -4921,7 +4921,8 @@ or unsandboxed fallback. The mandatory barrier is create cgroup → set every li
 dedicated Linux test uses distinct launcher, materializer, runtime, trusted-rootfs, and
 unauthorized identities and is mandatory whenever process execution is enabled. On
 2026-07-28 the current host executed it successfully inside a systemd-delegated
-subordinate-UID namespace; the complete active gate passed 17 cross-UID assertions.
+subordinate-UID namespace; the active gate also proves durable interrupted-operation
+replay after launcher restart.
 
 **Tranche 2A2 resolution:** the materializer now holds a kernel lifetime lease before
 any staging, registry, or socket mutation. A separate Rust launcher-foundation service
@@ -4954,11 +4955,27 @@ launcher-crash descendant death, stale-cgroup restart cleanup, and the fixed
 truthfully a throttle and no longer a terminal resource cause.
 `docs/PROCESS_LAUNCHER_FOUNDATION.md` is the governing design.
 
-The private generation is deliberately not assigned to
-`CURRENT_PROCESS_SANDBOX_CAPABILITY`; version-3 model requests remain sandbox-denied.
+The private generation is deliberately not assigned to a mutable
+`CURRENT_PROCESS_SANDBOX_CAPABILITY`. Tranche 2B resolves fresh native health into a
+closed `process-runtime-v1-<sha256>` generation only while the feature flag, migration
+029 lifecycle schema, artifact store, materializer, containment, rootfs/ELF authority,
+protocol versions, and mandatory release gates all match.
 
-**Remaining sequence:** 2B dispatch, durable evidence/output artifacts,
-PostgreSQL execution idempotency, cancellation/recovery, and completion integration.
+**Tranche 2B resolution:** `process_operations` binds one immutable launch plan to the
+canonical run-scoped operation identity before any launcher call. PostgreSQL advisory
+locks and revision-guarded state transitions enforce
+`intent → active → finalizing → terminal`. The Rust launcher persists acceptance before
+child release, preserves terminal tombstones across restart, and exposes bounded
+terminal-only output chunks with cleanup acknowledgement. The runtime independently
+verifies and atomically publishes raw stdout/stderr artifacts, records append-only
+authority/terminal/artifact evidence and a generic operation receipt, and acknowledges
+launcher output only after durable finalization. Interruption, lease expiry, startup,
+Node crash, and launcher restart reconcile without duplicate execution or invented
+terminal facts.
+
+This completes the durable lifecycle and recovery capabilities originally expected from
+Tranche 3 and the enforceable sandbox capabilities originally expected from Tranche 4.
+They must not be reintroduced as parallel subsystems.
 
 ---
 

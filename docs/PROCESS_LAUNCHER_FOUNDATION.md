@@ -1,12 +1,14 @@
-# Native process launcher and containment (Tranche 2A3)
+# Native process launcher, containment, and durable operation registry
 
 ## Boundary
 
 The Rust service in `native/process-launcher` is the private launcher used by the
-standalone Tranche 2A3 integrity gate. It is not imported by `server.js`, is not reachable
-from model dispatch, and writes no PostgreSQL process-lifecycle evidence.
-`CURRENT_PROCESS_SANDBOX_CAPABILITY` remains `null`; model `runProcess` requests remain
-denied with `PROCESS_SANDBOX_UNAVAILABLE`.
+Tranche 2A3 integrity gate and by Tranche 2B's authorized runtime controller. `server.js`
+does not invoke native lifecycle operations directly: authorization, durable intent,
+artifact publication, evidence, cancellation, and recovery are centralized in
+`runtime/process-execution-controller.js`. The launcher interprets no ticket policy or
+model intent. `CURRENT_PROCESS_SANDBOX_CAPABILITY` remains `null`; fresh health is
+resolved and expired for each admission and launch.
 
 The authenticated protocol exposes only:
 
@@ -16,6 +18,8 @@ The authenticated protocol exposes only:
 - `launch`
 - `getOperation`
 - `cancelOperation`
+- `readOutput`
+- `acknowledgeOutput`
 
 There is no generic command, shell, host-path, raw Bubblewrap, raw seccomp, raw cgroup,
 PID-selection, attach, signal, or output-content operation.
@@ -154,9 +158,18 @@ exact unexpired containment projection. Expanded or extra authority is rejected.
 {"operationIdentity":"process-operation:lowercase-sha256"}
 ```
 
-Tranche 2A3 keeps only in-memory private operation state. Exact terminal replay returns
-the same bounded result. It does not claim durable execution idempotency or restart
-recovery; those belong to 2B.
+The launcher commits a canonical service-owned operation record before releasing the
+blocked child. The registry is keyed by operation identity and additionally binds launch
+plan, containment generation, workspace/rootfs/ELF authority, launcher acceptance,
+start facts, terminal result/hash, and output state. Exact replay returns the existing
+record. Conflicting authority, corruption, or the 4,096-record hard ceiling fails closed.
+Accepted/active records found after a launcher restart become truthful
+`runtime_interrupted` terminal tombstones and are never relaunched.
+
+`readOutput` accepts exact operation/stream/offset/size/count/hash authority and returns
+at most 65,536 bytes in deterministic base64. `acknowledgeOutput` requires the exact
+terminal-result hash. Only terminal immutable bytes are readable, no host path is
+returned, and output is removed only after an fsynced acknowledgement tombstone.
 
 ## Pre-execution barrier and Bubblewrap plan
 
@@ -266,7 +279,8 @@ On launcher death, the blocked child/top-level Bubblewrap receives a parent-deat
 Bubblewrap uses `--die-with-parent`, and the private PID namespace tears down remaining
 descendants. The systemd unit owns the full delegated service cgroup with
 `KillMode=control-group`. Startup kills and removes stale operation cgroups before active
-health. Durable lifecycle reconciliation remains a 2B concern.
+health. The durable registry prevents accepted identities from being launched again;
+the Node controller reconciles the interruption through PostgreSQL and required evidence.
 
 ## Active containment generation
 
@@ -313,8 +327,9 @@ node scripts/process-launcher-foundation-cross-uid-test.js
 It requires Linux, Bubblewrap, a systemd user manager, cgroup-v2 delegation, user/mount/
 PID/network namespaces, seccomp, subordinate UID mappings, and distinct mapped runtime,
 materializer, launcher, trusted-rootfs, and unauthorized identities. It proves
-cross-principal descriptor authority, the fixed Node profile, replay, cancellation,
-launcher crash, descendant death, stale-cgroup cleanup, and restart health.
+cross-principal descriptor authority, the fixed Node profile, durable replay,
+cancellation, launcher crash, descendant death, stale-cgroup cleanup, interrupted
+operation tombstones, and restart health.
 
 ## Stable failures
 
@@ -347,10 +362,11 @@ In addition to the 2A2 rootfs/backend/prerequisite failures, active launch uses:
 
 No failure falls back to an unsandboxed launch.
 
-## Remaining boundary
+## Runtime boundary
 
-Tranche 2B may connect already-authorized dispatch to a private healthy launcher
-generation and add durable start/terminal evidence, bounded output artifacts,
-PostgreSQL execution idempotency, cancellation/recovery, and completion integration.
-Until then the active descriptor remains private, runtime capability remains null, and
-model execution remains denied.
+Tranche 2B connects only version-3 requests that pass immutable snapshot, phase, current
+runtime capability, PostgreSQL lifecycle, artifact, and evidence checks. The runtime
+controller commits intent before `launch`, never relaunches an accepted identity, streams
+bounded terminal output to immutable artifacts, and acknowledges cleanup last. The
+launcher still owns only kernel containment and process facts; it does not own run
+completion, model authority, or PostgreSQL evidence.

@@ -72,18 +72,19 @@ passed += 1;
 console.log('  ok production Node integration contains no process-launch API');
 
 const serverSource = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-assert.ok(!/process-input-materialization|ProcessMaterializerClient/.test(serverSource),
-  'server dispatch must not import the trusted standalone materialization seam');
+assert.ok(/ProcessMaterializerClient/.test(serverSource) &&
+  !/processMaterializerClient\.(?:materialize|getSnapshot)\s*\(/.test(serverSource),
+  'server dispatch must reach materialization only through the process controller');
 passed += 1;
-console.log('  ok materialization remains disconnected from server and model dispatch');
+console.log('  ok materialization is confined to the authorized runtime controller');
 
 const executionContractSource = fs.readFileSync(
   path.join(ROOT, 'runtime/process-execution-contract.js'),
   'utf8'
 );
 assert.match(executionContractSource, /const CURRENT_PROCESS_SANDBOX_CAPABILITY = null;/,
-  'Tranche 2A1 must leave sandbox capability permanently unavailable');
+  'the stale process-global sandbox capability must remain unavailable');
 passed += 1;
-console.log('  ok current sandbox capability remains null');
+console.log('  ok static sandbox capability remains null; fresh health is resolved per admission');
 
 console.log(`\nPASS: native process materializer gate — ${passed} checks`);

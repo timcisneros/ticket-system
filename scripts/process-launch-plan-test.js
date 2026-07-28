@@ -479,13 +479,12 @@ throwsCode(
 );
 
 equal(processAuthorityReferences(snapshotV3, 'verification'), [],
-  'version-3 authority remains absent from the model envelope');
+  'a snapshot without admitted runtime capability remains absent from the model envelope');
 const serverSource = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
 ok(!serverSource.includes("require('./runtime/process-launch-plan')") &&
   !serverSource.includes('buildProcessLaunchPlan('),
-'launch plans are not connected to server dispatch');
-ok(!serverSource.includes('launchPlanHash') &&
-  !serverSource.includes('workspaceSnapshot.manifestSha256'),
-'private launch-plan material cannot enter the runtime/model envelope');
+'server dispatch delegates private launch-plan construction to the process controller');
+ok(!/processTargets[\s\S]{0,500}(?:executableIdentity|runtimeRootfs|launchPlanHash)/.test(serverSource),
+'private executable and launch-plan authority cannot enter the model envelope');
 
 console.log(`\nPASS: process launch-plan Tranche 2A0 integrity — ${passed} assertions`);

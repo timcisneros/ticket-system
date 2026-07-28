@@ -24,6 +24,7 @@ const {
   buildProcessOperationResolutionRecord,
   buildProcessPolicySnapshot,
   classifyProcessOperationIdReuse,
+  hashProcessContractValue,
   isProcessContractFeatureEnabled,
   historicalProcessGrantReferences,
   normalizeProcessPolicySnapshot,
@@ -71,24 +72,46 @@ const request = {
 };
 
 equal(CURRENT_PROCESS_SANDBOX_CAPABILITY, null,
-  'current runtime sandbox capability remains permanently unavailable in this tranche');
+  'process-global sandbox capability remains null; health is resolved per admission/launch');
 
 function sandboxCapability(overrides = {}) {
   const now = Date.now();
   return {
     version: 1,
     status: 'containment_verified',
-    generationId: 'sandbox-generation-001',
+    generationId: `sandbox-containment-v1-${'b'.repeat(64)}`,
     launcherProtocolVersion: 1,
     launcherIdentityHash: 'c'.repeat(64),
     sandboxBackendIdentityHash: 'd'.repeat(64),
     seccompPolicyHash: 'e'.repeat(64),
-    rootfsRegistryGeneration: 'rootfs-registry-001',
-    materializerGeneration: 'materializer-001',
+    rootfsRegistryGeneration: `rootfs-registry-v1-${'1'.repeat(64)}`,
+    materializerGeneration: `materializer-v1-${'2'.repeat(64)}`,
     delegatedCgroupIdentityHash: 'f'.repeat(64),
     containmentProbeHash: 'a'.repeat(64),
     verifiedAt: new Date(now - 1000).toISOString(),
     expiresAt: new Date(now + 240000).toISOString(),
+    readyForExecution: true,
+    ...overrides
+  };
+}
+
+function runtimeCapability(sandbox, overrides = {}) {
+  const authority = {
+    controllerProtocolVersion: 1,
+    databaseSchemaVersion: 29,
+    artifactPublicationContractVersion: 1,
+    containmentGenerationId: sandbox.generationId,
+    materializerGeneration: sandbox.materializerGeneration,
+    rootfsRegistryGeneration: sandbox.rootfsRegistryGeneration,
+    launcherProtocolVersion: sandbox.launcherProtocolVersion
+  };
+  return {
+    version: 1,
+    status: 'runtime_verified',
+    generationId: `process-runtime-v1-${hashProcessContractValue(authority)}`,
+    ...authority,
+    verifiedAt: sandbox.verifiedAt,
+    expiresAt: sandbox.expiresAt,
     readyForExecution: true,
     ...overrides
   };
@@ -301,8 +324,53 @@ equal(
     'inspection',
     healthySandbox
   ).code,
-  'PROCESS_EXECUTOR_UNAVAILABLE',
-  'a healthy fixture generation reaches only the still executor-free refusal'
+  'PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE',
+  'sandbox health alone cannot authorize execution without runtime lifecycle health'
+);
+const healthyRuntime = runtimeCapability(healthySandbox);
+equal(
+  processAuthorityReferences(
+    versionThreeSnapshot,
+    'inspection',
+    healthyRuntime
+  ),
+  [{ targetId: 'trusted-target', profileIds: ['readonly-profile'] }],
+  'current closed runtime capability advertises only phase-authorized version-3 references'
+);
+equal(
+  resolveProcessOperationRequest(
+    request,
+    versionThreeSnapshot,
+    'inspection',
+    healthySandbox,
+    healthyRuntime
+  ).code,
+  'PROCESS_EXECUTION_AUTHORIZED',
+  'matching closed sandbox and runtime generations authorize exact version-3 dispatch'
+);
+equal(
+  resolveProcessOperationRequest(
+    request,
+    versionThreeSnapshot,
+    'inspection',
+    healthySandbox,
+    { ...healthyRuntime, extra: true }
+  ).code,
+  'PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE',
+  'extra or malformed runtime capability fields fail closed'
+);
+equal(
+  resolveProcessOperationRequest(
+    request,
+    versionThreeSnapshot,
+    'inspection',
+    healthySandbox,
+    runtimeCapability(healthySandbox, {
+      containmentGenerationId: `sandbox-containment-v1-${'0'.repeat(64)}`
+    })
+  ).code,
+  'PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE',
+  'runtime capability generation cannot be substituted across containment authority'
 );
 equal(
   resolveProcessOperationRequest({

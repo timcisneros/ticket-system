@@ -48,6 +48,7 @@ const native = [
   'src/executor.rs',
   'src/launch_contract.rs',
   'src/materializer_client.rs',
+  'src/operation_registry.rs',
   'src/seccomp.rs'
 ].map(file =>
   fs.readFileSync(path.join(ROOT, 'native/process-launcher', file), 'utf8')
@@ -71,8 +72,10 @@ const operations = native.match(/enum ProtocolOperation \{[\s\S]*?\}/)[0];
 assert.ok(/\bLaunch\b/.test(operations) &&
   /\bGetOperation\b/.test(operations) &&
   /\bCancelOperation\b/.test(operations) &&
-  !/\b(?:Execute|Spawn|Signal|Output|Attach)\b/.test(operations),
-'launcher protocol exposes only the bounded lifecycle, not generic execution');
+  /\bReadOutput\b/.test(operations) &&
+  /\bAcknowledgeOutput\b/.test(operations) &&
+  !/\b(?:Execute|Spawn|Signal|Attach)\b/.test(operations),
+'launcher protocol exposes only the bounded lifecycle and terminal-output transfer');
 passed += 1;
 console.log('  ok launcher protocol is a bounded launch lifecycle');
 
@@ -93,9 +96,11 @@ assert.match(
 passed += 1;
 console.log('  ok current runtime sandbox capability remains null');
 const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-assert.ok(!/process-launcher-foundation|process-sandbox-prerequisite-inspection/.test(server),
-  'launcher and prerequisite inspection remain disconnected from model dispatch');
+assert.ok(/process-execution-controller/.test(server) &&
+  !/processExecutionLauncherClient\.(?:launch|getOperation|cancelOperation|readOutput|acknowledgeOutput)\s*\(/
+    .test(server),
+  'model dispatch reaches the launcher only through the authorized runtime controller');
 passed += 1;
-console.log('  ok prerequisite inspection remains private and non-dispatchable');
+console.log('  ok launcher access is confined to the authorized runtime controller');
 
 console.log(`\nPASS: process launcher foundation native gate — ${passed} checks`);

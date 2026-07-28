@@ -15,7 +15,14 @@ async function main() {
   else if (input.operation === 'verifyExecutable') {
     result = await client.verifyExecutable(input.request);
   } else if (input.operation === 'launch') {
-    result = await client.launch(input.request, input.authority);
+    let status = await client.launch(input.request, input.authority);
+    while (status.state === 'active') {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      status = await client.getOperation({
+        operationIdentity: input.request.launchPlan.operationIdentity
+      });
+    }
+    result = status.result;
   } else if (input.operation === 'getOperation') {
     result = await client.getOperation(input.request);
   } else if (input.operation === 'cancelOperation') {

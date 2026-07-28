@@ -36,6 +36,25 @@ const PROCESS_FEATURE_ENV = 'ENABLE_PROCESS_EXECUTION_CONTRACT';
 const CURRENT_PROCESS_SANDBOX_CAPABILITY = null;
 const PROCESS_INLINE_OUTPUT_MAX_BYTES = 64 * 1024;
 const PROCESS_ARTIFACT_REFERENCE_MAX_LENGTH = 2048;
+const PROCESS_RUNTIME_CONTROLLER_PROTOCOL_VERSION = 1;
+const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 29;
+const PROCESS_ARTIFACT_PUBLICATION_CONTRACT_VERSION = 1;
+const PROCESS_RUNTIME_CAPABILITY_VERSION = 1;
+const PROCESS_RUNTIME_CAPABILITY_KEYS = Object.freeze([
+  'version',
+  'status',
+  'generationId',
+  'controllerProtocolVersion',
+  'databaseSchemaVersion',
+  'artifactPublicationContractVersion',
+  'containmentGenerationId',
+  'materializerGeneration',
+  'rootfsRegistryGeneration',
+  'launcherProtocolVersion',
+  'verifiedAt',
+  'expiresAt',
+  'readyForExecution'
+]);
 
 const PROCESS_AUTHORITY_RULE = Object.freeze([
   'The model requests an existing process profile.',
@@ -302,6 +321,91 @@ function normalizeProcessSandboxCapabilityDescriptor(value, {
     materializerGeneration,
     delegatedCgroupIdentityHash: value.delegatedCgroupIdentityHash,
     containmentProbeHash: value.containmentProbeHash,
+    verifiedAt,
+    expiresAt,
+    readyForExecution: true
+  });
+}
+
+function normalizeProcessRuntimeCapabilityDescriptor(value, {
+  observedAt = new Date().toISOString()
+} = {}) {
+  validatePlainObject(value, 'process runtime capability');
+  const actual = Object.keys(value).sort(compareCanonicalStrings);
+  const expected = [...PROCESS_RUNTIME_CAPABILITY_KEYS].sort(compareCanonicalStrings);
+  if (actual.length !== expected.length ||
+      actual.some((key, index) => key !== expected[index])) {
+    throw new TypeError(
+      `process runtime capability must contain exactly: ` +
+      PROCESS_RUNTIME_CAPABILITY_KEYS.join(', ')
+    );
+  }
+  if (value.version !== PROCESS_RUNTIME_CAPABILITY_VERSION ||
+      value.status !== 'runtime_verified' ||
+      value.controllerProtocolVersion !== PROCESS_RUNTIME_CONTROLLER_PROTOCOL_VERSION ||
+      value.databaseSchemaVersion !== PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION ||
+      value.artifactPublicationContractVersion !==
+        PROCESS_ARTIFACT_PUBLICATION_CONTRACT_VERSION ||
+      value.launcherProtocolVersion !== 1 ||
+      value.readyForExecution !== true) {
+    throw new TypeError('process runtime capability is malformed');
+  }
+  const generationId = processIdentifier(
+    value.generationId,
+    'process runtime capability.generationId'
+  );
+  const containmentGenerationId = processIdentifier(
+    value.containmentGenerationId,
+    'process runtime capability.containmentGenerationId'
+  );
+  const materializerGeneration = processIdentifier(
+    value.materializerGeneration,
+    'process runtime capability.materializerGeneration'
+  );
+  const rootfsRegistryGeneration = processIdentifier(
+    value.rootfsRegistryGeneration,
+    'process runtime capability.rootfsRegistryGeneration'
+  );
+  if (!/^process-runtime-v1-[0-9a-f]{64}$/.test(generationId) ||
+      !/^sandbox-containment-v1-[0-9a-f]{64}$/.test(containmentGenerationId)) {
+    throw new TypeError('process runtime capability generation identity is malformed');
+  }
+  const verifiedAt = processContractTimestamp(
+    value.verifiedAt,
+    'process runtime capability.verifiedAt'
+  );
+  const expiresAt = processContractTimestamp(
+    value.expiresAt,
+    'process runtime capability.expiresAt'
+  );
+  const observed = processContractTimestamp(
+    observedAt,
+    'process runtime capability observedAt'
+  );
+  if (Date.parse(expiresAt) <= Date.parse(verifiedAt) ||
+      Date.parse(observed) < Date.parse(verifiedAt) ||
+      Date.parse(observed) >= Date.parse(expiresAt)) {
+    throw new TypeError('process runtime capability is expired');
+  }
+  const authority = {
+    controllerProtocolVersion: value.controllerProtocolVersion,
+    databaseSchemaVersion: value.databaseSchemaVersion,
+    artifactPublicationContractVersion: value.artifactPublicationContractVersion,
+    containmentGenerationId,
+    materializerGeneration,
+    rootfsRegistryGeneration,
+    launcherProtocolVersion: value.launcherProtocolVersion
+  };
+  if (generationId !== `process-runtime-v1-${hashProcessContractValue(authority)}`) {
+    throw new TypeError(
+      'process runtime capability generation does not match its authority'
+    );
+  }
+  return deepFreeze({
+    version: PROCESS_RUNTIME_CAPABILITY_VERSION,
+    status: 'runtime_verified',
+    generationId,
+    ...authority,
     verifiedAt,
     expiresAt,
     readyForExecution: true
@@ -675,14 +779,23 @@ function normalizeProcessPolicySnapshot(value) {
   }
 }
 
-function processAuthorityReferences(value, phase = null) {
+function processAuthorityReferences(value, phase = null, runtimeCapability = null) {
   const snapshot = normalizeProcessPolicySnapshot(value);
-  // Tranche 2A0 deliberately does not advertise version-3 authority. A future
-  // healthy sandbox capability generation is an additional mandatory gate.
-  // Preserve the existing version-2 historical envelope behavior without
-  // interpreting it as executable authority.
-  if (!snapshot || snapshot.version !== PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2 ||
-      !snapshot.capabilityEnabled) return [];
+  if (!snapshot || ![
+    PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2,
+    PROCESS_POLICY_SNAPSHOT_VERSION
+  ].includes(snapshot.version) || !snapshot.capabilityEnabled) return [];
+  // Historical version-2 references remain visible only for their frozen
+  // executor-unavailable compatibility behavior. Executable version-3
+  // references require a current, closed runtime capability in addition to the
+  // immutable process-policy snapshot.
+  if (snapshot.version === PROCESS_POLICY_SNAPSHOT_VERSION) {
+    try {
+      normalizeProcessRuntimeCapabilityDescriptor(runtimeCapability);
+    } catch (_) {
+      return [];
+    }
+  }
   if (phase !== null && !PROCESS_RUNTIME_PHASES.includes(phase)) return [];
   const grouped = new Map();
   for (const profile of snapshot.profiles) {
@@ -726,7 +839,8 @@ function resolveProcessOperationRequest(
   action,
   policySnapshot,
   currentPhase = null,
-  sandboxCapability = CURRENT_PROCESS_SANDBOX_CAPABILITY
+  sandboxCapability = CURRENT_PROCESS_SANDBOX_CAPABILITY,
+  runtimeCapability = null
 ) {
   const request = parseProcessOperationRequest(action);
   const snapshot = normalizeProcessPolicySnapshot(policySnapshot);
@@ -801,6 +915,50 @@ function resolveProcessOperationRequest(
       terminalOutcome: 'policy_denied'
     });
   }
+  let resolvedRuntimeCapability = null;
+  if (snapshot.version === PROCESS_POLICY_SNAPSHOT_VERSION) {
+    try {
+      resolvedRuntimeCapability = normalizeProcessRuntimeCapabilityDescriptor(
+        runtimeCapability
+      );
+      if (resolvedRuntimeCapability.containmentGenerationId !==
+            sandboxCapability.generationId ||
+          resolvedRuntimeCapability.materializerGeneration !==
+            sandboxCapability.materializerGeneration ||
+          resolvedRuntimeCapability.rootfsRegistryGeneration !==
+            sandboxCapability.rootfsRegistryGeneration ||
+          resolvedRuntimeCapability.launcherProtocolVersion !==
+            sandboxCapability.launcherProtocolVersion) {
+        resolvedRuntimeCapability = null;
+      }
+    } catch (_) {
+      resolvedRuntimeCapability = null;
+    }
+  }
+  if (resolvedRuntimeCapability) {
+    return processResolution({
+      disposition: 'authorized',
+      code: 'PROCESS_EXECUTION_AUTHORIZED',
+      message: 'runProcess is authorized by immutable run and current runtime capability',
+      request,
+      snapshot,
+      runtimePhase: currentPhase,
+      authorityStatus: 'allowed'
+    });
+  }
+  if (snapshot.version === PROCESS_POLICY_SNAPSHOT_VERSION) {
+    return processResolution({
+      disposition: 'policy_denied',
+      code: 'PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE',
+      message:
+        'runProcess version-3 authority is denied because no matching current runtime capability generation is available',
+      request,
+      snapshot,
+      runtimePhase: currentPhase,
+      authorityStatus: 'denied',
+      terminalOutcome: 'policy_denied'
+    });
+  }
   return processResolution({
     disposition: 'unsupported',
     code: 'PROCESS_EXECUTOR_UNAVAILABLE',
@@ -838,8 +996,18 @@ const PROCESS_RESOLUTION_AUTHORITIES = Object.freeze({
     authorityStatus: 'denied',
     terminalOutcome: 'policy_denied'
   }),
+  PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE: Object.freeze({
+    disposition: 'policy_denied',
+    authorityStatus: 'denied',
+    terminalOutcome: 'policy_denied'
+  }),
   PROCESS_EXECUTOR_UNAVAILABLE: Object.freeze({
     disposition: 'unsupported',
+    authorityStatus: 'allowed',
+    terminalOutcome: null
+  }),
+  PROCESS_EXECUTION_AUTHORIZED: Object.freeze({
+    disposition: 'authorized',
     authorityStatus: 'allowed',
     terminalOutcome: null
   })
@@ -850,14 +1018,30 @@ function validateProcessOperationResolutionRecord(value) {
   const allowedKeys = [
     'operationId', 'runId', 'ticketId', 'targetId', 'profileId',
     'disposition', 'code', 'authorityStatus', 'terminalOutcome',
-    'runtimePhase', 'policySnapshotHash', 'message', 'enforcementCause'
+    'runtimePhase', 'policySnapshotHash', 'message', 'enforcementCause',
+    'capturedAt', 'evidenceKey'
   ];
   const unexpected = Object.keys(value).find(key => !allowedKeys.includes(key));
   if (unexpected) {
     throw new TypeError(`process operation resolution includes unsupported field: ${unexpected}`);
   }
-  for (const key of allowedKeys) {
+  for (const key of allowedKeys.filter(key =>
+    !['capturedAt', 'evidenceKey'].includes(key))) {
     if (!hasOwn(value, key)) throw new TypeError(`process operation resolution.${key} is required`);
+  }
+  if (hasOwn(value, 'capturedAt')) {
+    processContractTimestamp(
+      value.capturedAt,
+      'process operation resolution.capturedAt'
+    );
+  }
+  if (hasOwn(value, 'evidenceKey') &&
+      (typeof value.evidenceKey !== 'string' ||
+       value.evidenceKey.length < 1 ||
+       value.evidenceKey.length > 512)) {
+    throw new TypeError(
+      'process operation resolution.evidenceKey must be a bounded string'
+    );
   }
   processIdentifier(value.operationId, 'process operation resolution.operationId');
   processIdentifier(value.targetId, 'process operation resolution.targetId');
@@ -1271,10 +1455,12 @@ module.exports = {
   PROCESS_AUTHORITY_CARDINALITY_LIMITS,
   PROCESS_AUTHORITY_RULE,
   PROCESS_CONTRACT_VERSION,
+  PROCESS_ARTIFACT_PUBLICATION_CONTRACT_VERSION,
   PROCESS_EVIDENCE_CONTRACT,
   PROCESS_EXECUTABLE_FORMAT,
   PROCESS_EXECUTION_POLICY,
   PROCESS_FEATURE_ENV,
+  PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION,
   PROCESS_FILESYSTEM_POLICY,
   PROCESS_FILESYSTEM_POLICY_HARD_LIMITS,
   PROCESS_IDENTIFIER_MAX_LENGTH,
@@ -1288,6 +1474,9 @@ module.exports = {
   PROCESS_PROFILE_HARD_LIMITS,
   PROCESS_RESOURCE_LIMIT_CAUSES,
   PROCESS_RUNTIME_PHASES,
+  PROCESS_RUNTIME_CAPABILITY_KEYS,
+  PROCESS_RUNTIME_CAPABILITY_VERSION,
+  PROCESS_RUNTIME_CONTROLLER_PROTOCOL_VERSION,
   PROCESS_SANDBOX_CAPABILITY_MAX_VALIDITY_MS,
   PROCESS_SANDBOX_CAPABILITY_STATUS,
   PROCESS_SANDBOX_CAPABILITY_VERSION,
@@ -1306,6 +1495,7 @@ module.exports = {
   hashProcessContractValue,
   isProcessContractFeatureEnabled,
   normalizeProcessPolicySnapshot,
+  normalizeProcessRuntimeCapabilityDescriptor,
   normalizeProcessSandboxCapabilityDescriptor,
   parseProcessOperationRequest,
   processIdentifier,

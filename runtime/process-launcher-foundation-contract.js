@@ -72,7 +72,13 @@ const PROCESS_LAUNCHER_FOUNDATION_FAILURE_CODES = Object.freeze([
   'PROCESS_RESOURCE_LIMIT_EXCEEDED',
   'PROCESS_OPERATION_NOT_FOUND',
   'PROCESS_OPERATION_ALREADY_ACTIVE',
-  'PROCESS_OPERATION_TERMINATION_FAILED'
+  'PROCESS_OPERATION_TERMINATION_FAILED',
+  'PROCESS_EXECUTION_INTENT_CONFLICT',
+  'PROCESS_LAUNCHER_REGISTRY_INVALID',
+  'PROCESS_LAUNCHER_REGISTRY_FULL',
+  'PROCESS_OUTPUT_UNAVAILABLE',
+  'PROCESS_OUTPUT_CHUNK_INVALID',
+  'PROCESS_OUTPUT_ACKNOWLEDGEMENT_FAILED'
 ]);
 
 const EXECUTION_RESULT_KEYS = Object.freeze([
@@ -88,6 +94,7 @@ const EXECUTION_RESULT_KEYS = Object.freeze([
   'combinedOutputBytes',
   'stdoutSha256',
   'stderrSha256',
+  'outputComplete',
   'resourceCause',
   'enforcementCause',
   'cpuThrottledEvents',
@@ -96,7 +103,19 @@ const EXECUTION_RESULT_KEYS = Object.freeze([
 const OPERATION_STATUS_KEYS = Object.freeze([
   'operationIdentity',
   'state',
+  'launcherAcceptanceIdentity',
+  'terminalResultHash',
+  'outputAvailable',
   'result'
+]);
+const OUTPUT_CHUNK_KEYS = Object.freeze([
+  'operationIdentity',
+  'stream',
+  'offset',
+  'totalBytes',
+  'sha256',
+  'dataBase64',
+  'end'
 ]);
 const LAUNCH_REQUEST_KEYS = Object.freeze([
   'launchPlan',
@@ -109,7 +128,9 @@ const PROCESS_PRIVATE_TERMINAL_OUTCOMES = Object.freeze([
   'timed_out',
   'cancelled',
   'output_limit_exceeded',
-  'resource_limit_exceeded'
+  'resource_limit_exceeded',
+  'failed_to_start',
+  'runtime_interrupted'
 ]);
 const PROCESS_PRIVATE_RESOURCE_CAUSES = Object.freeze([
   'memory',
@@ -575,6 +596,63 @@ function buildLauncherOperationRequest(value) {
   return Object.freeze({ operationIdentity: value.operationIdentity });
 }
 
+function buildLauncherReadOutputRequest(value) {
+  closed(value, [
+    'operationIdentity',
+    'stream',
+    'offset',
+    'maximumBytes',
+    'expectedTotalBytes',
+    'expectedSha256'
+  ], 'launcher readOutput request');
+  const operation = buildLauncherOperationRequest({
+    operationIdentity: value.operationIdentity
+  });
+  if (!['stdout', 'stderr'].includes(value.stream)) {
+    fail('launcher output stream must be stdout or stderr');
+  }
+  const offset = nonnegativeInteger(value.offset, 'launcher output offset');
+  const maximumBytes = nonnegativeInteger(
+    value.maximumBytes,
+    'launcher output maximumBytes'
+  );
+  if (maximumBytes === 0 || maximumBytes > 65_536) {
+    fail('launcher output maximumBytes must be between 1 and 65536');
+  }
+  const expectedTotalBytes = nonnegativeInteger(
+    value.expectedTotalBytes,
+    'launcher output expectedTotalBytes'
+  );
+  if (offset > expectedTotalBytes) {
+    fail('launcher output offset exceeds expectedTotalBytes');
+  }
+  return Object.freeze({
+    operationIdentity: operation.operationIdentity,
+    stream: value.stream,
+    offset,
+    maximumBytes,
+    expectedTotalBytes,
+    expectedSha256: sha256(value.expectedSha256, 'launcher output expectedSha256')
+  });
+}
+
+function buildLauncherOutputAcknowledgementRequest(value) {
+  closed(value, [
+    'operationIdentity',
+    'terminalResultHash'
+  ], 'launcher output acknowledgement request');
+  const operation = buildLauncherOperationRequest({
+    operationIdentity: value.operationIdentity
+  });
+  return Object.freeze({
+    operationIdentity: operation.operationIdentity,
+    terminalResultHash: sha256(
+      value.terminalResultHash,
+      'launcher output terminalResultHash'
+    )
+  });
+}
+
 function nullableInteger(value, label, { minimum = 0 } = {}) {
   if (value === null) return null;
   if (!Number.isSafeInteger(value) || value < minimum) {
@@ -634,6 +712,9 @@ function normalizePrivateExecutionResult(value, expectedOperationIdentity) {
   if (combinedOutputBytes !== stdoutBytes + stderrBytes) {
     fail('private execution result combinedOutputBytes must equal both stream counts');
   }
+  if (typeof value.outputComplete !== 'boolean') {
+    fail('private execution result outputComplete must be a boolean');
+  }
   const resourceCause = value.resourceCause === null
     ? null
     : (() => {
@@ -656,7 +737,9 @@ function normalizePrivateExecutionResult(value, expectedOperationIdentity) {
   if (value.terminalOutcome === 'completed' && exitCode !== 0 ||
       value.terminalOutcome === 'exited_nonzero' &&
         (exitCode === null || exitCode === 0) ||
-      value.terminalOutcome === 'signaled' && signal === null) {
+      value.terminalOutcome === 'signaled' && signal === null ||
+      ['failed_to_start', 'runtime_interrupted'].includes(value.terminalOutcome) &&
+        (exitCode !== null || signal !== null || value.outputComplete !== false)) {
     fail('private execution result exit or signal claim contradicts terminalOutcome');
   }
   return deepFreeze({
@@ -672,6 +755,7 @@ function normalizePrivateExecutionResult(value, expectedOperationIdentity) {
     combinedOutputBytes,
     stdoutSha256: sha256(value.stdoutSha256, 'private execution result.stdoutSha256'),
     stderrSha256: sha256(value.stderrSha256, 'private execution result.stderrSha256'),
+    outputComplete: value.outputComplete,
     resourceCause,
     enforcementCause: value.enforcementCause,
     cpuThrottledEvents: nonnegativeInteger(
@@ -698,17 +782,82 @@ function normalizePrivateOperationStatus(value, expectedOperationIdentity) {
       value.state === 'terminal' && value.result === null) {
     fail('private operation status state and result contradict one another');
   }
+  if (typeof value.launcherAcceptanceIdentity !== 'string' ||
+      !/^process-launcher-acceptance:[0-9a-f]{64}$/.test(
+        value.launcherAcceptanceIdentity
+      )) {
+    fail('private operation status launcher acceptance identity is invalid');
+  }
+  const terminalResultHash = value.terminalResultHash === null
+    ? null
+    : sha256(value.terminalResultHash, 'private operation status.terminalResultHash');
+  if (typeof value.outputAvailable !== 'boolean' ||
+      value.state === 'active' &&
+        (terminalResultHash !== null || value.outputAvailable) ||
+      value.state === 'terminal' && terminalResultHash === null) {
+    fail('private operation status terminal/output authority is contradictory');
+  }
+  const result = value.result === null
+    ? null
+    : normalizePrivateExecutionResult(value.result, request.operationIdentity);
+  if (result !== null &&
+      hashProcessContractValue(result) !== terminalResultHash) {
+    fail('private operation status terminal-result hash is invalid');
+  }
+  if (value.outputAvailable && result && result.outputComplete !== true) {
+    fail('incomplete launcher output cannot be advertised as available');
+  }
   return deepFreeze({
     operationIdentity: request.operationIdentity,
     state: value.state,
-    result: value.result === null
-      ? null
-      : normalizePrivateExecutionResult(value.result, request.operationIdentity)
+    launcherAcceptanceIdentity: value.launcherAcceptanceIdentity,
+    terminalResultHash,
+    outputAvailable: value.outputAvailable,
+    result
+  });
+}
+
+function normalizeLauncherOutputChunk(value, request) {
+  const expected = buildLauncherReadOutputRequest(request);
+  closed(value, OUTPUT_CHUNK_KEYS, 'launcher output chunk');
+  if (value.operationIdentity !== expected.operationIdentity ||
+      value.stream !== expected.stream ||
+      value.offset !== expected.offset ||
+      value.totalBytes !== expected.expectedTotalBytes ||
+      value.sha256 !== expected.expectedSha256 ||
+      typeof value.end !== 'boolean' ||
+      typeof value.dataBase64 !== 'string' ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+        value.dataBase64
+      )) {
+    fail('launcher output chunk identity or encoding is invalid',
+      'PROCESS_OUTPUT_CHUNK_INVALID');
+  }
+  const bytes = Buffer.from(value.dataBase64, 'base64');
+  if (bytes.toString('base64') !== value.dataBase64 ||
+      bytes.length > expected.maximumBytes ||
+      value.offset + bytes.length > value.totalBytes ||
+      value.end !== (value.offset + bytes.length === value.totalBytes) ||
+      !value.end && bytes.length === 0) {
+    fail('launcher output chunk bounds are invalid', 'PROCESS_OUTPUT_CHUNK_INVALID');
+  }
+  return deepFreeze({
+    operationIdentity: value.operationIdentity,
+    stream: value.stream,
+    offset: value.offset,
+    totalBytes: value.totalBytes,
+    sha256: value.sha256,
+    bytes,
+    end: value.end
   });
 }
 
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  // Buffer/typed-array elements cannot be individually frozen on current Node.
+  // The returned chunk owns a freshly decoded bounded Buffer, so callers cannot
+  // mutate protocol input by alias; the surrounding authority object is frozen.
+  if (ArrayBuffer.isView(value)) return value;
   for (const item of Object.values(value)) deepFreeze(item);
   return Object.freeze(value);
 }
@@ -740,6 +889,8 @@ module.exports = {
   buildGetRootfsRequest,
   buildLauncherLaunchRequest,
   buildLauncherOperationRequest,
+  buildLauncherOutputAcknowledgementRequest,
+  buildLauncherReadOutputRequest,
   buildProcessSandboxPrerequisiteDescriptor,
   buildVerifyExecutableRequest,
   canonicalJson,
@@ -750,5 +901,6 @@ module.exports = {
   normalizeProcessSandboxPrerequisiteDescriptor,
   normalizePrivateExecutionResult,
   normalizePrivateOperationStatus,
+  normalizeLauncherOutputChunk,
   normalizeRootfsAuthority
 };

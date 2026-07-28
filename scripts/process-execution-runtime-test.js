@@ -233,14 +233,10 @@ async function main() {
       const inspectionEnvelope = runtimeEnvelopes.find(envelope =>
         envelope.currentPhase === 'inspection');
       assert(Boolean(inspectionEnvelope) &&
-        JSON.stringify(inspectionEnvelope.processTargets) === JSON.stringify([{
-          targetId: 'ticket-system-local',
-          profileIds: ['inspection-check']
-        }]) &&
-        JSON.stringify(inspectionEnvelope.processOperation) === JSON.stringify({
-          requiredArgs: ['targetId', 'profileId', 'operationId']
-        }),
-      'inspection envelope advertises only profiles permitted in inspection');
+        !Object.hasOwn(inspectionEnvelope, 'processTargets') &&
+        !Object.hasOwn(inspectionEnvelope, 'processOperation') &&
+        !inspectionEnvelope.allowedOperations.includes('runProcess'),
+      'historical version-2 authority remains executor-free and is not advertised');
       const providerEvidence = JSON.stringify(inspectionEnvelope);
       for (const hiddenValue of ['/usr/bin/node', '--check', '1048576']) {
         assert(!providerEvidence.includes(hiddenValue),
