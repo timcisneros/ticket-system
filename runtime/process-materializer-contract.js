@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const path = require('path');
 
 const {
@@ -87,7 +88,8 @@ const GET_SNAPSHOT_REQUEST_KEYS = Object.freeze([
   'expectedOperationId',
   'expectedOperationIdentity',
   'expectedPolicySnapshotHash',
-  'expectedMaterializerGeneration'
+  'expectedMaterializerGeneration',
+  'expectedFilesystemPolicyHash'
 ]);
 
 class ProcessMaterializerError extends Error {
@@ -181,6 +183,14 @@ function normalizeFilesystemPolicy(value) {
     maxInputFiles,
     maxInputBytes
   });
+}
+
+function hashProcessFilesystemPolicy(value) {
+  const normalized = normalizeFilesystemPolicy(value);
+  return crypto
+    .createHash('sha256')
+    .update(canonicalJson(normalized), 'utf8')
+    .digest('hex');
 }
 
 function normalizeMaterializerGeneration(value) {
@@ -300,7 +310,8 @@ function buildGetProcessSnapshotRequest(value) {
     'ticketId',
     'operationId',
     'policySnapshotHash',
-    'materializerGeneration'
+    'materializerGeneration',
+    'filesystemPolicy'
   ];
   assertClosed(value, inputKeys, 'getSnapshot input');
   const runId = positiveInteger(value.runId, 'runId');
@@ -315,19 +326,33 @@ function buildGetProcessSnapshotRequest(value) {
     expectedMaterializerGeneration: identifier(
       value.materializerGeneration,
       'materializerGeneration'
-    )
+    ),
+    expectedFilesystemPolicyHash: hashProcessFilesystemPolicy(value.filesystemPolicy)
   });
 }
 
 function validateGetProcessSnapshotRequest(value) {
   assertClosed(value, GET_SNAPSHOT_REQUEST_KEYS, 'getSnapshot request');
-  const expected = buildGetProcessSnapshotRequest({
-    snapshotId: value.snapshotId,
-    runId: value.expectedRunId,
-    ticketId: value.expectedTicketId,
-    operationId: value.expectedOperationId,
-    policySnapshotHash: value.expectedPolicySnapshotHash,
-    materializerGeneration: value.expectedMaterializerGeneration
+  const runId = positiveInteger(value.expectedRunId, 'expectedRunId');
+  const operationId = identifier(value.expectedOperationId, 'expectedOperationId');
+  const expected = deepFreeze({
+    snapshotId: identifier(value.snapshotId, 'snapshotId'),
+    expectedRunId: runId,
+    expectedTicketId: positiveInteger(value.expectedTicketId, 'expectedTicketId'),
+    expectedOperationId: operationId,
+    expectedOperationIdentity: buildProcessOperationIdentity(runId, operationId),
+    expectedPolicySnapshotHash: sha256(
+      value.expectedPolicySnapshotHash,
+      'expectedPolicySnapshotHash'
+    ),
+    expectedMaterializerGeneration: identifier(
+      value.expectedMaterializerGeneration,
+      'expectedMaterializerGeneration'
+    ),
+    expectedFilesystemPolicyHash: sha256(
+      value.expectedFilesystemPolicyHash,
+      'expectedFilesystemPolicyHash'
+    )
   });
   if (canonicalJson(value) !== canonicalJson(expected)) {
     fail('getSnapshot request does not match its recomputed operation identity');
@@ -383,6 +408,7 @@ module.exports = {
   WORKSPACE_SNAPSHOT_KEYS,
   buildGetProcessSnapshotRequest,
   buildProcessMaterializationRequest,
+  hashProcessFilesystemPolicy,
   normalizeMaterializerGeneration,
   normalizeProcessMaterializerClientConfig,
   normalizeWorkspaceSnapshotDescriptor,

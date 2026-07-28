@@ -1,0 +1,33 @@
+[Unit]
+Description=Ticket System trusted process-input materializer
+After=local-fs.target
+ConditionPathIsDirectory=/run/ticket-system-process
+ConditionPathIsDirectory=/var/lib/ticket-system/process-inputs
+
+[Service]
+Type=simple
+User=ticket-system-materializer
+Group=ticket-system-runtime
+ExecStart=/usr/libexec/ticket-system/ticket-system-process-materializer /etc/ticket-system/process-materializer.json
+Environment=LANG=C.UTF-8
+UMask=0027
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/srv/ticket-system/workspace
+ReadOnlyPaths=/etc/ticket-system/process-materializer.json
+ReadOnlyPaths=/etc/ticket-system/process-input-policy.json
+ReadWritePaths=/run/ticket-system-process
+ReadWritePaths=/var/lib/ticket-system/process-inputs
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

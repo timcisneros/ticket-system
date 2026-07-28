@@ -1,0 +1,7 @@
+# Install as /usr/lib/tmpfiles.d/ticket-system-process-materializer.conf.
+# The service account is dedicated; ticket-system-runtime is the application service group.
+d /run/ticket-system-process 0750 ticket-system-materializer ticket-system-runtime -
+d /var/lib/ticket-system/process-inputs 0750 ticket-system-materializer ticket-system-runtime -
+d /etc/ticket-system 0750 root ticket-system-runtime -
+z /etc/ticket-system/process-materializer.json 0640 root ticket-system-runtime -
+z /etc/ticket-system/process-input-policy.json 0640 root ticket-system-runtime -

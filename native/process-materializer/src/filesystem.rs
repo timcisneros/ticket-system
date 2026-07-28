@@ -23,6 +23,116 @@ const RESOLVE_BENEATH: u64 = 0x08;
 const DIRECTORY_MODE: u32 = 0o550;
 const FILE_MODE: u32 = 0o440;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectoryIdentity {
+    pub device: u64,
+    pub inode: u64,
+    pub owner_uid: u32,
+    pub owner_gid: u32,
+    pub mode: u32,
+}
+
+#[derive(Debug)]
+pub struct PinnedDirectory {
+    descriptor: File,
+    identity: DirectoryIdentity,
+}
+
+impl PinnedDirectory {
+    pub fn open_absolute(path: &Path) -> Result<Self> {
+        let descriptor = open_absolute_directory(path)?;
+        let stat = file_stat(descriptor.as_raw_fd())?;
+        Ok(Self {
+            descriptor,
+            identity: DirectoryIdentity {
+                device: stat.st_dev,
+                inode: stat.st_ino,
+                owner_uid: stat.st_uid,
+                owner_gid: stat.st_gid,
+                mode: stat.st_mode & 0o7777,
+            },
+        })
+    }
+
+    pub fn duplicate(&self) -> Result<File> {
+        let current = CString::new(".").expect("current component contains no NUL");
+        let descriptor = unsafe {
+            libc::openat(
+                self.descriptor.as_raw_fd(),
+                current.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if descriptor < 0 {
+            return Err(storage(std::io::Error::last_os_error()));
+        }
+        Ok(unsafe { File::from_raw_fd(descriptor) })
+    }
+
+    pub fn identity(&self) -> DirectoryIdentity {
+        self.identity
+    }
+
+    pub fn current_identity(&self) -> Result<DirectoryIdentity> {
+        let stat = file_stat(self.descriptor.as_raw_fd())?;
+        Ok(DirectoryIdentity {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+            owner_uid: stat.st_uid,
+            owner_gid: stat.st_gid,
+            mode: stat.st_mode & 0o7777,
+        })
+    }
+
+    pub fn proc_path(&self) -> PathBuf {
+        PathBuf::from(format!("/proc/self/fd/{}", self.descriptor.as_raw_fd()))
+    }
+
+    pub fn set_as_current_directory(&self) -> Result<()> {
+        if unsafe { libc::fchdir(self.descriptor.as_raw_fd()) } != 0 {
+            return Err(storage(std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+}
+
+pub fn same_physical_directory(left: &PinnedDirectory, right: &PinnedDirectory) -> bool {
+    left.identity.device == right.identity.device && left.identity.inode == right.identity.inode
+}
+
+pub fn physical_directories_overlap(
+    left: &PinnedDirectory,
+    right: &PinnedDirectory,
+) -> Result<bool> {
+    Ok(directory_contains(left, right)? || directory_contains(right, left)?)
+}
+
+fn directory_contains(ancestor: &PinnedDirectory, descendant: &PinnedDirectory) -> Result<bool> {
+    let mut current = descendant.duplicate()?;
+    loop {
+        if fd_identity(current.as_raw_fd())? == (ancestor.identity.device, ancestor.identity.inode)
+        {
+            return Ok(true);
+        }
+        let parent_name = CString::new("..").expect("parent component contains no NUL");
+        let parent_fd = unsafe {
+            libc::openat(
+                current.as_raw_fd(),
+                parent_name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if parent_fd < 0 {
+            return Err(storage(std::io::Error::last_os_error()));
+        }
+        let parent = unsafe { File::from_raw_fd(parent_fd) };
+        if fd_identity(parent.as_raw_fd())? == fd_identity(current.as_raw_fd())? {
+            return Ok(false);
+        }
+        current = parent;
+    }
+}
+
 #[repr(C)]
 struct OpenHow {
     flags: u64,
@@ -68,13 +178,24 @@ struct ScanState<'a> {
     visited_entries: u64,
 }
 
+#[cfg(test)]
 pub fn materialize_source_tree(
     source_root: &Path,
     staging_tree: &Path,
     policy: &ProcessInputPolicy,
     limits: &FilesystemPolicy,
 ) -> Result<MaterializedTree> {
-    let root = open_trusted_root(source_root)?;
+    let root = open_absolute_directory(source_root)?;
+    materialize_source_tree_from_descriptor(&root, staging_tree, policy, limits)
+}
+
+pub fn materialize_source_tree_from_descriptor(
+    source_root: &File,
+    staging_tree: &Path,
+    policy: &ProcessInputPolicy,
+    limits: &FilesystemPolicy,
+) -> Result<MaterializedTree> {
+    let root = source_root.try_clone().map_err(storage)?;
     fs::create_dir(staging_tree).map_err(|error| {
         MaterializerError::new(
             PROCESS_INPUT_STORAGE_UNAVAILABLE,
@@ -111,13 +232,13 @@ pub fn materialize_source_tree(
     })
 }
 
-pub fn revalidate_materialized_source(
-    source_root: &Path,
+pub fn revalidate_materialized_source_from_descriptor(
+    source_root: &File,
     policy: &ProcessInputPolicy,
     limits: &FilesystemPolicy,
     materialized: &MaterializedTree,
 ) -> Result<()> {
-    let rescan_root = open_trusted_root(source_root)?;
+    let rescan_root = source_root.try_clone().map_err(storage)?;
     if fd_identity(rescan_root.as_raw_fd())? != materialized.source_root_identity {
         return Err(MaterializerError::new(
             PROCESS_INPUT_SOURCE_CHANGED,
@@ -125,14 +246,19 @@ pub fn revalidate_materialized_source(
         ));
     }
     let rescan = scan(&rescan_root, None, policy, limits)?;
-    if rescan.evidence != materialized.source_evidence
-        || rescan.entries != materialized.manifest.entries
+    if rescan.evidence != materialized.source_evidence {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_SOURCE_CHANGED,
+            "workspace file identity or content changed while execution input was materialized",
+        ));
+    }
+    if rescan.entries != materialized.manifest.entries
         || rescan.file_count != materialized.file_count
         || rescan.total_bytes != materialized.total_bytes
     {
         return Err(MaterializerError::new(
             PROCESS_INPUT_SOURCE_CHANGED,
-            "workspace contents changed while execution input was materialized",
+            "workspace manifest changed while execution input was materialized",
         ));
     }
     Ok(())
@@ -160,7 +286,7 @@ pub fn verify_sealed_tree(
         max_input_files: file_count.max(1),
         max_input_bytes: total_bytes.max(1),
     };
-    let root = open_trusted_root(tree_root)?;
+    let root = open_internal_directory(tree_root)?;
     let scan = scan(&root, None, &no_exclusions, &limits)?;
     if scan.entries != expected_manifest.entries
         || scan.file_count != file_count
@@ -503,16 +629,65 @@ fn validate_filename(raw: &[u8]) -> Result<&str> {
     Ok(name)
 }
 
-fn open_trusted_root(path: &Path) -> Result<File> {
-    let metadata = fs::symlink_metadata(path).map_err(storage)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+fn open_absolute_directory(path: &Path) -> Result<File> {
+    if !path.is_absolute() {
         return Err(MaterializerError::new(
             PROCESS_INPUT_PATH_INVALID,
-            "configured workspace source root must be a real directory",
+            "trusted directory path must be absolute",
         ));
     }
+    let root_path = CString::new("/").expect("root path contains no NUL");
+    let root_fd = unsafe {
+        libc::open(
+            root_path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if root_fd < 0 {
+        return Err(storage(std::io::Error::last_os_error()));
+    }
+    let root = unsafe { File::from_raw_fd(root_fd) };
+    if path == Path::new("/") {
+        return root.try_clone().map_err(storage);
+    }
+    let relative = path.strip_prefix("/").map_err(|_| {
+        MaterializerError::new(PROCESS_INPUT_PATH_INVALID, "trusted path is not absolute")
+    })?;
+    let name = CString::new(relative.as_os_str().as_bytes()).map_err(|_| {
+        MaterializerError::new(PROCESS_INPUT_PATH_INVALID, "trusted path contains NUL")
+    })?;
+    let how = OpenHow {
+        flags: (libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW) as u64,
+        mode: 0,
+        resolve: RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+    };
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            root.as_raw_fd(),
+            name.as_ptr(),
+            &how,
+            std::mem::size_of::<OpenHow>(),
+        ) as i32
+    };
+    if descriptor < 0 {
+        let error = std::io::Error::last_os_error();
+        let code = if matches!(error.raw_os_error(), Some(libc::ELOOP) | Some(libc::EXDEV)) {
+            PROCESS_INPUT_SYMLINK_REJECTED
+        } else {
+            PROCESS_INPUT_PATH_INVALID
+        };
+        return Err(MaterializerError::new(
+            code,
+            format!("trusted directory cannot be opened without symlinks: {error}"),
+        ));
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn open_internal_directory(path: &Path) -> Result<File> {
     let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
-        MaterializerError::new(PROCESS_INPUT_PATH_INVALID, "source root contains NUL")
+        MaterializerError::new(PROCESS_INPUT_PATH_INVALID, "internal path contains NUL")
     })?;
     let descriptor = unsafe {
         libc::open(

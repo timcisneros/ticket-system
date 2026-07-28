@@ -74,8 +74,24 @@ The sealed root may not equal, contain, or be contained by a source root, runtim
 path, artifact path, database path, or the socket. Every source root is also checked
 against the sealed-storage boundary after filesystem resolution.
 
-The service creates a `0750` socket directory and a `0660` Unix socket. Each connection
-is authenticated with Linux `SO_PEERCRED` against the exact configured service UID.
+The deployment must pre-provision the sealed root and the `0750` socket directory with
+the materializer service as owner. The service never creates or chmods either trusted
+top-level root. It rejects group- or world-writable sealed storage, requires socket
+directory mode `0750`, and rejects symbolic or magic links in every path component.
+Only the service's internal state directories and `0660` socket entry are created.
+
+At startup each workspace allocation, the sealed root, and the socket directory are
+opened from `/` with `openat2` and `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS |
+RESOLVE_NO_MAGICLINKS`. The service retains those descriptors. Allocation device,
+inode, owner, group, and mode evidence participates in the materializer generation;
+duplicate physical allocation roots are rejected. Materialization duplicates the
+retained allocation descriptor and never reopens `sourceRoot`. Sealed operations remain
+relative to the retained state descriptor, and socket creation is relative to the
+retained socket-directory descriptor. Replacing a configured pathname cannot redirect a
+running generation.
+
+Each connection is authenticated with Linux `SO_PEERCRED` against the exact configured
+service UID.
 The Node process only receives the socket path and a trusted allocation ID; it cannot
 name a source root, sealed root, staging path, or final host path.
 
@@ -84,6 +100,24 @@ name a source root, sealed root, staging path, or final host path.
 Messages use a four-byte unsigned big-endian length followed by UTF-8 JSON. Version 1
 has a 2,097,152-byte maximum. The length is rejected before payload allocation.
 Envelopes and bodies are closed and reject unknown fields.
+
+An unauthorized peer is rejected before the service reads its request frame. The only
+uncorrelated response is:
+
+```json
+{
+  "version": 1,
+  "requestId": null,
+  "ok": false,
+  "error": {
+    "code": "PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED",
+    "message": "Materializer client is not authorized"
+  }
+}
+```
+
+`requestId: null` is invalid for every other response. Every authenticated response
+echoes the exact request ID. The refusal never includes the rejected numeric UID.
 
 The only operations are:
 
@@ -129,7 +163,8 @@ options cannot be represented.
   "expectedOperationId": "operation-001",
   "expectedOperationIdentity": "process-operation:lowercase-sha256",
   "expectedPolicySnapshotHash": "lowercase-sha256",
-  "expectedMaterializerGeneration": "materializer-v1-lowercase-sha256"
+  "expectedMaterializerGeneration": "materializer-v1-lowercase-sha256",
+  "expectedFilesystemPolicyHash": "lowercase-sha256"
 }
 ```
 
@@ -146,6 +181,8 @@ At startup the service hashes:
 - SHA-256 of canonical process-input exclusion policy;
 - SHA-256 of the complete canonical trusted service configuration, including the exact
   client UID, workspace allocations, storage/socket boundaries, and protected host paths;
+- canonical allocation IDs plus the pinned source-root device, inode, owner, group, and
+  mode evidence;
 - manifest schema version; and
 - registry schema version.
 
@@ -157,6 +194,15 @@ exactly:
   "materializerGeneration": "materializer-v1-lowercase-sha256",
   "materializerIdentityHash": "lowercase-sha256",
   "inputPolicyHash": "lowercase-sha256",
+  "filesystemPolicy": {
+    "inputMode": "materialized_read_only",
+    "writableRoots": [],
+    "allowSymlinks": false,
+    "allowSpecialFiles": false,
+    "maxInputFiles": 10000,
+    "maxInputBytes": 268435456
+  },
+  "filesystemPolicyHash": "lowercase-sha256",
   "manifestSchemaVersion": 1,
   "registrySchemaVersion": 1
 }
@@ -297,6 +343,13 @@ sealed trees without matching records, and validates every registered tree and m
 Partial state is never reinterpreted as sealed. Garbage collection is intentionally not
 part of 2A1.
 
+`filesystemPolicyHash` is SHA-256 over canonical JSON for the exact normalized private
+`filesystemPolicy`. Startup recomputes it. Exact materialization replay requires the
+complete policy and hash to match; stricter or broader limits under the same operation
+identity produce `PROCESS_INPUT_SNAPSHOT_MISMATCH`. `getSnapshot` carries the expected
+hash derived from the selected immutable version-3 profile. The public descriptor is
+unchanged.
+
 The only public descriptor is:
 
 ```json
@@ -340,6 +393,21 @@ The stable failures are:
 - `PROCESS_INPUT_GENERATION_MISMATCH`
 
 No failure returns a public descriptor.
+
+## Production service boundary
+
+The deployment examples are:
+
+- `deployment/systemd/ticket-system-process-materializer.service`
+- `deployment/systemd/ticket-system-process-materializer.tmpfiles`
+
+The tmpfiles example pre-provisions `/run/ticket-system-process` and
+`/var/lib/ticket-system/process-inputs` as `0750`, owned by the dedicated
+`ticket-system-materializer` user with the `ticket-system-runtime` group. It also pins
+root-owned `0640` configuration and input-policy files. The unit uses a fixed absolute
+binary and configuration path, no shell or environment file, and exposes only the
+workspace read path plus the two required write roots. This hardens the trusted
+materializer service; it does not claim to sandbox future executed code.
 
 The Linux integration suite tests the real native binary, Unix framing, `SO_PEERCRED`,
 `openat2`, source races, fsync/rename publication, restart cleanup, and registry/tree

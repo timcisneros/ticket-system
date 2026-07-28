@@ -15,7 +15,7 @@
     "build:materializer": "cargo build --release --manifest-path native/process-materializer/Cargo.toml",
     "fmt:materializer": "cargo fmt --manifest-path native/process-materializer/Cargo.toml -- --check",
     "lint:materializer": "cargo clippy --manifest-path native/process-materializer/Cargo.toml --all-targets -- -D warnings",
-    "test:materializer": "node scripts/process-materializer-native-test.js && node scripts/process-materializer-contract-test.js && node scripts/process-materializer-linux-test.js && node scripts/process-materializer-cross-uid-test.js",
+    "test:materializer": "node scripts/process-materializer-native-test.js && node scripts/process-materializer-contract-test.js && node scripts/process-materializer-deployment-test.js && node scripts/process-materializer-linux-test.js && node scripts/process-materializer-cross-uid-test.js",
     "preview": "NODE_ENV=production node server.js",
     "codex:bootstrap": "node scripts/codex-bootstrap.js",
     "codex:trace": "node scripts/codex-trace.js",

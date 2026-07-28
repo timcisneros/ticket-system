@@ -27,6 +27,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'process-execution-contract-test.js',
   'process-launch-plan-test.js',
   'process-materializer-contract-test.js',
+  'process-materializer-deployment-test.js',
   'process-materializer-native-test.js',
   'process-materializer-linux-test.js',
   'process-materializer-cross-uid-test.js',

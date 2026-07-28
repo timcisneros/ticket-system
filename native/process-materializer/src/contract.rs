@@ -175,6 +175,7 @@ pub struct GetSnapshotBody {
     pub expected_operation_identity: String,
     pub expected_policy_snapshot_hash: String,
     pub expected_materializer_generation: String,
+    pub expected_filesystem_policy_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -234,6 +235,8 @@ pub struct RegistryRecord {
     pub materializer_generation: String,
     pub materializer_identity_hash: String,
     pub input_policy_hash: String,
+    pub filesystem_policy: FilesystemPolicy,
+    pub filesystem_policy_hash: String,
     pub manifest_schema_version: u32,
     pub manifest_sha256: String,
     pub file_count: u64,
@@ -254,7 +257,7 @@ pub struct SuccessResponse<T: Serialize> {
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
     pub version: u32,
-    pub request_id: String,
+    pub request_id: Option<String>,
     pub ok: bool,
     pub error: ErrorDocument,
 }
@@ -480,6 +483,10 @@ pub fn validate_get_snapshot_body(body: &GetSnapshotBody) -> Result<()> {
         &body.expected_materializer_generation,
         "expectedMaterializerGeneration",
     )?;
+    validate_sha256(
+        &body.expected_filesystem_policy_hash,
+        "expectedFilesystemPolicyHash",
+    )?;
     let expected = build_operation_identity(body.expected_run_id, &body.expected_operation_id)?;
     if body.expected_operation_identity != expected {
         return Err(MaterializerError::new(
@@ -514,6 +521,11 @@ pub fn validate_filesystem_policy(policy: &FilesystemPolicy) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+pub fn filesystem_policy_hash(policy: &FilesystemPolicy) -> Result<String> {
+    validate_filesystem_policy(policy)?;
+    Ok(sha256_bytes(&canonical_struct_json(policy)?))
 }
 
 pub fn validate_identifier(value: &str, label: &str) -> Result<()> {
@@ -735,7 +747,8 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 fn validate_configured_path_separation(config: &ServiceConfig) -> Result<()> {
     let sealed = lexical_normalize(&config.sealed_snapshot_root);
     let socket = lexical_normalize(&config.socket_path);
-    let mut forbidden = vec![socket];
+    let socket_directory = socket.parent().unwrap_or(Path::new("/"));
+    let mut forbidden = vec![socket.clone()];
     forbidden.extend(
         config
             .protected_host_paths
@@ -752,6 +765,15 @@ fn validate_configured_path_separation(config: &ServiceConfig) -> Result<()> {
                 PROCESS_MATERIALIZER_REQUEST_INVALID,
                 format!(
                     "sealedSnapshotRoot overlaps workspace allocation {}",
+                    allocation.id
+                ),
+            ));
+        }
+        if paths_overlap(socket_directory, &source) {
+            return Err(MaterializerError::new(
+                PROCESS_MATERIALIZER_REQUEST_INVALID,
+                format!(
+                    "materializer socket directory overlaps workspace allocation {}",
                     allocation.id
                 ),
             ));

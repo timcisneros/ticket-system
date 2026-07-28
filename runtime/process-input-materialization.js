@@ -88,7 +88,8 @@ async function materializeProcessExecutionInput({
           ticketId: context.ticketId,
           operationId,
           policySnapshotHash: context.processPolicySnapshot.snapshotHash,
-          materializerGeneration: generation.materializerGeneration
+          materializerGeneration: generation.materializerGeneration,
+          filesystemPolicy: profile.filesystemPolicy
         })),
         {
           id: descriptor.id,

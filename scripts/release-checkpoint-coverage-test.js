@@ -34,6 +34,7 @@ for (const required of [
 
 for (const materializerGate of [
   'process-materializer-contract-test.js',
+  'process-materializer-deployment-test.js',
   'process-materializer-native-test.js',
   'process-materializer-linux-test.js',
   'process-materializer-cross-uid-test.js',

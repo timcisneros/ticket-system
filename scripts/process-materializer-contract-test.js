@@ -13,6 +13,7 @@ const {
   ProcessMaterializerError,
   buildGetProcessSnapshotRequest,
   buildProcessMaterializationRequest,
+  hashProcessFilesystemPolicy,
   normalizeMaterializerGeneration,
   normalizeProcessMaterializerClientConfig,
   normalizeWorkspaceSnapshotDescriptor,
@@ -23,7 +24,8 @@ const {
   materializeProcessExecutionInput
 } = require('../runtime/process-input-materialization');
 const {
-  ProcessMaterializerClient
+  ProcessMaterializerClient,
+  parseResponse
 } = require('../runtime/process-materializer-client');
 
 let passed = 0;
@@ -189,8 +191,12 @@ async function main() {
     ticketId: context.ticketId,
     operationId: request.operationId,
     policySnapshotHash: snapshot.snapshotHash,
-    materializerGeneration: generation.materializerGeneration
+    materializerGeneration: generation.materializerGeneration,
+    filesystemPolicy: profile().filesystemPolicy
   });
+  equal(getRequest.expectedFilesystemPolicyHash,
+    hashProcessFilesystemPolicy(profile().filesystemPolicy),
+    'getSnapshot derives the exact normalized filesystem-policy hash');
   equal(validateGetProcessSnapshotRequest(getRequest), getRequest,
     'getSnapshot recomputes and validates operation identity');
   throwsCode(
@@ -200,6 +206,53 @@ async function main() {
     }),
     'PROCESS_MATERIALIZER_REQUEST_INVALID',
     'another operation in the same run cannot substitute at getSnapshot'
+  );
+
+  const correlatedRequestId = 'request-parser-001';
+  throwsCode(
+    () => parseResponse(Buffer.from(JSON.stringify({
+      version: 1,
+      requestId: null,
+      ok: false,
+      error: {
+        code: 'PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED',
+        message: 'Materializer client is not authorized'
+      }
+    })), correlatedRequestId),
+    'PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED',
+    'the exact null-ID pre-authentication refusal preserves its typed unauthorized result'
+  );
+  for (const [requestId, code, message] of [
+    [null, 'PROCESS_INPUT_SNAPSHOT_MISMATCH',
+      'a null request ID with another code is protocol-invalid'],
+    ['peer', 'PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED',
+      'a synthetic peer request ID is not a pre-authentication envelope'],
+    ['request-other', 'PROCESS_INPUT_SNAPSHOT_MISMATCH',
+      'an ordinary mismatched request ID remains protocol-invalid']
+  ]) {
+    throwsCode(
+      () => parseResponse(Buffer.from(JSON.stringify({
+        version: 1,
+        requestId,
+        ok: false,
+        error: { code, message: 'refused' }
+      })), correlatedRequestId),
+      'PROCESS_MATERIALIZER_PROTOCOL_INVALID',
+      message
+    );
+  }
+  throwsCode(
+    () => parseResponse(Buffer.from(JSON.stringify({
+      version: 1,
+      requestId: correlatedRequestId,
+      ok: false,
+      error: {
+        code: 'PROCESS_INPUT_SNAPSHOT_MISMATCH',
+        message: 'snapshot mismatch'
+      }
+    })), correlatedRequestId),
+    'PROCESS_INPUT_SNAPSHOT_MISMATCH',
+    'an authorized correlated typed failure remains typed'
   );
 
   const clientConfig = normalizeProcessMaterializerClientConfig({

@@ -14,7 +14,8 @@ const {
 } = require('../runtime/process-execution-contract');
 const {
   buildGetProcessSnapshotRequest,
-  buildProcessMaterializationRequest
+  buildProcessMaterializationRequest,
+  hashProcessFilesystemPolicy
 } = require('../runtime/process-materializer-contract');
 const {
   ProcessMaterializerClient
@@ -72,6 +73,10 @@ function createFixture(label = 'main') {
   const policy = path.join(root, 'input-policy.json');
   const config = path.join(root, 'materializer.json');
   fs.mkdirSync(source, { recursive: true });
+  fs.mkdirSync(sealed, { mode: 0o750 });
+  fs.chmodSync(sealed, 0o750);
+  fs.mkdirSync(path.dirname(socket), { recursive: true, mode: 0o750 });
+  fs.chmodSync(path.dirname(socket), 0o750);
   writeJson(policy, JSON.parse(fs.readFileSync(
     path.join(ROOT, 'config/process-input-policy.json'),
     'utf8'
@@ -142,16 +147,21 @@ function requestFor(generation, operationId, overrides = {}) {
     operationId,
     policySnapshotHash: 'a'.repeat(64),
     materializerGeneration: generation.materializerGeneration,
-    filesystemPolicy: {
-      inputMode: 'materialized_read_only',
-      writableRoots: [],
-      allowSymlinks: false,
-      allowSpecialFiles: false,
-      maxInputFiles: 10000,
-      maxInputBytes: 268435456
-    },
+    filesystemPolicy: filesystemPolicy(),
     ...overrides
   });
+}
+
+function filesystemPolicy(overrides = {}) {
+  return {
+    inputMode: 'materialized_read_only',
+    writableRoots: [],
+    allowSymlinks: false,
+    allowSpecialFiles: false,
+    maxInputFiles: 1000,
+    maxInputBytes: 67108864,
+    ...overrides
+  };
 }
 
 function rawProtocol(socketPath, value) {
@@ -196,6 +206,221 @@ function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
+function updateFixtureConfig(fixture, transform) {
+  const config = JSON.parse(fs.readFileSync(fixture.config, 'utf8'));
+  transform(config);
+  writeJson(fixture.config, config);
+}
+
+async function runPinnedRootScenarios() {
+  {
+    const fixture = createFixture('source-path-replacement');
+    let service;
+    try {
+      fs.writeFileSync(path.join(fixture.source, 'identity.txt'), 'pinned-source\n');
+      service = await startService(fixture);
+      const pinnedSource = `${fixture.source}-pinned`;
+      fs.renameSync(fixture.source, pinnedSource);
+      fs.mkdirSync(fixture.source);
+      fs.writeFileSync(path.join(fixture.source, 'identity.txt'), 'replacement-source\n');
+      const descriptor = await service.client.materialize(
+        requestFor(service.generation, 'operation-source-path-replacement')
+      );
+      equal(fs.readFileSync(path.join(
+        fixture.sealed, 'sealed', descriptor.id, 'tree', 'identity.txt'
+      ), 'utf8'), 'pinned-source\n',
+      'replacing the configured source pathname cannot redirect a live service generation');
+    } finally {
+      if (service) await stopService(service.child);
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const fixture = createFixture('source-parent-substitution');
+    let service;
+    try {
+      const allocationParent = path.join(fixture.root, 'allocation-parent');
+      const pinnedWorkspace = path.join(allocationParent, 'workspace');
+      fs.mkdirSync(pinnedWorkspace, { recursive: true });
+      fs.writeFileSync(path.join(pinnedWorkspace, 'identity.txt'), 'pinned-parent\n');
+      updateFixtureConfig(fixture, config => {
+        config.workspaceAllocations[0].sourceRoot = pinnedWorkspace;
+      });
+      service = await startService(fixture);
+      const retainedParent = `${allocationParent}-retained`;
+      fs.renameSync(allocationParent, retainedParent);
+      const redirectedParent = path.join(fixture.root, 'redirected-parent');
+      fs.mkdirSync(path.join(redirectedParent, 'workspace'), { recursive: true });
+      fs.writeFileSync(
+        path.join(redirectedParent, 'workspace', 'identity.txt'),
+        'redirected-parent\n'
+      );
+      fs.symlinkSync(redirectedParent, allocationParent);
+      const descriptor = await service.client.materialize(
+        requestFor(service.generation, 'operation-parent-substitution')
+      );
+      equal(fs.readFileSync(path.join(
+        fixture.sealed, 'sealed', descriptor.id, 'tree', 'identity.txt'
+      ), 'utf8'), 'pinned-parent\n',
+      'a parent-symlink substitution cannot redirect a pinned source allocation');
+    } finally {
+      if (service) await stopService(service.child);
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const fixture = createFixture('duplicate-physical-allocation');
+    try {
+      updateFixtureConfig(fixture, config => {
+        config.workspaceAllocations.push({
+          id: 'same-physical-workspace',
+          sourceRoot: fixture.source
+        });
+      });
+      const failed = await startExpectFailure(fixture);
+      ok(failed.stderr.includes('PROCESS_MATERIALIZER_REQUEST_INVALID'),
+        'two allocation IDs for one physical source directory are rejected');
+      equal(fs.readdirSync(fixture.sealed), [],
+        'duplicate physical allocation rejection creates no internal sealed state');
+      ok(!fs.existsSync(fixture.socket),
+        'duplicate physical allocation rejection creates no socket entry');
+    } finally {
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const fixture = createFixture('generation-inode');
+    let first;
+    let second;
+    try {
+      first = await startService(fixture);
+      const firstGeneration = first.generation.materializerGeneration;
+      await stopService(first.child);
+      first = null;
+      fs.renameSync(fixture.source, `${fixture.source}-old`);
+      fs.mkdirSync(fixture.source);
+      second = await startService(fixture);
+      ok(second.generation.materializerGeneration !== firstGeneration,
+        'a service restart against another source-root inode changes the generation');
+    } finally {
+      if (first) await stopService(first.child);
+      if (second) await stopService(second.child);
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const fixture = createFixture('source-mode-change');
+    let service;
+    try {
+      service = await startService(fixture);
+      fs.chmodSync(fixture.source, 0o700);
+      await rejectsCode(
+        () => service.client.materialize(
+          requestFor(service.generation, 'operation-source-mode-change')
+        ),
+        'PROCESS_INPUT_SOURCE_CHANGED',
+        'source-root owner or mode changes invalidate the pinned generation'
+      );
+      equal(fs.readdirSync(fixture.sealed, 'utf8').sort(),
+        ['quarantine', 'registry', 'sealed', 'staging'],
+        'source-root authority change publishes no snapshot state');
+    } finally {
+      if (service) await stopService(service.child);
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const fixture = createFixture('symlinked-state-parent');
+    try {
+      fs.rmSync(fixture.sealed, { recursive: true });
+      const realParent = path.join(fixture.root, 'real-state-parent');
+      const realSealed = path.join(realParent, 'inputs');
+      fs.mkdirSync(realSealed, { recursive: true, mode: 0o750 });
+      fs.chmodSync(realSealed, 0o750);
+      const linkedParent = path.join(fixture.root, 'state-parent');
+      fs.symlinkSync(realParent, linkedParent);
+      updateFixtureConfig(fixture, config => {
+        config.sealedSnapshotRoot = path.join(linkedParent, 'inputs');
+      });
+      const failed = await startExpectFailure(fixture);
+      ok(failed.stderr.includes('PROCESS_INPUT_SYMLINK_REJECTED'),
+        'a symlinked sealed-root parent is rejected at startup');
+      equal(fs.readdirSync(realSealed), [],
+        'invalid sealed-root configuration creates or chmods no internal state');
+      ok(!fs.existsSync(fixture.socket),
+        'invalid sealed-root configuration creates no socket entry');
+    } finally {
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const fixture = createFixture('symlinked-socket-parent');
+    try {
+      const socketDirectory = path.dirname(fixture.socket);
+      fs.rmSync(socketDirectory, { recursive: true });
+      const realSocketDirectory = path.join(fixture.root, 'real-socket-directory');
+      fs.mkdirSync(realSocketDirectory, { mode: 0o750 });
+      fs.symlinkSync(realSocketDirectory, socketDirectory);
+      const failed = await startExpectFailure(fixture);
+      ok(failed.stderr.includes('PROCESS_INPUT_PATH_INVALID'),
+        `a symlinked socket parent is rejected before binding (${failed.stderr.trim()})`);
+      equal(fs.readdirSync(realSocketDirectory), [],
+        'a rejected socket parent receives no socket entry');
+      equal(fs.readdirSync(fixture.sealed), [],
+        'a rejected socket parent creates no internal sealed state');
+    } finally {
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const fixture = createFixture('socket-parent-mode');
+    try {
+      fs.chmodSync(path.dirname(fixture.socket), 0o770);
+      const failed = await startExpectFailure(fixture);
+      ok(failed.stderr.includes('PROCESS_INPUT_STORAGE_UNAVAILABLE'),
+        'a group-writable socket parent is rejected');
+      ok(!fs.existsSync(fixture.socket),
+        'invalid socket-parent mode creates no socket entry');
+      equal(fs.readdirSync(fixture.sealed), [],
+        'invalid socket-parent mode creates no internal sealed state');
+    } finally {
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const fixture = createFixture('existing-socket-entry');
+    try {
+      fs.writeFileSync(fixture.socket, 'not a socket');
+      const failed = await startExpectFailure(fixture);
+      ok(failed.stderr.includes('PROCESS_MATERIALIZER_UNAVAILABLE'),
+        'an existing non-socket entry is rejected');
+      equal(fs.readFileSync(fixture.socket, 'utf8'), 'not a socket',
+        'the service does not remove an existing non-socket entry');
+      equal(fs.readdirSync(fixture.sealed), [],
+        'an invalid existing socket entry creates no internal sealed state');
+    } finally {
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+}
+
 function makeTreeWritable(root) {
   if (!fs.existsSync(root)) return;
   const metadata = fs.lstatSync(root);
@@ -213,6 +438,7 @@ async function main() {
   if (!fs.existsSync(BINARY)) {
     throw new Error(`native materializer binary is missing: ${BINARY}`);
   }
+  await runPinnedRootScenarios();
   const fixture = createFixture();
   let service;
   let specialSocket = null;
@@ -246,6 +472,26 @@ async function main() {
 
     const request = requestFor(service.generation, 'operation-001');
     const descriptor = await service.client.materialize(request);
+    equal(await service.client.materialize(request), descriptor,
+      'exact repeated materialization returns the persisted snapshot idempotently');
+    await rejectsCode(
+      () => service.client.materialize(requestFor(
+        service.generation,
+        'operation-001',
+        { filesystemPolicy: filesystemPolicy({ maxInputFiles: 999 }) }
+      )),
+      'PROCESS_INPUT_SNAPSHOT_MISMATCH',
+      'same-operation replay with a stricter filesystem policy is rejected'
+    );
+    await rejectsCode(
+      () => service.client.materialize(requestFor(
+        service.generation,
+        'operation-001',
+        { filesystemPolicy: filesystemPolicy({ maxInputFiles: 1001 }) }
+      )),
+      'PROCESS_INPUT_SNAPSHOT_MISMATCH',
+      'same-operation replay with a broader filesystem policy is rejected'
+    );
     equal(Object.keys(descriptor).sort(), [
       'fileCount',
       'id',
@@ -308,6 +554,8 @@ async function main() {
       'private registry binds the process operation identity');
     equal(registry.inputPolicyHash, service.generation.inputPolicyHash,
       'private registry binds the exact exclusion policy hash');
+    equal(registry.filesystemPolicyHash, hashProcessFilesystemPolicy(filesystemPolicy()),
+      'private registry binds the exact normalized profile filesystem policy');
     ok(!Object.keys(registry).some(key => /path/i.test(key)),
       'private registry stores no source or sealed host path');
 
@@ -317,10 +565,27 @@ async function main() {
       ticketId: 45,
       operationId: 'operation-001',
       policySnapshotHash: 'a'.repeat(64),
-      materializerGeneration: service.generation.materializerGeneration
+      materializerGeneration: service.generation.materializerGeneration,
+      filesystemPolicy: filesystemPolicy()
     }));
     equal(retrieved, descriptor,
       'getSnapshot reproduces the exact durable public descriptor');
+    await rejectsCode(
+      () => service.client.getSnapshot({
+        ...buildGetProcessSnapshotRequest({
+          snapshotId: descriptor.id,
+          runId: 123,
+          ticketId: 45,
+          operationId: 'operation-001',
+          policySnapshotHash: 'a'.repeat(64),
+          materializerGeneration: service.generation.materializerGeneration,
+          filesystemPolicy: filesystemPolicy()
+        }),
+        expectedFilesystemPolicyHash: 'f'.repeat(64)
+      }),
+      'PROCESS_INPUT_SNAPSHOT_MISMATCH',
+      'getSnapshot rejects a substituted filesystem-policy hash'
+    );
     await rejectsCode(
       () => service.client.getSnapshot(buildGetProcessSnapshotRequest({
         snapshotId: descriptor.id,
@@ -328,7 +593,8 @@ async function main() {
         ticketId: 46,
         operationId: 'operation-001',
         policySnapshotHash: 'a'.repeat(64),
-        materializerGeneration: service.generation.materializerGeneration
+        materializerGeneration: service.generation.materializerGeneration,
+        filesystemPolicy: filesystemPolicy()
       })),
       'PROCESS_INPUT_SNAPSHOT_MISMATCH',
       'another ticket cannot substitute the sealed snapshot'
@@ -340,7 +606,8 @@ async function main() {
         ticketId: 45,
         operationId: 'operation-002',
         policySnapshotHash: 'a'.repeat(64),
-        materializerGeneration: service.generation.materializerGeneration
+        materializerGeneration: service.generation.materializerGeneration,
+        filesystemPolicy: filesystemPolicy()
       })),
       'PROCESS_INPUT_SNAPSHOT_MISMATCH',
       'another operation in the same run cannot substitute the sealed snapshot'
@@ -352,7 +619,8 @@ async function main() {
         ticketId: 45,
         operationId: 'operation-001',
         policySnapshotHash: 'a'.repeat(64),
-        materializerGeneration: service.generation.materializerGeneration
+        materializerGeneration: service.generation.materializerGeneration,
+        filesystemPolicy: filesystemPolicy()
       })),
       'PROCESS_INPUT_SNAPSHOT_MISMATCH',
       'another run cannot substitute the sealed snapshot'
@@ -364,7 +632,8 @@ async function main() {
         ticketId: 45,
         operationId: 'operation-001',
         policySnapshotHash: 'b'.repeat(64),
-        materializerGeneration: service.generation.materializerGeneration
+        materializerGeneration: service.generation.materializerGeneration,
+        filesystemPolicy: filesystemPolicy()
       })),
       'PROCESS_INPUT_SNAPSHOT_MISMATCH',
       'another policy snapshot cannot substitute the sealed snapshot'
@@ -376,7 +645,8 @@ async function main() {
         ticketId: 45,
         operationId: 'operation-001',
         policySnapshotHash: 'a'.repeat(64),
-        materializerGeneration: `materializer-v1-${'f'.repeat(64)}`
+        materializerGeneration: `materializer-v1-${'f'.repeat(64)}`,
+        filesystemPolicy: filesystemPolicy()
       })),
       'PROCESS_INPUT_GENERATION_MISMATCH',
       'another materializer generation cannot retrieve the sealed snapshot'
@@ -388,7 +658,8 @@ async function main() {
         ticketId: 45,
         operationId: 'operation-001',
         policySnapshotHash: 'a'.repeat(64),
-        materializerGeneration: service.generation.materializerGeneration
+        materializerGeneration: service.generation.materializerGeneration,
+        filesystemPolicy: filesystemPolicy()
       })),
       'PROCESS_INPUT_SNAPSHOT_NOT_FOUND',
       'staging or unpublished state cannot be retrieved as a snapshot'
@@ -416,6 +687,17 @@ async function main() {
     });
     equal(wrongIdentity.error.code, 'PROCESS_MATERIALIZER_REQUEST_INVALID',
       'service independently recomputes operation identity');
+    const modifiedFixedPolicy = await rawProtocol(fixture.socket, {
+      version: 1,
+      requestId: 'raw-fixed-policy',
+      operation: 'materialize',
+      body: {
+        ...request,
+        filesystemPolicy: filesystemPolicy({ allowSymlinks: true })
+      }
+    });
+    equal(modifiedFixedPolicy.error.code, 'PROCESS_INPUT_POLICY_INVALID',
+      'native service rejects modification of a fixed filesystem-policy field');
     await rejectsCode(
       () => service.client.materialize(requestFor(
         { materializerGeneration: `materializer-v1-${'f'.repeat(64)}` },
@@ -501,7 +783,8 @@ async function main() {
       ticketId: 45,
       operationId: 'operation-001',
       policySnapshotHash: 'a'.repeat(64),
-      materializerGeneration: service.generation.materializerGeneration
+      materializerGeneration: service.generation.materializerGeneration,
+      filesystemPolicy: filesystemPolicy()
     }));
     equal(afterRestart, descriptor,
       'sealed registry record remains valid across service restart');
@@ -523,6 +806,20 @@ async function main() {
     const invalidStart = await startExpectFailure(fixture);
     ok(invalidStart.stderr.includes('PROCESS_INPUT_REGISTRY_INVALID'),
       'invalid private registry state prevents service startup');
+    fs.chmodSync(registryPath, 0o600);
+    fs.writeFileSync(registryPath, originalRegistryBytes);
+    fs.chmodSync(registryPath, 0o440);
+
+    const tamperedPolicyHash = {
+      ...registry,
+      filesystemPolicyHash: '0'.repeat(64)
+    };
+    fs.chmodSync(registryPath, 0o600);
+    fs.writeFileSync(registryPath, canonicalJson(tamperedPolicyHash));
+    fs.chmodSync(registryPath, 0o440);
+    const policyHashStart = await startExpectFailure(fixture);
+    ok(policyHashStart.stderr.includes('PROCESS_INPUT_REGISTRY_INVALID'),
+      'registry filesystem-policy hash tampering fails startup validation');
     fs.chmodSync(registryPath, 0o600);
     fs.writeFileSync(registryPath, originalRegistryBytes);
     fs.chmodSync(registryPath, 0o440);

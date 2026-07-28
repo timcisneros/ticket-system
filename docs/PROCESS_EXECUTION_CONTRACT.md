@@ -573,7 +573,13 @@ Its trusted output descriptor is:
 The descriptor is bounded by the selected profile's immutable filesystem policy and
 bound to the run, process-policy snapshot, operation, and current materializer
 generation. A service-owned durable registry maps the opaque ID to sealed private state
-and `getSnapshot` revalidates every ownership field, manifest, count, and byte total.
+and `getSnapshot` revalidates every ownership field, the exact canonical
+`filesystemPolicyHash`, manifest, count, and byte total. Workspace allocation, sealed
+state, and socket roots are pinned as startup descriptors rather than reopened from
+configured path strings. Allocation physical identity participates in the generation.
+The sealed and socket roots are pre-provisioned by the checked-in systemd/tmpfiles
+deployment boundary. An unauthorized peer receives only the fixed uncorrelated
+`requestId: null` refusal before any request bytes are read.
 The descriptor is not a path and cannot select a mutable source location. The exact
 configuration, protocol, generation derivation, traversal/race rules, manifest, registry,
 sealing sequence, failures, and cross-UID release proof are specified in

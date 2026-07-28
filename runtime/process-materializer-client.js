@@ -76,19 +76,43 @@ function parseResponse(payload, requestId) {
     closedObject(response, ERROR_RESPONSE_KEYS, 'materializer error response');
   }
   if (response.version !== PROCESS_MATERIALIZER_PROTOCOL_VERSION ||
-      response.requestId !== requestId || typeof response.ok !== 'boolean') {
+      typeof response.ok !== 'boolean') {
     throw new ProcessMaterializerError(
       'Materializer response envelope does not match the request',
       'PROCESS_MATERIALIZER_PROTOCOL_INVALID'
     );
   }
-  if (response.ok) return response.result;
+  if (response.ok) {
+    if (response.requestId !== requestId) {
+      throw new ProcessMaterializerError(
+        'Materializer response envelope does not match the request',
+        'PROCESS_MATERIALIZER_PROTOCOL_INVALID'
+      );
+    }
+    return response.result;
+  }
   closedObject(response.error, ERROR_DOCUMENT_KEYS, 'materializer error');
   if (typeof response.error.code !== 'string' ||
       !PROCESS_MATERIALIZER_FAILURE_CODES.includes(response.error.code) ||
       typeof response.error.message !== 'string' || !response.error.message) {
     throw new ProcessMaterializerError(
       'Materializer returned an unknown or malformed typed failure',
+      'PROCESS_MATERIALIZER_PROTOCOL_INVALID'
+    );
+  }
+  if (response.requestId === null) {
+    if (response.error.code === 'PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED' &&
+        response.error.message === 'Materializer client is not authorized') {
+      throw new ProcessMaterializerError(response.error.message, response.error.code);
+    }
+    throw new ProcessMaterializerError(
+      'Only the fixed pre-authentication refusal may use a null requestId',
+      'PROCESS_MATERIALIZER_PROTOCOL_INVALID'
+    );
+  }
+  if (response.requestId !== requestId) {
+    throw new ProcessMaterializerError(
+      'Materializer response envelope does not match the request',
       'PROCESS_MATERIALIZER_PROTOCOL_INVALID'
     );
   }

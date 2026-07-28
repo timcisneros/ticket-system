@@ -4867,7 +4867,14 @@ workspace-root advisory-lock boundary, copies only regular files with descriptor
 read-exclusion policy, enforces file/byte bounds, creates a service-owned sealed tree,
 hashes the canonical output manifest, and rescans identity/type/size/content before
 publication. Its canonical fsynced private registry binds the opaque descriptor to the
-run, ticket, operation, policy hash, allocation, generation, manifest, and counts.
+run, ticket, operation, policy hash, exact canonical filesystem-policy hash, allocation,
+generation, manifest, and counts. Startup pins allocation, sealed-state, and socket
+directories by descriptor without following symbolic or magic links. Allocation physical
+identity affects the materializer generation; configured paths cannot redirect a live
+generation. Sealed and socket roots are pre-provisioned through the checked-in
+systemd/tmpfiles boundary. The fixed pre-authentication refusal uses `requestId: null`
+and preserves `PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED` without reading an unauthorized
+payload or exposing the peer UID.
 `docs/PROCESS_INPUT_MATERIALIZER.md` is the governing design.
 
 **Read-only first launch:** `inputMode` is `materialized_read_only`; writable roots are

@@ -111,6 +111,20 @@ async function main() {
   try {
     fs.mkdirSync(source, { mode: 0o750 });
     fs.chownSync(source, RUNTIME_UID, SHARED_GID);
+    fs.mkdirSync(sealed, { mode: 0o750 });
+    fs.chownSync(sealed, SERVICE_UID, SHARED_GID);
+    fs.chmodSync(sealed, 0o750);
+    fs.mkdirSync(path.dirname(socket), { mode: 0o750 });
+    fs.chownSync(path.dirname(socket), SERVICE_UID, SHARED_GID);
+    fs.chmodSync(path.dirname(socket), 0o750);
+    ok(fs.statSync(sealed).uid === SERVICE_UID &&
+      fs.statSync(sealed).gid === SHARED_GID &&
+      (fs.statSync(sealed).mode & 0o7777) === 0o750,
+    'sealed state root is pre-provisioned with the deployment ownership and mode');
+    ok(fs.statSync(path.dirname(socket)).uid === SERVICE_UID &&
+      fs.statSync(path.dirname(socket)).gid === SHARED_GID &&
+      (fs.statSync(path.dirname(socket)).mode & 0o7777) === 0o750,
+    'socket directory is pre-provisioned with the deployment ownership and mode');
     fs.writeFileSync(path.join(source, 'input.txt'), 'cross uid input\n', { mode: 0o640 });
     fs.chownSync(path.join(source, 'input.txt'), RUNTIME_UID, SHARED_GID);
     fs.copyFileSync(path.join(ROOT, 'config/process-input-policy.json'), policy);
@@ -212,9 +226,12 @@ async function main() {
       'failed runtime mutation leaves sealed bytes intact');
 
     const unauthorized = runClient(UNAUTHORIZED_UID, clientScript, healthFile);
+    const unauthorizedError = JSON.parse(unauthorized.stderr);
     ok(unauthorized.status !== 0 &&
-      unauthorized.stderr.includes('PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED'),
-    'unauthorized UID is rejected by SO_PEERCRED after reaching the group-readable socket');
+      unauthorizedError.code === 'PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED' &&
+      unauthorizedError.message === 'Materializer client is not authorized' &&
+      !unauthorized.stderr.includes(String(UNAUTHORIZED_UID)),
+    'unauthorized UID observes the exact non-identifying pre-authentication refusal');
     ok(!path.resolve(sealed).startsWith(`${path.resolve(source)}${path.sep}`),
       'source workspace contains no path into sealed storage');
 

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -16,23 +16,24 @@ use sha2::{Digest, Sha256};
 use crate::contract::{
     EmptyBody, ErrorDocument, ErrorResponse, GetSnapshotBody, MANIFEST_SCHEMA_VERSION,
     MAX_MESSAGE_BYTES, MaterializeBody, MaterializerError, MaterializerGeneration,
-    PROCESS_INPUT_GENERATION_MISMATCH, PROCESS_INPUT_MANIFEST_INVALID, PROCESS_INPUT_PATH_INVALID,
+    PROCESS_INPUT_GENERATION_MISMATCH, PROCESS_INPUT_MANIFEST_INVALID,
     PROCESS_INPUT_REGISTRY_INVALID, PROCESS_INPUT_SNAPSHOT_MISMATCH,
     PROCESS_INPUT_SNAPSHOT_NOT_FOUND, PROCESS_INPUT_SNAPSHOT_SEAL_FAILED,
-    PROCESS_INPUT_STORAGE_UNAVAILABLE, PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED,
-    PROCESS_MATERIALIZER_PROTOCOL_INVALID, PROCESS_MATERIALIZER_REQUEST_INVALID,
-    PROCESS_MATERIALIZER_UNAVAILABLE, PROCESS_WORKSPACE_ALLOCATION_UNKNOWN, PROTOCOL_VERSION,
-    ProcessInputPolicy, ProtocolOperation, REGISTRY_SCHEMA_VERSION, RegistryRecord,
-    RequestEnvelope, Result, ServiceConfig, SuccessResponse, WorkspaceSnapshotDescriptor,
-    canonical_struct_json, sha256_bytes, validate_get_snapshot_body, validate_identifier,
-    validate_materialize_body, validate_sha256,
+    PROCESS_INPUT_SOURCE_CHANGED, PROCESS_INPUT_STORAGE_UNAVAILABLE,
+    PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED, PROCESS_MATERIALIZER_PROTOCOL_INVALID,
+    PROCESS_MATERIALIZER_REQUEST_INVALID, PROCESS_MATERIALIZER_UNAVAILABLE,
+    PROCESS_WORKSPACE_ALLOCATION_UNKNOWN, PROTOCOL_VERSION, ProcessInputPolicy, ProtocolOperation,
+    REGISTRY_SCHEMA_VERSION, RegistryRecord, RequestEnvelope, Result, ServiceConfig,
+    SuccessResponse, WorkspaceSnapshotDescriptor, canonical_struct_json, filesystem_policy_hash,
+    sha256_bytes, validate_get_snapshot_body, validate_identifier, validate_materialize_body,
+    validate_sha256,
 };
 use crate::filesystem::{
-    materialize_source_tree, revalidate_materialized_source, sync_directory, validate_manifest,
-    verify_sealed_tree, write_and_sync_file,
+    PinnedDirectory, materialize_source_tree_from_descriptor, physical_directories_overlap,
+    revalidate_materialized_source_from_descriptor, same_physical_directory, sync_directory,
+    validate_manifest, verify_sealed_tree, write_and_sync_file,
 };
 
-const SOCKET_DIRECTORY_MODE: u32 = 0o750;
 const SOCKET_MODE: u32 = 0o660;
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const REGISTRY_FILE_MODE: u32 = 0o440;
@@ -48,6 +49,10 @@ struct ServiceState {
     config: ServiceConfig,
     input_policy: ProcessInputPolicy,
     generation: MaterializerGeneration,
+    allocations: BTreeMap<String, PinnedDirectory>,
+    _sealed_root: PinnedDirectory,
+    socket_directory: PinnedDirectory,
+    socket_name: String,
     staging: PathBuf,
     sealed: PathBuf,
     registry: PathBuf,
@@ -60,10 +65,13 @@ impl MaterializerService {
     pub fn new(config: ServiceConfig) -> Result<Self> {
         config.validate()?;
         let input_policy = ProcessInputPolicy::load(&config.input_policy_path)?;
-        validate_source_roots(&config)?;
-        let root = PathBuf::from(&config.sealed_snapshot_root);
-        create_private_directory(&root)?;
-        validate_source_roots(&config)?;
+        let allocations = pin_workspace_allocations(&config)?;
+        let sealed_root = PinnedDirectory::open_absolute(Path::new(&config.sealed_snapshot_root))?;
+        validate_service_owned_root(&sealed_root, "sealedSnapshotRoot", None)?;
+        let (socket_directory, socket_name) = pin_socket_directory(&config)?;
+        validate_existing_socket_entry(&socket_directory, &socket_name)?;
+        validate_physical_boundaries(&config, &allocations, &sealed_root, &socket_directory)?;
+        let root = sealed_root.proc_path();
         let staging = root.join("staging");
         let sealed = root.join("sealed");
         let registry = root.join("registry");
@@ -72,12 +80,16 @@ impl MaterializerService {
             create_private_directory(directory)?;
         }
         clear_abandoned_staging(&staging)?;
-        let generation = derive_generation(&config, &input_policy)?;
+        let generation = derive_generation(&config, &input_policy, &allocations)?;
         let records = load_and_validate_registry(&registry, &sealed)?;
         let state = ServiceState {
             config,
             input_policy,
             generation,
+            allocations,
+            _sealed_root: sealed_root,
+            socket_directory,
+            socket_name,
             staging,
             sealed,
             registry,
@@ -98,8 +110,9 @@ impl MaterializerService {
     }
 
     pub fn serve(self) -> Result<()> {
-        let socket_path = PathBuf::from(&self.state.config.socket_path);
-        prepare_socket_path(&socket_path)?;
+        self.state.socket_directory.set_as_current_directory()?;
+        let socket_path =
+            prepare_socket_path(&self.state.socket_directory, &self.state.socket_name)?;
         let listener = UnixListener::bind(&socket_path).map_err(|error| {
             MaterializerError::new(
                 PROCESS_MATERIALIZER_UNAVAILABLE,
@@ -141,9 +154,9 @@ fn handle_connection(state: &ServiceState, mut stream: UnixStream) -> Result<()>
     if peer_uid != state.config.allowed_client_uid {
         let error = MaterializerError::new(
             PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED,
-            format!("peer UID {peer_uid} is not the configured runtime UID"),
+            "Materializer client is not authorized",
         );
-        let _ = write_response(&mut stream, &error_response("peer", &error));
+        let _ = write_response(&mut stream, &pre_authentication_error_response());
         return Err(error);
     }
     let request_bytes = read_frame(&mut stream)?;
@@ -159,7 +172,10 @@ fn handle_connection(state: &ServiceState, mut stream: UnixStream) -> Result<()>
             PROCESS_MATERIALIZER_PROTOCOL_INVALID,
             "request protocol version must be 1",
         );
-        write_response(&mut stream, &error_response(&envelope.request_id, &error))?;
+        write_response(
+            &mut stream,
+            &error_response(Some(&envelope.request_id), &error),
+        )?;
         return Ok(());
     }
 
@@ -171,9 +187,8 @@ fn handle_connection(state: &ServiceState, mut stream: UnixStream) -> Result<()>
             result,
         })
         .map_err(protocol)?,
-        Err(error) => {
-            serde_json::to_value(error_response(&envelope.request_id, &error)).map_err(protocol)?
-        }
+        Err(error) => serde_json::to_value(error_response(Some(&envelope.request_id), &error))
+            .map_err(protocol)?,
     };
     write_response(&mut stream, &response)
 }
@@ -210,10 +225,8 @@ fn materialize(
         ));
     }
     let allocation = state
-        .config
-        .workspace_allocations
-        .iter()
-        .find(|allocation| allocation.id == request.workspace_allocation_id)
+        .allocations
+        .get(&request.workspace_allocation_id)
         .ok_or_else(|| {
             MaterializerError::new(
                 PROCESS_WORKSPACE_ALLOCATION_UNKNOWN,
@@ -226,6 +239,8 @@ fn materialize(
             "materializer serialization lock is poisoned",
         )
     })?;
+    validate_pinned_source_identity(allocation)?;
+    validate_service_owned_root(&state._sealed_root, "sealedSnapshotRoot", None)?;
 
     {
         let records = state.records.lock().map_err(registry_lock)?;
@@ -255,8 +270,9 @@ fn materialize(
     .map_err(storage)?;
     let staging_tree = staging_root.join("tree");
 
-    let materialized = match materialize_source_tree(
-        Path::new(&allocation.source_root),
+    let source_root = allocation.duplicate()?;
+    let materialized = match materialize_source_tree_from_descriptor(
+        &source_root,
         &staging_tree,
         &state.input_policy,
         &request.filesystem_policy,
@@ -280,8 +296,9 @@ fn materialize(
         return Err(error);
     }
     sync_directory(&staging_root)?;
-    if let Err(error) = revalidate_materialized_source(
-        Path::new(&allocation.source_root),
+    let rescan_root = allocation.duplicate()?;
+    if let Err(error) = revalidate_materialized_source_from_descriptor(
+        &rescan_root,
         &state.input_policy,
         &request.filesystem_policy,
         &materialized,
@@ -290,6 +307,7 @@ fn materialize(
         let _ = fs::remove_dir_all(&staging_root);
         return Err(error);
     }
+    validate_pinned_source_identity(allocation)?;
 
     let final_root = state.sealed.join(&snapshot_id);
     fs::rename(&staging_root, &final_root).map_err(|error| {
@@ -300,6 +318,7 @@ fn materialize(
     })?;
     sync_directory(&state.sealed)?;
 
+    let request_filesystem_policy_hash = filesystem_policy_hash(&request.filesystem_policy)?;
     let record = RegistryRecord {
         version: REGISTRY_SCHEMA_VERSION,
         snapshot_id: snapshot_id.clone(),
@@ -313,6 +332,8 @@ fn materialize(
         materializer_generation: state.generation.materializer_generation.clone(),
         materializer_identity_hash: state.generation.materializer_identity_hash.clone(),
         input_policy_hash: state.generation.input_policy_hash.clone(),
+        filesystem_policy: request.filesystem_policy.clone(),
+        filesystem_policy_hash: request_filesystem_policy_hash,
         manifest_schema_version: MANIFEST_SCHEMA_VERSION,
         manifest_sha256: materialized.manifest_sha256,
         file_count: materialized.file_count,
@@ -354,7 +375,8 @@ fn get_snapshot(
         && record.operation_id == request.expected_operation_id
         && record.operation_identity == request.expected_operation_identity
         && record.policy_snapshot_hash == request.expected_policy_snapshot_hash
-        && record.materializer_generation == request.expected_materializer_generation;
+        && record.materializer_generation == request.expected_materializer_generation
+        && record.filesystem_policy_hash == request.expected_filesystem_policy_hash;
     if !matches {
         return Err(MaterializerError::new(
             PROCESS_INPUT_SNAPSHOT_MISMATCH,
@@ -445,6 +467,10 @@ fn public_descriptor(record: &RegistryRecord) -> WorkspaceSnapshotDescriptor {
 }
 
 fn record_matches_materialize_request(record: &RegistryRecord, request: &MaterializeBody) -> bool {
+    let Ok(request_filesystem_policy_hash) = filesystem_policy_hash(&request.filesystem_policy)
+    else {
+        return false;
+    };
     record.state == "sealed"
         && record.run_id == request.run_id
         && record.ticket_id == request.ticket_id
@@ -453,6 +479,8 @@ fn record_matches_materialize_request(record: &RegistryRecord, request: &Materia
         && record.workspace_allocation_id == request.workspace_allocation_id
         && record.policy_snapshot_hash == request.policy_snapshot_hash
         && record.materializer_generation == request.materializer_generation
+        && record.filesystem_policy == request.filesystem_policy
+        && record.filesystem_policy_hash == request_filesystem_policy_hash
 }
 
 fn persist_registry_record(state: &ServiceState, record: &RegistryRecord) -> Result<()> {
@@ -508,11 +536,20 @@ fn validate_registry_record(record: &RegistryRecord) -> Result<()> {
             "materializerIdentityHash",
         ),
         (&record.input_policy_hash, "inputPolicyHash"),
+        (&record.filesystem_policy_hash, "filesystemPolicyHash"),
         (&record.manifest_sha256, "manifestSha256"),
     ] {
         validate_sha256(value, label).map_err(|error| {
             MaterializerError::new(PROCESS_INPUT_REGISTRY_INVALID, error.message)
         })?;
+    }
+    let expected_filesystem_policy_hash = filesystem_policy_hash(&record.filesystem_policy)
+        .map_err(|error| MaterializerError::new(PROCESS_INPUT_REGISTRY_INVALID, error.message))?;
+    if expected_filesystem_policy_hash != record.filesystem_policy_hash {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_REGISTRY_INVALID,
+            "private registry filesystem policy hash is inconsistent",
+        ));
     }
     let expected = crate::contract::build_operation_identity(record.run_id, &record.operation_id)
         .map_err(|error| {
@@ -622,6 +659,7 @@ fn load_and_validate_registry(
 fn derive_generation(
     config: &ServiceConfig,
     input_policy: &ProcessInputPolicy,
+    allocations: &BTreeMap<String, PinnedDirectory>,
 ) -> Result<MaterializerGeneration> {
     let executable = std::env::current_exe().map_err(storage)?;
     let materializer_identity_hash = sha256_file(&executable)?;
@@ -638,7 +676,22 @@ fn derive_generation(
         paths.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     }
     let trusted_configuration_hash = sha256_bytes(&canonical_struct_json(&canonical_config)?);
+    let allocation_identities = allocations
+        .iter()
+        .map(|(id, allocation)| {
+            let identity = allocation.identity();
+            serde_json::json!({
+                "device": identity.device,
+                "id": id,
+                "inode": identity.inode,
+                "mode": identity.mode,
+                "ownerGid": identity.owner_gid,
+                "ownerUid": identity.owner_uid
+            })
+        })
+        .collect::<Vec<_>>();
     let authority = serde_json::json!({
+        "allocationPhysicalIdentities": allocation_identities,
         "inputPolicyHash": input_policy_hash,
         "manifestSchemaVersion": MANIFEST_SCHEMA_VERSION,
         "materializerIdentityHash": materializer_identity_hash,
@@ -656,37 +709,124 @@ fn derive_generation(
     })
 }
 
-fn validate_source_roots(config: &ServiceConfig) -> Result<()> {
-    let configured_sealed = Path::new(&config.sealed_snapshot_root);
-    let sealed =
-        fs::canonicalize(configured_sealed).unwrap_or_else(|_| configured_sealed.to_path_buf());
+fn pin_workspace_allocations(config: &ServiceConfig) -> Result<BTreeMap<String, PinnedDirectory>> {
+    let mut pinned = BTreeMap::new();
     for allocation in &config.workspace_allocations {
-        let source = Path::new(&allocation.source_root);
-        let metadata = fs::symlink_metadata(source).map_err(|error| {
-            MaterializerError::new(
-                PROCESS_INPUT_STORAGE_UNAVAILABLE,
-                format!(
-                    "workspace allocation {} is unavailable: {error}",
-                    allocation.id
-                ),
-            )
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(MaterializerError::new(
-                PROCESS_INPUT_PATH_INVALID,
-                format!(
-                    "workspace allocation {} sourceRoot must be a real directory",
-                    allocation.id
-                ),
-            ));
-        }
-        let canonical_source = fs::canonicalize(source).map_err(storage)?;
-        if paths_overlap(&canonical_source, &sealed) {
+        let root = PinnedDirectory::open_absolute(Path::new(&allocation.source_root)).map_err(
+            |error| {
+                MaterializerError::new(
+                    error.code,
+                    format!(
+                        "workspace allocation {} cannot be pinned: {}",
+                        allocation.id, error.message
+                    ),
+                )
+            },
+        )?;
+        if pinned
+            .values()
+            .any(|existing| same_physical_directory(existing, &root))
+        {
             return Err(MaterializerError::new(
                 PROCESS_MATERIALIZER_REQUEST_INVALID,
-                "configured source and sealed roots overlap",
+                "workspace allocations must identify distinct physical directories",
             ));
         }
+        pinned.insert(allocation.id.clone(), root);
+    }
+    Ok(pinned)
+}
+
+fn validate_service_owned_root(
+    root: &PinnedDirectory,
+    label: &str,
+    exact_mode: Option<u32>,
+) -> Result<()> {
+    let identity = root.current_identity()?;
+    if identity != root.identity() {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_STORAGE_UNAVAILABLE,
+            format!("{label} identity or authority changed after startup"),
+        ));
+    }
+    let service_uid = unsafe { libc::geteuid() };
+    if identity.owner_uid != service_uid {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_STORAGE_UNAVAILABLE,
+            format!("{label} must be owned by the materializer service UID"),
+        ));
+    }
+    if identity.mode & 0o022 != 0 {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_STORAGE_UNAVAILABLE,
+            format!("{label} must not be group- or world-writable"),
+        ));
+    }
+    if let Some(mode) = exact_mode
+        && identity.mode != mode
+    {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_STORAGE_UNAVAILABLE,
+            format!("{label} must have mode {mode:04o}"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_pinned_source_identity(root: &PinnedDirectory) -> Result<()> {
+    if root.current_identity()? != root.identity() {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_SOURCE_CHANGED,
+            "workspace allocation root identity or mode changed after startup",
+        ));
+    }
+    Ok(())
+}
+
+fn pin_socket_directory(config: &ServiceConfig) -> Result<(PinnedDirectory, String)> {
+    let socket_path = Path::new(&config.socket_path);
+    let parent = socket_path.parent().ok_or_else(|| {
+        MaterializerError::new(
+            PROCESS_MATERIALIZER_REQUEST_INVALID,
+            "socketPath has no parent directory",
+        )
+    })?;
+    let name = socket_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+        .ok_or_else(|| {
+            MaterializerError::new(
+                PROCESS_MATERIALIZER_REQUEST_INVALID,
+                "socketPath must end in one valid UTF-8 entry name",
+            )
+        })?;
+    let directory = PinnedDirectory::open_absolute(parent)?;
+    validate_service_owned_root(&directory, "materializer socket directory", Some(0o750))?;
+    Ok((directory, name.to_owned()))
+}
+
+fn validate_physical_boundaries(
+    config: &ServiceConfig,
+    allocations: &BTreeMap<String, PinnedDirectory>,
+    sealed: &PinnedDirectory,
+    socket_directory: &PinnedDirectory,
+) -> Result<()> {
+    for allocation in allocations.values() {
+        if physical_directories_overlap(sealed, allocation)?
+            || physical_directories_overlap(socket_directory, allocation)?
+        {
+            return Err(MaterializerError::new(
+                PROCESS_MATERIALIZER_REQUEST_INVALID,
+                "workspace allocation physically overlaps sealed storage or socket directory",
+            ));
+        }
+    }
+    if physical_directories_overlap(sealed, socket_directory)? {
+        return Err(MaterializerError::new(
+            PROCESS_MATERIALIZER_REQUEST_INVALID,
+            "sealed storage physically overlaps the socket directory",
+        ));
     }
     for candidate in config
         .protected_host_paths
@@ -696,38 +836,25 @@ fn validate_source_roots(config: &ServiceConfig) -> Result<()> {
         .chain(config.protected_host_paths.database.iter())
         .map(Path::new)
     {
-        let canonical = fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
-        if paths_overlap(&sealed, &canonical) {
-            return Err(MaterializerError::new(
-                PROCESS_MATERIALIZER_REQUEST_INVALID,
-                "sealedSnapshotRoot overlaps a protected runtime, artifact, or database path",
-            ));
+        if candidate.exists() {
+            let protected = PinnedDirectory::open_absolute(candidate)?;
+            if physical_directories_overlap(sealed, &protected)? {
+                return Err(MaterializerError::new(
+                    PROCESS_MATERIALIZER_REQUEST_INVALID,
+                    "sealedSnapshotRoot physically overlaps a protected host path",
+                ));
+            }
         }
-    }
-    let socket = Path::new(&config.socket_path);
-    let canonical_socket = socket
-        .parent()
-        .and_then(|parent| {
-            fs::canonicalize(parent)
-                .ok()
-                .map(|value| value.join(socket.file_name().unwrap_or_default()))
-        })
-        .unwrap_or_else(|| socket.to_path_buf());
-    if paths_overlap(&sealed, &canonical_socket) {
-        return Err(MaterializerError::new(
-            PROCESS_MATERIALIZER_REQUEST_INVALID,
-            "sealedSnapshotRoot overlaps the materializer socket path",
-        ));
     }
     Ok(())
 }
 
-fn paths_overlap(left: &Path, right: &Path) -> bool {
-    left == right || left.starts_with(right) || right.starts_with(left)
-}
-
 fn create_private_directory(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).map_err(storage)?;
+    match fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(storage(error)),
+    }
     let metadata = fs::symlink_metadata(path).map_err(storage)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(MaterializerError::new(
@@ -736,6 +863,12 @@ fn create_private_directory(path: &Path) -> Result<()> {
                 "private storage path is not a real directory: {}",
                 path.display()
             ),
+        ));
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_STORAGE_UNAVAILABLE,
+            "private storage directory is not owned by the materializer service UID",
         ));
     }
     fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE)).map_err(storage)
@@ -787,19 +920,20 @@ fn quarantine_unregistered_tree(state: &ServiceState, snapshot_id: &str) -> Resu
     sync_directory(&state.quarantine)
 }
 
-fn prepare_socket_path(socket_path: &Path) -> Result<()> {
-    let parent = socket_path.parent().ok_or_else(|| {
-        MaterializerError::new(
-            PROCESS_MATERIALIZER_UNAVAILABLE,
-            "socketPath has no parent directory",
-        )
-    })?;
-    fs::create_dir_all(parent).map_err(storage)?;
-    fs::set_permissions(parent, fs::Permissions::from_mode(SOCKET_DIRECTORY_MODE))
-        .map_err(storage)?;
-    match fs::symlink_metadata(socket_path) {
+fn prepare_socket_path(directory: &PinnedDirectory, socket_name: &str) -> Result<PathBuf> {
+    validate_service_owned_root(directory, "materializer socket directory", Some(0o750))?;
+    let socket_path = PathBuf::from(socket_name);
+    match fs::symlink_metadata(&socket_path) {
+        Ok(metadata)
+            if metadata.file_type().is_socket() && metadata.uid() == unsafe { libc::geteuid() } =>
+        {
+            fs::remove_file(&socket_path).map_err(storage)?;
+        }
         Ok(metadata) if metadata.file_type().is_socket() => {
-            fs::remove_file(socket_path).map_err(storage)?;
+            return Err(MaterializerError::new(
+                PROCESS_MATERIALIZER_UNAVAILABLE,
+                "socketPath contains a socket not owned by the materializer service",
+            ));
         }
         Ok(_) => {
             return Err(MaterializerError::new(
@@ -810,7 +944,28 @@ fn prepare_socket_path(socket_path: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(storage(error)),
     }
-    Ok(())
+    Ok(socket_path)
+}
+
+fn validate_existing_socket_entry(directory: &PinnedDirectory, socket_name: &str) -> Result<()> {
+    let socket_path = directory.proc_path().join(socket_name);
+    match fs::symlink_metadata(socket_path) {
+        Ok(metadata)
+            if metadata.file_type().is_socket() && metadata.uid() == unsafe { libc::geteuid() } =>
+        {
+            Ok(())
+        }
+        Ok(metadata) if metadata.file_type().is_socket() => Err(MaterializerError::new(
+            PROCESS_MATERIALIZER_UNAVAILABLE,
+            "socketPath contains a socket not owned by the materializer service",
+        )),
+        Ok(_) => Err(MaterializerError::new(
+            PROCESS_MATERIALIZER_UNAVAILABLE,
+            "socketPath exists and is not a Unix socket",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(storage(error)),
+    }
 }
 
 fn peer_uid(stream: &UnixStream) -> Result<u32> {
@@ -879,14 +1034,26 @@ fn write_response<T: Serialize>(stream: &mut UnixStream, response: &T) -> Result
         })
 }
 
-fn error_response(request_id: &str, error: &MaterializerError) -> ErrorResponse {
+fn error_response(request_id: Option<&str>, error: &MaterializerError) -> ErrorResponse {
     ErrorResponse {
         version: PROTOCOL_VERSION,
-        request_id: request_id.to_owned(),
+        request_id: request_id.map(str::to_owned),
         ok: false,
         error: ErrorDocument {
             code: error.code.to_owned(),
             message: error.message.clone(),
+        },
+    }
+}
+
+fn pre_authentication_error_response() -> ErrorResponse {
+    ErrorResponse {
+        version: PROTOCOL_VERSION,
+        request_id: None,
+        ok: false,
+        error: ErrorDocument {
+            code: PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED.to_owned(),
+            message: "Materializer client is not authorized".to_owned(),
         },
     }
 }
@@ -1033,17 +1200,18 @@ mod tests {
         };
         config.validate().unwrap();
         let policy = ProcessInputPolicy::load(&config.input_policy_path).unwrap();
-        let first = derive_generation(&config, &policy).unwrap();
-        let second = derive_generation(&config, &policy).unwrap();
+        let allocations = pin_workspace_allocations(&config).unwrap();
+        let first = derive_generation(&config, &policy, &allocations).unwrap();
+        let second = derive_generation(&config, &policy, &allocations).unwrap();
         assert_eq!(first, second);
         let mut changed = policy.clone();
         changed.excluded_basenames.push("extra".into());
         changed.validate_and_canonicalize().unwrap();
-        let third = derive_generation(&config, &changed).unwrap();
+        let third = derive_generation(&config, &changed, &allocations).unwrap();
         assert_ne!(first.materializer_generation, third.materializer_generation);
         let mut changed_config = config.clone();
         changed_config.allowed_client_uid += 1;
-        let fourth = derive_generation(&changed_config, &policy).unwrap();
+        let fourth = derive_generation(&changed_config, &policy, &allocations).unwrap();
         assert_ne!(
             first.materializer_generation,
             fourth.materializer_generation
@@ -1074,5 +1242,18 @@ mod tests {
         }))
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn pre_authentication_refusal_is_fixed_and_uncorrelated() {
+        let bytes = canonical_struct_json(&pre_authentication_error_response()).unwrap();
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            concat!(
+                "{\"error\":{\"code\":\"PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED\",",
+                "\"message\":\"Materializer client is not authorized\"},",
+                "\"ok\":false,\"requestId\":null,\"version\":1}"
+            )
+        );
     }
 }

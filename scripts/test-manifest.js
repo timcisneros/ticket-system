@@ -190,6 +190,7 @@ const TESTS = Object.freeze([
   { file: "process-launch-plan-test.js", status: "required" },
   { file: "process-materializer-contract-test.js", status: "required" },
   { file: "process-materializer-cross-uid-test.js", status: "required" },
+  { file: "process-materializer-deployment-test.js", status: "required" },
   { file: "process-materializer-linux-test.js", status: "required" },
   { file: "process-materializer-native-test.js", status: "required" },
   { file: "process-execution-runtime-test.js", status: "required" },
