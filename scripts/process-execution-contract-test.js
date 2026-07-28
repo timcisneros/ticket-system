@@ -9,9 +9,13 @@ const {
   PROCESS_EVIDENCE_CONTRACT,
   PROCESS_IDENTIFIER_MAX_LENGTH,
   PROCESS_INLINE_OUTPUT_MAX_BYTES,
+  PROCESS_NETWORK_ACCESS_NONE_MEANING,
   PROCESS_OPERATION,
   PROCESS_PHASE_AUTHORITY_RULE,
+  PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2,
+  PROCESS_POLICY_SNAPSHOT_VERSION,
   PROCESS_PRE_EXECUTION_EVIDENCE_FIELDS,
+  PROCESS_RESOURCE_LIMIT_CAUSES,
   PROCESS_TERMINAL_EVIDENCE_FIELDS,
   PROCESS_TERMINAL_OUTCOMES,
   buildHistoricalProcessPolicySnapshotV1,
@@ -29,6 +33,7 @@ const {
   restoreProcessOperationResolution,
   validateProcessEvidenceRecord,
   validateProcessOperationResolutionRecord,
+  validateProcessResourceLimitCause,
   validateProcessTerminalOutcome
 } = require('../runtime/process-execution-contract');
 
@@ -145,6 +150,67 @@ const enabledSnapshot = buildProcessPolicySnapshot({
   }],
   capturedAt: '2026-07-27T12:00:00.000Z'
 });
+equal(enabledSnapshot.version, PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2,
+  'legacy resolved profiles continue to build historical version-2 snapshots');
+
+const versionThreeSnapshot = buildProcessPolicySnapshot({
+  version: PROCESS_POLICY_SNAPSHOT_VERSION,
+  capabilityEnabled: true,
+  profiles: [{
+    targetId: 'trusted-target',
+    profileId: 'readonly-profile',
+    allowedPhases: ['inspection'],
+    runtimeRootfs: {
+      id: 'node-24-runtime-v1',
+      manifestSha256: 'a'.repeat(64)
+    },
+    executableIdentity: {
+      path: '/usr/bin/node',
+      sha256: 'b'.repeat(64),
+      format: 'elf'
+    },
+    arguments: ['--check', 'server.js'],
+    workingDirectory: '.',
+    environment: { CI: '1' },
+    filesystemPolicy: {
+      inputMode: 'materialized_read_only',
+      writableRoots: [],
+      allowSymlinks: false,
+      allowSpecialFiles: false,
+      maxInputFiles: 10000,
+      maxInputBytes: 268435456
+    },
+    limits: {
+      wallTimeMs: 30000,
+      maxOutputBytes: 1048576,
+      maxProcesses: 8,
+      memoryBytes: 268435456,
+      cpuQuotaMicrosPer100ms: 100000,
+      maxOpenFiles: 128,
+      maxFileBytes: 16777216,
+      maxTempBytes: 67108864
+    },
+    executionPolicy: {
+      shell: false,
+      stdin: 'disabled',
+      detached: false,
+      networkAccess: 'none',
+      environmentMode: 'replace'
+    }
+  }],
+  capturedAt: '2026-07-27T12:00:00.000Z'
+});
+equal(versionThreeSnapshot.version, 3, 'complete authority builds a version-3 snapshot');
+equal(
+  normalizeProcessPolicySnapshot(JSON.parse(JSON.stringify(versionThreeSnapshot))),
+  versionThreeSnapshot,
+  'version-3 snapshot survives persistence normalization deterministically'
+);
+equal(processAuthorityReferences(versionThreeSnapshot, 'inspection'), [],
+  'version-3 snapshot alone does not advertise model-dispatchable authority');
+equal(resolveProcessOperationRequest(request, versionThreeSnapshot, 'inspection').code,
+  'PROCESS_EXECUTOR_UNAVAILABLE',
+  'direct version-3 resolution remains executor-free');
 equal(
   resolveProcessOperationRequest({
     ...request,
@@ -297,11 +363,16 @@ throwsCode(
 );
 const contractSource = fs.readFileSync(path.join(ROOT, 'runtime/process-execution-contract.js'), 'utf8');
 const targetCatalogSource = fs.readFileSync(path.join(ROOT, 'runtime/process-target-catalog.js'), 'utf8');
+const launchPlanSource = fs.readFileSync(path.join(ROOT, 'runtime/process-launch-plan.js'), 'utf8');
 const serverSource = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-ok(!/require\s*\(\s*['"]child_process['"]\s*\)/.test(contractSource + targetCatalogSource),
-  'process contract and catalog import no child_process API');
-ok(!/\b(?:spawn|execFile|exec)\s*\(/.test(contractSource + targetCatalogSource),
-  'process contract and catalog contain no process-launch call');
+const processAuthoritySource = contractSource + targetCatalogSource + launchPlanSource;
+ok(!/require\s*\(\s*['"]child_process['"]\s*\)/.test(processAuthoritySource),
+  'process authority and launch-plan contracts import no child_process API');
+ok(!/\b(?:spawn|execFile|exec)\s*\(/.test(processAuthoritySource),
+  'process authority and launch-plan contracts contain no process-launch call');
+ok(!/\b(?:bwrap|bubblewrap|systemctl|systemd-run|unshare|nsenter|cgexec|cgcreate)\b/i
+  .test(processAuthoritySource),
+'process authority and launch-plan contracts invoke no sandbox or service command');
 const phaseCatalogSource = serverSource.match(/const PHASE_OPERATIONS = \{[\s\S]*?\n\};/);
 ok(Boolean(phaseCatalogSource) &&
   !phaseCatalogSource[0].includes('runProcess') &&
@@ -415,6 +486,11 @@ const terminalEvidenceByOutcome = {
     terminalOutcome: 'output_limit_exceeded',
     enforcementCause: { kind: 'output_limit' }
   },
+  resource_limit_exceeded: {
+    ...completedEvidence,
+    terminalOutcome: 'resource_limit_exceeded',
+    enforcementCause: { kind: 'resource_limit', cause: 'memory' }
+  },
   policy_denied: evidence,
   runtime_interrupted: {
     ...completedEvidence,
@@ -426,6 +502,35 @@ for (const outcome of PROCESS_TERMINAL_OUTCOMES) {
   equal(validateProcessEvidenceRecord(terminalEvidenceByOutcome[outcome]),
     terminalEvidenceByOutcome[outcome],
     `terminal evidence schema accepts a well-formed ${outcome} record`);
+}
+equal(PROCESS_RESOURCE_LIMIT_CAUSES, [
+  'memory',
+  'process_count',
+  'cpu',
+  'open_files',
+  'file_size',
+  'temporary_storage',
+  'launcher_capacity'
+], 'resource-limit causes are a frozen structured taxonomy');
+for (const cause of PROCESS_RESOURCE_LIMIT_CAUSES) {
+  equal(validateProcessResourceLimitCause({
+    kind: 'resource_limit',
+    cause
+  }), {
+    kind: 'resource_limit',
+    cause
+  }, `resource-limit cause ${cause} is accepted`);
+}
+for (const malformedCause of [
+  { kind: 'resource_limit', cause: 'unknown' },
+  { kind: 'memory', cause: 'memory' },
+  { kind: 'resource_limit' },
+  { kind: 'resource_limit', cause: 'memory', detail: 'extra' },
+  'memory'
+]) {
+  assert.throws(() => validateProcessResourceLimitCause(malformedCause), TypeError);
+  passed += 1;
+  console.log(`  ok malformed resource-limit cause is rejected: ${JSON.stringify(malformedCause)}`);
 }
 
 const malformedEvidenceCases = [
@@ -524,6 +629,11 @@ equal(PROCESS_AUTHORITY_RULE, [
   'The target configuration grants authority.',
   'Process output is evidence, not authority.'
 ], 'authority rule is exact');
+equal(
+  PROCESS_NETWORK_ACCESS_NONE_MEANING,
+  'The process and its descendants cannot communicate with anything outside their operation sandbox.',
+  'networkAccess none has an exact external-communication meaning'
+);
 equal(PROCESS_PHASE_AUTHORITY_RULE, [
   'A process profile declares its permitted runtime phase.',
   'The run snapshot captures that declaration.',

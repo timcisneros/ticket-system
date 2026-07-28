@@ -561,6 +561,85 @@ async function main() {
       assert(!JSON.stringify(disabled.replay.providerRequests || []).includes('runProcess'),
         'feature-disabled model envelopes never advertise runProcess');
 
+      await server.stop();
+      fs.writeFileSync(catalogPath, JSON.stringify({
+        version: 2,
+        runtimeRootfs: [{
+          id: 'node-24-fedora-runtime-v1',
+          manifestSha256: 'a'.repeat(64)
+        }],
+        targets: [{
+          id: 'ticket-system-local',
+          profiles: [{
+            id: 'inspection-check',
+            allowedPhases: ['inspection'],
+            runtimeRootfsId: 'node-24-fedora-runtime-v1',
+            executableIdentity: {
+              path: '/usr/bin/node',
+              sha256: 'b'.repeat(64),
+              format: 'elf'
+            },
+            arguments: ['--check', 'server.js'],
+            workingDirectory: '.',
+            environment: { CI: '1' },
+            filesystemPolicy: {
+              inputMode: 'materialized_read_only',
+              writableRoots: [],
+              allowSymlinks: false,
+              allowSpecialFiles: false,
+              maxInputFiles: 10000,
+              maxInputBytes: 268435456
+            },
+            limits: {
+              wallTimeMs: 30000,
+              maxOutputBytes: 1048576,
+              maxProcesses: 8,
+              memoryBytes: 268435456,
+              cpuQuotaMicrosPer100ms: 100000,
+              maxOpenFiles: 128,
+              maxFileBytes: 16777216,
+              maxTempBytes: 67108864
+            }
+          }]
+        }]
+      }, null, 2));
+      const versionThreeAgent = await createAgent('ProcessVersionThree', [{
+        targetId: 'ticket-system-local',
+        profileIds: ['inspection-check']
+      }]);
+      server = await startServer({
+        NODE_OPTIONS: `--require ${preloadPath}`,
+        ENABLE_PROCESS_EXECUTION_CONTRACT: 'true',
+        PROCESS_TARGET_CATALOG_FILE: catalogPath,
+        RUNTIME_SCHEDULER_INTERVAL_MS: '200',
+        RUN_LEASE_DURATION_MS: '60000'
+      });
+      cookie = await server.login();
+      const versionThreePath = `process-contract-v3-${STAMP}.txt`;
+      const versionThree = await runPlans('version-three-nondispatchable', versionThreeAgent, [{
+        message: 'Write the version-three non-dispatch positive control.',
+        actions: [{
+          operation: 'writeFile',
+          args: { path: versionThreePath, content: 'version-three' }
+        }],
+        complete: true
+      }]);
+      assert(versionThree.run.processPolicySnapshot.version === 3 &&
+        versionThree.run.processPolicySnapshot.profiles.length === 1,
+      'catalog version 2 admission stores complete process-policy snapshot version 3');
+      assert(versionThree.run.processPolicySnapshot.profiles[0].runtimeRootfs.id ===
+        'node-24-fedora-runtime-v1' &&
+        versionThree.run.processPolicySnapshot.profiles[0].executableIdentity.format === 'elf' &&
+        versionThree.run.processPolicySnapshot.profiles[0].limits.memoryBytes === 268435456,
+      'PostgreSQL run and replay retain complete version-3 rootfs, ELF, and resource authority');
+      assert(versionThree.replay.processPolicySnapshot.snapshotHash ===
+        versionThree.run.processPolicySnapshot.snapshotHash,
+      'PostgreSQL replay retains the exact version-3 snapshot hash');
+      assert(!JSON.stringify(versionThree.replay.providerRequests || []).includes('runProcess') &&
+        !JSON.stringify(versionThree.replay.providerRequests || []).includes('/usr/bin/node') &&
+        !JSON.stringify(versionThree.replay.providerRequests || []).includes('node-24-fedora-runtime-v1'),
+      'version-3 authority and launch material remain absent from model envelopes');
+
       console.log(`\nPASS: process execution runtime contract — ${assert.count()} assertions (PostgreSQL-native)`);
     }, { schemaSlug: 'process_execution_runtime' });
   } finally {

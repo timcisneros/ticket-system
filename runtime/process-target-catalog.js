@@ -4,13 +4,19 @@ const fs = require('fs');
 const path = require('path');
 const {
   PROCESS_AUTHORITY_CARDINALITY_LIMITS,
+  PROCESS_EXECUTABLE_FORMAT,
   PROCESS_EXECUTION_POLICY,
+  PROCESS_FILESYSTEM_POLICY,
+  PROCESS_FILESYSTEM_POLICY_HARD_LIMITS,
+  PROCESS_PROFILE_HARD_LIMITS,
   PROCESS_RUNTIME_PHASES,
+  PROCESS_SHA256_PATTERN,
   compareCanonicalStrings,
   validateProcessIdentifier
 } = require('./process-authority-constants');
 
-const PROCESS_TARGET_CATALOG_VERSION = 1;
+const PROCESS_TARGET_CATALOG_HISTORICAL_VERSION = 1;
+const PROCESS_TARGET_CATALOG_VERSION = 2;
 const PROCESS_PROFILE_BOUNDS = Object.freeze({
   maxExecutableBytes: 4096,
   maxArgumentCount: 128,
@@ -19,11 +25,12 @@ const PROCESS_PROFILE_BOUNDS = Object.freeze({
   maxEnvironmentEntries: 64,
   maxEnvironmentValueBytes: 16384
 });
-const PROCESS_PROFILE_HARD_LIMITS = Object.freeze({
-  wallTimeMs: 300000,
-  maxOutputBytes: 16 * 1024 * 1024,
-  maxProcesses: 64
-});
+const PROCESS_PROFILE_LIMIT_KEYS_V1 = Object.freeze([
+  'wallTimeMs',
+  'maxOutputBytes',
+  'maxProcesses'
+]);
+const PROCESS_PROFILE_LIMIT_KEYS_V2 = Object.freeze(Object.keys(PROCESS_PROFILE_HARD_LIMITS));
 const SHELL_INTERPRETER_BASENAMES = new Set([
   'sh', 'bash', 'zsh', 'dash', 'fish', 'ksh', 'csh', 'tcsh',
   'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe'
@@ -107,6 +114,42 @@ function normalizeExecutable(value, label) {
   return executable;
 }
 
+function normalizeSha256(value, label) {
+  if (typeof value !== 'string' || !PROCESS_SHA256_PATTERN.test(value)) {
+    fail(`${label} must be a lowercase SHA-256 hash`);
+  }
+  return value;
+}
+
+function normalizeRuntimeRootfsEntry(value, label) {
+  plainObject(value, label);
+  onlyKeys(value, ['id', 'manifestSha256'], label);
+  let id;
+  try {
+    id = validateProcessIdentifier(value.id, `${label}.id`);
+  } catch (error) {
+    fail(error.message);
+  }
+  return {
+    id,
+    manifestSha256: normalizeSha256(value.manifestSha256, `${label}.manifestSha256`)
+  };
+}
+
+function normalizeExecutableIdentity(value, label) {
+  plainObject(value, label);
+  onlyKeys(value, ['path', 'sha256', 'format'], label);
+  const executablePath = normalizeExecutable(value.path, `${label}.path`);
+  if (value.format !== PROCESS_EXECUTABLE_FORMAT) {
+    fail(`${label}.format must be ${PROCESS_EXECUTABLE_FORMAT}`);
+  }
+  return {
+    path: executablePath,
+    sha256: normalizeSha256(value.sha256, `${label}.sha256`),
+    format: PROCESS_EXECUTABLE_FORMAT
+  };
+}
+
 function normalizeArguments(value, label) {
   if (!Array.isArray(value)) fail(`${label} must be an ordered array of strings`);
   if (value.length > PROCESS_PROFILE_BOUNDS.maxArgumentCount) {
@@ -163,11 +206,14 @@ function normalizeEnvironment(value, label) {
   return normalized;
 }
 
-function normalizeLimits(value, label) {
+function normalizeLimits(value, label, version) {
   plainObject(value, label);
-  onlyKeys(value, ['wallTimeMs', 'maxOutputBytes', 'maxProcesses'], label);
+  const limitKeys = version === PROCESS_TARGET_CATALOG_HISTORICAL_VERSION
+    ? PROCESS_PROFILE_LIMIT_KEYS_V1
+    : PROCESS_PROFILE_LIMIT_KEYS_V2;
+  onlyKeys(value, limitKeys, label);
   const result = {};
-  for (const key of ['wallTimeMs', 'maxOutputBytes', 'maxProcesses']) {
+  for (const key of limitKeys) {
     if (!Number.isSafeInteger(value[key]) || value[key] <= 0) {
       fail(`${label}.${key} must be a positive safe integer`);
     }
@@ -179,34 +225,134 @@ function normalizeLimits(value, label) {
   return result;
 }
 
-function normalizeProfile(value, label) {
+function normalizeFilesystemPolicy(value, label) {
   plainObject(value, label);
-  onlyKeys(value, [
-    'id', 'allowedPhases', 'executable', 'arguments', 'workingDirectory',
-    'environment', 'limits'
-  ], label);
+  const allowedKeys = [
+    'inputMode',
+    'writableRoots',
+    'allowSymlinks',
+    'allowSpecialFiles',
+    'maxInputFiles',
+    'maxInputBytes'
+  ];
+  onlyKeys(value, allowedKeys, label);
+  for (const key of ['inputMode', 'allowSymlinks', 'allowSpecialFiles']) {
+    if (value[key] !== PROCESS_FILESYSTEM_POLICY[key]) {
+      fail(`${label}.${key} must be ${JSON.stringify(PROCESS_FILESYSTEM_POLICY[key])}`);
+    }
+  }
+  if (!Array.isArray(value.writableRoots) || value.writableRoots.length !== 0) {
+    fail(`${label}.writableRoots must be an empty array`);
+  }
+  const normalized = {
+    inputMode: PROCESS_FILESYSTEM_POLICY.inputMode,
+    writableRoots: [],
+    allowSymlinks: false,
+    allowSpecialFiles: false
+  };
+  for (const key of ['maxInputFiles', 'maxInputBytes']) {
+    if (!Number.isSafeInteger(value[key]) || value[key] <= 0) {
+      fail(`${label}.${key} must be a positive safe integer`);
+    }
+    if (value[key] > PROCESS_FILESYSTEM_POLICY_HARD_LIMITS[key]) {
+      fail(
+        `${label}.${key} exceeds the hard ceiling of ` +
+        PROCESS_FILESYSTEM_POLICY_HARD_LIMITS[key]
+      );
+    }
+    normalized[key] = value[key];
+  }
+  return normalized;
+}
+
+function normalizeProfile(value, label, version) {
+  plainObject(value, label);
+  const profileKeys = version === PROCESS_TARGET_CATALOG_HISTORICAL_VERSION
+    ? [
+        'id', 'allowedPhases', 'executable', 'arguments', 'workingDirectory',
+        'environment', 'limits'
+      ]
+    : [
+        'id', 'allowedPhases', 'runtimeRootfsId', 'executableIdentity',
+        'arguments', 'workingDirectory', 'environment', 'filesystemPolicy', 'limits'
+      ];
+  onlyKeys(value, profileKeys, label);
   let id;
   try {
     id = validateProcessIdentifier(value.id, `${label}.id`);
   } catch (error) {
     fail(error.message);
   }
-  return {
+  const normalized = {
     id,
     allowedPhases: normalizeAllowedPhases(value.allowedPhases, `${label}.allowedPhases`),
-    executable: normalizeExecutable(value.executable, `${label}.executable`),
     arguments: normalizeArguments(value.arguments, `${label}.arguments`),
     workingDirectory: normalizeWorkingDirectory(value.workingDirectory, `${label}.workingDirectory`),
     environment: normalizeEnvironment(value.environment, `${label}.environment`),
-    limits: normalizeLimits(value.limits, `${label}.limits`)
+    limits: normalizeLimits(value.limits, `${label}.limits`, version)
+  };
+  if (version === PROCESS_TARGET_CATALOG_HISTORICAL_VERSION) {
+    return {
+      ...normalized,
+      executable: normalizeExecutable(value.executable, `${label}.executable`)
+    };
+  }
+  let runtimeRootfsId;
+  try {
+    runtimeRootfsId = validateProcessIdentifier(
+      value.runtimeRootfsId,
+      `${label}.runtimeRootfsId`
+    );
+  } catch (error) {
+    fail(error.message);
+  }
+  return {
+    ...normalized,
+    runtimeRootfsId,
+    executableIdentity: normalizeExecutableIdentity(
+      value.executableIdentity,
+      `${label}.executableIdentity`
+    ),
+    filesystemPolicy: normalizeFilesystemPolicy(
+      value.filesystemPolicy,
+      `${label}.filesystemPolicy`
+    )
   };
 }
 
 function validateProcessTargetCatalog(value) {
   plainObject(value, 'process target catalog');
-  onlyKeys(value, ['version', 'targets'], 'process target catalog');
-  if (value.version !== PROCESS_TARGET_CATALOG_VERSION) {
-    fail(`process target catalog.version must be ${PROCESS_TARGET_CATALOG_VERSION}`);
+  if (![PROCESS_TARGET_CATALOG_HISTORICAL_VERSION, PROCESS_TARGET_CATALOG_VERSION]
+    .includes(value.version)) {
+    fail(
+      `process target catalog.version must be ` +
+      `${PROCESS_TARGET_CATALOG_HISTORICAL_VERSION} or ${PROCESS_TARGET_CATALOG_VERSION}`
+    );
+  }
+  const isHistorical = value.version === PROCESS_TARGET_CATALOG_HISTORICAL_VERSION;
+  onlyKeys(
+    value,
+    isHistorical ? ['version', 'targets'] : ['version', 'runtimeRootfs', 'targets'],
+    'process target catalog'
+  );
+  let runtimeRootfs = [];
+  if (!isHistorical) {
+    if (!Array.isArray(value.runtimeRootfs)) {
+      fail('process target catalog.runtimeRootfs must be an array');
+    }
+    if (value.runtimeRootfs.length >
+        PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxRuntimeRootfsEntries) {
+      fail(
+        `process target catalog.runtimeRootfs exceeds the ` +
+        `${PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxRuntimeRootfsEntries}-entry limit`
+      );
+    }
+    runtimeRootfs = value.runtimeRootfs.map((entry, index) =>
+      normalizeRuntimeRootfsEntry(entry, `process target catalog.runtimeRootfs[${index}]`));
+    if (new Set(runtimeRootfs.map(entry => entry.id)).size !== runtimeRootfs.length) {
+      fail('process target catalog.runtimeRootfs must have unique ids');
+    }
+    runtimeRootfs.sort((left, right) => compareCanonicalStrings(left.id, right.id));
   }
   if (!Array.isArray(value.targets)) fail('process target catalog.targets must be an array');
   if (value.targets.length > PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxTargetsPerCatalog) {
@@ -241,7 +387,17 @@ function validateProcessTargetCatalog(value) {
       );
     }
     const profiles = target.profiles.map((profile, profileIndex) =>
-      normalizeProfile(profile, `${label}.profiles[${profileIndex}]`));
+      normalizeProfile(profile, `${label}.profiles[${profileIndex}]`, value.version));
+    if (!isHistorical) {
+      for (const profile of profiles) {
+        if (!runtimeRootfs.some(entry => entry.id === profile.runtimeRootfsId)) {
+          fail(
+            `${label}.profiles references unknown runtimeRootfsId: ` +
+            profile.runtimeRootfsId
+          );
+        }
+      }
+    }
     const profileIds = profiles.map(profile => profile.id);
     if (new Set(profileIds).size !== profileIds.length) {
       fail(`${label}.profiles must have unique ids`);
@@ -254,7 +410,9 @@ function validateProcessTargetCatalog(value) {
     fail('process target catalog.targets must have unique ids');
   }
   targets.sort((left, right) => compareCanonicalStrings(left.id, right.id));
-  return deepFreeze({ version: PROCESS_TARGET_CATALOG_VERSION, targets });
+  return deepFreeze(isHistorical
+    ? { version: PROCESS_TARGET_CATALOG_HISTORICAL_VERSION, targets }
+    : { version: PROCESS_TARGET_CATALOG_VERSION, runtimeRootfs, targets });
 }
 
 function normalizeProcessProfileGrants(value) {
@@ -348,17 +506,48 @@ function resolveProcessProfileGrants({ capabilityEnabled, catalog, grants }) {
           { targetId: grant.targetId, profileId }
         );
       }
-      profiles.push({
+      const resolved = {
         targetId: target.id,
         profileId: profile.id,
         allowedPhases: [...profile.allowedPhases],
-        executable: profile.executable,
         arguments: [...profile.arguments],
         workingDirectory: profile.workingDirectory,
         environment: { ...profile.environment },
         limits: { ...profile.limits },
         executionPolicy: { ...PROCESS_EXECUTION_POLICY }
-      });
+      };
+      if (normalizedCatalog.version === PROCESS_TARGET_CATALOG_HISTORICAL_VERSION) {
+        profiles.push({
+          ...resolved,
+          executable: profile.executable
+        });
+      } else {
+        const rootfs = normalizedCatalog.runtimeRootfs.find(
+          entry => entry.id === profile.runtimeRootfsId
+        );
+        // Catalog validation already established this reference. Retain the check
+        // here so the grant resolver fails closed if that invariant is changed.
+        if (!rootfs) {
+          throw new ProcessTargetCatalogError(
+            `Process profile references unavailable runtime rootfs: ${profile.runtimeRootfsId}`,
+            'PROCESS_ROOTFS_UNKNOWN',
+            {
+              targetId: target.id,
+              profileId: profile.id,
+              runtimeRootfsId: profile.runtimeRootfsId
+            }
+          );
+        }
+        profiles.push({
+          ...resolved,
+          runtimeRootfs: { ...rootfs },
+          executableIdentity: { ...profile.executableIdentity },
+          filesystemPolicy: {
+            ...profile.filesystemPolicy,
+            writableRoots: []
+          }
+        });
+      }
       if (profiles.length > PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxResolvedProfilesPerSnapshot) {
         throw new ProcessTargetCatalogError(
           `Resolved process profile authority exceeds the ` +
@@ -400,10 +589,14 @@ function loadProcessTargetCatalog(filePath) {
 
 module.exports = {
   PROCESS_AUTHORITY_CARDINALITY_LIMITS,
+  PROCESS_EXECUTABLE_FORMAT,
   PROCESS_EXECUTION_POLICY,
+  PROCESS_FILESYSTEM_POLICY,
+  PROCESS_FILESYSTEM_POLICY_HARD_LIMITS,
   PROCESS_PROFILE_BOUNDS,
   PROCESS_PROFILE_HARD_LIMITS,
   PROCESS_RUNTIME_PHASES,
+  PROCESS_TARGET_CATALOG_HISTORICAL_VERSION,
   PROCESS_TARGET_CATALOG_VERSION,
   ProcessTargetCatalogError,
   loadProcessTargetCatalog,

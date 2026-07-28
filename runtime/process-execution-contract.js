@@ -3,20 +3,30 @@
 const crypto = require('crypto');
 const {
   PROCESS_AUTHORITY_CARDINALITY_LIMITS,
+  PROCESS_EXECUTABLE_FORMAT,
   PROCESS_EXECUTION_POLICY,
+  PROCESS_FILESYSTEM_POLICY,
+  PROCESS_FILESYSTEM_POLICY_HARD_LIMITS,
   PROCESS_IDENTIFIER_MAX_LENGTH,
+  PROCESS_NETWORK_ACCESS_NONE_MEANING,
+  PROCESS_PROFILE_HARD_LIMITS,
   PROCESS_RESOLUTION_RUNTIME_PHASES,
+  PROCESS_RESOURCE_LIMIT_CAUSES,
   PROCESS_RUNTIME_PHASES,
+  PROCESS_SHA256_PATTERN,
   compareCanonicalStrings,
   validateProcessIdentifier
 } = require('./process-authority-constants');
 const {
+  PROCESS_TARGET_CATALOG_HISTORICAL_VERSION,
+  PROCESS_TARGET_CATALOG_VERSION,
   validateProcessTargetCatalog
 } = require('./process-target-catalog');
 
 const PROCESS_CONTRACT_VERSION = 1;
-const PROCESS_POLICY_SNAPSHOT_VERSION = 2;
+const PROCESS_POLICY_SNAPSHOT_VERSION = 3;
 const PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION = 1;
+const PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2 = 2;
 const PROCESS_OPERATION = 'runProcess';
 const PROCESS_FEATURE_ENV = 'ENABLE_PROCESS_EXECUTION_CONTRACT';
 const PROCESS_INLINE_OUTPUT_MAX_BYTES = 64 * 1024;
@@ -44,6 +54,7 @@ const PROCESS_TERMINAL_OUTCOMES = Object.freeze([
   'timed_out',
   'cancelled',
   'output_limit_exceeded',
+  'resource_limit_exceeded',
   'policy_denied',
   'runtime_interrupted'
 ]);
@@ -153,6 +164,9 @@ function canonicalize(value) {
 function sha256Json(value) {
   return crypto.createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
 }
+
+const canonicalizeProcessContractValue = canonicalize;
+const hashProcessContractValue = sha256Json;
 
 function processIdentifier(value, label, { request = false } = {}) {
   try {
@@ -309,12 +323,12 @@ function normalizeExecutionPolicy(value, label) {
   const expected = PROCESS_EXECUTION_POLICY;
   const unexpected = Object.keys(value).find(key => !Object.hasOwn(expected, key));
   if (unexpected || Object.keys(expected).some(key => value[key] !== expected[key])) {
-    throw new TypeError(`${label} must contain the fixed Tranche 1 execution policy`);
+    throw new TypeError(`${label} must contain the fixed process execution policy`);
   }
   return { ...expected };
 }
 
-function normalizeResolvedProfile(profile, label) {
+function normalizeResolvedProfileV2(profile, label) {
   if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
     throw new TypeError(`${label} must be an object`);
   }
@@ -329,7 +343,7 @@ function normalizeResolvedProfile(profile, label) {
   // Reuse the catalog validator when reading persisted snapshots so a valid
   // hash cannot turn malformed authority material into dispatch authority.
   const validated = validateProcessTargetCatalog({
-    version: 1,
+    version: PROCESS_TARGET_CATALOG_HISTORICAL_VERSION,
     targets: [{
       id: targetId,
       profiles: [{
@@ -356,7 +370,82 @@ function normalizeResolvedProfile(profile, label) {
   };
 }
 
+function normalizeResolvedProfileV3(profile, label) {
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const expectedKeys = [
+    'targetId',
+    'profileId',
+    'allowedPhases',
+    'runtimeRootfs',
+    'executableIdentity',
+    'arguments',
+    'workingDirectory',
+    'environment',
+    'filesystemPolicy',
+    'limits',
+    'executionPolicy'
+  ];
+  const unexpected = Object.keys(profile).find(key => !expectedKeys.includes(key));
+  if (unexpected) throw new TypeError(`${label} includes unsupported field: ${unexpected}`);
+  const targetId = processIdentifier(profile.targetId, `${label}.targetId`);
+  const profileId = processIdentifier(profile.profileId, `${label}.profileId`);
+  if (!profile.runtimeRootfs || typeof profile.runtimeRootfs !== 'object' ||
+      Array.isArray(profile.runtimeRootfs)) {
+    throw new TypeError(`${label}.runtimeRootfs must be an object`);
+  }
+  const unexpectedRootfsKey = Object.keys(profile.runtimeRootfs)
+    .find(key => !['id', 'manifestSha256'].includes(key));
+  if (unexpectedRootfsKey) {
+    throw new TypeError(
+      `${label}.runtimeRootfs includes unsupported field: ${unexpectedRootfsKey}`
+    );
+  }
+  const rootfsId = processIdentifier(profile.runtimeRootfs.id, `${label}.runtimeRootfs.id`);
+  const validatedCatalog = validateProcessTargetCatalog({
+    version: PROCESS_TARGET_CATALOG_VERSION,
+    runtimeRootfs: [{
+      id: rootfsId,
+      manifestSha256: profile.runtimeRootfs.manifestSha256
+    }],
+    targets: [{
+      id: targetId,
+      profiles: [{
+        id: profileId,
+        allowedPhases: profile.allowedPhases,
+        runtimeRootfsId: rootfsId,
+        executableIdentity: profile.executableIdentity,
+        arguments: profile.arguments,
+        workingDirectory: profile.workingDirectory,
+        environment: profile.environment,
+        filesystemPolicy: profile.filesystemPolicy,
+        limits: profile.limits
+      }]
+    }]
+  });
+  const validatedRootfs = validatedCatalog.runtimeRootfs[0];
+  const validated = validatedCatalog.targets[0].profiles[0];
+  return {
+    targetId,
+    profileId,
+    allowedPhases: [...validated.allowedPhases],
+    runtimeRootfs: { ...validatedRootfs },
+    executableIdentity: { ...validated.executableIdentity },
+    arguments: [...validated.arguments],
+    workingDirectory: validated.workingDirectory,
+    environment: { ...validated.environment },
+    filesystemPolicy: {
+      ...validated.filesystemPolicy,
+      writableRoots: []
+    },
+    limits: { ...validated.limits },
+    executionPolicy: normalizeExecutionPolicy(profile.executionPolicy, `${label}.executionPolicy`)
+  };
+}
+
 function buildProcessPolicySnapshot({
+  version = null,
   capabilityEnabled,
   profiles = [],
   capturedAt = new Date().toISOString()
@@ -372,8 +461,22 @@ function buildProcessPolicySnapshot({
     );
   }
   normalizeCapturedAt(capturedAt);
+  const snapshotVersion = version === null
+    ? (profiles.some(profile => profile && profile.runtimeRootfs)
+        ? PROCESS_POLICY_SNAPSHOT_VERSION
+        : PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2)
+    : version;
+  if (![PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2, PROCESS_POLICY_SNAPSHOT_VERSION]
+    .includes(snapshotVersion)) {
+    throw new TypeError(
+      `processPolicySnapshot.version must be ` +
+      `${PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2} or ${PROCESS_POLICY_SNAPSHOT_VERSION}`
+    );
+  }
   const normalizedProfiles = profiles.map((profile, index) =>
-    normalizeResolvedProfile(profile, `processPolicySnapshot.profiles[${index}]`));
+    snapshotVersion === PROCESS_POLICY_SNAPSHOT_VERSION
+      ? normalizeResolvedProfileV3(profile, `processPolicySnapshot.profiles[${index}]`)
+      : normalizeResolvedProfileV2(profile, `processPolicySnapshot.profiles[${index}]`));
   normalizedProfiles.sort((left, right) =>
     compareCanonicalStrings(left.targetId, right.targetId) ||
     compareCanonicalStrings(left.profileId, right.profileId));
@@ -382,7 +485,7 @@ function buildProcessPolicySnapshot({
     throw new TypeError('processPolicySnapshot.profiles target/profile values must be unique');
   }
   const withoutHash = {
-    version: PROCESS_POLICY_SNAPSHOT_VERSION,
+    version: snapshotVersion,
     capabilityEnabled,
     profiles: normalizedProfiles,
     capturedAt
@@ -393,14 +496,29 @@ function buildProcessPolicySnapshot({
 function normalizeProcessPolicySnapshot(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   try {
+    const expectedTopLevelKeys = value.version === PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION
+      ? ['version', 'capabilityEnabled', 'grants', 'capturedAt', 'snapshotHash']
+      : [
+          PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2,
+          PROCESS_POLICY_SNAPSHOT_VERSION
+        ].includes(value.version)
+        ? ['version', 'capabilityEnabled', 'profiles', 'capturedAt', 'snapshotHash']
+        : [];
+    if (expectedTopLevelKeys.length === 0 ||
+        Object.keys(value).some(key => !expectedTopLevelKeys.includes(key)) ||
+        expectedTopLevelKeys.some(key => !Object.hasOwn(value, key))) {
+      return null;
+    }
     const normalized = value.version === PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION
       ? buildHistoricalProcessPolicySnapshotV1({
           capabilityEnabled: value.capabilityEnabled,
           grants: value.grants,
           capturedAt: value.capturedAt
         })
-      : value.version === PROCESS_POLICY_SNAPSHOT_VERSION
+      : value.version === PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2 ||
+          value.version === PROCESS_POLICY_SNAPSHOT_VERSION
         ? buildProcessPolicySnapshot({
+            version: value.version,
             capabilityEnabled: value.capabilityEnabled,
             profiles: value.profiles,
             capturedAt: value.capturedAt
@@ -416,7 +534,11 @@ function normalizeProcessPolicySnapshot(value) {
 
 function processAuthorityReferences(value, phase = null) {
   const snapshot = normalizeProcessPolicySnapshot(value);
-  if (!snapshot || snapshot.version !== PROCESS_POLICY_SNAPSHOT_VERSION ||
+  // Tranche 2A0 deliberately does not advertise version-3 authority. A future
+  // healthy sandbox capability generation is an additional mandatory gate.
+  // Preserve the existing version-2 historical envelope behavior without
+  // interpreting it as executable authority.
+  if (!snapshot || snapshot.version !== PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2 ||
       !snapshot.capabilityEnabled) return [];
   if (phase !== null && !PROCESS_RUNTIME_PHASES.includes(phase)) return [];
   const grouped = new Map();
@@ -472,7 +594,10 @@ function resolveProcessOperationRequest(action, policySnapshot, currentPhase = n
       terminalOutcome: 'policy_denied'
     });
   }
-  const profiles = snapshot.version === PROCESS_POLICY_SNAPSHOT_VERSION ? snapshot.profiles : [];
+  const profiles = [
+    PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2,
+    PROCESS_POLICY_SNAPSHOT_VERSION
+  ].includes(snapshot.version) ? snapshot.profiles : [];
   const targetProfiles = profiles.filter(profile => profile.targetId === request.args.targetId);
   if (targetProfiles.length === 0) {
     return processResolution({
@@ -514,7 +639,7 @@ function resolveProcessOperationRequest(action, policySnapshot, currentPhase = n
   return processResolution({
     disposition: 'unsupported',
     code: 'PROCESS_EXECUTOR_UNAVAILABLE',
-    message: 'runProcess is authorized by the immutable run snapshot but has no executor in Tranche 1',
+    message: 'runProcess is authorized by the immutable run snapshot but has no executor or healthy sandbox capability',
     request,
     snapshot,
     runtimePhase: currentPhase,
@@ -699,6 +824,20 @@ function validateProcessTerminalOutcome(value) {
     throw new TypeError(`Unsupported process terminal outcome: ${String(value)}`);
   }
   return value;
+}
+
+function validateProcessResourceLimitCause(value) {
+  validatePlainObject(value, 'process resource-limit cause');
+  const unexpected = Object.keys(value).find(key => !['kind', 'cause'].includes(key));
+  if (unexpected || Object.keys(value).length !== 2 ||
+      value.kind !== 'resource_limit' ||
+      !PROCESS_RESOURCE_LIMIT_CAUSES.includes(value.cause)) {
+    throw new TypeError(
+      'process resource-limit cause must be exactly ' +
+      '{kind:"resource_limit",cause:<defined resource cause>}'
+    );
+  }
+  return deepFreeze({ kind: 'resource_limit', cause: value.cause });
 }
 
 function hasOwn(value, key) {
@@ -920,6 +1059,9 @@ function validateProcessEvidenceRecord(value) {
       ]) forbidEvidenceValue(value, key, terminalOutcome);
     } else {
       requiredEvidenceField(value, 'enforcementCause');
+      if (terminalOutcome === 'resource_limit_exceeded') {
+        validateProcessResourceLimitCause(value.enforcementCause);
+      }
     }
   }
 
@@ -937,14 +1079,21 @@ module.exports = {
   PROCESS_AUTHORITY_RULE,
   PROCESS_CONTRACT_VERSION,
   PROCESS_EVIDENCE_CONTRACT,
+  PROCESS_EXECUTABLE_FORMAT,
   PROCESS_EXECUTION_POLICY,
   PROCESS_FEATURE_ENV,
+  PROCESS_FILESYSTEM_POLICY,
+  PROCESS_FILESYSTEM_POLICY_HARD_LIMITS,
   PROCESS_IDENTIFIER_MAX_LENGTH,
   PROCESS_INLINE_OUTPUT_MAX_BYTES,
   PROCESS_OPERATION,
+  PROCESS_NETWORK_ACCESS_NONE_MEANING,
   PROCESS_PHASE_AUTHORITY_RULE,
+  PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2,
   PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION,
   PROCESS_POLICY_SNAPSHOT_VERSION,
+  PROCESS_PROFILE_HARD_LIMITS,
+  PROCESS_RESOURCE_LIMIT_CAUSES,
   PROCESS_RUNTIME_PHASES,
   PROCESS_PRE_EXECUTION_EVIDENCE_FIELDS,
   PROCESS_TERMINAL_EVIDENCE_FIELDS,
@@ -954,8 +1103,10 @@ module.exports = {
   buildProcessOperationResolutionRecord,
   buildProcessPolicySnapshot,
   buildHistoricalProcessPolicySnapshotV1,
+  canonicalizeProcessContractValue,
   classifyProcessOperationIdReuse,
   historicalProcessGrantReferences,
+  hashProcessContractValue,
   isProcessContractFeatureEnabled,
   normalizeProcessPolicySnapshot,
   parseProcessOperationRequest,
@@ -967,5 +1118,6 @@ module.exports = {
   restoreProcessOperationResolution,
   validateProcessEvidenceRecord,
   validateProcessOperationResolutionRecord,
+  validateProcessResourceLimitCause,
   validateProcessTerminalOutcome
 };

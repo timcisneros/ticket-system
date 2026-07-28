@@ -35,6 +35,8 @@ const {
   PROCESS_AUTHORITY_RULE,
   PROCESS_OPERATION,
   PROCESS_PHASE_AUTHORITY_RULE,
+  PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2,
+  PROCESS_POLICY_SNAPSHOT_VERSION,
   buildProcessOperationIdentity,
   buildProcessOperationResolutionRecord,
   buildProcessPolicySnapshot,
@@ -48,6 +50,7 @@ const {
   restoreProcessOperationResolution
 } = require('./runtime/process-execution-contract');
 const {
+  PROCESS_TARGET_CATALOG_HISTORICAL_VERSION,
   loadProcessTargetCatalog,
   normalizeProcessProfileGrants,
   resolveProcessProfileGrants
@@ -14368,6 +14371,9 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     // Complete process authority is resolved from trusted configuration exactly
     // once. Dispatch must never reread the live catalog or agent grants.
     processPolicySnapshot: buildProcessPolicySnapshot({
+      version: PROCESS_TARGET_CATALOG.version === PROCESS_TARGET_CATALOG_HISTORICAL_VERSION
+        ? PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2
+        : PROCESS_POLICY_SNAPSHOT_VERSION,
       capabilityEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED && ticket.executionMode !== 'workflow',
       profiles: processProfiles,
       capturedAt: now

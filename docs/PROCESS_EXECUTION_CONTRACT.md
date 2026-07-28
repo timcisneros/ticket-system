@@ -1,8 +1,10 @@
-# Bounded process execution contract — Tranche 1
+# Bounded process execution contract — Tranche 2A0
 
-Tranche 1 adds trusted target/profile configuration, exact agent grants, admission-time
-resolution, and immutable run snapshots. It does not provide an executor and cannot
-start a process.
+Tranche 2A0 freezes executable-authority version 3 and the private immutable launch-plan
+contract. It does not provide a launcher, sandbox capability probe, materializer, or
+executor and cannot start a process. Version-1 and version-2 process-policy snapshots
+remain readable historical records and are permanently non-executable. A valid
+version-3 snapshot is necessary but not sufficient for future execution.
 
 ## Authority
 
@@ -45,10 +47,12 @@ The only profile phases are `inspection`, `mutation`, and `verification`.
 `allowedPhases` is nonempty, deduplicated, and canonically ordered. `runProcess` has no
 global phase-catalog assignment.
 
-## Trusted catalog
+## Historical catalog version 1
 
 The default trusted file is `config/process-targets.json`; an operator can select another
-trusted file with `PROCESS_TARGET_CATALOG_FILE`. Its closed version-1 schema is:
+trusted file with `PROCESS_TARGET_CATALOG_FILE`. The closed version-1 schema is retained
+only to preserve existing admission behavior that produces historical, executor-free
+version-2 snapshots:
 
 ```json
 {
@@ -143,9 +147,97 @@ an unknown profile fails admission with `PROCESS_PROFILE_UNKNOWN`; no partial ru
 created. The grant list is also closed, bounded by the identifier contract, deduplicated,
 and canonically ordered.
 
-## Versioned run snapshot
+## Catalog version 2
 
-Newly admitted runs store this canonical version-2 shape:
+Catalog version 2 is the first executable-authority catalog schema. It declares trusted
+versioned runtime rootfs identities and profiles refer to those entries exactly:
+
+```json
+{
+  "version": 2,
+  "runtimeRootfs": [
+    {
+      "id": "node-24-fedora-runtime-v1",
+      "manifestSha256": "lowercase-sha256"
+    }
+  ],
+  "targets": [
+    {
+      "id": "ticket-system-local",
+      "profiles": [
+        {
+          "id": "syntax-check",
+          "allowedPhases": ["verification"],
+          "runtimeRootfsId": "node-24-fedora-runtime-v1",
+          "executableIdentity": {
+            "path": "/usr/bin/node",
+            "sha256": "lowercase-sha256",
+            "format": "elf"
+          },
+          "arguments": ["--check", "server.js"],
+          "workingDirectory": ".",
+          "environment": {"CI": "1"},
+          "filesystemPolicy": {
+            "inputMode": "materialized_read_only",
+            "writableRoots": [],
+            "allowSymlinks": false,
+            "allowSpecialFiles": false,
+            "maxInputFiles": 10000,
+            "maxInputBytes": 268435456
+          },
+          "limits": {
+            "wallTimeMs": 30000,
+            "maxOutputBytes": 1048576,
+            "maxProcesses": 8,
+            "memoryBytes": 268435456,
+            "cpuQuotaMicrosPer100ms": 100000,
+            "maxOpenFiles": 128,
+            "maxFileBytes": 16777216,
+            "maxTempBytes": 67108864
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+The rootfs deployment contract is root-owned, versioned, non-writable by the runtime and
+future launcher UID, represented by a complete canonical manifest, verified before a
+future backend becomes healthy, and retained while an admitted or executing operation
+references it. Live host `/usr`, `/lib`, `/lib64`, `/bin`, and operator home directories
+are never substitutes. A future trusted operator mapping may associate the rootfs ID with
+an installed host path, but that mapping is not model input and is not dispatch authority.
+
+Executable paths are normalized absolute paths interpreted inside the selected rootfs.
+Their lowercase SHA-256 and `format: "elf"` are mandatory. Scripts, shebangs, command
+strings, host `PATH` resolution, and model-derived executable identity cannot be
+represented. No dependency layer exists in the initial schema; a later layer must be
+explicitly identified and manifest-hashed before it can become authority.
+
+The initial filesystem policy is read-only and closed. `writableRoots` must be empty,
+symlinks and special files cannot be enabled, and `maxInputFiles`/`maxInputBytes` are
+positive integers no larger than 10,000 and 268,435,456 respectively.
+
+All eight resource values are required positive safe integers. Their hard ceilings are:
+
+- `wallTimeMs`: 300,000
+- `maxOutputBytes`: 16,777,216
+- `maxProcesses`: 64 kernel tasks
+- `memoryBytes`: 1,073,741,824
+- `cpuQuotaMicrosPer100ms`: 100,000
+- `maxOpenFiles`: 256
+- `maxFileBytes`: 67,108,864
+- `maxTempBytes`: 268,435,456
+
+`maxProcesses` counts kernel tasks, including threads and future namespace-init overhead,
+but excludes the trusted launcher daemon.
+
+## Versioned run snapshots
+
+### Historical version 2
+
+Catalog-version-1 admissions retain this canonical version-2 shape:
 
 ```json
 {
@@ -188,9 +280,71 @@ ceilings live in the dependency-neutral
 `runtime/process-authority-constants.js` module. The fixed execution policy is authority
 for a future executor, not a claim that Tranche 1 provides kernel enforcement.
 
-Version-1 Tranche 0 grant-reference snapshots remain readable as historical policy. They
-are never resolved through the live catalog and expose no executable authority. Stored
-historical runs are not rewritten.
+Version-1 grant-reference and version-2 resolved-profile snapshots remain readable as
+historical policy. They are never upgraded through the live catalog and can never produce
+a launch plan. Stored historical runs are not rewritten.
+
+### Executable-authority version 3
+
+Catalog-version-2 admissions store complete resolved authority:
+
+```json
+{
+  "version": 3,
+  "capabilityEnabled": true,
+  "profiles": [
+    {
+      "targetId": "ticket-system-local",
+      "profileId": "syntax-check",
+      "allowedPhases": ["verification"],
+      "runtimeRootfs": {
+        "id": "node-24-fedora-runtime-v1",
+        "manifestSha256": "lowercase-sha256"
+      },
+      "executableIdentity": {
+        "path": "/usr/bin/node",
+        "sha256": "lowercase-sha256",
+        "format": "elf"
+      },
+      "arguments": ["--check", "server.js"],
+      "workingDirectory": ".",
+      "environment": {"CI": "1"},
+      "filesystemPolicy": {
+        "inputMode": "materialized_read_only",
+        "writableRoots": [],
+        "allowSymlinks": false,
+        "allowSpecialFiles": false,
+        "maxInputFiles": 10000,
+        "maxInputBytes": 268435456
+      },
+      "limits": {
+        "wallTimeMs": 30000,
+        "maxOutputBytes": 1048576,
+        "maxProcesses": 8,
+        "memoryBytes": 268435456,
+        "cpuQuotaMicrosPer100ms": 100000,
+        "maxOpenFiles": 128,
+        "maxFileBytes": 16777216,
+        "maxTempBytes": 67108864
+      },
+      "executionPolicy": {
+        "shell": false,
+        "stdin": "disabled",
+        "detached": false,
+        "networkAccess": "none",
+        "environmentMode": "replace"
+      }
+    }
+  ],
+  "capturedAt": "2026-07-27T12:00:00.000Z",
+  "snapshotHash": "lowercase-sha256"
+}
+```
+
+All nested authority is deep-copied, canonically ordered with the shared ordinal
+comparator, hashed with canonical JSON, and deeply frozen. Version 3 remains
+non-dispatchable in 2A0. `processAuthorityReferences` does not project it into the model
+envelope; a future healthy sandbox-capability generation is an additional mandatory gate.
 
 ## Model request and envelope
 
@@ -211,7 +365,8 @@ The model cannot supply a command, executable, arguments, environment, working d
 shell syntax, redirection, pipeline, timeout, resource limit, background option, or
 detached option.
 
-For the current phase, the runtime envelope reads only the immutable version-2 snapshot
+For existing historical compatibility, the runtime envelope can read an immutable
+version-2 snapshot
 and projects:
 
 ```json
@@ -228,7 +383,7 @@ and projects:
 }
 ```
 
-It advertises `runProcess` only when this projection is nonempty. Executable paths,
+Version-3 snapshots do not produce this projection in 2A0. Executable paths,
 arguments, working directories, environment values, and limits never enter the model
 envelope.
 
@@ -298,8 +453,22 @@ The frozen process outcomes remain:
 - `timed_out`
 - `cancelled`
 - `output_limit_exceeded`
+- `resource_limit_exceeded`
 - `policy_denied`
 - `runtime_interrupted`
+
+`resource_limit_exceeded` uses an exact structured cause:
+
+```json
+{
+  "kind": "resource_limit",
+  "cause": "memory"
+}
+```
+
+Allowed causes are `memory`, `process_count`, `cpu`, `open_files`, `file_size`,
+`temporary_storage`, and `launcher_capacity`. Tranche 2A0 defines but does not
+operationally classify them.
 
 `runtime/process-execution-contract.js` remains the machine-readable future evidence
 field authority and structural validator. It enforces identifiers, positive run/ticket
@@ -316,3 +485,151 @@ Terminal evidence consists of `finishedAt`, `durationMs`, `pid`, `processGroupId
 `exitCode`, `terminatingSignal`, `terminalOutcome`, `enforcementCause`, stdout/stderr byte
 counts and truncation states, and one bounded inline value or artifact reference per
 stream. Process output remains evidence and can never alter the prior authority decision.
+
+## Immutable execution-input materialization
+
+Neither process authority nor a launch plan contains a mutable host workspace path. A
+future trusted materializer will run while holding the runtime mutation boundary and will:
+
+- include only authorized regular files;
+- reject symlinks and special files;
+- exclude configured protected paths;
+- enforce the snapshotted file-count and byte bounds;
+- create a launcher-private immutable tree;
+- hash a canonical file manifest; and
+- verify the source against the copied manifest before releasing the mutation boundary.
+
+The materializer is not implemented in 2A0. Its trusted output descriptor is:
+
+```json
+{
+  "id": "runtime-generated-opaque-id",
+  "manifestSha256": "lowercase-sha256",
+  "fileCount": 123,
+  "totalBytes": 456789
+}
+```
+
+The descriptor is bounded by the selected profile's immutable filesystem policy.
+
+## Private launch-plan contract
+
+`runtime/process-launch-plan.js` is a pure builder and validator. It has no launcher
+client or side-effecting dependency. Only a valid, enabled version-3 run snapshot can
+produce version-1 launch-plan material:
+
+```json
+{
+  "version": 1,
+  "operationIdentity": "process-operation:lowercase-sha256",
+  "runId": 123,
+  "ticketId": 45,
+  "targetId": "ticket-system-local",
+  "profileId": "syntax-check",
+  "policySnapshotHash": "lowercase-sha256",
+  "runtimePhase": "verification",
+  "runtimeRootfs": {
+    "id": "node-24-fedora-runtime-v1",
+    "manifestSha256": "lowercase-sha256"
+  },
+  "executableIdentity": {
+    "path": "/usr/bin/node",
+    "sha256": "lowercase-sha256",
+    "format": "elf"
+  },
+  "arguments": ["--check", "server.js"],
+  "workingDirectory": ".",
+  "environment": {"CI": "1"},
+  "workspaceSnapshot": {
+    "id": "runtime-generated-opaque-id",
+    "manifestSha256": "lowercase-sha256",
+    "fileCount": 123,
+    "totalBytes": 456789
+  },
+  "filesystemPolicy": {
+    "inputMode": "materialized_read_only",
+    "writableRoots": [],
+    "allowSymlinks": false,
+    "allowSpecialFiles": false,
+    "maxInputFiles": 10000,
+    "maxInputBytes": 268435456
+  },
+  "limits": {
+    "wallTimeMs": 30000,
+    "maxOutputBytes": 1048576,
+    "maxProcesses": 8,
+    "memoryBytes": 268435456,
+    "cpuQuotaMicrosPer100ms": 100000,
+    "maxOpenFiles": 128,
+    "maxFileBytes": 16777216,
+    "maxTempBytes": 67108864
+  },
+  "executionPolicy": {
+    "shell": false,
+    "stdin": "disabled",
+    "detached": false,
+    "networkAccess": "none",
+    "environmentMode": "replace"
+  },
+  "launchPlanHash": "lowercase-sha256"
+}
+```
+
+The caller supplies only operation/run/ticket/profile references, the exact process-policy
+hash and phase, and the trusted materializer descriptor. Executable, arguments,
+environment, filesystem, limits, and fixed execution policy are copied solely from the
+immutable run snapshot. The validator compares all material back to that snapshot, rejects
+extra fields and raw rootfs/workspace host paths, canonicalizes before hashing, and
+deep-freezes the result. Versions 1 and 2 return
+`PROCESS_POLICY_SNAPSHOT_NOT_EXECUTABLE`.
+
+Launch plans are private runtime-to-launcher material and never enter the model envelope.
+
+## Network meaning
+
+`networkAccess: "none"` means:
+
+> The process and its descendants cannot communicate with anything outside their
+> operation sandbox.
+
+Future enforcement requires an isolated network namespace, no host interfaces or socket
+mounts, no inherited sockets, and syscall filtering for external network families and
+host connection paths. The contract deliberately does not require denial of unnamed
+operation-local IPC such as Unix `socketpair`; that is not external communication and may
+be required by a configured runtime. Standard input remains disabled, no PTY may be
+allocated, and detached execution is forbidden. No enforcement exists in 2A0.
+
+## Future authenticated launcher boundary
+
+The future launcher protocol will use `/run/ticket-system-process` owned by the launcher
+service with mode `0750`, a socket owned by the launcher service and ticket-system service
+group with mode `0660`, and `SO_PEERCRED` validation against the exact configured
+ticket-system service UID. It will accept only closed bounded versioned messages no larger
+than 2,097,152 bytes and reject client-provided host mount paths, raw Bubblewrap options,
+and raw cgroup names. It has no unsandboxed fallback.
+
+Its pre-execution barrier is:
+
+```text
+create operation cgroup
+→ set every limit
+→ create blocked sandbox child
+→ move child into cgroup
+→ verify membership
+→ release child
+→ execute untrusted code
+```
+
+No untrusted code may run before membership and every limit are active.
+
+## Remaining tranche sequence
+
+- **2A1:** trusted immutable execution-input materializer and protected-path manifest.
+- **2A2:** rootfs deployment mapping, retention, manifest verification, and capability
+  health contract.
+- **2A3:** launcher protocol/server and pre-execution cgroup barrier, still not connected
+  to model dispatch.
+- **2A4:** kernel-backed namespace, filesystem, network, seccomp, cgroup/resource and
+  adversarial enforcement validation.
+- **2B:** connect authorized dispatch, durable start/terminal evidence, bounded output
+  artifacts, cancellation/recovery, and execution idempotency.

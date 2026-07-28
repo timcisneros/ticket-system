@@ -7,10 +7,14 @@ const fs = require('fs');
 const path = require('path');
 const {
   PROCESS_AUTHORITY_CARDINALITY_LIMITS,
+  PROCESS_EXECUTABLE_FORMAT,
   PROCESS_EXECUTION_POLICY,
+  PROCESS_FILESYSTEM_POLICY_HARD_LIMITS,
   PROCESS_PROFILE_BOUNDS,
   PROCESS_PROFILE_HARD_LIMITS,
   PROCESS_RUNTIME_PHASES,
+  PROCESS_TARGET_CATALOG_HISTORICAL_VERSION,
+  PROCESS_TARGET_CATALOG_VERSION,
   normalizeProcessProfileGrants,
   resolveProcessProfileGrants,
   validateProcessTargetCatalog
@@ -78,6 +82,55 @@ function validCatalog() {
   };
 }
 
+function profileV2(id = 'syntax-check', overrides = {}) {
+  return {
+    id,
+    allowedPhases: ['verification'],
+    runtimeRootfsId: 'node-24-fedora-runtime-v1',
+    executableIdentity: {
+      path: '/usr/bin/node',
+      sha256: 'b'.repeat(64),
+      format: PROCESS_EXECUTABLE_FORMAT
+    },
+    arguments: ['--check', 'server.js'],
+    workingDirectory: '.',
+    environment: { CI: '1' },
+    filesystemPolicy: {
+      inputMode: 'materialized_read_only',
+      writableRoots: [],
+      allowSymlinks: false,
+      allowSpecialFiles: false,
+      maxInputFiles: PROCESS_FILESYSTEM_POLICY_HARD_LIMITS.maxInputFiles,
+      maxInputBytes: PROCESS_FILESYSTEM_POLICY_HARD_LIMITS.maxInputBytes
+    },
+    limits: {
+      wallTimeMs: 30000,
+      maxOutputBytes: 1048576,
+      maxProcesses: 8,
+      memoryBytes: 268435456,
+      cpuQuotaMicrosPer100ms: 100000,
+      maxOpenFiles: 128,
+      maxFileBytes: 16777216,
+      maxTempBytes: 67108864
+    },
+    ...overrides
+  };
+}
+
+function validCatalogV2() {
+  return {
+    version: PROCESS_TARGET_CATALOG_VERSION,
+    runtimeRootfs: [{
+      id: 'node-24-fedora-runtime-v1',
+      manifestSha256: 'a'.repeat(64)
+    }],
+    targets: [{
+      id: 'ticket-system-local',
+      profiles: [profileV2()]
+    }]
+  };
+}
+
 function numberedId(prefix, index) {
   return `${prefix}-${String(index).padStart(3, '0')}`;
 }
@@ -112,6 +165,15 @@ const parsed = validateProcessTargetCatalog(validCatalog());
 equal(parsed, validCatalog(), 'valid version-1 process target catalog parses deterministically');
 ok(Object.isFrozen(parsed) && Object.isFrozen(parsed.targets[0].profiles[0]),
   'validated catalog is deeply immutable');
+const parsedV2 = validateProcessTargetCatalog(validCatalogV2());
+equal(parsedV2, validCatalogV2(), 'valid version-2 process target catalog parses deterministically');
+ok(Object.isFrozen(parsedV2.runtimeRootfs) &&
+  Object.isFrozen(parsedV2.targets[0].profiles[0].filesystemPolicy),
+'validated version-2 catalog is deeply immutable');
+equal(PROCESS_TARGET_CATALOG_HISTORICAL_VERSION, 1,
+  'catalog version 1 remains the historical executor-free schema');
+equal(PROCESS_TARGET_CATALOG_VERSION, 2,
+  'catalog version 2 is the executable-authority schema');
 
 rejects(value => value.targets.push(structuredClone(value.targets[0])),
   'duplicate target IDs are rejected');
@@ -233,6 +295,127 @@ for (const key of ['wallTimeMs', 'maxOutputBytes', 'maxProcesses']) {
   }, `${key} hard ceiling is enforced`);
 }
 
+function rejectsV2(mutator, message) {
+  const value = validCatalogV2();
+  mutator(value);
+  assert.throws(
+    () => validateProcessTargetCatalog(value),
+    error => error && error.code === 'PROCESS_TARGET_CATALOG_INVALID',
+    message
+  );
+  passed += 1;
+  console.log(`  ok ${message}`);
+}
+
+rejectsV2(value => { delete value.runtimeRootfs; },
+  'version-2 catalog requires trusted runtime rootfs declarations');
+rejectsV2(value => {
+  value.runtimeRootfs.push(structuredClone(value.runtimeRootfs[0]));
+}, 'version-2 catalog rejects duplicate runtime rootfs IDs');
+const rootfsMaximum = validCatalogV2();
+rootfsMaximum.runtimeRootfs = Array.from(
+  { length: PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxRuntimeRootfsEntries },
+  (_, index) => ({
+    id: numberedId('runtime', index),
+    manifestSha256: crypto.createHash('sha256').update(`runtime-${index}`).digest('hex')
+  })
+);
+rootfsMaximum.targets[0].profiles[0].runtimeRootfsId = rootfsMaximum.runtimeRootfs[0].id;
+equal(
+  validateProcessTargetCatalog(rootfsMaximum).runtimeRootfs.length,
+  PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxRuntimeRootfsEntries,
+  'version-2 catalog accepts the exact runtime rootfs entry ceiling'
+);
+rejectsV2(value => {
+  value.runtimeRootfs = Array.from(
+    { length: PROCESS_AUTHORITY_CARDINALITY_LIMITS.maxRuntimeRootfsEntries + 1 },
+    (_, index) => ({
+      id: numberedId('runtime', index),
+      manifestSha256: crypto.createHash('sha256').update(`runtime-${index}`).digest('hex')
+    })
+  );
+  value.targets[0].profiles[0].runtimeRootfsId = value.runtimeRootfs[0].id;
+}, 'version-2 catalog rejects maximum-plus-one runtime rootfs entries');
+const rootfsPunctuation = validCatalogV2();
+rootfsPunctuation.runtimeRootfs.push({
+  id: '0-runtime',
+  manifestSha256: 'd'.repeat(64)
+});
+equal(
+  validateProcessTargetCatalog(rootfsPunctuation).runtimeRootfs.map(item => item.id),
+  ['0-runtime', 'node-24-fedora-runtime-v1'],
+  'runtime rootfs entries use canonical identifier ordering'
+);
+rejectsV2(value => {
+  value.targets[0].profiles[0].runtimeRootfsId = 'missing-rootfs';
+}, 'version-2 profile rejects an unknown runtime rootfs reference');
+for (const field of ['manifestSha256']) {
+  rejectsV2(value => { value.runtimeRootfs[0][field] = 'A'.repeat(64); },
+    `runtime rootfs ${field} must be lowercase SHA-256`);
+}
+rejectsV2(value => {
+  value.targets[0].profiles[0].executableIdentity.sha256 = 'not-a-hash';
+}, 'executable identity rejects an invalid hash');
+rejectsV2(value => {
+  value.targets[0].profiles[0].executableIdentity.format = 'script';
+}, 'non-ELF executable authority is rejected');
+rejectsV2(value => {
+  value.targets[0].profiles[0].executableIdentity.path = '/usr/bin/tool --flag';
+}, 'executable identity cannot represent a command string');
+rejectsV2(value => {
+  value.targets[0].profiles[0].executableIdentity = {
+    path: '/usr/bin/script',
+    sha256: 'b'.repeat(64),
+    format: 'script',
+    shebang: '/bin/sh'
+  };
+}, 'script and shebang authority cannot be represented');
+
+for (const key of Object.keys(PROCESS_PROFILE_HARD_LIMITS)) {
+  rejectsV2(value => { delete value.targets[0].profiles[0].limits[key]; },
+    `version-2 profile requires ${key}`);
+  rejectsV2(value => { value.targets[0].profiles[0].limits[key] = 0; },
+    `version-2 profile rejects zero ${key}`);
+  rejectsV2(value => {
+    value.targets[0].profiles[0].limits[key] = PROCESS_PROFILE_HARD_LIMITS[key] + 1;
+  }, `version-2 profile rejects maximum-plus-one ${key}`);
+  const boundary = validCatalogV2();
+  boundary.targets[0].profiles[0].limits[key] = PROCESS_PROFILE_HARD_LIMITS[key];
+  equal(
+    validateProcessTargetCatalog(boundary).targets[0].profiles[0].limits[key],
+    PROCESS_PROFILE_HARD_LIMITS[key],
+    `version-2 profile accepts the exact ${key} hard ceiling`
+  );
+}
+
+rejectsV2(value => {
+  value.targets[0].profiles[0].filesystemPolicy.writableRoots = ['out'];
+}, 'initial filesystem policy rejects writable roots');
+rejectsV2(value => {
+  value.targets[0].profiles[0].filesystemPolicy.allowSymlinks = true;
+}, 'initial filesystem policy cannot enable symlinks');
+rejectsV2(value => {
+  value.targets[0].profiles[0].filesystemPolicy.allowSpecialFiles = true;
+}, 'initial filesystem policy cannot enable special files');
+for (const key of ['maxInputFiles', 'maxInputBytes']) {
+  rejectsV2(value => {
+    value.targets[0].profiles[0].filesystemPolicy[key] = 0;
+  }, `filesystem policy rejects zero ${key}`);
+  rejectsV2(value => {
+    value.targets[0].profiles[0].filesystemPolicy[key] =
+      PROCESS_FILESYSTEM_POLICY_HARD_LIMITS[key] + 1;
+  }, `filesystem policy rejects maximum-plus-one ${key}`);
+  const boundary = validCatalogV2();
+  boundary.targets[0].profiles[0].filesystemPolicy[key] =
+    PROCESS_FILESYSTEM_POLICY_HARD_LIMITS[key];
+  equal(
+    validateProcessTargetCatalog(boundary).targets[0].profiles[0]
+      .filesystemPolicy[key],
+    PROCESS_FILESYSTEM_POLICY_HARD_LIMITS[key],
+    `filesystem policy accepts the exact ${key} hard ceiling`
+  );
+}
+
 const grants = normalizeProcessProfileGrants([{
   targetId: 'ticket-system-local',
   profileIds: ['syntax-check']
@@ -279,6 +462,55 @@ equal(processAuthorityReferences(snapshot, 'verification'), [{
 }], 'phase-filtered authority references contain only target and profile IDs');
 equal(processAuthorityReferences(snapshot, 'inspection'), [],
   'profiles not allowed in the current phase are not advertised');
+
+const resolvedProfilesV3 = resolveProcessProfileGrants({
+  capabilityEnabled: true,
+  catalog: parsedV2,
+  grants
+});
+const snapshotV3 = buildProcessPolicySnapshot({
+  capabilityEnabled: true,
+  profiles: resolvedProfilesV3,
+  capturedAt: '2026-07-27T12:00:00.000Z'
+});
+equal(snapshotV3.version, 3, 'catalog version 2 exact grants resolve into snapshot version 3');
+equal(snapshotV3.profiles[0].runtimeRootfs, {
+  id: 'node-24-fedora-runtime-v1',
+  manifestSha256: 'a'.repeat(64)
+}, 'version-3 snapshot freezes resolved rootfs manifest authority');
+const punctuationSnapshotV3 = buildProcessPolicySnapshot({
+  capabilityEnabled: true,
+  profiles: punctuationIds.map(profileId => ({
+    ...resolvedProfilesV3[0],
+    profileId
+  })),
+  capturedAt: '2026-07-27T12:00:00.000Z'
+});
+equal(punctuationSnapshotV3.profiles.map(item => item.profileId),
+  ['0-target', 'a-1', 'a.1', 'a0', 'a_1', 'b-target'],
+  'version-3 resolved profile hashing order uses the canonical comparator');
+equal(processAuthorityReferences(snapshotV3, 'verification'), [],
+  'version-3 authority is not advertised before a healthy sandbox capability gate');
+const mutableCatalogV2 = validCatalogV2();
+const immutableSnapshotV3 = buildProcessPolicySnapshot({
+  capabilityEnabled: true,
+  profiles: resolveProcessProfileGrants({
+    capabilityEnabled: true,
+    catalog: mutableCatalogV2,
+    grants
+  }),
+  capturedAt: '2026-07-27T12:00:00.000Z'
+});
+const immutableHashV3 = immutableSnapshotV3.snapshotHash;
+mutableCatalogV2.runtimeRootfs[0].manifestSha256 = 'f'.repeat(64);
+mutableCatalogV2.targets[0].profiles[0].executableIdentity.sha256 = 'e'.repeat(64);
+mutableCatalogV2.targets[0].profiles[0].limits.memoryBytes = 1;
+equal(immutableSnapshotV3.snapshotHash, immutableHashV3,
+  'later version-2 catalog mutation cannot alter the admitted version-3 hash');
+equal(immutableSnapshotV3.profiles[0].runtimeRootfs.manifestSha256, 'a'.repeat(64),
+  'later rootfs catalog mutation cannot alter version-3 rootfs authority');
+equal(immutableSnapshotV3.profiles[0].limits.memoryBytes, 268435456,
+  'later resource-limit mutation cannot alter version-3 resource authority');
 
 assert.throws(() => resolveProcessProfileGrants({
   capabilityEnabled: true,

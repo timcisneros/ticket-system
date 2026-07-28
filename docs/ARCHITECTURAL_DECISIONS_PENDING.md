@@ -4833,6 +4833,67 @@ snapshots remain readable but receive no executable authority.
 
 ---
 
+## Process Executable Authority and Launch-Plan Boundary
+
+| Field | Value |
+|-------|-------|
+| **Status** | Resolved for Tranche 2A0 on 2026-07-27 |
+| **Boundary** | Contract-only; no materializer, capability probe, launcher, sandbox, or execution |
+| **Evidence** | `docs/PROCESS_EXECUTION_CONTRACT.md`; `runtime/process-authority-constants.js`; `runtime/process-target-catalog.js`; `runtime/process-execution-contract.js`; `runtime/process-launch-plan.js` |
+| **Decision** | Only a complete version-3 authority snapshot can produce a private immutable launch plan; versions 1 and 2 are permanently executor-free |
+
+**Why version 2 is not executable:** it records a host absolute executable path but no
+executable content hash, immutable runtime-root identity, read-only materialized-input
+identity, memory/CPU/FD/file/temp ceilings, or explicit immutable filesystem policy.
+Interpreting it through later live deployment configuration would rewrite historical
+authority. It remains readable and unchanged but can never produce a launch plan.
+
+**Version-3 authority:** catalog version 2 resolves exact rootfs ID/manifest authority,
+ELF path/content identity, arguments, working directory, replacement environment,
+read-only materialized-input policy, all required resource ceilings, phases, and fixed
+execution policy into the admitted run. Canonical JSON and the shared locale-independent
+comparator govern snapshot and launch-plan hashes.
+
+**Rootfs trust:** rootfs trees are root-owned, versioned, non-writable by the runtime and
+future launcher UID, manifest-verified before backend health, and retained while
+referenced. Live host system directories and operator home directories cannot substitute.
+An operator deployment mapping from rootfs ID to installed path is outside model input and
+outside live dispatch authority.
+
+**Execution input:** no mutable host workspace path appears in authority or launch plans.
+A later trusted materializer must hold the runtime mutation boundary, copy only authorized
+regular files, reject symlinks/special files, exclude protected paths, enforce file/byte
+bounds, create a launcher-private immutable tree, hash a canonical manifest, and verify
+source-versus-copy before release. Tranche 2A0 defines only its opaque descriptor.
+
+**Read-only first launch:** `inputMode` is `materialized_read_only`; writable roots are
+empty and cannot be enabled. Writable process effects require a later independent
+authority and bounded-copy-out decision.
+
+**Network meaning:** `networkAccess: none` prohibits communication outside the operation
+sandbox. Future enforcement requires a network namespace, no host interfaces/socket
+mounts/inherited sockets, and syscall filtering for external network families and host
+connection paths. Unnamed operation-local IPC such as Unix `socketpair` is not frozen as
+forbidden.
+
+**Launch-plan boundary:** the plan is private runtime-to-launcher material, derived only
+from an immutable v3 run snapshot plus a trusted materialized-input descriptor. It is
+closed, bounded, versioned, canonically hashed, deeply frozen, and absent from the model
+envelope. Version 3 remains non-dispatchable until a future healthy sandbox capability
+generation is an additional gate.
+
+**Future launcher protocol:** launcher-owned restricted Unix socket, `SO_PEERCRED`
+validation against the exact service UID, closed bounded messages with a fixed maximum
+size of 2,097,152 bytes, no client host mount paths, raw sandbox options, raw cgroup names,
+or unsandboxed fallback. The mandatory barrier is create cgroup → set every limit → create blocked child
+→ move and verify membership → release → execute.
+
+**Remaining sequence:** 2A1 materializer; 2A2 rootfs mapping/retention/capability health;
+2A3 authenticated launcher protocol and cgroup barrier; 2A4 kernel containment and
+adversarial proof; 2B dispatch/evidence/output/cancellation/recovery/execution idempotency.
+
+---
+
 ## Workspace Operation Error Handling
 
 | Field | Value |
