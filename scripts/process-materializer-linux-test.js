@@ -214,6 +214,46 @@ function updateFixtureConfig(fixture, transform) {
 
 async function runPinnedRootScenarios() {
   {
+    const fixture = createFixture('singleton-lease');
+    let first;
+    let restarted;
+    try {
+      first = await startService(fixture);
+      const activeSocketIdentity = fs.statSync(fixture.socket).ino;
+      const stagingMarker = path.join(
+        fixture.sealed,
+        'staging',
+        'staging-owned-by-active-instance'
+      );
+      fs.mkdirSync(stagingMarker);
+      fs.writeFileSync(path.join(stagingMarker, 'partial'), 'active');
+      const rejected = await startExpectFailure(fixture);
+      ok(rejected.stderr.includes('PROCESS_MATERIALIZER_ALREADY_RUNNING'),
+        'a second materializer instance is rejected by the lifetime kernel lease');
+      equal(fs.statSync(fixture.socket).ino, activeSocketIdentity,
+        'a rejected second instance cannot unlink or replace the active socket');
+      ok(fs.existsSync(stagingMarker),
+        'a rejected second instance cannot clean active staging state');
+      const health = await first.client.health();
+      equal(health.materializerGeneration, first.generation.materializerGeneration,
+        'the first materializer remains healthy after the rejected start');
+
+      await stopService(first.child);
+      first = null;
+      restarted = await startService(fixture);
+      ok(!fs.existsSync(stagingMarker),
+        'another materializer starts and performs cleanup after the first releases its lease');
+      ok(fs.existsSync(path.join(fixture.sealed, 'materializer-instance.lock')),
+        'the stale lease pathname remains harmless without a held kernel lock');
+    } finally {
+      if (first) await stopService(first.child);
+      if (restarted) await stopService(restarted.child);
+      makeTreeWritable(fixture.root);
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+
+  {
     const fixture = createFixture('source-path-replacement');
     let service;
     try {
@@ -330,7 +370,7 @@ async function runPinnedRootScenarios() {
         'source-root owner or mode changes invalidate the pinned generation'
       );
       equal(fs.readdirSync(fixture.sealed, 'utf8').sort(),
-        ['quarantine', 'registry', 'sealed', 'staging'],
+        ['materializer-instance.lock', 'quarantine', 'registry', 'sealed', 'staging'],
         'source-root authority change publishes no snapshot state');
     } finally {
       if (service) await stopService(service.child);

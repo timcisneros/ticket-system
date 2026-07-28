@@ -1,0 +1,10 @@
+# Install as /usr/lib/tmpfiles.d/ticket-system-process-launcher-foundation.conf.
+# Rootfs contents, manifests, configuration, and the seccomp policy are installed
+# by trusted deployment tooling; tmpfiles only pins their containing boundaries.
+d /run/ticket-system-process 0750 root ticket-system-runtime -
+d /run/ticket-system-process/launcher 0750 ticket-system-launcher ticket-system-runtime -
+d /var/lib/ticket-system/process-launcher 0750 ticket-system-launcher ticket-system-runtime -
+d /var/lib/ticket-system/runtime-rootfs 0555 root root -
+d /etc/ticket-system 0750 root ticket-system-runtime -
+z /etc/ticket-system/process-launcher-foundation.json 0640 root ticket-system-runtime -
+z /etc/ticket-system/process-seccomp-v1.bpf 0440 root ticket-system-runtime -

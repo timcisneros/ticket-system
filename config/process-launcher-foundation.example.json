@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "socketPath": "/run/ticket-system-process/launcher/launcher.sock",
+  "stateRoot": "/var/lib/ticket-system/process-launcher",
+  "allowedClientUid": 62002,
+  "launcherServiceUid": 62004,
+  "materializerServiceUid": 62001,
+  "trustedRootfsOwnerUid": 0,
+  "delegatedCgroupRoot": "/sys/fs/cgroup/ticket-system-process",
+  "healthValidityMs": 30000,
+  "rootfsRegistry": [
+    {
+      "id": "node-24-fedora-runtime-v1",
+      "rootPath": "/var/lib/ticket-system/runtime-rootfs/node-24-fedora-runtime-v1/root",
+      "manifestPath": "/var/lib/ticket-system/runtime-rootfs/node-24-fedora-runtime-v1/manifest.json",
+      "manifestSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "sandboxBackend": {
+    "kind": "bubblewrap",
+    "binaryPath": "/usr/bin/bwrap",
+    "binarySha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "seccompPolicyPath": "/etc/ticket-system/process-seccomp-v1.bpf",
+  "seccompPolicySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "protectedHostPaths": {
+    "runtimeData": [
+      "/var/lib/ticket-system/runtime"
+    ],
+    "materializerState": [
+      "/var/lib/ticket-system/process-inputs"
+    ],
+    "workspaces": [
+      "/srv/ticket-system/workspace"
+    ]
+  }
+}

@@ -4837,9 +4837,9 @@ snapshots remain readable but receive no executable authority.
 
 | Field | Value |
 |-------|-------|
-| **Status** | Resolved for Tranche 2A0; integrity-corrected on 2026-07-27 |
-| **Boundary** | Contract-only; no materializer, capability probe, launcher, sandbox, or execution |
-| **Evidence** | `docs/PROCESS_EXECUTION_CONTRACT.md`; `runtime/process-authority-constants.js`; `runtime/process-target-catalog.js`; `runtime/process-execution-contract.js`; `runtime/process-launch-plan.js` |
+| **Status** | Resolved through Tranche 2A2 on 2026-07-28; active enforcement remains 2A3 |
+| **Boundary** | Materializer and launcher-foundation verification only; no sandbox launch or execution |
+| **Evidence** | `docs/PROCESS_EXECUTION_CONTRACT.md`; `docs/PROCESS_INPUT_MATERIALIZER.md`; `docs/PROCESS_LAUNCHER_FOUNDATION.md`; `runtime/process-execution-contract.js`; `runtime/process-launch-plan.js`; `runtime/process-launcher-foundation-contract.js` |
 | **Decision** | Only a complete version-3 authority snapshot can produce a private immutable launch plan; versions 1 and 2 are permanently executor-free |
 
 **Why version 2 is not executable:** it records a host absolute executable path but no
@@ -4923,8 +4923,26 @@ mandatory whenever process execution is enabled. The present development host ha
 neither root access nor subordinate UID mappings, so this proof is locally blocked and
 must not be reported as executed.
 
-**Remaining sequence:** 2A2 rootfs mapping/retention/capability health; 2A3 enforceable
-launcher and kernel containment; 2B
+**Tranche 2A2 resolution:** the materializer now holds a kernel lifetime lease before
+any staging, registry, or socket mutation. A separate Rust launcher-foundation service
+pins trusted rootfs/manifest/backend/seccomp/cgroup identities, validates a canonical
+complete rootfs manifest, freshly verifies rootfs-internal ELF identities, and exposes
+only authenticated `health`, `getRootfs`, and `verifyExecutable` operations. Its
+rootfs-registry generation binds complete trusted configuration, launcher/backend/policy
+bytes and physical identities, every rootfs manifest and physical identity, protocol,
+and manifest schema. The runtime can form only a private, expiring
+`prerequisites_verified` descriptor with `readyForExecution: false`; this descriptor is
+deliberately incompatible with the healthy sandbox capability contract.
+`docs/PROCESS_LAUNCHER_FOUNDATION.md` is the governing design.
+
+The current host has static Linux prerequisites, including cgroup v2 and the required
+controllers, namespace handles, seccomp, `no_new_privs`, and Bubblewrap. The production
+seccomp policy and delegated ticket-system cgroup do not exist locally. Root/cross-UID
+deployment proof remains an explicit process-enabled release gate; subordinate ranges
+exist on this host, but `newuidmap` cannot install the multi-UID mapping and passwordless
+root is unavailable.
+
+**Remaining sequence:** 2A3 enforceable launcher and kernel containment; 2B
 dispatch/evidence/output/cancellation/recovery/execution idempotency.
 
 ---

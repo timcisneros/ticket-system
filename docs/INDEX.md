@@ -11,6 +11,10 @@
 - [`POSTGRES_CUTOVER.md`](POSTGRES_CUTOVER.md) — current PostgreSQL authority/coordination contract.
 - [`PROCESS_EXECUTION_CONTRACT.md`](PROCESS_EXECUTION_CONTRACT.md) — default-off, executor-free
   bounded process-operation authority, request, outcome, evidence, and snapshot contract.
+- [`PROCESS_INPUT_MATERIALIZER.md`](PROCESS_INPUT_MATERIALIZER.md) — trusted immutable
+  workspace-input materialization, registry, ownership, and mutation-boundary contract.
+- [`PROCESS_LAUNCHER_FOUNDATION.md`](PROCESS_LAUNCHER_FOUNDATION.md) — pinned runtime-rootfs,
+  executable-identity, and non-executable sandbox-prerequisite verification contract.
 - [`PRIMITIVE_GLOSSARY.md`](PRIMITIVE_GLOSSARY.md) — runtime terminology.
 - [`OPERATIONAL_TRANSPARENCY.md`](OPERATIONAL_TRANSPARENCY.md) — read-only operational surfaces.
 - [`OPERATOR_INBOX.md`](OPERATOR_INBOX.md) and [`BROWSER_ENVIRONMENT.md`](BROWSER_ENVIRONMENT.md) —

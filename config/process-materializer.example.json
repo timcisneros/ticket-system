@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "socketPath": "/run/ticket-system-process/materializer.sock",
+  "socketPath": "/run/ticket-system-process/materializer/materializer.sock",
   "sealedSnapshotRoot": "/var/lib/ticket-system/process-inputs",
   "allowedClientUid": 1000,
   "inputPolicyPath": "/etc/ticket-system/process-input-policy.json",

@@ -94,6 +94,10 @@ impl PinnedDirectory {
         }
         Ok(())
     }
+
+    pub(crate) fn raw_fd(&self) -> RawFd {
+        self.descriptor.as_raw_fd()
+    }
 }
 
 pub fn same_physical_directory(left: &PinnedDirectory, right: &PinnedDirectory) -> bool {

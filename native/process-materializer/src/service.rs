@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
+use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -20,13 +21,13 @@ use crate::contract::{
     PROCESS_INPUT_REGISTRY_INVALID, PROCESS_INPUT_SNAPSHOT_MISMATCH,
     PROCESS_INPUT_SNAPSHOT_NOT_FOUND, PROCESS_INPUT_SNAPSHOT_SEAL_FAILED,
     PROCESS_INPUT_SOURCE_CHANGED, PROCESS_INPUT_STORAGE_UNAVAILABLE,
-    PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED, PROCESS_MATERIALIZER_PROTOCOL_INVALID,
-    PROCESS_MATERIALIZER_REQUEST_INVALID, PROCESS_MATERIALIZER_UNAVAILABLE,
-    PROCESS_WORKSPACE_ALLOCATION_UNKNOWN, PROTOCOL_VERSION, ProcessInputPolicy, ProtocolOperation,
-    REGISTRY_SCHEMA_VERSION, RegistryRecord, RequestEnvelope, Result, ServiceConfig,
-    SuccessResponse, WorkspaceSnapshotDescriptor, canonical_struct_json, filesystem_policy_hash,
-    sha256_bytes, validate_get_snapshot_body, validate_identifier, validate_materialize_body,
-    validate_sha256,
+    PROCESS_MATERIALIZER_ALREADY_RUNNING, PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED,
+    PROCESS_MATERIALIZER_PROTOCOL_INVALID, PROCESS_MATERIALIZER_REQUEST_INVALID,
+    PROCESS_MATERIALIZER_UNAVAILABLE, PROCESS_WORKSPACE_ALLOCATION_UNKNOWN, PROTOCOL_VERSION,
+    ProcessInputPolicy, ProtocolOperation, REGISTRY_SCHEMA_VERSION, RegistryRecord,
+    RequestEnvelope, Result, ServiceConfig, SuccessResponse, WorkspaceSnapshotDescriptor,
+    canonical_struct_json, filesystem_policy_hash, sha256_bytes, validate_get_snapshot_body,
+    validate_identifier, validate_materialize_body, validate_sha256,
 };
 use crate::filesystem::{
     PinnedDirectory, materialize_source_tree_from_descriptor, physical_directories_overlap,
@@ -38,6 +39,8 @@ const SOCKET_MODE: u32 = 0o660;
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const REGISTRY_FILE_MODE: u32 = 0o440;
 const PROTOCOL_IO_TIMEOUT: Duration = Duration::from_secs(120);
+const INSTANCE_LOCK_NAME: &str = "materializer-instance.lock";
+const INSTANCE_LOCK_MODE: u32 = 0o600;
 
 #[derive(Debug)]
 pub struct MaterializerService {
@@ -51,6 +54,7 @@ struct ServiceState {
     generation: MaterializerGeneration,
     allocations: BTreeMap<String, PinnedDirectory>,
     _sealed_root: PinnedDirectory,
+    _instance_lock: File,
     socket_directory: PinnedDirectory,
     socket_name: String,
     staging: PathBuf,
@@ -71,6 +75,7 @@ impl MaterializerService {
         let (socket_directory, socket_name) = pin_socket_directory(&config)?;
         validate_existing_socket_entry(&socket_directory, &socket_name)?;
         validate_physical_boundaries(&config, &allocations, &sealed_root, &socket_directory)?;
+        let instance_lock = acquire_instance_lock(&sealed_root)?;
         let root = sealed_root.proc_path();
         let staging = root.join("staging");
         let sealed = root.join("sealed");
@@ -88,6 +93,7 @@ impl MaterializerService {
             generation,
             allocations,
             _sealed_root: sealed_root,
+            _instance_lock: instance_lock,
             socket_directory,
             socket_name,
             staging,
@@ -141,6 +147,53 @@ impl MaterializerService {
         }
         Ok(())
     }
+}
+
+fn acquire_instance_lock(sealed_root: &PinnedDirectory) -> Result<File> {
+    let name = CString::new(INSTANCE_LOCK_NAME).expect("static lock name contains no NUL");
+    let descriptor = unsafe {
+        libc::openat(
+            sealed_root.raw_fd(),
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            INSTANCE_LOCK_MODE,
+        )
+    };
+    if descriptor < 0 {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_STORAGE_UNAVAILABLE,
+            format!(
+                "cannot open descriptor-relative materializer instance lease: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let metadata = file.metadata().map_err(storage)?;
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o7777 != INSTANCE_LOCK_MODE
+    {
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_STORAGE_UNAVAILABLE,
+            "materializer instance lease must be a service-owned regular file with mode 0600",
+        ));
+    }
+    let status = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if status != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            return Err(MaterializerError::new(
+                PROCESS_MATERIALIZER_ALREADY_RUNNING,
+                "Another materializer service instance already owns this sealed state root",
+            ));
+        }
+        return Err(MaterializerError::new(
+            PROCESS_INPUT_STORAGE_UNAVAILABLE,
+            format!("cannot acquire materializer instance lease: {error}"),
+        ));
+    }
+    Ok(file)
 }
 
 fn handle_connection(state: &ServiceState, mut stream: UnixStream) -> Result<()> {

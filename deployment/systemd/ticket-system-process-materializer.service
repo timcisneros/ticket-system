@@ -1,7 +1,7 @@
 [Unit]
 Description=Ticket System trusted process-input materializer
 After=local-fs.target
-ConditionPathIsDirectory=/run/ticket-system-process
+ConditionPathIsDirectory=/run/ticket-system-process/materializer
 ConditionPathIsDirectory=/var/lib/ticket-system/process-inputs
 
 [Service]
@@ -21,7 +21,7 @@ ProtectSystem=strict
 ReadOnlyPaths=/srv/ticket-system/workspace
 ReadOnlyPaths=/etc/ticket-system/process-materializer.json
 ReadOnlyPaths=/etc/ticket-system/process-input-policy.json
-ReadWritePaths=/run/ticket-system-process
+ReadWritePaths=/run/ticket-system-process/materializer
 ReadWritePaths=/var/lib/ticket-system/process-inputs
 RestrictAddressFamilies=AF_UNIX
 CapabilityBoundingSet=

@@ -42,6 +42,7 @@ dist
 dist-ssr
 *.local
 native/process-materializer/target/
+native/process-launcher/target/
 
 # TypeScript
 *.tsbuildinfo

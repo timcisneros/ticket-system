@@ -23,6 +23,8 @@ pub const MAX_INPUT_BYTES_HARD: u64 = 268_435_456;
 pub type FailureCode = &'static str;
 
 pub const PROCESS_MATERIALIZER_UNAVAILABLE: FailureCode = "PROCESS_MATERIALIZER_UNAVAILABLE";
+pub const PROCESS_MATERIALIZER_ALREADY_RUNNING: FailureCode =
+    "PROCESS_MATERIALIZER_ALREADY_RUNNING";
 pub const PROCESS_MATERIALIZER_PROTOCOL_INVALID: FailureCode =
     "PROCESS_MATERIALIZER_PROTOCOL_INVALID";
 pub const PROCESS_MATERIALIZER_CLIENT_UNAUTHORIZED: FailureCode =
@@ -867,7 +869,7 @@ mod tests {
     fn service_configuration_rejects_duplicate_allocations_and_path_overlap() {
         let base = ServiceConfig {
             version: 1,
-            socket_path: "/run/ticket-system-process/materializer.sock".into(),
+            socket_path: "/run/ticket-system-process/materializer/materializer.sock".into(),
             sealed_snapshot_root: "/var/lib/ticket-system/process-inputs".into(),
             allowed_client_uid: 1000,
             input_policy_path: "/etc/ticket-system/process-input-policy.json".into(),

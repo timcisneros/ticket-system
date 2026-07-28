@@ -41,7 +41,10 @@ ok(service.includes('Restart=on-failure') &&
   service.includes('RestrictAddressFamilies=AF_UNIX'),
 'systemd unit defines restart and conservative trusted-service hardening');
 ok(tmpfiles.includes(
-  'd /run/ticket-system-process 0750 ticket-system-materializer ticket-system-runtime -'
+  'd /run/ticket-system-process 0750 root ticket-system-runtime -'
+) && tmpfiles.includes(
+  'd /run/ticket-system-process/materializer 0750 ' +
+  'ticket-system-materializer ticket-system-runtime -'
 ) && tmpfiles.includes(
   'd /var/lib/ticket-system/process-inputs 0750 ' +
   'ticket-system-materializer ticket-system-runtime -'

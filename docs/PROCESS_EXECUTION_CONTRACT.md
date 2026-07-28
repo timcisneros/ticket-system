@@ -710,14 +710,23 @@ be required by a configured runtime. Standard input remains disabled, no PTY may
 allocated, and detached execution is forbidden. Process sandbox enforcement remains
 absent in 2A1.
 
-## Future authenticated launcher boundary
+## Verified launcher foundation and future authenticated launcher boundary
 
-The future launcher protocol will use `/run/ticket-system-process` owned by the launcher
-service with mode `0750`, a socket owned by the launcher service and ticket-system service
-group with mode `0660`, and `SO_PEERCRED` validation against the exact configured
-ticket-system service UID. It will accept only closed bounded versioned messages no larger
-than 2,097,152 bytes and reject client-provided host mount paths, raw Bubblewrap options,
-and raw cgroup names. It has no unsandboxed fallback.
+Tranche 2A2 implements the verification-only Rust foundation documented in
+`docs/PROCESS_LAUNCHER_FOUNDATION.md`. It pins and completely verifies rootfs manifests,
+ELF identities, the Bubblewrap binary, the seccomp policy, the delegated cgroup
+directory, and static Linux prerequisite presence. Its closed, bounded, authenticated
+protocol exposes only `health`, `getRootfs`, and `verifyExecutable`. The private,
+time-bounded prerequisite generation has `readyForExecution: false`; it is not a healthy
+sandbox capability.
+
+The future launcher execution protocol will use the launcher-owned
+`/run/ticket-system-process/launcher` directory with mode `0750`, a socket owned by the
+launcher service and ticket-system service group with mode `0660`, and `SO_PEERCRED`
+validation against the exact configured ticket-system service UID. It will accept only
+closed bounded versioned messages no larger than 2,097,152 bytes and reject
+client-provided host mount paths, raw Bubblewrap options, and raw cgroup names. It has no
+unsandboxed fallback.
 
 Its pre-execution barrier is:
 
@@ -735,8 +744,6 @@ No untrusted code may run before membership and every limit are active.
 
 ## Remaining tranche sequence
 
-- **2A2:** rootfs deployment mapping, retention, manifest verification, and capability
-  health contract.
 - **2A3:** launcher protocol/server and pre-execution cgroup barrier, still not connected
   to model dispatch.
 - **2B:** connect authorized dispatch, durable start/terminal evidence, bounded output

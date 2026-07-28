@@ -48,7 +48,7 @@ The closed version-1 service configuration is:
 ```json
 {
   "version": 1,
-  "socketPath": "/run/ticket-system-process/materializer.sock",
+  "socketPath": "/run/ticket-system-process/materializer/materializer.sock",
   "sealedSnapshotRoot": "/var/lib/ticket-system/process-inputs",
   "allowedClientUid": 1000,
   "inputPolicyPath": "/etc/ticket-system/process-input-policy.json",
@@ -401,9 +401,11 @@ The deployment examples are:
 - `deployment/systemd/ticket-system-process-materializer.service`
 - `deployment/systemd/ticket-system-process-materializer.tmpfiles`
 
-The tmpfiles example pre-provisions `/run/ticket-system-process` and
-`/var/lib/ticket-system/process-inputs` as `0750`, owned by the dedicated
-`ticket-system-materializer` user with the `ticket-system-runtime` group. It also pins
+The tmpfiles example pre-provisions the root-owned
+`/run/ticket-system-process` parent and the service-owned
+`/run/ticket-system-process/materializer` and
+`/var/lib/ticket-system/process-inputs` roots as `0750`. The service-owned roots use the
+dedicated `ticket-system-materializer` user with the `ticket-system-runtime` group. It also pins
 root-owned `0640` configuration and input-policy files. The unit uses a fixed absolute
 binary and configuration path, no shell or environment file, and exposes only the
 workspace read path plus the two required write roots. This hardens the trusted
@@ -417,3 +419,11 @@ UID cannot use the socket. It needs root or a subordinate multi-UID user namespa
 When `ENABLE_PROCESS_EXECUTION_CONTRACT=true` or
 `PROCESS_MATERIALIZER_CROSS_UID_REQUIRED=1`, inability to run that proof fails the
 release; a process-enabled production release cannot silently skip it.
+
+The service also holds `materializer-instance.lock` beneath the pinned sealed root using
+a descriptor-relative `O_NOFOLLOW | O_CLOEXEC` open and
+`flock(LOCK_EX | LOCK_NB)`. It acquires this lease before staging cleanup, registry
+loading, socket removal, or bind and retains the descriptor for its lifetime. A second
+instance therefore cannot replace the active socket or mutate active staging/registry
+state. The lock pathname remains after shutdown; only the kernel-held lease is
+authoritative.
