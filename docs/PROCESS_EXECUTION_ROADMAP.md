@@ -551,6 +551,13 @@ completed, with `none` for no diagnostic and `unknown` for an exact durable type
 outside the current closed mapping. These presentation categories never replace the
 underlying durable code.
 
+A process is not fully finalized until exactly one canonical generic `runProcess`
+receipt binds that operation identity and agrees with its target, profile, terminal
+outcome, and terminal-result hash. Missing receipt authority keeps the operation
+`finalizing` with pending reconciliation; contradictory or multiply matching authority
+is unavailable and fails closed. For a multi-operation run, any such operation prevents
+the aggregate supervision projection from reporting full terminalization.
+
 `POST /api/runs/:id/stop` remains the one run-level action. It requires the existing
 `ticket:update` authority and same-origin CSRF protection, accepts no request fields,
 and delegates to `ProcessExecutionController.cancelRunOperations`. The controller

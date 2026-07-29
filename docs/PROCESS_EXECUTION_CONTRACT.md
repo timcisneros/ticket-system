@@ -908,8 +908,12 @@ and CLI surfaces derive one bounded `processSupervision` projection from Postgre
 process state, receipts, artifacts, completion authority, and a read-only bounded
 launcher observation. The existing run stop route accepts only the run ID, retains its
 `ticket:update` and same-origin protections, and delegates to the canonical durable
-process cancellation controller. It exposes no PID, cgroup, command, signal, path,
-environment, private capability, raw output, or launcher authority. Tranche 8 is next.
+process cancellation controller. A process is not fully finalized until exactly one
+canonical generic `runProcess` receipt binds the operation identity and agrees with the
+durable target/profile and terminal authority; an absent receipt remains pending
+recovery and a contradictory receipt fails closed. It exposes no PID, cgroup, command,
+signal, path, environment, private capability, raw output, or launcher authority.
+Tranche 8 is next.
 Completed authority, launcher, containment, lifecycle, budget, scheduling, receipt,
 evidence, consequence, completion, supervision, and recovery systems must not be
 rebuilt as parallel subsystems.

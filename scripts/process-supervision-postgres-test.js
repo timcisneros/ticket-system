@@ -14,6 +14,7 @@ const {
   sleep
 } = require('./postgres-test-harness');
 const {
+  buildProcessOperationIdentity,
   hashProcessContractValue
 } = require('../runtime/process-execution-contract');
 
@@ -738,6 +739,301 @@ async function main() {
         repeatedEvents.filter(item =>
           item.type === 'run.completion_decided').length === 1,
       'retry duplicates no lifecycle, terminal, or completion evidence');
+
+      const gapPlans = [{
+        message: 'The bounded fixture has no further work.',
+        actions: [],
+        complete: true
+      }];
+      const gapObjective =
+        `Receipt finalization projection ${STAMP} #PLANS=${
+          encodePlans(gapPlans)
+        }`;
+      const gapTicketResponse = await server.request('POST', '/tickets', {
+        cookie: adminCookie,
+        form: {
+          objective: gapObjective,
+          assignmentTargetType: 'agent',
+          assignmentTargetId: String(agent.id),
+          assignmentMode: 'individual'
+        }
+      });
+      assert(gapTicketResponse.statusCode === 302,
+        'receipt-gap fixture run is admitted through the public seam');
+      const gapTicket = await waitFor(async () => {
+        const page = await store.listTickets({ limit: 100 });
+        return page.tickets.find(item => item.objective === gapObjective);
+      }, 30000, 'receipt-gap ticket');
+      const gapRun = await waitFor(async () => {
+        const page = await store.listRunsForTicket({
+          ticketId: gapTicket.id,
+          limit: 10
+        });
+        const candidate = page.runs[0];
+        if (!candidate ||
+            !['completed', 'failed', 'interrupted'].includes(candidate.status)) {
+          return null;
+        }
+        const durableConsequence = await store.getRunConsequence(candidate.id);
+        return durableConsequence &&
+          durableConsequence.consequence.completionDecision
+          ? candidate
+          : null;
+      }, 45000, 'terminal receipt-gap run with completion decision');
+      const gapOperationIdentity = buildProcessOperationIdentity(
+        gapRun.id,
+        'receipt-gap-operation-001'
+      );
+      const gapHash = 'a'.repeat(64);
+      let gapOperation = (await store.createProcessExecutionIntent({
+        operationIdentity: gapOperationIdentity,
+        runId: gapRun.id,
+        ticketId: gapRun.ticketId,
+        actingAgentId: gapRun.agentId,
+        stepId: 'receipt-gap-step',
+        runtimePhase: 'verification',
+        targetId: 'ticket-system-local',
+        profileId: 'syntax-check',
+        policySnapshotHash: gapHash,
+        runtimeCapabilityGeneration: `process-runtime-v1-${gapHash}`,
+        launchPlanVersion: 1,
+        launchPlanHash: gapHash,
+        launchPlan: {
+          version: 1,
+          operationIdentity: gapOperationIdentity,
+          authority: 'immutable-receipt-gap-fixture'
+        },
+        workspaceSnapshotId: 'workspace-snapshot-receipt-gap',
+        workspaceManifestHash: gapHash,
+        materializerGeneration: 'materializer-v1-receipt-gap',
+        containmentGenerationId: `sandbox-containment-v1-${gapHash}`,
+        rootfsId: 'node-24-fedora-runtime-v1',
+        rootfsManifestHash: gapHash,
+        executableIdentityHash: gapHash,
+        executionPolicyHash: gapHash,
+        filesystemPolicyHash: gapHash
+      })).record;
+      gapOperation = await store.transitionProcessOperation({
+        operationIdentity: gapOperationIdentity,
+        expectedStates: ['intent'],
+        expectedRevision: gapOperation.revision,
+        changes: {
+          lifecycleState: 'active',
+          launcherAcceptanceIdentity:
+            `process-launcher-acceptance:${'1'.repeat(64)}`,
+          lastReconciliationResult: {
+            kind: 'launcher_accepted',
+            observedAt: new Date().toISOString()
+          }
+        }
+      });
+      const gapEndedAt = new Date().toISOString();
+      const gapStartedAt = new Date(Date.parse(gapEndedAt) - 1).toISOString();
+      const gapTerminalResult = {
+        operationIdentity: gapOperationIdentity,
+        terminalOutcome: 'completed',
+        startedAt: gapStartedAt,
+        endedAt: gapEndedAt,
+        durationMs: 1,
+        exitCode: 0,
+        signal: null,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        combinedOutputBytes: 0,
+        stdoutSha256: emptySha256,
+        stderrSha256: emptySha256,
+        outputComplete: true,
+        resourceCause: null,
+        enforcementCause: null,
+        cpuThrottledEvents: 0,
+        launcherEnvironment: {
+          LANG: 'C.UTF-8',
+          LC_ALL: 'C.UTF-8',
+          TMPDIR: '/tmp'
+        }
+      };
+      const gapTerminalResultHash =
+        hashProcessContractValue(gapTerminalResult);
+      gapOperation = await store.transitionProcessOperation({
+        operationIdentity: gapOperationIdentity,
+        expectedStates: ['active'],
+        expectedRevision: gapOperation.revision,
+        changes: {
+          lifecycleState: 'finalizing',
+          startedAt: gapStartedAt,
+          terminalAt: gapEndedAt,
+          terminalOutcome: 'completed',
+          terminalResult: gapTerminalResult,
+          terminalResultHash: gapTerminalResultHash,
+          exitCode: 0,
+          stdoutByteCount: 0,
+          stdoutSha256: emptySha256,
+          stderrByteCount: 0,
+          stderrSha256: emptySha256,
+          combinedOutputByteCount: 0,
+          lastReconciliationResult: {
+            kind: 'launcher_terminal',
+            observedAt: gapEndedAt,
+            terminalResultHash: gapTerminalResultHash
+          }
+        }
+      });
+      const gapStdoutArtifact = {
+        version: 1,
+        id: 'receipt-gap-stdout',
+        path: path.join(privateRoot, 'receipt-gap-stdout.bin'),
+        stream: 'stdout',
+        byteCount: 0,
+        sha256: emptySha256
+      };
+      const gapStderrArtifact = {
+        version: 1,
+        id: 'receipt-gap-stderr',
+        path: path.join(privateRoot, 'receipt-gap-stderr.bin'),
+        stream: 'stderr',
+        byteCount: 0,
+        sha256: emptySha256
+      };
+      await store.appendEvent({
+        type: 'process.terminal',
+        ticketId: gapRun.ticketId,
+        runId: gapRun.id,
+        stepId: 'receipt-gap-step',
+        payload: {
+          operationIdentity: gapOperationIdentity,
+          terminalOutcome: 'completed',
+          terminalResultHash: gapTerminalResultHash
+        }
+      });
+      gapOperation = await store.transitionProcessOperation({
+        operationIdentity: gapOperationIdentity,
+        expectedStates: ['finalizing'],
+        expectedRevision: gapOperation.revision,
+        changes: {
+          lifecycleState: 'terminal',
+          requiredEvidenceState: 'complete',
+          stdoutArtifact: gapStdoutArtifact,
+          stderrArtifact: gapStderrArtifact,
+          lastReconciliationResult: {
+            kind: 'durable_finalization_complete',
+            observedAt: new Date().toISOString()
+          }
+        }
+      });
+      gapOperation = await store.transitionProcessOperation({
+        operationIdentity: gapOperationIdentity,
+        expectedStates: ['terminal'],
+        expectedRevision: gapOperation.revision,
+        changes: {
+          launcherOutputAcknowledged: true,
+          lastReconciliationResult: {
+            kind: 'launcher_output_acknowledged',
+            observedAt: new Date().toISOString()
+          }
+        }
+      });
+      const gapReceiptsBefore =
+        await store.listRunOperations(gapRun.id, { limit: 100 });
+      assert(!gapReceiptsBefore.some(item =>
+        item.operation === 'runProcess'),
+      'terminal fixture deliberately has no canonical runProcess receipt');
+      const gapEventsBefore = await store.listRunEvents(
+        gapRun.id,
+        { afterSeq: -1, limit: 500 }
+      );
+      const gapRevisionBefore = gapOperation.revision;
+      const launchCountBeforeReceiptProjection = native.launchCount;
+
+      const gapStateResponse = await server.request(
+        'GET',
+        `/api/runs/${gapRun.id}/state`,
+        { cookie: adminCookie }
+      );
+      const gapState = json(gapStateResponse).processSupervision;
+      assert(gapStateResponse.statusCode === 200 &&
+        gapState.lifecycleState === 'finalizing' &&
+        gapState.finalizationState === 'pending' &&
+        gapState.reconciliationState === 'pending' &&
+        gapState.diagnosticCategory === 'recovery_failure' &&
+        gapState.diagnosticCode === 'PROCESS_OPERATION_RECEIPT_MISSING',
+      'authorized state API keeps a terminal operation finalizing without its receipt');
+      const gapPage = await server.request(
+        'GET',
+        `/runs/${gapRun.id}`,
+        { cookie: adminCookie }
+      );
+      const gapSectionStart = gapPage.body.indexOf('Process supervision');
+      const gapSectionEnd = gapPage.body.indexOf('</section>', gapSectionStart);
+      const gapSupervisionHtml = gapPage.body.slice(
+        gapSectionStart,
+        gapSectionEnd + '</section>'.length
+      );
+      assert(gapPage.statusCode === 200 &&
+        gapSupervisionHtml.includes(
+          '<dt>Finalization</dt><dd><code>pending</code></dd>'
+        ) &&
+        !gapSupervisionHtml.includes(
+          '<dt>Finalization</dt><dd><code>complete</code></dd>'
+        ),
+      'run detail does not render all finalization obligations complete');
+      const gapAfterReads = await store.getProcessOperation(
+        gapOperationIdentity
+      );
+      const gapEventsAfterReads = await store.listRunEvents(
+        gapRun.id,
+        { afterSeq: -1, limit: 500 }
+      );
+      const gapReceiptsAfterReads =
+        await store.listRunOperations(gapRun.id, { limit: 100 });
+      assert(gapAfterReads.revision === gapRevisionBefore &&
+        gapEventsAfterReads.length === gapEventsBefore.length &&
+        gapReceiptsAfterReads.length === gapReceiptsBefore.length,
+      'state and page GETs neither repair nor mutate PostgreSQL');
+
+      await store.recordOperationReceipt({
+        runId: gapRun.id,
+        idempotencyKey: gapOperationIdentity,
+        stepId: 'receipt-gap-step',
+        operation: 'runProcess',
+        outcome: 'succeeded',
+        receipt: {
+          version: 1,
+          operationIdentity: gapOperationIdentity,
+          targetId: 'ticket-system-local',
+          profileId: 'syntax-check',
+          terminalOutcome: 'completed',
+          terminalResultHash: gapTerminalResultHash,
+          stdoutArtifact: gapStdoutArtifact,
+          stderrArtifact: gapStderrArtifact
+        },
+        eventType: null
+      });
+      const convergedResponse = await server.request(
+        'GET',
+        `/api/runs/${gapRun.id}/state`,
+        { cookie: adminCookie }
+      );
+      const converged = json(convergedResponse).processSupervision;
+      assert(convergedResponse.statusCode === 200 &&
+        converged.lifecycleState === 'terminal' &&
+        converged.finalizationState === 'complete' &&
+        converged.processTreeState === 'confirmed_empty',
+      'existing receipt publication converges supervision to terminal');
+      const gapProcessReceipts = (
+        await store.listRunOperations(gapRun.id, { limit: 100 })
+      ).filter(item => item.operation === 'runProcess');
+      assert(gapProcessReceipts.length === 1 &&
+        gapProcessReceipts[0].operationKey === gapOperationIdentity,
+      'exactly one canonical receipt binds the operation identity');
+      const replayedConverged = json(await server.request(
+        'GET',
+        `/api/runs/${gapRun.id}/state`,
+        { cookie: adminCookie }
+      )).processSupervision;
+      assert(JSON.stringify(replayedConverged) === JSON.stringify(converged),
+        'exact replay reconstructs the same final supervision projection');
+      assert(native.launchCount === launchCountBeforeReceiptProjection,
+        'receipt recovery and repeated reads cause no process or launcher side effect');
     } finally {
       await new Promise(resolve => materializerServer.close(resolve));
       await new Promise(resolve => launcherServer.close(resolve));

@@ -12,6 +12,7 @@ const {
 
 const HASH = 'a'.repeat(64);
 const IDENTITY = `process-operation:${'b'.repeat(64)}`;
+const OTHER_IDENTITY = `process-operation:${'c'.repeat(64)}`;
 const NOW = '2026-07-29T12:00:00.000Z';
 
 function run(overrides = {}) {
@@ -58,12 +59,26 @@ function event(type, payload = {}) {
   };
 }
 
-function receipt() {
+function receipt(operationIdentity = IDENTITY, overrides = {}) {
+  const {
+    receipt: receiptOverrides = {},
+    ...envelopeOverrides
+  } = overrides;
   return {
     operation: 'runProcess',
-    idempotencyKey: IDENTITY,
+    idempotencyKey: operationIdentity,
+    targetId: 'local-workspace',
+    profileId: 'node-check',
+    terminalOutcome: 'completed',
+    terminalResultHash: HASH,
+    ...envelopeOverrides,
     receipt: {
-      operationIdentity: IDENTITY
+      operationIdentity,
+      targetId: 'local-workspace',
+      profileId: 'node-check',
+      terminalOutcome: 'completed',
+      terminalResultHash: HASH,
+      ...receiptOverrides
     }
   };
 }
@@ -89,13 +104,18 @@ function completion(executionDisposition, completionDisposition) {
 function project({
   runValue = run(),
   operation = record(),
+  operations = null,
   events = [],
   receipts = [],
   observations = []
 } = {}) {
   return buildProcessSupervisionProjection({
     run: runValue,
-    processOperations: operation ? [operation] : [],
+    processOperations: operations === null
+      ? operation
+        ? [operation]
+        : []
+      : operations,
     events,
     receipts,
     launcherObservations: observations
@@ -175,7 +195,10 @@ function lifecycleCases() {
         event('process.cancellation_requested'),
         event('process.terminal')
       ],
-      receipts: [receipt()]
+      receipts: [receipt(IDENTITY, {
+        terminalOutcome: 'cancelled',
+        receipt: { terminalOutcome: 'cancelled' }
+      })]
     })],
     ['failed', project({
       runValue: run({
@@ -187,7 +210,10 @@ function lifecycleCases() {
         terminalOutcome: 'runtime_interrupted'
       },
       events: [event('process.terminal')],
-      receipts: [receipt()]
+      receipts: [receipt(IDENTITY, {
+        terminalOutcome: 'runtime_interrupted',
+        receipt: { terminalOutcome: 'runtime_interrupted' }
+      })]
     })],
     ['unavailable', project({
       operation: record({
@@ -352,7 +378,11 @@ function main() {
       requiredEvidenceState: 'complete',
       launcherOutputAcknowledged: true
     }),
-    events: [event('process.terminal')]
+    events: [event('process.terminal')],
+    receipts: [receipt(IDENTITY, {
+      terminalOutcome: 'exited_nonzero',
+      receipt: { terminalOutcome: 'exited_nonzero' }
+    })]
   });
   assert.strictEqual(
     executionFailure.diagnosticCategory,
@@ -409,17 +439,145 @@ function main() {
     },
     events: [event('process.terminal')],
     receipts: [{
-      ...receipt(),
-      receipt: {
-        operationIdentity: IDENTITY,
-        terminalResultHash: 'c'.repeat(64)
-      }
+      ...receipt(IDENTITY, {
+        receipt: { terminalResultHash: 'd'.repeat(64) }
+      })
     }]
   });
   assert.strictEqual(receiptConflict.lifecycleState, 'unavailable');
   assert.strictEqual(
     receiptConflict.diagnosticCode,
     'PROCESS_EXECUTION_STATE_INVALID'
+  );
+
+  const terminalReceiptRecord = {
+    ...record(),
+    lifecycleState: 'terminal',
+    launcherAcceptanceIdentity: 'launcher-acceptance',
+    startedAt: NOW,
+    terminalAt: NOW,
+    terminalOutcome: 'completed',
+    terminalResultHash: HASH,
+    terminalResult: {
+      outputComplete: true
+    },
+    stdoutArtifact: {
+      id: 'receipt-stdout',
+      stream: 'stdout',
+      byteCount: 0,
+      sha256: HASH
+    },
+    stderrArtifact: {
+      id: 'receipt-stderr',
+      stream: 'stderr',
+      byteCount: 0,
+      sha256: HASH
+    },
+    requiredEvidenceState: 'complete',
+    launcherOutputAcknowledged: true
+  };
+  const terminalReceiptRun = run({
+    status: 'completed',
+    ...completion('succeeded', 'completed')
+  });
+  const terminalReceiptEvents = [event('process.terminal')];
+  const missingReceipt = project({
+    runValue: terminalReceiptRun,
+    operation: terminalReceiptRecord,
+    events: terminalReceiptEvents,
+    receipts: []
+  });
+  assert.strictEqual(missingReceipt.finalizationState, 'pending');
+  assert.strictEqual(missingReceipt.lifecycleState, 'finalizing');
+  assert.strictEqual(missingReceipt.reconciliationState, 'pending');
+  assert.strictEqual(
+    missingReceipt.diagnosticCategory,
+    'recovery_failure'
+  );
+  assert.strictEqual(
+    missingReceipt.diagnosticCode,
+    'PROCESS_OPERATION_RECEIPT_MISSING'
+  );
+  assert.strictEqual(
+    missingReceipt.operations[0].terminalResultHash,
+    HASH,
+    'missing receipt preserves authoritative terminal facts'
+  );
+
+  const exactReceipt = project({
+    runValue: terminalReceiptRun,
+    operation: terminalReceiptRecord,
+    events: terminalReceiptEvents,
+    receipts: [receipt()]
+  });
+  assert.strictEqual(exactReceipt.finalizationState, 'complete');
+  assert.strictEqual(exactReceipt.lifecycleState, 'terminal');
+  assert.strictEqual(exactReceipt.diagnosticCode, 'OBJECTIVE_COMPLETED');
+
+  const anotherOperationReceipt = project({
+    runValue: terminalReceiptRun,
+    operation: terminalReceiptRecord,
+    events: terminalReceiptEvents,
+    receipts: [receipt(OTHER_IDENTITY)]
+  });
+  assert.strictEqual(
+    anotherOperationReceipt.diagnosticCode,
+    'PROCESS_OPERATION_RECEIPT_MISSING',
+    'a receipt for another operation cannot satisfy this operation'
+  );
+
+  const otherTerminalRecord = {
+    ...terminalReceiptRecord,
+    operationIdentity: OTHER_IDENTITY,
+    requestedAt: '2026-07-29T12:00:01.000Z'
+  };
+  const multiOperation = buildProcessSupervisionProjection({
+    run: terminalReceiptRun,
+    processOperations: [terminalReceiptRecord, otherTerminalRecord],
+    events: [
+      event('process.terminal'),
+      event('process.terminal', { operationIdentity: OTHER_IDENTITY })
+    ],
+    receipts: [receipt()],
+    launcherObservations: []
+  });
+  assert.strictEqual(multiOperation.operations[0].lifecycleState, 'terminal');
+  assert.strictEqual(
+    multiOperation.operations[1].lifecycleState,
+    'finalizing'
+  );
+  assert.strictEqual(
+    multiOperation.operations[1].diagnosticCode,
+    'PROCESS_OPERATION_RECEIPT_MISSING'
+  );
+  assert.strictEqual(
+    multiOperation.lifecycleState,
+    'finalizing',
+    'one exact receipt cannot finalize two process operations'
+  );
+
+  const crossBoundReceipt = receipt(IDENTITY, {
+    receipt: { operationIdentity: OTHER_IDENTITY }
+  });
+  const crossBound = buildProcessSupervisionProjection({
+    run: terminalReceiptRun,
+    processOperations: [terminalReceiptRecord, otherTerminalRecord],
+    events: [
+      event('process.terminal'),
+      event('process.terminal', { operationIdentity: OTHER_IDENTITY })
+    ],
+    receipts: [crossBoundReceipt],
+    launcherObservations: []
+  });
+  assert(crossBound.operations.every(operation =>
+    operation.lifecycleState === 'unavailable' &&
+    operation.diagnosticCode === 'PROCESS_EXECUTION_STATE_INVALID'),
+  'conflicting identity locations cannot let one receipt satisfy two operations');
+  assert.strictEqual(crossBound.lifecycleState, 'unavailable');
+  assert.notStrictEqual(
+    missingReceipt.diagnosticCode,
+    receiptConflict.diagnosticCode,
+    'receipt absence remains distinct from receipt contradiction'
   );
 
   const unprovedCancellation = project({
@@ -516,6 +674,18 @@ function main() {
     supervisionSource
   ),
     'the derived projection introduces no process-local lifecycle registry');
+  assert.match(
+    supervisionSource,
+    /const receiptComplete = Boolean\(receipt\) && !receiptMismatch;/
+  );
+  const terminalFinalizationSource = supervisionSource.slice(
+    supervisionSource.indexOf("if (record.lifecycleState === 'finalizing')"),
+    supervisionSource.indexOf('let lifecycleState;')
+  );
+  assert(
+    /receiptComplete/.test(terminalFinalizationSource),
+    'complete finalization requires the exact canonical process receipt'
+  );
   const migrations = fs.readdirSync(
     path.join(__dirname, '..', 'persistence', 'postgres', 'migrations')
   );

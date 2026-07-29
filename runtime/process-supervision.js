@@ -199,13 +199,32 @@ function observationFor(operationIdentity, launcherObservations) {
     item && item.operationIdentity === operationIdentity) || null;
 }
 
+function receiptIdentityValues(item) {
+  const document = item && item.receipt &&
+    typeof item.receipt === 'object' &&
+    !Array.isArray(item.receipt)
+    ? item.receipt
+    : null;
+  return [
+    item && item.operationKey,
+    item && item.idempotencyKey,
+    item && item.operationIdentity,
+    document && document.operationIdentity
+  ].filter(value => typeof value === 'string');
+}
+
+function receiptMatchesIdentity(item, operationIdentity) {
+  return Boolean(
+    item &&
+    item.operation === 'runProcess' &&
+    receiptIdentityValues(item).includes(operationIdentity)
+  );
+}
+
 function receiptFor(operationIdentity, receipts) {
-  return receipts.find(item =>
-    item && item.operation === 'runProcess' &&
-    (item.operationKey === operationIdentity ||
-      item.idempotencyKey === operationIdentity ||
-      item.operationIdentity === operationIdentity ||
-      (item.receipt && item.receipt.operationIdentity === operationIdentity))) || null;
+  const matches = receipts.filter(item =>
+    receiptMatchesIdentity(item, operationIdentity));
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function operationEvents(operationIdentity, events) {
@@ -213,8 +232,15 @@ function operationEvents(operationIdentity, events) {
     eventOperationIdentity(event) === operationIdentity);
 }
 
-function reconciliationState(record, observation, events, mismatch) {
+function reconciliationState(
+  record,
+  observation,
+  events,
+  mismatch,
+  receiptMissing
+) {
   if (mismatch) return 'pending';
+  if (receiptMissing) return 'pending';
   const kinds = new Set([
     record && record.lastReconciliationResult &&
       record.lastReconciliationResult.kind
@@ -336,6 +362,8 @@ function deriveOperationProjection({
     record.operationIdentity,
     launcherObservations
   );
+  const receiptCandidates = receipts.filter(item =>
+    receiptMatchesIdentity(item, record.operationIdentity));
   const receipt = receiptFor(record.operationIdentity, receipts);
   const receiptFacts = receipt && receipt.receipt &&
     typeof receipt.receipt === 'object'
@@ -350,17 +378,22 @@ function deriveOperationProjection({
   const launcherState = observation && observation.availability === 'available'
     ? observation.state
     : null;
-  const receiptMismatch = Boolean(receiptFacts && (
-    receiptFacts.operationIdentity !== record.operationIdentity ||
-    (receiptFacts.targetId != null &&
-      receiptFacts.targetId !== record.targetId) ||
-    (receiptFacts.profileId != null &&
-      receiptFacts.profileId !== record.profileId) ||
-    (receiptFacts.terminalOutcome != null &&
-      receiptFacts.terminalOutcome !== record.terminalOutcome) ||
-    (receiptFacts.terminalResultHash != null &&
-      receiptFacts.terminalResultHash !== record.terminalResultHash)
-  ));
+  const receiptMismatch = receiptCandidates.length > 1 || Boolean(
+    receiptFacts && (
+      receiptIdentityValues(receipt).some(identity =>
+        identity !== record.operationIdentity) ||
+      receiptFacts.targetId !== record.targetId ||
+      receiptFacts.profileId !== record.profileId ||
+      receiptFacts.terminalOutcome !== record.terminalOutcome ||
+      receiptFacts.terminalResultHash !== record.terminalResultHash
+    )
+  );
+  const receiptRequired = record.lifecycleState === 'terminal' &&
+    terminalEvidence &&
+    typeof record.terminalResultHash === 'string';
+  const receiptMissing = receiptRequired &&
+    receiptCandidates.length === 0;
+  const receiptComplete = Boolean(receipt) && !receiptMismatch;
   const mismatch = Boolean(
     receiptMismatch ||
     (record.lifecycleState === 'active' && launcherState === 'not_found') ||
@@ -409,6 +442,15 @@ function deriveOperationProjection({
     processTreeState = 'confirmed_empty';
   }
 
+  const stdoutArtifact = artifactProjection(record.stdoutArtifact, 'stdout');
+  const stderrArtifact = artifactProjection(record.stderrArtifact, 'stderr');
+  const outputArtifactsRequired = Boolean(
+    record.terminalResult &&
+    record.terminalResult.outputComplete === true
+  );
+  const outputArtifactsComplete = !outputArtifactsRequired ||
+    Boolean(stdoutArtifact && stderrArtifact);
+
   let cancellationState = 'not_requested';
   if (record.cancellationRequested) {
     if (record.lifecycleState === 'terminal') {
@@ -429,9 +471,17 @@ function deriveOperationProjection({
   if (record.lifecycleState === 'finalizing') {
     finalizationState = 'pending';
   } else if (record.lifecycleState === 'terminal') {
-    const complete = record.requiredEvidenceState === 'complete' &&
+    const complete =
+      typeof record.terminalOutcome === 'string' &&
+      typeof record.terminalResultHash === 'string' &&
+      ['confirmed_empty', 'not_applicable'].includes(processTreeState) &&
+      outputArtifactsComplete &&
+      record.requiredEvidenceState === 'complete' &&
+      receiptComplete &&
       (record.launcherAcceptanceIdentity === null ||
-        record.launcherOutputAcknowledged === true);
+        record.launcherOutputAcknowledged === true) &&
+      TERMINAL_RUN_STATUSES.has(run.status) &&
+      Boolean(completion);
     finalizationState = complete ? 'complete' : 'pending';
   } else if (launcherState === 'terminal') {
     finalizationState = 'pending';
@@ -481,7 +531,8 @@ function deriveOperationProjection({
     record,
     observation,
     matchingEvents,
-    mismatch
+    mismatch,
+    receiptMissing
   );
   const diagnostic = diagnosticFor({
     run,
@@ -494,14 +545,15 @@ function deriveOperationProjection({
   if (receiptMismatch) {
     diagnostic.category = 'recovery_failure';
     diagnostic.code = 'PROCESS_EXECUTION_STATE_INVALID';
+  } else if (receiptMissing) {
+    diagnostic.category = 'recovery_failure';
+    diagnostic.code = 'PROCESS_OPERATION_RECEIPT_MISSING';
   } else if (record.cancellationRequested &&
       record.lifecycleState === 'terminal' &&
       cancellationState !== 'complete') {
     diagnostic.category = 'cancellation_failure';
     diagnostic.code = 'PROCESS_OPERATION_TERMINATION_FAILED';
   }
-  const stdoutArtifact = artifactProjection(record.stdoutArtifact, 'stdout');
-  const stderrArtifact = artifactProjection(record.stderrArtifact, 'stderr');
   const projection = {
     operationIdentity: record.operationIdentity,
     targetId: record.targetId,
@@ -600,10 +652,16 @@ function buildProcessSupervisionProjection({
   const latest = operations.length > 0
     ? operations[operations.length - 1]
     : null;
-  const topDiagnostic = latest
+  const receiptBlocker = operations.find(operation =>
+    operation.diagnosticCode === 'PROCESS_EXECUTION_STATE_INVALID') ||
+    operations.find(operation =>
+      operation.diagnosticCode === 'PROCESS_OPERATION_RECEIPT_MISSING') ||
+    null;
+  const aggregate = receiptBlocker || latest;
+  const topDiagnostic = aggregate
     ? {
-        category: latest.diagnosticCategory,
-        code: latest.diagnosticCode || null
+        category: aggregate.diagnosticCategory,
+        code: aggregate.diagnosticCode || null
       }
     : diagnosticFor({
         run,
@@ -617,13 +675,13 @@ function buildProcessSupervisionProjection({
     version: PROCESS_SUPERVISION_VERSION,
     availability: historical
       ? 'historical'
-      : latest && latest.lifecycleState === 'unavailable'
+      : aggregate && aggregate.lifecycleState === 'unavailable'
         ? 'unavailable'
         : 'available',
     lifecycleState: historical
       ? 'not_started'
-      : latest
-        ? latest.lifecycleState
+      : aggregate
+        ? aggregate.lifecycleState
         : 'not_started',
     diagnosticCategory: topDiagnostic.category,
     ...(topDiagnostic.code ? { diagnosticCode: topDiagnostic.code } : {}),
@@ -639,7 +697,7 @@ function buildProcessSupervisionProjection({
         }
       : {})
   };
-  if (latest) {
+  if (aggregate) {
     for (const key of [
       'durableOperationState',
       'launcherOwnershipState',
@@ -649,7 +707,7 @@ function buildProcessSupervisionProjection({
       'reconciliationState',
       'lastObservedAt'
     ]) {
-      if (latest[key] !== undefined) projection[key] = latest[key];
+      if (aggregate[key] !== undefined) projection[key] = aggregate[key];
     }
   }
   return deepFreeze(projection);
