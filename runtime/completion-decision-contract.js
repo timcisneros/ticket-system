@@ -89,6 +89,72 @@ const RELEVANT_EVIDENCE_TYPES = new Set([
   'process.cancellation_requested',
   'process.infrastructure_interrupted'
 ]);
+const INFRASTRUCTURE_FAILURE_AUTHORITIES = new Set([
+  'EVENT_PERSISTENCE_UNAVAILABLE',
+  'EVIDENCE_PERSISTENCE_FAILED',
+  'PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE',
+  'PROCESS_RUNTIME_CAPABILITY_MISMATCH',
+  'PROCESS_EXECUTION_RECONCILIATION_FAILED',
+  'PROCESS_EXECUTION_OPERATION_LOST',
+  'PROCESS_EXECUTION_LAUNCHER_RESTARTED',
+  'PROCESS_OUTPUT_UNAVAILABLE',
+  'PROCESS_OUTPUT_CHUNK_INVALID',
+  'PROCESS_OUTPUT_HASH_MISMATCH',
+  'PROCESS_OUTPUT_ARTIFACT_FAILED',
+  'PROCESS_OUTPUT_ACKNOWLEDGEMENT_FAILED',
+  'PROCESS_EXECUTION_EVIDENCE_FAILED',
+  'PROCESS_EXECUTION_CANCELLATION_FAILED',
+  'PROCESS_EXECUTION_FINALIZATION_FAILED',
+  'PROCESS_LAUNCHER_REGISTRY_INVALID',
+  'PROCESS_LAUNCHER_REGISTRY_FULL',
+  'PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE',
+  'PROCESS_CONTAINMENT_UNAVAILABLE',
+  'PROCESS_CONTAINMENT_GENERATION_MISMATCH',
+  'PROCESS_CONTAINMENT_EXPIRED',
+  'PROCESS_CGROUP_DELEGATION_UNAVAILABLE',
+  'PROCESS_CGROUP_CONTROLLER_UNAVAILABLE',
+  'PROCESS_CGROUP_LIMIT_UNAVAILABLE',
+  'PROCESS_CGROUP_MEMBERSHIP_FAILED',
+  'PROCESS_CGROUP_TERMINATION_FAILED',
+  'PROCESS_NAMESPACE_UNAVAILABLE',
+  'PROCESS_MOUNT_LAYOUT_INVALID',
+  'PROCESS_NETWORK_ISOLATION_UNAVAILABLE',
+  'PROCESS_SECCOMP_INSTALLATION_FAILED',
+  'PROCESS_OPERATION_TERMINATION_FAILED',
+  'RUN_BUDGET_RECONCILIATION_FAILED',
+  'RUNTIME_CAPACITY_RECONCILIATION_FAILED',
+  'infrastructure_failure',
+  'evidence_persistence',
+  'process_execution_failed',
+  'environment_integrity',
+  'persistence_failure',
+  'launcher_failure',
+  'containment_failure',
+  'reconciliation_failure',
+  'required_evidence_failure'
+]);
+const BUDGET_FAILURE_AUTHORITIES = new Set([
+  'RUN_BUDGET_EXHAUSTED',
+  'RUN_RUNTIME_DURATION_EXCEEDED',
+  'RUN_FEASIBILITY_REJECTED',
+  'RUN_LIMIT_EXCEEDED',
+  'budget_exhausted',
+  'runtime_budget_exhausted',
+  'runtime_budget_insufficient',
+  'runtime_duration_exhausted',
+  'deterministic_infeasibility'
+]);
+const CANCELLATION_AUTHORITIES = new Set([
+  'RUN_CANCELLED',
+  'RUN_INTERRUPTED',
+  'cancelled',
+  'canceled',
+  'interrupted'
+]);
+const VERIFICATION_FAILURE_AUTHORITIES = new Set([
+  'VERIFICATION_FAILED',
+  'verification_failed'
+]);
 
 class CompletionContractError extends TypeError {
   constructor(code, message, details = null) {
@@ -528,38 +594,67 @@ function workflowPostconditionResults(postconditions, events, consequence) {
   return { results: [...processResults, ...results], issues: [] };
 }
 
-function failureCodeFrom(run, snapshot, events) {
-  const candidates = [
+function durableFailureAuthorities(run, snapshot, events) {
+  const values = [
     snapshot && snapshot.failure && snapshot.failure.code,
     snapshot && snapshot.failure && snapshot.failure.kind,
     run && run.failure && run.failure.code,
-    run && run.errorCode
+    run && run.failure && run.failure.kind,
+    run && run.errorCode,
+    run && run.failureKind
   ].filter(Boolean);
-  for (const event of Array.isArray(events) ? events : []) {
+  const eventTypes = new Set();
+  const eventList = Array.isArray(events) ? events : [];
+  for (const event of eventList) {
+    if (event && typeof event.type === 'string') eventTypes.add(event.type);
     const payload = event && event.payload;
-    if (payload && payload.failure && payload.failure.code) candidates.push(payload.failure.code);
-    if (payload && payload.failure && payload.failure.kind) candidates.push(payload.failure.kind);
+    if (payload && payload.failure && payload.failure.code) values.push(payload.failure.code);
+    if (payload && payload.failure && payload.failure.kind) values.push(payload.failure.kind);
+    if (payload && payload.errorCode) values.push(payload.errorCode);
+    if (payload && payload.failureKind) values.push(payload.failureKind);
   }
-  return candidates.map(String);
+  return {
+    values: new Set(values.map(String)),
+    eventTypes,
+    naturalProcessCompletion: eventList.some(event =>
+      event && event.type === 'process.terminal' && event.payload &&
+      event.payload.terminalOutcome === 'completed')
+  };
 }
 
 function deriveExecutionDisposition(run, snapshot, events) {
   if (!run || !TERMINAL_RUN_STATUSES.has(run.status)) {
     fail('COMPLETION_DECISION_INVALID', 'Completion decisions require a terminal run');
   }
-  const codes = failureCodeFrom(run, snapshot, events);
-  const has = pattern => codes.some(code => pattern.test(code));
-  if (run.status === 'interrupted') return 'cancelled';
-  if (has(/verification_failed/i)) return 'succeeded';
-  if (has(/budget|limit_exceeded|runtime_duration|feasibility/i) ||
-      (Array.isArray(events) && events.some(event =>
-        event && ['budget.exhausted', 'feasibility.rejected'].includes(event.type)))) {
-    return 'budget_exhausted';
-  }
-  if (has(/infrastructure|persistence|launcher|containment|reconciliation|evidence/i)) {
+  const authority = durableFailureAuthorities(run, snapshot, events);
+  const hasValue = accepted =>
+    [...authority.values].some(value => accepted.has(value));
+  const hasEvent = type => authority.eventTypes.has(type);
+
+  // Durable cause authority is stronger than the generic terminal status. Keep
+  // these sets closed: error prose never classifies execution disposition.
+  if (hasValue(INFRASTRUCTURE_FAILURE_AUTHORITIES) ||
+      hasEvent('process.infrastructure_interrupted')) {
     return 'infrastructure_failed';
   }
-  return run.status === 'completed' ? 'succeeded' : 'failed';
+  if (hasValue(BUDGET_FAILURE_AUTHORITIES) ||
+      hasEvent('budget.exhausted') ||
+      hasEvent('feasibility.rejected')) {
+    return 'budget_exhausted';
+  }
+  if ((hasValue(CANCELLATION_AUTHORITIES) ||
+       hasEvent('process.cancellation_requested')) &&
+      !authority.naturalProcessCompletion) {
+    return 'cancelled';
+  }
+  if (hasValue(VERIFICATION_FAILURE_AUTHORITIES) ||
+      hasEvent('run.verification_failed')) {
+    return 'succeeded';
+  }
+
+  if (run.status === 'completed') return 'succeeded';
+  if (run.status === 'interrupted') return 'cancelled';
+  return 'failed';
 }
 
 function modelCompletionClaim(snapshot) {

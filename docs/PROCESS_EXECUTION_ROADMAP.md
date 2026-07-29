@@ -423,6 +423,13 @@ decision hash. It is append-only with the consequence: exact reconstruction is
 idempotent, mutation and deletion remain prohibited by the existing consequence
 constraints, and conflicting replay fails closed.
 
+Durable cause authority determines execution disposition. Explicit infrastructure,
+budget/feasibility, cancellation, and verification authority is evaluated in that order;
+terminal status is only a fallback when no more specific durable cause exists. Thus an
+interrupted run with `process.infrastructure_interrupted` remains
+`infrastructure_failed`, while an ordinary interrupted run without stronger authority is
+`cancelled`.
+
 The existing deterministic completion language is preserved. Direct folder, file, and
 absence requirements use their admitted normalized contracts, governed workspace state,
 durable workspace receipts, and finalized replay checks. Existing workflow

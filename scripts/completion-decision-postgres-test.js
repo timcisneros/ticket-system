@@ -5,6 +5,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { withHarness, createAsserter, sleep } = require('./postgres-test-harness');
+const {
+  buildCompletionAuthoritySnapshot,
+  buildCompletionDecision,
+  normalizeCompletionDecision
+} = require('../runtime/completion-decision-contract');
 
 const STAMP = Date.now();
 const assert = createAsserter();
@@ -216,6 +221,180 @@ async function main() {
         'repeated projection creates no duplicate completion evidence');
 
       try { await server.stop(); } catch (_) { /* best effort */ }
+
+      const infrastructureTicket = await store.createTicket({
+        status: 'in_progress',
+        objective: `Infrastructure interruption precedence ${STAMP}`,
+        createdBy: 'completion-decision-postgres-test'
+      });
+      const capturedAt = new Date().toISOString();
+      const completionAuthoritySnapshot = buildCompletionAuthoritySnapshot({
+        objective: infrastructureTicket.objective,
+        kind: 'unrecognized',
+        recognized: false,
+        intent: 'model_driven',
+        completionPolicy: 'explicit_evidence_required',
+        verificationPolicy: 'when_declared',
+        capturedAt
+      });
+      const leaseOwner = `completion-infrastructure-${STAMP}`;
+      const infrastructureRun = await store.createRun({
+        ticketId: infrastructureTicket.id,
+        agentId: agent.id,
+        agentName: agent.name,
+        status: 'pending',
+        leaseOwner,
+        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        ticketOpenedAt: capturedAt,
+        completionAuthoritySnapshot,
+        executionPolicySnapshot: { requireVerification: 'when_declared' }
+      });
+      const started = await store.transitionRun({
+        runId: infrastructureRun.id,
+        expectedRevision: infrastructureRun.revision,
+        fromStatuses: ['pending'],
+        toStatus: 'running',
+        leaseOwner,
+        eventType: 'run.started',
+        eventPayload: { source: 'completion-decision-postgres-test' }
+      });
+      await store.initializeRunReplay({
+        runId: infrastructureRun.id,
+        ticketId: infrastructureTicket.id,
+        snapshot: {
+          runId: infrastructureRun.id,
+          ticketId: infrastructureTicket.id,
+          events: [],
+          parsedModelPlans: [],
+          providerRequests: [],
+          modelResponses: [],
+          workspaceOperations: []
+        }
+      });
+      const failure = {
+        code: 'PROCESS_EXECUTION_LAUNCHER_RESTARTED',
+        kind: 'infrastructure_failure',
+        detail: { operationIdentity: `process-operation:${'f'.repeat(64)}` }
+      };
+      const finalizedAt = new Date().toISOString();
+      const replaySnapshot = {
+        runId: infrastructureRun.id,
+        ticketId: infrastructureTicket.id,
+        events: [],
+        parsedModelPlans: [],
+        providerRequests: [],
+        modelResponses: [],
+        workspaceOperations: [],
+        terminalStatus: 'interrupted',
+        failure,
+        finalizedAt
+      };
+      const terminalized = await store.terminalizeRun({
+        runId: infrastructureRun.id,
+        expectedRevision: started.run.revision,
+        fromStatuses: ['running'],
+        status: 'interrupted',
+        leaseOwner,
+        patch: {
+          currentPhase: 'terminalization',
+          error: 'Launcher restarted while the process operation was active'
+        },
+        replaySnapshot,
+        executionEvent: {
+          type: 'run.execution_completed',
+          payload: { status: 'interrupted', failure, completedAt: finalizedAt }
+        },
+        beforeReplayEvents: [{
+          type: 'process.infrastructure_interrupted',
+          payload: failure.detail
+        }],
+        replayEvent: {
+          type: 'run.snapshot_finalized',
+          payload: { status: 'interrupted', finalizedAt }
+        },
+        beforeEvaluationEvents: [{
+          type: 'run.violations_checked',
+          payload: { status: 'none' }
+        }],
+        evaluation: {
+          effectiveness: { status: 'unknown' },
+          violations: { status: 'none' },
+          browserEvidence: null
+        },
+        consequence: context => {
+          const base = {
+            mutations: [],
+            created: [],
+            updated: [],
+            deleted: [],
+            renamed: [],
+            notifications: [],
+            externalEffects: [],
+            verification: {
+              postconditionsStatus: 'unknown',
+              violationsStatus: 'none',
+              browserEvidence: null
+            }
+          };
+          return {
+            ...base,
+            completionDecision: buildCompletionDecision({
+              run: {
+                ...context.run,
+                status: 'interrupted',
+                completionAuthoritySnapshot,
+                executionPolicySnapshot: { requireVerification: 'when_declared' },
+                runtimeBudgetSnapshot: null
+              },
+              replaySnapshot,
+              events: context.events,
+              operations: context.operations,
+              consequence: base,
+              verificationContract: null,
+              evaluatedAt: finalizedAt
+            })
+          };
+        },
+        terminalEvent: {
+          type: 'run.terminalized',
+          payload: { status: 'interrupted' }
+        }
+      });
+      const infrastructureDecision = normalizeCompletionDecision(
+        terminalized.consequence.completionDecision
+      );
+      assert(infrastructureDecision.executionDisposition === 'infrastructure_failed',
+        'interrupted terminal run persists durable infrastructure disposition');
+      assert(infrastructureDecision.completionDisposition === 'blocked',
+        'infrastructure interruption persists blocked completion');
+
+      const infrastructureEvents = await store.listRunEvents(infrastructureRun.id, { limit: 200 });
+      const infrastructureDecisionEvents = infrastructureEvents.filter(event =>
+        event.type === 'run.completion_decided');
+      assert(infrastructureDecisionEvents.length === 1,
+        'infrastructure completion decision persists exactly once');
+      assert(infrastructureDecisionEvents[0].payload.decisionHash ===
+        infrastructureDecision.decisionHash,
+      'completion evidence binds the corrected infrastructure decision');
+
+      const projectedInfrastructure = await store.transitionTicketAfterRun({
+        runId: infrastructureRun.id
+      });
+      assert(projectedInfrastructure.ticket.status !== 'completed',
+        'infrastructure interruption cannot project a completed ticket');
+      const replayedInfrastructure = await store.getRunConsequence(infrastructureRun.id);
+      assert(replayedInfrastructure.consequence.completionDecision.decisionHash ===
+        infrastructureDecision.decisionHash,
+      'PostgreSQL replay preserves the corrected decision hash');
+      const receiptsBeforeReplay = await store.listOperationReceipts(infrastructureRun.id);
+      await store.transitionTicketAfterRun({ runId: infrastructureRun.id });
+      const receiptsAfterReplay = await store.listOperationReceipts(infrastructureRun.id);
+      assert(receiptsBeforeReplay.length === 0 && receiptsAfterReplay.length === 0,
+        'completion replay repeats no operation or process side effect');
+      const eventsAfterReplay = await store.listRunEvents(infrastructureRun.id, { limit: 200 });
+      assert(eventsAfterReplay.filter(event => event.type === 'run.completion_decided').length === 1,
+        'ticket replay does not duplicate infrastructure completion evidence');
+
       console.log(`PASS: completion decision PostgreSQL (${assert.count()} assertions)`);
     });
   } finally {

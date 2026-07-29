@@ -368,13 +368,51 @@ assert(browserOnly.completionDisposition === 'incomplete', 'browser evidence alo
 
 const cancelled = decision({ status: 'interrupted' });
 assert(cancelled.executionDisposition === 'cancelled' && cancelled.completionDisposition === 'incomplete',
-  'cancellation cannot be completion');
+  'plain interrupted run with no stronger durable cause remains cancelled');
+assert(cancelled.reasonCode === 'RUN_CANCELLED',
+  'ordinary cancellation retains its stable reason');
+
+const interruptedInfrastructureCode = decision({
+  status: 'interrupted',
+  failure: { code: 'PROCESS_EXECUTION_RECONCILIATION_FAILED', kind: 'unknown' }
+});
+assert(interruptedInfrastructureCode.executionDisposition === 'infrastructure_failed',
+  'interrupted run with an infrastructure failure code is infrastructure failed');
+assert(interruptedInfrastructureCode.completionDisposition === 'blocked',
+  'infrastructure failure blocks completion');
+assert(interruptedInfrastructureCode.reasonCode !== 'RUN_CANCELLED',
+  'infrastructure failure is never assigned the cancellation reason');
+
+const interruptedInfrastructureKind = decision({
+  status: 'interrupted',
+  failure: { code: 'UNKNOWN_FAILURE_CODE', kind: 'infrastructure_failure' }
+});
+assert(interruptedInfrastructureKind.executionDisposition === 'infrastructure_failed',
+  'interrupted run with an infrastructure failure kind is infrastructure failed');
+
+const interruptedInfrastructureEvent = decision({
+  status: 'interrupted',
+  events: [{
+    type: 'process.infrastructure_interrupted',
+    payload: { operationIdentity: OPERATION_IDENTITY }
+  }]
+});
+assert(interruptedInfrastructureEvent.executionDisposition === 'infrastructure_failed',
+  'process.infrastructure_interrupted is semantic infrastructure authority');
+
 const budget = decision({
   status: 'failed',
   failure: { code: 'RUN_BUDGET_EXHAUSTED', kind: 'runtime_budget_exhausted' }
 });
 assert(budget.executionDisposition === 'budget_exhausted' && budget.completionDisposition === 'incomplete',
   'budget exhaustion cannot be completion');
+const interruptedBudget = decision({
+  status: 'interrupted',
+  failure: { code: 'RUN_BUDGET_EXHAUSTED', kind: 'runtime_budget_exhausted' }
+});
+assert(interruptedBudget.executionDisposition === 'budget_exhausted',
+  'explicit budget exhaustion outranks interrupted status');
+
 const infrastructure = decision({
   status: 'failed',
   failure: { code: 'PROCESS_EXECUTION_RECONCILIATION_FAILED', kind: 'infrastructure_failure' }
@@ -386,6 +424,69 @@ const executionFailed = decision({ status: 'failed', failure: { code: 'WORKSPACE
 assert(executionFailed.executionDisposition === 'failed' &&
   executionFailed.completionDisposition === 'incomplete',
   'execution failure remains distinct');
+
+const verificationWithInfrastructure = decision({
+  completionAuthority: workflowAuthority,
+  verificationContract: workflowContract,
+  status: 'interrupted',
+  failure: {
+    code: 'PROCESS_EXECUTION_RECONCILIATION_FAILED',
+    kind: 'infrastructure_failure'
+  },
+  events: [{
+    type: 'run.postconditions_checked',
+    payload: {
+      status: 'failed',
+      results: [{ id: 'file-exists', type: 'fileExists', passed: false }]
+    }
+  }, {
+    type: 'run.verification_failed',
+    payload: { status: 'failed' }
+  }]
+});
+assert(workflowFailed.executionDisposition === 'succeeded' &&
+  workflowFailed.verificationDisposition === 'failed',
+  'verification failure with otherwise successful execution remains succeeded');
+assert(verificationWithInfrastructure.executionDisposition === 'infrastructure_failed',
+  'verification failure does not override infrastructure authority');
+
+const leaseLossCancellation = decision({
+  status: 'interrupted',
+  events: [{
+    type: 'process.cancellation_requested',
+    payload: { reason: 'scheduler lease ownership lost' }
+  }]
+});
+assert(leaseLossCancellation.executionDisposition === 'cancelled' &&
+  leaseLossCancellation.reasonCode === 'RUN_CANCELLED',
+  'lease-loss cancellation retains cancellation semantics');
+
+const naturalCompletionRace = decision({
+  status: 'completed',
+  events: [{
+    type: 'process.cancellation_requested',
+    payload: { reason: 'cancellation raced completion' }
+  }, {
+    type: 'process.terminal',
+    payload: {
+      operationIdentity: OPERATION_IDENTITY,
+      terminalOutcome: 'completed',
+      terminalResultHash: TERMINAL_HASH
+    }
+  }]
+});
+assert(naturalCompletionRace.executionDisposition === 'succeeded',
+  'authoritative natural completion racing cancellation is not reclassified');
+
+const replayedInterruptedInfrastructure = decision({
+  status: 'interrupted',
+  events: [{
+    type: 'process.infrastructure_interrupted',
+    payload: { operationIdentity: OPERATION_IDENTITY }
+  }]
+});
+assert(replayedInterruptedInfrastructure.decisionHash === interruptedInfrastructureEvent.decisionHash,
+  'exact replay reproduces the corrected infrastructure decision hash');
 
 const replayed = decision({
   completionAuthority: directAuthority,
