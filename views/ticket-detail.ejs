@@ -10,7 +10,7 @@
   const initialRuntimeStart = visibleRuntimeRun ? (visibleRuntimeRun.startedAt || visibleRuntimeRun.createdAt || '') : '';
   const initialRuntimeComplete = visibleRuntimeRun ? (visibleRuntimeRun.completedAt || '') : '';
   const initialLeaseState = visibleRuntimeRun && visibleRuntimeRun.leaseOwner
-    ? (visibleRuntimeRun.leaseOwner + (visibleRuntimeRun.leaseExpiresAt ? ' until ' + visibleRuntimeRun.leaseExpiresAt : ''))
+    ? ('held' + (visibleRuntimeRun.leaseExpiresAt ? ' until ' + visibleRuntimeRun.leaseExpiresAt : ''))
     : '-';
   const detailIsOpen = ticket.status === 'open';
   const detailHasAssignment = Boolean(ticket.assignmentTargetId);
@@ -932,10 +932,8 @@
   }
 
   function formatLease(lease) {
-    if (!lease || !lease.leaseOwner) return '-';
-    const parts = [lease.leaseOwner];
-    if (lease.expired) parts.push('expired');
-    else if (lease.heldByCurrentProcess) parts.push('held');
+    if (!lease || lease.status === 'unowned') return '-';
+    const parts = [String(lease.status || 'held').replaceAll('_', ' ')];
     if (lease.leaseExpiresAt) parts.push('until ' + lease.leaseExpiresAt);
     return parts.join(' · ');
   }

@@ -13,7 +13,7 @@ Tranche 3: COMPLETE
 Tranche 4: COMPLETE
 Tranche 5: COMPLETE
 Tranche 6: COMPLETE
-Tranche 7: NOT STARTED
+Tranche 7: COMPLETE
 Tranche 8: NOT STARTED
 ```
 
@@ -505,6 +505,69 @@ arbitrary execution authority or weakening runtime ownership.
 
 This tranche uses existing run, operation, artifact, and evidence surfaces. It adds no
 direct process authority and no shadow lifecycle.
+
+### Implemented contract
+
+Supervision is exactly truthful observation plus authorized run cancellation. The
+version-1 `processSupervision` projection is derived on read from durable
+`process_operations`, process events, generic operation receipts, immutable artifact
+metadata, run lease/recovery state, and the canonical completion decision. A bounded
+authenticated launcher `getOperation` observation may refine nonterminal ownership, but
+it never writes PostgreSQL or initiates reconciliation. The authority hierarchy is:
+
+```text
+durable PostgreSQL process operation and events
+→ durable operation receipt and artifacts
+→ canonical completion decision
+→ bounded launcher observation
+→ run/ticket projection
+→ UI labels
+```
+
+The closed operator lifecycle vocabulary is `not_started`, `intent`, `accepted`,
+`active`, `cancellation_requested`, `cancelling`, `finalizing`, `terminal`,
+`interrupted`, `failed`, and `unavailable`. It is a projection of existing authority,
+not another persisted state machine. Launcher/PostgreSQL disagreement produces an
+explicit `mismatch` ownership state and pending reconciliation diagnostic; observation
+failure leaves ownership and the process tree unavailable rather than inferring death.
+Reconciliation is shown as `not_required`, `pending`, `in_progress`, `converged`,
+`failed`, or `unavailable`.
+
+Process-tree visibility is limited to `not_applicable`, `unknown`, `active`,
+`termination_requested`, and `confirmed_empty`. `confirmed_empty` is emitted only from
+the existing terminal launcher/cgroup authority. No PID, process list, cgroup path,
+namespace identity, UID/GID detail, executable path, argument, environment, socket,
+host path, private capability, or launch-plan authority enters the projection or
+operator rendering.
+
+The existing run-detail page, exact-run state API, event/receipt surfaces, and CLI show
+the same bounded lifecycle facts. Output remains discoverable only as immutable stdout
+or stderr artifact ID, stream, raw byte count, SHA-256, and publication state; raw
+output and artifact host paths are not rendered. Exact typed codes are classified
+without interpreting prose into policy denial, capacity waiting, budget exhaustion,
+containment failure, execution failure, cancellation pending/failure, artifact failure,
+evidence failure, recovery failure, verification failure, objective incomplete, or
+completed, with `none` for no diagnostic and `unknown` for an exact durable typed code
+outside the current closed mapping. These presentation categories never replace the
+underlying durable code.
+
+`POST /api/runs/:id/stop` remains the one run-level action. It requires the existing
+`ticket:update` authority and same-origin CSRF protection, accepts no request fields,
+and delegates to `ProcessExecutionController.cancelRunOperations`. The controller
+durably records the existing per-operation cancellation request before its launcher
+call. The same append-only evidence infrastructure records a bounded actor audit
+separately; it does not replace `process.cancellation_requested` as lifecycle authority.
+Whole-tree termination, the launcher's one terminal result, artifacts, evidence,
+receipt, output acknowledgement, completion decision, run terminalization, and ticket
+projection retain their existing order. Exact retries and natural-completion races
+reuse the one durable result; a terminal process operation does not call the launcher
+again. Unknown or unproved tree termination cannot be shown as successful cancellation.
+
+Runs predating current process lifecycle authority remain readable with an explicit
+historical-process-lifecycle label and no reconstructed current launcher observation.
+Future work must reuse the existing process authority, controller, launcher, operation
+table, artifacts, evidence, receipts, completion decision, cancellation, and recovery
+paths. Tranche 8 is next; no Tranche 8 capability is implemented here.
 
 ## Tranche 8 — Release hardening and GA
 

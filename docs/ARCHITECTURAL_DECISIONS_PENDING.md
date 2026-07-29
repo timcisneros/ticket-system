@@ -5014,10 +5014,13 @@ current run follows the persisted completion disposition rather than its overloa
 status. Historical runs without admitted completion authority retain explicit
 compatibility behavior.
 
-Tranches 3, 4, 5, and 6 are complete; Tranche 7 is next and remains not started.
-Existing authority, materialization, launcher, containment, lifecycle, budgets,
-scheduling, artifact, evidence, cancellation, completion, consequence, receipt, and
-recovery systems are mandatory reuse points, not subsystems to rebuild.
+Tranches 3, 4, 5, 6, and 7 are complete; Tranche 8 is next and remains not started.
+Tranche 7 adds only the derived, bounded `processSupervision` projection on existing
+run-detail/state/CLI surfaces and authorized delegation from the existing run stop route
+to the canonical cancellation controller. Existing authority, materialization,
+launcher, containment, lifecycle, budgets, scheduling, artifact, evidence,
+cancellation, completion, consequence, receipt, supervision, and recovery systems are
+mandatory reuse points, not subsystems to rebuild.
 
 ---
 

@@ -80,6 +80,9 @@ const {
   ProcessExecutionController
 } = require('./runtime/process-execution-controller');
 const {
+  buildProcessSupervisionProjection
+} = require('./runtime/process-supervision');
+const {
   buildRuntimeBudgetSnapshot,
   getRunRuntimeBudgetSnapshot
 } = require('./runtime/runtime-budget-contract');
@@ -4577,9 +4580,97 @@ function sanitizeWorkspaceDisplayValue(value, executionWorkspaceType = 'main') {
   return value;
 }
 
+const PRIVATE_PROCESS_PRESENTATION_FIELDS = new Set([
+  'processPolicySnapshot',
+  'processRuntimeCapabilitySnapshot',
+  'launchPlan',
+  'launchPlanVersion',
+  'launchPlanHash',
+  'policySnapshotHash',
+  'filesystemPolicyHash',
+  'executionPolicyHash',
+  'runtimeCapabilityGeneration',
+  'containmentGenerationId',
+  'materializerGeneration',
+  'rootfsRegistryGeneration',
+  'rootfsId',
+  'rootfsManifestHash',
+  'executableIdentityHash',
+  'workspaceSnapshotId',
+  'workspaceManifestHash',
+  'launcherAcceptanceIdentity',
+  'leaseOwner',
+  'pid',
+  'cgroupPath',
+  'launcherSocketPath',
+  'materializerSocketPath',
+  'rootfsPath',
+  'sealedPath',
+  'artifactRoot'
+]);
+
+function sanitizeProcessArtifactStorageForPresentation(value, parentKey = null) {
+  if (Array.isArray(value)) {
+    return value.map(item =>
+      sanitizeProcessArtifactStorageForPresentation(item, parentKey));
+  }
+  if (!value || typeof value !== 'object') return value;
+  const processArtifact = ['stdout', 'stderr'].includes(value.stream) &&
+    typeof value.sha256 === 'string' &&
+    Number.isSafeInteger(value.byteCount);
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) =>
+      !PRIVATE_PROCESS_PRESENTATION_FIELDS.has(key) &&
+      !(processArtifact && key === 'path') &&
+      !(parentKey === 'executableIdentity' && key === 'path'))
+    .map(([key, item]) => [
+      key,
+      sanitizeProcessArtifactStorageForPresentation(item, key)
+    ]));
+}
+
+function sanitizeRunPrivateProcessAuthorityForPresentation(run) {
+  if (!run || typeof run !== 'object') return run;
+  const {
+    processPolicySnapshot: _processPolicySnapshot,
+    processRuntimeCapabilitySnapshot: _processRuntimeCapabilitySnapshot,
+    replaySnapshot: _replaySnapshot,
+    leaseOwner: _leaseOwner,
+    ...safeRun
+  } = run;
+  return sanitizeRunEvidenceForPresentation(safeRun, run);
+}
+
+function sanitizeRunEvidenceForPresentation(value, run) {
+  return sanitizeProcessArtifactStorageForPresentation(
+    sanitizeWorkspaceDisplayValue(
+      value,
+      run && run.executionWorkspaceType
+        ? run.executionWorkspaceType
+        : 'main'
+    )
+  );
+}
+
 function createDisplaySnapshot(snapshot) {
   if (!snapshot) return null;
-  return sanitizeWorkspaceDisplayValue(snapshot, snapshot.executionWorkspaceType || 'main');
+  const {
+    processPolicySnapshot: _processPolicySnapshot,
+    processRuntimeCapabilitySnapshot: _processRuntimeCapabilitySnapshot,
+    ...publicSnapshot
+  } = snapshot;
+  if (publicSnapshot.runtimeEnvelope &&
+      typeof publicSnapshot.runtimeEnvelope === 'object') {
+    publicSnapshot.runtimeEnvelope = compactRuntimeEnvelopeForPrompt(
+      publicSnapshot.runtimeEnvelope
+    );
+  }
+  return sanitizeProcessArtifactStorageForPresentation(
+    sanitizeWorkspaceDisplayValue(
+      publicSnapshot,
+      snapshot.executionWorkspaceType || 'main'
+    )
+  );
 }
 
 function describeFirstFailedOperation(source) {
@@ -7775,12 +7866,20 @@ async function persistRunWorkflowStep(runId, step, status = 'started') {
 
 function serializeRunLease(run) {
   if (!run) return null;
+  const expired = isRunLeaseExpired(run);
+  const heldByCurrentProcess = isRunLeaseHeldByCurrentProcess(run);
   return {
-    leaseOwner: run.leaseOwner || null,
+    status: !run.leaseOwner
+      ? 'unowned'
+      : expired
+        ? 'expired'
+        : heldByCurrentProcess
+          ? 'held_by_current_runtime'
+          : 'held_by_another_runtime',
     leaseExpiresAt: run.leaseExpiresAt || null,
     lastHeartbeatAt: run.lastHeartbeatAt || null,
-    expired: isRunLeaseExpired(run),
-    heldByCurrentProcess: isRunLeaseHeldByCurrentProcess(run)
+    expired,
+    heldByCurrentProcess
   };
 }
 
@@ -7810,6 +7909,27 @@ function getRunAuthorityEvidence(run, suppliedEvents = null) {
 // run's event summary (and reused again for getRunCurrentMessage below), so a
 // single serialization scans the event log at most once. Callers serializing
 // the same run more than once per request supply it to avoid repeat scans.
+async function readRunProcessSupervision(run, {
+  events = [],
+  receipts = [],
+  processOperations = null
+} = {}) {
+  const durableOperations = processOperations ||
+    await postgresRuntimeStore.listProcessOperationsForRun(run.id);
+  const launcherObservations =
+    await processExecutionController.observeRunOperations(
+      run,
+      durableOperations
+    );
+  return buildProcessSupervisionProjection({
+    run,
+    processOperations: durableOperations,
+    events,
+    receipts,
+    launcherObservations
+  });
+}
+
 function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
   if (!run) return null;
   const suppliedEvents = Array.isArray(options.events) ? options.events : null;
@@ -7859,7 +7979,6 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
       : null,
     triage: normalizeTriage(run.triage),
     lease: serializeRunLease(run),
-    leaseOwner: run.leaseOwner || null,
     leaseExpiresAt: run.leaseExpiresAt || null,
     currentStepId: run.currentStepId || null,
     currentWorkflowAction: run.currentWorkflowAction || null,
@@ -7882,6 +8001,9 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
       options.runtimeBudgetState || null
     ),
     runtimeBudgetState: options.runtimeBudgetState || null,
+    ...(options.processSupervision
+      ? { processSupervision: options.processSupervision }
+      : {}),
     runConsequence,
     completionDecisionIntegrity: currentTerminalWithoutConsequence
       ? {
@@ -7934,7 +8056,6 @@ function serializeRunOperationalStatus(run, logsByRunId, attemptPosition = null)
     workflowId: run.workflowId || null,
     triage: normalizeTriage(run.triage),
     lease: serializeRunLease(run),
-    leaseOwner: run.leaseOwner || null,
     leaseExpiresAt: run.leaseExpiresAt || null,
     currentStepId: run.currentStepId || null,
     currentWorkflowAction: run.currentWorkflowAction || null,
@@ -26232,13 +26353,13 @@ async function buildRunDiagnosticBundle(ctx) {
   const safeAgent = agent ? { id: agent.id, name: agent.name, provider: agent.provider, model: agent.model } : null;
   const rawDebug = {
     route, generatedAt, appVersion: DIAGNOSTIC_APP_VERSION,
-    run: run || null,
+    run: sanitizeRunPrivateProcessAuthorityForPresentation(run) || null,
     ticket: ticket || null,
     agent: safeAgent,
     acceptanceCriteriaSnapshot: run && run.acceptanceCriteriaSnapshot || null,
     ticketAcceptanceCriteria: ticket && ticket.acceptanceCriteria || null,
     failureSummary: failureSummary || null,
-    operationHistory: history,
+    operationHistory: sanitizeProcessArtifactStorageForPresentation(history),
     permissionedDeleteAuditEvents: permEvents,
     eventSummary: eventSummary || null,
     snapshotSummary: {
@@ -26248,8 +26369,11 @@ async function buildRunDiagnosticBundle(ctx) {
       failureReason: s.failureReason || null,
       providerRequests: Array.isArray(s.providerRequests) ? s.providerRequests.length : 0,
       modelResponses: Array.isArray(s.modelResponses) ? s.modelResponses.length : 0,
-      workspaceOperations: workspaceOps,
-      browserOperations: browserOps,
+      workspaceOperations: sanitizeRunEvidenceForPresentation(
+        workspaceOps,
+        run
+      ),
+      browserOperations: sanitizeRunEvidenceForPresentation(browserOps, run),
       browserEvidenceStatus: s.browserEvidenceStatus || null,
       browserEvidenceDetail: s.browserEvidenceDetail || null,
       browserReport: browserReport || (run && run.browserReport) || null,
@@ -26368,12 +26492,19 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }, request.session.userId));
   }
 
-  const [runEvents, runOperations, ticketRuns, runLogs] = await Promise.all([
+  const [runEvents, runOperations, ticketRuns, runLogs, processOperations] =
+    await Promise.all([
     readAllRunTimelineEvents(runId),
     readAllRunOperations(runId),
     readAllRunsForTicket(run.ticketId),
-    collectDiagnosticLogPages({ runId })
+    collectDiagnosticLogPages({ runId }),
+    postgresRuntimeStore.listProcessOperationsForRun(runId)
   ]);
+  const processSupervision = await readRunProcessSupervision(run, {
+    events: runEvents,
+    receipts: runOperations,
+    processOperations
+  });
   const history = runOperations;
   const runPartialMutationCount = countRunMutatingOperations(runId, runOperations);
   const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
@@ -26482,7 +26613,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     routingDisplay,
     budgetStatus: buildRunBudgetStatus(run, runDetailAttemptUsage),
     runStatusLabel: displayRunStatus(run.status),
-    runEvents,
+    runEvents: sanitizeRunEvidenceForPresentation(runEvents, run),
+    processSupervision,
     eventSummary,
     runStateInconsistency,
     completionSummary,
@@ -26517,7 +26649,7 @@ fastify.get('/api/runs/:id/events', { preHandler: fastify.requireAuth }, async (
 
   const events = await readAllRunTimelineEvents(runId);
   return {
-    events,
+    events: sanitizeRunEvidenceForPresentation(events, run),
     summary: (await recentEventSummary(runId, events))
   };
 });
@@ -26543,19 +26675,32 @@ fastify.get('/api/runs/:id/state', { preHandler: fastify.requireAuth }, async (r
     return { error: 'Run not found' };
   }
 
-  const [events, operations, ticketRuns, runtimeBudgetState] = await Promise.all([
+  const [
+    events,
+    operations,
+    ticketRuns,
+    runtimeBudgetState,
+    processOperations
+  ] = await Promise.all([
     readAllRunTimelineEvents(runId),
     readAllRunOperations(runId),
     readAllRunsForTicket(run.ticketId),
     getRunRuntimeBudgetSnapshot(run)
       ? postgresRuntimeStore.getRunBudgetState(run.id)
-      : Promise.resolve(null)
+      : Promise.resolve(null),
+    postgresRuntimeStore.listProcessOperationsForRun(runId)
   ]);
+  const processSupervision = await readRunProcessSupervision(run, {
+    events,
+    receipts: operations,
+    processOperations
+  });
   return serializeRunRuntimeState(run, null, {
     events,
     operations,
     ticketRuns,
     runtimeBudgetState,
+    processSupervision,
     eventSummary: (await recentEventSummary(runId, events))
   });
 });
@@ -26580,7 +26725,12 @@ fastify.get('/api/runs/:id/operations', { preHandler: fastify.requireAuth }, asy
     return { error: 'Run not found' };
   }
 
-  return { operations: await readAllRunOperations(runId) };
+  return {
+    operations: sanitizeRunEvidenceForPresentation(
+      await readAllRunOperations(runId),
+      run
+    )
+  };
 });
 
 fastify.post('/api/runs/:id/stop', {
@@ -26592,12 +26742,24 @@ fastify.post('/api/runs/:id/stop', {
     return { error: 'Permission denied' };
   }
 
-  const runId = parseInt(request.params.id, 10);
-  const run = Number.isSafeInteger(runId) && runId > 0
-    ? await getRuntimeStateReadRepository().getRun(runId)
-    : null;
+  const suppliedFields = request.body && typeof request.body === 'object' &&
+    !Array.isArray(request.body)
+    ? Object.keys(request.body)
+    : request.body === null || request.body === undefined
+      ? []
+      : ['invalid-body'];
+  if (suppliedFields.length > 0) {
+    reply.code(400);
+    return { error: 'Run cancellation accepts no request fields' };
+  }
 
-  if (Number.isNaN(runId)) {
+  const runId = parseInt(request.params.id, 10);
+  const authority = Number.isSafeInteger(runId) && runId > 0
+    ? await readRuntimeRunAuthority(runId)
+    : null;
+  const run = authority ? authority.run : null;
+
+  if (!Number.isSafeInteger(runId) || runId <= 0) {
     reply.code(400);
     return { error: 'Invalid run id' };
   }
@@ -26607,12 +26769,67 @@ fastify.post('/api/runs/:id/stop', {
     return { error: 'Run not found' };
   }
 
+  const currentProcessOperations =
+    await postgresRuntimeStore.listProcessOperationsForRun(run.id);
   if (!['pending', 'running'].includes(run.status)) {
-    reply.code(400);
-    return { error: 'Only pending or running runs can be stopped' };
+    if (currentProcessOperations.length === 0) {
+      reply.code(400);
+      return { error: 'Only pending or running runs can be stopped' };
+    }
+    const [events, receipts] = await Promise.all([
+      readAllRunTimelineEvents(run.id),
+      readAllRunOperations(run.id)
+    ]);
+    return {
+      run: sanitizeRunPrivateProcessAuthorityForPresentation(run),
+      processSupervision: await readRunProcessSupervision(run, {
+        events,
+        receipts,
+        processOperations: currentProcessOperations
+      })
+    };
   }
 
-  return { run: await interruptAgentRun(run, 'manually stopped') };
+  if (currentProcessOperations.some(operation =>
+    ['intent', 'active'].includes(operation.lifecycleState))) {
+    const audit = {
+      version: 1,
+      runId: run.id,
+      ticketId: run.ticketId,
+      actorUserId: request.session.userId,
+      action: 'cancel_run',
+      resultingCancellationState: 'requested',
+      reasonCode: 'OPERATOR_RUN_CANCELLATION_REQUESTED'
+    };
+    await getNonTerminalEvidenceRepository().appendRunEvidence({
+      runId: run.id,
+      ticketId: run.ticketId,
+      evidenceKey:
+        `process-operator-cancellation:${run.id}:user:${request.session.userId}`,
+      replayKey: 'processOperatorCancellationRequests',
+      replayItem: audit,
+      event: {
+        type: 'process.operator_cancellation_requested',
+        payload: audit
+      }
+    });
+  }
+  await interruptAgentRun(run, 'manually stopped');
+  const refreshedAuthority = await readRuntimeRunAuthority(run.id);
+  const refreshedRun = refreshedAuthority.run;
+  const [events, receipts, processOperations] = await Promise.all([
+    readAllRunTimelineEvents(run.id),
+    readAllRunOperations(run.id),
+    postgresRuntimeStore.listProcessOperationsForRun(run.id)
+  ]);
+  return {
+    run: sanitizeRunPrivateProcessAuthorityForPresentation(refreshedRun),
+    processSupervision: await readRunProcessSupervision(refreshedRun, {
+      events,
+      receipts,
+      processOperations
+    })
+  };
 });
 
 fastify.post('/api/runs/:id/retry', {

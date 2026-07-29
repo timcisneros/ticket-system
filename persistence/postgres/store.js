@@ -7238,6 +7238,19 @@ class PostgresRuntimeStore {
     return result.rows.map(eventFromRow);
   }
 
+  async getRunEvidenceEvent(runId, evidenceKey) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const key = requiredString(evidenceKey, 'evidenceKey', 512);
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('events')}
+       WHERE run_id = $1 AND payload->>'evidenceKey' = $2
+       ORDER BY seq
+       LIMIT 1`,
+      [id, key]
+    );
+    return result.rowCount === 0 ? null : eventFromRow(result.rows[0]);
+  }
+
   async listRunTimelineEvents(runId, { afterPosition = 0, limit = 100 } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const cursor = nonNegativeSafeInteger(afterPosition, 'afterPosition');

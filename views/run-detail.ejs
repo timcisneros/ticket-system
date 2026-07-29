@@ -56,7 +56,7 @@
       </div>
       <div><dt>Mutations</dt><dd><%= partialMutationCount || 0 %></dd></div>
       <div><dt>Phase</dt><dd><code id="run-live-phase"><%= run.currentPhase || '-' %></code></dd></div>
-      <div><dt>Lease</dt><dd id="run-live-lease"><%= run.leaseOwner ? run.leaseOwner + (run.leaseExpiresAt ? ' until ' + run.leaseExpiresAt : '') : '-' %></dd></div>
+      <div><dt>Lease</dt><dd id="run-live-lease"><%= run.leaseOwner ? 'held' + (run.leaseExpiresAt ? ' until ' + run.leaseExpiresAt : '') : '-' %></dd></div>
       <div><dt>Last Heartbeat</dt><dd id="run-live-heartbeat"><%= run.lastHeartbeatAt || '-' %></dd></div>
       <% if (typeof eventSummary !== 'undefined' && eventSummary) { %>
         <div><dt>Event Status</dt><dd id="run-live-event-status"><%= eventSummary.latestStatus ? eventSummary.latestStatus.status : '-' %></dd></div>
@@ -96,6 +96,65 @@
     <% } %>
   </div>
 </section>
+
+<% if (typeof processSupervision !== 'undefined' && processSupervision) { %>
+<section class="detail-section process-supervision" id="process-supervision">
+  <h2>Process supervision</h2>
+  <p class="text-muted">Read-only durable lifecycle observation. Cancellation uses the existing run stop authority; no direct process controls are exposed.</p>
+  <% if (processSupervision.historicalCompatibility) { %>
+    <p class="text-muted"><strong>Historical compatibility:</strong> <%= processSupervision.historicalCompatibility %>.</p>
+  <% } %>
+  <dl class="detail-grid">
+    <div><dt>Lifecycle</dt><dd><code><%= processSupervision.lifecycleState %></code></dd></div>
+    <div><dt>Availability</dt><dd><code><%= processSupervision.availability %></code></dd></div>
+    <% if (processSupervision.durableOperationState) { %><div><dt>Durable operation</dt><dd><code><%= processSupervision.durableOperationState %></code></dd></div><% } %>
+    <% if (processSupervision.launcherOwnershipState) { %><div><dt>Launcher ownership</dt><dd><code><%= processSupervision.launcherOwnershipState %></code></dd></div><% } %>
+    <% if (processSupervision.processTreeState) { %><div><dt>Process tree</dt><dd><code><%= processSupervision.processTreeState %></code></dd></div><% } %>
+    <% if (processSupervision.cancellationState) { %><div><dt>Cancellation</dt><dd><code><%= processSupervision.cancellationState %></code></dd></div><% } %>
+    <% if (processSupervision.finalizationState) { %><div><dt>Finalization</dt><dd><code><%= processSupervision.finalizationState %></code></dd></div><% } %>
+    <% if (processSupervision.reconciliationState) { %><div><dt>Reconciliation</dt><dd><code><%= processSupervision.reconciliationState %></code></dd></div><% } %>
+    <div><dt>Diagnostic</dt><dd><code><%= processSupervision.diagnosticCategory %></code><% if (processSupervision.diagnosticCode) { %> · <code><%= processSupervision.diagnosticCode %></code><% } %></dd></div>
+    <% if (processSupervision.lastObservedAt) { %><div><dt>Launcher observed</dt><dd><%= processSupervision.lastObservedAt %></dd></div><% } %>
+  </dl>
+  <% (processSupervision.operations || []).forEach(operation => { %>
+    <details class="collapsible process-supervision-operation" open>
+      <summary><code>runProcess</code> · <code><%= operation.lifecycleState %></code></summary>
+      <div class="collapsible__content">
+        <dl class="detail-grid">
+          <div><dt>Operation identity</dt><dd><code><%= operation.operationIdentity %></code></dd></div>
+          <div><dt>Target / profile</dt><dd><code><%= operation.targetId %></code> / <code><%= operation.profileId %></code></dd></div>
+          <div><dt>Durable state</dt><dd><code><%= operation.durableOperationState %></code></dd></div>
+          <div><dt>Launcher ownership</dt><dd><code><%= operation.launcherOwnershipState %></code></dd></div>
+          <div><dt>Process tree</dt><dd><code><%= operation.processTreeState %></code></dd></div>
+          <div><dt>Cancellation</dt><dd><code><%= operation.cancellationState %></code></dd></div>
+          <div><dt>Finalization</dt><dd><code><%= operation.finalizationState %></code></dd></div>
+          <div><dt>Reconciliation</dt><dd><code><%= operation.reconciliationState %></code></dd></div>
+          <div><dt>Diagnostic</dt><dd><code><%= operation.diagnosticCategory %></code><% if (operation.diagnosticCode) { %> · <code><%= operation.diagnosticCode %></code><% } %></dd></div>
+          <% if (operation.startedAt) { %><div><dt>Started</dt><dd><%= operation.startedAt %></dd></div><% } %>
+          <% if (operation.cancellationRequestedAt) { %><div><dt>Cancellation requested</dt><dd><%= operation.cancellationRequestedAt %></dd></div><% } %>
+          <% if (operation.terminalAt) { %><div><dt>Terminal</dt><dd><%= operation.terminalAt %></dd></div><% } %>
+          <% if (operation.terminalOutcome) { %><div><dt>Terminal outcome</dt><dd><code><%= operation.terminalOutcome %></code></dd></div><% } %>
+          <% if (operation.terminalResultHash) { %><div><dt>Terminal-result hash</dt><dd><code><%= operation.terminalResultHash %></code></dd></div><% } %>
+        </dl>
+        <% [operation.stdoutArtifact, operation.stderrArtifact].filter(Boolean).forEach(artifact => { %>
+          <div class="process-artifact-metadata">
+            <strong><%= artifact.stream %> artifact</strong>
+            <dl class="detail-grid">
+              <div><dt>Artifact ID</dt><dd><code><%= artifact.artifactId %></code></dd></div>
+              <div><dt>Bytes</dt><dd><%= artifact.byteCount %></dd></div>
+              <div><dt>SHA-256</dt><dd><code><%= artifact.sha256 %></code></dd></div>
+              <div><dt>Publication</dt><dd><code><%= artifact.publicationState %></code></dd></div>
+            </dl>
+          </div>
+        <% }); %>
+      </div>
+    </details>
+  <% }); %>
+  <% if (processSupervision.completionDecision) { %>
+    <p class="text-muted">Canonical completion remains separate: execution <code><%= processSupervision.completionDecision.executionDisposition %></code>, verification <code><%= processSupervision.completionDecision.verificationDisposition %></code>, objective <code><%= processSupervision.completionDecision.completionDisposition %></code>.</p>
+  <% } %>
+</section>
+<% } %>
 
 <% if (hasRunAttention) { %>
 <section class="zone">
@@ -1674,10 +1733,9 @@
     setText(eventStatusEl, state.eventSummary && state.eventSummary.latestStatus ? state.eventSummary.latestStatus.status : null);
     setText(eventErrorEl, state.eventSummary && state.eventSummary.latestError ? state.eventSummary.latestError.message : null);
     if (state.lease) {
-      setText(leaseEl, state.lease.leaseOwner
-        ? state.lease.leaseOwner
+      setText(leaseEl, state.lease.status !== 'unowned'
+        ? state.lease.status.replaceAll('_', ' ')
           + (state.lease.leaseExpiresAt ? ' until ' + state.lease.leaseExpiresAt : '')
-          + (state.lease.expired ? ' (expired)' : '')
         : null);
       setText(heartbeatEl, state.lease.lastHeartbeatAt);
     }

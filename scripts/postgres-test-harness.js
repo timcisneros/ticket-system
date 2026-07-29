@@ -106,7 +106,8 @@ function requestFactory(baseUrl) {
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(body)
           } : {}),
-          ...(options.cookie ? { Cookie: options.cookie } : {})
+          ...(options.cookie ? { Cookie: options.cookie } : {}),
+          ...(options.headers || {})
         }
       }, res => {
         const chunks = [];

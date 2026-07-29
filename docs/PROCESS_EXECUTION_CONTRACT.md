@@ -903,6 +903,13 @@ completion decision in the immutable run consequence, plus idempotent
 `run.completion_decided` evidence, governs ticket projection. Raw output is never
 interpreted and model prose is never completion authority.
 
-Tranche 7 is next and remains not started. Completed authority, launcher, containment,
-lifecycle, budget, scheduling, receipt, evidence, consequence, completion, and recovery
-systems must not be rebuilt as parallel subsystems.
+Tranche 7 is complete. The existing run-detail, exact-run state, operation, evidence,
+and CLI surfaces derive one bounded `processSupervision` projection from PostgreSQL
+process state, receipts, artifacts, completion authority, and a read-only bounded
+launcher observation. The existing run stop route accepts only the run ID, retains its
+`ticket:update` and same-origin protections, and delegates to the canonical durable
+process cancellation controller. It exposes no PID, cgroup, command, signal, path,
+environment, private capability, raw output, or launcher authority. Tranche 8 is next.
+Completed authority, launcher, containment, lifecycle, budget, scheduling, receipt,
+evidence, consequence, completion, supervision, and recovery systems must not be
+rebuilt as parallel subsystems.

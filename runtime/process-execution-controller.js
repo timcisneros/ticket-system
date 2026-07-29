@@ -190,6 +190,85 @@ class ProcessExecutionController {
     return exactRuntimeCapability(run, current);
   }
 
+  async observeRunOperations(run, suppliedRecords = null) {
+    const records = suppliedRecords === null
+      ? await this.repository.listProcessOperationsForRun(run.id)
+      : suppliedRecords;
+    if (!Array.isArray(records)) {
+      throw new TypeError('Process operation observations require an array');
+    }
+    const observable = records.filter(record =>
+      record && record.lifecycleState !== 'terminal' &&
+      (record.lifecycleState === 'active' ||
+        record.launcherAcceptanceIdentity !== null));
+    if (observable.length === 0) return Object.freeze([]);
+
+    let capabilityError = null;
+    try {
+      await this.currentCapabilityForRun(run);
+    } catch (error) {
+      capabilityError = error;
+    }
+    const observations = [];
+    for (const record of observable) {
+      const observedAt = new Date().toISOString();
+      if (capabilityError) {
+        observations.push(Object.freeze({
+          operationIdentity: record.operationIdentity,
+          availability: 'unavailable',
+          diagnosticCode: capabilityError.code ||
+            'PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE',
+          observedAt
+        }));
+        continue;
+      }
+      try {
+        const status = await this.launcherClient.getOperation({
+          operationIdentity: record.operationIdentity
+        });
+        observations.push(Object.freeze({
+          operationIdentity: record.operationIdentity,
+          availability: 'available',
+          state: status.state,
+          launcherOwnershipState: status.state === 'active'
+            ? 'owned_active'
+            : 'owned_terminal',
+          processTreeState: status.state === 'active'
+            ? 'active'
+            : 'confirmed_empty',
+          ...(status.state === 'terminal' && status.result
+            ? {
+                terminalOutcome: status.result.terminalOutcome,
+                terminalResultHash: status.terminalResultHash
+              }
+            : {}),
+          observedAt
+        }));
+      } catch (error) {
+        if (error && error.code === 'PROCESS_OPERATION_NOT_FOUND') {
+          observations.push(Object.freeze({
+            operationIdentity: record.operationIdentity,
+            availability: 'available',
+            state: 'not_found',
+            launcherOwnershipState: 'not_found',
+            processTreeState: 'unknown',
+            observedAt
+          }));
+        } else {
+          observations.push(Object.freeze({
+            operationIdentity: record.operationIdentity,
+            availability: 'unavailable',
+            diagnosticCode: error && error.code
+              ? error.code
+              : 'PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE',
+            observedAt
+          }));
+        }
+      }
+    }
+    return Object.freeze(observations);
+  }
+
   async execute({ run, action, step, observationDeadlineMs = null }) {
     const parsed = parseProcessOperationRequest(action);
     const operationIdentity = buildProcessOperationIdentity(
@@ -276,6 +355,44 @@ class ProcessExecutionController {
   async cancelRunOperations(run, reason) {
     const records = await this.repository.listProcessOperationsForRun(run.id);
     for (const current of records) {
+      // The durable cancellation request is intentionally recorded before
+      // waiting for the operation advisory lock. The active execution
+      // controller holds that lock while it observes the launcher; the durable
+      // flag is its fenced instruction to cancel the launcher-owned tree.
+      let requested = await this.repository.getProcessOperation(
+        current.operationIdentity
+      );
+      if (requested &&
+          (requested.lifecycleState === 'intent' ||
+            requested.lifecycleState === 'active')) {
+        try {
+          requested = await this.repository.requestProcessOperationCancellation({
+            operationIdentity: requested.operationIdentity,
+            reason
+          });
+        } catch (error) {
+          const raced = await this.repository.getProcessOperation(
+            current.operationIdentity
+          );
+          if (!raced ||
+              (!raced.cancellationRequested &&
+                !['finalizing', 'terminal'].includes(raced.lifecycleState))) {
+            throw error;
+          }
+          requested = raced;
+        }
+        if (requested.cancellationRequested) {
+          await this.#publishEvidence(
+            requested,
+            'process.cancellation_requested',
+            { reason: requested.cancellationReason }
+          );
+          await this.faultCheckpoint('during_process_cancellation', {
+            operationIdentity: requested.operationIdentity
+          });
+        }
+      }
+
       const disposition = await this.repository.withProcessOperationLock(
         current.operationIdentity,
         async () => {
@@ -291,17 +408,12 @@ class ProcessExecutionController {
             // that result as cancellation.
             return { kind: 'reconcile', record };
           }
-
-          record = await this.repository.requestProcessOperationCancellation({
-            operationIdentity: record.operationIdentity,
-            reason
-          });
-          await this.#publishEvidence(record, 'process.cancellation_requested', {
-            reason: record.cancellationReason
-          });
-          await this.faultCheckpoint('during_process_cancellation', {
-            operationIdentity: record.operationIdentity
-          });
+          if (!record.cancellationRequested) {
+            throw new ProcessExecutionControllerError(
+              'Process cancellation request was not durably recorded',
+              'PROCESS_EXECUTION_CANCELLATION_FAILED'
+            );
+          }
 
           if (record.lifecycleState === 'intent' &&
               record.launcherAcceptanceIdentity === null) {
@@ -380,7 +492,9 @@ class ProcessExecutionController {
     run,
     record,
     launchAuthority = null,
-    observationDeadlineMs = null
+    observationDeadlineMs = null,
+    knownLauncherStatus = null,
+    launcherCancellationRequested = false
   }) {
     if (record.lifecycleState === 'terminal') {
       if (!record.launcherOutputAcknowledged &&
@@ -393,13 +507,15 @@ class ProcessExecutionController {
     if (record.lifecycleState === 'finalizing') {
       return this.#finishFinalization(record);
     }
-    let launcherStatus = null;
-    try {
-      launcherStatus = await this.launcherClient.getOperation({
-        operationIdentity: record.operationIdentity
-      });
-    } catch (error) {
-      if (error.code !== 'PROCESS_OPERATION_NOT_FOUND') throw error;
+    let launcherStatus = knownLauncherStatus;
+    if (!launcherStatus) {
+      try {
+        launcherStatus = await this.launcherClient.getOperation({
+          operationIdentity: record.operationIdentity
+        });
+      } catch (error) {
+        if (error.code !== 'PROCESS_OPERATION_NOT_FOUND') throw error;
+      }
     }
     if (!launcherStatus) {
       if (record.lifecycleState === 'active' ||
@@ -456,7 +572,11 @@ class ProcessExecutionController {
       await this.faultCheckpoint('after_child_release_before_start_evidence', {
         operationIdentity: record.operationIdentity
       });
-      launcherStatus = await this.#observeTerminal(record, observationDeadlineMs);
+      launcherStatus = await this.#observeTerminal(
+        record,
+        observationDeadlineMs,
+        launcherCancellationRequested
+      );
     }
     const terminal = normalizeLauncherTerminalStatus(
       launcherStatus,
@@ -475,7 +595,11 @@ class ProcessExecutionController {
     return this.#finishFinalization(record);
   }
 
-  async #observeTerminal(record, observationDeadlineMs = null) {
+  async #observeTerminal(
+    record,
+    observationDeadlineMs = null,
+    cancellationAlreadySent = false
+  ) {
     const profile = record.launchPlan;
     const policyDeadline = Date.now() +
       profile.limits.wallTimeMs +
@@ -484,6 +608,7 @@ class ProcessExecutionController {
       ? Math.min(policyDeadline, observationDeadlineMs)
       : policyDeadline;
     let nextLeaseHeartbeat = Date.now();
+    let launcherCancellationRequested = cancellationAlreadySent;
     while (Date.now() < deadline) {
       if (Date.now() >= nextLeaseHeartbeat) {
         try {
@@ -502,19 +627,25 @@ class ProcessExecutionController {
         }
       }
       if (this.shutdownSignal()) {
-        await this.repository.requestProcessOperationCancellation({
+        const shutdownCancellation =
+          await this.repository.requestProcessOperationCancellation({
           operationIdentity: record.operationIdentity,
           reason: 'runtime shutdown'
         });
-        await this.launcherClient.cancelOperation({
-          operationIdentity: record.operationIdentity
-        });
+        await this.#publishEvidence(
+          shutdownCancellation,
+          'process.cancellation_requested',
+          { reason: shutdownCancellation.cancellationReason }
+        );
+        if (!launcherCancellationRequested) {
+          await this.#notifyLauncherCancellation(shutdownCancellation);
+          launcherCancellationRequested = true;
+        }
       }
       const current = await this.repository.getProcessOperation(record.operationIdentity);
-      if (current.cancellationRequested) {
-        await this.launcherClient.cancelOperation({
-          operationIdentity: record.operationIdentity
-        });
+      if (current.cancellationRequested && !launcherCancellationRequested) {
+        await this.#notifyLauncherCancellation(current);
+        launcherCancellationRequested = true;
       }
       const status = await this.launcherClient.getOperation({
         operationIdentity: record.operationIdentity
@@ -537,6 +668,33 @@ class ProcessExecutionController {
       'Launcher did not publish a terminal result within the bounded observation window',
       'PROCESS_EXECUTION_RECONCILIATION_FAILED'
     );
+  }
+
+  async #notifyLauncherCancellation(record) {
+    const evidenceKey =
+      `process-execution:${record.operationIdentity}:cancellation_reached_launcher`;
+    if (typeof this.repository.getRunEvidenceEvent === 'function') {
+      const existing = await this.repository.getRunEvidenceEvent(
+        record.runId,
+        evidenceKey
+      );
+      if (existing) {
+        return this.launcherClient.getOperation({
+          operationIdentity: record.operationIdentity
+        });
+      }
+    }
+    const status = await this.launcherClient.cancelOperation({
+      operationIdentity: record.operationIdentity
+    });
+    await this.#publishEvidence(
+      record,
+      'process.cancellation_reached_launcher',
+      {
+        cancellationState: 'accepted'
+      }
+    );
+    return status;
   }
 
   async #markActive(record, status) {
@@ -814,9 +972,7 @@ class ProcessExecutionController {
 
   async #cancelAccepted(record) {
     try {
-      await this.launcherClient.cancelOperation({
-        operationIdentity: record.operationIdentity
-      });
+      const status = await this.#notifyLauncherCancellation(record);
       await this.repository.withProcessOperationLock(
         record.operationIdentity,
         async () => this.#reconcileLocked({
@@ -825,7 +981,9 @@ class ProcessExecutionController {
             ticketId: record.ticketId,
             processPolicySnapshot: record.launchPlan
           },
-          record: await this.repository.getProcessOperation(record.operationIdentity)
+          record: await this.repository.getProcessOperation(record.operationIdentity),
+          knownLauncherStatus: status,
+          launcherCancellationRequested: true
         })
       );
     } catch (error) {

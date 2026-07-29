@@ -1411,9 +1411,17 @@ async function cmdStop(args) {
   const url = args.url || opercUrl();
   const { status, data } = await postOperatorAction(url, cookie, `/api/runs/${runId}/stop`);
   if (status === 200 && data && data.run) {
-    if (args.json) return console.log(JSON.stringify({ runId, action: 'stop', status: data.run.status }, null, 2));
+    if (args.json) return console.log(JSON.stringify({
+      runId,
+      action: 'stop',
+      status: data.run.status,
+      processSupervision: data.processSupervision || null
+    }, null, 2));
     console.log(`  ${green('✓')} Stop requested for Run #${runId}.`);
     console.log(`  Run is now ${statusTag(data.run.status)}.`);
+    if (data.processSupervision) {
+      console.log(`  Process lifecycle: ${data.processSupervision.lifecycleState}; tree: ${data.processSupervision.processTreeState || 'unknown'}.`);
+    }
     console.log(dim(`  Next: oquery runs --id ${runId}`));
     return;
   }
@@ -1664,7 +1672,23 @@ async function cmdRunState(args) {
   if (data.outcomeLabel) console.log(`  ${dim('outcome')} ${data.outcomeLabel}`);
   if (data.lease) {
     const l = data.lease;
-    console.log(`  ${dim('lease')} owner: ${l.owner || '?'}  expires: ${l.expiresAt ? datetime(l.expiresAt) : '?'}`);
+    console.log(`  ${dim('lease')} ${l.status || 'unknown'}  expires: ${l.leaseExpiresAt ? datetime(l.leaseExpiresAt) : '?'}`);
+  }
+  if (data.processSupervision) {
+    const p = data.processSupervision;
+    console.log(`  ${dim('process')} ${p.lifecycleState}  launcher: ${p.launcherOwnershipState || 'unknown'}  tree: ${p.processTreeState || 'unknown'}`);
+    if (p.diagnosticCategory && p.diagnosticCategory !== 'none') {
+      console.log(`  ${dim('process diagnostic')} ${p.diagnosticCategory}${p.diagnosticCode ? ` · ${p.diagnosticCode}` : ''}`);
+    }
+    for (const operation of p.operations || []) {
+      console.log(`    ${operation.targetId || '?'} / ${operation.profileId || '?'}  ${operation.operationIdentity || '?'}`);
+      for (const artifact of [
+        operation.stdoutArtifact,
+        operation.stderrArtifact
+      ].filter(Boolean)) {
+        console.log(`      ${artifact.stream}: ${artifact.artifactId} · ${artifact.byteCount} bytes · ${artifact.sha256}`);
+      }
+    }
   }
   if (data.runtimeBudgetState && data.runtimeBudgetState.snapshot) {
     const usage = data.runtimeBudgetState.usage || {};

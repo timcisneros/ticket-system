@@ -215,9 +215,15 @@ function selfCgroup() {
 function prepareDelegation() {
   const root = selfCgroup();
   const fixtureControl = path.join(root, 'fixture-control');
+  const serviceRoot = path.join(root, 'launcher-service');
   fs.mkdirSync(fixtureControl);
   fs.writeFileSync(path.join(fixtureControl, 'cgroup.procs'), String(process.pid));
-  return { root, fixtureControl };
+  fs.writeFileSync(
+    path.join(root, 'cgroup.subtree_control'),
+    '+cpu +memory +pids'
+  );
+  fs.mkdirSync(serviceRoot);
+  return { root, fixtureControl, serviceRoot };
 }
 
 async function waitForSocket(service, socket, label, timeoutMs = 120000) {
@@ -467,7 +473,7 @@ async function inside() {
       gate: gateBinary,
       launcher: launcherBinary,
       configuration: launcherConfiguration,
-      cgroupRoot: delegation.root,
+      cgroupRoot: delegation.serviceRoot,
       socket: launcherSocket
     });
     const launcherHealthRequest = requestFile(path.join(clients, 'launcher-health.json'), {
@@ -801,7 +807,7 @@ async function inside() {
       `cancellation kills and terminalizes the whole operation cgroup: ` +
         `${JSON.stringify(cancelled)} launcher=${launcher.stderr()}`);
 
-    const remainingOperationCgroups = fs.readdirSync(delegation.root)
+    const remainingOperationCgroups = fs.readdirSync(delegation.serviceRoot)
       .filter(name => name.startsWith('operation-') || name.startsWith('probe-'));
     ok(remainingOperationCgroups.length === 0,
       'all operation and active-probe cgroups reach populated 0 and are removed');
@@ -815,7 +821,7 @@ async function inside() {
     ), { stdio: ['ignore', 'pipe', 'pipe'] });
     const crashIdentity = buildProcessOperationIdentity(authority.runId, 'crash-001');
     const crashCgroup = path.join(
-      delegation.root,
+      delegation.serviceRoot,
       `operation-${crashIdentity.slice('process-operation:'.length)}`
     );
     const crashTreeActive = await waitFor(() => {
@@ -838,6 +844,14 @@ async function inside() {
       .map(Number);
     launcher.child.kill('SIGKILL');
     await waitFor(() => launcher.child.exitCode !== null, 5000);
+    // The production unit owns this entire delegated service cgroup with
+    // KillMode=control-group. The fixture controller is deliberately a sibling
+    // outside that cgroup, so it can exercise the same kernel kill after the
+    // launcher daemon dies instead of relying on Bubblewrap parent-death timing.
+    fs.writeFileSync(
+      path.join(delegation.serviceRoot, 'cgroup.kill'),
+      '1'
+    );
     await waitFor(() => crashingClient.exitCode !== null, 5000);
     const crashTreeEmpty = await waitFor(() => {
       try {
@@ -861,7 +875,7 @@ async function inside() {
       gate: gateBinary,
       launcher: launcherBinary,
       configuration: launcherConfiguration,
-      cgroupRoot: delegation.root,
+      cgroupRoot: delegation.serviceRoot,
       socket: launcherSocket,
       resetDelegation: true
     });
