@@ -4993,10 +4993,31 @@ reconstruction through a closed `processOperations` projection. That projection 
 only durable operation/target/profile/outcome/result-hash and bounded artifact metadata;
 it cannot claim a workspace mutation, expose raw/private authority, or alter completion
 semantics. Restart replay and unchanged workspace/browser behavior are covered by
-`scripts/process-consequence-reconstruction-test.js`. Tranches 3 and 4 are complete;
-Tranche 5 is next and remains not started. Existing authority, materialization, launcher,
-containment, lifecycle, artifact, evidence, cancellation, and recovery systems are
-mandatory reuse points, not subsystems to rebuild.
+`scripts/process-consequence-reconstruction-test.js`.
+
+**Tranche 6 completion decision:** every newly admitted run now captures immutable
+completion authority from the recognized objective contract, declared postconditions,
+and admitted `when_declared` verification policy. The existing immutable
+`run_consequences` record stores one canonical hashed completion decision with separate
+execution, verification, and objective-completion dispositions. Required bounded
+`run.completion_decided` evidence is appended in the existing PostgreSQL terminalization
+transaction before the terminal lifecycle event and is repaired idempotently after
+restart.
+
+The evaluator consumes only durable facts, receipts, consequence projections, declared
+postconditions, and admitted policy. Exact process-operation, process-terminal-outcome,
+and process-artifact predicates reuse `processOperations` and existing process evidence;
+workspace and browser verification retain their canonical paths. Missing or
+contradictory authority fails closed, raw process output is not interpreted, and model
+completion prose is retained only as a non-authoritative claim. Ticket projection for a
+current run follows the persisted completion disposition rather than its overloaded run
+status. Historical runs without admitted completion authority retain explicit
+compatibility behavior.
+
+Tranches 3, 4, 5, and 6 are complete; Tranche 7 is next and remains not started.
+Existing authority, materialization, launcher, containment, lifecycle, budgets,
+scheduling, artifact, evidence, cancellation, completion, consequence, receipt, and
+recovery systems are mandatory reuse points, not subsystems to rebuild.
 
 ---
 

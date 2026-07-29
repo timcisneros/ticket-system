@@ -14,6 +14,11 @@ const {
   normalizeRuntimeBudgetSnapshot
 } = require('../../runtime/runtime-budget-contract');
 const {
+  normalizeCompletionAuthoritySnapshot,
+  normalizeCompletionDecision,
+  completionEvidenceProjection
+} = require('../../runtime/completion-decision-contract');
+const {
   buildProcessTemplateState,
   emptyGeneratedTicketCounts
 } = require('../process-template-projection');
@@ -58,6 +63,7 @@ const SINGULAR_TERMINAL_REPAIR_EVENT_TYPES = new Set([
   'run.violations_checked',
   'run.evaluation_completed',
   'run.consequence_recorded',
+  'run.completion_decided',
   'run.terminalized'
 ]);
 const RUN_STATUS_TRANSITIONS = new Map([
@@ -1540,6 +1546,16 @@ class PostgresRuntimeStore {
           return normalizeRuntimeBudgetSnapshot(run.runtimeBudgetSnapshot);
         } catch (error) {
           error.message = `runDrafts[${index}].runtimeBudgetSnapshot: ${error.message}`;
+          throw error;
+        }
+      });
+      drafts.forEach((run, index) => {
+        if (run.completionAuthoritySnapshot === null ||
+            run.completionAuthoritySnapshot === undefined) return;
+        try {
+          normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot);
+        } catch (error) {
+          error.message = `runDrafts[${index}].completionAuthoritySnapshot: ${error.message}`;
           throw error;
         }
       });
@@ -4344,19 +4360,47 @@ class PostgresRuntimeStore {
         [run.ticketId, run.ticketOpenedAt]
       );
       const batchRuns = batchResult.rows.map(runFromRow);
+      const decisionResult = await connection.query(
+        `SELECT run_id, consequence
+         FROM ${this.table('run_consequences')}
+         WHERE run_id = ANY($1::bigint[])`,
+        [batchRuns.map(item => item.id)]
+      );
+      const completionDecisionByRunId = new Map(decisionResult.rows.map(row => {
+        const decision = row.consequence && row.consequence.completionDecision
+          ? normalizeCompletionDecision(row.consequence.completionDecision)
+          : null;
+        return [positiveSafeInteger(row.run_id, 'runConsequence.runId'), decision];
+      }));
+      const projectedStatus = item => {
+        if (!item.completionAuthoritySnapshot) return item.status;
+        const decision = completionDecisionByRunId.get(item.id);
+        if (!decision || decision.runId !== item.id || decision.ticketId !== item.ticketId) {
+          const error = new Error(`Run ${item.id} cannot project its ticket without a completion decision`);
+          error.code = 'COMPLETION_EVIDENCE_MISSING';
+          throw error;
+        }
+        if (decision.completionDisposition === 'completed') return 'completed';
+        if (decision.completionDisposition === 'blocked') return 'blocked';
+        return item.status === 'interrupted' ? 'interrupted' : 'failed';
+      };
+      const projectedBatchStatuses = batchRuns.map(projectedStatus);
+      const projectedRunStatus = projectedStatus(run);
       const ownedScope = ticket.assignmentTargetType === 'group' &&
         ['allocated', 'dynamic'].includes(ticket.assignmentMode);
       let targetStatus = null;
-      if (run.status === 'interrupted') {
+      if (projectedRunStatus === 'interrupted') {
         if (ticket.status === 'in_progress' &&
             !batchRuns.some(item => ['pending', 'running'].includes(item.status))) {
           targetStatus = 'open';
         }
       } else if (!ownedScope) {
-        targetStatus = run.status;
-      } else if (run.status === 'failed' || batchRuns.some(item => item.status === 'failed')) {
+        targetStatus = projectedRunStatus;
+      } else if (projectedRunStatus === 'blocked' || projectedBatchStatuses.includes('blocked')) {
+        targetStatus = 'blocked';
+      } else if (projectedRunStatus === 'failed' || projectedBatchStatuses.includes('failed')) {
         targetStatus = 'failed';
-      } else if (batchRuns.length > 0 && batchRuns.every(item => item.status === 'completed')) {
+      } else if (batchRuns.length > 0 && projectedBatchStatuses.every(status => status === 'completed')) {
         targetStatus = 'completed';
       }
 
@@ -4796,6 +4840,47 @@ class PostgresRuntimeStore {
     });
   }
 
+  async _recordCompletionDecisionEvidence(connection, runId, ticketId, consequence) {
+    const decision = consequence && consequence.completionDecision
+      ? normalizeCompletionDecision(consequence.completionDecision)
+      : null;
+    const existing = await connection.query(
+      `SELECT * FROM ${this.table('events')}
+       WHERE run_id = $1 AND type = 'run.completion_decided'
+       ORDER BY seq`,
+      [runId]
+    );
+    if (!decision) {
+      if (existing.rowCount > 0) {
+        const error = new Error(`Run ${runId} has completion evidence without a completion decision`);
+        error.code = 'COMPLETION_DECISION_CONFLICT';
+        throw error;
+      }
+      return null;
+    }
+    const payload = completionEvidenceProjection(decision);
+    if (existing.rowCount > 1) {
+      const error = new Error(`Run ${runId} has duplicate completion-decision evidence`);
+      error.code = 'COMPLETION_DECISION_CONFLICT';
+      throw error;
+    }
+    if (existing.rowCount === 1) {
+      const event = eventFromRow(existing.rows[0]);
+      if (canonicalJson(event.payload || {}) !== canonicalJson(payload)) {
+        const error = new Error(`Run ${runId} completion-decision evidence conflicts with its consequence`);
+        error.code = 'COMPLETION_DECISION_CONFLICT';
+        throw error;
+      }
+      return null;
+    }
+    return this._appendEvent(connection, {
+      type: 'run.completion_decided',
+      ticketId,
+      runId,
+      payload
+    });
+  }
+
   async getRunEvaluation(runId) {
     const id = positiveSafeInteger(runId, 'runId');
     const result = await this.pool.query(
@@ -5112,6 +5197,13 @@ class PostgresRuntimeStore {
         consequence: consequenceDocument
       }, { client });
       storedEvents.push(consequenceResult.event);
+      const completionDecisionEvent = await this._recordCompletionDecisionEvidence(
+        client,
+        id,
+        transitioned.run.ticketId,
+        consequenceDocument
+      );
+      if (completionDecisionEvent) storedEvents.push(completionDecisionEvent);
       const terminalizedEvent = await this._appendEvent(client, {
         ...terminal,
         ticketId: transitioned.run.ticketId,
@@ -5218,6 +5310,7 @@ class PostgresRuntimeStore {
         ['violation summary', ['run.violations_checked']],
         ['evaluation', ['run.evaluation_completed']],
         ['consequence', ['run.consequence_recorded']],
+        ['completion decision', ['run.completion_decided']],
         ['terminal lifecycle', ['run.terminalized']]
       ]) {
         const matches = observedEvents.filter(event => types.includes(event.type));
@@ -5427,6 +5520,17 @@ class PostgresRuntimeStore {
           observedEvents.push(recorded.event);
           storedEvents.push(recorded.event);
         }
+      }
+
+      const completionDecisionEvent = await this._recordCompletionDecisionEvidence(
+        client,
+        id,
+        projectedRun.ticketId,
+        consequenceDocument
+      );
+      if (completionDecisionEvent) {
+        observedEvents.push(completionDecisionEvent);
+        storedEvents.push(completionDecisionEvent);
       }
 
       await appendMissing(terminal);

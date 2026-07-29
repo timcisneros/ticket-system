@@ -114,6 +114,8 @@ const TESTS = Object.freeze([
   { file: "catalog-consistency-test.js", status: "required" },
   { file: "child-process-settlement-test.js", status: "required" },
   { file: "completion-admission-test.js", status: "required" },
+  { file: "completion-decision-contract-test.js", status: "required" },
+  { file: "completion-decision-postgres-test.js", status: "required" },
   { file: "startup-state-convergence-test.js", status: "required" },
   { file: "verification-contract-authority-test.js", status: "required" },
   { file: "event-record-limit-containment-test.js", status: "required" },

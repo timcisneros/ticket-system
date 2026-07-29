@@ -3,13 +3,15 @@
 // Terminalization-boundary crash recovery — PostgreSQL-native
 // (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A23).
 //
-// The three deterministic crash seams no suite drove, each a materially different
-// recovery contract:
+// The deterministic crash seams at the terminal boundary, including the
+// Tranche 6 completion-decision projection:
 //
 //   after_run.created                — the run row exists and nothing else has happened
 //   before_run.consequence_recorded  — death immediately before the atomic
 //                                      terminalization bundle
 //   after_run.snapshot_finalized     — death immediately after that bundle committed
+//   after_run.completion_decided      — death after the immutable completion
+//                                      decision/evidence commit and before ticket projection
 //
 // WHAT THE SEAM NAMES NO LONGER IMPLY. `before_run.snapshot_finalized` and
 // `before_run.consequence_recorded` fire back to back at the same point, and
@@ -178,6 +180,9 @@ async function main() {
 
         const consequence = await store.getRunConsequence(runId);
         assert(Boolean(consequence), `${label}: a consequence was recorded`);
+        assert(Boolean(consequence && consequence.consequence &&
+          consequence.consequence.completionDecision),
+        `${label}: one canonical completion decision was recorded`);
 
         const events = await store.listRunEvents(runId, { afterSeq: -1, limit: 500 });
         const terminalized = (events || []).filter(e => e.type === 'run.terminalized');
@@ -186,6 +191,12 @@ async function main() {
         const consequenceEvents = (events || []).filter(e => e.type === 'run.consequence_recorded');
         assert(consequenceEvents.length <= 1,
           `${label}: consequence evidence was not duplicated (found ${consequenceEvents.length})`);
+        const completionEvents = (events || []).filter(e => e.type === 'run.completion_decided');
+        assert(completionEvents.length === 1,
+          `${label}: completion-decision evidence was recorded exactly once (found ${completionEvents.length})`);
+        assert(completionEvents[0].payload.decisionHash ===
+          consequence.consequence.completionDecision.decisionHash,
+        `${label}: completion evidence binds the persisted decision hash`);
 
         const receipts = (await opsFor(runId))
           .filter(op => !op.error && op.outcome !== 'failed' && op.outcome !== 'refused');
@@ -278,13 +289,39 @@ async function main() {
           '3: no duplicate mutation receipt appeared after restart');
       }
 
+      // ── 4. after_run.completion_decided — decision committed, ticket pending ─
+      {
+        const label = 'after-completion-decided';
+        const fileName = `boundary-decision-${STAMP}.txt`;
+        const crashed = await crashAt(label, 'after_run.completion_decided', fileName);
+        assert(['completed', 'failed'].includes(crashed.atDeath.status),
+          `4: the run and completion decision were terminal at death (was ${crashed.atDeath.status})`);
+        const atDeathConsequence = await store.getRunConsequence(crashed.run.id);
+        assert(Boolean(atDeathConsequence && atDeathConsequence.consequence &&
+          atDeathConsequence.consequence.completionDecision),
+        '4: the immutable completion decision existed before ticket projection');
+        const decisionHashAtDeath =
+          atDeathConsequence.consequence.completionDecision.decisionHash;
+
+        const terminal = await recover(label, crashed.run.id);
+        const after = await assertConverged('4', crashed.ticket.id, crashed.run.id, terminal);
+        assert(after.consequence.consequence.completionDecision.decisionHash === decisionHashAtDeath,
+          '4: recovery preserved the exact completion decision hash');
+        const projectedTicket = await waitFor(async () => {
+          const current = await store.getTicket(crashed.ticket.id);
+          return current && current.status !== 'in_progress' ? current : null;
+        }, 30000, '4 ticket completion projection');
+        assert(projectedTicket.status !== 'completed',
+          '4: the unrecognized objective remains incomplete after recovery rather than following model prose');
+      }
+
       await retireLiveServer();
       assertScenariosExecuted({
         label: 'terminalization boundary recovery',
         assertions: assert.count(),
         scenarios: scenariosRun,
         minAssertions: 40,
-        minScenarios: 3
+        minScenarios: 4
       });
       console.log(`\nPASS: terminalization boundary recovery — ${scenariosRun} seams, ${assert.count()} assertions (PostgreSQL-native)`);
     }, { schemaSlug: 'terminal_boundary' });

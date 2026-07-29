@@ -12,7 +12,7 @@ Tranche 2: COMPLETE
 Tranche 3: COMPLETE
 Tranche 4: COMPLETE
 Tranche 5: COMPLETE
-Tranche 6: NOT STARTED
+Tranche 6: COMPLETE
 Tranche 7: NOT STARTED
 Tranche 8: NOT STARTED
 ```
@@ -370,6 +370,97 @@ terminalizes only from deterministic, evidence-backed postconditions.
 ### Scope boundary
 
 This tranche does not add a generalized theorem prover or unrestricted workflow engine.
+
+### Implemented contract
+
+Completion follows one authority hierarchy:
+
+```text
+durable observable facts
+→ durable operation receipts
+→ deterministic consequence reconstruction
+→ declared postcondition evaluation
+→ immutable verification policy
+→ completion decision
+→ model claims
+```
+
+A lower source cannot contradict or override a higher source. In particular, a model
+completion statement is retained only as a non-authoritative claim. Operation success,
+artifact existence, absence of a known violation, cancellation, and budget exhaustion
+cannot establish objective completion by themselves.
+
+Each newly admitted run freezes a closed version-1 `completionAuthoritySnapshot`. It
+binds the objective hash and recognized deterministic kind, the existing completion
+policy, normalized direct postconditions, the immutable `requireVerification` policy,
+and its own canonical hash. The only supported verification policy remains
+`when_declared`: declared postconditions are required and all are evaluated; without a
+declaration verification is explicitly `not_required`, but that state does not turn an
+unrecognized objective or a model claim into completion. Invalid or future policy values
+fail closed. Historical runs without this authority retain explicitly labelled
+compatibility behavior.
+
+The existing immutable `run_consequences` record owns one canonical version-1
+`completionDecision`; no parallel completion store exists. Its three independent closed
+dimensions are:
+
+```text
+executionDisposition:
+  succeeded | failed | cancelled | budget_exhausted | infrastructure_failed
+
+verificationDisposition:
+  not_required | passed | failed | unavailable
+
+completionDisposition:
+  completed | incomplete | blocked
+```
+
+The decision binds the run and ticket, admitted objective/workflow/policy/budget hashes,
+operation-receipt authority, consequence authority, required-evidence authority,
+evaluated postconditions, violations, missing or contradictory evidence, the bounded
+model claim as non-authority, a stable reason code, evaluation time, and a canonical
+decision hash. It is append-only with the consequence: exact reconstruction is
+idempotent, mutation and deletion remain prohibited by the existing consequence
+constraints, and conflicting replay fails closed.
+
+The existing deterministic completion language is preserved. Direct folder, file, and
+absence requirements use their admitted normalized contracts, governed workspace state,
+durable workspace receipts, and finalized replay checks. Existing workflow
+postconditions retain their exact file/output evidence inputs. The only process
+predicates added are closed exact-metadata checks for an identified durable process
+operation, its terminal outcome, or a named stdout/stderr artifact with exact immutable
+metadata. They consume the existing `processOperations` consequence and process terminal
+and artifact evidence; raw process output is never interpreted. Browser verdicts use the
+existing durable receipt/evidence classifier. A successful process exit, workspace
+mutation, navigation, or browser observation remains an operation fact rather than a
+completion shortcut.
+
+Missing or contradictory receipt, terminal, artifact, browser-verdict, workspace, or
+consequence authority produces `verification: unavailable` and
+`completion: blocked`; deterministically false postconditions produce
+`verification: failed` and `completion: incomplete`. The runtime does not select the
+more favorable source, call a model to arbitrate, or fabricate an unknown fact.
+
+Terminalization reuses the canonical PostgreSQL bundle and required-evidence drain:
+owned operations and receipts settle, required evidence is observed, the consequence
+and decision are reconstructed, `run.completion_decided` is appended idempotently, the
+run terminalizes, and ticket projection follows the persisted decision. Crash recovery
+at each boundary retrieves or recreates the exact same decision and evidence without
+rerunning a side effect. Current runs can project a completed ticket only from
+`completionDisposition: completed`; incomplete and blocked outcomes cannot inherit a
+model-facing completed run status.
+
+Stable integrity and outcome codes include `COMPLETION_DECISION_INVALID`,
+`COMPLETION_DECISION_CONFLICT`, `COMPLETION_EVIDENCE_MISSING`,
+`COMPLETION_EVIDENCE_CONTRADICTORY`, `COMPLETION_CONSEQUENCE_INVALID`,
+`POSTCONDITION_EVALUATION_FAILED`, `POSTCONDITION_EVIDENCE_UNAVAILABLE`,
+`POSTCONDITION_UNSUPPORTED`, `OBJECTIVE_INCOMPLETE`, `VERIFICATION_REQUIRED`,
+`VERIFICATION_FAILED`, and `VERIFICATION_UNAVAILABLE`.
+
+Future work must reuse the admitted authority snapshot, `run_consequences`, generic
+operation receipts, replay, required evidence, PostgreSQL terminalization, and the
+existing workspace/browser/process consequence paths. It must not introduce a second
+completion, consequence, receipt, evidence, or recovery subsystem.
 
 ## Tranche 7 — Supervised process lifecycle
 

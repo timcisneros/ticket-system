@@ -310,6 +310,9 @@ async function main() {
       'historical runs without runtimeBudgetSnapshot must remain explicitly advisory');
     assert(runDetail.body.includes('historical run has no effective budget snapshot'),
       'historical run numeric policy must not be presented as a current enforced limit');
+    assert(runDetail.body.includes('Historical completion compatibility') &&
+      runDetail.body.includes('predates the canonical completion-decision contract'),
+    'historical runs without completion authority must remain explicitly historical');
     assert(runDetail.body.includes('recorded intent · not implemented'),
       'historical run detail must retain the unimplemented child-ticket boundary');
     const runMap = await assertPage(cookie, `/runs/${fixture.run.id}/map`, 'Decision Map');

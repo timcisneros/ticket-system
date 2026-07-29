@@ -247,7 +247,7 @@
     <h3><span class="sev"><%= reviewStatus.needsReview ? 'Needs review' : 'Reviewed' %></span> Review status</h3>
     <% if (reviewStatus.needsReview) { %>
       <p><strong>Needs review</strong> — execution completed, but the result should be checked.</p>
-      <p class="text-muted">The system verified declared postconditions / workspace evidence, not the full ticket objective.</p>
+      <p class="text-muted">Review warnings do not override the canonical execution, verification, and completion decision below.</p>
       <ul class="text-muted">
         <% reviewStatus.reasons.forEach(reason => { %>
           <li><%= reason %></li>
@@ -255,7 +255,7 @@
       </ul>
     <% } else { %>
       <p><strong>No review flag</strong> — no evidence warnings were detected.</p>
-      <p class="text-muted">Completion reflects declared postconditions / workspace evidence, not independent verification of the full ticket objective.</p>
+      <p class="text-muted">No warning is itself not completion evidence; the canonical decision below remains authoritative.</p>
     <% } %>
   </div>
 <% } %>
@@ -263,6 +263,45 @@
 <% } %>
 
 <div class="zone-head"><span class="zone-eyebrow">Outcome &amp; verification</span></div>
+
+<% const completionDecision = run.runConsequence && run.runConsequence.completionDecision ? run.runConsequence.completionDecision : null; %>
+<% if (completionDecision) { %>
+<section class="detail-section completion-decision">
+  <h2>Canonical completion decision</h2>
+  <p class="text-muted">Execution, deterministic verification, and objective completion are separate durable facts. Model completion text is non-authoritative.</p>
+  <dl class="detail-grid">
+    <div><dt>Execution</dt><dd><code><%= completionDecision.executionDisposition %></code></dd></div>
+    <div><dt>Verification</dt><dd><code><%= completionDecision.verificationDisposition %></code></dd></div>
+    <div><dt>Objective completion</dt><dd><code><%= completionDecision.completionDisposition %></code></dd></div>
+    <div><dt>Reason</dt><dd><code><%= completionDecision.reasonCode %></code></dd></div>
+    <div><dt>Evaluated postconditions</dt><dd><%= Array.isArray(completionDecision.evaluatedPostconditions) ? completionDecision.evaluatedPostconditions.length : 0 %></dd></div>
+    <div><dt>Evidence issues</dt><dd><%= Array.isArray(completionDecision.evidenceIssues) ? completionDecision.evidenceIssues.length : 0 %></dd></div>
+    <div><dt>Decision hash</dt><dd><code><%= completionDecision.decisionHash %></code></dd></div>
+  </dl>
+  <% if (Array.isArray(completionDecision.evaluatedPostconditions) && completionDecision.evaluatedPostconditions.length > 0) { %>
+    <ul class="postcondition-list">
+      <% completionDecision.evaluatedPostconditions.forEach(postcondition => { %>
+        <li class="postcondition-item">
+          <code><%= postcondition.id || postcondition.type || 'postcondition' %></code>
+          · <%= postcondition.passed === true ? 'passed' : postcondition.passed === false ? 'failed' : 'unavailable' %>
+        </li>
+      <% }) %>
+    </ul>
+  <% } %>
+  <% if (Array.isArray(completionDecision.evidenceIssues) && completionDecision.evidenceIssues.length > 0) { %>
+    <ul class="text-muted">
+      <% completionDecision.evidenceIssues.forEach(issue => { %>
+        <li><code><%= issue.code %></code><%= issue.detail ? ' · ' + issue.detail : '' %></li>
+      <% }) %>
+    </ul>
+  <% } %>
+</section>
+<% } else if (['completed', 'failed', 'interrupted'].includes(run.status)) { %>
+<section class="detail-section completion-decision completion-decision--historical">
+  <h2>Historical completion compatibility</h2>
+  <p class="text-muted">This run predates the canonical completion-decision contract. Its historical terminal and verification records are shown without being reinterpreted as a Tranche 6 decision.</p>
+</section>
+<% } %>
 
 <% if (typeof completionSummary !== 'undefined' && completionSummary) { %>
 <section class="detail-section completion-summary">

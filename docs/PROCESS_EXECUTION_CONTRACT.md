@@ -886,9 +886,23 @@ evidence, during cancellation, and during startup reconciliation. Each restart c
 to one execution, one terminal row, one artifact pair, one receipt/evidence set, and one
 launcher acknowledgement.
 
-Tranches 1–4 are complete under the authoritative roadmap. Kernel containment and active
+Tranches 1–6 are complete under the authoritative roadmap. Kernel containment and active
 proof satisfy Tranche 4. Durable execution identity, artifacts, evidence, cancellation,
 crash recovery, scheduler lease-loss cancellation ordering, receipts, replay, and
-ordinary consequence reconstruction satisfy Tranche 3. Tranche 5 is next and remains
-not started. Completed lifecycle and containment systems must not be rebuilt as parallel
-subsystems.
+ordinary consequence reconstruction satisfy Tranche 3. Tranche 5 adds the immutable
+effective run-budget snapshot, durable exactly-once charges, and PostgreSQL capacity
+coordination without replacing this process lifecycle.
+
+Tranche 6 makes process facts inputs to the common completion system rather than
+process-specific completion shortcuts. Exact declared process-operation,
+terminal-outcome, and stream-artifact metadata predicates consume the existing durable
+receipt, `processOperations` consequence, and terminal/artifact evidence. A successful
+exit or artifact alone cannot complete an objective; missing or contradictory process
+authority makes verification unavailable and completion blocked. One canonical
+completion decision in the immutable run consequence, plus idempotent
+`run.completion_decided` evidence, governs ticket projection. Raw output is never
+interpreted and model prose is never completion authority.
+
+Tranche 7 is next and remains not started. Completed authority, launcher, containment,
+lifecycle, budget, scheduling, receipt, evidence, consequence, completion, and recovery
+systems must not be rebuilt as parallel subsystems.

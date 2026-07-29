@@ -258,8 +258,12 @@ async function main() {
     const serverSource = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
     assert(/buildRunConsequence requires an explicit operations array/.test(serverSource),
       'buildRunConsequence rejects a missing operations argument rather than defaulting to []');
-    assert(!/\(Array\.isArray\(suppliedOperations\) \? suppliedOperations : \[\]\)/.test(serverSource),
-      'the silent empty-array default is gone');
+    const consequenceSignature = serverSource.match(
+      /function buildRunConsequence\(run,\s*\{([\s\S]*?)\}\s*=\s*\{\}\)\s*\{/
+    );
+    assert(Boolean(consequenceSignature) &&
+      !/suppliedOperations\s*=\s*\[\]/.test(consequenceSignature[1]),
+    'the consequence builder signature has no silent operations default');
     assert(/operations: await this\._listRunOperationsOn\(client, id/.test(
       fs.readFileSync(path.join(ROOT, 'persistence/postgres/store.js'), 'utf8')),
       'terminalization reads receipts on its own transaction client');

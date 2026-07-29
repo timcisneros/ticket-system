@@ -86,6 +86,12 @@ const {
 const {
   RuntimeBudgetController
 } = require('./runtime/runtime-budget-controller');
+const {
+  buildCompletionAuthoritySnapshot,
+  normalizeCompletionAuthoritySnapshot,
+  buildCompletionDecision,
+  normalizeCompletionDecision
+} = require('./runtime/completion-decision-contract');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -4724,8 +4730,16 @@ function buildRunCompletionSummary(run, snapshot, runEvents, operationHistory, f
   let timeoutNote = null;
   let modelCallNote = null;
   let progressNote = null;
+  const completionDecision = run && run.runConsequence && run.runConsequence.completionDecision
+    ? normalizeCompletionDecision(run.runConsequence.completionDecision)
+    : null;
 
-  if (run.status === 'failed' || run.status === 'interrupted') {
+  if (completionDecision) {
+    source = 'canonical_completion_decision';
+    label = `Execution ${completionDecision.executionDisposition}; verification ` +
+      `${completionDecision.verificationDisposition}; objective ` +
+      `${completionDecision.completionDisposition} (${completionDecision.reasonCode}).`;
+  } else if (run.status === 'failed' || run.status === 'interrupted') {
     source = run.status;
     label = run.status === 'interrupted'
       ? 'Run was interrupted before it completed.'
@@ -6964,7 +6978,7 @@ function resolveWorkflowPostconditionTemplates(postcondition, run, output) {
   });
 }
 
-function evaluateWorkflowPostcondition(run, workflow, postcondition, output) {
+function evaluateWorkflowPostcondition(run, workflow, postcondition, output, processOperations = []) {
   const resolved = resolveWorkflowPostconditionTemplates(postcondition, run, output);
   const id = resolved.id || postcondition.id || null;
 
@@ -7025,6 +7039,59 @@ function evaluateWorkflowPostcondition(run, workflow, postcondition, output) {
     };
   }
 
+  if (resolved.type === 'processOperationExists' ||
+      resolved.type === 'processTerminalOutcomeEquals' ||
+      resolved.type === 'processArtifactEquals') {
+    const operation = processOperations.find(item =>
+      item && item.operationIdentity === resolved.operationIdentity) || null;
+    if (resolved.type === 'processOperationExists') {
+      return {
+        id,
+        type: resolved.type,
+        passed: Boolean(operation),
+        expected: { operationIdentity: resolved.operationIdentity, exists: true },
+        actual: { exists: Boolean(operation) }
+      };
+    }
+    if (resolved.type === 'processTerminalOutcomeEquals') {
+      return {
+        id,
+        type: resolved.type,
+        passed: Boolean(operation && operation.terminalOutcome === resolved.terminalOutcome),
+        expected: {
+          operationIdentity: resolved.operationIdentity,
+          terminalOutcome: resolved.terminalOutcome
+        },
+        actual: {
+          exists: Boolean(operation),
+          terminalOutcome: operation ? operation.terminalOutcome : null
+        }
+      };
+    }
+    const artifact = operation
+      ? operation[resolved.stream === 'stdout' ? 'stdoutArtifact' : 'stderrArtifact']
+      : null;
+    return {
+      id,
+      type: resolved.type,
+      passed: Boolean(artifact &&
+        artifact.stream === resolved.stream &&
+        artifact.byteCount === resolved.byteCount &&
+        artifact.sha256 === resolved.sha256),
+      expected: {
+        operationIdentity: resolved.operationIdentity,
+        stream: resolved.stream,
+        byteCount: resolved.byteCount,
+        sha256: resolved.sha256
+      },
+      actual: artifact ? {
+        stream: artifact.stream,
+        byteCount: artifact.byteCount,
+        sha256: artifact.sha256
+      } : null
+    };
+  }
+
   return {
     id,
     type: resolved.type || null,
@@ -7034,7 +7101,7 @@ function evaluateWorkflowPostcondition(run, workflow, postcondition, output) {
   };
 }
 
-function buildRunPostconditionEvidence(run, existingEvents = []) {
+function buildRunPostconditionEvidence(run, existingEvents = [], suppliedOperations = []) {
   if (!run || run.executionMode !== 'workflow' || !run.workflowId) return null;
 
   if (existingEvents.some(event => event.type === 'run.postconditions_checked')) {
@@ -7065,7 +7132,11 @@ function buildRunPostconditionEvidence(run, existingEvents = []) {
   if (postconditions.length === 0) return { failedResults: [], events: [] };
 
   const output = getRunWorkflowOutput(run);
-  const results = postconditions.map(postcondition => evaluateWorkflowPostcondition(run, workflow, postcondition, output));
+  const processOperations = (Array.isArray(suppliedOperations) ? suppliedOperations : [])
+    .map(buildProcessConsequenceFromHistory)
+    .filter(Boolean);
+  const results = postconditions.map(postcondition =>
+    evaluateWorkflowPostcondition(run, workflow, postcondition, output, processOperations));
   const failedResults = results.filter(result => !result.passed);
 
   return {
@@ -7099,7 +7170,11 @@ function buildRunPostconditionEvidence(run, existingEvents = []) {
 async function completeRunPostconditionCheck(runId) {
   const run = await hydrateRunReplaySnapshot(await getRunById(runId));
   if (!run) return null;
-  const plan = buildRunPostconditionEvidence(run, (await getRunEvents(run.id)));
+  const [events, operations] = await Promise.all([
+    getRunEvents(run.id),
+    readAllRunOperations(run.id)
+  ]);
+  const plan = buildRunPostconditionEvidence(run, events, operations);
   if (!plan) return null;
   for (const event of plan.events) {
     await appendEvent({
@@ -7391,7 +7466,10 @@ function buildRunConsequence(run, {
     externalEffects: collectExplicitExternalEffects(run, suppliedEvents),
     verification: {
       postconditionsStatus: evaluation.effectiveness ? evaluation.effectiveness.status || 'unknown' : 'unknown',
-      violationsStatus: evaluation.violations ? evaluation.violations.status || 'unknown' : 'unknown'
+      violationsStatus: evaluation.violations ? evaluation.violations.status || 'unknown' : 'unknown',
+      browserEvidence: evaluation.browserEvidence
+        ? sanitizeSnapshotValue(evaluation.browserEvidence)
+        : null
     }
   };
   const processOperations = suppliedOperations
@@ -7412,6 +7490,28 @@ function buildRunConsequence(run, {
       attempted: true
     });
   });
+
+  const completionAuthoritySnapshot = run.completionAuthoritySnapshot ||
+    snapshot.completionAuthoritySnapshot ||
+    null;
+  if (completionAuthoritySnapshot && ['completed', 'failed', 'interrupted'].includes(run.status)) {
+    consequence.completionDecision = buildCompletionDecision({
+      run: {
+        ...run,
+        completionAuthoritySnapshot,
+        executionPolicySnapshot: run.executionPolicySnapshot || snapshot.executionPolicySnapshot || {},
+        runtimeBudgetSnapshot: run.runtimeBudgetSnapshot || snapshot.runtimeBudgetSnapshot || null
+      },
+      replaySnapshot: snapshot,
+      events: suppliedEvents || [],
+      operations: suppliedOperations,
+      consequence,
+      verificationContract: normalizeVerificationContractSnapshot(
+        run.verificationContractSnapshot || snapshot.verificationContractSnapshot
+      ),
+      evaluatedAt: run.completedAt || snapshot.finalizedAt || new Date().toISOString()
+    });
+  }
 
   return consequence;
 }
@@ -7725,6 +7825,22 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     suppliedEvents,
     options.attemptPosition || null
   );
+  const hydratedConsequence = applyHistoricalMutationConsequence(
+    run.runConsequence,
+    suppliedOperations || []
+  );
+  const currentTerminalWithoutConsequence = Boolean(
+    run.completionAuthoritySnapshot &&
+    ['completed', 'failed', 'interrupted'].includes(run.status) &&
+    !hydratedConsequence
+  );
+  const runConsequence = hydratedConsequence || (currentTerminalWithoutConsequence
+    ? null
+    : buildRunConsequence(run, {
+        events: suppliedEvents,
+        operations: suppliedOperations || [],
+        evaluation: run.runEvaluation || null
+      }));
 
   return {
     id: run.id,
@@ -7738,6 +7854,9 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     workflowId: run.workflowId || null,
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
     verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
+    completionAuthoritySnapshot: run.completionAuthoritySnapshot
+      ? normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot)
+      : null,
     triage: normalizeTriage(run.triage),
     lease: serializeRunLease(run),
     leaseOwner: run.leaseOwner || null,
@@ -7763,12 +7882,13 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
       options.runtimeBudgetState || null
     ),
     runtimeBudgetState: options.runtimeBudgetState || null,
-    runConsequence: applyHistoricalMutationConsequence(run.runConsequence, suppliedOperations || [])
-      || buildRunConsequence(run, {
-        events: suppliedEvents,
-        operations: suppliedOperations || [],
-        evaluation: run.runEvaluation || null
-      }),
+    runConsequence,
+    completionDecisionIntegrity: currentTerminalWithoutConsequence
+      ? {
+          status: 'missing',
+          code: 'COMPLETION_EVIDENCE_MISSING'
+        }
+      : null,
     currentMessage: getRunCurrentMessage(run, effectiveLogsByRunId, summary),
     stateInconsistency: detectRunStateInconsistency(run, {
       logs: runLogs,
@@ -8191,6 +8311,9 @@ function buildWorkReceipt(run, ticket, options = {}) {
   const authorityDenied = events.filter(e => e && e.type === 'authority.denied').length;
   const verificationRequired = isRunVerificationRequired(run);
   const verificationResult = effectiveness && effectiveness.status ? effectiveness.status : (verificationRequired ? 'unknown' : 'not_required');
+  const completionDecision = run.runConsequence && run.runConsequence.completionDecision
+    ? normalizeCompletionDecision(run.runConsequence.completionDecision)
+    : null;
   const blocked = Boolean(run.triage && run.triage.required === true);
   const targetOps = history.map(record => ({ historyId: record.id, operation: record.operation || null, path: record.path || record.targetPath || null })).slice(0, 25);
   const artifactPaths = [...new Set(targetOps.map(op => op.path).filter(Boolean))].slice(0, 25);
@@ -8213,12 +8336,30 @@ function buildWorkReceipt(run, ticket, options = {}) {
     targetOperationsPerformed: targetOps,
     artifactsProduced: artifactPaths,
     authorityDecisions: { allowed: authorityAllowed, denied: authorityDenied },
-    verification: { required: verificationRequired, result: verificationResult },
+    verification: {
+      required: verificationRequired,
+      result: completionDecision
+        ? completionDecision.verificationDisposition
+        : verificationResult
+    },
+    completion: completionDecision ? {
+      executionDisposition: completionDecision.executionDisposition,
+      verificationDisposition: completionDecision.verificationDisposition,
+      completionDisposition: completionDecision.completionDisposition,
+      reasonCode: completionDecision.reasonCode,
+      decisionHash: completionDecision.decisionHash
+    } : {
+      compatibility: 'historical'
+    },
     triage: blocked ? { required: true, reasonCode: run.triage.reasonCode || null } : { required: false },
     whatWasDone: effectiveness ? `postconditions passed ${effectiveness.postconditionsPassed || 0}, failed ${effectiveness.postconditionsFailed || 0}` : null,
     whatWasNotDone: blocked ? `stopped for triage: ${run.triage.reasonCode || 'review'}` : (run.status === 'failed' ? timelineText(run.error) : null),
     whereWorkStopped: blocked ? 'triage_required' : (run.status || 'unknown'),
-    nextRecommendedAction: blocked ? 'resolve triage' : (run.status === 'failed' ? 'review failure' : (run.status === 'completed' ? 'none' : 'await completion'))
+    nextRecommendedAction: blocked
+      ? 'resolve triage'
+      : completionDecision && completionDecision.completionDisposition !== 'completed'
+        ? 'review incomplete objective'
+        : (run.status === 'failed' ? 'review failure' : (run.status === 'completed' ? 'none' : 'await completion'))
   };
 }
 
@@ -9277,6 +9418,10 @@ function isRunVerificationRequired(run) {
     runWorkspaceScope(run)
   );
   if (executionPolicy.requireVerification !== 'when_declared') return false;
+  if (run && run.completionAuthoritySnapshot) {
+    const completionAuthority = normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot);
+    if (completionAuthority.objectiveContract.directPostconditions.length > 0) return true;
+  }
   if (!run || run.executionMode !== 'workflow' || !run.workflowId) return false;
   const capturedContract = normalizeVerificationContractSnapshot(run.verificationContractSnapshot);
   return Boolean(capturedContract && capturedContract.postconditions.length > 0);
@@ -9285,6 +9430,40 @@ function isRunVerificationRequired(run) {
 function buildObjectiveSuccess(run) {
   if (!run || !run.status) {
     return { scored: false, status: 'unknown', score: null, percent: null, reason: 'No run status available' };
+  }
+
+  const completionDecision = run.runConsequence && run.runConsequence.completionDecision
+    ? normalizeCompletionDecision(run.runConsequence.completionDecision)
+    : null;
+  if (completionDecision) {
+    if (completionDecision.completionDisposition === 'completed') {
+      return {
+        scored: true,
+        status: 'succeeded',
+        score: 1,
+        percent: 100,
+        reason: 'Deterministic completion decision passed',
+        decisionHash: completionDecision.decisionHash
+      };
+    }
+    if (completionDecision.completionDisposition === 'blocked') {
+      return {
+        scored: false,
+        status: 'blocked',
+        score: null,
+        percent: null,
+        reason: completionDecision.reasonCode,
+        decisionHash: completionDecision.decisionHash
+      };
+    }
+    return {
+      scored: true,
+      status: 'incomplete',
+      score: 0,
+      percent: 0,
+      reason: completionDecision.reasonCode,
+      decisionHash: completionDecision.decisionHash
+    };
   }
 
   if (run.status === 'completed') {
@@ -10389,6 +10568,9 @@ function createReplaySnapshotBase(run, overrides = {}) {
     processPolicySnapshot: normalizeProcessPolicySnapshot(run.processPolicySnapshot),
     processRuntimeCapabilitySnapshot: run.processRuntimeCapabilitySnapshot || null,
     verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
+    completionAuthoritySnapshot: run.completionAuthoritySnapshot
+      ? normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot)
+      : null,
     workTypeId: run.workTypeId || null,
     workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
     workTypeSnapshotSource: run.workTypeSnapshot ? 'ticket_snapshot' : null,
@@ -10446,6 +10628,9 @@ async function createRunReplaySnapshot(run, ticket, agent, providerConfig, runti
     runtimeLimits: pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run)),
     runtimeLimitsSnapshot: getRunRuntimeLimitsSnapshot(run),
     verificationContractSnapshot: normalizeVerificationContractSnapshot(run.verificationContractSnapshot),
+    completionAuthoritySnapshot: run.completionAuthoritySnapshot
+      ? normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot)
+      : null,
     systemInstructionSnapshot,
       effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent, getRunRuntimeLimitsSnapshot(run))
     })
@@ -12095,6 +12280,85 @@ function checkObviousTicketPostcondition(ticket) {
   };
 }
 
+function buildRunCompletionAuthoritySnapshot(ticket, workflow, executionPolicy, capturedAt) {
+  const objective = ticket && typeof ticket.objective === 'string' ? ticket.objective : '';
+  const deterministicContract = buildObjectiveContract(objective);
+  const postconditions = [];
+  const seen = new Set();
+  const addPostcondition = postcondition => {
+    if (!postcondition || typeof postcondition !== 'object') return;
+    const key = canonicalOperationJson(postcondition);
+    if (seen.has(key)) return;
+    seen.add(key);
+    postconditions.push(postcondition);
+  };
+
+  if (!workflow && deterministicContract && Array.isArray(deterministicContract.postconditions)) {
+    deterministicContract.postconditions.forEach(postcondition => {
+      if (!postcondition || !['folder_exists', 'path_absent'].includes(postcondition.type)) return;
+      addPostcondition({ type: postcondition.type, path: postcondition.path });
+    });
+  }
+  if (!workflow) {
+    buildObviousPostconditionChecks(objective).forEach(postcondition => {
+      if (postcondition.type === 'folder') {
+        addPostcondition({ type: 'folder_exists', path: postcondition.path });
+      } else if (postcondition.type === 'absent') {
+        addPostcondition({ type: 'path_absent', path: postcondition.path });
+      } else if (postcondition.type === 'file' && postcondition.expectedContent !== undefined) {
+        addPostcondition({
+          type: 'file_content_equals',
+          path: postcondition.path,
+          contentSha256: crypto.createHash('sha256')
+            .update(String(postcondition.expectedContent))
+            .digest('hex')
+        });
+      }
+    });
+  }
+
+  const workflowDraft = !workflow && isWorkflowDraftObjective(objective);
+  const directWorkspaceObjective = !workflow && isDirectWorkspaceWriteObjective(objective);
+  const kind = workflow
+    ? 'workflow'
+    : workflowDraft
+      ? 'workflow_draft'
+      : (deterministicContract && deterministicContract.recognized) || directWorkspaceObjective
+        ? 'deterministic'
+        : 'unrecognized';
+  const intent = workflow
+    ? 'workflow'
+    : workflowDraft
+      ? 'workflow_draft'
+      : deterministicContract && deterministicContract.intent
+        ? deterministicContract.intent
+        : 'model_driven';
+  const completionPolicy = workflow
+    ? 'workflow_terminal'
+    : workflowDraft
+      ? 'workflow_draft_receipt'
+      : postconditions.length > 0
+        ? 'declared_postconditions'
+        : directWorkspaceObjective
+          ? 'workspace_objective_receipt'
+        : deterministicContract && deterministicContract.completionPolicy
+          ? deterministicContract.completionPolicy
+          : 'explicit_evidence_required';
+
+  return buildCompletionAuthoritySnapshot({
+    objective,
+    kind,
+    recognized: Boolean(workflow || workflowDraft ||
+      directWorkspaceObjective ||
+      (deterministicContract && deterministicContract.recognized)),
+    intent,
+    completionPolicy,
+    directPostconditions: postconditions,
+    verificationPolicy: executionPolicy.requireVerification,
+    capturedAt
+  });
+}
+
 function buildFailureMetadata(error, status, failureReason = null, detail = {}) {
   if (status === 'interrupted') {
     return {
@@ -12510,6 +12774,7 @@ async function commitRunTerminalization(run, {
     error: error || null
   });
   await maybeTestInterrupt(terminalRun, 'after_run.snapshot_finalized');
+  await maybeTestInterrupt(terminalRun, 'after_run.completion_decided');
   // Terminal state is durable; drop per-run evidence tracking so the module-level
   // maps stay bounded by live runs rather than by all runs this process ever saw.
   releaseRunEvidenceTracking(terminalRun && terminalRun.id != null ? terminalRun.id : run.id);
@@ -13666,6 +13931,9 @@ async function validateManualTicketCompletion(ticket) {
   }
 
   const objectiveSuccess = buildObjectiveSuccess(latestRun);
+  const hasCompletionDecision = Boolean(
+    latestRun.runConsequence && latestRun.runConsequence.completionDecision
+  );
   // Option A: completion means execution reached a valid terminal completion state.
   // When declared verification applies to this run, completion still requires a
   // passing verdict (verified). When no verification was required for the run
@@ -13676,6 +13944,8 @@ async function validateManualTicketCompletion(ticket) {
     if (!objectiveSuccess.scored || objectiveSuccess.status !== 'succeeded') {
       return { allowed: false, reason: 'Ticket cannot be completed because the latest run has no verified objective-success evidence.' };
     }
+  } else if (hasCompletionDecision && objectiveSuccess.status !== 'succeeded') {
+    return { allowed: false, reason: 'Ticket cannot be completed because the canonical completion decision did not establish objective completion.' };
   } else if (objectiveSuccess.status === 'failed') {
     return { allowed: false, reason: 'Ticket cannot be completed because the latest run did not reach objective success.' };
   }
@@ -13770,7 +14040,7 @@ async function reconcileTerminalRunUnlocked(run) {
   });
 
   if (targetStatus === 'completed' && run.executionMode === 'workflow' && run.workflowId) {
-    const postconditionPlan = buildRunPostconditionEvidence(run, events);
+    const postconditionPlan = buildRunPostconditionEvidence(run, events, operations);
     const failedPostconditions = postconditionPlan ? postconditionPlan.failedResults : null;
     if (postconditionPlan) beforeReplayEvents.push(...postconditionPlan.events);
     if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
@@ -14869,6 +15139,13 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     ticket.executionPolicy,
     usesOwnedScope ? 'owned_paths' : 'shared'
   );
+  const verificationContractSnapshot = buildVerificationContractSnapshot(workflow, now);
+  const completionAuthoritySnapshot = buildRunCompletionAuthoritySnapshot(
+    ticket,
+    workflow,
+    executionPolicySnapshot,
+    now
+  );
   const runtimeBudgetSnapshot = buildRuntimeBudgetSnapshot({
     runtimeLimits: {
       ...runtimeLimitsSnapshot,
@@ -14949,7 +15226,8 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     processRuntimeCapabilitySnapshot,
     runtimeLimitsSnapshot,
     runtimeBudgetSnapshot,
-    verificationContractSnapshot: buildVerificationContractSnapshot(workflow, now),
+    verificationContractSnapshot,
+    completionAuthoritySnapshot,
     acceptanceCriteriaSnapshot: (typeof ticket.acceptanceCriteria === 'string' && ticket.acceptanceCriteria.trim()) ? ticket.acceptanceCriteria.trim() : null,
     // Immutable routing snapshot (r1.28): supporting metadata only, never rewritten.
     routingSnapshot: routeDecision.routingSnapshot,
@@ -14997,6 +15275,7 @@ function buildRunCreatedEventPayload(run) {
     runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
     runtimeBudgetSnapshot: run.runtimeBudgetSnapshot,
     verificationContractSnapshot: run.verificationContractSnapshot,
+    completionAuthoritySnapshot: run.completionAuthoritySnapshot,
     acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
     workTypeId: run.workTypeId,
     workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
@@ -16682,7 +16961,15 @@ function validateWorkflowDefinition(workflow) {
     }
 
     const type = postcondition.type;
-    if (!['fileExists', 'fileContains', 'jsonPathEquals', 'outputFieldEquals'].includes(type)) {
+    if (![
+      'fileExists',
+      'fileContains',
+      'jsonPathEquals',
+      'outputFieldEquals',
+      'processOperationExists',
+      'processTerminalOutcomeEquals',
+      'processArtifactEquals'
+    ].includes(type)) {
       errors.push(`workflow.postconditions[${index}].type is unsupported: ${type}`);
       return;
     }
@@ -16701,6 +16988,27 @@ function validateWorkflowDefinition(workflow) {
     }
     if ((type === 'jsonPathEquals' || type === 'outputFieldEquals') && !Object.prototype.hasOwnProperty.call(postcondition, 'equals')) {
       errors.push(`workflow.postconditions[${index}].equals is required`);
+    }
+    if (type.startsWith('process') &&
+        (typeof postcondition.operationIdentity !== 'string' ||
+         !/^process-operation:[0-9a-f]{64}$/.test(postcondition.operationIdentity))) {
+      errors.push(`workflow.postconditions[${index}].operationIdentity is required`);
+    }
+    if (type === 'processTerminalOutcomeEquals' &&
+        (typeof postcondition.terminalOutcome !== 'string' ||
+         !PROCESS_TERMINAL_OUTCOMES.includes(postcondition.terminalOutcome))) {
+      errors.push(`workflow.postconditions[${index}].terminalOutcome is invalid`);
+    }
+    if (type === 'processArtifactEquals') {
+      if (!['stdout', 'stderr'].includes(postcondition.stream)) {
+        errors.push(`workflow.postconditions[${index}].stream must be stdout or stderr`);
+      }
+      if (!Number.isSafeInteger(postcondition.byteCount) || postcondition.byteCount < 0) {
+        errors.push(`workflow.postconditions[${index}].byteCount must be a nonnegative safe integer`);
+      }
+      if (typeof postcondition.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(postcondition.sha256)) {
+        errors.push(`workflow.postconditions[${index}].sha256 must be a lowercase SHA-256`);
+      }
     }
   });
 
@@ -21313,11 +21621,22 @@ async function runAgentTicket(runId) {
       }
 
       const compiledPostcondition = isBrowserRun(run) ? null : checkObjectiveContractPostcondition(compiledContract);
-      const postcondition = compiledPostcondition || (isBrowserRun(run) ? null : await checkPostconditionCompletion(run, actions, actionResults, step));
+      const declaredDirectPostcondition = isBrowserRun(run) ? null : checkObviousTicketPostcondition(ticket);
+      const postcondition = compiledPostcondition ||
+        declaredDirectPostcondition ||
+        (isBrowserRun(run) ? null : await checkPostconditionCompletion(run, actions, actionResults, step));
       if (postcondition) {
         await recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
           step,
-          mutatingActionCount: postcondition.mutatingActionCount
+          mutatingActionCount: postcondition.mutatingActionCount || 0,
+          checkedPaths: Array.isArray(postcondition.checkedPaths)
+            ? postcondition.checkedPaths
+            : [],
+          source: compiledPostcondition
+            ? 'deterministic_objective_contract'
+            : declaredDirectPostcondition
+              ? 'declared_direct_postcondition'
+              : 'redundant_operation'
         });
         completed = true;
         break;

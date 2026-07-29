@@ -12,6 +12,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'business-scenario-contracts-test.js',
   'dev-environment-test.js',
   'catalog-consistency-test.js',
+  'completion-decision-contract-test.js',
   'action-contract-streak-test.js',
   'evidence-truthfulness-contract-test.js',
   'event-integrity-negative-test.js',
@@ -160,6 +161,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // what an operator may mark completed, and what startup concludes about
   // tickets whose runs already finished.
   'completion-admission-test.js',
+  'completion-decision-postgres-test.js',
   'startup-state-convergence-test.js',
   // A20 — replaces the JSON-era verification-contract-reconciliation-test.js.
   'verification-contract-authority-test.js',
