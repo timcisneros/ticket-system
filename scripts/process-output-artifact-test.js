@@ -80,6 +80,21 @@ async function main() {
       fs.readFileSync(path.join(artifactRoot, ...stderr.path.split('/'))),
       stderrBytes
     ) === 0, 'stderr is published as a separate exact raw-byte artifact');
+    const verifiedStderr = await store.verifyPublished(stderr);
+    ok(verifiedStderr.byteCount === stderr.byteCount &&
+      verifiedStderr.sha256 === stderr.sha256 &&
+      verifiedStderr.status === 'verified',
+    'published artifact verification binds actual bytes to durable metadata');
+    const stderrPath = path.join(artifactRoot, ...stderr.path.split('/'));
+    const missingProbe = path.join(artifactRoot, 'missing-stderr-probe.bin');
+    fs.renameSync(stderrPath, missingProbe);
+    await rejectsCode(
+      () => store.verifyPublished(stderr),
+      'PROCESS_OUTPUT_UNAVAILABLE',
+      'missing published artifact bytes fail truthfully rather than becoming empty'
+    );
+    fs.renameSync(missingProbe, stderrPath);
+    await store.verifyPublished(stderr);
 
     const replay = await store.publish({
       operationIdentity,
@@ -179,6 +194,22 @@ async function main() {
       'PROCESS_OUTPUT_ARTIFACT_FAILED',
       'an existing immutable artifact cannot be substituted'
     );
+
+    const operationDirectory = path.dirname(stdoutPath);
+    const abandoned = path.join(
+      operationDirectory,
+      `.stderr.${'a'.repeat(32)}.tmp`
+    );
+    fs.writeFileSync(abandoned, 'abandoned');
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(abandoned, old, old);
+    const cleanup = await store.cleanupAbandonedTemporaryFiles({
+      olderThanMs: 60 * 60 * 1000,
+      nowMs: Date.now()
+    });
+    ok(cleanup.removed === 1 && !fs.existsSync(abandoned) &&
+      fs.existsSync(stdoutPath),
+    'startup cleanup removes only stale staging files and retains published artifacts');
 
     const allFiles = fs.readdirSync(path.join(artifactRoot, 'process'), {
       recursive: true

@@ -28,7 +28,7 @@ use launch_contract::{
     ContainmentCapability, LaunchBody, LaunchPlan, OperationBody, OperationStatus,
 };
 use materializer_client::{AcquireSnapshotRequest, MaterializerClient};
-use operation_registry::{OperationRegistry, OutputChunk};
+use operation_registry::{OperationRegistry, OutputChunk, RegistryMetrics};
 use seccomp::{SECCOMP_POLICY_SCHEMA_VERSION, SeccompPolicy};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -261,6 +261,8 @@ enum ProtocolOperation {
     CancelOperation,
     ReadOutput,
     AcknowledgeOutput,
+    GetRegistryMetrics,
+    CompactOperation,
 }
 
 #[derive(Debug, Deserialize)]
@@ -300,6 +302,14 @@ struct ReadOutputBody {
 struct AcknowledgeOutputBody {
     operation_identity: String,
     terminal_result_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CompactOperationBody {
+    operation_identity: String,
+    terminal_result_hash: String,
+    durable_finalization_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1165,6 +1175,27 @@ impl FoundationService {
             .acknowledge(&body.operation_identity, &body.terminal_result_hash)
     }
 
+    fn registry_metrics(&self) -> Result<RegistryMetrics> {
+        Ok(self
+            .operation_registry
+            .lock()
+            .map_err(operation_lock)?
+            .metrics())
+    }
+
+    fn compact_operation(&self, body: CompactOperationBody) -> Result<OperationStatus> {
+        validate_operation_identity_text(&body.operation_identity)?;
+        validate_sha256(&body.terminal_result_hash, "terminalResultHash")?;
+        validate_sha256(&body.durable_finalization_hash, "durableFinalizationHash")?;
+        let mut registry = self.operation_registry.lock().map_err(operation_lock)?;
+        registry.compact(
+            &body.operation_identity,
+            &body.terminal_result_hash,
+            &body.durable_finalization_hash,
+        )?;
+        registry.status(&body.operation_identity)
+    }
+
     fn run_active_containment_probe(&self) -> Result<String> {
         let probe = &self.config.containment_probe;
         let rootfs = self.rootfs.get(&probe.rootfs_id).ok_or_else(|| {
@@ -1753,6 +1784,14 @@ fn dispatch(service: &Arc<FoundationService>, request: &RequestEnvelope) -> Resu
         ProtocolOperation::AcknowledgeOutput => {
             let body = parse_body::<AcknowledgeOutputBody>(&request.body)?;
             serde_json::to_value(service.acknowledge_output(body)?).map_err(protocol_json)
+        }
+        ProtocolOperation::GetRegistryMetrics => {
+            parse_body::<EmptyBody>(&request.body)?;
+            serde_json::to_value(service.registry_metrics()?).map_err(protocol_json)
+        }
+        ProtocolOperation::CompactOperation => {
+            let body = parse_body::<CompactOperationBody>(&request.body)?;
+            serde_json::to_value(service.compact_operation(body)?).map_err(protocol_json)
         }
     }
 }

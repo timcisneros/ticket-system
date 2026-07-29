@@ -168,6 +168,11 @@ function fixture({ now = Date.now(), containmentOverrides = {}, calls = null } =
       artifactStore,
       materializerClient,
       launcherClient,
+      releaseReadiness: {
+        async assertAdmissionReady() {
+          return { state: 'ready' };
+        }
+      },
       releaseGates: [...PROCESS_ENABLED_RELEASE_GATES]
     })
   };

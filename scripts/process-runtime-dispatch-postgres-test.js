@@ -10,6 +10,9 @@ const { withHarness, createAsserter, sleep } = require('./postgres-test-harness'
 const {
   hashProcessContractValue
 } = require('../runtime/process-execution-contract');
+const {
+  buildProcessExecutionReleaseContract
+} = require('../runtime/process-execution-release-contract');
 
 const assert = createAsserter();
 const STAMP = Date.now();
@@ -378,9 +381,24 @@ async function main() {
       const objective =
         `Inspect project syntax with the trusted process profile ${STAMP} ` +
         `#PLANS=${encodePlans(plans)}`;
+      const sourceRevision = 'a'.repeat(40);
+      const releaseContract = buildProcessExecutionReleaseContract({
+        applicationVersion: require('../package.json').version,
+        sourceRevision
+      });
+      await store.setProcessExecutionAdmission({
+        enabled: true,
+        releaseContractHash: releaseContract.releaseContractHash,
+        sourceRevision,
+        applicationVersion: releaseContract.applicationVersion,
+        changedBy: 'process-runtime-dispatch-test',
+        reason: 'validated isolated process test deployment'
+      });
       const server = await startServer({
         NODE_OPTIONS: `--require ${preloadPath}`,
         ENABLE_PROCESS_EXECUTION_CONTRACT: 'true',
+        PROCESS_EXECUTION_SOURCE_REVISION: sourceRevision,
+        PROCESS_EXECUTION_DEPLOYMENT_VALIDATED: 'true',
         PROCESS_TARGET_CATALOG_FILE: catalogPath,
         PROCESS_MATERIALIZER_SOCKET_PATH: materializerSocket,
         PROCESS_LAUNCHER_SOCKET_PATH: launcherSocket,

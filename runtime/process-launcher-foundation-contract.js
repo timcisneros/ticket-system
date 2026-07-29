@@ -118,6 +118,15 @@ const OUTPUT_CHUNK_KEYS = Object.freeze([
   'dataBase64',
   'end'
 ]);
+const REGISTRY_METRICS_KEYS = Object.freeze([
+  'version',
+  'fullRecordCount',
+  'compactTombstoneCount',
+  'fullRecordCapacity',
+  'compactTombstoneCapacity',
+  'fullRecordCapacityRemaining',
+  'compactTombstoneCapacityRemaining'
+]);
 const LAUNCH_REQUEST_KEYS = Object.freeze([
   'launchPlan',
   'containmentGenerationId'
@@ -654,6 +663,47 @@ function buildLauncherOutputAcknowledgementRequest(value) {
   });
 }
 
+function buildLauncherCompactionRequest(value) {
+  closed(value, [
+    'operationIdentity',
+    'terminalResultHash',
+    'durableFinalizationHash'
+  ], 'launcher operation compaction request');
+  const operation = buildLauncherOperationRequest({
+    operationIdentity: value.operationIdentity
+  });
+  return Object.freeze({
+    operationIdentity: operation.operationIdentity,
+    terminalResultHash: sha256(
+      value.terminalResultHash,
+      'launcher compaction terminalResultHash'
+    ),
+    durableFinalizationHash: sha256(
+      value.durableFinalizationHash,
+      'launcher compaction durableFinalizationHash'
+    )
+  });
+}
+
+function normalizeLauncherRegistryMetrics(value) {
+  closed(value, REGISTRY_METRICS_KEYS, 'launcher registry metrics');
+  if (value.version !== 1) {
+    fail('launcher registry metrics version is unsupported');
+  }
+  const normalized = { version: value.version };
+  for (const key of REGISTRY_METRICS_KEYS.slice(1)) {
+    normalized[key] = nonnegativeInteger(value[key], `launcher registry metrics.${key}`);
+  }
+  if (normalized.fullRecordCount + normalized.fullRecordCapacityRemaining !==
+      normalized.fullRecordCapacity ||
+      normalized.compactTombstoneCount +
+        normalized.compactTombstoneCapacityRemaining !==
+      normalized.compactTombstoneCapacity) {
+    fail('launcher registry metrics contain contradictory capacity facts');
+  }
+  return deepFreeze(normalized);
+}
+
 function nullableInteger(value, label, { minimum = 0 } = {}) {
   if (value === null) return null;
   if (!Number.isSafeInteger(value) || value < minimum) {
@@ -889,6 +939,7 @@ module.exports = {
   ROOTFS_AUTHORITY_KEYS,
   buildGetRootfsRequest,
   buildLauncherLaunchRequest,
+  buildLauncherCompactionRequest,
   buildLauncherOperationRequest,
   buildLauncherOutputAcknowledgementRequest,
   buildLauncherReadOutputRequest,
@@ -903,5 +954,6 @@ module.exports = {
   normalizePrivateExecutionResult,
   normalizePrivateOperationStatus,
   normalizeLauncherOutputChunk,
+  normalizeLauncherRegistryMetrics,
   normalizeRootfsAuthority
 };

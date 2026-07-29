@@ -15,6 +15,12 @@
   workspace-input materialization, registry, ownership, and mutation-boundary contract.
 - [`PROCESS_LAUNCHER_FOUNDATION.md`](PROCESS_LAUNCHER_FOUNDATION.md) — pinned runtime-rootfs,
   executable-identity, and non-executable sandbox-prerequisite verification contract.
+- [`PROCESS_EXECUTION_ROADMAP.md`](PROCESS_EXECUTION_ROADMAP.md) — authoritative eight-tranche
+  process-execution roadmap and frozen release status.
+- [`PROCESS_EXECUTION_COMPATIBILITY.md`](PROCESS_EXECUTION_COMPATIBILITY.md) — exact release,
+  schema, native protocol, and historical-read compatibility matrix.
+- [`PROCESS_EXECUTION_GA_RUNBOOK.md`](PROCESS_EXECUTION_GA_RUNBOOK.md) — installation,
+  readiness, staged enablement, disablement, backup, rollback, and incident procedures.
 - [`PRIMITIVE_GLOSSARY.md`](PRIMITIVE_GLOSSARY.md) — runtime terminology.
 - [`OPERATIONAL_TRANSPARENCY.md`](OPERATIONAL_TRANSPARENCY.md) — read-only operational surfaces.
 - [`OPERATOR_INBOX.md`](OPERATOR_INBOX.md) and [`BROWSER_ENVIRONMENT.md`](BROWSER_ENVIRONMENT.md) —

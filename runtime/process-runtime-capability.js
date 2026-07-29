@@ -51,6 +51,7 @@ class ProcessRuntimeCapabilityResolver {
     artifactStore,
     materializerClient,
     launcherClient,
+    releaseReadiness = null,
     releaseGates = PROCESS_ENABLED_RELEASE_GATES
   } = {}) {
     this.featureEnabled = featureEnabled === true;
@@ -58,6 +59,7 @@ class ProcessRuntimeCapabilityResolver {
     this.artifactStore = artifactStore;
     this.materializerClient = materializerClient;
     this.launcherClient = launcherClient;
+    this.releaseReadiness = releaseReadiness;
     this.releaseGates = releaseGates;
   }
 
@@ -65,6 +67,24 @@ class ProcessRuntimeCapabilityResolver {
     if (!this.featureEnabled) {
       throw new ProcessRuntimeCapabilityError(
         'Process execution is disabled by feature policy'
+      );
+    }
+    if (!this.releaseReadiness ||
+        typeof this.releaseReadiness.assertAdmissionReady !== 'function') {
+      throw new ProcessRuntimeCapabilityError(
+        'Process execution release readiness authority is unavailable'
+      );
+    }
+    try {
+      await this.releaseReadiness.assertAdmissionReady();
+    } catch (error) {
+      throw new ProcessRuntimeCapabilityError(
+        error && error.message
+          ? error.message
+          : 'Process execution release readiness is unavailable',
+        error && error.code === 'PROCESS_RELEASE_ADMISSION_DISABLED'
+          ? 'PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE'
+          : 'PROCESS_RUNTIME_CAPABILITY_MISMATCH'
       );
     }
     const snapshot = normalizeProcessPolicySnapshot(processPolicySnapshot);

@@ -17,7 +17,7 @@ const CONTRACTS = Object.freeze({
   runReplay: ['initializeRunReplay', 'readRunReplay', 'listRunReplays', 'updateRunReplay'],
   runtimeStateRead: ['getTicket', 'getRun', 'listTickets', 'listTicketPage', 'countTicketsByStatus', 'listRuns', 'listRunsForTicket', 'listRunsForTickets', 'listLatestRunsForTickets', 'getRunAttemptPositions', 'listChildTickets', 'listRunsNeedingTerminalReconciliation', 'listRunEvents', 'listRunTimelineEvents', 'listTicketEvents', 'getRunEvaluation', 'getRunConsequence', 'listRunOperations', 'listTicketOperations', 'countRunMutations'],
   runRecovery: ['listRecoverableRuns', 'claimRunRecovery', 'resumeRecoveredRun', 'repairRecoveredRunTerminalProjection'],
-  runtimeBootstrap: ['acquireRuntimeAuthority', 'prepareRuntimePersistence', 'refreshRuntimeAuthority', 'releaseRuntimeAuthority'],
+  runtimeBootstrap: ['acquireRuntimeAuthority', 'prepareRuntimePersistence', 'refreshRuntimeAuthority', 'releaseRuntimeAuthority', 'getMigrationStatus'],
   triage: ['createRunTriage', 'resolveTicketTriage', 'resolveRunTriage', 'getUnresolvedTriageSummary'],
   operationalStatus: ['getRuntimeOperationalSummary'],
   diagnosticLog: ['appendRunLog', 'appendSystemLog', 'listLogs', 'listLogsForRuns', 'hasRunLogType', 'getRunLogMetrics', 'resetLogs'],
@@ -36,7 +36,11 @@ const CONTRACTS = Object.freeze({
     'requestProcessOperationCancellation',
     'withProcessOperationLock',
     'recordOperationReceipt',
-    'appendRunEvidence'
+    'appendRunEvidence',
+    'getProcessExecutionReleaseState',
+    'setProcessExecutionAdmission',
+    'getProcessReleaseOperationalMetrics',
+    'listProcessLauncherCompactionCandidates'
   ],
   runtimeBudget: [
     'isRuntimeBudgetSchemaAvailable',

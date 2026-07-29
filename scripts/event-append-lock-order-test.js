@@ -74,7 +74,8 @@ async function main() {
       const run = await store.createRun({
         ticketId: ticket.id, agentId: agent.id, agentName: agent.name,
         runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
-        executionPolicySnapshot: {}, status: 'pending'
+        executionPolicySnapshot: {}, status: 'pending',
+        ticketOpenedAt: ticket.updatedAt
       });
       // Seed the chain tip so `ON CONFLICT DO NOTHING` is a no-op in both transactions
       // and the interleaving below turns purely on lock ORDER, not on row creation.
@@ -286,12 +287,137 @@ async function main() {
       `5: a real transaction conflict was absorbed, so this is recovery rather than luck ` +
       `(${store.transientConflictRetries - conflictsBeforeVictim} retries)`);
 
+    // ── 6. Bundled replay + event evidence follows the same run-first order ─
+    // Operator cancellation exposed a second inversion: appendRunEvidence took the
+    // replay row first, then `_appendEvent` took the run row, while terminalization
+    // holds the run row before updating replay. Close that exact cycle and require
+    // the evidence bundle to wait rather than surface PostgreSQL 40P01.
+    scenariosRun += 1;
+    const bundled = await makeRun('bundled-evidence');
+    await store.writeReplaySnapshot({
+      runId: bundled.run.id,
+      snapshot: { version: 1, processExecutionLifecycle: [] }
+    });
+    const terminalizer = await store.pool.connect();
+    let bundledError = null;
+    let bundledEvidence = null;
+    try {
+      await terminalizer.query('BEGIN');
+      await terminalizer.query(
+        `SELECT id FROM ${store.table('runs')} WHERE id = $1 FOR UPDATE`,
+        [bundled.run.id]
+      );
+      const evidencePromise = store.appendRunEvidence({
+        runId: bundled.run.id,
+        ticketId: bundled.ticket.id,
+        evidenceKey: `lock-order-bundle:${STAMP}`,
+        replayKey: 'processExecutionLifecycle',
+        replayItem: { status: 'cancel_requested' },
+        event: {
+          type: 'process.cancellation_requested',
+          payload: { status: 'cancel_requested' }
+        }
+      }).then(result => { bundledEvidence = result; })
+        .catch(error => { bundledError = error; });
+
+      await sleep(500);
+      // This is terminalization's second lock. If the evidence writer already
+      // owns replay, this closes the run/replay cycle and PostgreSQL aborts one.
+      await terminalizer.query(
+        `SELECT run_id FROM ${store.table('replay_snapshots')}
+         WHERE run_id = $1 FOR UPDATE`,
+        [bundled.run.id]
+      );
+      await terminalizer.query('COMMIT');
+      await evidencePromise;
+    } finally {
+      try { await terminalizer.query('ROLLBACK'); } catch (_) { /* settled */ }
+      terminalizer.release();
+    }
+    assert(bundledError === null,
+      `6: bundled replay/event evidence waits behind terminalization without deadlock ` +
+      `(${bundledError && bundledError.code}: ${bundledError && bundledError.message}; ` +
+      `${bundledError && bundledError.detail})`);
+    assert(bundledEvidence && bundledEvidence.inserted === true,
+      '6: the exact evidence bundle commits after terminalization releases its locks');
+    const bundledReplay = await store.getReplaySnapshot(bundled.run.id);
+    assert(
+      bundledReplay.snapshot.processExecutionLifecycle.length === 1 &&
+      bundledReplay.snapshot.processExecutionLifecycle[0].status === 'cancel_requested',
+      '6: replay evidence is present exactly once'
+    );
+    const bundledEvents = await store.listRunEvents(bundled.run.id);
+    assert(
+      bundledEvents.filter(event => event.type === 'process.cancellation_requested').length === 1,
+      '6: event evidence is present exactly once'
+    );
+    assert(verifyCurrentRunEventChain(bundledEvents).chainValid,
+      '6: bundled evidence preserves the run event hash chain');
+
+    // ── 7. Ticket projection locks runs before the owning ticket ───────────
+    // transitionTicketAfterRun used to take the ticket row and then the run.
+    // A process-evidence append takes the run first and obtains the ticket FK
+    // lock only when its event is inserted, so the former order deadlocked the
+    // public cancellation route. Exercise the actual ticket-projection method.
+    scenariosRun += 1;
+    const projection = await makeRun('ticket-projection');
+    const terminalized = await store.transitionRun({
+      runId: projection.run.id,
+      expectedRevision: projection.run.revision,
+      fromStatuses: ['pending'],
+      toStatus: 'interrupted',
+      patch: { currentPhase: 'terminalization' },
+      eventType: 'run.execution_completed',
+      eventPayload: { status: 'interrupted' }
+    });
+    const evidenceWriter = await store.pool.connect();
+    let projectionError = null;
+    let projectionResult = null;
+    try {
+      await evidenceWriter.query('BEGIN');
+      await evidenceWriter.query(
+        `SELECT id FROM ${store.table('runs')} WHERE id = $1 FOR KEY SHARE`,
+        [projection.run.id]
+      );
+      const projectionPromise = store.transitionTicketAfterRun({
+        runId: projection.run.id
+      }).then(result => { projectionResult = result; })
+        .catch(error => { projectionError = error; });
+
+      await sleep(500);
+      await store.appendEvent({
+        type: 'lock.projection_evidence',
+        ticketId: projection.ticket.id,
+        runId: projection.run.id,
+        payload: { marker: `projection-${STAMP}` }
+      }, { client: evidenceWriter });
+      await evidenceWriter.query('COMMIT');
+      await projectionPromise;
+    } finally {
+      try { await evidenceWriter.query('ROLLBACK'); } catch (_) { /* settled */ }
+      evidenceWriter.release();
+    }
+    assert(projectionError === null,
+      `7: ticket projection waits behind run evidence without deadlock ` +
+      `(${projectionError && projectionError.code}: ${projectionError && projectionError.message})`);
+    assert(projectionResult && projectionResult.ticket.status === 'open',
+      '7: interrupted-run ticket projection completes after evidence releases the run');
+    const projectionEvents = await store.listRunEvents(projection.run.id);
+    assert(
+      projectionEvents.filter(event => event.type === 'lock.projection_evidence').length === 1,
+      '7: the contended process-style evidence event commits exactly once'
+    );
+    assert(verifyCurrentRunEventChain(projectionEvents).chainValid,
+      '7: ticket projection concurrency preserves the run event hash chain');
+    assert(terminalized.run.status === 'interrupted',
+      '7: the fixture projects one authoritative terminal run');
+
     assertScenariosExecuted({
       label: 'event append lock order',
       assertions: assert.count(),
       scenarios: scenariosRun,
-      minAssertions: 21,
-      minScenarios: 5
+      minAssertions: 31,
+      minScenarios: 7
     });
     console.log(`\nPASS: event append lock order — ${scenariosRun} scenarios, ${assert.count()} assertions (PostgreSQL-native)`);
   }, { schemaSlug: 'lock_order' });

@@ -228,6 +228,112 @@ class ProcessOutputArtifactStore {
       );
     }
   }
+
+  async verifyPublished(artifact) {
+    if (!artifact || artifact.version !==
+        PROCESS_ARTIFACT_PUBLICATION_CONTRACT_VERSION ||
+        typeof artifact.id !== 'string' ||
+        !['stdout', 'stderr'].includes(artifact.stream) ||
+        !Number.isSafeInteger(artifact.byteCount) || artifact.byteCount < 0 ||
+        typeof artifact.sha256 !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(artifact.sha256)) {
+      throw new ProcessOutputArtifactError(
+        'Published process artifact authority is invalid'
+      );
+    }
+    const match = /^([0-9a-f]{64}):(stdout|stderr)$/.exec(artifact.id);
+    if (!match || match[2] !== artifact.stream) {
+      throw new ProcessOutputArtifactError(
+        'Published process artifact identity is invalid'
+      );
+    }
+    const expectedPath = path.posix.join(
+      'process',
+      match[1],
+      `${artifact.stream}.bin`
+    );
+    if (artifact.path !== expectedPath) {
+      throw new ProcessOutputArtifactError(
+        'Published process artifact path conflicts with its identity'
+      );
+    }
+    let observed;
+    try {
+      observed = await sha256File(path.join(this.artifactRoot, ...expectedPath.split('/')));
+    } catch (error) {
+      if (error instanceof ProcessOutputArtifactError) throw error;
+      if (error && error.code === 'ENOENT') {
+        throw new ProcessOutputArtifactError(
+          'Published process artifact bytes are unavailable',
+          'PROCESS_OUTPUT_UNAVAILABLE'
+        );
+      }
+      throw new ProcessOutputArtifactError(
+        `Published process artifact cannot be verified: ${error.message}`
+      );
+    }
+    if (observed.bytes !== artifact.byteCount ||
+        observed.sha256 !== artifact.sha256) {
+      throw new ProcessOutputArtifactError(
+        'Published process artifact bytes conflict with durable metadata',
+        'PROCESS_OUTPUT_HASH_MISMATCH'
+      );
+    }
+    return Object.freeze({
+      version: PROCESS_ARTIFACT_PUBLICATION_CONTRACT_VERSION,
+      id: artifact.id,
+      stream: artifact.stream,
+      byteCount: observed.bytes,
+      sha256: observed.sha256,
+      status: 'verified'
+    });
+  }
+
+  async cleanupAbandonedTemporaryFiles({
+    olderThanMs = 60 * 60 * 1000,
+    nowMs = Date.now()
+  } = {}) {
+    if (!Number.isSafeInteger(olderThanMs) || olderThanMs < 60_000 ||
+        !Number.isSafeInteger(nowMs) || nowMs < 0) {
+      throw new TypeError('Artifact cleanup bounds are invalid');
+    }
+    await this.health();
+    let inspected = 0;
+    let removed = 0;
+    const operationDirectories = await fs.promises.readdir(this.processRoot, {
+      withFileTypes: true
+    });
+    for (const directory of operationDirectories.slice(0, 100_000)) {
+      if (!directory.isDirectory() || !/^[0-9a-f]{64}$/.test(directory.name)) {
+        continue;
+      }
+      const directoryPath = path.join(this.processRoot, directory.name);
+      const entries = await fs.promises.readdir(directoryPath, {
+        withFileTypes: true
+      });
+      for (const entry of entries) {
+        if (!entry.isFile() ||
+            !/^\.(?:stdout|stderr)\.[0-9a-f]{32}\.tmp$/.test(entry.name)) {
+          continue;
+        }
+        inspected += 1;
+        const candidate = path.join(directoryPath, entry.name);
+        const metadata = await fs.promises.lstat(candidate);
+        if (metadata.isSymbolicLink() || !metadata.isFile() ||
+            nowMs - metadata.mtimeMs < olderThanMs) {
+          continue;
+        }
+        await fs.promises.unlink(candidate);
+        removed += 1;
+      }
+    }
+    return Object.freeze({
+      version: 1,
+      inspected,
+      removed,
+      retainedPublishedArtifacts: true
+    });
+  }
 }
 
 module.exports = {

@@ -80,6 +80,15 @@ const {
   ProcessExecutionController
 } = require('./runtime/process-execution-controller');
 const {
+  buildProcessExecutionReleaseContract
+} = require('./runtime/process-execution-release-contract');
+const {
+  ProcessExecutionReleaseReadiness
+} = require('./runtime/process-execution-release-readiness');
+const {
+  buildProcessExecutionReleaseHealth
+} = require('./runtime/process-execution-release-health');
+const {
   buildProcessSupervisionProjection
 } = require('./runtime/process-supervision');
 const {
@@ -265,6 +274,24 @@ const MODEL_CONTRACT_COMPILER_ENABLED = process.env.ENABLE_MODEL_CONTRACT_COMPIL
 // resulting immutable run snapshot.
 const PROCESS_EXECUTION_CONTRACT_ENABLED = isProcessContractFeatureEnabled();
 const PROCESS_TARGET_CATALOG = loadProcessTargetCatalog(PROCESS_TARGET_CATALOG_FILE);
+const PROCESS_EXECUTION_SOURCE_REVISION = String(
+  process.env.PROCESS_EXECUTION_SOURCE_REVISION || ''
+).trim();
+let PROCESS_EXECUTION_RELEASE_CONTRACT;
+try {
+  PROCESS_EXECUTION_RELEASE_CONTRACT =
+    buildProcessExecutionReleaseContract({
+      applicationVersion: require('./package.json').version,
+      sourceRevision: PROCESS_EXECUTION_SOURCE_REVISION
+    });
+} catch (error) {
+  // A missing release identity keeps process admission blocked while preserving
+  // the ordinary ticket runtime and all durable recovery/inspection surfaces.
+  PROCESS_EXECUTION_RELEASE_CONTRACT = Object.freeze({
+    invalid: true,
+    code: error && error.code || 'PROCESS_RELEASE_CONTRACT_INVALID'
+  });
+}
 const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
   ...(AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED ? ['createWorkflowDraft'] : []),
   'createWorkflowDraftIntent'
@@ -388,12 +415,24 @@ const processLauncherClient = new ProcessLauncherFoundationClient({
 const processOutputArtifactStore = new ProcessOutputArtifactStore({
   artifactRoot: ARTIFACT_ROOT
 });
+const processExecutionReleaseReadiness = new ProcessExecutionReleaseReadiness({
+  installed: PROCESS_EXECUTION_CONTRACT_ENABLED,
+  releaseContract: PROCESS_EXECUTION_RELEASE_CONTRACT,
+  repository: postgresRuntimeStore,
+  artifactStore: processOutputArtifactStore,
+  materializerClient: processMaterializerClient,
+  launcherClient: processLauncherClient,
+  targetCatalog: PROCESS_TARGET_CATALOG,
+  deploymentValidated:
+    process.env.PROCESS_EXECUTION_DEPLOYMENT_VALIDATED === 'true'
+});
 const processRuntimeCapabilityResolver = new ProcessRuntimeCapabilityResolver({
   featureEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED,
   repository: postgresRuntimeStore,
   artifactStore: processOutputArtifactStore,
   materializerClient: processMaterializerClient,
   launcherClient: processLauncherClient,
+  releaseReadiness: processExecutionReleaseReadiness,
   releaseGates: PROCESS_ENABLED_RELEASE_GATES
 });
 const processExecutionController = new ProcessExecutionController({
@@ -1763,6 +1802,8 @@ const runtimeBudgetController = new RuntimeBudgetController({
 });
 let lastLogTimestampNs = 0n;
 let serverReady = false;
+let processExecutionReleaseReadinessSnapshot = null;
+let processArtifactCleanupSnapshot = null;
 let runLeaseRepository = null;
 let runPhaseRepository = null;
 let runTerminalizationRepository = null;
@@ -1945,6 +1986,30 @@ fastify.addHook('onRequestAbort', async request => {
   releaseRequestMutationAdmission(request);
 });
 
+async function refreshProcessExecutionReleaseReadiness() {
+  try {
+    processExecutionReleaseReadinessSnapshot =
+      await processExecutionReleaseReadiness.evaluate();
+  } catch (error) {
+    processExecutionReleaseReadinessSnapshot = Object.freeze({
+      version: 1,
+      state: 'blocked',
+      releaseContractHash: null,
+      sourceRevision: null,
+      admissionEnabled: false,
+      recoveryAvailable: false,
+      evaluatedAt: new Date().toISOString(),
+      issues: [{
+        code: error && error.code || 'PROCESS_RELEASE_READINESS_UNAVAILABLE',
+        category: 'release_contract_invalid',
+        message: 'Process release readiness could not be established',
+        severity: 'blocked'
+      }]
+    });
+  }
+  return processExecutionReleaseReadinessSnapshot;
+}
+
 fastify.get('/styles.css', async (request, reply) => {
   reply.type('text/css; charset=utf-8');
   return fs.readFileSync(path.join(__dirname, 'src', 'styles.css'), 'utf8');
@@ -1959,7 +2024,21 @@ fastify.get('/health', async (request, reply) => {
     reply.code(503);
     return { status: 'backpressured', ready: false, reason: 'mutation_admission_capacity' };
   }
-  return { status: 'ok', ready: true };
+  const processRelease = await refreshProcessExecutionReleaseReadiness();
+  return {
+    status: 'ok',
+    ready: true,
+    processExecutionRelease: {
+      state: processRelease.state,
+      admissionEnabled: processRelease.admissionEnabled,
+      recoveryAvailable: processRelease.recoveryAvailable,
+      releaseContractHash: processRelease.releaseContractHash,
+      issues: processRelease.issues.map(issue => ({
+        code: issue.code,
+        category: issue.category
+      }))
+    }
+  };
 });
 
 fastify.register(require('@fastify/view'), {
@@ -8088,11 +8167,19 @@ async function getRuntimeStatusSnapshot({ afterId = 0, limit = 50 } = {}) {
   const runningRuns = activeRuns.filter(run => run.status === 'running');
   const expiredLeases = runningRuns.filter(isRunLeaseExpired);
   const runIds = activeRuns.map(run => run.id);
-  const [operational, attemptPositions, runtimeLimitsConfig] = await Promise.all([
+  const [operational, attemptPositions, runtimeLimitsConfig, releaseReadiness] = await Promise.all([
     getOperationalStatusRepository().getRuntimeOperationalSummary({ limit: pageLimit }),
     runIds.length > 0 ? repository.getRunAttemptPositions({ runIds }) : [],
-    getRuntimeLimitsRepository().getRuntimeLimitsConfig()
+    getRuntimeLimitsRepository().getRuntimeLimitsConfig(),
+    refreshProcessExecutionReleaseReadiness()
   ]);
+  const processExecutionReleaseHealth =
+    await buildProcessExecutionReleaseHealth({
+      readiness: releaseReadiness,
+      repository: postgresRuntimeStore,
+      launcherClient: processLauncherClient,
+      artifactCleanup: processArtifactCleanupSnapshot
+    });
   const attemptPositionByRunId = new Map(attemptPositions.map(item => [item.runId, item]));
   const logs = runIds.length > 0
     ? await getDiagnosticLogRepository().listLogsForRuns({ runIds, limitPerRun: 25 })
@@ -8105,6 +8192,7 @@ async function getRuntimeStatusSnapshot({ afterId = 0, limit = 50 } = {}) {
   const serializeRunOnce = run => serializedByRunId.get(run.id);
 
   return {
+    processExecutionReleaseHealth,
     scheduler: {
       running: Boolean(runtimeScheduler && runtimeScheduler.isRunning()),
       intervalMs: getPositiveIntegerEnv('RUNTIME_SCHEDULER_INTERVAL_MS', 500)
@@ -24158,7 +24246,22 @@ fastify.get('/api/health', async (request, reply) => {
       uptime: Math.floor(process.uptime())
     };
   }
-  return { status: 'ok', ready: true, uptime: Math.floor(process.uptime()) };
+  const processRelease = await refreshProcessExecutionReleaseReadiness();
+  return {
+    status: 'ok',
+    ready: true,
+    uptime: Math.floor(process.uptime()),
+    processExecutionRelease: {
+      state: processRelease.state,
+      admissionEnabled: processRelease.admissionEnabled,
+      recoveryAvailable: processRelease.recoveryAvailable,
+      releaseContractHash: processRelease.releaseContractHash,
+      issues: processRelease.issues.map(issue => ({
+        code: issue.code,
+        category: issue.category
+      }))
+    }
+  };
 });
 
 fastify.get('/api/runtime/identity', { preHandler: fastify.requireAuth }, async (request, reply) => {
@@ -28556,6 +28659,23 @@ async function start() {
     const bootstrapRepository = getRuntimeBootstrapRepository();
     await bootstrapRepository.acquireRuntimeAuthority();
     await bootstrapRepository.prepareRuntimePersistence();
+    try {
+      const cleanup = await processOutputArtifactStore
+        .cleanupAbandonedTemporaryFiles();
+      processArtifactCleanupSnapshot = Object.freeze({
+        orphanCount: cleanup.inspected - cleanup.removed,
+        removed: cleanup.removed,
+        error: false
+      });
+    } catch (error) {
+      processArtifactCleanupSnapshot = Object.freeze({
+        orphanCount: null,
+        removed: 0,
+        error: true,
+        code: error && error.code || 'PROCESS_ARTIFACT_CLEANUP_FAILED'
+      });
+    }
+    await refreshProcessExecutionReleaseReadiness();
     await createDefaultData();
     await purgeExpiredSessions();
     if (!TEST_SKIP_STARTUP_RUN_RECOVERY) await interruptStaleRunsOnStartup();

@@ -199,6 +199,8 @@ class DurableLauncherFixture {
     this.ackCount = 0;
     this.cancelCount = 0;
     this.cancelOutcome = cancelOutcome;
+    this.onTerminalObserved = null;
+    this.terminalObservationHookRan = false;
   }
   async launch({ launchPlan }) {
     if (!this.status) {
@@ -254,6 +256,10 @@ class DurableLauncherFixture {
       throw error;
     }
     this.#complete();
+    if (this.onTerminalObserved && !this.terminalObservationHookRan) {
+      this.terminalObservationHookRan = true;
+      await this.onTerminalObserved(structuredClone(this.status));
+    }
     return structuredClone(this.status);
   }
   async cancelOperation() {
@@ -603,6 +609,126 @@ async function main() {
     'finalizing operation completes existing evidence without fabricating cancellation');
   } finally {
     fs.rmSync(finalizingCancellation.artifactRoot, {
+      recursive: true,
+      force: true
+    });
+  }
+
+  const concurrentTerminal = fixture();
+  try {
+    concurrentTerminal.launcher.onTerminalObserved = async status => {
+      const current = await concurrentTerminal.repository.getProcessOperation();
+      const result = status.result;
+      await concurrentTerminal.repository.transitionProcessOperation({
+        operationIdentity: current.operationIdentity,
+        expectedStates: ['active'],
+        expectedRevision: current.revision,
+        changes: {
+          lifecycleState: 'finalizing',
+          launcherAcceptanceIdentity: status.launcherAcceptanceIdentity,
+          startedAt: result.startedAt,
+          terminalAt: result.endedAt,
+          terminalOutcome: result.terminalOutcome,
+          terminalResult: result,
+          terminalResultHash: status.terminalResultHash,
+          exitCode: result.exitCode,
+          terminatingSignal: result.signal,
+          resourceCause: result.resourceCause,
+          stdoutByteCount: result.stdoutBytes,
+          stdoutSha256: result.stdoutSha256,
+          stderrByteCount: result.stderrBytes,
+          stderrSha256: result.stderrSha256,
+          combinedOutputByteCount: result.combinedOutputBytes,
+          lastReconciliationResult: {
+            kind: 'concurrent_launcher_terminal',
+            observedAt: new Date().toISOString()
+          }
+        }
+      });
+    };
+    const result = await concurrentTerminal.buildController().execute({
+      run: concurrentTerminal.run,
+      action: concurrentTerminal.action,
+      step: 1
+    });
+    const terminal =
+      await concurrentTerminal.repository.getProcessOperation();
+    ok(concurrentTerminal.launcher.terminalObservationHookRan === true &&
+      terminal.lifecycleState === 'terminal' &&
+      result.terminalResultHash === terminal.terminalResultHash,
+    'refreshed concurrent terminal authority is reused instead of transitioned twice');
+    ok(concurrentTerminal.launcher.launchCount === 1 &&
+      concurrentTerminal.launcher.ackCount === 1 &&
+      concurrentTerminal.repository.receipts.size === 1 &&
+      [...concurrentTerminal.repository.evidence.keys()]
+        .filter(key => key.endsWith(':terminal')).length === 1,
+    'concurrent terminal refresh preserves one launch, acknowledgement, receipt, and terminal evidence');
+  } finally {
+    fs.rmSync(concurrentTerminal.artifactRoot, {
+      recursive: true,
+      force: true
+    });
+  }
+
+  const conflictingConcurrentTerminal = fixture();
+  try {
+    conflictingConcurrentTerminal.launcher.onTerminalObserved = async status => {
+      const current =
+        await conflictingConcurrentTerminal.repository.getProcessOperation();
+      const result = {
+        ...status.result,
+        terminalOutcome: 'failed',
+        exitCode: 1
+      };
+      await conflictingConcurrentTerminal.repository.transitionProcessOperation({
+        operationIdentity: current.operationIdentity,
+        expectedStates: ['active'],
+        expectedRevision: current.revision,
+        changes: {
+          lifecycleState: 'finalizing',
+          launcherAcceptanceIdentity: status.launcherAcceptanceIdentity,
+          startedAt: result.startedAt,
+          terminalAt: result.endedAt,
+          terminalOutcome: result.terminalOutcome,
+          terminalResult: result,
+          terminalResultHash: hashProcessContractValue(result),
+          exitCode: result.exitCode,
+          terminatingSignal: result.signal,
+          resourceCause: result.resourceCause,
+          stdoutByteCount: result.stdoutBytes,
+          stdoutSha256: result.stdoutSha256,
+          stderrByteCount: result.stderrBytes,
+          stderrSha256: result.stderrSha256,
+          combinedOutputByteCount: result.combinedOutputBytes,
+          lastReconciliationResult: {
+            kind: 'conflicting_concurrent_launcher_terminal',
+            observedAt: new Date().toISOString()
+          }
+        }
+      });
+    };
+    await assert.rejects(
+      () => conflictingConcurrentTerminal.buildController().execute({
+        run: conflictingConcurrentTerminal.run,
+        action: conflictingConcurrentTerminal.action,
+        step: 1
+      }),
+      error => error && error.code === 'PROCESS_EXECUTION_STATE_INVALID'
+    );
+    const terminal =
+      await conflictingConcurrentTerminal.repository.getProcessOperation();
+    ok(conflictingConcurrentTerminal.launcher.terminalObservationHookRan === true &&
+      terminal.lifecycleState === 'finalizing' &&
+      terminal.terminalOutcome === 'failed',
+    'conflicting concurrent terminal authority fails closed without overwriting its durable result');
+    ok(conflictingConcurrentTerminal.launcher.launchCount === 1 &&
+      conflictingConcurrentTerminal.launcher.ackCount === 0 &&
+      conflictingConcurrentTerminal.repository.receipts.size === 0 &&
+      [...conflictingConcurrentTerminal.repository.evidence.keys()]
+        .filter(key => key.endsWith(':terminal')).length === 0,
+    'terminal conflict performs no second launch, acknowledgement, receipt, or terminal evidence write');
+  } finally {
+    fs.rmSync(conflictingConcurrentTerminal.artifactRoot, {
       recursive: true,
       force: true
     });

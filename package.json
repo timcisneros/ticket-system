@@ -34,6 +34,14 @@
     "test:cutover:postgres": "node scripts/postgres-runtime-cutover-test.js",
     "test:page-render:postgres": "node scripts/page-render-regression-test.js",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/postgres-migrate.js",
+    "release:db-preflight": "node --env-file-if-exists=.env.local scripts/release-db-preflight.js",
+    "release:db-migrate": "node --env-file-if-exists=.env.local scripts/release-db-migrate.js",
+    "release:admission": "node --env-file-if-exists=.env.local scripts/process-execution-admission.js",
+    "release:compact-launcher": "node --env-file-if-exists=.env.local scripts/process-launcher-compact.js",
+    "release:manifest": "node scripts/release-manifest.js",
+    "release:package": "node scripts/release-package.js",
+    "release:security": "node scripts/release-security-check.js",
+    "release:ga-check": "node scripts/process-execution-ga-check.js",
     "checkpoint:release": "node scripts/release-checkpoint.js",
     "test": "npm run checkpoint:release"
   },
@@ -45,7 +53,7 @@
     "argon2": "^0.44.0",
     "dotenv": "^17.4.2",
     "ejs": "^5.0.2",
-    "fastify": "^5.8.5",
+    "fastify": "^5.10.0",
     "pg": "^8.22.0",
     "playwright-core": "^1.61.1"
   },

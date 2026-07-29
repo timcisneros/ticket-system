@@ -9,6 +9,7 @@ const {
   PROCESS_LAUNCHER_FOUNDATION_PROTOCOL_VERSION,
   ProcessLauncherFoundationError,
   buildGetRootfsRequest,
+  buildLauncherCompactionRequest,
   buildLauncherLaunchRequest,
   buildLauncherOperationRequest,
   buildLauncherOutputAcknowledgementRequest,
@@ -18,6 +19,7 @@ const {
   normalizeExecutableAuthority,
   normalizePrivateOperationStatus,
   normalizeLauncherOutputChunk,
+  normalizeLauncherRegistryMetrics,
   normalizeProcessLauncherFoundationClientConfig,
   normalizeRootfsAuthority
 } = require('./process-launcher-foundation-contract');
@@ -169,6 +171,20 @@ class ProcessLauncherFoundationClient {
     const normalized = buildLauncherOutputAcknowledgementRequest(request);
     return normalizePrivateOperationStatus(
       await this.#request('acknowledgeOutput', normalized),
+      normalized.operationIdentity
+    );
+  }
+
+  async getRegistryMetrics() {
+    return normalizeLauncherRegistryMetrics(
+      await this.#request('getRegistryMetrics', {})
+    );
+  }
+
+  async compactOperation(request) {
+    const normalized = buildLauncherCompactionRequest(request);
+    return normalizePrivateOperationStatus(
+      await this.#request('compactOperation', normalized),
       normalized.operationIdentity
     );
   }

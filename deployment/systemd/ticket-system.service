@@ -1,0 +1,35 @@
+[Unit]
+Description=Ticket System application runtime
+After=network.target postgresql.service ticket-system-process-materializer.service ticket-system-process-launcher-foundation.service
+Requires=postgresql.service
+ConditionPathExists=/etc/ticket-system/ticket-system.env
+ConditionPathIsDirectory=/var/lib/ticket-system/artifacts
+
+[Service]
+Type=simple
+User=ticket-system-runtime
+Group=ticket-system-runtime
+WorkingDirectory=/usr/libexec/ticket-system
+ExecStart=/usr/bin/node /usr/libexec/ticket-system/server.js
+Environment=NODE_ENV=production
+Environment=ENABLE_PROCESS_EXECUTION_CONTRACT=false
+EnvironmentFile=/etc/ticket-system/ticket-system.env
+UMask=0027
+Restart=on-failure
+RestartSec=2s
+KillMode=control-group
+TimeoutStopSec=120s
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/srv/ticket-system/workspace
+ReadWritePaths=/var/lib/ticket-system/artifacts
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

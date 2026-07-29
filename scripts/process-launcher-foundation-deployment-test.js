@@ -18,6 +18,14 @@ const configuration = JSON.parse(fs.readFileSync(path.join(
   ROOT,
   'config/process-launcher-foundation.example.json'
 ), 'utf8'));
+const applicationService = fs.readFileSync(path.join(
+  ROOT,
+  'deployment/systemd/ticket-system.service'
+), 'utf8');
+const applicationTmpfiles = fs.readFileSync(path.join(
+  ROOT,
+  'deployment/systemd/ticket-system.tmpfiles'
+), 'utf8');
 let passed = 0;
 
 function ok(value, message) {
@@ -73,5 +81,21 @@ ok(!JSON.stringify(configuration).includes('/home/') &&
 ok(!/\b(?:launch|execute|spawn|cancel|signal|output|attach)\b/i.test(
   JSON.stringify(configuration)
 ), 'deployment configuration contains no execution operation or arguments');
+ok(applicationService.includes('User=ticket-system-runtime') &&
+  applicationService.includes(
+    'ExecStart=/usr/bin/node /usr/libexec/ticket-system/server.js'
+  ) &&
+  applicationService.includes('ENABLE_PROCESS_EXECUTION_CONTRACT=false') &&
+  applicationService.includes('KillMode=control-group'),
+'application unit uses a dedicated runtime principal and default-off admission');
+ok(applicationTmpfiles.includes(
+  'd /var/lib/ticket-system/artifacts 0750 ticket-system-runtime ticket-system-runtime -'
+) && applicationTmpfiles.includes(
+  'z /etc/ticket-system/ticket-system.env 0640 root ticket-system-runtime -'
+), 'application artifact and environment boundaries have exact deployment modes');
+ok(!applicationService.includes('/home/') &&
+  !applicationTmpfiles.includes('/home/') &&
+  !/(?:^|\s)(?:sh|bash|zsh|dash)\s+-c(?:\s|$)/m.test(applicationService),
+'application deployment contains no operator home path or shell command');
 
 console.log(`\nPASS: process launcher deployment boundary — ${passed} assertions`);

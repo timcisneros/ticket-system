@@ -171,6 +171,15 @@ at most 65,536 bytes in deterministic base64. `acknowledgeOutput` requires the e
 terminal-result hash. Only terminal immutable bytes are readable, no host path is
 returned, and output is removed only after an fsynced acknowledgement tombstone.
 
+Acknowledged terminal records may be compacted only with an exact runtime durable-
+finalization hash proving artifacts, required evidence, the generic receipt, completion
+decision, and run terminalization. The compact record retains operation identity,
+immutable launch-authority hash, terminal-result hash, acknowledgement state, compaction
+time, schema version, durable-finalization hash, and a canonical record hash. It remains
+restart-durable and conflict-checking, so compaction never permits identity reuse.
+Active, finalizing, or unacknowledged operations cannot compact. Full records and
+compact tombstones have separate hard capacities and bounded health metrics.
+
 ## Pre-execution barrier and Bubblewrap plan
 
 Wall time starts before workspace/rootfs validation and sandbox construction. For each

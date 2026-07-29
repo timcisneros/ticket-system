@@ -35,7 +35,11 @@ The snapshot is stored in the PostgreSQL run JSONB body, included in the append-
 `run.created` event, and copied to `replaySnapshot.processPolicySnapshot`. Later catalog,
 grant, array, or object mutation cannot rewrite the admitted snapshot or its hash.
 
-The capability gate is `ENABLE_PROCESS_EXECUTION_CONTRACT=true`; it is false by default.
+Installation is gated by `ENABLE_PROCESS_EXECUTION_CONTRACT=true`; it is false by
+default. New admission additionally requires the PostgreSQL
+`process_execution_release_state` singleton to bind the exact validated release
+contract. Disabling that durable admission authority stops new intent while preserving
+observation, cancellation, recovery, and finalization of existing durable operations.
 Configured grants confer no authority while it is disabled. Workflow runs receive no
 process authority. Direct agents receive only their explicitly assigned profiles.
 
@@ -913,7 +917,10 @@ canonical generic `runProcess` receipt binds the operation identity and agrees w
 durable target/profile and terminal authority; an absent receipt remains pending
 recovery and a contradictory receipt fails closed. It exposes no PID, cgroup, command,
 signal, path, environment, private capability, raw output, or launcher authority.
-Tranche 8 is next.
+Release hardening and GA are governed by
+`PROCESS_EXECUTION_COMPATIBILITY.md` and `PROCESS_EXECUTION_GA_RUNBOOK.md`. All eight
+authoritative process-execution tranches are complete only when the mandatory GA
+evidence command succeeds for committed source.
 Completed authority, launcher, containment, lifecycle, budget, scheduling, receipt,
 evidence, consequence, completion, supervision, and recovery systems must not be
 rebuilt as parallel subsystems.

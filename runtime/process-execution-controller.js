@@ -577,11 +577,42 @@ class ProcessExecutionController {
         observationDeadlineMs,
         launcherCancellationRequested
       );
+      // A cancellation request is deliberately allowed to advance the durable
+      // operation revision without waiting for this operation lock. Refresh
+      // after launcher observation so terminal facts compare-and-set against
+      // that durable request rather than the pre-cancellation revision.
+      record = await this.repository.getProcessOperation(
+        record.operationIdentity
+      );
     }
     const terminal = normalizeLauncherTerminalStatus(
       launcherStatus,
       record.operationIdentity
     );
+    if (record.lifecycleState === 'finalizing' ||
+        record.lifecycleState === 'terminal') {
+      if (record.terminalResultHash !== terminal.status.terminalResultHash ||
+          record.terminalOutcome !== terminal.result.terminalOutcome ||
+          hashProcessContractValue(record.terminalResult) !==
+            hashProcessContractValue(terminal.result)) {
+        throw new ProcessExecutionControllerError(
+          'Concurrent process terminal authority conflicts with launcher result',
+          'PROCESS_EXECUTION_STATE_INVALID',
+          { operationIdentity: record.operationIdentity }
+        );
+      }
+      if (record.lifecycleState === 'finalizing') {
+        return this.#finishFinalization(record);
+      }
+      if (!record.launcherOutputAcknowledged &&
+          record.launcherAcceptanceIdentity !== null) {
+        await this.#acknowledge(record);
+        record = await this.repository.getProcessOperation(
+          record.operationIdentity
+        );
+      }
+      return terminalActionResult(record);
+    }
     if (record.lifecycleState === 'intent') {
       record = await this.#markActive(record, launcherStatus);
       await this.#publishEvidence(record, 'process.launcher_accepted', {

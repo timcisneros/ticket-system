@@ -14,13 +14,13 @@ Tranche 4: COMPLETE
 Tranche 5: COMPLETE
 Tranche 6: COMPLETE
 Tranche 7: COMPLETE
-Tranche 8: NOT STARTED
+Tranche 8: COMPLETE
 ```
 
-Future tranches may have reusable prerequisites already implemented. A tranche remains
-`NOT STARTED` until work begins against its frozen capability claim. Completed authority,
-materialization, launcher, containment, lifecycle, artifact, evidence, cancellation, and
-recovery systems are foundations to reuse, not parallel systems to rebuild.
+All eight authoritative tranches are complete. The completed authority,
+materialization, launcher, containment, lifecycle, artifact, evidence, cancellation,
+recovery, budget, completion, supervision, and release systems remain canonical
+foundations rather than parallel systems to rebuild.
 
 ## Tranche 1 — Declarative process profiles and authority
 
@@ -574,7 +574,8 @@ Runs predating current process lifecycle authority remain readable with an expli
 historical-process-lifecycle label and no reconstructed current launcher observation.
 Future work must reuse the existing process authority, controller, launcher, operation
 table, artifacts, evidence, receipts, completion decision, cancellation, and recovery
-paths. Tranche 8 is next; no Tranche 8 capability is implemented here.
+paths. Tranche 8 release hardening preserves those ownership boundaries and adds no
+direct process-control authority.
 
 ## Tranche 8 — Release hardening and GA
 
@@ -621,3 +622,84 @@ under production conditions.
 This tranche hardens deployment and operations for general availability. It reuses the
 existing process authority, launcher, containment, lifecycle, evidence, artifact, and
 recovery systems.
+
+### Implemented contract
+
+The closed version-1 process-execution release contract binds application and source
+identity, the exact PostgreSQL schema range, launcher and materializer protocols,
+target-catalog and rootfs-registry schemas, and every versioned budget, completion,
+supervision, and process-operation authority established by Tranches 1–7. Its canonical
+hash contains no clock or host-path input. The deterministic release manifest adds the
+clean committed revision, migration head, lockfile and native-binary hashes, deployment
+unit hashes, catalog/rootfs generations, and mandatory test inventory. The allowlisted
+release package excludes credentials, environment files, development paths, fixtures,
+dependency trees, build trees, and temporary state.
+
+Startup derives one bounded release-readiness projection with `disabled`, `ready`,
+`degraded_read_only`, and `blocked` states. New admission remains default-off and
+requires compatible schema, protocols, generations, identities, containment, deployment
+permissions, configuration, and explicit enablement. Admission authority is separate
+from installed recovery authority: disabling new work is PostgreSQL-durable and audited,
+creates no new intent or capacity acquisition, and leaves observation, cancellation,
+launcher ownership, artifact/receipt/evidence finalization, completion reconstruction,
+and recovery available for existing durable operations.
+
+Mixed runtime generations are unsupported and detected rather than guessed compatible.
+Upgrades are quiesced: take the paired PostgreSQL/artifact backup, disable admission,
+drain or cancel owned work, stop the old generation, validate and apply checksummed
+migrations under the canonical advisory lock, install matching application/native
+components, validate readiness, run the bounded canary, then enable admission. Binary
+rollback is permitted only when the previous release contract supports the current
+schema; otherwise rollback is an explicit paired backup restore. Reverse SQL, silent
+schema downgrade, destructive automatic restore, and abandonment of active launcher
+ownership are not supported.
+
+The backup regression creates a real PostgreSQL custom-format `pg_dump`, restores it
+with `pg_restore` into a distinct schema without migration or reseeding, restores the
+paired artifact tree under a different root, and verifies durable identities, hashes,
+sequences, supervision, and non-relaunch behavior. Missing backup tools or restored
+artifact bytes fail with typed unavailable results.
+
+Launcher retention compacts only fully finalized, output-acknowledged terminal records
+whose artifacts, evidence, generic receipt, completion decision, and run terminalization
+are already durable. A compact record retains immutable operation and launch-authority
+identity, terminal-result and finalization hashes, acknowledgement state, version,
+timestamp, and record hash. Compaction is restart-safe and idempotent, releases
+full-record capacity without releasing operation identity, rejects conflicting replay,
+and keeps a separately enforced compact-tombstone capacity. Active, finalizing, or
+unacknowledged operations never compact.
+
+Artifact cleanup removes only abandoned staging files under the trusted artifact root.
+Published referenced artifacts remain retained by default, and missing bytes are never
+reinterpreted as an empty stream. Existing generation/ownership checks govern stale
+lease, capacity, cgroup, socket, and temporary-state cleanup; production systemd retains
+`KillMode=control-group`.
+
+Existing health/admin/CLI surfaces expose a bounded release-health projection covering
+readiness, contract and schema state, native generations, containment, admission,
+operation/finalization/recovery counts, launcher full/compact capacity, temporary
+artifacts, and operation age. Closed alert categories distinguish compatibility,
+component, containment, capacity, stuck-operation, receipt/evidence/reconciliation,
+artifact-cleanup, backup, and canary failures without revealing credentials, raw output,
+host paths, sockets, PIDs, cgroups, launch plans, or lease tokens.
+
+The bounded production-like soak measures two-runtime PostgreSQL coordination,
+launcher-capacity backpressure, successful and cancelled work, natural-completion races,
+launcher restart, artifact/receipt/completion reconstruction, record growth and
+compaction, replay conflict handling, connections, event growth, descendants, cgroups,
+and staging files. The GA evidence command requires the full release checkpoint,
+privileged active containment, real backup/restore, measured soak, migration,
+deployment, package, manifest, and authorized Node/Rust dependency audits. It prints
+`PROCESS EXECUTION GA RELEASE PASSED` only when every mandatory gate succeeds.
+
+The shipped Node graph is Fastify 5.10.0 with `find-my-way` 9.7.0 and `fast-uri`
+3.1.4/4.1.1. The authorized 2026-07-29 audit reports no production Node or native
+Rust vulnerabilities at the configured release threshold. Release binaries, manifests,
+and packages are hashed from one clean committed source. The package inventory and
+normalized archive are deterministic; native bit identity is recorded for the validated
+toolchain and platform, but cross-toolchain bit-identical native builds are not claimed.
+
+Operational commands and exact install, readiness, canary, kill-switch, migration,
+rollback, restore, incident, compaction, diagnostics, manifest, and package procedures
+are governed by `PROCESS_EXECUTION_GA_RUNBOOK.md`. Supported and read-only compatibility
+pairings are governed by `PROCESS_EXECUTION_COMPATIBILITY.md`.

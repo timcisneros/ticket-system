@@ -16,7 +16,8 @@ use crate::{
 };
 
 pub(crate) const REGISTRY_SCHEMA_VERSION: u32 = 1;
-pub(crate) const MAX_OPERATION_RECORDS: usize = 4096;
+pub(crate) const MAX_FULL_OPERATION_RECORDS: usize = 4096;
+pub(crate) const MAX_COMPACT_TOMBSTONES: usize = 65_536;
 pub(crate) const MAX_OUTPUT_CHUNK_BYTES: u64 = 65_536;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,7 +41,25 @@ pub(crate) struct DurableOperationRecord {
     pub terminal_result_hash: Option<String>,
     pub output_available: bool,
     pub output_acknowledged: bool,
+    #[serde(default)]
+    pub compacted_at: Option<String>,
+    #[serde(default)]
+    pub durable_finalization_hash: Option<String>,
+    #[serde(default)]
+    pub record_hash: Option<String>,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RegistryMetrics {
+    pub version: u32,
+    pub full_record_count: u64,
+    pub compact_tombstone_count: u64,
+    pub full_record_capacity: u64,
+    pub compact_tombstone_capacity: u64,
+    pub full_record_capacity_remaining: u64,
+    pub compact_tombstone_capacity_remaining: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,10 +78,32 @@ pub(crate) struct OutputChunk {
 pub(crate) struct OperationRegistry {
     root: PathBuf,
     records: BTreeMap<String, DurableOperationRecord>,
+    full_record_capacity: usize,
+    compact_tombstone_capacity: usize,
 }
 
 impl OperationRegistry {
     pub(crate) fn open(state_root: &Path) -> Result<Self> {
+        Self::open_with_limits(
+            state_root,
+            MAX_FULL_OPERATION_RECORDS,
+            MAX_COMPACT_TOMBSTONES,
+        )
+    }
+
+    fn open_with_limits(
+        state_root: &Path,
+        full_record_capacity: usize,
+        compact_tombstone_capacity: usize,
+    ) -> Result<Self> {
+        if full_record_capacity == 0 || compact_tombstone_capacity == 0 {
+            return Err(invalid(
+                "launcher operation registry capacities must be positive",
+            ));
+        }
+        let total_capacity = full_record_capacity
+            .checked_add(compact_tombstone_capacity)
+            .ok_or_else(|| invalid("launcher operation registry capacity overflows"))?;
         let root = state_root.join("operations");
         if !root.exists() {
             fs::create_dir(&root).map_err(registry_io)?;
@@ -84,7 +125,7 @@ impl OperationRegistry {
         let entries = fs::read_dir(&root).map_err(registry_io)?;
         for entry in entries {
             let entry = entry.map_err(registry_io)?;
-            if records.len() >= MAX_OPERATION_RECORDS {
+            if records.len() >= total_capacity {
                 return Err(invalid(
                     "launcher operation registry exceeds its hard ceiling",
                 ));
@@ -123,11 +164,45 @@ impl OperationRegistry {
                 return Err(invalid("launcher operation identity is duplicated"));
             }
         }
-        Ok(Self { root, records })
+        let registry = Self {
+            root,
+            records,
+            full_record_capacity,
+            compact_tombstone_capacity,
+        };
+        let metrics = registry.metrics();
+        if metrics.full_record_count > full_record_capacity as u64
+            || metrics.compact_tombstone_count > compact_tombstone_capacity as u64
+        {
+            return Err(invalid(
+                "launcher operation registry exceeds its configured capacity",
+            ));
+        }
+        Ok(registry)
     }
 
     pub(crate) fn get(&self, operation_identity: &str) -> Option<&DurableOperationRecord> {
         self.records.get(operation_identity)
+    }
+
+    pub(crate) fn metrics(&self) -> RegistryMetrics {
+        let compact_tombstone_count = self
+            .records
+            .values()
+            .filter(|record| record.compacted_at.is_some())
+            .count() as u64;
+        let full_record_count = self.records.len() as u64 - compact_tombstone_count;
+        RegistryMetrics {
+            version: REGISTRY_SCHEMA_VERSION,
+            full_record_count,
+            compact_tombstone_count,
+            full_record_capacity: self.full_record_capacity as u64,
+            compact_tombstone_capacity: self.compact_tombstone_capacity as u64,
+            full_record_capacity_remaining: (self.full_record_capacity as u64)
+                .saturating_sub(full_record_count),
+            compact_tombstone_capacity_remaining: (self.compact_tombstone_capacity as u64)
+                .saturating_sub(compact_tombstone_count),
+        }
     }
 
     pub(crate) fn accept(
@@ -148,7 +223,9 @@ impl OperationRegistry {
             }
             return Ok((existing.clone(), false));
         }
-        if self.records.len() >= MAX_OPERATION_RECORDS {
+        if self.metrics().full_record_count >= self.full_record_capacity as u64
+            || self.records.len() >= self.full_record_capacity + self.compact_tombstone_capacity
+        {
             return Err(FoundationError::new(
                 PROCESS_LAUNCHER_REGISTRY_FULL,
                 "launcher operation registry is full",
@@ -183,6 +260,9 @@ impl OperationRegistry {
             terminal_result_hash: None,
             output_available: false,
             output_acknowledged: false,
+            compacted_at: None,
+            durable_finalization_hash: None,
+            record_hash: None,
             updated_at: accepted_at,
         };
         self.persist_new(&record)?;
@@ -381,6 +461,52 @@ impl OperationRegistry {
         self.status(operation_identity)
     }
 
+    pub(crate) fn compact(
+        &mut self,
+        operation_identity: &str,
+        terminal_result_hash: &str,
+        durable_finalization_hash: &str,
+    ) -> Result<DurableOperationRecord> {
+        if !canonical_sha256(durable_finalization_hash) {
+            return Err(invalid("durable finalization hash is invalid"));
+        }
+        let mut record = self
+            .records
+            .get(operation_identity)
+            .cloned()
+            .ok_or_else(not_found)?;
+        if record.state != "terminal"
+            || record.terminal_result_hash.as_deref() != Some(terminal_result_hash)
+            || !record.output_acknowledged
+            || record.output_available
+        {
+            return Err(invalid(
+                "launcher operation is not durably eligible for compaction",
+            ));
+        }
+        if record.compacted_at.is_some() {
+            if record.durable_finalization_hash.as_deref() != Some(durable_finalization_hash) {
+                return Err(invalid(
+                    "compacted launcher operation is bound to other finalization authority",
+                ));
+            }
+            return Ok(record);
+        }
+        if self.metrics().compact_tombstone_count >= self.compact_tombstone_capacity as u64 {
+            return Err(FoundationError::new(
+                PROCESS_LAUNCHER_REGISTRY_FULL,
+                "launcher compact tombstone registry is full",
+            ));
+        }
+        let compacted_at = now()?;
+        record.compacted_at = Some(compacted_at);
+        record.durable_finalization_hash = Some(durable_finalization_hash.to_owned());
+        record.record_hash = Some(compact_record_hash(&record)?);
+        record.updated_at = now()?;
+        self.replace(record.clone())?;
+        Ok(record)
+    }
+
     pub(crate) fn interrupt_incomplete(&mut self) -> Result<()> {
         let identities: Vec<String> = self
             .records
@@ -537,7 +663,40 @@ fn validate_record(record: &DurableOperationRecord) -> Result<()> {
             ));
         }
     }
+    let compact_fields = [
+        record.compacted_at.is_some(),
+        record.durable_finalization_hash.is_some(),
+        record.record_hash.is_some(),
+    ];
+    if compact_fields.iter().any(|value| *value)
+        && (!compact_fields.iter().all(|value| *value)
+            || record.state != "terminal"
+            || !record.output_acknowledged
+            || record.output_available
+            || !record
+                .durable_finalization_hash
+                .as_deref()
+                .is_some_and(canonical_sha256)
+            || !record.record_hash.as_deref().is_some_and(canonical_sha256)
+            || record.record_hash.as_deref() != Some(&compact_record_hash(record)?))
+    {
+        return Err(invalid(
+            "compacted launcher tombstone contains contradictory facts",
+        ));
+    }
     Ok(())
+}
+
+fn compact_record_hash(record: &DurableOperationRecord) -> Result<String> {
+    sha256_json(&serde_json::json!({
+        "version": record.version,
+        "operationIdentity": record.operation_identity,
+        "authorityHash": record.authority_hash,
+        "terminalResultHash": record.terminal_result_hash,
+        "outputAcknowledged": record.output_acknowledged,
+        "compactedAt": record.compacted_at,
+        "durableFinalizationHash": record.durable_finalization_hash
+    }))
 }
 
 fn reconcile_output_files(path: &Path, record: &DurableOperationRecord) -> Result<()> {
@@ -955,6 +1114,222 @@ mod tests {
         }
         corrupt.authority_hash = "not-a-hash".into();
         write_canonical_atomic(&directory, "record.json", &corrupt).unwrap();
+        assert_eq!(
+            OperationRegistry::open(&root).unwrap_err().code,
+            PROCESS_LAUNCHER_REGISTRY_INVALID
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compaction_requires_acknowledged_terminal_authority_and_preserves_replay() {
+        let root = test_root("compact");
+        let authority = plan('1');
+        let identity = authority.operation_identity.clone();
+        let finalization_hash = "f".repeat(64);
+        let terminal_hash;
+        {
+            let mut registry = OperationRegistry::open(&root).unwrap();
+            registry
+                .accept(&authority, &authority.sandbox_capability.generation_id)
+                .unwrap();
+            assert_eq!(
+                registry
+                    .compact(&identity, &"a".repeat(64), &finalization_hash)
+                    .unwrap_err()
+                    .code,
+                PROCESS_LAUNCHER_REGISTRY_INVALID
+            );
+            registry.mark_active(&identity).unwrap();
+            terminal_hash = registry
+                .mark_terminal(
+                    &identity,
+                    terminal_result(&identity, b"output", b""),
+                    b"output",
+                    b"",
+                )
+                .unwrap()
+                .terminal_result_hash
+                .unwrap();
+            assert_eq!(
+                registry
+                    .compact(&identity, &terminal_hash, &finalization_hash)
+                    .unwrap_err()
+                    .code,
+                PROCESS_LAUNCHER_REGISTRY_INVALID
+            );
+            registry.acknowledge(&identity, &terminal_hash).unwrap();
+            let compacted = registry
+                .compact(&identity, &terminal_hash, &finalization_hash)
+                .unwrap();
+            assert!(compacted.compacted_at.is_some());
+            assert!(compacted.record_hash.is_some());
+            assert_eq!(registry.metrics().full_record_count, 0);
+            assert_eq!(registry.metrics().compact_tombstone_count, 1);
+            let replay = registry
+                .accept(&authority, &authority.sandbox_capability.generation_id)
+                .unwrap();
+            assert!(!replay.1);
+            let again = registry
+                .compact(&identity, &terminal_hash, &finalization_hash)
+                .unwrap();
+            assert_eq!(again.record_hash, compacted.record_hash);
+        }
+        let mut reopened = OperationRegistry::open(&root).unwrap();
+        assert_eq!(reopened.metrics().compact_tombstone_count, 1);
+        assert_eq!(
+            reopened
+                .compact(&identity, &terminal_hash, &"e".repeat(64))
+                .unwrap_err()
+                .code,
+            PROCESS_LAUNCHER_REGISTRY_INVALID
+        );
+        let mut conflicting = authority.clone();
+        conflicting.launch_plan_hash = "e".repeat(64);
+        assert_eq!(
+            reopened
+                .accept(&conflicting, &authority.sandbox_capability.generation_id)
+                .unwrap_err()
+                .code,
+            crate::PROCESS_EXECUTION_INTENT_CONFLICT
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compaction_releases_full_record_capacity_without_releasing_identity() {
+        let root = test_root("compact-capacity");
+        let first = plan('3');
+        let second = plan('4');
+        let third = plan('5');
+        let mut registry = OperationRegistry::open_with_limits(&root, 2, 1).unwrap();
+
+        assert!(
+            registry
+                .accept(&first, &first.sandbox_capability.generation_id)
+                .unwrap()
+                .1
+        );
+        assert!(
+            registry
+                .accept(&second, &second.sandbox_capability.generation_id)
+                .unwrap()
+                .1
+        );
+        assert_eq!(registry.metrics().full_record_capacity_remaining, 0);
+        assert_eq!(
+            registry
+                .accept(&third, &third.sandbox_capability.generation_id)
+                .unwrap_err()
+                .code,
+            PROCESS_LAUNCHER_REGISTRY_FULL
+        );
+
+        registry.mark_active(&first.operation_identity).unwrap();
+        let first_terminal_hash = registry
+            .mark_terminal(
+                &first.operation_identity,
+                terminal_result(&first.operation_identity, b"first", b""),
+                b"first",
+                b"",
+            )
+            .unwrap()
+            .terminal_result_hash
+            .unwrap();
+        registry
+            .acknowledge(&first.operation_identity, &first_terminal_hash)
+            .unwrap();
+        registry
+            .compact(
+                &first.operation_identity,
+                &first_terminal_hash,
+                &"d".repeat(64),
+            )
+            .unwrap();
+        assert_eq!(registry.metrics().full_record_capacity_remaining, 1);
+        assert_eq!(registry.metrics().compact_tombstone_capacity_remaining, 0);
+
+        assert!(
+            registry
+                .accept(&third, &third.sandbox_capability.generation_id)
+                .unwrap()
+                .1,
+            "compaction must release one full-record admission slot"
+        );
+        assert!(
+            !registry
+                .accept(&first, &first.sandbox_capability.generation_id)
+                .unwrap()
+                .1,
+            "a compacted identity must replay without launching"
+        );
+        let mut conflicting = first.clone();
+        conflicting.launch_plan_hash = "e".repeat(64);
+        assert_eq!(
+            registry
+                .accept(&conflicting, &first.sandbox_capability.generation_id)
+                .unwrap_err()
+                .code,
+            crate::PROCESS_EXECUTION_INTENT_CONFLICT
+        );
+
+        registry.mark_active(&second.operation_identity).unwrap();
+        let second_terminal_hash = registry
+            .mark_terminal(
+                &second.operation_identity,
+                terminal_result(&second.operation_identity, b"second", b""),
+                b"second",
+                b"",
+            )
+            .unwrap()
+            .terminal_result_hash
+            .unwrap();
+        registry
+            .acknowledge(&second.operation_identity, &second_terminal_hash)
+            .unwrap();
+        assert_eq!(
+            registry
+                .compact(
+                    &second.operation_identity,
+                    &second_terminal_hash,
+                    &"c".repeat(64),
+                )
+                .unwrap_err()
+                .code,
+            PROCESS_LAUNCHER_REGISTRY_FULL,
+            "compact tombstones retain a separately enforced hard capacity"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compact_record_hash_tampering_fails_startup_validation() {
+        let root = test_root("compact-corrupt");
+        let authority = plan('2');
+        let identity = authority.operation_identity.clone();
+        let directory;
+        {
+            let mut registry = OperationRegistry::open(&root).unwrap();
+            registry
+                .accept(&authority, &authority.sandbox_capability.generation_id)
+                .unwrap();
+            registry.mark_active(&identity).unwrap();
+            let terminal_hash = registry
+                .mark_terminal(&identity, terminal_result(&identity, b"", b""), b"", b"")
+                .unwrap()
+                .terminal_result_hash
+                .unwrap();
+            registry.acknowledge(&identity, &terminal_hash).unwrap();
+            registry
+                .compact(&identity, &terminal_hash, &"d".repeat(64))
+                .unwrap();
+            directory = registry.operation_path(&identity);
+        }
+        let mut record: DurableOperationRecord =
+            serde_json::from_slice(&fs::read(directory.join("record.json")).unwrap()).unwrap();
+        record.durable_finalization_hash = Some("c".repeat(64));
+        write_canonical_atomic(&directory, "record.json", &record).unwrap();
         assert_eq!(
             OperationRegistry::open(&root).unwrap_err().code,
             PROCESS_LAUNCHER_REGISTRY_INVALID

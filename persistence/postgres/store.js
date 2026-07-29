@@ -38,6 +38,7 @@ const { installRuntimeBudgetMethods } = require('./runtime-budget-methods');
 const { installApplicationStateMethods } = require('./application-state-methods');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
+const MIGRATION_FILE_PATTERN = /^[0-9]{3}_[a-z0-9_]+\.sql$/;
 const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/;
 const TICKET_STATUSES = new Set(['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed']);
 const RUN_STATUSES = new Set(['pending', 'running', 'completed', 'failed', 'interrupted']);
@@ -73,6 +74,45 @@ const RUN_STATUS_TRANSITIONS = new Map([
   ['failed', new Set()],
   ['interrupted', new Set()]
 ]);
+
+function migrationFiles() {
+  const files = fs.readdirSync(MIGRATIONS_DIR)
+    .filter(name => name.endsWith('.sql'))
+    .sort();
+  if (files.length === 0 ||
+      files.some(name => !MIGRATION_FILE_PATTERN.test(name)) ||
+      new Set(files.map(name => name.slice(0, 3))).size !== files.length) {
+    throw new PostgresRuntimeIntegrityError(
+      'schema_migrations',
+      'migration filenames must have unique ordered NNN_name.sql identities'
+    );
+  }
+  return files;
+}
+
+function migrationChecksum(version) {
+  return crypto.createHash('sha256')
+    .update(fs.readFileSync(path.join(MIGRATIONS_DIR, version)))
+    .digest('hex');
+}
+
+function migrationHeadVersion(files = migrationFiles()) {
+  return Number(files[files.length - 1].slice(0, 3));
+}
+
+function processExecutionReleaseStateFromRow(row) {
+  if (!row) return null;
+  return Object.freeze({
+    admissionEnabled: row.admission_enabled === true,
+    releaseContractHash: row.release_contract_hash,
+    sourceRevision: row.source_revision,
+    applicationVersion: row.application_version,
+    changedBy: row.changed_by,
+    changeReason: row.change_reason,
+    revision: positiveSafeInteger(row.revision, 'process release revision'),
+    updatedAt: rowTimestamp(row.updated_at)
+  });
+}
 
 class OptimisticConcurrencyError extends Error {
   constructor(entity, id, expectedRevision, current = null) {
@@ -934,18 +974,40 @@ class PostgresRuntimeStore {
           'schema is not initialized; run the explicit migration command before startup'
         );
       }
-      const expectedMigrations = fs.readdirSync(MIGRATIONS_DIR)
-        .filter(name => name.endsWith('.sql'))
-        .sort();
+      const expectedMigrations = migrationFiles();
       const migrationResult = await client.query(
         `SELECT version FROM ${this.table('schema_migrations')} ORDER BY version`
       );
       const appliedMigrations = new Set(migrationResult.rows.map(row => row.version));
       const missingMigrations = expectedMigrations.filter(version => !appliedMigrations.has(version));
+      const unknownMigrations = [...appliedMigrations]
+        .filter(version => !expectedMigrations.includes(version));
       if (missingMigrations.length > 0) {
         throw new PostgresRuntimeIntegrityError(
           'schema_migrations',
           `missing required migration(s): ${missingMigrations.join(', ')}`
+        );
+      }
+      if (unknownMigrations.length > 0) {
+        throw new PostgresRuntimeIntegrityError(
+          'schema_migrations',
+          `unknown future migration(s): ${unknownMigrations.join(', ')}`
+        );
+      }
+      const identityResult = await client.query(
+        `SELECT version, sha256
+         FROM ${this.table('schema_migration_identities')}
+         ORDER BY version`
+      );
+      const identities = new Map(
+        identityResult.rows.map(row => [row.version, row.sha256])
+      );
+      const identityFailures = expectedMigrations.filter(version =>
+        identities.get(version) !== migrationChecksum(version));
+      if (identityFailures.length > 0) {
+        throw new PostgresRuntimeIntegrityError(
+          'schema_migration_identities',
+          `missing or changed migration identity: ${identityFailures.join(', ')}`
         );
       }
       const requiredRelations = [
@@ -959,6 +1021,8 @@ class PostgresRuntimeStore {
         'operation_receipts',
         'target_operation_intents',
         'process_operations',
+        'process_execution_release_state',
+        'schema_migration_identities',
         'operator_recovery_intents',
         'runtime_status_counts',
         'diagnostic_logs',
@@ -1017,6 +1081,14 @@ class PostgresRuntimeStore {
         ['replay_snapshots', 'replay_snapshots_mutation_guard'],
         ['target_operation_intents', 'target_operation_intents_append_only'],
         ['process_operations', 'process_operations_lifecycle_guard'],
+        [
+          'process_execution_release_state',
+          'process_execution_release_state_guard'
+        ],
+        [
+          'schema_migration_identities',
+          'schema_migration_identities_append_only'
+        ],
         ['operator_recovery_intents', 'operator_recovery_intents_append_only'],
         ['tickets', 'tickets_runtime_status_count'],
         ['runs', 'runs_runtime_status_count'],
@@ -1088,6 +1160,14 @@ class PostgresRuntimeStore {
         ['target_operation_intents', 'target_operation_intents_operation_key_unique'],
         ['process_operations', 'process_operations_pkey'],
         ['process_operations', 'process_operations_run_ticket_fk'],
+        [
+          'process_execution_release_state',
+          'process_execution_release_state_singleton'
+        ],
+        [
+          'process_execution_release_state',
+          'process_execution_release_state_enablement'
+        ],
         ['operator_recovery_intents', 'operator_recovery_intents_original_owner_fk'],
         ['operator_recovery_intents', 'operator_recovery_intents_run_ticket_fk'],
         ['operator_recovery_intents', 'operator_recovery_intents_original_unique'],
@@ -1259,6 +1339,320 @@ class PostgresRuntimeStore {
     if (this.ownsPool && this.pool) await this.pool.end();
   }
 
+  async getMigrationStatus({ client = null } = {}) {
+    const execute = async connection => {
+      const expected = migrationFiles();
+      const migrationTable = await connection.query(
+        'SELECT to_regclass($1) AS name',
+        [`${this.schema}.schema_migrations`]
+      );
+      if (!migrationTable.rows[0] || migrationTable.rows[0].name === null) {
+        return Object.freeze({
+          currentVersion: 0,
+          headVersion: migrationHeadVersion(expected),
+          migrationHead: expected[expected.length - 1],
+          fullyApplied: false,
+          checksumsValid: false,
+          partial: false,
+          pendingMigrations: expected.length,
+          unknownMigrations: 0
+        });
+      }
+      const appliedRows = (await connection.query(
+        `SELECT version FROM ${this.table('schema_migrations')} ORDER BY version`
+      )).rows;
+      const applied = new Set(appliedRows.map(row => row.version));
+      const pending = expected.filter(version => !applied.has(version));
+      const unknown = [...applied].filter(version => !expected.includes(version));
+      const identityTable = await connection.query(
+        'SELECT to_regclass($1) AS name',
+        [`${this.schema}.schema_migration_identities`]
+      );
+      let identityRows = [];
+      if (identityTable.rows[0] && identityTable.rows[0].name !== null) {
+        identityRows = (await connection.query(
+          `SELECT version, sha256
+           FROM ${this.table('schema_migration_identities')}
+           ORDER BY version`
+        )).rows;
+      }
+      const identities = new Map(identityRows.map(row => [
+        row.version,
+        row.sha256
+      ]));
+      const checksumsValid = expected.every(version =>
+        identities.get(version) === migrationChecksum(version));
+      const current = appliedRows
+        .map(row => Number(String(row.version).slice(0, 3)))
+        .filter(Number.isSafeInteger);
+      return Object.freeze({
+        currentVersion: current.length > 0 ? Math.max(...current) : 0,
+        headVersion: migrationHeadVersion(expected),
+        migrationHead: expected[expected.length - 1],
+        fullyApplied: pending.length === 0 &&
+          unknown.length === 0 &&
+          checksumsValid,
+        checksumsValid,
+        partial: pending.length === 0 && !checksumsValid,
+        pendingMigrations: pending.length,
+        unknownMigrations: unknown.length
+      });
+    };
+    return client ? execute(client) : this.withTransaction(async connection => {
+      await connection.query(
+        'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'
+      );
+      return execute(connection);
+    });
+  }
+
+  async getProcessExecutionReleaseState({ client = null, forUpdate = false } = {}) {
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT *
+         FROM ${this.table('process_execution_release_state')}
+         WHERE id = 1${forUpdate ? ' FOR UPDATE' : ''}`
+      );
+      if (result.rowCount !== 1) {
+        throw new PostgresRuntimeIntegrityError(
+          'process_execution_release_state',
+          'release authority singleton is missing'
+        );
+      }
+      return processExecutionReleaseStateFromRow(result.rows[0]);
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async setProcessExecutionAdmission({
+    enabled,
+    releaseContractHash = null,
+    sourceRevision = null,
+    applicationVersion = null,
+    changedBy,
+    reason
+  } = {}) {
+    if (typeof enabled !== 'boolean') {
+      throw new TypeError('enabled must be boolean');
+    }
+    const actor = requiredString(changedBy, 'changedBy', 256);
+    const changeReason = requiredString(reason, 'reason', 1024);
+    if (enabled && (
+      typeof releaseContractHash !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(releaseContractHash) ||
+      typeof sourceRevision !== 'string' ||
+      !/^[0-9a-f]{40}$/.test(sourceRevision) ||
+      typeof applicationVersion !== 'string' ||
+      !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(
+        applicationVersion
+      )
+    )) {
+      throw new TypeError(
+        'Enabling admission requires exact release contract authority'
+      );
+    }
+    return this.withTransaction(async client => {
+      await client.query(
+        `SELECT pg_advisory_xact_lock(
+           hashtextextended('ticket-system:process-release-admission', 0)
+         )`
+      );
+      const current = await this.getProcessExecutionReleaseState({
+        client,
+        forUpdate: true
+      });
+      const nextContractHash = enabled
+        ? releaseContractHash
+        : current.releaseContractHash;
+      const nextSourceRevision = enabled
+        ? sourceRevision
+        : current.sourceRevision;
+      const nextApplicationVersion = enabled
+        ? applicationVersion
+        : current.applicationVersion;
+      if (current.admissionEnabled === enabled &&
+          current.releaseContractHash === nextContractHash &&
+          current.sourceRevision === nextSourceRevision &&
+          current.applicationVersion === nextApplicationVersion) {
+        return { state: current, changed: false };
+      }
+      const result = await client.query(
+        `UPDATE ${this.table('process_execution_release_state')}
+         SET admission_enabled = $1,
+             release_contract_hash = $2,
+             source_revision = $3,
+             application_version = $4,
+             changed_by = $5,
+             change_reason = $6,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = 1
+         RETURNING *`,
+        [
+          enabled,
+          nextContractHash,
+          nextSourceRevision,
+          nextApplicationVersion,
+          actor,
+          changeReason
+        ]
+      );
+      await this._appendSystemLog(client, {
+        type: enabled
+          ? 'process_release:admission_enabled'
+          : 'process_release:admission_disabled',
+        message: enabled
+          ? 'Process execution admission enabled for validated release'
+          : 'Process execution admission disabled; recovery remains available',
+        metadata: {
+          actor,
+          reason: changeReason,
+          admissionEnabled: enabled,
+          releaseContractHash: nextContractHash,
+          sourceRevision: nextSourceRevision,
+          applicationVersion: nextApplicationVersion
+        }
+      });
+      return {
+        state: processExecutionReleaseStateFromRow(result.rows[0]),
+        changed: true
+      };
+    });
+  }
+
+  async getProcessReleaseOperationalMetrics() {
+    const result = await this.pool.query(
+      `SELECT
+         COUNT(*) FILTER (
+           WHERE lifecycle_state IN ('intent', 'active')
+         )::bigint AS active_count,
+         COUNT(*) FILTER (
+           WHERE lifecycle_state = 'finalizing'
+              OR lifecycle_state = 'terminal'
+                 AND (
+                   required_evidence_state <> 'complete'
+                   OR launcher_output_acknowledged = false
+                 )
+         )::bigint AS finalizing_count,
+         COUNT(*) FILTER (
+           WHERE lifecycle_state = 'terminal'
+             AND NOT EXISTS (
+               SELECT 1
+               FROM ${this.table('operation_receipts')} AS receipt
+               WHERE receipt.run_id = process_operation.run_id
+                 AND receipt.operation = 'runProcess'
+                 AND receipt.idempotency_key =
+                   process_operation.operation_identity
+             )
+         )::bigint AS awaiting_receipt_count,
+         COUNT(*) FILTER (
+           WHERE required_evidence_state <> 'complete'
+         )::bigint AS awaiting_evidence_count,
+         COUNT(*) FILTER (
+           WHERE lifecycle_state = 'terminal'
+             AND launcher_acceptance_identity IS NOT NULL
+             AND launcher_output_acknowledged = false
+         )::bigint AS awaiting_output_ack_count,
+         COUNT(*) FILTER (
+           WHERE cancellation_requested = true
+             AND lifecycle_state <> 'terminal'
+         )::bigint AS cancellation_pending_count,
+         COUNT(*) FILTER (
+           WHERE lifecycle_state <> 'terminal'
+             AND (
+               last_reconciliation_result->>'kind' LIKE '%failed%'
+               OR last_reconciliation_result->>'kind' LIKE '%lost%'
+             )
+         )::bigint AS reconciliation_failed_count,
+         MIN(requested_at) FILTER (
+           WHERE lifecycle_state IN ('intent', 'active')
+         ) AS oldest_active_at,
+         MIN(updated_at) FILTER (
+           WHERE lifecycle_state = 'finalizing'
+         ) AS oldest_finalizing_at
+       FROM ${this.table('process_operations')} AS process_operation`
+    );
+    const row = result.rows[0];
+    const count = (value, label) => {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        throw new RangeError(`${label} exceeds safe integer range`);
+      }
+      return parsed;
+    };
+    return Object.freeze({
+      activeOperations: count(row.active_count, 'active process count'),
+      finalizingOperations: count(
+        row.finalizing_count,
+        'finalizing process count'
+      ),
+      operationsAwaitingReceipts: count(
+        row.awaiting_receipt_count,
+        'awaiting receipt count'
+      ),
+      operationsAwaitingEvidence: count(
+        row.awaiting_evidence_count,
+        'awaiting evidence count'
+      ),
+      operationsAwaitingOutputAcknowledgement: count(
+        row.awaiting_output_ack_count,
+        'awaiting output acknowledgement count'
+      ),
+      cancellationPending: count(
+        row.cancellation_pending_count,
+        'pending cancellation count'
+      ),
+      reconciliationFailed: count(
+        row.reconciliation_failed_count,
+        'failed reconciliation count'
+      ),
+      oldestActiveAt: row.oldest_active_at
+        ? rowTimestamp(row.oldest_active_at)
+        : null,
+      oldestFinalizingAt: row.oldest_finalizing_at
+        ? rowTimestamp(row.oldest_finalizing_at)
+        : null
+    });
+  }
+
+  async listProcessLauncherCompactionCandidates({ limit = 100 } = {}) {
+    const boundedLimit = positiveSafeInteger(limit, 'limit');
+    if (boundedLimit > 1000) throw new RangeError('limit exceeds 1000');
+    const result = await this.pool.query(
+      `SELECT
+         process_operation.*,
+         run.status AS run_status,
+         receipt.receipt AS operation_receipt,
+         consequence.consequence AS run_consequence
+       FROM ${this.table('process_operations')} AS process_operation
+       JOIN ${this.table('runs')} AS run
+         ON run.id = process_operation.run_id
+        AND run.ticket_id = process_operation.ticket_id
+       JOIN ${this.table('operation_receipts')} AS receipt
+         ON receipt.run_id = process_operation.run_id
+        AND receipt.ticket_id = process_operation.ticket_id
+        AND receipt.operation = 'runProcess'
+        AND receipt.idempotency_key = process_operation.operation_identity
+       JOIN ${this.table('run_consequences')} AS consequence
+         ON consequence.run_id = process_operation.run_id
+        AND consequence.ticket_id = process_operation.ticket_id
+       WHERE process_operation.lifecycle_state = 'terminal'
+         AND process_operation.required_evidence_state = 'complete'
+         AND process_operation.launcher_output_acknowledged = true
+         AND run.status = ANY(ARRAY['completed', 'failed', 'interrupted'])
+         AND consequence.consequence ? 'completionDecision'
+       ORDER BY process_operation.terminal_at, process_operation.operation_identity
+       LIMIT $1`,
+      [boundedLimit]
+    );
+    return result.rows.map(row => Object.freeze({
+      processOperation: processOperationFromRow(row),
+      runStatus: row.run_status,
+      operationReceipt: row.operation_receipt,
+      runConsequence: row.run_consequence
+    }));
+  }
+
   async migrate() {
     const client = await this.pool.connect();
     const lockName = `ticket-system:migrations:${this.schema}`;
@@ -1270,7 +1664,38 @@ class PostgresRuntimeStore {
         applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
       )`);
 
-      const migrations = fs.readdirSync(MIGRATIONS_DIR).filter(name => name.endsWith('.sql')).sort();
+      const migrations = migrationFiles();
+      const currentVersions = new Set((await client.query(
+        `SELECT version FROM ${this.table('schema_migrations')} ORDER BY version`
+      )).rows.map(row => row.version));
+      const unknown = [...currentVersions].filter(version =>
+        !migrations.includes(version));
+      if (unknown.length > 0) {
+        throw new PostgresRuntimeIntegrityError(
+          'schema_migrations',
+          `unknown future migration(s): ${unknown.join(', ')}`
+        );
+      }
+      const identityTable = await client.query(
+        'SELECT to_regclass($1) AS name',
+        [`${this.schema}.schema_migration_identities`]
+      );
+      if (identityTable.rows[0] && identityTable.rows[0].name !== null) {
+        const identities = await client.query(
+          `SELECT version, sha256
+           FROM ${this.table('schema_migration_identities')}
+           ORDER BY version`
+        );
+        for (const row of identities.rows) {
+          if (!migrations.includes(row.version) ||
+              row.sha256 !== migrationChecksum(row.version)) {
+            throw new PostgresRuntimeIntegrityError(
+              'schema_migration_identities',
+              `historical migration identity changed: ${row.version}`
+            );
+          }
+        }
+      }
       const applied = [];
       for (const version of migrations) {
         await client.query('BEGIN');
@@ -1293,6 +1718,36 @@ class PostgresRuntimeStore {
           await client.query('ROLLBACK');
           throw error;
         }
+      }
+      await client.query('BEGIN');
+      try {
+        await client.query(`SET LOCAL search_path TO ${this.schemaSql}, public`);
+        for (const version of migrations) {
+          const checksum = migrationChecksum(version);
+          const existing = await client.query(
+            `SELECT sha256
+             FROM ${this.table('schema_migration_identities')}
+             WHERE version = $1`,
+            [version]
+          );
+          if (existing.rowCount === 0) {
+            await client.query(
+              `INSERT INTO ${this.table('schema_migration_identities')}
+                 (version, sha256)
+               VALUES ($1, $2)`,
+              [version, checksum]
+            );
+          } else if (existing.rows[0].sha256 !== checksum) {
+            throw new PostgresRuntimeIntegrityError(
+              'schema_migration_identities',
+              `historical migration identity changed: ${version}`
+            );
+          }
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
       }
       return applied;
     } finally {
@@ -4319,26 +4774,16 @@ class PostgresRuntimeStore {
   async transitionTicketAfterRun({ runId }, { client = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const execute = async connection => {
-      const runIdentityResult = await connection.query(
-        `SELECT ticket_id FROM ${this.table('runs')} WHERE id = $1`,
-        [id]
-      );
-      if (runIdentityResult.rowCount === 0) {
-        const error = new Error(`run ${id} was not found`);
-        error.code = 'POSTGRES_RECORD_NOT_FOUND';
-        throw error;
-      }
-      const ticketId = positiveSafeInteger(runIdentityResult.rows[0].ticket_id, 'run.ticketId');
-      const ticketResult = await connection.query(
-        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
-        [ticketId]
-      );
-      if (ticketResult.rowCount === 0) {
-        const error = new Error(`ticket ${ticketId} was not found`);
-        error.code = 'POSTGRES_RECORD_NOT_FOUND';
-        throw error;
-      }
-      const ticket = ticketFromRow(ticketResult.rows[0]);
+      // Lock the terminal run (and then every run in its allocation batch)
+      // before the owning ticket. Required run evidence takes the run row before
+      // its event insert obtains the ticket foreign-key lock. The former
+      // ticket-first order could therefore deadlock operator cancellation:
+      //
+      //   ticket projection  tickets FOR UPDATE -> runs FOR UPDATE
+      //   process evidence   runs FOR KEY SHARE -> events(ticket FK)
+      //
+      // Run-first ordering lets the evidence transaction finish and release
+      // before ticket projection proceeds.
       const runResult = await connection.query(
         `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
         [id]
@@ -4349,7 +4794,7 @@ class PostgresRuntimeStore {
         throw error;
       }
       const run = runFromRow(runResult.rows[0]);
-      if (run.ticketId !== ticketId || !TERMINAL_RUN_STATUSES.has(run.status)) {
+      if (!TERMINAL_RUN_STATUSES.has(run.status)) {
         throw new StateTransitionConflictError('run', id, [...TERMINAL_RUN_STATUSES], run);
       }
       const batchResult = await connection.query(
@@ -4360,6 +4805,16 @@ class PostgresRuntimeStore {
         [run.ticketId, run.ticketOpenedAt]
       );
       const batchRuns = batchResult.rows.map(runFromRow);
+      const ticketResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [run.ticketId]
+      );
+      if (ticketResult.rowCount === 0) {
+        const error = new Error(`ticket ${run.ticketId} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(ticketResult.rows[0]);
       const decisionResult = await connection.query(
         `SELECT run_id, consequence
          FROM ${this.table('run_consequences')}
@@ -5902,8 +6357,14 @@ class PostgresRuntimeStore {
     };
 
     const execute = async connection => {
+      // Evidence bundles also update the replay row before appending their event.
+      // Take the run row first so this path follows the same lock order as
+      // terminalizeRun (runs -> replay_snapshots -> event chain). Without the
+      // explicit key-share lock, cancellation finalization can hold the run row
+      // while appendRunEvidence holds the replay row, and each then waits for
+      // the other with PostgreSQL 40P01.
       const runResult = await connection.query(
-        `SELECT ticket_id FROM ${this.table('runs')} WHERE id = $1`,
+        `SELECT ticket_id FROM ${this.table('runs')} WHERE id = $1 FOR KEY SHARE`,
         [id]
       );
       if (runResult.rowCount === 0) {

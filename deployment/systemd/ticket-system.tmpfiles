@@ -1,0 +1,6 @@
+# Installation creates boundaries only. Credentials are installed separately
+# in ticket-system.env with mode 0640 and never belong in a release package.
+d /srv/ticket-system/workspace 0750 ticket-system-runtime ticket-system-runtime -
+d /var/lib/ticket-system/artifacts 0750 ticket-system-runtime ticket-system-runtime -
+d /etc/ticket-system 0750 root ticket-system-runtime -
+z /etc/ticket-system/ticket-system.env 0640 root ticket-system-runtime -

@@ -12,6 +12,65 @@ governing design memo, that memo holds the rationale and this register holds the
 
 ---
 
+## Process-execution GA release blockers (2026-07-29)
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Resolved 2026-07-29 — patched production graph and clean authorized external audits; final GA validation remains in progress** |
+| **Scope** | Tranche 8 GA release evidence |
+| **Original code** | `PROCESS_RELEASE_VULNERABILITIES_FOUND` |
+
+The prior backup/restore and bounded-soak scripts were not valid GA evidence: the
+former rebuilt the same fixture in a new empty schema and the latter printed
+hard-coded zero-leak/no-duplicate claims. Both have been replaced. The bounded
+soak passes with measured PostgreSQL, launcher, artifact, receipt, completion,
+capacity, cancellation, restart, and compaction observations. The backup test
+passes through an actual `pg_dump` custom archive plus `pg_restore` into a
+separate schema, paired with a separately restored artifact tree and no
+reseeding.
+
+The authorized external audit ran on 2026-07-29. `pnpm` 11.8.0 reported three
+high-severity advisories in the shipped production Fastify dependency graph:
+
+- `GHSA-v2hh-gcrm-f6hx`: `fast-uri` 3.1.2, fixed in 3.1.4 or later;
+- `GHSA-4c8g-83qw-93j6`: `fast-uri` 3.1.2, fixed in 3.1.3 or later
+  (3.1.4 therefore satisfies both `fast-uri` advisories);
+- `GHSA-c96f-x56v-gq3h`: `find-my-way` 9.6.0, fixed in 9.6.1 or later.
+
+`fast-uri` and `find-my-way` are transitive production dependencies beneath the
+direct shipped dependency `fastify` 5.8.5, not development-only packages. The
+locked RustSec audit tool `cargo-audit` 0.22.2 found zero advisories across 22
+locked dependencies in each of the launcher and materializer components, using
+RustSec database commit `7c7ccac53056b87f69ac677f15ea2d9a98a6f8e2`.
+
+The authorized remediation updated the direct Fastify v5 dependency from
+5.8.5 to 5.10.0 and refreshed only its required production subtree.
+`find-my-way` moved from 9.6.0 to 9.7.0. The former `fast-uri` 3.1.2 paths
+now resolve to 3.1.4 through AJV and to 4.1.1 through
+`fast-json-stringify`. No override, advisory allowlist, automatic fix,
+Cargo-lock change, registry change, Git dependency, or local-filesystem
+dependency was introduced.
+
+The authorized external gate was rerun on 2026-07-29 with `pnpm` 11.8.0 and
+`cargo-audit` 0.22.2:
+
+```sh
+PROCESS_RELEASE_NETWORK_AUDIT=1 npm run release:security
+```
+
+The production Node report contained zero critical, high, moderate, low, or
+informational vulnerabilities across 83 dependencies. Each native lockfile
+contained 22 dependencies and reported zero RustSec vulnerabilities using
+database commit `7c7ccac53056b87f69ac677f15ea2d9a98a6f8e2`.
+
+The dependency blocker is resolved, but this record does not by itself close
+Tranche 8. The final candidate checkpoint and the complete GA command must
+still pass from the exact clean committed source. The GA command remains
+fail-closed and cannot print `PROCESS EXECUTION GA RELEASE PASSED` if a
+mandatory gate is skipped, unavailable, or inconclusive.
+
+---
+
 ## Execution-Governance Audit (2026-07-25)
 
 A read-only execution-governance integrity audit was performed against run #8 (ticket #3,
@@ -2735,6 +2794,20 @@ load. Recording it beats a hasty fix at the end of a session.
 `appendEvent`'s non-latching branch to swallow generic errors would break the exact
 distinction the tranche above exists to protect. The retry belongs at the transaction
 boundary, below the latch.
+
+**Tranche 8 clean-commit addendum (2026-07-29).** The independent GA checkpoint exposed
+two more concrete lock-order cycles in the operator process-cancellation public seam:
+`appendRunEvidence` took `replay_snapshots` before `_appendEvent` acquired its run-row
+foreign-key lock, while terminalization takes `runs` before replay; separately,
+`transitionTicketAfterRun` took the ticket before its run batch, while process evidence
+takes a run before its event insert obtains the ticket foreign-key lock. Both surfaced
+as `40P01`, and neither was accepted as a flaky pass. The canonical store now orders
+these boundaries as `runs → replay_snapshots → event chain` and `run batch → ticket`.
+`event-append-lock-order-test.js` scenarios 6 and 7 close the exact former cycles and
+prove the bundled evidence and ticket projection each commit once without retry or
+hash-chain damage. `process-supervision-postgres-test.js` then proves the real public
+cancellation route converges. No failure was downgraded and no duplicate evidence path
+was introduced.
 
 ### RESOLVED — surviving mutation `authority-denial-loses-its-rule` (2026-07-26)
 
