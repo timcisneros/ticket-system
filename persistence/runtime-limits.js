@@ -1,10 +1,14 @@
 'use strict';
 
 const RUNTIME_LIMIT_CONFIG_KEYS = Object.freeze([
+  'maxAttempts',
   'maxExecutionSteps',
   'maxModelRequestsPerRun',
   'maxWorkspaceOperationsPerRun',
-  'maxRuntimeDurationMs'
+  'maxProcessOperationsPerRun',
+  'maxBrowserOperationsPerRun',
+  'maxRuntimeDurationMs',
+  'maxOutputArtifactBytesPerRun'
 ]);
 
 const RUNTIME_SYSTEM_CONFIG_KEYS = Object.freeze([
@@ -18,10 +22,14 @@ const ALL_RUNTIME_CONFIG_KEYS = Object.freeze([
 ]);
 
 const RUNTIME_CONFIG_MINIMUMS = Object.freeze({
+  maxAttempts: 1,
   maxExecutionSteps: 1,
   maxModelRequestsPerRun: 1,
   maxWorkspaceOperationsPerRun: 1,
+  maxProcessOperationsPerRun: 1,
+  maxBrowserOperationsPerRun: 1,
   maxRuntimeDurationMs: 5000,
+  maxOutputArtifactBytesPerRun: 1,
   maxActiveRuns: 1,
   localModelConcurrency: 1
 });
@@ -92,7 +100,7 @@ function normalizeRuntimeLimitsValues(value, label = 'runtime limits value', all
   const normalized = {};
   for (const key of ALL_RUNTIME_CONFIG_KEYS) {
     const candidate = source[key];
-    if (candidate === null) {
+    if (candidate === null || candidate === undefined) {
       normalized[key] = null;
       continue;
     }

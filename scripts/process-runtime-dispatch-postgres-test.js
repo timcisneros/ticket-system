@@ -192,6 +192,7 @@ async function main() {
       materializerGeneration,
       delegatedCgroupIdentityHash: '6'.repeat(64),
       containmentProbeHash: '7'.repeat(64),
+      maxActiveOperations: 4,
       verifiedAt: new Date(now - 1000).toISOString(),
       expiresAt: new Date(now + 240000).toISOString(),
       readyForExecution: true
@@ -465,6 +466,18 @@ async function main() {
       assert(operations.length === 1 && operations[0].lifecycleState === 'terminal',
         'one canonical durable process operation reaches terminal');
       const operation = operations[0];
+      const budgetState = await store.getRunBudgetState(run.id);
+      assert(budgetState.usage.process_operation.committed === 1 &&
+        budgetState.usage.output_artifact_bytes.committed ===
+          stdout.length + stderr.length &&
+        budgetState.usage.model_request.committed >= 1 &&
+        budgetState.usage.execution_step.committed >= 1,
+      'authorized dispatch charges process, output, model, and execution-step usage exactly once');
+      assert(budgetState.charges.filter(charge =>
+        charge.dimension === 'process_operation' &&
+        charge.sourceIdentity === operation.operationIdentity
+      ).length === 1,
+      'canonical process operation identity is the durable budget source');
       assert(native.launchCount === 1 && native.acknowledgeCount === 1,
         'runtime submits once and acknowledges output only after finalization');
       assert(operation.requiredEvidenceState === 'complete' &&

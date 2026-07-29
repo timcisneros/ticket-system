@@ -76,9 +76,11 @@ class ProcessRuntimeCapabilityResolver {
     }
     if (!this.repository ||
         typeof this.repository.isProcessExecutionSchemaAvailable !== 'function' ||
-        await this.repository.isProcessExecutionSchemaAvailable() !== true) {
+        typeof this.repository.isRuntimeBudgetSchemaAvailable !== 'function' ||
+        await this.repository.isProcessExecutionSchemaAvailable() !== true ||
+        await this.repository.isRuntimeBudgetSchemaAvailable() !== true) {
       throw new ProcessRuntimeCapabilityError(
-        'PostgreSQL process lifecycle schema is unavailable'
+        'PostgreSQL process lifecycle or runtime budget schema is unavailable'
       );
     }
     if (!this.artifactStore || typeof this.artifactStore.health !== 'function') {

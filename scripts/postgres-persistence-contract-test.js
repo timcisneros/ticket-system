@@ -54,6 +54,8 @@ const LOCAL_CONNECTOR_OBJECTS_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '026_lo
 const RUN_AGENT_INTEGRITY_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '027_run_agent_integrity.sql');
 const PROCESS_TEMPLATE_TICKET_PROVENANCE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '028_process_template_ticket_provenance.sql');
 const PROCESS_EXECUTION_LIFECYCLE_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '029_process_execution_lifecycle.sql');
+const RUNTIME_BUDGET_MIGRATION_PATH = path.join(MIGRATIONS_DIR, '030_runtime_budget_and_capacity.sql');
+const RUNTIME_BUDGET_METHODS_PATH = path.join(ROOT, 'persistence', 'postgres', 'runtime-budget-methods.js');
 const APPLICATION_STATE_METHODS_PATH = path.join(ROOT, 'persistence', 'postgres', 'application-state-methods.js');
 const RUNTIME_BACKEND_PATH = path.join(ROOT, 'persistence', 'runtime-backend.js');
 const SERVER_PATH = path.join(ROOT, 'server.js');
@@ -87,6 +89,8 @@ const localConnectorObjectsMigration = fs.readFileSync(LOCAL_CONNECTOR_OBJECTS_M
 const runAgentIntegrityMigration = fs.readFileSync(RUN_AGENT_INTEGRITY_MIGRATION_PATH, 'utf8');
 const processTemplateTicketProvenanceMigration = fs.readFileSync(PROCESS_TEMPLATE_TICKET_PROVENANCE_MIGRATION_PATH, 'utf8');
 const processExecutionLifecycleMigration = fs.readFileSync(PROCESS_EXECUTION_LIFECYCLE_MIGRATION_PATH, 'utf8');
+const runtimeBudgetMigration = fs.readFileSync(RUNTIME_BUDGET_MIGRATION_PATH, 'utf8');
+const runtimeBudgetMethodsSource = fs.readFileSync(RUNTIME_BUDGET_METHODS_PATH, 'utf8');
 const applicationStateMethodsSource = fs.readFileSync(APPLICATION_STATE_METHODS_PATH, 'utf8');
 const runtimeBackendSource = fs.readFileSync(RUNTIME_BACKEND_PATH, 'utf8');
 const serverSource = fs.readFileSync(SERVER_PATH, 'utf8');
@@ -152,6 +156,32 @@ assert.match(storeSource, /pg_advisory_xact_lock\(hashtextextended\(\$1, 0\)\)/)
 assert.match(storeSource, /async withProcessOperationLock\(/);
 assert.match(storeSource, /pg_advisory_lock\(hashtextextended\(\$1, 0\)\)/);
 assert.match(storeSource, /async listProcessOperationsRequiringReconciliation\(/);
+
+for (const requiredSql of [
+  'CREATE TABLE run_budget_charges',
+  'CONSTRAINT run_budget_charges_identity UNIQUE',
+  'CREATE FUNCTION enforce_run_budget_charge_transition()',
+  'CREATE TABLE runtime_capacity_slots',
+  'CREATE TABLE run_capacity_waits',
+  'runtime budget charges cannot be deleted',
+  'runtime capacity slot identity is immutable'
+]) {
+  assert.ok(
+    runtimeBudgetMigration.includes(requiredSql),
+    `runtime budget migration must include: ${requiredSql}`
+  );
+}
+for (const requiredMethod of [
+  'async reserveRunBudget(',
+  'async commitRunBudget(',
+  'async releaseRunBudget(',
+  'async acquireRuntimeCapacity(',
+  'async renewRuntimeCapacity(',
+  'async releaseRuntimeCapacity('
+]) {
+  assert.ok(runtimeBudgetMethodsSource.includes(requiredMethod),
+    `runtime budget repository must include: ${requiredMethod}`);
+}
 
 assert.equal(normalizeWorkspacePath('./reports//daily.json'), 'reports/daily.json');
 assert.equal(normalizeWorkspacePath('.'), '');

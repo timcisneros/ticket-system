@@ -100,6 +100,7 @@ function containmentHealth(overrides = {}) {
     materializerGeneration: `materializer-v1-${'5'.repeat(64)}`,
     delegatedCgroupIdentityHash: '8'.repeat(64),
     containmentProbeHash: '9'.repeat(64),
+    maxActiveOperations: 4,
     verifiedAt: '2026-07-28T10:00:00.000Z',
     expiresAt: '2026-07-28T10:01:00.000Z',
     readyForExecution: true,
@@ -194,6 +195,20 @@ equal(
   containmentHealth(),
   'active containment health uses the closed time-bounded execution descriptor'
 );
+equal(
+  normalizeContainmentHealth(containmentHealth(), { observedAt }).maxActiveOperations,
+  4,
+  'active containment health publishes the launcher-enforced capacity'
+);
+for (const invalidCapacity of [0, 257, null]) {
+  throwsCode(
+    () => normalizeContainmentHealth(containmentHealth({
+      maxActiveOperations: invalidCapacity
+    }), { observedAt }),
+    'PROCESS_CONTAINMENT_UNAVAILABLE',
+    `launcher capacity rejects invalid authority ${String(invalidCapacity)}`
+  );
+}
 throwsCode(
   () => normalizeContainmentHealth(containmentHealth({
     readyForExecution: false

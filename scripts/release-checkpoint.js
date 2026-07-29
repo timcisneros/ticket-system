@@ -42,6 +42,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'postgres-persistence-contract-test.js',
   'recovery-state-reconstruction-test.js',
   'run-decision-graph-projection-test.js',
+  'runtime-budget-contract-test.js',
   'scheduler-observability-test.js',
   'workspace-fixture-catalog-test.js',
   'workspace-snapshot-availability-test.js',
@@ -103,6 +104,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'replay-snapshot-storage-test.js',
   'runtime-limits-config-test.js',
   'runtime-limits-ui-test.js',
+  'runtime-budget-postgres-test.js',
   'renamepath-runtime-regression-test.js',
   // A20 — the two confirmed orphans repaired in this tranche, plus two suites that
   // already exercised the PostgreSQL store and were nonetheless unregistered.

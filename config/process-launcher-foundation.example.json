@@ -10,6 +10,7 @@
   "trustedRootfsOwnerUid": 0,
   "materializerSocketPath": "/run/ticket-system-process/materializer/materializer.sock",
   "healthValidityMs": 30000,
+  "maxActiveOperations": 4,
   "rootfsRegistry": [
     {
       "id": "node-24-fedora-runtime-v1",

@@ -238,6 +238,8 @@ const TESTS = Object.freeze([
   { file: "run-timeout-attribution-clarity-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "run-vendor-chunk-test.js", status: "excluded", reason: "manual-demo" },
   { file: "run-vendor-compliance-test.js", status: "excluded", reason: "manual-demo" },
+  { file: "runtime-budget-contract-test.js", status: "required" },
+  { file: "runtime-budget-postgres-test.js", status: "required" },
   { file: "runtime-budget-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "runtime-feasibility-test.js", status: "required" },
   { file: "runtime-limits-config-test.js", status: "required" },

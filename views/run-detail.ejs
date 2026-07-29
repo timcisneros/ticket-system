@@ -641,15 +641,17 @@
     if (m.status === 'not_configured') return 'not configured';
     if (m.status === 'unavailable') return 'unavailable';
     var pair = m.usage + unit + ' / ' + m.threshold + unit;
+    if (m.status === 'exhausted') return pair + ' · exhausted';
     return m.status === 'exceeded' ? (pair + ' · exceeded (advisory)') : (pair + ' · within limit');
   }
-  const budgetExceededCount = ['runtimeMs', 'modelRequests', 'workspaceOperations']
-    .filter(key => budgetStatus[key] && budgetStatus[key].status === 'exceeded').length;
+  const budgetLimitedCount = ['runtimeMs', 'modelRequests', 'workspaceOperations']
+    .filter(key => budgetStatus[key] &&
+      ['exceeded', 'exhausted'].includes(budgetStatus[key].status)).length;
 %>
 <details class="disclosure">
-  <summary>Budget (advisory) <span class="sub"><%= budgetExceededCount > 0 ? budgetExceededCount + ' threshold(s) exceeded' : 'within thresholds' %></span></summary>
+  <summary>Budget (<%= budgetStatus.enforced ? 'enforced' : 'historical advisory' %>) <span class="sub"><%= budgetLimitedCount > 0 ? budgetLimitedCount + ' limit(s) reached' : 'within limits' %></span></summary>
   <div class="body">
-    <p class="text-muted">Advisory only — no execution is blocked. Recorded usage compared against this run's recorded thresholds; an exceeded threshold is a warning, not a limit.</p>
+    <p class="text-muted"><%= budgetStatus.enforced ? 'Immutable admission limits and durable charges; exhaustion blocks the next covered side effect.' : 'Historical advisory only — this run predates effective budget enforcement.' %></p>
     <dl class="detail-grid">
       <div><dt>Runtime</dt><dd><%= budgetCell(budgetStatus.runtimeMs, 'ms') %></dd></div>
       <div><dt>Model requests</dt><dd><%= budgetCell(budgetStatus.modelRequests, '') %></dd></div>
@@ -705,7 +707,7 @@
       <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
       <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
       <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-      <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts === null ? 'unlimited · enforced for manual rerun-from-start when set' : run.executionPolicySnapshot.maxAttempts + ' · enforced for manual rerun-from-start' %></dd></div>
+      <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts === null ? ((run.runtimeBudgetSnapshot && run.runtimeBudgetSnapshot.maxAttempts) ? run.runtimeBudgetSnapshot.maxAttempts + ' · inherited runtime default snapshotted at admission' : 'runtime default · historical run has no effective budget snapshot') : run.executionPolicySnapshot.maxAttempts + ' · ticket override snapshotted at admission' %></dd></div>
       <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'unspecified' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
       <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'unspecified' : run.executionPolicySnapshot.maxModelRequests %> · recorded intent, not enforced</dd></div>
       <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'unspecified' : run.executionPolicySnapshot.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>

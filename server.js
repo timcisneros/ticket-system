@@ -79,6 +79,13 @@ const {
 const {
   ProcessExecutionController
 } = require('./runtime/process-execution-controller');
+const {
+  buildRuntimeBudgetSnapshot,
+  getRunRuntimeBudgetSnapshot
+} = require('./runtime/runtime-budget-contract');
+const {
+  RuntimeBudgetController
+} = require('./runtime/runtime-budget-controller');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -106,7 +113,8 @@ const {
   assertWorkContextRepository,
   assertConfiguredAgentRepository,
   assertProcessTemplateProjectionRepository,
-  assertProcessExecutionRepository
+  assertProcessExecutionRepository,
+  assertRuntimeBudgetRepository
 } = require('./persistence/runtime-contracts');
 const { snapshotWorkType, normalizeWorkTypeSnapshot, copyWorkTypeSnapshot } = require('./work-types');
 const {
@@ -198,6 +206,10 @@ const DEFAULT_EXECUTION_POLICY = Object.freeze({
   maxRuntimeMs: null,
   maxModelRequests: null,
   maxWorkspaceOperations: null,
+  maxExecutionSteps: null,
+  maxProcessOperations: null,
+  maxBrowserOperations: null,
+  maxOutputArtifactBytes: null,
   allowWorkspaceWrites: true,
   allowParallelRuns: false,
   allowChildTickets: false,
@@ -273,22 +285,40 @@ const STALLED_RESPONSE_THRESHOLD = 2;
 const INSPECTION_NO_PROGRESS_THRESHOLD = 3;
 const INSPECTION_NO_PROGRESS_WARNING_THRESHOLD = INSPECTION_NO_PROGRESS_THRESHOLD - 1;
 const DEFAULT_AGENT_RUNTIME_LIMITS = {
+  maxAttempts: 3,
   maxExecutionSteps: 4,
   maxWorkspaceOperationsPerRun: 32,
   maxModelRequestsPerRun: 4,
-  maxRuntimeDurationMs: 120000
+  maxProcessOperationsPerRun: 4,
+  maxBrowserOperationsPerRun: 32,
+  maxRuntimeDurationMs: 120000,
+  maxOutputArtifactBytesPerRun: 16 * 1024 * 1024
 };
 const RUNTIME_LIMIT_CONFIG_KEYS = Object.freeze([
+  'maxAttempts',
+  'maxExecutionSteps',
+  'maxModelRequestsPerRun',
+  'maxWorkspaceOperationsPerRun',
+  'maxProcessOperationsPerRun',
+  'maxBrowserOperationsPerRun',
+  'maxRuntimeDurationMs',
+  'maxOutputArtifactBytesPerRun'
+]);
+const HISTORICAL_RUNTIME_LIMIT_KEYS = Object.freeze([
   'maxExecutionSteps',
   'maxModelRequestsPerRun',
   'maxWorkspaceOperationsPerRun',
   'maxRuntimeDurationMs'
 ]);
 const RUNTIME_LIMIT_MINIMUMS = Object.freeze({
+  maxAttempts: 1,
   maxExecutionSteps: 1,
   maxModelRequestsPerRun: 1,
   maxWorkspaceOperationsPerRun: 1,
-  maxRuntimeDurationMs: 5000
+  maxProcessOperationsPerRun: 1,
+  maxBrowserOperationsPerRun: 1,
+  maxRuntimeDurationMs: 5000,
+  maxOutputArtifactBytesPerRun: 1
 });
 const RUNTIME_SYSTEM_CONFIG_KEYS = Object.freeze([
   'maxActiveRuns',
@@ -1709,6 +1739,19 @@ const admittedRunIds = new Set();
 const admittedLocalModelRunIds = new Set();
 const RUN_LEASE_OWNER = `${process.pid}:${crypto.randomUUID()}`;
 const DEFAULT_RUN_LEASE_DURATION_MS = 180000;
+const runtimeBudgetController = new RuntimeBudgetController({
+  repository: assertRuntimeBudgetRepository(postgresRuntimeStore),
+  leaseOwner: RUN_LEASE_OWNER,
+  renewRunLease: (runId, payload) => heartbeatRunLease(runId, payload),
+  isCancelled: isRunInterrupted,
+  faultCheckpoint: async (point, details) => {
+    if (!TEST_INTERRUPTION_POINT || TEST_INTERRUPTION_POINT !== point) return;
+    const run = details && details.runId
+      ? await postgresRuntimeStore.getRun(details.runId)
+      : null;
+    await maybeTestInterrupt(run, point);
+  }
+});
 let lastLogTimestampNs = 0n;
 let serverReady = false;
 let runLeaseRepository = null;
@@ -3293,15 +3336,19 @@ function normalizeExecutionPolicy(policy, workspaceScope = 'shared') {
     // supplied here is deliberately ignored rather than honoured, because honouring it
     // would let a policy string override durable per-run verification evidence.
     requireVerification: SUPPORTED_REQUIRE_VERIFICATION,
-    // Strict boolean opt-in. Default-off; has effect only when maxAttempts is a
-    // finite positive integer (enforced by the auto-retry gate, not here).
+    // Strict boolean opt-in. Default-off. The effective attempt limit is
+    // resolved at admission from this override or the runtime default.
     autoRetry: source.autoRetry === true,
-    // Unset/invalid → null (unlimited). Only an explicit finite positive value is
-    // enforced (for manual rerun-from-start). Mirrors the other max* fields.
+    // Unset/invalid → null ("use the runtime default"). Admission resolves every
+    // numeric value into the immutable runtimeBudgetSnapshot.
     maxAttempts: normalizeOptionalPositiveInteger(source.maxAttempts),
+    maxExecutionSteps: normalizeOptionalPositiveInteger(source.maxExecutionSteps),
     maxRuntimeMs: normalizeOptionalPositiveInteger(source.maxRuntimeMs),
     maxModelRequests: normalizeOptionalPositiveInteger(source.maxModelRequests),
     maxWorkspaceOperations: normalizeOptionalPositiveInteger(source.maxWorkspaceOperations),
+    maxProcessOperations: normalizeOptionalPositiveInteger(source.maxProcessOperations),
+    maxBrowserOperations: normalizeOptionalPositiveInteger(source.maxBrowserOperations),
+    maxOutputArtifactBytes: normalizeOptionalPositiveInteger(source.maxOutputArtifactBytes),
     allowWorkspaceWrites: source.allowWorkspaceWrites === undefined
       ? DEFAULT_EXECUTION_POLICY.allowWorkspaceWrites
       : source.allowWorkspaceWrites === true,
@@ -6179,6 +6226,12 @@ async function acquireRunLease(runId) {
       claimReceipt: buildClaimReceipt(claimedRun, ticket)
     })
   });
+  if (!claim && pendingRun && getRunRuntimeBudgetSnapshot(pendingRun)) {
+    await postgresRuntimeStore.recordPendingRunCapacityWait({
+      runId,
+      retryMs: getPositiveIntegerEnv('RUNTIME_SCHEDULER_INTERVAL_MS', 500)
+    });
+  }
   return claim ? claim.run : null;
 }
 
@@ -6641,51 +6694,89 @@ function buildRoutingDisplay(run, snapshot) {
   };
 }
 
-// Advisory-only budget status: compares a run's recorded usage against the budget
-// threshold fields recorded in its execution policy snapshot. This NEVER blocks,
-// stops, fails, or reruns anything — it is purely a visibility signal derived from
-// existing usage metrics. Per-metric status:
+// Budget status is reconstructed from the immutable effective budget snapshot and
+// durable charge state for Tranche 5 runs. Historical runs without that snapshot
+// retain the former advisory projection. Per-metric status:
 //   not_configured   threshold is null/unset → no warning
 //   unavailable      usage not observable yet → no warning, no fabricated number
 //   within_threshold usage <= threshold (equal is within)
-//   exceeded         usage > threshold (advisory warning only)
-function buildRunBudgetStatus(run, usage = null) {
+//   exhausted        enforced run has no remaining unit
+//   exceeded         historical advisory usage exceeded its recorded threshold
+function buildRunBudgetStatus(run, usage = null, runtimeBudgetState = null) {
   if (!run) return null;
   const policy = copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run));
   const u = usage || buildRunAttemptUsage(run);
+  const budgetSnapshot = getRunRuntimeBudgetSnapshot(run);
+  const durableUsage = runtimeBudgetState && runtimeBudgetState.usage
+    ? runtimeBudgetState.usage
+    : null;
 
-  const metric = (threshold, used) => {
+  const metric = (threshold, used, remaining = null) => {
     const t = Number.isInteger(threshold) && threshold > 0 ? threshold : null;
     const usedValue = Number.isFinite(used) ? used : null;
     if (t === null) return { threshold: null, usage: usedValue, status: 'not_configured' };
     if (usedValue === null) return { threshold: t, usage: null, status: 'unavailable' };
+    if (budgetSnapshot && (remaining === 0 || usedValue >= t)) {
+      return { threshold: t, usage: usedValue, status: 'exhausted' };
+    }
     return { threshold: t, usage: usedValue, status: usedValue > t ? 'exceeded' : 'within_threshold' };
   };
 
   return {
-    advisory: true,
-    runtimeMs: metric(policy.maxRuntimeMs, u ? u.durationMs : null),
-    modelRequests: metric(policy.maxModelRequests, u ? u.modelRequestCount : null),
-    workspaceOperations: metric(policy.maxWorkspaceOperations, u ? u.workspaceOperationCount : null)
+    advisory: budgetSnapshot === null,
+    enforced: budgetSnapshot !== null,
+    runtimeMs: metric(
+      budgetSnapshot ? budgetSnapshot.maxRuntimeDurationMs : policy.maxRuntimeMs,
+      u ? u.durationMs : null
+    ),
+    modelRequests: metric(
+      budgetSnapshot ? budgetSnapshot.maxModelRequests : policy.maxModelRequests,
+      durableUsage && durableUsage.model_request
+        ? durableUsage.model_request.committed
+        : u ? u.modelRequestCount : null,
+      durableUsage && durableUsage.model_request
+        ? durableUsage.model_request.remaining
+        : null
+    ),
+    workspaceOperations: metric(
+      budgetSnapshot ? budgetSnapshot.maxWorkspaceOperations : policy.maxWorkspaceOperations,
+      durableUsage && durableUsage.workspace_operation
+        ? durableUsage.workspace_operation.committed
+        : u ? u.workspaceOperationCount : null,
+      durableUsage && durableUsage.workspace_operation
+        ? durableUsage.workspace_operation.remaining
+        : null
+    )
   };
 }
 
-// Advisory-only ticket-level budget rollup across a ticket's runs. Reuses each
+// Ticket-level budget rollup across historical advisory and enforced runs. Reuses each
 // run's own buildRunBudgetStatus (so every run is compared against its OWN
-// executionPolicySnapshot, never the current mutable ticket policy). Rolls up by
-// priority exceeded > unavailable > within_threshold > not_configured. Visibility
-// only — it never blocks, stops, fails, or reruns anything and is not read by any
-// control flow.
-const BUDGET_ROLLUP_PRIORITY = ['exceeded', 'unavailable', 'within_threshold', 'not_configured'];
+// immutable snapshot, never the current mutable ticket policy).
+const BUDGET_ROLLUP_PRIORITY = [
+  'exceeded',
+  'exhausted',
+  'unavailable',
+  'within_threshold',
+  'not_configured'
+];
 function rollupBudgetStatuses(statuses) {
   return BUDGET_ROLLUP_PRIORITY.find(status => statuses.includes(status)) || 'not_configured';
 }
 function buildTicketBudgetSummary(ticketRuns) {
   const runs = Array.isArray(ticketRuns) ? ticketRuns.filter(Boolean) : [];
-  const emptyCounts = { exceeded: 0, unavailable: 0, within_threshold: 0, not_configured: 0 };
+  const emptyCounts = {
+    exceeded: 0,
+    exhausted: 0,
+    unavailable: 0,
+    within_threshold: 0,
+    not_configured: 0
+  };
   if (runs.length === 0) {
     return {
       advisory: true,
+      enforcedRunCount: 0,
+      historicalAdvisoryRunCount: 0,
       runCount: 0,
       overall: 'no_runs',
       metrics: { runtimeMs: 'not_configured', modelRequests: 'not_configured', workspaceOperations: 'not_configured' },
@@ -6708,7 +6799,9 @@ function buildTicketBudgetSummary(ticketRuns) {
   });
 
   return {
-    advisory: true,
+    advisory: perRun.every(budget => budget.advisory),
+    enforcedRunCount: perRun.filter(budget => budget.enforced).length,
+    historicalAdvisoryRunCount: perRun.filter(budget => budget.advisory).length,
     runCount: runs.length,
     overall: rollupBudgetStatuses([metrics.runtimeMs, metrics.modelRequests, metrics.workspaceOperations]),
     metrics,
@@ -7343,7 +7436,31 @@ async function expireStaleRunLeases() {
     // reconstruction can decide that this run is resumable. In particular,
     // never let `reconcileRun` observe an active launcher operation and wait for
     // natural completion under ownership that the scheduler already fenced.
+    await runtimeBudgetController.recoveringSchedulerLease(run);
     await processExecutionController.cancelRunOperations(run, leaseLossReason);
+    await reconcileRunBudgetReservations(run);
+    try {
+      runtimeBudgetController.assertDuration(run);
+    } catch (error) {
+      if (error && error.code === 'RUN_RUNTIME_DURATION_EXCEEDED') {
+        await appendEvent({
+          type: 'budget.exhausted',
+          ticketId: run.ticketId,
+          runId: run.id,
+          payload: {
+            budgetSnapshotHash: getRunRuntimeBudgetSnapshot(run).snapshotHash,
+            dimension: 'runtime_duration',
+            sourceIdentity: 'scheduler:lease-recovery',
+            limit: error.details.limit,
+            elapsedMs: error.details.elapsedMs,
+            reason: 'runtime_duration_exhausted_during_recovery'
+          }
+        });
+        await failAgentRun(run, error);
+        continue;
+      }
+      throw error;
+    }
     let runEvents = await readAllRunScopedEvents(run.id);
     const claimedState = reconstructResumableState(run, runEvents);
     if (claimedState && claimedState.isTerminal) {
@@ -7640,7 +7757,12 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
       attemptPosition: options.attemptPosition || null
     }),
     attemptUsage: serializedAttemptUsage,
-    budgetStatus: buildRunBudgetStatus(run, serializedAttemptUsage),
+    budgetStatus: buildRunBudgetStatus(
+      run,
+      serializedAttemptUsage,
+      options.runtimeBudgetState || null
+    ),
+    runtimeBudgetState: options.runtimeBudgetState || null,
     runConsequence: applyHistoricalMutationConsequence(run.runConsequence, suppliedOperations || [])
       || buildRunConsequence(run, {
         events: suppliedEvents,
@@ -10279,6 +10401,8 @@ function createReplaySnapshotBase(run, overrides = {}) {
     ticketOpenedAt: run.ticketOpenedAt || null,
     runtimeLimits: pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run)),
     runtimeLimitsSnapshot: getRunRuntimeLimitsSnapshot(run),
+    runtimeBudgetSnapshot: getRunRuntimeBudgetSnapshot(run),
+    runtimeBudgetState: null,
     providerRequests: [],
     modelResponses: [],
     parsedModelPlans: [],
@@ -10561,10 +10685,14 @@ function getPositiveIntegerEnv(name, fallback) {
 
 function emptyRuntimeLimitsConfig() {
   return {
+    maxAttempts: null,
     maxExecutionSteps: null,
     maxModelRequestsPerRun: null,
     maxWorkspaceOperationsPerRun: null,
+    maxProcessOperationsPerRun: null,
+    maxBrowserOperationsPerRun: null,
     maxRuntimeDurationMs: null,
+    maxOutputArtifactBytesPerRun: null,
     maxActiveRuns: null,
     localModelConcurrency: null,
     revision: 1,
@@ -10575,10 +10703,14 @@ function emptyRuntimeLimitsConfig() {
 
 function getDeploymentRuntimeDefaults() {
   return {
+    maxAttempts: getPositiveIntegerEnv('AGENT_MAX_ATTEMPTS', DEFAULT_AGENT_RUNTIME_LIMITS.maxAttempts),
     maxExecutionSteps: getPositiveIntegerEnv('AGENT_MAX_EXECUTION_STEPS', DEFAULT_AGENT_RUNTIME_LIMITS.maxExecutionSteps),
     maxWorkspaceOperationsPerRun: getPositiveIntegerEnv('AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxWorkspaceOperationsPerRun),
     maxModelRequestsPerRun: getPositiveIntegerEnv('AGENT_MAX_MODEL_REQUESTS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxModelRequestsPerRun),
+    maxProcessOperationsPerRun: getPositiveIntegerEnv('AGENT_MAX_PROCESS_OPERATIONS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxProcessOperationsPerRun),
+    maxBrowserOperationsPerRun: getPositiveIntegerEnv('AGENT_MAX_BROWSER_OPERATIONS_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxBrowserOperationsPerRun),
     maxRuntimeDurationMs: getPositiveIntegerEnv('AGENT_MAX_RUNTIME_DURATION_MS', DEFAULT_AGENT_RUNTIME_LIMITS.maxRuntimeDurationMs),
+    maxOutputArtifactBytesPerRun: getPositiveIntegerEnv('AGENT_MAX_OUTPUT_ARTIFACT_BYTES_PER_RUN', DEFAULT_AGENT_RUNTIME_LIMITS.maxOutputArtifactBytesPerRun),
     maxActiveRuns: getPositiveIntegerEnv('MAX_ACTIVE_RUNS', DEFAULT_MAX_ACTIVE_RUNS),
     localModelConcurrency: getPositiveIntegerEnv('LOCAL_MODEL_CONCURRENCY', DEFAULT_LOCAL_MODEL_CONCURRENCY)
   };
@@ -10598,11 +10730,29 @@ function pickRuntimeLimitValues(source) {
 }
 
 function runtimeLimitsForExecution(source) {
-  const limits = pickRuntimeLimitValues(source);
+  const limits = Object.fromEntries(
+    HISTORICAL_RUNTIME_LIMIT_KEYS.map(key => [key, source[key]])
+  );
   for (const key of ['maxListDirectoryPerRun', 'maxReadFilePerRun']) {
     if (Number.isInteger(source && source[key]) && source[key] > 0) limits[key] = source[key];
   }
   return limits;
+}
+
+function effectiveRunExecutionLimits(run, runtimeLimitsSnapshot) {
+  const legacy = runtimeLimitsForExecution(runtimeLimitsSnapshot);
+  const budget = getRunRuntimeBudgetSnapshot(run);
+  if (!budget) return legacy;
+  return {
+    ...legacy,
+    maxExecutionSteps: budget.maxExecutionSteps,
+    maxModelRequestsPerRun: budget.maxModelRequests,
+    maxWorkspaceOperationsPerRun: budget.maxWorkspaceOperations,
+    maxProcessOperationsPerRun: budget.maxProcessOperations,
+    maxBrowserOperationsPerRun: budget.maxBrowserOperations,
+    maxRuntimeDurationMs: budget.maxRuntimeDurationMs,
+    maxOutputArtifactBytesPerRun: budget.maxOutputArtifactBytes
+  };
 }
 
 function getWorkflowSpecificLimits() {
@@ -10657,10 +10807,12 @@ function resolveAgentRuntimeLimitsFromConfig(objective, config, options = {}) {
   return {
     limits,
     snapshot: {
+      ...pickRuntimeLimitValues(limits),
       ...runtimeLimitsForExecution(limits),
       source: {
         uiConfigured: uiConfiguredKeys.length > 0,
         uiConfiguredKeys,
+        runtimeLimitsRevision: config.revision,
         workloadProfile: profile || null,
         workflowLimits: options.workflow ? getWorkflowSpecificLimits() : null
       },
@@ -10681,7 +10833,7 @@ async function resolveAgentRuntimeLimits(objective = null, options = {}) {
 
 function normalizeRuntimeLimitsSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
-  for (const key of RUNTIME_LIMIT_CONFIG_KEYS) {
+  for (const key of HISTORICAL_RUNTIME_LIMIT_KEYS) {
     if (!Number.isInteger(snapshot[key]) || snapshot[key] <= 0) return null;
   }
   return {
@@ -10752,10 +10904,14 @@ async function persistRuntimeLimitsUpdate(parsedValue, request, expectedRevision
 }
 
 const RUNTIME_LIMIT_DISPLAY = Object.freeze({
+  maxAttempts: { label: 'Max attempts / ticket', help: 'Maximum admitted run attempts for one ticket.' },
   maxExecutionSteps: { label: 'Max execution steps / model turns', help: 'Maximum model turns for one direct-action run.' },
   maxModelRequestsPerRun: { label: 'Max model requests per run', help: 'Maximum provider requests made by one run.' },
   maxWorkspaceOperationsPerRun: { label: 'Max workspace operations per run', help: 'Maximum accepted workspace operations in one run.' },
-  maxRuntimeDurationMs: { label: 'Max runtime duration (ms)', help: 'Wall-clock timeout for one run. Minimum 5000 ms.' }
+  maxProcessOperationsPerRun: { label: 'Max process operations per run', help: 'Maximum exactly authorized process operations in one run.' },
+  maxBrowserOperationsPerRun: { label: 'Max browser operations per run', help: 'Maximum accepted browser primitives in one run.' },
+  maxRuntimeDurationMs: { label: 'Max runtime duration (ms)', help: 'Wall-clock timeout for one run. Minimum 5000 ms.' },
+  maxOutputArtifactBytesPerRun: { label: 'Max output artifact bytes per run', help: 'Aggregate durable raw output artifact bytes for one run.' }
 });
 
 async function buildRuntimeLimitsAdminState(formValues = null) {
@@ -11021,9 +11177,12 @@ function redactProviderInput(run, input) {
 }
 
 async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, limits, options = {}) {
+  runtimeBudgetController.assertDuration(run);
   input = redactProviderInput(run, input);
   const slot = String(options.slot || '').trim();
   if (!slot) throw new TypeError('A stable provider evidence slot is required');
+  const budgetSourceIdentity = `model-request:${slot}`;
+  await runtimeBudgetController.reserve(run, 'model_request', budgetSourceIdentity, 1);
   const requestStartedAt = Date.now();
   const startedAt = new Date(requestStartedAt).toISOString();
   const metadata = sanitizeSnapshotValue(options.metadata || {});
@@ -11069,6 +11228,7 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
       error.providerEvidencePersistenceFailure = true;
       throw error;
     }
+    await runtimeBudgetController.commit(run, 'model_request', budgetSourceIdentity, 1);
     requestPersisted = true;
   };
 
@@ -11121,6 +11281,14 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
         persistenceError.providerEvidencePersistenceFailure = true;
         throw persistenceError;
       }
+    }
+    if (!requestPersisted && !error.providerRequestPayload) {
+      await runtimeBudgetController.release(
+        run,
+        'model_request',
+        budgetSourceIdentity,
+        'provider_request_not_accepted'
+      );
     }
     error.providerEvidencePersisted = true;
     throw error;
@@ -11217,6 +11385,120 @@ async function assertRunWorkspaceOperationAllowed(run, currentCount, incomingCou
       configuredLimit: limits.maxWorkspaceOperationsPerRun
     });
   }
+}
+
+async function reconcileRunBudgetReservations(run, { releaseUnobserved = false } = {}) {
+  if (!getRunRuntimeBudgetSnapshot(run)) return;
+  await runtimeBudgetController.reconciling(run);
+  const charges = (await postgresRuntimeStore.listRunBudgetCharges(run.id))
+    .filter(charge => charge.state === 'reserved');
+  if (charges.length === 0) return;
+  const [operations, events, processOperations] = await Promise.all([
+    readAllRunOperations(run.id),
+    readAllRunScopedEvents(run.id),
+    postgresRuntimeStore.listProcessOperationsForRun(run.id)
+  ]);
+  const operationByKey = new Map(
+    operations.filter(Boolean).map(operation => [
+      operation.operationKey || operation.idempotencyKey,
+      operation
+    ])
+  );
+  const processByIdentity = new Map(
+    processOperations.map(operation => [operation.operationIdentity, operation])
+  );
+  for (const charge of charges) {
+    let observedAmount = null;
+    let keepReserved = false;
+    if (charge.dimension === 'execution_step') {
+      const step = charge.sourceIdentity.replace(/^execution-step:/, '');
+      const observed = events.some(event =>
+        event && event.type === 'run.heartbeat' &&
+        event.payload && String(event.payload.step) === step &&
+        event.payload.phase === 'agent_step_started');
+      observedAmount = observed ? 1 : null;
+    } else if (charge.dimension === 'model_request') {
+      const slot = charge.sourceIdentity.replace(/^model-request:/, '');
+      const observed = events.some(event => {
+        if (!event || event.type !== 'provider.request.persisted') return false;
+        const payload = event.payload || {};
+        return payload.modelCallKey === slot ||
+          (slot === 'contract-compile:0' && payload.phase === 'contract_compile');
+      });
+      observedAmount = observed ? 1 : null;
+    } else if (['workspace_operation', 'browser_operation'].includes(charge.dimension)) {
+      observedAmount = operationByKey.has(charge.sourceIdentity) ? 1 : null;
+    } else if (charge.dimension === 'process_operation') {
+      observedAmount = processByIdentity.has(charge.sourceIdentity) ? 1 : null;
+    } else if (charge.dimension === 'output_artifact_bytes' &&
+        charge.sourceIdentity.startsWith('process-artifacts:')) {
+      const identity = charge.sourceIdentity.slice('process-artifacts:'.length);
+      const processOperation = processByIdentity.get(identity);
+      if (processOperation && processOperation.combinedOutputByteCount !== null) {
+        observedAmount = processOperation.combinedOutputByteCount;
+      } else if (processOperation && processOperation.lifecycleState !== 'terminal') {
+        keepReserved = true;
+      }
+    } else if (charge.dimension === 'output_artifact_bytes' &&
+        charge.sourceIdentity.startsWith('browser-artifact:')) {
+      const operationKey = charge.sourceIdentity.slice('browser-artifact:'.length);
+      const operation = operationByKey.get(operationKey);
+      const bytes = operation && operation.receipt && operation.receipt.metadata
+        ? operation.receipt.metadata.bytes
+        : operation && operation.result ? operation.result.bytes : null;
+      observedAmount = Number.isSafeInteger(bytes) && bytes >= 0 ? bytes : null;
+    }
+    if (observedAmount !== null) {
+      await runtimeBudgetController.commit(
+        run,
+        charge.dimension,
+        charge.sourceIdentity,
+        observedAmount
+      );
+    } else if (!keepReserved && releaseUnobserved) {
+      await runtimeBudgetController.release(
+        run,
+        charge.dimension,
+        charge.sourceIdentity,
+        'recovery_found_no_durable_side_effect'
+      );
+    }
+  }
+}
+
+async function recordRunBudgetFailure(run, error) {
+  if (!run || !error || ![
+    'RUN_BUDGET_EXHAUSTED',
+    'RUN_RUNTIME_DURATION_EXCEEDED',
+    'RUN_FEASIBILITY_REJECTED'
+  ].includes(error.code)) return;
+  const existing = await readAllRunScopedEvents(run.id);
+  if (existing.some(event =>
+    event && ['budget.exhausted', 'feasibility.rejected'].includes(event.type) &&
+    (error.code === 'RUN_FEASIBILITY_REJECTED' ||
+    event.payload && (
+      event.payload.code === error.code ||
+      (error.code === 'RUN_BUDGET_EXHAUSTED' &&
+        event.payload.dimension === (error.details && error.details.dimension))
+    )))) return;
+  const snapshot = getRunRuntimeBudgetSnapshot(run);
+  await appendEvent({
+    type: error.code === 'RUN_FEASIBILITY_REJECTED'
+      ? 'feasibility.rejected'
+      : 'budget.exhausted',
+    ticketId: run.ticketId,
+    runId: run.id,
+    payload: {
+      code: error.code,
+      budgetSnapshotHash: snapshot ? snapshot.snapshotHash : null,
+      dimension: error.code === 'RUN_RUNTIME_DURATION_EXCEEDED'
+        ? 'runtime_duration'
+        : (error.details && error.details.dimension) || null,
+      sourceIdentity: 'runtime:execution',
+      reason: error.message,
+      ...(error.details || {})
+    }
+  });
 }
 
 // Count mutations still required to satisfy a deterministic objective contract,
@@ -11353,6 +11635,7 @@ async function assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot
   }
 
   const requiredSteps = Math.ceil(required / effectiveMutationCap);
+  const budgetSnapshot = getRunRuntimeBudgetSnapshot(run);
   const decisionBase = {
     checked: true,
     recognized,
@@ -11364,17 +11647,33 @@ async function assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot
     effectiveExecutionStepLimit
   };
 
-  if (requiredSteps > effectiveExecutionStepLimit) {
+  if (requiredSteps > effectiveExecutionStepLimit ||
+      (budgetSnapshot && required > budgetSnapshot.maxWorkspaceOperations)) {
     await recordRuntimeFeasibilityDecision(run, {
       ...decisionBase,
       outcome: 'rejected',
-      message: `Feasibility gate rejected the run: ${required} required mutation(s) project to ${requiredSteps} step(s) against a limit of ${effectiveExecutionStepLimit}`
+      message: `Feasibility gate rejected the run: ${required} required mutation(s) project to ${requiredSteps} step(s) against limits of ${effectiveExecutionStepLimit} steps and ${budgetSnapshot ? budgetSnapshot.maxWorkspaceOperations : limits.maxWorkspaceOperationsPerRun} workspace operations`
+    });
+    await appendEvent({
+      type: 'feasibility.rejected',
+      ticketId: run.ticketId,
+      runId: run.id,
+      payload: {
+        budgetSnapshotHash: budgetSnapshot ? budgetSnapshot.snapshotHash : null,
+        requiredWorkspaceOperations: required,
+        requiredExecutionSteps: requiredSteps,
+        maxWorkspaceOperations: budgetSnapshot
+          ? budgetSnapshot.maxWorkspaceOperations
+          : limits.maxWorkspaceOperationsPerRun,
+        maxExecutionSteps: effectiveExecutionStepLimit,
+        reason: 'deterministic_minimum_exceeds_budget'
+      }
     });
     const error = new Error(
       `Runtime budget infeasible: ${required} required mutation(s) need at least ${requiredSteps} execution step(s), but maxExecutionSteps is ${effectiveExecutionStepLimit}. Raise the mutating-action limit, split the task into smaller objectives, or manually recover.`
     );
-    error.code = 'RUNTIME_BUDGET_INSUFFICIENT';
-    error.failureKind = 'runtime_budget_insufficient';
+    error.code = budgetSnapshot ? 'RUN_FEASIBILITY_REJECTED' : 'RUNTIME_BUDGET_INSUFFICIENT';
+    error.failureKind = budgetSnapshot ? 'deterministic_infeasibility' : 'runtime_budget_insufficient';
     error.details = {
       requiredMutations: required,
       requiredSteps,
@@ -11884,7 +12183,12 @@ async function buildRunTriage(run, {
     failureKind === 'provider_error' ||
     /Agent API key is missing|Agent model is missing|Ollama model is missing/i.test(message)
   )) mappedReason = 'provider_failed';
-  if (!mappedReason && failureKind === 'runtime_budget_insufficient') mappedReason = 'runtime_budget_insufficient';
+  if (!mappedReason && [
+    'runtime_budget_insufficient',
+    'runtime_budget_exhausted',
+    'runtime_duration_exhausted',
+    'deterministic_infeasibility'
+  ].includes(failureKind)) mappedReason = 'runtime_budget_insufficient';
   // A repeated model-response contract violation is an instruction-following
   // failure, distinct from a provider transport failure and from a
   // runtime-duration (timeout) failure. Keyed on the specific failure code so
@@ -11984,6 +12288,14 @@ async function buildFinalizedRunReplayState(run, status, failureReason = null, m
   const snapshot = await readRunReplaySnapshot(run) || run.replaySnapshot || {};
   const browserEvidence = classifyBrowserEvidence(run, snapshot);
   const browserReport = extractBrowserReport(run, snapshot);
+  // No further side effect can start after execution completion. Reservations
+  // with durable receipts are committed above; only now may an unobserved
+  // reservation be abandoned without preventing resumable work from reusing
+  // its canonical source identity.
+  await reconcileRunBudgetReservations(run, { releaseUnobserved: true });
+  const runtimeBudgetState = getRunRuntimeBudgetSnapshot(run)
+    ? await postgresRuntimeStore.getRunBudgetState(run.id)
+    : null;
   const replayEvents = Array.isArray(snapshot.events) ? snapshot.events : [];
   const failureReplayEvent = status === 'failed' && failureReason && !replayEvents.some(event => event && event.type === 'run:failed')
     ? [{
@@ -12007,6 +12319,9 @@ async function buildFinalizedRunReplayState(run, status, failureReason = null, m
         ? 'no_mutations'
         : status === 'completed' ? 'all_intended' : 'partial_mutations',
     mutationCount: effectiveMutationCount,
+    runtimeBudgetState: runtimeBudgetState
+      ? sanitizeSnapshotValue(runtimeBudgetState)
+      : null,
     browserEvidenceStatus: browserEvidence.status,
     browserEvidenceDetail: browserEvidence.detail,
     browserReport,
@@ -13742,12 +14057,9 @@ async function forceTicketOpenForRerun(ticketId, rerunMode = null) {
   return result.ticket;
 }
 
-// Manual rerun-from-start safety gate. This is the ONLY place maxAttempts is
-// enforced: when an operator manually reruns a ticket and the ticket has already
-// used >= maxAttempts runs, the manual rerun is rejected. Attempt count is derived
-// from existing runs (no persisted counter, no fabricated attempts). maxAttempts
-// that is null/non-finite preserves today's behavior (allow). This is NOT automatic
-// retry — nothing here schedules, backs off, or retries on failure.
+// Manual rerun-from-start safety gate. Explicit ticket authority wins; null uses
+// the current deployment default for admission. Once admitted, the resolved value
+// is frozen in runtimeBudgetSnapshot.
 async function validateManualRerun(ticket) {
   if (!ticket) return { allowed: false, reason: 'Ticket not found' };
 
@@ -13762,12 +14074,15 @@ async function validateManualRerun(ticket) {
   }
 
   const policy = ticket.executionPolicy;
-  const maxAttempts = policy && Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0
+  const configuredMaxAttempts = policy && Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0
     ? policy.maxAttempts
     : null;
-  if (maxAttempts === null) return { allowed: true, attemptCount: null, maxAttempts: null };
+  const runtimeLimits = await getRuntimeLimitsRepository().getRuntimeLimitsConfig();
+  const maxAttempts = configuredMaxAttempts ||
+    (Number.isInteger(runtimeLimits.maxAttempts) ? runtimeLimits.maxAttempts : null) ||
+    getDeploymentRuntimeDefaults().maxAttempts;
 
-  const attemptCount = await getRuntimeStateReadRepository().countRunsForTicket(ticket.id);
+  const attemptCount = countTicketAdmissionAttempts(await readAllRunsForTicket(ticket.id));
   if (attemptCount >= maxAttempts) {
     return {
       allowed: false,
@@ -13809,8 +14124,12 @@ async function assessAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mut
 
   const policy = ticket.executionPolicy || {};
   if (policy.autoRetry !== true) return { eligible: false, reason: 'auto_retry_disabled' };
-  const maxAttempts = Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0 ? policy.maxAttempts : null;
-  if (maxAttempts === null) return { eligible: false, reason: 'no_finite_max_attempts' };
+  const runtimeLimits = await getRuntimeLimitsRepository().getRuntimeLimitsConfig();
+  const maxAttempts = Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0
+    ? policy.maxAttempts
+    : Number.isInteger(runtimeLimits.maxAttempts)
+      ? runtimeLimits.maxAttempts
+      : getDeploymentRuntimeDefaults().maxAttempts;
   if (ticket.triage && ticket.triage.required === true) return { eligible: false, reason: 'ticket_triage_required' };
   // v1 supports only single-run individual-agent tickets (one new pending run).
   if (usesOwnedScopeAllocation(ticket) || ticket.assignmentTargetType !== 'agent') {
@@ -13825,7 +14144,7 @@ async function assessAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mut
   }
 
   // The just-failed run is already counted; require room under the ceiling.
-  const attemptCount = await getRuntimeStateReadRepository().countRunsForTicket(ticket.id);
+  const attemptCount = countTicketAdmissionAttempts(await readAllRunsForTicket(ticket.id));
   if (attemptCount >= maxAttempts) return { eligible: false, reason: 'max_attempts_exhausted' };
   return { eligible: true, ticketId: ticket.id, attemptCount, maxAttempts, reasonCode: prospectiveReasonCode };
 }
@@ -14499,6 +14818,18 @@ async function buildOperationalSummary(options = {}) {
   };
 }
 
+function countTicketAdmissionAttempts(runs) {
+  const attemptKeys = new Set();
+  for (const run of Array.isArray(runs) ? runs : []) {
+    const allocationPlanId = run && run.allocationPlanId;
+    attemptKeys.add(allocationPlanId === null || allocationPlanId === undefined ||
+      String(allocationPlanId).trim() === ''
+      ? `run:${run.id}`
+      : `allocation:${String(allocationPlanId).trim()}`);
+  }
+  return attemptKeys.size;
+}
+
 async function prepareAgentRunDraft(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null, options = {}) {
   const runs = await readAllRunsForTicket(ticket.id);
   const activeRun = runs.find(run =>
@@ -14534,6 +14865,32 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     ticket.executionMode === 'workflow' ? null : ticket.objective,
     { workflow: Boolean(workflow) }
   )).snapshot;
+  const executionPolicySnapshot = copyExecutionPolicy(
+    ticket.executionPolicy,
+    usesOwnedScope ? 'owned_paths' : 'shared'
+  );
+  const runtimeBudgetSnapshot = buildRuntimeBudgetSnapshot({
+    runtimeLimits: {
+      ...runtimeLimitsSnapshot,
+      revision: runtimeLimitsSnapshot.source.runtimeLimitsRevision
+    },
+    executionPolicy: executionPolicySnapshot
+  });
+  const admittedAttemptCount = countTicketAdmissionAttempts(runs);
+  if (admittedAttemptCount >= runtimeBudgetSnapshot.maxAttempts) {
+    const error = new Error(
+      `Run attempt budget exhausted: ticket ${ticket.id} already has ${admittedAttemptCount} ` +
+      `of ${runtimeBudgetSnapshot.maxAttempts} admitted attempts`
+    );
+    error.code = 'RUN_BUDGET_EXHAUSTED';
+    error.failureKind = 'runtime_budget_exhausted';
+    error.details = {
+      dimension: 'attempt',
+      currentCommitted: admittedAttemptCount,
+      limit: runtimeBudgetSnapshot.maxAttempts
+    };
+    throw error;
+  }
   const processProfiles = resolveProcessProfileGrants({
     capabilityEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED && ticket.executionMode !== 'workflow',
     catalog: PROCESS_TARGET_CATALOG,
@@ -14585,15 +14942,13 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     workspaceRoot: workspaceProvider.root,
     mainWorkspaceRoot: workspaceProvider.root,
     executionWorkspaceType: usesOwnedScope ? 'main_owned_paths' : 'main',
-    executionPolicySnapshot: copyExecutionPolicy(
-      ticket.executionPolicy,
-      usesOwnedScope ? 'owned_paths' : 'shared'
-    ),
+    executionPolicySnapshot,
     // Complete process authority is resolved from trusted configuration exactly
     // once. Dispatch must never reread the live catalog or agent grants.
     processPolicySnapshot,
     processRuntimeCapabilitySnapshot,
     runtimeLimitsSnapshot,
+    runtimeBudgetSnapshot,
     verificationContractSnapshot: buildVerificationContractSnapshot(workflow, now),
     acceptanceCriteriaSnapshot: (typeof ticket.acceptanceCriteria === 'string' && ticket.acceptanceCriteria.trim()) ? ticket.acceptanceCriteria.trim() : null,
     // Immutable routing snapshot (r1.28): supporting metadata only, never rewritten.
@@ -14640,6 +14995,7 @@ function buildRunCreatedEventPayload(run) {
     processPolicySnapshot: normalizeProcessPolicySnapshot(run.processPolicySnapshot),
     processRuntimeCapabilitySnapshot: run.processRuntimeCapabilitySnapshot || null,
     runtimeLimitsSnapshot: run.runtimeLimitsSnapshot,
+    runtimeBudgetSnapshot: run.runtimeBudgetSnapshot,
     verificationContractSnapshot: run.verificationContractSnapshot,
     acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
     workTypeId: run.workTypeId,
@@ -17091,35 +17447,6 @@ async function completeWorkspaceReadEvidence(run, step, operation, args, result,
 
 async function executeWorkspaceOperation(run, action, step = 0, options = {}) {
   const parsed = parseWorkspaceOperation(action);
-  if (!AGENT_MUTATING_OPERATIONS.includes(parsed.operation)) {
-    const sanitized = sanitizeOperationArgs(parsed.operation, parsed.args).args;
-    const operationContext = {
-      ...options,
-      startedAt: options.startedAt || Date.now()
-    };
-    operationContext.operationKey = options.operationKey || buildTargetOperationKey(
-      run,
-      parsed.operation,
-      sanitized,
-      options.slot || `step:${step}`
-    );
-    try {
-      const result = await executeWorkspaceOperationUnlocked(run, action, step, operationContext);
-      try {
-        await completeWorkspaceReadEvidence(run, step, parsed.operation, sanitized, result, null, operationContext);
-      } catch (persistenceError) {
-        markOperationEvidenceRecorded(persistenceError);
-        throw persistenceError;
-      }
-      return markOperationEvidenceRecorded(result);
-    } catch (error) {
-      if (!error._operationEvidenceRecorded) {
-        await completeWorkspaceReadEvidence(run, step, parsed.operation, sanitized, null, error, operationContext);
-        markOperationEvidenceRecorded(error);
-      }
-      throw error;
-    }
-  }
   const sanitized = sanitizeOperationArgs(parsed.operation, parsed.args).args;
   const operationContext = {
     ...options,
@@ -17131,20 +17458,75 @@ async function executeWorkspaceOperation(run, action, step = 0, options = {}) {
     sanitized,
     options.slot || `step:${step}`
   );
-  return getNonTerminalEvidenceRepository().withTargetOperationLock({
-    run,
-    targetId: getRunWorkspaceProvider(run).id,
-    paths: [sanitized.path, sanitized.nextPath].filter(value => typeof value === 'string'),
-    operation: parsed.operation,
-    args: sanitized
-  }, async () => {
-    if (run && await isRunInterrupted(run.id)) {
-      const error = new Error('Run interrupted');
-      error.code = 'RUN_INTERRUPTED';
+  const executeBudgeted = async operation => {
+    await runtimeBudgetController.reserve(
+      run,
+      'workspace_operation',
+      operationContext.operationKey,
+      1
+    );
+    try {
+      const result = await operation();
+      await runtimeBudgetController.observedSideEffect(
+        run,
+        'workspace_operation',
+        operationContext.operationKey
+      );
+      await runtimeBudgetController.commit(
+        run,
+        'workspace_operation',
+        operationContext.operationKey,
+        1
+      );
+      return result;
+    } catch (error) {
+      // A parsed and admitted workspace primitive counts as an attempted
+      // operation under the existing workspace-operation limit semantics.
+      await runtimeBudgetController.commit(
+        run,
+        'workspace_operation',
+        operationContext.operationKey,
+        1
+      );
       throw error;
     }
-    return await executeWorkspaceOperationUnlocked(run, action, step, operationContext);
-  });
+  };
+  if (!AGENT_MUTATING_OPERATIONS.includes(parsed.operation)) {
+    return executeBudgeted(async () => {
+      try {
+        const result = await executeWorkspaceOperationUnlocked(run, action, step, operationContext);
+        try {
+          await completeWorkspaceReadEvidence(run, step, parsed.operation, sanitized, result, null, operationContext);
+        } catch (persistenceError) {
+          markOperationEvidenceRecorded(persistenceError);
+          throw persistenceError;
+        }
+        return markOperationEvidenceRecorded(result);
+      } catch (error) {
+        if (!error._operationEvidenceRecorded) {
+          await completeWorkspaceReadEvidence(run, step, parsed.operation, sanitized, null, error, operationContext);
+          markOperationEvidenceRecorded(error);
+        }
+        throw error;
+      }
+    });
+  }
+  return executeBudgeted(() =>
+    getNonTerminalEvidenceRepository().withTargetOperationLock({
+      run,
+      targetId: getRunWorkspaceProvider(run).id,
+      paths: [sanitized.path, sanitized.nextPath].filter(value => typeof value === 'string'),
+      operation: parsed.operation,
+      args: sanitized
+    }, async () => {
+      if (run && await isRunInterrupted(run.id)) {
+        const error = new Error('Run interrupted');
+        error.code = 'RUN_INTERRUPTED';
+        throw error;
+      }
+      return await executeWorkspaceOperationUnlocked(run, action, step, operationContext);
+    })
+  );
 }
 
 async function executeWorkspaceOperationUnlocked(run, action, step = 0, operationContext = {}) {
@@ -17750,6 +18132,16 @@ async function executeBrowserOperation(run, action, step = 0, options = {}) {
       const artifactPath = path.join(artifactDir, artifactName);
       result = await entry.session.screenshot(artifactPath);
       const bytes = fs.readFileSync(artifactPath);
+      if (Number.isSafeInteger(options.artifactByteLimit) &&
+          bytes.length > options.artifactByteLimit) {
+        fs.unlinkSync(artifactPath);
+        const error = new Error(
+          `Browser screenshot exceeds remaining run artifact budget of ${options.artifactByteLimit} bytes`
+        );
+        error.code = 'RUN_BUDGET_EXHAUSTED';
+        error.failureKind = 'runtime_budget_exhausted';
+        throw error;
+      }
       const relativeArtifactPath = path.relative(ARTIFACT_ROOT, artifactPath);
       receipt.resourceUrl = redactBrowserUrl(result.url);
       receipt.targetResourceId = receipt.resourceUrl;
@@ -18763,11 +19155,32 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
       });
     }
 
+    runtimeBudgetController.assertDuration(run);
+    const executionStepIdentity =
+      `execution-step:workflow:${workflow.id}:transition:${counters.transitions}`;
+    await runtimeBudgetController.reserve(
+      run,
+      'execution_step',
+      executionStepIdentity,
+      1
+    );
     await persistRunWorkflowStep(run.id, currentStep, 'started');
+    await runtimeBudgetController.observedSideEffect(
+      run,
+      'execution_step',
+      executionStepIdentity
+    );
+    await runtimeBudgetController.commit(
+      run,
+      'execution_step',
+      executionStepIdentity,
+      1
+    );
     await heartbeatRunLease(run.id, {
       phase: 'workflow_step_started',
       currentStepId: currentStep.id,
-      currentWorkflowAction: currentStep.action
+      currentWorkflowAction: currentStep.action,
+      workflowTransitionIndex: counters.transitions
     });
     const input = resolveWorkflowInputTemplates(currentStep.input || {}, context);
     const result = await executeWorkflowAction(
@@ -18782,6 +19195,7 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
       agent,
       counters.transitions
     );
+    runtimeBudgetController.assertDuration(run);
     counters.transitions += 1;
     await persistRunWorkflowStep(run.id, currentStep, 'completed');
     await heartbeatRunLease(run.id, {
@@ -19316,6 +19730,8 @@ async function runAgentTicket(runId) {
 
     if (!ticket) throw new Error('Ticket not found');
     if (!agent) throw new Error('Agent not found');
+    await reconcileRunBudgetReservations(run);
+    runtimeBudgetController.assertDuration(run);
     const promptTicket = {
       ...ticket,
       acceptanceCriteria: run.acceptanceCriteriaSnapshot || null
@@ -19326,7 +19742,7 @@ async function runAgentTicket(runId) {
       run.executionMode === 'workflow' ? null : ticket.objective,
       { workflow: run.executionMode === 'workflow' }
     );
-    const limits = runtimeLimitsForExecution(runtimeLimitsSnapshot);
+    const limits = effectiveRunExecutionLimits(run, runtimeLimitsSnapshot);
     const runtimeEnvelope = await buildRuntimeEnvelope(run, 0, ticket.objective, limits);
     const initialInput = await buildAgentPrompt(promptTicket, runtimeEnvelope, [], run.rerunMode);
     await createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
@@ -19646,6 +20062,13 @@ async function runAgentTicket(runId) {
     }
 
     for (let step = initialExecutionTurn; !completed; step += 1) {
+      runtimeBudgetController.assertDuration(run);
+      await runtimeBudgetController.charge(
+        run,
+        'execution_step',
+        `execution-step:${step}`,
+        1
+      );
       await heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       assertRunStepAllowed(run, step, limits);
@@ -20286,10 +20709,17 @@ async function runAgentTicket(runId) {
       const repeatedListPaths = [];
       const listPathsThisStep = new Set();
 
-      await assertRunWorkspaceOperationAllowed(run, workspaceOperationCount, actions.length, limits);
+      if (!getRunRuntimeBudgetSnapshot(run)) {
+        await assertRunWorkspaceOperationAllowed(run, workspaceOperationCount, actions.length, limits);
+      }
 
       for (const [actionIndex, action] of actions.entries()) {
         let operation = null;
+        let operationBudgetDimension = null;
+        let operationBudgetSource = null;
+        let operationBudgetDispatched = false;
+        let artifactBudgetSource = null;
+        let artifactBudgetReservedAmount = null;
         const actionStartedAt = Date.now();
         const proposedOperation = action && typeof action.operation === 'string' ? action.operation : null;
         const requiresMutationAdmission = (isBrowserRun(run) && BROWSER_OPERATIONS_REQUIRING_MUTATION_ADMISSION.has(proposedOperation)) ||
@@ -20314,6 +20744,7 @@ async function runAgentTicket(runId) {
           // immediately before parsing and executing each proposed action so a
           // stale worker cannot begin another target operation.
           await assertLiveRunLease(run.id);
+          runtimeBudgetController.assertDuration(run);
           assertRunNotTimedOut(run, runStartedAtMs, limits);
           operation = isBrowserRun(run) ? parseBrowserDirectAction(run, action) : parseAgentDirectAction(action);
           if (!isBrowserRun(run)) {
@@ -20324,6 +20755,74 @@ async function runAgentTicket(runId) {
               step,
               operation.args,
               { processDispatchAuthority }
+            );
+          }
+
+          const actionSlot = `agent:${step}:${actionIndex}`;
+          if (isBrowserRun(run)) {
+            operationBudgetDimension = 'browser_operation';
+            operationBudgetSource = buildTargetOperationKey(
+              run,
+              operation.operation,
+              operation.args,
+              actionSlot
+            );
+          } else if (operation.operation === PROCESS_OPERATION) {
+            operationBudgetDimension = 'process_operation';
+            operationBudgetSource = buildProcessOperationIdentity(
+              run.id,
+              operation.args.operationId
+            );
+          }
+          if (operationBudgetDimension) {
+            await runtimeBudgetController.reserve(
+              run,
+              operationBudgetDimension,
+              operationBudgetSource,
+              1
+            );
+          }
+          runtimeBudgetController.assertDuration(run);
+          if (operation.operation === PROCESS_OPERATION) {
+            const processSnapshot = normalizeProcessPolicySnapshot(run.processPolicySnapshot);
+            const selectedProfile = processSnapshot.profiles.find(profile =>
+              profile.targetId === operation.args.targetId &&
+              profile.profileId === operation.args.profileId);
+            if (!selectedProfile) {
+              const error = new Error(
+                'Selected process profile is not in the immutable run snapshot'
+              );
+              error.code = 'PROCESS_PROFILE_UNKNOWN';
+              error.failureKind = 'process_policy_denied';
+              throw error;
+            }
+            artifactBudgetSource = `process-artifacts:${operationBudgetSource}`;
+            artifactBudgetReservedAmount = selectedProfile.limits.maxOutputBytes;
+            await runtimeBudgetController.reserve(
+              run,
+              'output_artifact_bytes',
+              artifactBudgetSource,
+              artifactBudgetReservedAmount
+            );
+          } else if (isBrowserRun(run) && operation.operation === 'screenshot' &&
+              getRunRuntimeBudgetSnapshot(run)) {
+            const budgetState = await postgresRuntimeStore.getRunBudgetState(run.id);
+            const remaining = budgetState.usage.output_artifact_bytes.remaining;
+            if (remaining <= 0) {
+              await postgresRuntimeStore.reserveRunBudget({
+                runId: run.id,
+                dimension: 'output_artifact_bytes',
+                sourceIdentity: `browser-artifact:${operationBudgetSource}`,
+                amount: 1
+              });
+            }
+            artifactBudgetSource = `browser-artifact:${operationBudgetSource}`;
+            artifactBudgetReservedAmount = remaining;
+            await runtimeBudgetController.reserve(
+              run,
+              'output_artifact_bytes',
+              artifactBudgetSource,
+              remaining
             );
           }
 
@@ -20347,11 +20846,20 @@ async function runAgentTicket(runId) {
             }
           }
 
+          if (operationBudgetDimension) operationBudgetDispatched = true;
           let result;
           if (isBrowserRun(run)) {
-            result = await executeBrowserOperation(run, operation, step, {
-              slot: `agent:${step}:${actionIndex}`
-            });
+            result = await runtimeBudgetController.withCapacity(run, {
+              capacityDomain: 'target',
+              resourceKey: `browser:${run.browserTargetSnapshot.id}`,
+              limit: 1,
+              sourceIdentity: operationBudgetSource,
+              operationIdentity: operationBudgetSource,
+              leaseDurationMs: getRunLeaseDurationMs()
+            }, () => executeBrowserOperation(run, operation, step, {
+              slot: actionSlot,
+              artifactByteLimit: artifactBudgetReservedAmount
+            }));
           } else if (operation.operation === 'createWorkflowDraft') {
             result = await createWorkflowDraftFromAgent(run, operation.args.workflow, step, {
               slot: `agent:${step}:${actionIndex}`
@@ -20373,7 +20881,7 @@ async function runAgentTicket(runId) {
               }
             });
           } else if (operation.operation === PROCESS_OPERATION) {
-            result = await processExecutionController.execute({
+            const executeProcess = () => processExecutionController.execute({
               run,
               action: {
                 operation: PROCESS_OPERATION,
@@ -20382,6 +20890,26 @@ async function runAgentTicket(runId) {
               step,
               observationDeadlineMs: runStartedAtMs + limits.maxRuntimeDurationMs
             });
+            result = await runtimeBudgetController.withCapacity(run, {
+              capacityDomain: 'target',
+              resourceKey: `process:${operation.args.targetId}`,
+              limit: 1,
+              sourceIdentity: operationBudgetSource,
+              operationIdentity: operationBudgetSource,
+              leaseDurationMs: getRunLeaseDurationMs()
+            }, () => runtimeBudgetController.withCapacity(run, {
+              capacityDomain: 'process_launcher',
+              resourceKey: run.processRuntimeCapabilitySnapshot
+                ? run.processRuntimeCapabilitySnapshot.containmentGenerationId
+                : 'unavailable',
+              limit: processDispatchAuthority &&
+                processDispatchAuthority.sandboxCapability
+                ? processDispatchAuthority.sandboxCapability.maxActiveOperations
+                : 1,
+              sourceIdentity: operationBudgetSource,
+              operationIdentity: operationBudgetSource,
+              leaseDurationMs: getRunLeaseDurationMs()
+            }, executeProcess));
           } else {
             result = await executeWorkspaceOperation(run, action, step, {
               slot: `agent:${step}:${actionIndex}`,
@@ -20401,6 +20929,37 @@ async function runAgentTicket(runId) {
             if (AGENT_MUTATING_OPERATIONS.includes(operation.operation)) {
               await verifyBatchOperation(run, action, result);
             }
+          }
+          runtimeBudgetController.assertDuration(run);
+          if (operationBudgetDimension) {
+            await runtimeBudgetController.observedSideEffect(
+              run,
+              operationBudgetDimension,
+              operationBudgetSource
+            );
+            await runtimeBudgetController.commit(
+              run,
+              operationBudgetDimension,
+              operationBudgetSource,
+              1
+            );
+          }
+          if (artifactBudgetSource) {
+            const actualArtifactBytes = operation.operation === PROCESS_OPERATION
+              ? Number((result.stdout && result.stdout.byteCount) || 0) +
+                Number((result.stderr && result.stderr.byteCount) || 0)
+              : Number(result && result.bytes);
+            await runtimeBudgetController.observedSideEffect(
+              run,
+              'output_artifact_bytes',
+              artifactBudgetSource
+            );
+            await runtimeBudgetController.commit(
+              run,
+              'output_artifact_bytes',
+              artifactBudgetSource,
+              actualArtifactBytes
+            );
           }
           const opDurationMs = Date.now() - actionStartedAt;
           const isResumeSkipped = result && result.skipped === true;
@@ -20536,6 +21095,43 @@ async function runAgentTicket(runId) {
             listPathsThisStep.add(listedPath);
           }
         } catch (error) {
+          if (operationBudgetDimension) {
+            if (operationBudgetDispatched) {
+              await runtimeBudgetController.commit(
+                run,
+                operationBudgetDimension,
+                operationBudgetSource,
+                1
+              );
+            } else {
+              await runtimeBudgetController.release(
+                run,
+                operationBudgetDimension,
+                operationBudgetSource,
+                'operation_not_dispatched'
+              );
+            }
+          }
+          if (artifactBudgetSource) {
+            const processRecord = operationBudgetDimension === 'process_operation'
+              ? await postgresRuntimeStore.getProcessOperation(operationBudgetSource)
+              : null;
+            if (processRecord && processRecord.combinedOutputByteCount !== null) {
+              await runtimeBudgetController.commit(
+                run,
+                'output_artifact_bytes',
+                artifactBudgetSource,
+                processRecord.combinedOutputByteCount
+              );
+            } else {
+              await runtimeBudgetController.release(
+                run,
+                'output_artifact_bytes',
+                artifactBudgetSource,
+                'artifact_not_published'
+              );
+            }
+          }
           const opDurationMs = Date.now() - actionStartedAt;
           const canRetryPriorOwnerConflict = isRecoverablePriorArtifactOwnerConflict(
             error,
@@ -20806,6 +21402,7 @@ async function runAgentTicket(runId) {
       appendRunLog(run, 'run:stopped_for_recovery',
         sanitizeLogMessage(error.message || 'Execution stopped for recovery'));
     } else {
+      await recordRunBudgetFailure(run, error);
       run = await failAgentRun(run, error, error.workspaceAction || null);
     }
   } finally {
@@ -23912,10 +24509,10 @@ fastify.post('/api/tickets/:id/simulate-plan', {
   return result;
 });
 
-// Narrowly-scoped operator control to set/clear ONLY ticket.executionPolicy.maxAttempts
-// (the one field enforced for manual rerun-from-start). Every other policy field is
-// preserved. This edits no runs and creates no runs — it only updates the ticket's
-// recorded ceiling, which the manual rerun guard reads fresh on future rerun attempts.
+// Narrowly-scoped operator control to set/clear ONLY ticket.executionPolicy.maxAttempts.
+// Every other policy field is preserved. This edits no runs and creates no runs — it
+// only updates the ticket override used for future admission. A null value inherits
+// the current runtime default; admitted runs keep their already-resolved snapshot.
 // No domain event is appended: executionPolicy is not part of the event-sourced ticket
 // projection (ticket.created payloads omit it and the rebuilder never reconstructs it),
 // The PostgreSQL ticket row is authoritative for policy. The optimistic ticket update and
@@ -23938,23 +24535,23 @@ fastify.post('/api/tickets/:id/execution-policy/max-attempts', {
   const raw = request.body ? request.body.maxAttempts : undefined;
   let nextValue;
   if (raw === null || raw === '' || (typeof raw === 'string' && raw.trim().toLowerCase() === 'clear')) {
-    nextValue = null; // clear → unlimited
+    nextValue = null; // clear → runtime default
   } else if (typeof raw === 'number') {
     if (!Number.isInteger(raw) || raw <= 0) {
       reply.code(400);
-      return { error: 'maxAttempts must be a positive integer, or empty/clear for unlimited' };
+      return { error: 'maxAttempts must be a positive integer, or empty/clear for the runtime default' };
     }
     nextValue = raw;
   } else if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
     const parsed = parseInt(raw.trim(), 10);
     if (!Number.isInteger(parsed) || parsed <= 0) {
       reply.code(400);
-      return { error: 'maxAttempts must be a positive integer, or empty/clear for unlimited' };
+      return { error: 'maxAttempts must be a positive integer, or empty/clear for the runtime default' };
     }
     nextValue = parsed;
   } else {
     reply.code(400);
-    return { error: 'maxAttempts must be a positive integer, or empty/clear for unlimited' };
+    return { error: 'maxAttempts must be a positive integer, or empty/clear for the runtime default' };
   }
 
   const currentTicket = await getRuntimeStateReadRepository().getTicket(ticketId);
@@ -23979,7 +24576,7 @@ fastify.post('/api/tickets/:id/execution-policy/max-attempts', {
   });
   const ticket = result.ticket;
   broadcastTicketChange();
-  await appendSystemLog('ticket:max_attempts_change', `Ticket #${ticketId} maxAttempts changed from ${previousValue === null ? 'unlimited' : previousValue} to ${nextValue === null ? 'unlimited' : nextValue} by ${changedBy}`, null, {
+  await appendSystemLog('ticket:max_attempts_change', `Ticket #${ticketId} maxAttempts changed from ${previousValue === null ? 'runtime default' : previousValue} to ${nextValue === null ? 'runtime default' : nextValue} by ${changedBy}`, null, {
     ticketId,
     changedBy,
     changedAt: ticket.changedAt,
@@ -25627,15 +26224,19 @@ fastify.get('/api/runs/:id/state', { preHandler: fastify.requireAuth }, async (r
     return { error: 'Run not found' };
   }
 
-  const [events, operations, ticketRuns] = await Promise.all([
+  const [events, operations, ticketRuns, runtimeBudgetState] = await Promise.all([
     readAllRunTimelineEvents(runId),
     readAllRunOperations(runId),
-    readAllRunsForTicket(run.ticketId)
+    readAllRunsForTicket(run.ticketId),
+    getRunRuntimeBudgetSnapshot(run)
+      ? postgresRuntimeStore.getRunBudgetState(run.id)
+      : Promise.resolve(null)
   ]);
   return serializeRunRuntimeState(run, null, {
     events,
     operations,
     ticketRuns,
+    runtimeBudgetState,
     eventSummary: (await recentEventSummary(runId, events))
   });
 });

@@ -16,10 +16,14 @@ function rowTimestamp(value) {
 
 function runtimeLimitsFromRow(row) {
   return {
+    maxAttempts: row.max_attempts === null ? null : positiveSafeInteger(row.max_attempts, 'runtimeLimits.maxAttempts'),
     maxExecutionSteps: row.max_execution_steps === null ? null : positiveSafeInteger(row.max_execution_steps, 'runtimeLimits.maxExecutionSteps'),
     maxModelRequestsPerRun: row.max_model_requests_per_run === null ? null : positiveSafeInteger(row.max_model_requests_per_run, 'runtimeLimits.maxModelRequestsPerRun'),
     maxWorkspaceOperationsPerRun: row.max_workspace_operations_per_run === null ? null : positiveSafeInteger(row.max_workspace_operations_per_run, 'runtimeLimits.maxWorkspaceOperationsPerRun'),
+    maxProcessOperationsPerRun: row.max_process_operations_per_run === null ? null : positiveSafeInteger(row.max_process_operations_per_run, 'runtimeLimits.maxProcessOperationsPerRun'),
+    maxBrowserOperationsPerRun: row.max_browser_operations_per_run === null ? null : positiveSafeInteger(row.max_browser_operations_per_run, 'runtimeLimits.maxBrowserOperationsPerRun'),
     maxRuntimeDurationMs: row.max_runtime_duration_ms === null ? null : positiveSafeInteger(row.max_runtime_duration_ms, 'runtimeLimits.maxRuntimeDurationMs'),
+    maxOutputArtifactBytesPerRun: row.max_output_artifact_bytes_per_run === null ? null : positiveSafeInteger(row.max_output_artifact_bytes_per_run, 'runtimeLimits.maxOutputArtifactBytesPerRun'),
     maxActiveRuns: row.max_active_runs === null ? null : positiveSafeInteger(row.max_active_runs, 'runtimeLimits.maxActiveRuns'),
     localModelConcurrency: row.local_model_concurrency === null ? null : positiveSafeInteger(row.local_model_concurrency, 'runtimeLimits.localModelConcurrency'),
     revision: positiveSafeInteger(row.revision, 'runtimeLimits.revision'),
@@ -57,22 +61,30 @@ function methods() {
         if (previous.revision !== revision) throw new RuntimeLimitsConflictError(revision, previous);
         const updated = await client.query(
           `UPDATE ${this.table('runtime_limit_config')}
-           SET max_execution_steps = $1,
-               max_model_requests_per_run = $2,
-               max_workspace_operations_per_run = $3,
-               max_runtime_duration_ms = $4,
-               max_active_runs = $5,
-               local_model_concurrency = $6,
+           SET max_attempts = $1,
+               max_execution_steps = $2,
+               max_model_requests_per_run = $3,
+               max_workspace_operations_per_run = $4,
+               max_process_operations_per_run = $5,
+               max_browser_operations_per_run = $6,
+               max_runtime_duration_ms = $7,
+               max_output_artifact_bytes_per_run = $8,
+               max_active_runs = $9,
+               local_model_concurrency = $10,
                revision = revision + 1,
-               updated_by = $7,
+               updated_by = $11,
                updated_at = clock_timestamp()
-           WHERE id = 1 AND revision = $8
+           WHERE id = 1 AND revision = $12
            RETURNING *`,
           [
+            normalized.maxAttempts,
             normalized.maxExecutionSteps,
             normalized.maxModelRequestsPerRun,
             normalized.maxWorkspaceOperationsPerRun,
+            normalized.maxProcessOperationsPerRun,
+            normalized.maxBrowserOperationsPerRun,
             normalized.maxRuntimeDurationMs,
+            normalized.maxOutputArtifactBytesPerRun,
             normalized.maxActiveRuns,
             normalized.localModelConcurrency,
             actor,

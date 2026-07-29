@@ -231,7 +231,7 @@ async function main() {
       scenariosRun += 1;
       const cleared = await setCeiling(open.id, null);
       assert(cleared.statusCode === 200,
-        `3: the ceiling can be cleared back to unlimited (HTTP ${cleared.statusCode})`);
+        `3: the ceiling can be cleared back to the runtime default (HTTP ${cleared.statusCode})`);
       assert((await ticketNow(open.id)).executionPolicy.maxAttempts === null,
         '3: and the cleared value is what is stored');
       const allowedAgain = await rerun(open.id);
@@ -240,6 +240,11 @@ async function main() {
       await settled(open.id, 3);
       assert(await runCount(open.id) === 3,
         `3: creating exactly one further run (${await runCount(open.id)})`);
+      const defaultExhausted = await rerun(open.id);
+      assert(defaultExhausted.statusCode === 409,
+        `3: the inherited runtime attempt default remains enforced (HTTP ${defaultExhausted.statusCode})`);
+      assert(await runCount(open.id) === 3,
+        `3: exhausting the inherited default creates no fourth run (${await runCount(open.id)})`);
 
       // ── 4. THE CEILING EDIT IS NARROW AND AUTHORIZED ──────────────────────────
       scenariosRun += 1;
@@ -366,7 +371,10 @@ async function main() {
 
       // Now the state the public API cannot reach in one step, written through the
       // same repository call `blockTicketForNoModelRoute` uses.
-      const beforeSeed = await ticketNow(failing.id);
+      const beforeSeed = await waitFor(async () => {
+        const current = await ticketNow(failing.id);
+        return current.status === 'failed' ? current : null;
+      }, 30000, `ticket ${failing.id} terminal projection after retry`);
       await store.transitionTicketState({
         ticketId: failing.id,
         fromStatuses: [beforeSeed.status],

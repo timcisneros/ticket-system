@@ -37,6 +37,18 @@ const CONTRACTS = Object.freeze({
     'withProcessOperationLock',
     'recordOperationReceipt',
     'appendRunEvidence'
+  ],
+  runtimeBudget: [
+    'isRuntimeBudgetSchemaAvailable',
+    'reserveRunBudget',
+    'commitRunBudget',
+    'releaseRunBudget',
+    'listRunBudgetCharges',
+    'getRunBudgetState',
+    'recordPendingRunCapacityWait',
+    'acquireRuntimeCapacity',
+    'renewRuntimeCapacity',
+    'releaseRuntimeCapacity'
   ]
 });
 
@@ -86,5 +98,6 @@ module.exports = {
   assertWorkContextRepository: assertion('workContext', 'work context'),
   assertConfiguredAgentRepository: assertion('configuredAgent', 'configured agent'),
   assertProcessTemplateProjectionRepository: assertion('processTemplateProjection', 'process template projection'),
-  assertProcessExecutionRepository: assertion('processExecution', 'process execution')
+  assertProcessExecutionRepository: assertion('processExecution', 'process execution'),
+  assertRuntimeBudgetRepository: assertion('runtimeBudget', 'runtime budget')
 };

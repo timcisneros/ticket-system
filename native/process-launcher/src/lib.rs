@@ -48,6 +48,7 @@ pub const MAX_COMPONENT_BYTES: usize = 255;
 pub const MAX_DIRECTORY_DEPTH: usize = 64;
 pub const MAX_HEALTH_VALIDITY_MS: u64 = 300_000;
 pub const MIN_HEALTH_VALIDITY_MS: u64 = 1_000;
+pub const MAX_ACTIVE_OPERATIONS: u32 = 256;
 
 pub type FailureCode = &'static str;
 pub const PROCESS_LAUNCHER_FOUNDATION_UNAVAILABLE: FailureCode =
@@ -111,6 +112,8 @@ pub const PROCESS_OUTPUT_UNAVAILABLE: FailureCode = "PROCESS_OUTPUT_UNAVAILABLE"
 pub const PROCESS_OUTPUT_CHUNK_INVALID: FailureCode = "PROCESS_OUTPUT_CHUNK_INVALID";
 pub const PROCESS_OUTPUT_ACKNOWLEDGEMENT_FAILED: FailureCode =
     "PROCESS_OUTPUT_ACKNOWLEDGEMENT_FAILED";
+pub const PROCESS_LAUNCHER_CAPACITY_UNAVAILABLE: FailureCode =
+    "PROCESS_LAUNCHER_CAPACITY_UNAVAILABLE";
 
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
@@ -159,6 +162,7 @@ pub struct ServiceConfig {
     pub trusted_rootfs_owner_uid: u32,
     pub materializer_socket_path: String,
     pub health_validity_ms: u64,
+    pub max_active_operations: u32,
     pub rootfs_registry: Vec<RootfsConfiguration>,
     pub sandbox_backend: SandboxBackendConfiguration,
     pub seccomp_policy_path: String,
@@ -531,6 +535,12 @@ impl ServiceConfig {
                 ),
             ));
         }
+        if self.max_active_operations == 0 || self.max_active_operations > MAX_ACTIVE_OPERATIONS {
+            return Err(FoundationError::new(
+                PROCESS_LAUNCHER_PROTOCOL_INVALID,
+                format!("maxActiveOperations must be in 1..={MAX_ACTIVE_OPERATIONS}"),
+            ));
+        }
         if self.rootfs_registry.is_empty()
             || self.rootfs_registry.len() > MAX_ROOTFS_REGISTRY_ENTRIES
         {
@@ -733,6 +743,7 @@ impl FoundationService {
             materializer_generation: materializer_health.materializer_generation.clone(),
             delegated_cgroup_identity_hash: delegated_cgroup.identity_hash()?,
             containment_probe_hash: "0".repeat(64),
+            max_active_operations: config.max_active_operations,
             verified_at: canonical_utc(verified_seconds)?,
             expires_at: canonical_utc(
                 verified_seconds
@@ -772,6 +783,7 @@ impl FoundationService {
             "materializerGeneration": materializer_health.materializer_generation.clone(),
             "delegatedCgroupIdentityHash": service.delegated_cgroup.identity_hash()?,
             "containmentProbeHash": containment_probe_hash.clone(),
+            "maxActiveOperations": service.config.max_active_operations,
             "mountPlanVersion": executor::MOUNT_PLAN_VERSION,
             "seccompPolicySchemaVersion": SECCOMP_POLICY_SCHEMA_VERSION
         });
@@ -941,14 +953,26 @@ impl FoundationService {
         })?;
         let control = Arc::new(ExecutionControl::new());
         {
+            let mut controls = self.operation_controls.lock().map_err(operation_lock)?;
             let mut registry = self.operation_registry.lock().map_err(operation_lock)?;
-            let (_, inserted) = registry.accept(&plan, &body.containment_generation_id)?;
-            if !inserted {
+            if let Some(existing) = registry.get(&plan.operation_identity) {
+                let conflicts = existing.launch_plan_hash != plan.launch_plan_hash;
+                if conflicts {
+                    return Err(FoundationError::new(
+                        PROCESS_EXECUTION_INTENT_CONFLICT,
+                        "operation identity is already bound to different launch authority",
+                    ));
+                }
                 return registry.status(&plan.operation_identity);
             }
-        }
-        {
-            let mut controls = self.operation_controls.lock().map_err(operation_lock)?;
+            if controls.len() >= self.config.max_active_operations as usize {
+                return Err(FoundationError::new(
+                    PROCESS_LAUNCHER_CAPACITY_UNAVAILABLE,
+                    "launcher active-operation capacity is occupied",
+                ));
+            }
+            let (_, inserted) = registry.accept(&plan, &body.containment_generation_id)?;
+            debug_assert!(inserted);
             controls.insert(plan.operation_identity.clone(), control.clone());
         }
         let operation_identity = plan.operation_identity.clone();
@@ -3347,6 +3371,7 @@ mod tests {
             materializer_socket_path: "/run/ticket-system-process/materializer/materializer.sock"
                 .into(),
             health_validity_ms: 30_000,
+            max_active_operations: 4,
             rootfs_registry: vec![RootfsConfiguration {
                 id: "node-24-fedora-runtime-v1".into(),
                 root_path: "/var/lib/ticket-system/runtime-rootfs/node-24-fedora-runtime-v1/root"
@@ -3512,6 +3537,27 @@ mod tests {
         assert_eq!(
             exact.validate().unwrap_err().code,
             PROCESS_ROOTFS_REGISTRY_INVALID
+        );
+    }
+
+    #[test]
+    fn active_operation_capacity_boundary_is_exact() {
+        let mut exact = configuration();
+        exact.max_active_operations = MAX_ACTIVE_OPERATIONS;
+        exact.validate().unwrap();
+
+        let mut zero = configuration();
+        zero.max_active_operations = 0;
+        assert_eq!(
+            zero.validate().unwrap_err().code,
+            PROCESS_LAUNCHER_PROTOCOL_INVALID
+        );
+
+        let mut excessive = configuration();
+        excessive.max_active_operations = MAX_ACTIVE_OPERATIONS + 1;
+        assert_eq!(
+            excessive.validate().unwrap_err().code,
+            PROCESS_LAUNCHER_PROTOCOL_INVALID
         );
     }
 

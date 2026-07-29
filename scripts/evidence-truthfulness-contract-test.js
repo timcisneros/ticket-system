@@ -88,7 +88,8 @@ function buildGate({ required, contract, mutationCap = 2 }) {
   const factory = new Function('deps', `
     const {
       isBrowserRun, buildObjectiveContract, countRequiredContractMutations,
-      recordRunEvent, appendEvent, MAX_MUTATING_ACTIONS_PER_RESPONSE
+      recordRunEvent, appendEvent, getRunRuntimeBudgetSnapshot,
+      MAX_MUTATING_ACTIONS_PER_RESPONSE
     } = deps;
     ${gateSource}
     return assertRuntimeBudgetFeasible;
@@ -101,6 +102,7 @@ function buildGate({ required, contract, mutationCap = 2 }) {
       runEvents.push({ type, message, ...details });
     },
     appendEvent: async event => { journalEvents.push(event); },
+    getRunRuntimeBudgetSnapshot: run => run.runtimeBudgetSnapshot || null,
     MAX_MUTATING_ACTIONS_PER_RESPONSE: mutationCap
   });
   return { gate, runEvents, journalEvents };
@@ -169,11 +171,13 @@ const cases = [
       { objective: 'obj' },
       testCase.limits || { maxExecutionSteps: 32 }
     );
+    const journalDecisions = result.journalEvents.filter(event =>
+      event.type === 'run.feasibility_decision');
 
     eq(`${testCase.name}: exactly one replay decision event`, result.runEvents.length, 1);
-    eq(`${testCase.name}: exactly one journal decision event`, result.journalEvents.length, 1);
+    eq(`${testCase.name}: exactly one journal decision event`, journalDecisions.length, 1);
     eq(`${testCase.name}: replay event type`, result.runEvents[0].type, 'run:feasibility_decision');
-    eq(`${testCase.name}: journal event type`, result.journalEvents[0].type, 'run.feasibility_decision');
+    eq(`${testCase.name}: journal event type`, journalDecisions[0].type, 'run.feasibility_decision');
     eq(`${testCase.name}: outcome recorded`, result.runEvents[0].outcome, testCase.expect.outcome);
     eq(`${testCase.name}: checked flag recorded`, result.runEvents[0].checked, testCase.expect.checked);
 
@@ -198,7 +202,7 @@ const cases = [
 
     // Journal and replay payloads must agree — one decision, not two stories.
     const { type: _replayType, message: _msg, ...replayPayload } = result.runEvents[0];
-    eq(`${testCase.name}: journal payload matches replay payload`, result.journalEvents[0].payload, replayPayload);
+    eq(`${testCase.name}: journal payload matches replay payload`, journalDecisions[0].payload, replayPayload);
 
     seenOutcomes.add(testCase.expect.outcome);
   }
@@ -208,10 +212,32 @@ const cases = [
   eq('every outcome emitted by the gate is exercised',
     [...new Set(declaredOutcomes)].sort(), [...seenOutcomes].sort());
 
-  // The gate still enforces only the step relation — no widened enforcement.
+  const workspaceBound = await runGate(
+    { required: 5, contract: RECOGNIZED },
+    {
+      id: 9,
+      ticketId: 9,
+      runtimeBudgetSnapshot: {
+        snapshotHash: 'a'.repeat(64),
+        maxWorkspaceOperations: 4
+      }
+    },
+    { objective: 'obj' },
+    { maxExecutionSteps: 32 }
+  );
+  eq('immutable workspace-operation minimum rejects before execution',
+    workspaceBound.thrown && workspaceBound.thrown.code, 'RUN_FEASIBILITY_REJECTED');
+  eq('workspace-operation infeasibility remains durably reconstructable',
+    workspaceBound.runEvents[0].outcome, 'rejected');
+
+  // The gate uses only deterministic step/workspace lower bounds. It does not
+  // invent runtime or model-request estimates.
   const gateBody = extractFunction(SOURCE, 'assertRuntimeBudgetFeasible');
-  ok('gate throws only on the projected-step relation',
-    (gateBody.match(/RUNTIME_BUDGET_INSUFFICIENT/g) || []).length === 1);
+  ok('gate preserves historical and effective-budget typed rejection codes',
+    (gateBody.match(/RUNTIME_BUDGET_INSUFFICIENT/g) || []).length === 1 &&
+    (gateBody.match(/RUN_FEASIBILITY_REJECTED/g) || []).length === 1);
+  ok('gate consults only the immutable effective run snapshot for new operation bounds',
+    /getRunRuntimeBudgetSnapshot\(run\)/.test(gateBody));
   ok('gate does not consult wall-clock budget',
     !/maxRuntimeDurationMs/.test(gateBody));
   ok('gate does not consult model-request budget',
@@ -296,7 +322,8 @@ const cases = [
       const {
         buildExecutionSemanticsSnapshot, getDeploymentRuntimeDefaults, RUNTIME_LIMIT_CONFIG_KEYS,
         RUNTIME_LIMIT_MINIMUMS, detectWorkloadProfile, getProfileRuntimeLimits, isReportObjective,
-        getReportRuntimeLimits, runtimeLimitsForExecution, getWorkflowSpecificLimits,
+        getReportRuntimeLimits, pickRuntimeLimitValues, runtimeLimitsForExecution,
+        getWorkflowSpecificLimits,
         ENABLE_PREFIX_TRUNCATION, MODEL_CONTRACT_COMPILER_ENABLED, ACTION_CONTRACT_VIOLATION_THRESHOLD,
         STALLED_RESPONSE_THRESHOLD, INSPECTION_NO_PROGRESS_THRESHOLD, RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES,
         MAX_AGENT_ACTIONS_PER_RESPONSE, MAX_MUTATING_ACTIONS_PER_RESPONSE
@@ -305,21 +332,36 @@ const cases = [
       return resolveAgentRuntimeLimitsFromConfig;
     `);
     const base = {
+      maxAttempts: 3,
       maxExecutionSteps: 32, maxModelRequestsPerRun: 32,
-      maxWorkspaceOperationsPerRun: 256, maxRuntimeDurationMs: 400000
+      maxWorkspaceOperationsPerRun: 256, maxProcessOperationsPerRun: 4,
+      maxBrowserOperationsPerRun: 32, maxRuntimeDurationMs: 400000,
+      maxOutputArtifactBytesPerRun: 16_777_216
     };
     const resolve = factory({
       buildExecutionSemanticsSnapshot: require('../runtime/execution-semantics').buildExecutionSemanticsSnapshot,
       getDeploymentRuntimeDefaults: () => ({ ...base }),
       RUNTIME_LIMIT_CONFIG_KEYS: Object.keys(base),
-      RUNTIME_LIMIT_MINIMUMS: { maxExecutionSteps: 1, maxModelRequestsPerRun: 1, maxWorkspaceOperationsPerRun: 1, maxRuntimeDurationMs: 5000 },
+      RUNTIME_LIMIT_MINIMUMS: Object.fromEntries(
+        Object.keys(base).map(key => [key, key === 'maxRuntimeDurationMs' ? 5000 : 1])
+      ),
       detectWorkloadProfile: () => profile,
       getProfileRuntimeLimits: (limits, name) => ({ ...limits, maxListDirectoryPerRun: 2, maxReadFilePerRun: 6, profileName: name }),
       isReportObjective: () => false,
       getReportRuntimeLimits: limits => limits,
+      pickRuntimeLimitValues: limits => Object.fromEntries(
+        Object.keys(base).map(key => [key, limits[key]])
+      ),
       runtimeLimitsForExecution: limits => {
-        const out = { ...base };
-        for (const key of ['maxListDirectoryPerRun', 'maxReadFilePerRun']) {
+        const out = {};
+        for (const key of [
+          'maxExecutionSteps',
+          'maxModelRequestsPerRun',
+          'maxWorkspaceOperationsPerRun',
+          'maxRuntimeDurationMs',
+          'maxListDirectoryPerRun',
+          'maxReadFilePerRun'
+        ]) {
           if (Number.isInteger(limits[key])) out[key] = limits[key];
         }
         return out;

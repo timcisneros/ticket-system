@@ -11,6 +11,9 @@ const {
   validateCurrentEventEnvelope
 } = require('../../runtime/event-integrity');
 const {
+  normalizeRuntimeBudgetSnapshot
+} = require('../../runtime/runtime-budget-contract');
+const {
   buildProcessTemplateState,
   emptyGeneratedTicketCounts
 } = require('../process-template-projection');
@@ -26,6 +29,7 @@ const { installModelRoutingPolicyMethods } = require('./model-routing-policy-met
 const { installConnectorAuthorityMethods } = require('./connector-authority-methods');
 const { installWatcherAuthorityMethods } = require('./watcher-authority-methods');
 const { installRuntimeLimitsMethods } = require('./runtime-limits-methods');
+const { installRuntimeBudgetMethods } = require('./runtime-budget-methods');
 const { installApplicationStateMethods } = require('./application-state-methods');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
@@ -1527,6 +1531,66 @@ class PostgresRuntimeStore {
       }
 
       const agentIds = drafts.map(run => run.agentId);
+      const budgetSnapshots = drafts.map((run, index) => {
+        if (!Object.prototype.hasOwnProperty.call(run, 'runtimeBudgetSnapshot') ||
+            run.runtimeBudgetSnapshot === null) {
+          return null;
+        }
+        try {
+          return normalizeRuntimeBudgetSnapshot(run.runtimeBudgetSnapshot);
+        } catch (error) {
+          error.message = `runDrafts[${index}].runtimeBudgetSnapshot: ${error.message}`;
+          throw error;
+        }
+      });
+      const effectiveAttemptLimits = budgetSnapshots
+        .filter(Boolean)
+        .map(snapshot => snapshot.maxAttempts);
+      if (effectiveAttemptLimits.length > 0) {
+        if (effectiveAttemptLimits.length !== drafts.length ||
+            new Set(effectiveAttemptLimits).size !== 1) {
+          const error = new Error(
+            'One run-admission batch must use one complete effective attempt limit'
+          );
+          error.code = 'RUN_BUDGET_SNAPSHOT_INVALID';
+          throw error;
+        }
+        const admitted = await connection.query(
+          `SELECT COUNT(DISTINCT CASE
+             WHEN NULLIF(body->>'allocationPlanId', '') IS NOT NULL
+               THEN 'allocation:' || (body->>'allocationPlanId')
+             ELSE 'run:' || id::text
+           END)::bigint AS count
+           FROM ${this.table('runs')}
+           WHERE ticket_id = $1`,
+          [id]
+        );
+        const admittedCount = Number(admitted.rows[0].count);
+        const requestedAttemptCount = new Set(drafts.map((draft, index) => {
+          const allocationPlanId = draft && draft.allocationPlanId;
+          return allocationPlanId === null || allocationPlanId === undefined ||
+            String(allocationPlanId).trim() === ''
+            ? `draft:${index}`
+            : `allocation:${String(allocationPlanId).trim()}`;
+        })).size;
+        const maxAttempts = effectiveAttemptLimits[0];
+        if (!Number.isSafeInteger(admittedCount) ||
+            admittedCount + requestedAttemptCount > maxAttempts) {
+          const error = new Error(
+            `Ticket ${id} cannot admit ${requestedAttemptCount} attempt(s): ` +
+            `${admittedCount} of ${maxAttempts} attempts already exist`
+          );
+          error.code = 'RUN_BUDGET_EXHAUSTED';
+          error.failureKind = 'runtime_budget_exhausted';
+          error.details = {
+            dimension: 'attempt',
+            currentCommittedUsage: admittedCount,
+            requestedAmount: requestedAttemptCount,
+            limit: maxAttempts
+          };
+          throw error;
+        }
+      }
       const active = await connection.query(
         `SELECT * FROM ${this.table('runs')}
          WHERE ticket_id = $1 AND agent_id = ANY($2::bigint[])
@@ -1579,6 +1643,19 @@ class PostgresRuntimeStore {
           runId: run.id,
           payload: { ...payload, status: run.status, createdAt: run.createdAt }
         }));
+        if (run.runtimeBudgetSnapshot) {
+          events.push(await this._appendEvent(connection, {
+            type: 'budget.snapshot_created',
+            ticketId: id,
+            runId: run.id,
+            payload: {
+              budgetSnapshotHash: run.runtimeBudgetSnapshot.snapshotHash,
+              version: run.runtimeBudgetSnapshot.version,
+              runtimeLimitsRevision: run.runtimeBudgetSnapshot.runtimeLimitsRevision,
+              executionPolicyHash: run.runtimeBudgetSnapshot.executionPolicyHash
+            }
+          }));
+        }
       }
 
       const transitioned = await this.transitionTicket({
@@ -6715,6 +6792,27 @@ class PostgresRuntimeStore {
              AND ($3::bigint[] IS NULL OR pending_run.id = ANY($3::bigint[]))
              AND active.total < policy.max_active_runs
              AND (agent.provider <> 'ollama' OR active.local_model < policy.local_model_concurrency)
+             AND NOT EXISTS (
+               SELECT 1
+               FROM ${this.table('runs')} AS sibling_run
+               WHERE sibling_run.ticket_id = pending_run.ticket_id
+                 AND sibling_run.id <> pending_run.id
+                 AND sibling_run.status IN ('pending', 'running')
+                 AND sibling_run.lease_owner IS NOT NULL
+                 AND sibling_run.lease_expires_at > clock_timestamp()
+                 AND (
+                   COALESCE(
+                     (pending_run.body #>>
+                       '{runtimeBudgetSnapshot,allowParallelRuns}')::boolean,
+                     true
+                   ) = false OR
+                   COALESCE(
+                     (sibling_run.body #>>
+                       '{runtimeBudgetSnapshot,allowParallelRuns}')::boolean,
+                     true
+                   ) = false
+                 )
+             )
            ORDER BY pending_run.created_at, pending_run.id
            FOR UPDATE OF pending_run SKIP LOCKED
            LIMIT 1
@@ -6746,7 +6844,28 @@ class PostgresRuntimeStore {
           lastHeartbeatAt: run.lastHeartbeatAt
         }
       });
-      return { run, event };
+      const waits = await client.query(
+        `UPDATE ${this.table('run_capacity_waits')}
+         SET active = false, updated_at = clock_timestamp(), revision = revision + 1
+         WHERE run_id = $1 AND active = true
+         RETURNING capacity_domain, resource_key, source_identity`,
+        [run.id]
+      );
+      const capacityEvents = [];
+      for (const wait of waits.rows) {
+        capacityEvents.push(await this._appendEvent(client, {
+          type: 'capacity.acquired',
+          ticketId: run.ticketId,
+          runId: run.id,
+          payload: {
+            capacityDomain: wait.capacity_domain,
+            resourceKey: wait.resource_key,
+            sourceIdentity: wait.source_identity,
+            authority: 'run_lease'
+          }
+        }));
+      }
+      return { run, event, capacityEvents };
     });
   }
 
@@ -6760,6 +6879,13 @@ class PostgresRuntimeStore {
         `UPDATE ${this.table('runs')} AS run
          SET status = 'running',
              started_at = COALESCE(run.started_at, clock_timestamp()),
+             body = run.body || jsonb_build_object(
+               'runtimeBudgetStartedAt',
+               COALESCE(
+                 run.body->>'runtimeBudgetStartedAt',
+                 to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+               )
+             ),
              lease_expires_at = clock_timestamp() + ($3::bigint * interval '1 millisecond'),
              last_heartbeat_at = clock_timestamp(),
              revision = run.revision + 1,
@@ -7205,6 +7331,7 @@ installModelRoutingPolicyMethods(PostgresRuntimeStore, { OptimisticConcurrencyEr
 installConnectorAuthorityMethods(PostgresRuntimeStore, { OptimisticConcurrencyError });
 installWatcherAuthorityMethods(PostgresRuntimeStore, { OptimisticConcurrencyError });
 installRuntimeLimitsMethods(PostgresRuntimeStore);
+installRuntimeBudgetMethods(PostgresRuntimeStore);
 installApplicationStateMethods(PostgresRuntimeStore, {
   OptimisticConcurrencyError,
   operationReceiptFromRow,

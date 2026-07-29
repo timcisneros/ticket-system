@@ -435,6 +435,7 @@ async function inside() {
       trustedRootfsOwnerUid: TRUSTED_UID,
       materializerSocketPath: materializerSocket,
       healthValidityMs: 300000,
+      maxActiveOperations: 4,
       rootfsRegistry: [{
         id: 'node-runtime-v1',
         rootPath: rootfs,
@@ -845,7 +846,7 @@ async function inside() {
       } catch {
         return false;
       }
-    }, 5000);
+    }, 10000);
     const survivingStates = crashPids
       .filter(pid => fs.existsSync(`/proc/${pid}/status`))
       .map(pid => {

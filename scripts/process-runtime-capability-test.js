@@ -77,7 +77,13 @@ const snapshot = buildProcessPolicySnapshot({
 
 function fixture({ now = Date.now(), containmentOverrides = {}, calls = null } = {}) {
   const count = calls || {
-    schema: 0, artifact: 0, materializer: 0, health: 0, rootfs: 0, executable: 0
+    schema: 0,
+    budgetSchema: 0,
+    artifact: 0,
+    materializer: 0,
+    health: 0,
+    rootfs: 0,
+    executable: 0
   };
   const containment = {
     version: 1,
@@ -91,6 +97,7 @@ function fixture({ now = Date.now(), containmentOverrides = {}, calls = null } =
     materializerGeneration,
     delegatedCgroupIdentityHash: '8'.repeat(64),
     containmentProbeHash: '9'.repeat(64),
+    maxActiveOperations: 4,
     verifiedAt: new Date(now - 1000).toISOString(),
     expiresAt: new Date(now + 60_000).toISOString(),
     readyForExecution: true,
@@ -99,6 +106,10 @@ function fixture({ now = Date.now(), containmentOverrides = {}, calls = null } =
   const repository = {
     async isProcessExecutionSchemaAvailable() {
       count.schema += 1;
+      return true;
+    },
+    async isRuntimeBudgetSchemaAvailable() {
+      count.budgetSchema += 1;
       return true;
     }
   };
@@ -170,6 +181,10 @@ async function main() {
       async isProcessExecutionSchemaAvailable() {
         disabledCalls.schema = true;
         return true;
+      },
+      async isRuntimeBudgetSchemaAvailable() {
+        disabledCalls.budgetSchema = true;
+        return true;
       }
     }
   });
@@ -178,7 +193,7 @@ async function main() {
     'PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE',
     'process execution remains default-off before native or storage health is touched'
   );
-  ok(disabledCalls.schema !== true,
+  ok(disabledCalls.schema !== true && disabledCalls.budgetSchema !== true,
     'disabled capability performs no lifecycle or launcher probe');
 
   const healthy = fixture();
@@ -187,7 +202,8 @@ async function main() {
     /^process-runtime-v1-[0-9a-f]{64}$/.test(first.generationId),
   'all runtime prerequisites publish one closed runtime capability');
   ok(Object.isFrozen(first), 'runtime capability descriptors are immutable');
-  ok(healthy.count.schema === 1 && healthy.count.artifact === 1 &&
+  ok(healthy.count.schema === 1 && healthy.count.budgetSchema === 1 &&
+    healthy.count.artifact === 1 &&
     healthy.count.materializer === 1 && healthy.count.rootfs === 1 &&
     healthy.count.executable === 1,
   'capability resolution checks database, artifact, materializer, rootfs, and executable health');

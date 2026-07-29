@@ -13,6 +13,7 @@
 // exactly one failure classification. A retry the operator did not ask for, or one that
 // keeps going, is a machine repeating failing work on its own; a retry that never
 // happens when the policy asks for it is a feature that lies about being enabled.
+// A null ticket ceiling inherits the concrete runtime default captured at admission.
 //
 // ── THE FIXTURE PROBLEM, AND WHY SCENARIO 1 EXISTS ──────────────────────────────────
 //
@@ -73,9 +74,9 @@ const CASES = Object.freeze([
     why: 'auto-retry off by default'
   },
   {
-    key: 'noceiling', kind: 'limit', expectRuns: 1,
+    key: 'noceiling', kind: 'limit', expectRuns: 3,
     policy: { autoRetry: true, maxAttempts: null },
-    why: 'no finite ceiling to bound the retry'
+    why: 'null ceiling inherits the finite runtime default'
   },
   {
     key: 'eligible', kind: 'limit', expectRuns: 2,
@@ -169,7 +170,8 @@ async function main() {
         // Small, so the stall reaches a runtime limit quickly. The limit is what
         // produces the fallback classification; its size is not the contract.
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '2',
-        AGENT_MAX_EXECUTION_STEPS: '2'
+        AGENT_MAX_EXECUTION_STEPS: '2',
+        AGENT_MAX_ATTEMPTS: '3'
       };
       // Tickets are created with the scheduler PARKED so their runs stay pending while
       // the triage case has its outstanding decision attached. Attaching it after the
@@ -292,15 +294,16 @@ async function main() {
       assert(controlRuns[0].triage && controlRuns[0].triage.required === true,
         '2: it stops into triage instead, leaving the decision to a human');
 
-      // ── 3. A CEILING IS REQUIRED ─────────────────────────────────────────────
-      // autoRetry alone is not enough: without a finite maxAttempts there is nothing
-      // to bound the retries, so the runtime refuses rather than retrying forever.
+      // ── 3. NULL INHERITS THE RUNTIME CEILING ──────────────────────────────────
+      // Tranche 5 resolves null ticket limits into the immutable run budget. The
+      // configured runtime default is 3, so two retries are permitted and the third
+      // failed run hands off to triage.
       scenariosRun += 1;
       const noCeilingRuns = await runsFor(byKey('noceiling').ticketId);
-      assert(noCeilingRuns.length === 1,
-        `3: auto-retry without a finite ceiling does not retry (${noCeilingRuns.length} runs)`);
-      assert(noCeilingRuns[0].triage && noCeilingRuns[0].triage.required === true,
-        '3: and stops into triage');
+      assert(noCeilingRuns.length === 3,
+        `3: null maxAttempts inherits the finite runtime default of 3 (${noCeilingRuns.length} runs)`);
+      assert(noCeilingRuns[2].triage && noCeilingRuns[2].triage.required === true,
+        '3: the inherited ceiling stops the final attempt into triage');
 
       // ── 4. ELIGIBLE — EXACTLY ONE RETRY, THEN STOP ───────────────────────────
       // The positive control for everything above, and the bound in the same breath:
@@ -382,12 +385,16 @@ async function main() {
       const autoRetryLogs = allLogs.filter(log => log && log.type === 'ticket:auto_retry');
       assert(allLogs.length > 0,
         `5d: diagnostic logs are readable (${allLogs.length}); observed types: ${[...new Set(allLogs.map(l => l && l.type))].join(',')}`);
-      // Exactly ONE retry happens across the whole suite, so a single entry suite-wide
-      // is the same statement as "one per retry" and does not depend on which field
-      // carries the ticket id.
-      assert(autoRetryLogs.length === 1,
-        `5d: exactly one auto-retry audit entry exists across every ticket (${autoRetryLogs.length})`);
-      const entry = autoRetryLogs[0];
+      // The inherited-default scenario retries twice and the explicit-ceiling
+      // scenario retries once. Each admission must have one audit record.
+      assert(autoRetryLogs.length === 3,
+        `5d: exactly one auto-retry audit entry exists per retry (${autoRetryLogs.length})`);
+      const entry = autoRetryLogs.find(log => {
+        const detail = JSON.stringify(log);
+        return detail.includes(String(eligibleRuns[0].id)) &&
+          detail.includes(String(eligibleRuns[1].id));
+      });
+      assert(Boolean(entry), '5d: the explicit-ceiling retry has its own audit record');
       const detail = JSON.stringify(entry);
       assert(detail.includes(String(eligibleRuns[0].id)) && detail.includes(String(eligibleRuns[1].id)),
         `5d: naming the run it replaced and the run it created (${detail.slice(0, 300)})`);
@@ -395,8 +402,8 @@ async function main() {
         '5d: attributed to the runtime rather than an operator');
       // The runs themselves also record which side of the retry they were on.
       const retriedLog = allLogs.filter(log => log && log.type === 'run:failed_auto_retried');
-      assert(retriedLog.length === 1,
-        `5d: exactly one run is recorded as failed-and-retried (${retriedLog.length})`);
+      assert(retriedLog.length === 3,
+        `5d: exactly one failed-and-retried record exists per retry (${retriedLog.length})`);
 
       // ── 6. RESTART DOES NOT RETRY SETTLED FAILURES ───────────────────────────
       // Auto-retry belongs to the failure path, not to startup convergence. A runtime
@@ -418,7 +425,7 @@ async function main() {
         label: 'auto retry bounds',
         assertions: assert.count(),
         scenarios: scenariosRun,
-        minAssertions: 45,
+        minAssertions: 46,
         minScenarios: 10
       });
       console.log(`\nPASS: auto retry bounds — ${scenariosRun} scenarios, ${assert.count()} assertions (PostgreSQL-native)`);

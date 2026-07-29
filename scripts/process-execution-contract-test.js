@@ -88,6 +88,7 @@ function sandboxCapability(overrides = {}) {
     materializerGeneration: `materializer-v1-${'2'.repeat(64)}`,
     delegatedCgroupIdentityHash: 'f'.repeat(64),
     containmentProbeHash: 'a'.repeat(64),
+    maxActiveOperations: 4,
     verifiedAt: new Date(now - 1000).toISOString(),
     expiresAt: new Date(now + 240000).toISOString(),
     readyForExecution: true,

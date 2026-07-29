@@ -228,6 +228,7 @@ function normalizeProcessSandboxCapabilityDescriptor(value, {
     'materializerGeneration',
     'delegatedCgroupIdentityHash',
     'containmentProbeHash',
+    'maxActiveOperations',
     'verifiedAt',
     'expiresAt',
     'readyForExecution'
@@ -276,6 +277,13 @@ function normalizeProcessSandboxCapabilityDescriptor(value, {
       `no greater than ${PROCESS_SANDBOX_LAUNCHER_PROTOCOL_MAX_VERSION}`
     );
   }
+  if (!Number.isSafeInteger(value.maxActiveOperations) ||
+      value.maxActiveOperations <= 0 ||
+      value.maxActiveOperations > 256) {
+    throw new TypeError(
+      'process sandbox capability.maxActiveOperations must be in 1..=256'
+    );
+  }
   for (const key of [
     'launcherIdentityHash',
     'sandboxBackendIdentityHash',
@@ -321,6 +329,7 @@ function normalizeProcessSandboxCapabilityDescriptor(value, {
     materializerGeneration,
     delegatedCgroupIdentityHash: value.delegatedCgroupIdentityHash,
     containmentProbeHash: value.containmentProbeHash,
+    maxActiveOperations: value.maxActiveOperations,
     verifiedAt,
     expiresAt,
     readyForExecution: true

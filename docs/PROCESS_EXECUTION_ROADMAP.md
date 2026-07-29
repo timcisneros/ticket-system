@@ -11,7 +11,7 @@ Tranche 1: COMPLETE
 Tranche 2: COMPLETE
 Tranche 3: COMPLETE
 Tranche 4: COMPLETE
-Tranche 5: NOT STARTED
+Tranche 5: COMPLETE
 Tranche 6: NOT STARTED
 Tranche 7: NOT STARTED
 Tranche 8: NOT STARTED
@@ -288,6 +288,52 @@ under exhaustion.
 
 This tranche extends the canonical scheduler and budget authority. It does not add a
 second scheduler or parallel budget authority.
+
+### Implemented contract
+
+Every new run stores a closed version-1 `runtimeBudgetSnapshot` before execution. It
+resolves `maxAttempts`, execution steps, model requests, workspace operations, process
+operations, browser operations, elapsed runtime, aggregate output-artifact bytes, and
+`allowParallelRuns` from the admitted execution policy and the referenced runtime-limit
+revision. A `null` ticket limit means the concrete value from that revision; historical
+runs without this snapshot keep their prior compatibility behavior and are not silently
+reinterpreted. One atomic owned-scope allocation wave is one ticket attempt even though
+it contains one run per allocated agent; ordinary single-run admission is one attempt.
+
+PostgreSQL table `run_budget_charges` is the single reservation and charging authority.
+Its canonical identities are the durable provider-request identity, runtime-step
+identity, workspace operation-receipt identity, process operation identity, browser
+operation-receipt identity, and immutable stream-artifact identity. Reservations precede
+covered effects, transition forward to committed or released, and are reconciled from
+durable provider, receipt, process-operation, and artifact facts after recovery. Process
+output remains subject to its launcher ceiling in addition to the aggregate run artifact
+budget.
+
+Feasibility admission rejects only deterministic lower bounds already present in trusted
+facts, such as a declared operation batch or workflow step count that cannot fit the
+snapshot. Vague objectives are not assigned inferred costs, and no model call estimates
+feasibility.
+
+The existing scheduler remains authoritative. PostgreSQL coordinates global active-run,
+configured local-model, target, and process-launcher capacity. Same-run lease fencing and
+workspace mutation serialization remain unchanged; `allowParallelRuns: false` prevents
+simultaneous active runs for one ticket. Capacity waits retain their first eligibility
+time and use stable run-ID ordering, while unrelated capacity keys remain eligible.
+Waiting is persisted and emitted once as backpressure rather than causing model
+re-entry. Capacity ownership renews with the run lease, expires fail-closed, and is
+reclaimed deterministically; process lease loss continues through the existing durable
+cancellation and reconciliation path.
+
+Append-only budget, capacity, and feasibility events reconstruct the admitted snapshot,
+committed and reserved usage, remaining limits, the current wait, and final exhaustion.
+The stable outcome distinctions are `RUN_FEASIBILITY_REJECTED`,
+`RUN_BUDGET_EXHAUSTED`, `RUN_RUNTIME_DURATION_EXCEEDED`, temporary capacity waiting,
+and the typed capacity integrity failures. None represents objective completion.
+
+Future work must reuse this snapshot, charge ledger, PostgreSQL capacity leases, canonical
+scheduler, run leases, operation receipts, artifacts, evidence, and existing process
+recovery. It must not introduce a second budget authority, scheduler, launcher-capacity
+registry, or recovery path.
 
 ## Tranche 6 — Verification and completion semantics
 

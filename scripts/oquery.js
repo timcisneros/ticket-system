@@ -1990,7 +1990,7 @@ async function cmdMaxAttempts(args) {
   const { status, data } = await operatorJsonCall(url, cookie, 'POST', `/api/tickets/${ticketId}/execution-policy/max-attempts`, body);
   if (status === 200 && data) {
     if (args.json) return console.log(JSON.stringify({ ticketId, action: 'max-attempts', maxAttempts: data.maxAttempts }, null, 2));
-    console.log(`  ${green('✓')} Ticket #${ticketId} maxAttempts set to ${data.maxAttempts === null ? 'unlimited' : data.maxAttempts}.`);
+    console.log(`  ${green('✓')} Ticket #${ticketId} maxAttempts set to ${data.maxAttempts === null ? 'runtime default' : data.maxAttempts}.`);
     return;
   }
   reportActionError(args, status, data);

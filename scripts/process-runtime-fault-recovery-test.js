@@ -307,6 +307,7 @@ function fixture(faultPoint = null, { cancelOutcome = 'completed' } = {}) {
     materializerGeneration: `materializer-v1-${'5'.repeat(64)}`,
     delegatedCgroupIdentityHash: '6'.repeat(64),
     containmentProbeHash: '7'.repeat(64),
+    maxActiveOperations: 4,
     verifiedAt: new Date(now - 1000).toISOString(),
     expiresAt: new Date(now + 120000).toISOString(),
     readyForExecution: true

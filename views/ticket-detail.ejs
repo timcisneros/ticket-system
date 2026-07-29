@@ -529,7 +529,7 @@
       <div><dt>Workspace writes</dt><dd><%= ticket.executionPolicy.allowWorkspaceWrites ? 'requested' : 'not requested' %> · <span class="intent">recorded intent</span></dd></div>
       <div><dt>Parallel runs</dt><dd><%= ticket.executionPolicy.allowParallelRuns ? 'requested' : 'not requested' %> · <span class="intent">recorded intent</span></dd></div>
       <div><dt>Child tickets</dt><dd><%= ticket.executionPolicy.allowChildTickets ? 'requested' : 'not requested' %> · <span class="intent">recorded intent</span></dd></div>
-      <div><dt>Max attempts</dt><dd><%= ticket.executionPolicy.maxAttempts === null ? 'unlimited · enforced for manual rerun-from-start when set' : ticket.executionPolicy.maxAttempts + ' · enforced for manual rerun-from-start' %></dd></div>
+      <div><dt>Max attempts</dt><dd><%= ticket.executionPolicy.maxAttempts === null ? 'runtime default · resolved for each newly admitted run' : ticket.executionPolicy.maxAttempts + ' · ticket override' %></dd></div>
       <div><dt>Automatic retry</dt><dd><%= !ticket.executionPolicy.autoRetry ? 'disabled' : (ticket.executionPolicy.maxAttempts === null ? 'enabled but inactive — set maxAttempts to bound automatic retry' : 'enabled · bounded by maxAttempts ' + ticket.executionPolicy.maxAttempts) %></dd></div>
       <div><dt>Max runtime</dt><dd><%= ticket.executionPolicy.maxRuntimeMs === null ? 'unspecified' : ticket.executionPolicy.maxRuntimeMs + 'ms' %> · <span class="intent">recorded intent</span></dd></div>
       <div><dt>Max model requests</dt><dd><%= ticket.executionPolicy.maxModelRequests === null ? 'unspecified' : ticket.executionPolicy.maxModelRequests %> · <span class="intent">recorded intent</span></dd></div>
@@ -538,7 +538,7 @@
     <% if (typeof canUpdateTickets !== 'undefined' && canUpdateTickets) { %>
     <div class="max-attempts-control" data-ticket-id="<%= ticket.id %>">
       <p class="text-muted">Set the manual rerun-from-start ceiling. Leave blank to clear (unlimited). Measurement/limit applies only to manual reruns — no automatic retry.</p>
-      <input type="number" id="max-attempts-input" min="1" step="1" placeholder="unlimited" value="<%= ticket.executionPolicy.maxAttempts === null ? '' : ticket.executionPolicy.maxAttempts %>">
+      <input type="number" id="max-attempts-input" min="1" step="1" placeholder="runtime default" value="<%= ticket.executionPolicy.maxAttempts === null ? '' : ticket.executionPolicy.maxAttempts %>">
       <button type="button" id="max-attempts-set" class="btn-small">Set</button>
       <button type="button" id="max-attempts-clear" class="btn-small">Clear (unlimited)</button>
       <span id="max-attempts-msg" class="text-muted"></span>
@@ -660,12 +660,13 @@
       <%
         function budgetRollupLabel(status) {
           if (status === 'exceeded') return 'exceeded (advisory)';
+          if (status === 'exhausted') return 'exhausted';
           if (status === 'unavailable') return 'unavailable';
           if (status === 'within_threshold') return 'within limit';
           return 'not configured';
         }
       %>
-      <p class="text-muted">Budget advisory (no execution blocked): overall <%= budgetRollupLabel(budgetSummary.overall) %> · runtime <%= budgetRollupLabel(budgetSummary.metrics.runtimeMs) %> · model requests <%= budgetRollupLabel(budgetSummary.metrics.modelRequests) %> · workspace operations <%= budgetRollupLabel(budgetSummary.metrics.workspaceOperations) %>. Runs: <%= budgetSummary.counts.exceeded %> exceeded, <%= budgetSummary.counts.within_threshold %> within, <%= budgetSummary.counts.unavailable %> unavailable, <%= budgetSummary.counts.not_configured %> not configured.</p>
+      <p class="text-muted">Budget history: overall <%= budgetRollupLabel(budgetSummary.overall) %> · runtime <%= budgetRollupLabel(budgetSummary.metrics.runtimeMs) %> · model requests <%= budgetRollupLabel(budgetSummary.metrics.modelRequests) %> · workspace operations <%= budgetRollupLabel(budgetSummary.metrics.workspaceOperations) %>. Runs: <%= budgetSummary.enforcedRunCount %> enforced, <%= budgetSummary.historicalAdvisoryRunCount %> historical advisory, <%= budgetSummary.counts.exhausted %> exhausted, <%= budgetSummary.counts.exceeded %> advisory exceeded, <%= budgetSummary.counts.within_threshold %> within, <%= budgetSummary.counts.unavailable %> unavailable, <%= budgetSummary.counts.not_configured %> not configured.</p>
     <% } %>
     <p class="text-muted">Each run is one attempt — measurement only, no retry triggered.</p>
   <% } %>

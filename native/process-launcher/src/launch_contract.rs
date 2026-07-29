@@ -137,6 +137,7 @@ pub struct ContainmentCapability {
     pub materializer_generation: String,
     pub delegated_cgroup_identity_hash: String,
     pub containment_probe_hash: String,
+    pub max_active_operations: u32,
     pub verified_at: String,
     pub expires_at: String,
     pub ready_for_execution: bool,

@@ -95,6 +95,7 @@ async function main() {
     assert.equal(migrationResults.flat().filter(name => name === '027_run_agent_integrity.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name => name === '028_process_template_ticket_provenance.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name => name === '029_process_execution_lifecycle.sql').length, 1);
+    assert.equal(migrationResults.flat().filter(name => name === '030_runtime_budget_and_capacity.sql').length, 1);
     assert.equal(await store.health(), true);
     assert.equal((await store.acquireRuntimeAuthority()).mode, 'shared_transactional');
     const emptyRuntimeIntegrity = await store.prepareRuntimePersistence();
