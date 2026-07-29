@@ -21,7 +21,7 @@
     "lint:launcher-foundation": "cargo clippy --manifest-path native/process-launcher/Cargo.toml --all-targets -- -D warnings",
     "test:launcher-foundation": "node scripts/process-launcher-foundation-native-test.js && node scripts/process-launcher-foundation-contract-test.js && node scripts/process-launcher-foundation-deployment-test.js && node scripts/process-launcher-foundation-cross-uid-test.js",
     "test:launcher-containment": "PROCESS_CONTAINMENT_ACTIVE_REQUIRED=1 node scripts/process-launcher-foundation-cross-uid-test.js",
-    "test:process-runtime": "node scripts/process-runtime-capability-test.js && node scripts/process-output-artifact-test.js && node scripts/process-runtime-fault-recovery-test.js && node scripts/process-runtime-lifecycle-postgres-test.js && node scripts/process-runtime-dispatch-postgres-test.js",
+    "test:process-runtime": "node scripts/process-runtime-capability-test.js && node scripts/process-output-artifact-test.js && node scripts/process-runtime-fault-recovery-test.js && node scripts/process-runtime-lifecycle-postgres-test.js && node scripts/process-runtime-dispatch-postgres-test.js && node scripts/process-lease-expiry-cancellation-postgres-test.js && node scripts/process-consequence-reconstruction-test.js",
     "preview": "NODE_ENV=production node server.js",
     "codex:bootstrap": "node scripts/codex-bootstrap.js",
     "codex:trace": "node scripts/codex-trace.js",

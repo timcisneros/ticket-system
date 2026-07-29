@@ -496,6 +496,22 @@ async function main() {
       assert(receipts.some(receipt => receipt.operation === 'runProcess' &&
         receipt.outcome === 'succeeded'),
       'process receipt participates in generic run reconstruction');
+      const consequenceRecord = await store.getRunConsequence(run.id);
+      const processConsequences = consequenceRecord &&
+        Array.isArray(consequenceRecord.consequence.processOperations)
+        ? consequenceRecord.consequence.processOperations
+        : [];
+      assert(processConsequences.length === 1 &&
+        processConsequences[0].operationIdentity === operation.operationIdentity &&
+        processConsequences[0].operation === 'runProcess' &&
+        processConsequences[0].outcome === 'succeeded' &&
+        processConsequences[0].terminalOutcome === 'completed' &&
+        processConsequences[0].terminalResultHash === operation.terminalResultHash,
+      'successful process receipt participates in the persisted ordinary run consequence');
+      assert(['created', 'updated', 'deleted', 'renamed']
+        .every(key => Array.isArray(consequenceRecord.consequence[key]) &&
+          consequenceRecord.consequence[key].length === 0),
+      'process consequence does not claim a workspace mutation');
 
       const databaseEvidence = JSON.stringify({
         operation,

@@ -537,6 +537,76 @@ async function main() {
     fs.rmSync(activeCancellation.artifactRoot, { recursive: true, force: true });
   }
 
+  const acceptedIntentCancellation = fixture(
+    'after_launcher_acceptance_before_active_state_commit',
+    { cancelOutcome: 'cancelled' }
+  );
+  try {
+    await assert.rejects(
+      () => acceptedIntentCancellation.buildController().execute({
+        run: acceptedIntentCancellation.run,
+        action: acceptedIntentCancellation.action,
+        step: 1
+      }),
+      error => error && error.code === 'TEST_PROCESS_RUNTIME_CRASH'
+    );
+    const before = await acceptedIntentCancellation.repository.getProcessOperation();
+    ok(before.lifecycleState === 'intent' &&
+      before.launcherAcceptanceIdentity === null &&
+      acceptedIntentCancellation.launcher.launchCount === 1,
+    'launcher acceptance may survive while PostgreSQL still records intent');
+    await acceptedIntentCancellation.buildController().cancelRunOperations(
+      acceptedIntentCancellation.run,
+      'lease expired'
+    );
+    const terminal =
+      await acceptedIntentCancellation.repository.getProcessOperation();
+    ok(terminal.lifecycleState === 'terminal' &&
+      terminal.cancellationRequested === true &&
+      terminal.terminalOutcome === 'completed' &&
+      acceptedIntentCancellation.launcher.cancelCount === 1 &&
+      acceptedIntentCancellation.launcher.launchCount === 1,
+    'intent cancellation queries durable launcher ownership and preserves its natural terminal result');
+  } finally {
+    fs.rmSync(
+      acceptedIntentCancellation.artifactRoot,
+      { recursive: true, force: true }
+    );
+  }
+
+  const finalizingCancellation = fixture(
+    'after_terminal_database_commit_before_required_evidence'
+  );
+  try {
+    await assert.rejects(
+      () => finalizingCancellation.buildController().execute({
+        run: finalizingCancellation.run,
+        action: finalizingCancellation.action,
+        step: 1
+      }),
+      error => error && error.code === 'TEST_PROCESS_RUNTIME_CRASH'
+    );
+    const before = await finalizingCancellation.repository.getProcessOperation();
+    ok(before.lifecycleState === 'finalizing' &&
+      before.terminalOutcome === 'completed',
+    'terminal launcher facts may await artifact and evidence finalization');
+    await finalizingCancellation.buildController().cancelRunOperations(
+      finalizingCancellation.run,
+      'lease expired'
+    );
+    const terminal = await finalizingCancellation.repository.getProcessOperation();
+    ok(terminal.lifecycleState === 'terminal' &&
+      terminal.terminalOutcome === 'completed' &&
+      terminal.cancellationRequested === false &&
+      finalizingCancellation.launcher.cancelCount === 0,
+    'finalizing operation completes existing evidence without fabricating cancellation');
+  } finally {
+    fs.rmSync(finalizingCancellation.artifactRoot, {
+      recursive: true,
+      force: true
+    });
+  }
+
   ok(CRASH_WINDOWS.length === 8,
     'all required non-cancellation runtime crash windows are exercised');
   console.log(`PASS: process runtime fault recovery (${passed} assertions)`);

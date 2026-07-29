@@ -274,46 +274,83 @@ class ProcessExecutionController {
   }
 
   async cancelRunOperations(run, reason) {
-    const records = await this.repository.listProcessOperationsForRun(run.id, {
-      states: ['intent', 'active', 'finalizing']
-    });
+    const records = await this.repository.listProcessOperationsForRun(run.id);
     for (const current of records) {
-      let record = await this.repository.requestProcessOperationCancellation({
-        operationIdentity: current.operationIdentity,
-        reason
-      });
-      await this.#publishEvidence(record, 'process.cancellation_requested', {
-        reason: record.cancellationReason
-      });
-      await this.faultCheckpoint('during_process_cancellation', {
-        operationIdentity: record.operationIdentity
-      });
-      if (record.lifecycleState === 'intent' &&
-          record.launcherAcceptanceIdentity === null) {
-        let acceptedDuringCancellation = false;
-        await this.repository.withProcessOperationLock(
-          record.operationIdentity,
-          async () => {
-            record = await this.repository.getProcessOperation(record.operationIdentity);
-            if (record.lifecycleState === 'intent' &&
-                record.launcherAcceptanceIdentity === null) {
+      const disposition = await this.repository.withProcessOperationLock(
+        current.operationIdentity,
+        async () => {
+          let record = await this.repository.getProcessOperation(current.operationIdentity);
+          if (record.lifecycleState === 'terminal') {
+            return record.launcherOutputAcknowledged
+              ? { kind: 'complete', record }
+              : { kind: 'reconcile', record };
+          }
+          if (record.lifecycleState === 'finalizing') {
+            // The launcher has already published one authoritative terminal
+            // result. Finish its artifacts/evidence/receipt without rewriting
+            // that result as cancellation.
+            return { kind: 'reconcile', record };
+          }
+
+          record = await this.repository.requestProcessOperationCancellation({
+            operationIdentity: record.operationIdentity,
+            reason
+          });
+          await this.#publishEvidence(record, 'process.cancellation_requested', {
+            reason: record.cancellationReason
+          });
+          await this.faultCheckpoint('during_process_cancellation', {
+            operationIdentity: record.operationIdentity
+          });
+
+          if (record.lifecycleState === 'intent' &&
+              record.launcherAcceptanceIdentity === null) {
+            // PostgreSQL may still say `intent` after launcher acceptance when
+            // the runtime crashed before committing `active`. Query the
+            // launcher's durable registry before deciding that no process ever
+            // started. A missing record is the only authority for the
+            // zero-output pre-launch cancellation path.
+            let launcherStatus = null;
+            try {
+              launcherStatus = await this.launcherClient.getOperation({
+                operationIdentity: record.operationIdentity
+              });
+            } catch (error) {
+              if (error.code !== 'PROCESS_OPERATION_NOT_FOUND') throw error;
+            }
+            if (!launcherStatus) {
               await this.#finalizeUnlaunchedCancellation(record);
-            } else {
-              acceptedDuringCancellation = true;
+              return { kind: 'complete', record };
             }
           }
+          return { kind: 'cancel', record };
+        }
+      );
+
+      if (disposition.kind === 'cancel') {
+        await this.#cancelAccepted(disposition.record);
+      } else if (disposition.kind === 'reconcile') {
+        await this.repository.withProcessOperationLock(
+          disposition.record.operationIdentity,
+          async () => this.#reconcileLocked({
+            run,
+            record: await this.repository.getProcessOperation(
+              disposition.record.operationIdentity
+            )
+          })
         );
-        if (acceptedDuringCancellation) await this.#cancelAccepted(record);
-      } else {
-        await this.#cancelAccepted(record);
       }
     }
     const remaining = await this.repository.listProcessOperationsForRun(run.id, {
       states: ['intent', 'active', 'finalizing']
     });
-    if (remaining.length > 0) {
+    const incompleteTerminal = (await this.repository.listProcessOperationsForRun(run.id))
+      .filter(record => record.lifecycleState === 'terminal' &&
+        !record.launcherOutputAcknowledged &&
+        record.launcherAcceptanceIdentity !== null);
+    if (remaining.length > 0 || incompleteTerminal.length > 0) {
       throw new ProcessExecutionControllerError(
-        'Owned process operations remain nonterminal after cancellation',
+        'Owned process operations remain incomplete after cancellation',
         'PROCESS_EXECUTION_CANCELLATION_FAILED'
       );
     }

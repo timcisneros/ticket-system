@@ -37,6 +37,7 @@ const {
   PROCESS_PHASE_AUTHORITY_RULE,
   PROCESS_POLICY_SNAPSHOT_HISTORICAL_VERSION_2,
   PROCESS_POLICY_SNAPSHOT_VERSION,
+  PROCESS_TERMINAL_OUTCOMES,
   buildProcessOperationIdentity,
   buildProcessOperationResolutionRecord,
   buildProcessPolicySnapshot,
@@ -45,6 +46,7 @@ const {
   normalizeProcessPolicySnapshot,
   parseProcessOperationRequest,
   processAuthorityReferences,
+  processIdentifier,
   processResolutionError,
   resolveProcessOperationRequest,
   restoreProcessOperationResolution
@@ -7071,6 +7073,51 @@ function buildMutationConsequenceFromHistory(record) {
   return { category: 'mutations', item: base };
 }
 
+function processArtifactConsequence(artifact, expectedStream) {
+  if (artifact === null || artifact === undefined) return null;
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact) ||
+      typeof artifact.id !== 'string' || artifact.id.length < 1 || artifact.id.length > 256 ||
+      artifact.stream !== expectedStream ||
+      !Number.isSafeInteger(artifact.byteCount) || artifact.byteCount < 0 ||
+      typeof artifact.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(artifact.sha256)) {
+    throw new TypeError(`runProcess ${expectedStream} artifact receipt is invalid`);
+  }
+  return {
+    id: artifact.id,
+    stream: expectedStream,
+    byteCount: artifact.byteCount,
+    sha256: artifact.sha256
+  };
+}
+
+function buildProcessConsequenceFromHistory(record) {
+  if (!record || record.operation !== PROCESS_OPERATION) return null;
+  const operationIdentity = record.operationIdentity || record.operationKey;
+  if (typeof operationIdentity !== 'string' ||
+      !/^process-operation:[0-9a-f]{64}$/.test(operationIdentity)) {
+    throw new TypeError('runProcess receipt has no canonical operation identity');
+  }
+  const targetId = processIdentifier(record.targetId, 'runProcess receipt targetId');
+  const profileId = processIdentifier(record.profileId, 'runProcess receipt profileId');
+  if (!['succeeded', 'failed'].includes(record.outcome) ||
+      !PROCESS_TERMINAL_OUTCOMES.includes(record.terminalOutcome) ||
+      typeof record.terminalResultHash !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(record.terminalResultHash)) {
+    throw new TypeError('runProcess receipt terminal authority is invalid');
+  }
+  return {
+    operationIdentity,
+    operation: PROCESS_OPERATION,
+    targetId,
+    profileId,
+    outcome: record.outcome,
+    terminalOutcome: record.terminalOutcome,
+    terminalResultHash: record.terminalResultHash,
+    stdoutArtifact: processArtifactConsequence(record.stdoutArtifact, 'stdout'),
+    stderrArtifact: processArtifactConsequence(record.stderrArtifact, 'stderr')
+  };
+}
+
 function collectAttemptedMutationConsequences(run, snapshot, suppliedEvents = null) {
   const attempts = [];
   const seen = new Set();
@@ -7154,7 +7201,6 @@ function collectExplicitNotifications(run, suppliedEvents = null) {
 // never derive different answers for the same run.
 async function hydrateRunConsequenceForPresentation(runId, consequenceDocument) {
   if (!consequenceDocument) return consequenceDocument;
-  if (hasMaterialMutationConsequence(consequenceDocument)) return consequenceDocument;
   // Deliberately not wrapped in a swallowing try/catch: a receipt read that fails
   // here would otherwise silently degrade every surface back to "changed nothing",
   // which is the exact failure this entry exists to remove.
@@ -7187,8 +7233,21 @@ function hasMaterialMutationConsequence(consequence) {
 // so failed, refused, or merely prepared operations are never counted.
 function applyHistoricalMutationConsequence(persistedConsequence, operations) {
   if (!persistedConsequence || typeof persistedConsequence !== 'object') return persistedConsequence;
-  if (hasMaterialMutationConsequence(persistedConsequence)) return persistedConsequence;
   if (!Array.isArray(operations) || operations.length === 0) return persistedConsequence;
+
+  let consequence = persistedConsequence;
+  if (!Array.isArray(consequence.processOperations)) {
+    const processOperations = operations
+      .map(buildProcessConsequenceFromHistory)
+      .filter(Boolean);
+    if (processOperations.length > 0) {
+      consequence = {
+        ...consequence,
+        processOperations
+      };
+    }
+  }
+  if (hasMaterialMutationConsequence(consequence)) return consequence;
 
   const rebuilt = { mutations: [], created: [], updated: [], deleted: [], renamed: [] };
   operations
@@ -7201,10 +7260,10 @@ function applyHistoricalMutationConsequence(persistedConsequence, operations) {
     });
 
   // A genuinely non-mutating run stays empty rather than gaining a provenance flag.
-  if (!hasMaterialMutationConsequence(rebuilt)) return persistedConsequence;
+  if (!hasMaterialMutationConsequence(rebuilt)) return consequence;
 
   return {
-    ...persistedConsequence,
+    ...consequence,
     ...rebuilt,
     mutationConsequenceSource: 'reconstructed_from_operation_receipts'
   };
@@ -7242,6 +7301,10 @@ function buildRunConsequence(run, {
       violationsStatus: evaluation.violations ? evaluation.violations.status || 'unknown' : 'unknown'
     }
   };
+  const processOperations = suppliedOperations
+    .map(buildProcessConsequenceFromHistory)
+    .filter(Boolean);
+  if (processOperations.length > 0) consequence.processOperations = processOperations;
 
   suppliedOperations.forEach(record => {
     const mutation = buildMutationConsequenceFromHistory(record);
@@ -7273,6 +7336,14 @@ async function expireStaleRunLeases() {
     });
     if (!recovery) continue;
     const run = recovery.run;
+    const leaseLossReason =
+      `Run lease expired for owner ${recovery.previousLease.leaseOwner || 'unknown'}`;
+    // Recovery has established that the prior execution owner lost its lease.
+    // Cancel/finalize every durable process operation before ordinary replay
+    // reconstruction can decide that this run is resumable. In particular,
+    // never let `reconcileRun` observe an active launcher operation and wait for
+    // natural completion under ownership that the scheduler already fenced.
+    await processExecutionController.cancelRunOperations(run, leaseLossReason);
     let runEvents = await readAllRunScopedEvents(run.id);
     const claimedState = reconstructResumableState(run, runEvents);
     if (claimedState && claimedState.isTerminal) {
@@ -7294,7 +7365,6 @@ async function expireStaleRunLeases() {
       await interruptAgentRun(run, 'target operation effect requires explicit reconciliation');
       continue;
     }
-    await processExecutionController.reconcileRun(run);
     // Check if run is safe to resume before interrupting
     runEvents = await readAllRunScopedEvents(run.id);
     const resumeState = reconstructResumableState(run, runEvents);
@@ -7332,7 +7402,7 @@ async function expireStaleRunLeases() {
         lastHeartbeatAt: recovery.previousLease.lastHeartbeatAt
       }
     });
-    await interruptAgentRun(run, `Run lease expired for owner ${recovery.previousLease.leaseOwner || 'unknown'}`);
+    await interruptAgentRun(run, leaseLossReason);
   }
 
   return expiredRuns;

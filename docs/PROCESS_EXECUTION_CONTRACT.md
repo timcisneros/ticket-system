@@ -1,4 +1,8 @@
-# Bounded process execution contract — Tranche 2 complete
+# Bounded process execution contract — Tranches 1–4 complete
+
+`docs/PROCESS_EXECUTION_ROADMAP.md` is the authoritative eight-tranche roadmap.
+Implementation labels 2A0–2B are internal stages within Tranche 2 and do not redefine
+that roadmap.
 
 Tranches 2A0–2A3 froze executable authority, immutable input, verified rootfs identity,
 and the native kernel-containment launcher. Tranche 2B connects only authorized
@@ -847,18 +851,26 @@ The controller publishes idempotent append-only evidence for
 `process.cancellation_requested`. Each binds run/ticket/operation, launch plan, policy,
 runtime/containment/materializer generations, rootfs/ELF authority, workspace snapshot
 and manifest, terminal-result hash, and artifact counts/hashes. A generic
-`run_operations` receipt records `runProcess`, participates in replay and consequence
-reconstruction, and does not create special ticket-completion semantics.
+`run_operations` receipt records `runProcess`, participates in replay and ordinary
+consequence reconstruction, and does not create special ticket-completion semantics. Its
+closed consequence projection contains only operation identity, `runProcess`,
+target/profile identity, receipt outcome, terminal outcome/result hash, and bounded
+stdout/stderr artifact identity/count/hash metadata. It cannot populate
+workspace-created, updated, deleted, renamed, or generic mutation collections and
+contains no raw output or private launch authority.
 
 Output acknowledgement occurs only after artifacts, database terminal facts, required
 evidence, and the generic receipt are durable. Evidence or artifact failure leaves the
 row recoverably `finalizing`; it cannot be reported as successful.
 
-Run interruption and lease loss first durably request cancellation, call the exact
-launcher operation, observe whole-tree terminalization, finish output/evidence, and only
-then terminalize the run. Cancellation before launcher acceptance produces a truthful
-zero-output cancelled result without launch. Cancellation racing natural completion
-reconciles the launcher's single terminal result.
+Run interruption and scheduler lease loss first inspect durable process state. For
+`intent`/`active`, they durably request cancellation, call the exact launcher operation
+when launcher ownership exists, observe whole-tree terminalization, and finish
+output/evidence/receipt acknowledgement before stale-run recovery or terminalization may
+complete. An unaccepted `intent` produces a truthful zero-output cancellation without
+submitting its launch plan. `finalizing` finishes the existing terminal result;
+`terminal` repairs only idempotent obligations. Cancellation racing natural completion
+preserves the launcher's single terminal result and the durable cancellation request.
 
 Startup scans every nonterminal operation. `intent` queries the launcher before any
 submission and submits the exact stored plan only when no acceptance exists and current
@@ -874,7 +886,9 @@ evidence, during cancellation, and during startup reconciliation. Each restart c
 to one execution, one terminal row, one artifact pair, one receipt/evidence set, and one
 launcher acknowledgement.
 
-Tranche 2 is closed. Kernel containment and active proof completed the original sandbox
-work commonly associated with Tranche 4; this tranche completes the durable execution,
-idempotency, artifact, cancellation, and recovery work commonly associated with
-Tranche 3. Neither capability should be rebuilt as a parallel subsystem.
+Tranches 1–4 are complete under the authoritative roadmap. Kernel containment and active
+proof satisfy Tranche 4. Durable execution identity, artifacts, evidence, cancellation,
+crash recovery, scheduler lease-loss cancellation ordering, receipts, replay, and
+ordinary consequence reconstruction satisfy Tranche 3. Tranche 5 is next and remains
+not started. Completed lifecycle and containment systems must not be rebuilt as parallel
+subsystems.

@@ -68,6 +68,8 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'postgres-startup-recovery-test.js',
   'provider-response-recovery-postgres-test.js',
   'process-execution-runtime-test.js',
+  'process-lease-expiry-cancellation-postgres-test.js',
+  'process-consequence-reconstruction-test.js',
   'process-runtime-lifecycle-postgres-test.js',
   'process-runtime-dispatch-postgres-test.js',
   'process-workspace-mutation-boundary-test.js',

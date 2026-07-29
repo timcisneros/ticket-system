@@ -227,6 +227,8 @@ for (const requiredRuntimeSuite of [
   'process-runtime-capability-test.js',
   'process-output-artifact-test.js',
   'process-runtime-fault-recovery-test.js',
+  'process-lease-expiry-cancellation-postgres-test.js',
+  'process-consequence-reconstruction-test.js',
   'process-runtime-lifecycle-postgres-test.js',
   'process-runtime-dispatch-postgres-test.js'
 ]) {

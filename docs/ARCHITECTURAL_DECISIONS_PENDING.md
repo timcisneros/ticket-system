@@ -4977,6 +4977,27 @@ This completes the durable lifecycle and recovery capabilities originally expect
 Tranche 3 and the enforceable sandbox capabilities originally expected from Tranche 4.
 They must not be reintroduced as parallel subsystems.
 
+**Tranche 3 integrity completion:** the authoritative roadmap is now persisted in
+`docs/PROCESS_EXECUTION_ROADMAP.md`. Scheduler lease-expiry recovery invokes the existing
+durable process cancellation authority immediately after fencing the stale owner and
+before ordinary reconciliation can resume the run. Accepted/active operations therefore
+reach the launcher's one terminal result and finish artifacts, evidence, receipt, and
+output acknowledgement before stale-run recovery completes; finalizing and terminal
+operations only finish their existing idempotent obligations. A natural-completion race
+preserves both the durable cancellation request and the launcher result. The real
+PostgreSQL scheduler seam is covered by
+`scripts/process-lease-expiry-cancellation-postgres-test.js`.
+
+Generic `runProcess` receipts now also participate in ordinary run consequence
+reconstruction through a closed `processOperations` projection. That projection records
+only durable operation/target/profile/outcome/result-hash and bounded artifact metadata;
+it cannot claim a workspace mutation, expose raw/private authority, or alter completion
+semantics. Restart replay and unchanged workspace/browser behavior are covered by
+`scripts/process-consequence-reconstruction-test.js`. Tranches 3 and 4 are complete;
+Tranche 5 is next and remains not started. Existing authority, materialization, launcher,
+containment, lifecycle, artifact, evidence, cancellation, and recovery systems are
+mandatory reuse points, not subsystems to rebuild.
+
 ---
 
 ## Workspace Operation Error Handling
