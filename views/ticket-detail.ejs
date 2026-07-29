@@ -521,26 +521,37 @@
 <details class="disclosure">
   <summary>Execution policy <span class="sub"><%= ticket.executionPolicy.mode %></span></summary>
   <div class="body">
-    <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
+    <%
+      function ticketBudgetOverride(value, unit) {
+        return value === null || value === undefined
+          ? 'inherit runtime default when a new run is admitted'
+          : value + (unit || '') + ' · ticket override for newly admitted runs';
+      }
+    %>
+    <p class="text-muted">Policy overrides apply when a new run is admitted. A blank numeric override inherits the then-current runtime default; changing this ticket never rewrites an existing run's immutable budget snapshot. Fields explicitly marked as recorded intent remain unimplemented.</p>
     <dl class="detail-grid">
       <div><dt>Verification</dt><dd><code><%= ticket.executionPolicy.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
       <div><dt>Workspace scope</dt><dd><code><%= ticket.executionPolicy.workspaceScope %></code> · enforced by the current workspace path</dd></div>
       <div><dt>Mode</dt><dd><code><%= ticket.executionPolicy.mode %></code> · <span class="intent">recorded intent</span></dd></div>
       <div><dt>Workspace writes</dt><dd><%= ticket.executionPolicy.allowWorkspaceWrites ? 'requested' : 'not requested' %> · <span class="intent">recorded intent</span></dd></div>
-      <div><dt>Parallel runs</dt><dd><%= ticket.executionPolicy.allowParallelRuns ? 'requested' : 'not requested' %> · <span class="intent">recorded intent</span></dd></div>
-      <div><dt>Child tickets</dt><dd><%= ticket.executionPolicy.allowChildTickets ? 'requested' : 'not requested' %> · <span class="intent">recorded intent</span></dd></div>
-      <div><dt>Max attempts</dt><dd><%= ticket.executionPolicy.maxAttempts === null ? 'runtime default · resolved for each newly admitted run' : ticket.executionPolicy.maxAttempts + ' · ticket override' %></dd></div>
-      <div><dt>Automatic retry</dt><dd><%= !ticket.executionPolicy.autoRetry ? 'disabled' : (ticket.executionPolicy.maxAttempts === null ? 'enabled but inactive — set maxAttempts to bound automatic retry' : 'enabled · bounded by maxAttempts ' + ticket.executionPolicy.maxAttempts) %></dd></div>
-      <div><dt>Max runtime</dt><dd><%= ticket.executionPolicy.maxRuntimeMs === null ? 'unspecified' : ticket.executionPolicy.maxRuntimeMs + 'ms' %> · <span class="intent">recorded intent</span></dd></div>
-      <div><dt>Max model requests</dt><dd><%= ticket.executionPolicy.maxModelRequests === null ? 'unspecified' : ticket.executionPolicy.maxModelRequests %> · <span class="intent">recorded intent</span></dd></div>
-      <div><dt>Max workspace operations</dt><dd><%= ticket.executionPolicy.maxWorkspaceOperations === null ? 'unspecified' : ticket.executionPolicy.maxWorkspaceOperations %> · <span class="intent">recorded intent</span></dd></div>
+      <div><dt>Parallel runs</dt><dd><%= ticket.executionPolicy.allowParallelRuns ? 'allowed' : 'not allowed' %> · enforced by the scheduler for newly admitted runs</dd></div>
+      <div><dt>Child tickets</dt><dd><%= ticket.executionPolicy.allowChildTickets ? 'requested' : 'not requested' %> · <span class="intent">recorded intent · not implemented</span></dd></div>
+      <div><dt>Max attempts</dt><dd><%= ticketBudgetOverride(ticket.executionPolicy.maxAttempts) %></dd></div>
+      <div><dt>Automatic retry</dt><dd><%= !ticket.executionPolicy.autoRetry ? 'disabled' : (ticket.executionPolicy.maxAttempts === null ? 'enabled · bounded by the runtime default resolved for each admitted run' : 'enabled · bounded by ticket override ' + ticket.executionPolicy.maxAttempts) %></dd></div>
+      <div><dt>Max execution steps</dt><dd><%= ticketBudgetOverride(ticket.executionPolicy.maxExecutionSteps) %></dd></div>
+      <div><dt>Max runtime</dt><dd><%= ticketBudgetOverride(ticket.executionPolicy.maxRuntimeMs, 'ms') %></dd></div>
+      <div><dt>Max model requests</dt><dd><%= ticketBudgetOverride(ticket.executionPolicy.maxModelRequests) %></dd></div>
+      <div><dt>Max workspace operations</dt><dd><%= ticketBudgetOverride(ticket.executionPolicy.maxWorkspaceOperations) %></dd></div>
+      <div><dt>Max process operations</dt><dd><%= ticketBudgetOverride(ticket.executionPolicy.maxProcessOperations) %></dd></div>
+      <div><dt>Max browser operations</dt><dd><%= ticketBudgetOverride(ticket.executionPolicy.maxBrowserOperations) %></dd></div>
+      <div><dt>Max output artifact bytes</dt><dd><%= ticketBudgetOverride(ticket.executionPolicy.maxOutputArtifactBytes, ' bytes') %></dd></div>
     </dl>
     <% if (typeof canUpdateTickets !== 'undefined' && canUpdateTickets) { %>
     <div class="max-attempts-control" data-ticket-id="<%= ticket.id %>">
-      <p class="text-muted">Set the manual rerun-from-start ceiling. Leave blank to clear (unlimited). Measurement/limit applies only to manual reruns — no automatic retry.</p>
+      <p class="text-muted">Set a ticket override for newly admitted attempts. Leave blank or clear the override to restore runtime-default inheritance. The effective limit bounds manual reruns and enabled automatic retries; existing run snapshots do not change.</p>
       <input type="number" id="max-attempts-input" min="1" step="1" placeholder="runtime default" value="<%= ticket.executionPolicy.maxAttempts === null ? '' : ticket.executionPolicy.maxAttempts %>">
       <button type="button" id="max-attempts-set" class="btn-small">Set</button>
-      <button type="button" id="max-attempts-clear" class="btn-small">Clear (unlimited)</button>
+      <button type="button" id="max-attempts-clear" class="btn-small">Clear (use runtime default)</button>
       <span id="max-attempts-msg" class="text-muted"></span>
     </div>
     <script>
@@ -668,7 +679,7 @@
       %>
       <p class="text-muted">Budget history: overall <%= budgetRollupLabel(budgetSummary.overall) %> · runtime <%= budgetRollupLabel(budgetSummary.metrics.runtimeMs) %> · model requests <%= budgetRollupLabel(budgetSummary.metrics.modelRequests) %> · workspace operations <%= budgetRollupLabel(budgetSummary.metrics.workspaceOperations) %>. Runs: <%= budgetSummary.enforcedRunCount %> enforced, <%= budgetSummary.historicalAdvisoryRunCount %> historical advisory, <%= budgetSummary.counts.exhausted %> exhausted, <%= budgetSummary.counts.exceeded %> advisory exceeded, <%= budgetSummary.counts.within_threshold %> within, <%= budgetSummary.counts.unavailable %> unavailable, <%= budgetSummary.counts.not_configured %> not configured.</p>
     <% } %>
-    <p class="text-muted">Each run is one attempt — measurement only, no retry triggered.</p>
+    <p class="text-muted">Run and attempt history is reconstructed from durable records. Automatic retries appear as separate runs and remain bounded by the effective admitted attempt limit.</p>
   <% } %>
 </section>
 

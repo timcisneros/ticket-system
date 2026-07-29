@@ -1666,13 +1666,21 @@ async function cmdRunState(args) {
     const l = data.lease;
     console.log(`  ${dim('lease')} owner: ${l.owner || '?'}  expires: ${l.expiresAt ? datetime(l.expiresAt) : '?'}`);
   }
-  if (data.budgetStatus) {
-    const b = data.budgetStatus;
-    console.log(`  ${dim('budget')} steps: ${b.usedSteps || 0}/${b.maxSteps || 'unlim'}  reqs: ${b.usedRequests || 0}/${b.maxRequests || 'unlim'}  ops: ${b.usedOps || 0}/${b.maxOps || 'unlim'}`);
+  if (data.runtimeBudgetState && data.runtimeBudgetState.snapshot) {
+    const usage = data.runtimeBudgetState.usage || {};
+    const pair = key => usage[key]
+      ? `${usage[key].committed}/${usage[key].limit}`
+      : 'unavailable';
+    console.log(`  ${dim('budget · enforced')} steps: ${pair('execution_step')}  reqs: ${pair('model_request')}  workspace: ${pair('workspace_operation')}  process: ${pair('process_operation')}  browser: ${pair('browser_operation')}  artifacts: ${pair('output_artifact_bytes')} bytes`);
+  } else if (data.budgetStatus) {
+    console.log(`  ${dim('budget')} historical advisory — this run has no effective runtime budget snapshot`);
   }
   if (data.attemptUsage) {
     const a = data.attemptUsage;
-    console.log(`  ${dim('attempts')} ${a.currentAttempt || 0}/${a.maxAttempts || 'unlim'}`);
+    const admittedMax = data.runtimeBudgetState && data.runtimeBudgetState.snapshot
+      ? data.runtimeBudgetState.snapshot.maxAttempts
+      : null;
+    console.log(`  ${dim('attempt')} ${a.attemptNumber || 'unavailable'} of ${a.attemptCount || 'unavailable'} admitted · max ${admittedMax === null ? 'historical/unavailable' : admittedMax + ' enforced'}`);
   }
   if (data.triage && data.triage.required) console.log(`  ${yellow('triage required')} ${data.triage.reasonCode || ''} ${data.triage.summary || ''}`);
   console.log('');
@@ -1834,7 +1842,7 @@ async function cmdRuntimeStatus(args) {
   if (counts.expiredLeases) console.log(`  ${yellow('expired leases')} ${counts.expiredLeases}`);
   if (data.concurrencyLimits) {
     const concurrency = data.concurrencyLimits;
-    console.log(`  ${dim('deployment limits')} active runs: ${concurrency.maxActiveRuns || 'unlimited'}  local model: ${concurrency.localModelConcurrency || 'unlimited'}`);
+    console.log(`  ${dim('deployment limits')} active runs: ${concurrency.maxActiveRuns || 'unavailable'}  local model: ${concurrency.localModelConcurrency || 'unavailable'}`);
   }
   if (data.mutationAdmission) {
     const admission = data.mutationAdmission;
@@ -1846,7 +1854,7 @@ async function cmdRuntimeStatus(args) {
   }
   if (data.runtimeLimits) {
     const rl = data.runtimeLimits;
-    console.log(`  ${dim('limits')} steps: ${rl.maxExecutionSteps || 'unlim'}  reqs: ${rl.maxModelRequestsPerRun || 'unlim'}  ops: ${rl.maxWorkspaceOperationsPerRun || 'unlim'}`);
+    console.log(`  ${dim('limits')} steps: ${rl.maxExecutionSteps || 'unavailable'}  reqs: ${rl.maxModelRequestsPerRun || 'unavailable'}  ops: ${rl.maxWorkspaceOperationsPerRun || 'unavailable'}`);
   }
   if (data.pagination) {
     const shown = Array.isArray(data.activeRuns) ? data.activeRuns.length : 0;
@@ -3213,7 +3221,7 @@ function help() {
 
     max-attempts <ticketId> <n>
                     Set max retry attempts on a ticket
-                      Use 'clear' for unlimited
+                      Use 'clear' to restore runtime-default inheritance
       --json          Raw JSON output
       --url <url>     Server base URL
 

@@ -153,7 +153,7 @@ async function main() {
 
     // 10: maxAttempts example renders the explicit ceiling.
     const ticket5 = await request('GET', '/tickets/5', { cookie });
-    assert(ticket5.body.includes('2 · enforced for manual rerun-from-start'), 'ticket 5 should show explicit maxAttempts ceiling');
+    assert(ticket5.body.includes('2 · ticket override for newly admitted runs'), 'ticket 5 should show its explicit maxAttempts admission override');
 
     // 11: resolved triage renders resolved on run detail (and is excluded from /triage, asserted above).
     const run106 = await request('GET', '/runs/106', { cookie });

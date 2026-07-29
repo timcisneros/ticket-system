@@ -114,7 +114,7 @@ function seed() {
     template(4, 'Schedule off', 'Create folder off', { schedule: schedule(PAST, { enabled: false }) }),           // schedule.enabled false → never
     template(5, 'Not yet due', 'Create folder later', { schedule: schedule(FUTURE) }),                            // future → inert
     template(6, 'Invalid schedule', 'Create folder invalid', { schedule: schedule('not-a-date') }),              // invalid → skipped safely
-    template(7, 'AutoRetry inert', 'Create folder retryable', { schedule: schedule(PAST), executionPolicy: { autoRetry: true } }) // autoRetry true + no maxAttempts
+    template(7, 'AutoRetry inherited bound', 'Create folder retryable', { schedule: schedule(PAST), executionPolicy: { autoRetry: true } }) // null maxAttempts inherits the runtime default at admission
   ]);
   const currentTemplates = readJsonData('process-templates.json').map(template => ({
     ...template,
@@ -207,10 +207,11 @@ async function main() {
     assert(src.scheduledFor === PAST, 'source.scheduledFor must be the slot boundary');
     assert(src.triggerToken === `schedule:1:${PAST}`, `deterministic token schedule:1:<iso>, got ${src.triggerToken}`);
 
-    // Normalized policy on generated ticket; autoRetry inert for template 7.
+    // Normalized policy on generated ticket; Tranche 5 resolves the null attempt
+    // override to the runtime default when a generated run is admitted.
     assert(t1.executionPolicy.requireVerification === 'when_declared', 'generated ticket policy must be normalized');
     assert(t1.executionPolicy.autoRetry === false, 'autoRetry defaults false when template omits it');
-    assert(t7.executionPolicy.autoRetry === true && t7.executionPolicy.maxAttempts === null, 'autoRetry true + maxAttempts null stays inert');
+    assert(t7.executionPolicy.autoRetry === true && t7.executionPolicy.maxAttempts === null, 'autoRetry true preserves the null ticket override for runtime-default inheritance');
 
     // Safe template → exactly one pending run via the normal path; ambiguous → blocked, no run.
     assert(runsForTicket(t1.id).length === 1 && runsForTicket(t1.id)[0].status === 'pending', 'clear scheduled ticket creates exactly one pending run via normal path');

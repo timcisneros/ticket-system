@@ -653,9 +653,20 @@
   <div class="body">
     <p class="text-muted"><%= budgetStatus.enforced ? 'Immutable admission limits and durable charges; exhaustion blocks the next covered side effect.' : 'Historical advisory only — this run predates effective budget enforcement.' %></p>
     <dl class="detail-grid">
+      <% if (run.runtimeBudgetSnapshot) { %>
+        <div><dt>Max attempts</dt><dd><code><%= run.runtimeBudgetSnapshot.maxAttempts %></code> · enforced</dd></div>
+        <div><dt>Max execution steps</dt><dd><code><%= run.runtimeBudgetSnapshot.maxExecutionSteps %></code> · enforced</dd></div>
+      <% } %>
       <div><dt>Runtime</dt><dd><%= budgetCell(budgetStatus.runtimeMs, 'ms') %></dd></div>
       <div><dt>Model requests</dt><dd><%= budgetCell(budgetStatus.modelRequests, '') %></dd></div>
       <div><dt>Workspace operations</dt><dd><%= budgetCell(budgetStatus.workspaceOperations, '') %></dd></div>
+      <% if (run.runtimeBudgetSnapshot) { %>
+        <div><dt>Max process operations</dt><dd><code><%= run.runtimeBudgetSnapshot.maxProcessOperations %></code> · enforced</dd></div>
+        <div><dt>Max browser operations</dt><dd><code><%= run.runtimeBudgetSnapshot.maxBrowserOperations %></code> · enforced</dd></div>
+        <div><dt>Max output artifact bytes</dt><dd><code><%= run.runtimeBudgetSnapshot.maxOutputArtifactBytes %></code> · enforced aggregate raw bytes</dd></div>
+        <div><dt>Parallel runs</dt><dd><%= run.runtimeBudgetSnapshot.allowParallelRuns ? 'allowed' : 'not allowed' %> · enforced by scheduler admission</dd></div>
+        <div><dt>Budget authority</dt><dd>version <code><%= run.runtimeBudgetSnapshot.version %></code> · runtime-limit revision <code><%= run.runtimeBudgetSnapshot.runtimeLimitsRevision %></code></dd></div>
+      <% } %>
     </dl>
   </div>
 </details>
@@ -698,19 +709,33 @@
 <details class="disclosure">
   <summary>Execution Policy Snapshot <span class="sub">verification <%= run.executionPolicySnapshot.requireVerification %></span></summary>
   <div class="body">
-    <p class="text-muted">Policy copied from the ticket when this run was created.</p>
-    <p class="text-muted">Verification is enforced when declared. Other fields below are recorded intent and are not enforced in this release unless explicitly noted.</p>
+    <%
+      function runPolicyBudgetOrigin(value, unit) {
+        const original = value === null || value === undefined
+          ? 'inherit runtime default at admission'
+          : value + (unit || '') + ' · ticket override at admission';
+        return run.runtimeBudgetSnapshot
+          ? original + ' · effective enforced value shown in Budget above'
+          : original + ' · historical run has no effective budget snapshot';
+      }
+    %>
+    <p class="text-muted">Original ticket policy copied when this run was created. For Tranche 5 runs, the separate Budget section shows the concrete immutable values that were resolved and enforced at admission.</p>
+    <p class="text-muted">Verification, workspace scope, parallel-run admission, and effective numeric budgets are enforced as explicitly noted. Mode, workspace-write intent, and child-ticket intent remain unimplemented policy fields.</p>
     <dl class="detail-grid">
       <div><dt>Verification</dt><dd><code><%= run.executionPolicySnapshot.requireVerification %></code> · enforced for declared workflow postconditions</dd></div>
       <div><dt>Workspace scope</dt><dd><code><%= run.executionPolicySnapshot.workspaceScope %></code> · enforced by this run's workspace path</dd></div>
       <div><dt>Mode</dt><dd><code><%= run.executionPolicySnapshot.mode %></code> · recorded intent, not enforced</dd></div>
       <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-      <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-      <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
-      <div><dt>Max attempts</dt><dd><%= run.executionPolicySnapshot.maxAttempts === null ? ((run.runtimeBudgetSnapshot && run.runtimeBudgetSnapshot.maxAttempts) ? run.runtimeBudgetSnapshot.maxAttempts + ' · inherited runtime default snapshotted at admission' : 'runtime default · historical run has no effective budget snapshot') : run.executionPolicySnapshot.maxAttempts + ' · ticket override snapshotted at admission' %></dd></div>
-      <div><dt>Max runtime</dt><dd><%= run.executionPolicySnapshot.maxRuntimeMs === null ? 'unspecified' : run.executionPolicySnapshot.maxRuntimeMs + 'ms' %> · recorded intent, not enforced</dd></div>
-      <div><dt>Max model requests</dt><dd><%= run.executionPolicySnapshot.maxModelRequests === null ? 'unspecified' : run.executionPolicySnapshot.maxModelRequests %> · recorded intent, not enforced</dd></div>
-      <div><dt>Max workspace operations</dt><dd><%= run.executionPolicySnapshot.maxWorkspaceOperations === null ? 'unspecified' : run.executionPolicySnapshot.maxWorkspaceOperations %> · recorded intent, not enforced</dd></div>
+      <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'allowed' : 'not allowed' %> · <%= run.runtimeBudgetSnapshot ? 'enforced by scheduler admission' : 'historical run has no effective scheduler budget snapshot' %></dd></div>
+      <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent · not implemented</dd></div>
+      <div><dt>Max attempts override</dt><dd><%= runPolicyBudgetOrigin(run.executionPolicySnapshot.maxAttempts) %></dd></div>
+      <div><dt>Max execution steps override</dt><dd><%= runPolicyBudgetOrigin(run.executionPolicySnapshot.maxExecutionSteps) %></dd></div>
+      <div><dt>Max runtime override</dt><dd><%= runPolicyBudgetOrigin(run.executionPolicySnapshot.maxRuntimeMs, 'ms') %></dd></div>
+      <div><dt>Max model requests override</dt><dd><%= runPolicyBudgetOrigin(run.executionPolicySnapshot.maxModelRequests) %></dd></div>
+      <div><dt>Max workspace operations override</dt><dd><%= runPolicyBudgetOrigin(run.executionPolicySnapshot.maxWorkspaceOperations) %></dd></div>
+      <div><dt>Max process operations override</dt><dd><%= runPolicyBudgetOrigin(run.executionPolicySnapshot.maxProcessOperations) %></dd></div>
+      <div><dt>Max browser operations override</dt><dd><%= runPolicyBudgetOrigin(run.executionPolicySnapshot.maxBrowserOperations) %></dd></div>
+      <div><dt>Max output artifact bytes override</dt><dd><%= runPolicyBudgetOrigin(run.executionPolicySnapshot.maxOutputArtifactBytes, ' bytes') %></dd></div>
     </dl>
   </div>
 </details>

@@ -418,30 +418,29 @@ recognizers to be *audited* rather than grandfathered. This entry is that audit 
 
 ---
 
-### A8. Dead `allow*` policy fields
+### A8. Remaining dead `allow*` policy fields
 
 | Field | Value |
 |-------|-------|
 | **Status** | Open |
 | **Severity** | Low — the UI is already honest about it |
-| **Evidence** | `server.js` `copyExecutionPolicy`; `views/run-detail.ejs`, `views/ticket-detail.ejs` |
+| **Evidence** | `server.js` `copyExecutionPolicy`; `views/run-detail.ejs`, `views/ticket-detail.ejs`; Tranche 5 `runtimeBudgetSnapshot` |
 | **Decision required** | Implement enforcement or formally retire the fields |
 
 **Description:**
 
-`executionPolicy.allowWorkspaceWrites`, `allowParallelRuns`, and `allowChildTickets` are
-normalized at policy-copy time and **never read again anywhere in the repository**. They are
-snapshotted into `executionPolicySnapshot` and displayed, but nothing enforces them.
+`executionPolicy.allowWorkspaceWrites` and `allowChildTickets` remain normalized,
+snapshotted intent fields without their own implementation. The UI labels them as recorded
+intent, and labels child-ticket creation explicitly as not implemented.
 
-The UI does not lie about this — run detail renders them as "recorded intent, not enforced"
-and ticket detail as "recorded intent" — which is why this is Low rather than High. The
-defect is that a persisted, operator-settable policy field has no effect.
-
-Related and **already honest**: `executionPolicy.maxRuntimeMs`, `maxModelRequests`, and
-`maxWorkspaceOperations` are advisory telemetry only, computed into an explicitly
-advisory-labelled budget block that "never blocks, stops, fails, or reruns anything".
-`maxAttempts` *is* enforced, but only at the manual rerun-from-start gate, and that narrow
-scope is documented at the call site. Do not mistake these for enforced per-ticket limits.
+Tranche 5 resolved the other items that used to be grouped here. `allowParallelRuns` is
+captured in `runtimeBudgetSnapshot` and enforced by scheduler admission. Nullable numeric
+budget overrides — including attempts, execution steps, runtime, model, workspace,
+process, browser, and aggregate output-artifact limits — resolve to concrete immutable
+values at admission and are enforced. `maxAttempts` bounds manual and enabled automatic
+retry admission; a null override inherits the runtime default rather than disabling retry
+or granting unlimited attempts. Historical runs without a runtime-budget snapshot retain
+an explicitly historical advisory display.
 
 ---
 
@@ -3667,8 +3666,9 @@ refused" survives it; one asserting the exact boundary does not.
 tranche should start.** Bounded automatic retry is the *automatic* counterpart of the
 same admission question and is live (`assessAutoRetryAfterFailureIfPolicyAllows`,
 `runAutoRetryAfterFailureIfPolicyAllows`), gated on `autoRetry === true`, a finite
-`maxAttempts`, no ticket triage, an individual-agent ticket, `mutationCount === 0`, and
-a prospective triage reason code of exactly `runtime_failed`.
+effective attempt limit (an explicit `maxAttempts` override or the inherited runtime
+default), no ticket triage, an individual-agent ticket, `mutationCount === 0`, and a
+prospective triage reason code of exactly `runtime_failed`.
 
 That last condition is the blocker, and it is a real one rather than an omission.
 `runtime_failed` is the **fallback** reason code (`buildRunTriage`: assigned only when no
@@ -3741,10 +3741,10 @@ triage was still written, and the only observable difference was a run that did 
 since the PostgreSQL cutover. This is the **fifth** time in A20 that a suite exposed a
 live production defect the moment it could run again.
 
-**Behavior change.** Deployments with `executionPolicy.autoRetry: true` and a finite
-`maxAttempts` will now actually retry eligible runtime failures once per available
-attempt. That is the documented intent, but it is a change in observable behavior for any
-ticket already carrying that policy.
+**Behavior change.** Deployments with `executionPolicy.autoRetry: true` and remaining
+effective attempt capacity will retry eligible runtime failures once per available
+attempt. The bound may be an explicit ticket override or the runtime default resolved
+into each newly admitted run.
 
 ---
 

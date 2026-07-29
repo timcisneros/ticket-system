@@ -3,6 +3,7 @@
 
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
@@ -103,7 +104,7 @@ function executionPolicy() {
   return {
     mode: 'assisted',
     requireVerification: 'when_declared',
-    autoRetry: false,
+    autoRetry: true,
     maxAttempts: null,
     maxRuntimeMs: null,
     maxModelRequests: null,
@@ -198,6 +199,7 @@ async function seedCurrentFormatFixture(store) {
     agentId: agentResult.agent.id,
     agentName: agentResult.agent.name,
     runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
+    executionPolicySnapshot: executionPolicy(),
     status: 'pending'
   });
   const transition = await store.transitionRun({
@@ -278,7 +280,25 @@ async function main() {
     const fixture = await seedCurrentFormatFixture(store);
 
     await assertPage(cookie, '/tickets', fixture.ticket.objective);
-    await assertPage(cookie, `/tickets/${fixture.ticket.id}`, 'At a glance');
+    const ticketDetail = await assertPage(cookie, `/tickets/${fixture.ticket.id}`, 'At a glance');
+    assert(ticketDetail.body.includes('inherit runtime default when a new run is admitted'),
+      'ticket null numeric budgets must render runtime-default inheritance');
+    assert(ticketDetail.body.includes('enabled · bounded by the runtime default resolved for each admitted run'),
+      'ticket auto-retry with a null override must render as active and runtime-default bounded');
+    assert(ticketDetail.body.includes('clear the override to restore runtime-default inheritance'),
+      'ticket max-attempt editor must describe clearing as restoring runtime-default inheritance');
+    assert(ticketDetail.body.includes('Clear (use runtime default)'),
+      'ticket max-attempt clear control must name the runtime-default result');
+    assert(ticketDetail.body.includes('recorded intent · not implemented'),
+      'allowChildTickets must remain explicitly unimplemented');
+    assert(!ticketDetail.body.includes('enabled but inactive'),
+      'ticket detail must not call runtime-default-bounded automatic retry inactive');
+    assert(!ticketDetail.body.includes('Clear (unlimited)'),
+      'ticket detail must not describe a null attempt override as unlimited');
+    assert(!ticketDetail.body.includes('no automatic retry'),
+      'ticket detail must not claim automatic retry is absent');
+    assert(ticketDetail.body.includes('Runs: 0 enforced, 1 historical advisory'),
+      'ticket budget rollup must retain the historical advisory fixture classification');
     const runDetail = await assertPage(cookie, `/runs/${fixture.run.id}`, 'Run Outcome');
     assert(runDetail.body.includes('id="run-live-status"'), 'run detail must preserve the live status target');
     assert((runDetail.body.match(/id="run-live-status"/g) || []).length === 1,
@@ -286,11 +306,43 @@ async function main() {
     assert(runDetail.body.includes('How it was set up'), 'run detail must render its configuration zone');
     assert(runDetail.body.includes('What the system did'), 'run detail must render its evidence zone');
     assert(runDetail.body.includes('Decision Map'), 'run detail must retain the decision-map entry point');
+    assert(runDetail.body.includes('Historical advisory only — this run predates effective budget enforcement.'),
+      'historical runs without runtimeBudgetSnapshot must remain explicitly advisory');
+    assert(runDetail.body.includes('historical run has no effective budget snapshot'),
+      'historical run numeric policy must not be presented as a current enforced limit');
+    assert(runDetail.body.includes('recorded intent · not implemented'),
+      'historical run detail must retain the unimplemented child-ticket boundary');
     const runMap = await assertPage(cookie, `/runs/${fixture.run.id}/map`, 'Decision Map');
     assert(runMap.body.includes('id="map-run-phase"'), 'run map must render the execution-phase badge');
     assert(runMap.body.includes('"currentPhase"'), 'run map graph payload must carry the current phase');
     assert(runDetail.body.includes("target.closest('details')"),
       'replay jumps must reveal collapsed evidence ancestors before scrolling');
+
+    const ticketViewSource = fs.readFileSync(path.join(ROOT, 'views/ticket-detail.ejs'), 'utf8');
+    const runViewSource = fs.readFileSync(path.join(ROOT, 'views/run-detail.ejs'), 'utf8');
+    const oquerySource = fs.readFileSync(path.join(ROOT, 'scripts/oquery.js'), 'utf8');
+    for (const stale of [
+      'enabled but inactive',
+      'Clear (unlimited)',
+      'Leave blank to clear (unlimited)',
+      'no automatic retry'
+    ]) {
+      assert(!ticketViewSource.includes(stale),
+        `ticket budget controls must not restore stale copy: ${stale}`);
+    }
+    const numericRunRows = runViewSource.split('\n').filter(line =>
+      /<dt>Max (?:attempts|execution steps|runtime|model requests|workspace operations|process operations|browser operations|output artifact bytes)/.test(line)
+    );
+    assert(numericRunRows.length >= 8,
+      'source-level stale-copy guard must cover every enforced numeric run-budget row');
+    assert(numericRunRows.every(line => !line.includes('recorded intent, not enforced')),
+      'enforced numeric run-budget rows must not be labelled recorded intent, not enforced');
+    assert(numericRunRows.every(line => !line.includes('unspecified')),
+      'enforced numeric run-budget rows must not call inherited authority unspecified');
+    assert(!oquerySource.includes("Use 'clear' for unlimited"),
+      'oquery max-attempt help must not call runtime-default inheritance unlimited');
+    assert(!oquerySource.includes("'unlim'"),
+      'oquery budget fallbacks must not invent unlimited authority');
     await assertPage(cookie, '/logs?limit=5', 'PostgreSQL page render fixture created');
     await assertPage(cookie, '/work-contexts', fixture.context.name);
     await assertPage(cookie, `/work-contexts/${fixture.context.id}`, fixture.context.name);

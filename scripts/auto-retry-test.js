@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Bounded automatic retry v1. Default-off, policy-gated, single-run, bounded by
-// maxAttempts, only for the runtime_failed allowlist with mutationCount === 0,
+// the effective maxAttempts override/default, only for the runtime_failed
+// allowlist with mutationCount === 0,
 // only inside failAgentRun before triage is persisted. No provider key required:
 // failures are induced deterministically by no-model workflows / a keyless agent.
 
@@ -105,7 +106,7 @@ function seed() {
 
   writeJson('tickets.json', [
     wfTicket(1, 'default off (no retry)', { autoRetry: false, maxAttempts: null }, 'bad-wf'),
-    wfTicket(2, 'autoRetry true but maxAttempts null (no retry)', { autoRetry: true, maxAttempts: null }, 'bad-wf'),
+    wfTicket(2, 'autoRetry true with runtime-default attempt bound', { autoRetry: true, maxAttempts: null }, 'bad-wf'),
     wfTicket(3, 'autoRetry true + maxAttempts 2 (bounded retry)', { autoRetry: true, maxAttempts: 2 }, 'bad-wf'),
     wfTicket(4, 'verification failure never retries', { autoRetry: true, maxAttempts: 2 }, 'verify-fail-wf'),
     ticket(5, 'provider failure never retries', { autoRetry: true, maxAttempts: 2 }, { assignmentTargetId: 2 }),
@@ -206,9 +207,10 @@ async function main() {
       `T1 should have 1 failed run, got ${t1.length} (${t1.map(run => run.status).join(', ')})`);
     assert(t1[0].triage && t1[0].triage.required === true, 'T1 failed run should be triaged');
 
-    // 2: autoRetry true + maxAttempts null → no retry.
+    // 2: autoRetry true + maxAttempts null → bounded by runtime default (3).
     const t2 = runsFor(2);
-    assert(t2.length === 1 && t2[0].triage && t2[0].triage.required, 'T2 must not retry without a finite maxAttempts');
+    assert(t2.length === 3 && t2[2].triage && t2[2].triage.required,
+      'T2 must inherit the runtime attempt default and stop after three failed runs');
 
     // 3,4,5,6,7,8,15,16,18: bounded retry on runtime failure.
     const t3 = runsFor(3);

@@ -76,9 +76,10 @@ status/lifecycle from events only; it does not currently cover policy/triage fie
 
 ## 5. Current decision
 
-Do **not** event-source policy or triage annotations until projection rebuild becomes a
-real restore path. There is no operational need today: the JSON files are authoritative,
-restart-durable, and the worst case of a hypothetical lossy restore is fail-safe
-(`maxAttempts` resets to unlimited *manual* reruns — no automation; lost triage is
-advisory and the independent status/verification completion gates still block). This is
-a documentation/architecture record only — no code, tests, or runtime behavior change.
+Do **not** use the reduced projection as a policy or triage restore path. PostgreSQL is
+the runtime authority, and a lossy reconstruction would not be fail-safe:
+`maxAttempts: null` means inherit the runtime default when a new run is admitted, and
+`autoRetry: true` remains active under that effective bound. Any future restore path must
+preserve the original policy and immutable admitted budget snapshot rather than inventing
+an unlimited or inactive policy. This is a documentation/architecture record only — no
+runtime behavior change.

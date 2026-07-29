@@ -28,6 +28,7 @@
 
 const argon2 = require('argon2');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
+const { buildRuntimeBudgetSnapshot } = require('../runtime/runtime-budget-contract');
 
 const STAMP = Date.now();
 const VIEWER_PASSWORD = 'viewer-password-runtime-limits-ui';
@@ -47,6 +48,38 @@ const APPLIED_LIMITS = {
   maxRuntimeDurationMs: 5000,
   source: { uiConfigured: true, deploymentCapped: true, workloadProfile: null, workflowLimits: null }
 };
+const ADMITTED_EXECUTION_POLICY = {
+  mode: 'assisted',
+  requireVerification: 'when_declared',
+  autoRetry: false,
+  maxAttempts: null,
+  maxExecutionSteps: null,
+  maxRuntimeMs: null,
+  maxModelRequests: null,
+  maxWorkspaceOperations: null,
+  maxProcessOperations: null,
+  maxBrowserOperations: null,
+  maxOutputArtifactBytes: null,
+  allowWorkspaceWrites: true,
+  allowParallelRuns: false,
+  allowChildTickets: false,
+  workspaceScope: 'shared'
+};
+const ADMITTED_RUNTIME_LIMITS = {
+  revision: 1,
+  maxAttempts: 3,
+  maxExecutionSteps: APPLIED_LIMITS.maxExecutionSteps,
+  maxModelRequestsPerRun: APPLIED_LIMITS.maxModelRequestsPerRun,
+  maxWorkspaceOperationsPerRun: APPLIED_LIMITS.maxWorkspaceOperationsPerRun,
+  maxProcessOperationsPerRun: 2,
+  maxBrowserOperationsPerRun: 5,
+  maxRuntimeDurationMs: APPLIED_LIMITS.maxRuntimeDurationMs,
+  maxOutputArtifactBytesPerRun: 4096
+};
+const ADMITTED_BUDGET = buildRuntimeBudgetSnapshot({
+  runtimeLimits: ADMITTED_RUNTIME_LIMITS,
+  executionPolicy: ADMITTED_EXECUTION_POLICY
+});
 const TIMEOUT_ERROR = 'Agent run exceeded runtime duration limit of 5000ms';
 
 const assert = createAsserter();
@@ -96,7 +129,8 @@ async function main() {
     const created = await store.createRun({
       ticketId: ticket.id, agentId: agent.id, agentName: agent.name,
       runtimeLimitsSnapshot: APPLIED_LIMITS,
-      executionPolicySnapshot: { requireVerification: 'when_declared' },
+      executionPolicySnapshot: ADMITTED_EXECUTION_POLICY,
+      runtimeBudgetSnapshot: ADMITTED_BUDGET,
       capabilityType: 'directAction', capabilityId: 'agent-selected-actions',
       workspaceRoot, mainWorkspaceRoot: workspaceRoot, executionWorkspaceType: 'main',
       runEvaluation: {
@@ -276,6 +310,27 @@ async function main() {
       'the diagnostics block names the applied-limit source');
     assert(applied.body.includes('Execution turns: 2 / 3'),
       'the diagnostics block repeats the usage/limit pair');
+    assert(applied.body.includes('Budget (enforced)'),
+      'a Tranche 5 run labels its immutable effective budget as enforced');
+    assert(applied.body.includes(`<dt>Max attempts</dt><dd><code>${ADMITTED_BUDGET.maxAttempts}</code> · enforced`),
+      'run detail renders the concrete admitted max-attempt limit');
+    assert(new RegExp(`<dt>Runtime</dt><dd>[^<]* / ${ADMITTED_BUDGET.maxRuntimeDurationMs}ms`).test(applied.body),
+      'run detail renders the concrete enforced runtime-duration limit');
+    assert(applied.body.includes(`<dt>Max process operations</dt><dd><code>${ADMITTED_BUDGET.maxProcessOperations}</code> · enforced`),
+      'run detail renders the concrete admitted process-operation limit');
+    assert(applied.body.includes(`<dt>Max browser operations</dt><dd><code>${ADMITTED_BUDGET.maxBrowserOperations}</code> · enforced`),
+      'run detail renders the concrete admitted browser-operation limit');
+    assert(applied.body.includes(`<dt>Max output artifact bytes</dt><dd><code>${ADMITTED_BUDGET.maxOutputArtifactBytes}</code> · enforced aggregate raw bytes`),
+      'run detail renders the concrete admitted aggregate artifact limit');
+    assert(!/<dt>Max (?:attempts|execution steps|runtime|model requests|workspace operations|process operations|browser operations|output artifact bytes)[^<]*<\/dt><dd>.*recorded intent, not enforced/.test(applied.body),
+      'enforced numeric limits never render as recorded intent, not enforced');
+    assert(applied.body.includes('recorded intent · not implemented'),
+      'allowChildTickets remains explicitly unimplemented');
+
+    const ticketDetail = await server.request('GET', `/tickets/${ticket.id}`, { cookie: admin });
+    assert(ticketDetail.statusCode === 200 &&
+      ticketDetail.body.includes('Runs: 1 enforced, 0 historical advisory'),
+    'ticket budget rollup still classifies a current Tranche 5 run as enforced');
 
     console.log(`\nPASS: runtime limits admin UI and run-detail reporting — ${assert.count()} assertions (PostgreSQL-native)`);
   }, { schemaSlug: 'runtime_limits_ui' });
