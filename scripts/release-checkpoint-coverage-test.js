@@ -88,6 +88,23 @@ const ciWorkflow = fs.readFileSync(
 const checkpointCommand = 'node scripts/release-checkpoint.js';
 const checkpointIndex = ciWorkflow.indexOf(checkpointCommand);
 assert.notEqual(checkpointIndex, -1, 'CI must run the release checkpoint');
+const postgresClientInstall = 'postgresql-client-17';
+const postgresClientInstallIndex = ciWorkflow.indexOf(postgresClientInstall);
+assert.notEqual(
+  postgresClientInstallIndex,
+  -1,
+  'CI must install the PostgreSQL 17 client matching its PostgreSQL 17 service'
+);
+assert.equal(
+  postgresClientInstallIndex < checkpointIndex,
+  true,
+  'CI must install the matching PostgreSQL client before the backup/restore release gate'
+);
+assert.match(
+  ciWorkflow.slice(postgresClientInstallIndex, checkpointIndex),
+  /echo "\/usr\/lib\/postgresql\/17\/bin" >> "\$GITHUB_PATH"/,
+  'CI must select the PostgreSQL 17 backup tools rather than an older runner default'
+);
 const checkpointStepStart = ciWorkflow.lastIndexOf('      - name:', checkpointIndex);
 const checkpointStepEnd = ciWorkflow.indexOf('\n      - ', checkpointIndex);
 const checkpointStep = ciWorkflow.slice(

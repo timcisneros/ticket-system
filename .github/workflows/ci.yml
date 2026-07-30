@@ -34,6 +34,13 @@ jobs:
         with:
           node-version: 24.17.0
           cache: pnpm
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
+          /usr/lib/postgresql/17/bin/pg_restore --version
       - run: pnpm install --frozen-lockfile
       - name: Fetch locked Rust dependencies
         run: |
