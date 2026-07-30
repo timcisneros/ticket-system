@@ -92,6 +92,16 @@ const {
   buildProcessSupervisionProjection
 } = require('./runtime/process-supervision');
 const {
+  buildBrowserConsequences,
+  compareCanonicalText,
+  deriveOperationFamilyCounts,
+  dedupeAndSort,
+  isBrowserOperation,
+  isProcessOperation,
+  isWorkspaceOperation,
+  summarizeTypedOperationConsequences
+} = require('./runtime/typed-evidence-projection');
+const {
   buildRuntimeBudgetSnapshot,
   getRunRuntimeBudgetSnapshot
 } = require('./runtime/runtime-budget-contract');
@@ -6462,6 +6472,29 @@ function countRunRetryAttempts(run, suppliedRuns = null) {
   }).length;
 }
 
+function projectRunEvaluationOperationCounts(runId, evaluation, operations) {
+  if (!evaluation || typeof evaluation !== 'object' || !Array.isArray(operations)) return evaluation;
+  // Historical evaluations may carry aggregate counts without retained generic
+  // receipts. An empty receipt set is not evidence that those recorded counts
+  // were zero, so preserve the historical evaluation unchanged.
+  if (operations.length === 0) return evaluation;
+  const counts = deriveOperationFamilyCounts(operations);
+  const mutationCount = countRunMutatingOperations(runId, operations);
+  return {
+    ...evaluation,
+    efficiency: {
+      ...(evaluation.efficiency || {}),
+      workspaceOperations: counts.workspaceOperations,
+      workspaceMutations: mutationCount,
+      browserOperations: counts.browserOperations,
+      processOperations: counts.processOperations,
+      // Historical consumers use mutationCount. Its established meaning remains
+      // workspace mutations only.
+      mutationCount
+    }
+  };
+}
+
 function buildRunEvaluation(run, {
   snapshot: suppliedSnapshot = null,
   events: suppliedEvents = null,
@@ -6520,6 +6553,18 @@ function buildRunEvaluation(run, {
   const mutationCount = suppliedOperations
     ? countRunMutatingOperations(run.id, suppliedOperations)
     : getRunMutationCount({ ...run, replaySnapshot: snapshot, replaySummary });
+  const operationFamilyCounts = suppliedOperations
+    ? deriveOperationFamilyCounts(suppliedOperations)
+    : {
+        workspaceOperations: replaySummary.workspaceOperations !== undefined
+          ? replaySummary.workspaceOperations
+          : workspaceOperations.length,
+        workspaceMutations: mutationCount,
+        browserOperations: Array.isArray(snapshot.browserOperations)
+          ? snapshot.browserOperations.length
+          : 0,
+        processOperations: null
+      };
   const violationItems = formalViolationEvents.map(event => ({
     id: event.id || null,
     ts: event.ts || null,
@@ -6575,7 +6620,10 @@ function buildRunEvaluation(run, {
       workflowSteps: workflowActions.length,
       providerRequests: replaySummary.providerRequests !== undefined ? replaySummary.providerRequests : providerRequests.length,
       modelResponses: replaySummary.modelResponses !== undefined ? replaySummary.modelResponses : modelResponses.length,
-      workspaceOperations: replaySummary.workspaceOperations !== undefined ? replaySummary.workspaceOperations : workspaceOperations.length,
+      workspaceOperations: operationFamilyCounts.workspaceOperations,
+      workspaceMutations: mutationCount,
+      browserOperations: operationFamilyCounts.browserOperations,
+      processOperations: operationFamilyCounts.processOperations,
       mutationCount,
       retryCount: suppliedAttemptPosition && Number.isSafeInteger(suppliedAttemptPosition.attemptNumber)
         ? Math.max(0, suppliedAttemptPosition.attemptNumber - 1)
@@ -7585,6 +7633,15 @@ function applyHistoricalMutationConsequence(persistedConsequence, operations) {
       };
     }
   }
+  if (!Array.isArray(consequence.browserOperations)) {
+    const browserOperations = buildBrowserConsequences(operations);
+    if (browserOperations.length > 0) {
+      consequence = {
+        ...consequence,
+        browserOperations
+      };
+    }
+  }
   if (hasMaterialMutationConsequence(consequence)) return consequence;
 
   const rebuilt = { mutations: [], created: [], updated: [], deleted: [], renamed: [] };
@@ -7682,6 +7739,13 @@ function buildRunConsequence(run, {
       evaluatedAt: run.completedAt || snapshot.finalizedAt || new Date().toISOString()
     });
   }
+
+  // Browser operations are presentation/reconstruction parity, not completion
+  // authority. Add them only after the canonical decision has consumed the
+  // established consequence shape so equivalent completion decisions remain
+  // byte-stable.
+  const browserOperations = buildBrowserConsequences(suppliedOperations);
+  if (browserOperations.length > 0) consequence.browserOperations = browserOperations;
 
   return consequence;
 }
@@ -8040,6 +8104,17 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
         operations: suppliedOperations || [],
         evaluation: run.runEvaluation || null
       }));
+  const runEvaluation = projectRunEvaluationOperationCounts(
+    run.id,
+    run.runEvaluation || buildRunEvaluation(run, {
+      events: suppliedEvents,
+      logs: runLogs,
+      operations: suppliedOperations,
+      ticketRuns: options.ticketRuns || null,
+      attemptPosition: options.attemptPosition || null
+    }),
+    suppliedOperations || []
+  );
 
   return {
     id: run.id,
@@ -8066,13 +8141,7 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     latestEventSummary: summary,
     replaySummary,
     authorityEvidence: getRunAuthorityEvidence(run, suppliedEvents),
-    runEvaluation: run.runEvaluation || buildRunEvaluation(run, {
-      events: suppliedEvents,
-      logs: runLogs,
-      operations: suppliedOperations,
-      ticketRuns: options.ticketRuns || null,
-      attemptPosition: options.attemptPosition || null
-    }),
+    runEvaluation,
     attemptUsage: serializedAttemptUsage,
     budgetStatus: buildRunBudgetStatus(
       run,
@@ -8383,6 +8452,11 @@ function summarizeTimelineEvaluation(evaluation) {
     durationMs: Number.isFinite(efficiency.durationMs) ? efficiency.durationMs : null,
     providerRequests: Number.isFinite(efficiency.providerRequests) ? efficiency.providerRequests : null,
     workspaceOperations: Number.isFinite(efficiency.workspaceOperations) ? efficiency.workspaceOperations : null,
+    workspaceMutations: Number.isFinite(efficiency.workspaceMutations)
+      ? efficiency.workspaceMutations
+      : Number.isFinite(efficiency.mutationCount) ? efficiency.mutationCount : null,
+    browserOperations: Number.isFinite(efficiency.browserOperations) ? efficiency.browserOperations : null,
+    processOperations: Number.isFinite(efficiency.processOperations) ? efficiency.processOperations : null,
     mutationCount: Number.isFinite(efficiency.mutationCount) ? efficiency.mutationCount : null
   };
 }
@@ -8396,6 +8470,8 @@ function summarizeTimelineConsequence(consequence) {
     updated: count('updated'),
     deleted: count('deleted'),
     renamed: count('renamed'),
+    browserOperations: count('browserOperations'),
+    processOperations: count('processOperations'),
     notifications: count('notifications'),
     externalEffects: count('externalEffects'),
     verification: consequence.verification ? sanitizeSnapshotValue(consequence.verification) : null
@@ -8526,6 +8602,44 @@ function buildWorkReceipt(run, ticket, options = {}) {
   const blocked = Boolean(run.triage && run.triage.required === true);
   const targetOps = history.map(record => ({ historyId: record.id, operation: record.operation || null, path: record.path || record.targetPath || null })).slice(0, 25);
   const artifactPaths = [...new Set(targetOps.map(op => op.path).filter(Boolean))].slice(0, 25);
+  const browserOperations = buildBrowserConsequences(history).slice(0, 25);
+  const processOperations = history
+    .map(buildProcessConsequenceFromHistory)
+    .filter(Boolean)
+    .slice(0, 25);
+  const workspaceTypedOperations = history
+    .filter(isWorkspaceOperation)
+    .map(record => ({
+      receiptId: Number.isSafeInteger(record.id) ? `operation:${record.id}` : null,
+      operation: record.operation,
+      path: record.path || record.targetPath || null,
+      outcome: record.outcome || (record.error ? 'failed' : 'succeeded')
+    }))
+    .slice(0, 25);
+  const workspaceTypedArtifacts = dedupeAndSort(
+    artifactPaths.map(artifactPath => ({ kind: 'workspace_path', path: artifactPath })),
+    item => item.path
+  ).slice(0, 25);
+  const browserTypedArtifacts = dedupeAndSort(
+    browserOperations
+      .filter(item => item.artifact)
+      .map(item => ({
+        ...item.artifact,
+        operationIdentity: item.operationIdentity,
+        evidenceReceiptId: item.evidence ? item.evidence.receiptId : null
+      })),
+    item => `${item.id}:${item.sha256}`
+  ).slice(0, 25);
+  const processTypedArtifacts = dedupeAndSort(
+    processOperations.flatMap(item => [item.stdoutArtifact, item.stderrArtifact]
+      .filter(Boolean)
+      .map(artifact => ({
+        ...artifact,
+        kind: 'process_output',
+        operationIdentity: item.operationIdentity
+      }))),
+    item => `${item.operationIdentity}:${item.stream}:${item.id}:${item.sha256}`
+  ).slice(0, 25);
   return {
     receiptKind: 'work_receipt',
     runId: run.id,
@@ -8544,6 +8658,16 @@ function buildWorkReceipt(run, ticket, options = {}) {
     ].filter(Boolean),
     targetOperationsPerformed: targetOps,
     artifactsProduced: artifactPaths,
+    typedOperations: {
+      workspace: workspaceTypedOperations,
+      browser: browserOperations,
+      process: processOperations
+    },
+    typedArtifacts: {
+      workspace: workspaceTypedArtifacts,
+      browser: browserTypedArtifacts,
+      process: processTypedArtifacts
+    },
     authorityDecisions: { allowed: authorityAllowed, denied: authorityDenied },
     verification: {
       required: verificationRequired,
@@ -9369,7 +9493,13 @@ async function buildTicketTimeline(ticketId) {
         timestamp: timelineTimestamp(run.completedAt, run.updatedAt),
         type: 'run.consequence_recorded',
         title: 'Run consequence recorded',
-        summary: consequence ? `${consequence.mutations} mutation consequence${consequence.mutations === 1 ? '' : 's'}` : 'Run consequence persisted',
+        summary: consequence
+          ? [
+              `${consequence.mutations} workspace mutation${consequence.mutations === 1 ? '' : 's'}`,
+              `${consequence.browserOperations} browser operation${consequence.browserOperations === 1 ? '' : 's'}`,
+              `${consequence.processOperations} process operation${consequence.processOperations === 1 ? '' : 's'}`
+            ].join(', ')
+          : 'Run consequence persisted',
         sourceType: 'run',
         sourceRef: runtimeAuthoritySourceRef('consequence', run.id, '.runConsequence'),
         sourceRole: 'live_state',
@@ -9487,6 +9617,28 @@ function normalizeArtifactComparisonType(value) {
   return type || 'unknown';
 }
 
+function workspaceProjectionMetricsApplicable(run, snapshot, operationHistory = []) {
+  const operations = Array.isArray(operationHistory)
+    ? operationHistory.filter(record => !run || record.runId === run.id)
+    : [];
+  if (operations.some(isWorkspaceOperation)) return true;
+  if (snapshot && Array.isArray(snapshot.workspaceOperations) && snapshot.workspaceOperations.length > 0) {
+    return true;
+  }
+  const prediction = snapshot && snapshot.artifactPrediction;
+  if (prediction && Array.isArray(prediction.artifacts) && prediction.artifacts.length > 0) {
+    return true;
+  }
+  const consequence = run && run.runConsequence;
+  const hasNonWorkspaceConsequence = Boolean(
+    (consequence && Array.isArray(consequence.browserOperations) && consequence.browserOperations.length > 0) ||
+    (consequence && Array.isArray(consequence.processOperations) && consequence.processOperations.length > 0) ||
+    operations.some(record => isBrowserOperation(record) || isProcessOperation(record)) ||
+    isBrowserRun(run)
+  );
+  return !hasNonWorkspaceConsequence;
+}
+
 function buildArtifactComparisonItem(type, artifact, details = {}) {
   const normalizedType = normalizeArtifactComparisonType(type);
   const normalizedArtifact = normalizeArtifactComparisonPath(artifact);
@@ -9589,7 +9741,7 @@ function buildArtifactPredictionComparison(run, snapshot, operationHistory = [])
   };
 }
 
-function buildArtifactAccuracy(snapshot, comparison = {}) {
+function buildArtifactAccuracy(snapshot, comparison = {}, { applicable = true } = {}) {
   const prediction = snapshot && snapshot.artifactPrediction ? snapshot.artifactPrediction : null;
   const predictedArtifacts = prediction && Array.isArray(prediction.artifacts) ? prediction.artifacts : [];
   const matched = Array.isArray(comparison.matched) ? comparison.matched.length : 0;
@@ -9597,8 +9749,10 @@ function buildArtifactAccuracy(snapshot, comparison = {}) {
   const unexpected = Array.isArray(comparison.unexpected) ? comparison.unexpected.length : 0;
   const total = matched + missing + unexpected;
 
-  if (predictedArtifacts.length === 0 || total === 0) {
+  if (!applicable || predictedArtifacts.length === 0 || total === 0) {
     return {
+      metricScope: 'workspace',
+      applicable,
       scored: false,
       score: null,
       percent: null,
@@ -9611,6 +9765,8 @@ function buildArtifactAccuracy(snapshot, comparison = {}) {
 
   const score = matched / total;
   return {
+    metricScope: 'workspace',
+    applicable,
     scored: true,
     score,
     percent: Math.round(score * 100),
@@ -9769,12 +9925,14 @@ function buildObjectiveCoveragePlannedPaths(snapshot) {
   return Array.from(pathSet);
 }
 
-function buildObjectivePathCoverage(ticket, snapshot) {
+function buildObjectivePathCoverage(ticket, snapshot, { applicable = true } = {}) {
   const objectivePaths = extractObjectivePathTokens(ticket && ticket.objective);
   const plannedPaths = buildObjectiveCoveragePlannedPaths(snapshot);
 
-  if (objectivePaths.length === 0) {
+  if (!applicable || objectivePaths.length === 0) {
     return {
+      metricScope: 'workspace',
+      applicable,
       scored: false,
       percent: null,
       covered: 0,
@@ -9790,6 +9948,8 @@ function buildObjectivePathCoverage(ticket, snapshot) {
   const covered = objectivePaths.length - missing.length;
 
   return {
+    metricScope: 'workspace',
+    applicable,
     scored: true,
     percent: Math.round((covered / objectivePaths.length) * 100),
     covered,
@@ -9819,12 +9979,12 @@ function buildRunReviewStatus(run, { objectivePathCoverage, artifactAccuracy, co
   const artifactName = item => (item && item.artifact) || (item && item.key) || null;
 
   const warnings = [];
-  if (coverage.scored === false) {
+  if (coverage.applicable !== false && coverage.scored === false) {
     warnings.push('Objective path coverage was not scored.');
   } else if (typeof coverage.percent === 'number' && coverage.percent < 100) {
     warnings.push(`Objective path coverage is ${coverage.percent}% (${coverage.covered}/${coverage.total} planned).`);
   }
-  if (accuracy.scored && typeof accuracy.percent === 'number' && accuracy.percent < 100) {
+  if (accuracy.applicable !== false && accuracy.scored && typeof accuracy.percent === 'number' && accuracy.percent < 100) {
     warnings.push(`Artifact accuracy is ${accuracy.percent}% (${accuracy.matched}/${accuracy.total} matched).`);
   }
   if (missing.length > 0) {
@@ -9835,7 +9995,11 @@ function buildRunReviewStatus(run, { objectivePathCoverage, artifactAccuracy, co
   }
 
   if (warnings.length === 0) {
-    return { applicable: true, needsReview: false, reasons: [] };
+    return {
+      applicable: coverage.applicable !== false || accuracy.applicable !== false,
+      needsReview: false,
+      reasons: []
+    };
   }
 
   // The standing truthfulness caveat is listed first when review is flagged, then
@@ -9864,9 +10028,56 @@ function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns 
       timestamp: record.timestamp || null
     };
 
+    const processOperation = buildProcessConsequenceFromHistory(record);
+    if (processOperation) {
+      [processOperation.stdoutArtifact, processOperation.stderrArtifact]
+        .filter(Boolean)
+        .forEach(artifact => {
+          artifacts.push({
+            ...base,
+            id: `process-artifact:${artifact.id}`,
+            category: 'process',
+            type: `process ${artifact.stream}`,
+            artifact: artifact.id,
+            artifactId: artifact.id,
+            artifactKind: 'process_output',
+            stream: artifact.stream,
+            byteCount: artifact.byteCount,
+            sha256: artifact.sha256,
+            operationIdentity: processOperation.operationIdentity,
+            status: 'published'
+          });
+        });
+      return;
+    }
+
+    if (isBrowserOperation(record)) {
+      const browserOperation = buildBrowserConsequences([record])[0] || null;
+      if (browserOperation && browserOperation.artifact) {
+        const artifact = browserOperation.artifact;
+        artifacts.push({
+          ...base,
+          id: `browser-artifact:${artifact.id}`,
+          category: 'browser',
+          type: 'browser screenshot',
+          artifact: artifact.id,
+          artifactId: artifact.id,
+          artifactKind: artifact.kind,
+          byteCount: artifact.byteCount,
+          sha256: artifact.sha256,
+          evidenceReceiptId: browserOperation.evidence
+            ? browserOperation.evidence.receiptId
+            : null,
+          status: 'published'
+        });
+      }
+      return;
+    }
+
     if (record.operation === 'writeFile') {
       artifacts.push({
         ...base,
+        category: 'workspace',
         type: 'file',
         artifact: result.path || args.path || '-',
         status: buildWriteFileArtifactStatus(record, operationHistory, runIds)
@@ -9877,6 +10088,7 @@ function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns 
     if (record.operation === 'createFolder' && result.status === 'created') {
       artifacts.push({
         ...base,
+        category: 'workspace',
         type: 'folder',
         artifact: result.path || args.path || '-',
         status: 'created'
@@ -9889,6 +10101,7 @@ function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns 
       const destinationPath = result.path || args.nextPath || '-';
       artifacts.push({
         ...base,
+        category: 'workspace',
         type: 'renamed',
         artifact: `${sourcePath} -> ${destinationPath}`,
         status: 'renamed'
@@ -9899,6 +10112,7 @@ function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns 
     if (record.operation === 'deletePath' && result.status === 'deleted') {
       artifacts.push({
         ...base,
+        category: 'workspace',
         type: 'deleted',
         artifact: result.path || args.path || '-',
         status: 'deleted'
@@ -9914,6 +10128,7 @@ function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns 
     const postconditionCount = Array.isArray(workflow.postconditions) ? workflow.postconditions.length : 0;
     artifacts.push({
       id: `workflow:${workflow.id}`,
+      category: 'workflow',
       type: 'workflow draft',
       artifact: workflow.id || workflow.name || '-',
       status: workflow.enabled ? 'enabled' : 'disabled',
@@ -9923,7 +10138,16 @@ function buildTicketArtifacts(operationHistory = [], workflows = [], ticketRuns 
     });
   });
 
-  return artifacts.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+  const seen = new Set();
+  return artifacts
+    .filter(artifact => {
+      if (seen.has(artifact.id)) return false;
+      seen.add(artifact.id);
+      return true;
+    })
+    .sort((a, b) =>
+      compareCanonicalText(a.timestamp || '', b.timestamp || '') ||
+      compareCanonicalText(a.id, b.id));
 }
 
 
@@ -10520,10 +10744,15 @@ function getRunModelName(run, snapshot) {
 function buildRunQualityMetrics(run, ticket, operationHistory = []) {
   const snapshot = run.replaySnapshot || {};
   const comparison = buildArtifactPredictionComparison(run, snapshot, operationHistory);
+  const workspaceMetricsApplicable = workspaceProjectionMetricsApplicable(run, snapshot, operationHistory);
   return {
-    artifactAccuracy: buildArtifactAccuracy(snapshot, comparison),
+    artifactAccuracy: buildArtifactAccuracy(snapshot, comparison, {
+      applicable: workspaceMetricsApplicable
+    }),
     objectiveSuccess: buildObjectiveSuccess(run),
-    objectivePathCoverage: buildObjectivePathCoverage(ticket, snapshot)
+    objectivePathCoverage: buildObjectivePathCoverage(ticket, snapshot, {
+      applicable: workspaceMetricsApplicable
+    })
   };
 }
 
@@ -12919,7 +13148,8 @@ async function commitRunTerminalization(run, {
       ];
       return buildRunEvaluation(projectedRun, {
         snapshot: finalized.snapshot,
-        events: projectedEvents
+        events: projectedEvents,
+        operations: context.operations || []
       });
     },
     consequence: context => {
@@ -14388,7 +14618,8 @@ async function reconcileTerminalRunUnlocked(run) {
       }, {
         snapshot: context.replaySnapshot,
         events: evaluationEvents,
-        logs: []
+        logs: [],
+        operations: context.operations || []
       });
     },
     consequence: context => {
@@ -24163,6 +24394,14 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     readAllChildTickets(ticketId)
   ]);
   const ticketRuns = await hydrateRunReplaySnapshots(enrichTicketRuns(rawTicketRuns, operationHistory, agents));
+  ticketRuns.forEach(item => {
+    if (!item.runEvaluation) return;
+    item.runEvaluation = projectRunEvaluationOperationCounts(
+      item.id,
+      item.runEvaluation,
+      operationHistory.filter(record => record.runId === item.id)
+    );
+  });
   const activeRuntimeRun = ticketRuns
     .filter(run => ['pending', 'running'].includes(run.status))
     .sort((a, b) => new Date(b.updatedAt || b.startedAt || b.createdAt || 0) - new Date(a.updatedAt || a.startedAt || a.createdAt || 0))[0] || null;
@@ -24195,9 +24434,18 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   if (latestRuntimeRun) {
     const latestSnapshot = latestRuntimeRun.replaySnapshot || null;
     const latestComparison = buildArtifactPredictionComparison(latestRuntimeRun, latestSnapshot, operationHistory);
+    const workspaceMetricsApplicable = workspaceProjectionMetricsApplicable(
+      latestRuntimeRun,
+      latestSnapshot,
+      operationHistory
+    );
     reviewStatus = buildRunReviewStatus(latestRuntimeRun, {
-      objectivePathCoverage: buildObjectivePathCoverage(ticket, latestSnapshot),
-      artifactAccuracy: buildArtifactAccuracy(latestSnapshot, latestComparison),
+      objectivePathCoverage: buildObjectivePathCoverage(ticket, latestSnapshot, {
+        applicable: workspaceMetricsApplicable
+      }),
+      artifactAccuracy: buildArtifactAccuracy(latestSnapshot, latestComparison, {
+        applicable: workspaceMetricsApplicable
+      }),
       comparison: latestComparison
     });
   }
@@ -25199,7 +25447,18 @@ function summarizeDeliverableConsequence(run) {
   if (Array.isArray(consequence.updated) && consequence.updated.length > 0) lines.push(`Updated (${consequence.updated.length}): ${describe(consequence.updated)}`);
   if (Array.isArray(consequence.renamed) && consequence.renamed.length > 0) lines.push(`Renamed (${consequence.renamed.length}): ${describe(consequence.renamed)}`);
   if (Array.isArray(consequence.deleted) && consequence.deleted.length > 0) lines.push(`Deleted (${consequence.deleted.length}): ${describe(consequence.deleted)}`);
-  if (Array.isArray(consequence.mutations) && consequence.mutations.length === 0) lines.push('No workspace mutations were recorded.');
+  const typedSummary = summarizeTypedOperationConsequences(consequence);
+  if (Array.isArray(consequence.mutations) && consequence.mutations.length === 0) {
+    lines.push('No workspace mutations were recorded.');
+  }
+  lines.push(...typedSummary.lines);
+  const hasTypedConsequence =
+    (Array.isArray(consequence.mutations) && consequence.mutations.length > 0) ||
+    typedSummary.browserOperationCount > 0 ||
+    typedSummary.processOperationCount > 0 ||
+    (Array.isArray(consequence.notifications) && consequence.notifications.length > 0) ||
+    (Array.isArray(consequence.externalEffects) && consequence.externalEffects.length > 0);
+  if (!hasTypedConsequence) lines.push('No work consequences were recorded.');
   if (consequence.verification) {
     lines.push(`Verification: postconditions ${consequence.verification.postconditionsStatus}, violations ${consequence.verification.violationsStatus}`);
   }
@@ -26609,6 +26868,9 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     processOperations
   });
   const history = runOperations;
+  if (run.runEvaluation) {
+    run.runEvaluation = projectRunEvaluationOperationCounts(run.id, run.runEvaluation, runOperations);
+  }
   const runPartialMutationCount = countRunMutatingOperations(runId, runOperations);
   const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
   const ticket = authority.ticket;
@@ -26635,9 +26897,14 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   });
   const failureSummary = buildRunFailureSummary(run, snapshot, enrichedHistory, runPartialMutationCount, authorityContext.controls.recoveryAvailable, ticket);
   const artifactPredictionComparison = buildArtifactPredictionComparison(run, snapshot, history);
-  const artifactAccuracy = buildArtifactAccuracy(snapshot, artifactPredictionComparison);
+  const workspaceMetricsApplicable = workspaceProjectionMetricsApplicable(run, snapshot, history);
+  const artifactAccuracy = buildArtifactAccuracy(snapshot, artifactPredictionComparison, {
+    applicable: workspaceMetricsApplicable
+  });
   const objectiveSuccess = buildObjectiveSuccess(run);
-  const objectivePathCoverage = buildObjectivePathCoverage(ticket, snapshot);
+  const objectivePathCoverage = buildObjectivePathCoverage(ticket, snapshot, {
+    applicable: workspaceMetricsApplicable
+  });
   const reviewStatus = buildRunReviewStatus(run, { objectivePathCoverage, artifactAccuracy, comparison: artifactPredictionComparison });
   const displaySnapshot = createDisplaySnapshot(snapshot);
   const operationalOutcome = classifyRunOperationalOutcome(run);

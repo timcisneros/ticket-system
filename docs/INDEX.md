@@ -21,6 +21,11 @@
   schema, native protocol, and historical-read compatibility matrix.
 - [`PROCESS_EXECUTION_GA_RUNBOOK.md`](PROCESS_EXECUTION_GA_RUNBOOK.md) — installation,
   readiness, staged enablement, disablement, backup, rollback, and incident procedures.
+- [`WORK_DEFINITION_AND_TYPED_EVIDENCE_ROADMAP.md`](WORK_DEFINITION_AND_TYPED_EVIDENCE_ROADMAP.md)
+  — authoritative four-tranche roadmap for typed projection parity and later structured
+  work-definition authority.
+- [`decision-memo-work-definition-and-typed-evidence.md`](decision-memo-work-definition-and-typed-evidence.md)
+  — rejection of a universal Target framework and the evidence-scoped correction.
 - [`PRIMITIVE_GLOSSARY.md`](PRIMITIVE_GLOSSARY.md) — runtime terminology.
 - [`OPERATIONAL_TRANSPARENCY.md`](OPERATIONAL_TRANSPARENCY.md) — read-only operational surfaces.
 - [`OPERATOR_INBOX.md`](OPERATOR_INBOX.md) and [`BROWSER_ENVIRONMENT.md`](BROWSER_ENVIRONMENT.md) —

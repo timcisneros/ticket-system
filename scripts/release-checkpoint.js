@@ -63,6 +63,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // cutover orphans rot unnoticed. scripts/test-manifest.js now classifies every
   // test file, and the coverage test fails if a required one is missing here.
   'telemetry-test.js',
+  'typed-evidence-projection-test.js',
   'workload-profile-test.js',
   'archive-local-events-test.js',
   'mutating-limit-context-regression-test.js',
@@ -196,6 +197,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // A20 — completes ticket-timeline-authority-visibility-test.js: receipt dedupe across
   // the event journal and replay, triage projection, and template provenance.
   'timeline-receipt-projection-test.js',
+  'typed-projection-parity-postgres-test.js',
   // A20 — replaces the JSON-era invalid-action-preflight-recovery-test.js. Pins that the
   // whole action batch is validated before any action executes.
   'action-batch-preflight-test.js',

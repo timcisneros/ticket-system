@@ -2661,8 +2661,32 @@ async function cmdWorkReceipt(args) {
     });
   }
   if (wr.artifactsProduced && wr.artifactsProduced.length > 0) {
-    console.log(`  ${dim('artifacts')}`);
+    console.log(`  ${dim('workspace artifacts')}`);
     wr.artifactsProduced.forEach(a => console.log(`    ${a}`));
+  }
+  if (wr.typedOperations && Array.isArray(wr.typedOperations.browser) && wr.typedOperations.browser.length > 0) {
+    console.log(`  ${dim('browser operations')} (${wr.typedOperations.browser.length})`);
+    wr.typedOperations.browser.forEach(op => {
+      console.log(`    ${op.operation} ${op.outcome} ${op.targetId || ''}`);
+    });
+  }
+  if (wr.typedOperations && Array.isArray(wr.typedOperations.process) && wr.typedOperations.process.length > 0) {
+    console.log(`  ${dim('process operations')} (${wr.typedOperations.process.length})`);
+    wr.typedOperations.process.forEach(op => {
+      console.log(`    ${op.profileId || '?'} ${op.terminalOutcome || op.outcome}`);
+    });
+  }
+  if (wr.typedArtifacts && Array.isArray(wr.typedArtifacts.process) && wr.typedArtifacts.process.length > 0) {
+    console.log(`  ${dim('process artifacts')}`);
+    wr.typedArtifacts.process.forEach(artifact => {
+      console.log(`    ${artifact.stream} ${artifact.id} ${artifact.byteCount} bytes sha256=${artifact.sha256}`);
+    });
+  }
+  if (wr.typedArtifacts && Array.isArray(wr.typedArtifacts.browser) && wr.typedArtifacts.browser.length > 0) {
+    console.log(`  ${dim('browser artifacts')}`);
+    wr.typedArtifacts.browser.forEach(artifact => {
+      console.log(`    ${artifact.kind} ${artifact.id} ${artifact.byteCount} bytes sha256=${artifact.sha256}`);
+    });
   }
   if (wr.whatWasDone) console.log(`  ${dim('done')}    ${wr.whatWasDone}`);
   if (wr.whatWasNotDone) console.log(`  ${dim('undone')}  ${wr.whatWasNotDone}`);

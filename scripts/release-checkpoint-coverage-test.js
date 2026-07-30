@@ -32,6 +32,14 @@ for (const required of [
   assert.equal(all.includes(required), true, `checkpoint must include ${required}`);
 }
 
+for (const typedProjectionGate of [
+  'typed-evidence-projection-test.js',
+  'typed-projection-parity-postgres-test.js'
+]) {
+  assert.equal(all.includes(typedProjectionGate), true,
+    `typed projection parity releases must include ${typedProjectionGate}`);
+}
+
 for (const materializerGate of [
   'process-materializer-contract-test.js',
   'process-materializer-deployment-test.js',

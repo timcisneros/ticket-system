@@ -420,6 +420,8 @@
     ['deleted', 'Deleted']
   ].map(([key, label]) => [key, label, Array.isArray(consequence[key]) ? consequence[key] : []]);
   const consequenceAttempted = (Array.isArray(consequence.mutations) ? consequence.mutations : []).filter(item => item && item.attempted);
+  const consequenceBrowserOperations = Array.isArray(consequence.browserOperations) ? consequence.browserOperations : [];
+  const consequenceProcessOperations = Array.isArray(consequence.processOperations) ? consequence.processOperations : [];
   const consequenceNotifications = Array.isArray(consequence.notifications) ? consequence.notifications : [];
   const consequenceExternalEffects = Array.isArray(consequence.externalEffects) ? consequence.externalEffects : [];
 %>
@@ -428,8 +430,9 @@
 <% if (consequence.mutationConsequenceSource === 'reconstructed_from_operation_receipts') { %>
   <p class="text-muted"><strong>Reconstructed, not originally persisted.</strong> This run terminalized before mutation consequences were recorded correctly, so its stored consequence was empty. The categories below are derived on read from this run's succeeded operation receipts and are not the terminal record that was written at the time.</p>
 <% } else { %>
-  <p class="text-muted">The authoritative record of what this run changed, derived from operation history at terminalization. Empty categories mean nothing of that kind was recorded.</p>
+  <p class="text-muted">Typed, authoritative facts derived from durable operation receipts. Operation success remains distinct from objective completion.</p>
 <% } %>
+  <h3>Workspace mutations</h3>
   <dl class="detail-grid">
     <% consequenceCategories.forEach(([key, label, items]) => { %>
       <div>
@@ -449,6 +452,37 @@
         <dd>
           <% consequenceAttempted.forEach(item => { %>
             <div><code class="owned-path"><%= item.path || '-' %></code><% if (item.operation) { %> <span class="text-muted">(<%= item.operation %>)</span><% } %></div>
+          <% }) %>
+        </dd>
+      </div>
+    <% } %>
+    <% if (consequenceBrowserOperations.length > 0) { %>
+      <div>
+        <dt>Browser operations / evidence (<%= consequenceBrowserOperations.length %>)</dt>
+        <dd>
+          <% consequenceBrowserOperations.forEach(item => { %>
+            <div>
+              <code><%= item.operation %></code> · <code><%= item.outcome %></code> · target <code><%= item.targetId %></code>
+              <% if (item.evidence && item.evidence.receiptId) { %><span class="text-muted"> · <%= item.evidence.receiptId %></span><% } %>
+              <% if (item.artifact) { %>
+                <div class="text-muted">screenshot <code><%= item.artifact.id %></code> · <%= item.artifact.byteCount %> bytes · SHA-256 <code><%= item.artifact.sha256 %></code></div>
+              <% } %>
+            </div>
+          <% }) %>
+        </dd>
+      </div>
+    <% } %>
+    <% if (consequenceProcessOperations.length > 0) { %>
+      <div>
+        <dt>Process operations / artifacts (<%= consequenceProcessOperations.length %>)</dt>
+        <dd>
+          <% consequenceProcessOperations.forEach(item => { %>
+            <div>
+              profile <code><%= item.profileId %></code> · <code><%= item.terminalOutcome %></code> · target <code><%= item.targetId %></code>
+              <% [item.stdoutArtifact, item.stderrArtifact].filter(Boolean).forEach(artifact => { %>
+                <div class="text-muted"><%= artifact.stream %> <code><%= artifact.id %></code> · <%= artifact.byteCount %> bytes · SHA-256 <code><%= artifact.sha256 %></code></div>
+              <% }) %>
+            </div>
           <% }) %>
         </dd>
       </div>
@@ -489,7 +523,9 @@
       <% if (evaluation.efficiency) { %>
         <div><dt>Duration</dt><dd><%= evaluation.efficiency.durationMs != null ? (typeof formatDurationHuman === 'function' ? formatDurationHuman(evaluation.efficiency.durationMs) : evaluation.efficiency.durationMs + 'ms') : '-' %></dd></div>
         <div><dt>Provider requests / responses</dt><dd><%= evaluation.efficiency.providerRequests != null ? evaluation.efficiency.providerRequests : '-' %> / <%= evaluation.efficiency.modelResponses != null ? evaluation.efficiency.modelResponses : '-' %></dd></div>
-        <div><dt>Workspace operations</dt><dd><%= evaluation.efficiency.workspaceOperations != null ? evaluation.efficiency.workspaceOperations : '-' %> (<%= evaluation.efficiency.mutationCount != null ? evaluation.efficiency.mutationCount : '-' %> mutating)</dd></div>
+        <div><dt>Workspace operations</dt><dd><%= evaluation.efficiency.workspaceOperations != null ? evaluation.efficiency.workspaceOperations : '-' %> (<%= evaluation.efficiency.workspaceMutations != null ? evaluation.efficiency.workspaceMutations : (evaluation.efficiency.mutationCount != null ? evaluation.efficiency.mutationCount : '-') %> mutating)</dd></div>
+        <div><dt>Browser operations</dt><dd><%= evaluation.efficiency.browserOperations != null ? evaluation.efficiency.browserOperations : 'unavailable for this historical evaluation' %></dd></div>
+        <div><dt>Process operations</dt><dd><%= evaluation.efficiency.processOperations != null ? evaluation.efficiency.processOperations : 'unavailable for this historical evaluation' %></dd></div>
         <div><dt>Retries</dt><dd><%= evaluation.efficiency.retryCount != null ? evaluation.efficiency.retryCount : '-' %></dd></div>
       <% } %>
       <% if (evaluation.violations) { %>
@@ -554,7 +590,7 @@
 </section>
 
 <section class="detail-section">
-  <h2>Artifact Prediction</h2>
+  <h2>Workspace Artifact Prediction</h2>
   <% const artifactPrediction = snapshot && snapshot.artifactPrediction ? snapshot.artifactPrediction : null; %>
   <% const predictedArtifacts = artifactPrediction && Array.isArray(artifactPrediction.artifacts) ? artifactPrediction.artifacts : []; %>
   <% const predictionComparison = typeof artifactPredictionComparison === 'undefined' || !artifactPredictionComparison ? { matched: [], missing: [], unexpected: [] } : artifactPredictionComparison; %>
@@ -565,8 +601,8 @@
   <% const missingPredictionKeys = new Set((predictionComparison.missing || []).map(item => item.key)); %>
   <% function predictionKey(item) { const type = item && item.type === 'workflow draft' ? 'workflowDraft' : (item && item.type ? item.type : 'unknown'); const artifact = String(item && item.artifact ? item.artifact : '').trim().replace(/^\.\//, ''); return type + ':' + artifact; } %>
   <p><strong>Objective Success:</strong> <% if (runObjectiveSuccess.scored) { %><%= runObjectiveSuccess.status === 'succeeded' ? 'Yes' : 'No · ' + runObjectiveSuccess.status %><% } else { %><%= runObjectiveSuccess.status === 'unverified' ? 'Unverified' : 'Not scored' %><% } %></p>
-  <p><strong>Objective Path Coverage:</strong> <% if (runObjectivePathCoverage.scored) { %><%= runObjectivePathCoverage.percent %>% · <%= runObjectivePathCoverage.covered %>/<%= runObjectivePathCoverage.total %> covered<% } else { %>Not scored<% } %></p>
-  <p><strong>Artifact Accuracy:</strong> <% if (predictionAccuracy.scored) { %><%= predictionAccuracy.percent %>% · <%= predictionAccuracy.matched %>/<%= predictionAccuracy.total %> matched<% } else { %>Not scored<% } %></p>
+  <p><strong>Workspace Objective Path Coverage:</strong> <% if (runObjectivePathCoverage.applicable === false) { %>Not applicable<% } else if (runObjectivePathCoverage.scored) { %><%= runObjectivePathCoverage.percent %>% · <%= runObjectivePathCoverage.covered %>/<%= runObjectivePathCoverage.total %> covered<% } else { %>Not scored<% } %></p>
+  <p><strong>Workspace Artifact Accuracy:</strong> <% if (predictionAccuracy.applicable === false) { %>Not applicable<% } else if (predictionAccuracy.scored) { %><%= predictionAccuracy.percent %>% · <%= predictionAccuracy.matched %>/<%= predictionAccuracy.total %> matched<% } else { %>Not scored<% } %></p>
   <% if (predictedArtifacts.length === 0) { %>
     <p class="text-muted">No artifact prediction captured.</p>
   <% } else { %>
@@ -1489,11 +1525,18 @@
           <% } %>
         </div>
         <div class="operation-history-body">
-          <div class="allocation-item-row">
-            <span class="allocation-item-label">Path</span>
-            <span class="allocation-item-value"><code class="owned-path"><%= record.args.path %></code></span>
-          </div>
-          <% if (record.args.nextPath) { %>
+          <% if (record.args && record.args.path) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Workspace path</span>
+              <span class="allocation-item-value"><code class="owned-path"><%= record.args.path %></code></span>
+            </div>
+          <% } else if (record.targetId) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Typed operation target</span>
+              <span class="allocation-item-value"><code><%= record.targetId %></code><%= record.targetKind ? ' · ' + record.targetKind : '' %></span>
+            </div>
+          <% } %>
+          <% if (record.args && record.args.nextPath) { %>
             <div class="allocation-item-row">
               <span class="allocation-item-label">Next Path</span>
               <span class="allocation-item-value"><code class="owned-path"><%= record.args.nextPath %></code></span>

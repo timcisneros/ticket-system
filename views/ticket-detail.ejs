@@ -688,11 +688,12 @@
   <div class="body">
   <% const ticketArtifacts = typeof artifacts === 'undefined' ? [] : artifacts; %>
   <% if (ticketArtifacts.length === 0) { %>
-    <p class="text-muted">No artifacts produced yet.</p>
+    <p class="text-muted">No durable workspace, process, browser, or workflow artifacts are recorded yet.</p>
   <% } else { %>
     <table class="tickets-table">
       <thead>
         <tr>
+          <th>Family</th>
           <th>Type</th>
           <th>Artifact</th>
           <th>Status</th>
@@ -704,8 +705,14 @@
       <tbody>
         <% ticketArtifacts.forEach(artifact => { %>
           <tr>
+            <td><%= artifact.category || 'workspace' %></td>
             <td><%= artifact.type %></td>
-            <td><code class="owned-path"><%= artifact.artifact %></code></td>
+            <td>
+              <code class="<%= artifact.category === 'workspace' ? 'owned-path' : '' %>"><%= artifact.artifact %></code>
+              <% if (artifact.stream) { %><div class="text-muted">stream <%= artifact.stream %></div><% } %>
+              <% if (artifact.byteCount != null) { %><div class="text-muted"><%= artifact.byteCount %> bytes</div><% } %>
+              <% if (artifact.sha256) { %><div class="text-muted">SHA-256 <code><%= artifact.sha256 %></code></div><% } %>
+            </td>
             <td><span class="status-badge"><%= artifact.status %></span></td>
             <td>
               <% if (artifact.runId) { %>
@@ -801,11 +808,18 @@
           <% } %>
         </div>
         <div class="operation-history-body">
-          <div class="allocation-item-row">
-            <span class="allocation-item-label">Path</span>
-            <span class="allocation-item-value"><code class="owned-path"><%= record.args.path %></code></span>
-          </div>
-          <% if (record.args.nextPath) { %>
+          <% if (record.args && record.args.path) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Workspace path</span>
+              <span class="allocation-item-value"><code class="owned-path"><%= record.args.path %></code></span>
+            </div>
+          <% } else if (record.targetId) { %>
+            <div class="allocation-item-row">
+              <span class="allocation-item-label">Typed operation target</span>
+              <span class="allocation-item-value"><code><%= record.targetId %></code><%= record.targetKind ? ' · ' + record.targetKind : '' %></span>
+            </div>
+          <% } %>
+          <% if (record.args && record.args.nextPath) { %>
             <div class="allocation-item-row">
               <span class="allocation-item-label">Next Path</span>
               <span class="allocation-item-value"><code class="owned-path"><%= record.args.nextPath %></code></span>

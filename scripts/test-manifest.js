@@ -267,6 +267,8 @@ const TESTS = Object.freeze([
   { file: "target-operation-reconciliation-test.js", status: "required" },
   { file: "target-provider-contract-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "telemetry-test.js", status: "required" },
+  { file: "typed-evidence-projection-test.js", status: "required" },
+  { file: "typed-projection-parity-postgres-test.js", status: "required" },
   { file: "terminalization-boundary-recovery-test.js", status: "required" },
   { file: "ticket-budget-rollup-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "ticket-execution-state-clarity-test.js", status: "orphaned", reason: "cutover-orphan" },
