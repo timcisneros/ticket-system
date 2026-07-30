@@ -128,3 +128,7 @@ Targeted database checks are available as `test:persistence:postgres`,
 `test:cutover:postgres`, and `test:page-render:postgres`. See [docs/SETUP_AND_FIRST_RUN.md](docs/SETUP_AND_FIRST_RUN.md),
 [docs/SYSTEM_STATUS.md](docs/SYSTEM_STATUS.md), and
 [docs/POSTGRES_CUTOVER.md](docs/POSTGRES_CUTOVER.md).
+
+## License
+
+This project is available under the [MIT License](LICENSE).

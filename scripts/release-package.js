@@ -19,6 +19,7 @@ const ALLOWED_ROOTS = Object.freeze([
   'views/'
 ]);
 const ALLOWED_FILES = new Set([
+  'LICENSE',
   'package.json',
   'pnpm-lock.yaml',
   'server.js'
