@@ -808,6 +808,63 @@
 
 <div class="zone-head"><span class="zone-eyebrow">How it was set up</span></div>
 
+<%
+  const admittedDeclaredWork = typeof declaredWork !== 'undefined' && declaredWork
+    ? declaredWork
+    : {
+        availability: run.declaredWorkSnapshot ? 'available' : 'historical-unavailable',
+        snapshot: run.declaredWorkSnapshot || null
+      };
+%>
+<details class="disclosure" open>
+  <summary>Declared work <span class="sub"><%= admittedDeclaredWork.availability === 'available' ? 'Frozen at admission' : 'Historical compatibility' %></span></summary>
+  <div class="body">
+    <% if (admittedDeclaredWork.snapshot) { const work = admittedDeclaredWork.snapshot; %>
+      <p class="text-muted">Immutable run authority describing what this run was admitted to attempt. Declarations are not produced evidence and are not evaluation results.</p>
+      <dl class="detail-grid">
+        <div><dt>Objective</dt><dd style="white-space:pre-wrap;"><%= work.objective.text %> <span class="text-muted">· <%= work.objective.provenance %></span></dd></div>
+        <div><dt>Contract</dt><dd>version <code><%= work.version %></code> · <code><%= work.contractHash %></code></dd></div>
+      </dl>
+      <h3>Expected outputs</h3>
+      <% if (work.expectedOutputs.length === 0) { %>
+        <p class="text-muted">No expected outputs were explicitly declared at admission.</p>
+      <% } else { %>
+        <ul>
+          <% work.expectedOutputs.forEach(function(item) { %>
+            <li><code><%= item.kind %></code> <%= item.declaration %> <span class="text-muted">· <%= item.provenance %> · declaration only</span></li>
+          <% }); %>
+        </ul>
+      <% } %>
+      <h3>Success criteria</h3>
+      <% if (work.successCriteria.length === 0) { %>
+        <p class="text-muted">No success criteria were explicitly declared at admission.</p>
+      <% } else { %>
+        <ul>
+          <% work.successCriteria.forEach(function(item) { %>
+            <% if (item.kind === 'text') { %>
+              <li><strong>Textual declaration:</strong> <span style="white-space:pre-wrap;"><%= item.declaration %></span> <span class="text-muted">· <%= item.provenance %> · not automatically evaluated</span></li>
+            <% } else { %>
+              <li><strong>Existing deterministic postcondition:</strong> <code><%= item.criterionType %></code> <code><%= item.declaration %></code> <span class="text-muted">· <%= item.provenance %></span></li>
+            <% } %>
+          <% }); %>
+        </ul>
+      <% } %>
+      <h3>Evidence requirements</h3>
+      <% if (work.evidenceRequirements.length === 0) { %>
+        <p class="text-muted">No explicit evidence requirements were admitted.</p>
+      <% } else { %>
+        <ul>
+          <% work.evidenceRequirements.forEach(function(item) { %>
+            <li><code><%= item.evidenceType %></code> for criterion <code><%= item.criterionHash %></code> <span class="text-muted">· <%= item.provenance %> · requirement, not evidence produced</span></li>
+          <% }); %>
+        </ul>
+      <% } %>
+    <% } else { %>
+      <p class="text-muted">Historical run: no declared-work snapshot was admitted. Current ticket or workflow values are not substituted for this run’s missing authority.</p>
+    <% } %>
+  </div>
+</details>
+
 <details class="disclosure">
   <summary>Work Type Snapshot <span class="sub"><%= run.workTypeSnapshot ? run.workTypeSnapshot.name : 'Unspecified' %></span></summary>
   <div class="body">
@@ -835,7 +892,7 @@
       <p class="text-muted">No acceptance criteria were captured for this run.</p>
       <p class="text-muted">Runs capture acceptance criteria at creation time; this run has no captured criteria.</p>
     <% } %>
-    <p class="text-muted">Frozen at run creation and supplied to the agent as part of the requested outcome; arbitrary prose criteria are not automatically verified.</p>
+    <p class="text-muted">Frozen at run creation and supplied to the agent as part of the requested outcome; arbitrary prose criteria are not automatically verified.<%= admittedDeclaredWork.snapshot ? ' For current runs this is the compatibility projection of the ticket-authored textual criterion in Declared work.' : '' %></p>
   </div>
 </details>
 

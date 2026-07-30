@@ -14,6 +14,9 @@ const {
   normalizeRuntimeBudgetSnapshot
 } = require('../../runtime/runtime-budget-contract');
 const {
+  normalizeDeclaredWorkSnapshot
+} = require('../../runtime/declared-work-contract');
+const {
   normalizeCompletionAuthoritySnapshot,
   normalizeCompletionDecision,
   completionEvidenceProjection
@@ -98,6 +101,13 @@ function migrationChecksum(version) {
 
 function migrationHeadVersion(files = migrationFiles()) {
   return Number(files[files.length - 1].slice(0, 3));
+}
+
+function assertDeclaredWorkAuthorityNotPatched(patch, label) {
+  if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'declaredWorkSnapshot')) return;
+  const error = new Error(`${label} cannot mutate declaredWorkSnapshot after admission`);
+  error.code = 'DECLARED_WORK_SNAPSHOT_IMMUTABLE';
+  throw error;
 }
 
 function processExecutionReleaseStateFromRow(row) {
@@ -1907,6 +1917,11 @@ class PostgresRuntimeStore {
 
   async createRun(record, { client = null } = {}) {
     const run = this.assertJsonRecord(record, 'run');
+    if (Object.prototype.hasOwnProperty.call(run, 'declaredWorkSnapshot') &&
+        run.declaredWorkSnapshot !== null &&
+        run.declaredWorkSnapshot !== undefined) {
+      normalizeDeclaredWorkSnapshot(run.declaredWorkSnapshot);
+    }
     const status = requiredString(run.status || 'pending', 'run.status');
     if (status !== 'pending') throw new TypeError('New runs must start pending');
     const currentPhase = normalizeRunPhase(run.currentPhase || 'planning', 'run.currentPhase');
@@ -2011,6 +2026,16 @@ class PostgresRuntimeStore {
           normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot);
         } catch (error) {
           error.message = `runDrafts[${index}].completionAuthoritySnapshot: ${error.message}`;
+          throw error;
+        }
+      });
+      drafts.forEach((run, index) => {
+        if (run.declaredWorkSnapshot === null ||
+            run.declaredWorkSnapshot === undefined) return;
+        try {
+          normalizeDeclaredWorkSnapshot(run.declaredWorkSnapshot);
+        } catch (error) {
+          error.message = `runDrafts[${index}].declaredWorkSnapshot: ${error.message}`;
           throw error;
         }
       });
@@ -4954,6 +4979,7 @@ class PostgresRuntimeStore {
       throw new TypeError('leaseOwner is required to transition a running run');
     }
     const requestedPatch = this.assertJsonRecord(patch, 'run patch');
+    assertDeclaredWorkAuthorityNotPatched(requestedPatch, 'run patch');
     const requestedPhase = Object.prototype.hasOwnProperty.call(requestedPatch, 'currentPhase')
       ? normalizeRunPhase(requestedPatch.currentPhase, 'patch.currentPhase')
       : null;
@@ -5696,6 +5722,7 @@ class PostgresRuntimeStore {
       ? null
       : requiredString(recoveryOwner, 'recoveryOwner');
     const requestedPatch = this.assertJsonRecord(patch, 'patch');
+    assertDeclaredWorkAuthorityNotPatched(requestedPatch, 'repair patch');
     if (Object.prototype.hasOwnProperty.call(requestedPatch, 'currentPhase') &&
         normalizeRunPhase(requestedPatch.currentPhase, 'patch.currentPhase') !== 'terminalization') {
       throw new TypeError('Terminal runs must project terminalization phase');

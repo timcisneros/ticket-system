@@ -106,6 +106,12 @@ const {
   getRunRuntimeBudgetSnapshot
 } = require('./runtime/runtime-budget-contract');
 const {
+  buildDeclaredWorkSnapshot,
+  normalizeDeclaredWorkSnapshot,
+  projectDeclaredWorkForModel,
+  projectDeclaredWorkForRun
+} = require('./runtime/declared-work-contract');
+const {
   RuntimeBudgetController
 } = require('./runtime/runtime-budget-controller');
 const {
@@ -8075,6 +8081,7 @@ async function readRunProcessSupervision(run, {
 
 function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
   if (!run) return null;
+  const declaredWork = projectDeclaredWorkForRun(run);
   const suppliedEvents = Array.isArray(options.events) ? options.events : null;
   const suppliedOperations = Array.isArray(options.operations) ? options.operations : null;
   const summary = options.eventSummary || { currentStep: null, latestStatus: null, latestError: null, latestWorkspaceMutation: null };
@@ -8131,6 +8138,8 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     completionAuthoritySnapshot: run.completionAuthoritySnapshot
       ? normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot)
       : null,
+    declaredWorkSnapshot: declaredWork.snapshot,
+    declaredWorkAvailability: declaredWork.availability,
     triage: normalizeTriage(run.triage),
     lease: serializeRunLease(run),
     leaseExpiresAt: run.leaseExpiresAt || null,
@@ -10980,6 +10989,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
   const targetProvider = getRunWorkspaceProvider(run);
   const target = getTargetProviderDescriptor(targetProvider);
   const browserRun = isBrowserRun(run);
+  const declaredWork = projectDeclaredWorkForRun(run);
   return {
     version: 1,
     runId: run.id,
@@ -11009,6 +11019,8 @@ function createReplaySnapshotBase(run, overrides = {}) {
     completionAuthoritySnapshot: run.completionAuthoritySnapshot
       ? normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot)
       : null,
+    declaredWorkSnapshot: declaredWork.snapshot,
+    declaredWorkAvailability: declaredWork.availability,
     workTypeId: run.workTypeId || null,
     workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
     workTypeSnapshotSource: run.workTypeSnapshot ? 'ticket_snapshot' : null,
@@ -11054,6 +11066,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
 }
 
 async function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, systemInstructionSnapshot) {
+  const declaredWork = projectDeclaredWorkForRun(run);
   const result = await getRunReplayRepository().initializeRunReplay({
     runId: run.id,
     ticketId: run.ticketId,
@@ -11061,7 +11074,9 @@ async function createRunReplaySnapshot(run, ticket, agent, providerConfig, runti
     provider: providerConfig.provider,
     model: providerConfig.model,
     runtimeEnvelope,
-    ticketObjectiveSnapshot: ticket.objective,
+    ticketObjectiveSnapshot: declaredWork.snapshot
+      ? declaredWork.snapshot.objective.text
+      : ticket.objective,
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
     runtimeLimits: pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run)),
     runtimeLimitsSnapshot: getRunRuntimeLimitsSnapshot(run),
@@ -11069,6 +11084,8 @@ async function createRunReplaySnapshot(run, ticket, agent, providerConfig, runti
     completionAuthoritySnapshot: run.completionAuthoritySnapshot
       ? normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot)
       : null,
+    declaredWorkSnapshot: declaredWork.snapshot,
+    declaredWorkAvailability: declaredWork.availability,
     systemInstructionSnapshot,
       effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent, getRunRuntimeLimitsSnapshot(run))
     })
@@ -15586,6 +15603,11 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     executionPolicySnapshot,
     now
   );
+  const declaredWorkSnapshot = buildDeclaredWorkSnapshot({
+    ticket,
+    workflow,
+    completionAuthoritySnapshot
+  });
   const runtimeBudgetSnapshot = buildRuntimeBudgetSnapshot({
     runtimeLimits: {
       ...runtimeLimitsSnapshot,
@@ -15668,6 +15690,7 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     runtimeBudgetSnapshot,
     verificationContractSnapshot,
     completionAuthoritySnapshot,
+    declaredWorkSnapshot,
     acceptanceCriteriaSnapshot: (typeof ticket.acceptanceCriteria === 'string' && ticket.acceptanceCriteria.trim()) ? ticket.acceptanceCriteria.trim() : null,
     // Immutable routing snapshot (r1.28): supporting metadata only, never rewritten.
     routingSnapshot: routeDecision.routingSnapshot,
@@ -15716,6 +15739,7 @@ function buildRunCreatedEventPayload(run) {
     runtimeBudgetSnapshot: run.runtimeBudgetSnapshot,
     verificationContractSnapshot: run.verificationContractSnapshot,
     completionAuthoritySnapshot: run.completionAuthoritySnapshot,
+    declaredWorkSnapshot: normalizeDeclaredWorkSnapshot(run.declaredWorkSnapshot),
     acceptanceCriteriaSnapshot: run.acceptanceCriteriaSnapshot,
     workTypeId: run.workTypeId,
     workTypeSnapshot: copyWorkTypeSnapshot(run.workTypeSnapshot),
@@ -20074,12 +20098,38 @@ function compactRuntimeEnvelopeForPrompt(runtimeEnvelope) {
   return compact;
 }
 
-function compactTicketContextForPrompt(ticketObjective, previousActionResults, priorFailureContext, workspaceContext, acceptanceCriteria = null) {
+function buildAdmittedTicketProjection(run, ticket) {
+  const declared = projectDeclaredWorkForRun(run);
+  if (!declared.snapshot) {
+    return {
+      ...(ticket || {}),
+      declaredWork: null,
+      declaredWorkAvailability: declared.availability
+    };
+  }
+  const declaredWork = projectDeclaredWorkForModel(declared.snapshot);
+  const ticketAuthoredCriterion = declaredWork.successCriteria.find(item =>
+    item.kind === 'text' && item.provenance === 'ticket-authored');
+  return {
+    ...(ticket || {}),
+    objective: declaredWork.objective.text,
+    acceptanceCriteria: ticketAuthoredCriterion
+      ? ticketAuthoredCriterion.declaration
+      : null,
+    declaredWork,
+    declaredWorkAvailability: declared.availability
+  };
+}
+
+function compactTicketContextForPrompt(ticketObjective, previousActionResults, priorFailureContext, workspaceContext, acceptanceCriteria = null, declaredWork = null) {
   const compact = {
     ticketObjective
   };
   if (typeof acceptanceCriteria === 'string' && acceptanceCriteria.trim()) {
     compact.acceptanceCriteria = acceptanceCriteria.trim();
+  }
+  if (declaredWork) {
+    compact.declaredWork = declaredWork;
   }
 
   // Anchoring context: clearly separate the workspace as-of run start, the live
@@ -20279,6 +20329,7 @@ async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rer
         content: JSON.stringify({
           objective: ticket.objective,
           acceptanceCriteria: ticket.acceptanceCriteria || null,
+          declaredWork: ticket.declaredWork || null,
           previousActionResults: sanitizeSnapshotValue(actionResults),
           browserContext: sanitizeSnapshotValue(workspaceContext)
         })
@@ -20411,7 +20462,8 @@ async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rer
           ? await buildPriorFailureContext(ticket.id, runtimeEnvelope.runId)
           : null,
         workspaceContext,
-        ticket.acceptanceCriteria
+        ticket.acceptanceCriteria,
+        ticket.declaredWork
       ))
     }
   ];
@@ -20480,18 +20532,15 @@ async function runAgentTicket(runId) {
     if (!agent) throw new Error('Agent not found');
     await reconcileRunBudgetReservations(run);
     runtimeBudgetController.assertDuration(run);
-    const promptTicket = {
-      ...ticket,
-      acceptanceCriteria: run.acceptanceCriteriaSnapshot || null
-    };
+    const promptTicket = buildAdmittedTicketProjection(run, ticket);
     providerConfig = getAgentProviderConfig(agent);
     const runtimeLimitsSnapshot = getRunRuntimeLimitsSnapshot(
       run,
-      run.executionMode === 'workflow' ? null : ticket.objective,
+      run.executionMode === 'workflow' ? null : promptTicket.objective,
       { workflow: run.executionMode === 'workflow' }
     );
     const limits = effectiveRunExecutionLimits(run, runtimeLimitsSnapshot);
-    const runtimeEnvelope = await buildRuntimeEnvelope(run, 0, ticket.objective, limits);
+    const runtimeEnvelope = await buildRuntimeEnvelope(run, 0, promptTicket.objective, limits);
     const initialInput = await buildAgentPrompt(promptTicket, runtimeEnvelope, [], run.rerunMode);
     await createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, initialInput[0].content);
     appendRunLog(run, 'run:runtime', JSON.stringify(runtimeEnvelope));
@@ -20780,7 +20829,7 @@ async function runAgentTicket(runId) {
     let fallbackNoFutureBudgetGuard = false;
     if (MODEL_CONTRACT_COMPILER_ENABLED && !isBrowserRun(run) && !resumedFromPersistedState) {
       const modelRequestCountRef = { count: modelRequestCount };
-      const compileResult = await compileObjectiveContract(run, ticket, agent, limits, modelRequestCountRef, runStartedAtMs);
+      const compileResult = await compileObjectiveContract(run, promptTicket, agent, limits, modelRequestCountRef, runStartedAtMs);
       compiledContract = compileResult.contract || null;
       fallbackNoFutureBudgetGuard = compileResult.fallback === true;
       modelRequestCount = modelRequestCountRef.count;
@@ -20789,7 +20838,9 @@ async function runAgentTicket(runId) {
     // Exact delete-target identity: for a simple "delete <X>" objective, the only
     // legitimate deletePath target is X. Used to reject near-miss deletes (e.g.
     // deletePath C for "Delete CD") before execution. null for non-simple objectives.
-    let simpleDeleteTargets = isBrowserRun(run) ? null : extractSimpleDeleteTargets(ticket && ticket.objective);
+    let simpleDeleteTargets = isBrowserRun(run)
+      ? null
+      : extractSimpleDeleteTargets(promptTicket && promptTicket.objective);
     if (!isBrowserRun(run) && compiledContract && compiledContract.intent === 'delete' && Array.isArray(compiledContract.allowedMutations)) {
       simpleDeleteTargets = compiledContract.allowedMutations.map(m => m.path).filter(Boolean);
     }
@@ -20797,7 +20848,13 @@ async function runAgentTicket(runId) {
       ? new Set(simpleDeleteTargets.map(t => normalizeArtifactOwnershipPath(t)).filter(Boolean))
       : null;
 
-    await assertRuntimeBudgetFeasible(run, ticket, initialWorkspaceSnapshot, limits, compiledContract);
+    await assertRuntimeBudgetFeasible(
+      run,
+      promptTicket,
+      initialWorkspaceSnapshot,
+      limits,
+      compiledContract
+    );
 
     // Seed the action-contract violation streak from durable replay evidence so
     // a run recovered between responses continues an in-progress streak rather
@@ -20859,7 +20916,7 @@ async function runAgentTicket(runId) {
         }
       }
 
-      const currentEnvelope = await buildRuntimeEnvelope(run, step, ticket.objective, limits);
+      const currentEnvelope = await buildRuntimeEnvelope(run, step, promptTicket.objective, limits);
       const currentWorkspaceSnapshot = isBrowserRun(run)
         ? await captureBrowserCurrentState(run)
         : captureRunWorkspaceRootSnapshot(run);
@@ -21989,7 +22046,9 @@ async function runAgentTicket(runId) {
 
       listPathsThisStep.forEach(listedPath => listedDirectoryPaths.add(listedPath));
 
-      if (!modelPlan.complete && isWorkflowDraftObjective(ticket.objective) && hasSuccessfulWorkflowDraftAction(actionResults)) {
+      if (!modelPlan.complete &&
+          isWorkflowDraftObjective(promptTicket.objective) &&
+          hasSuccessfulWorkflowDraftAction(actionResults)) {
         await recordRunEvent(run, 'workflow.draft_objective_satisfied', 'Workflow draft objective satisfied by created disabled draft', {
           step,
           source: 'successful_workflow_draft_action'
@@ -22002,7 +22061,7 @@ async function runAgentTicket(runId) {
         await recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
           step,
           source: 'successful_workspace_mutation',
-          objectivePaths: extractObjectivePathTokens(ticket.objective)
+          objectivePaths: extractObjectivePathTokens(promptTicket.objective)
         });
         completed = true;
         break;
@@ -24395,6 +24454,9 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   ]);
   const ticketRuns = await hydrateRunReplaySnapshots(enrichTicketRuns(rawTicketRuns, operationHistory, agents));
   ticketRuns.forEach(item => {
+    const declaredWork = projectDeclaredWorkForRun(item);
+    item.declaredWorkSnapshot = declaredWork.snapshot;
+    item.declaredWorkAvailability = declaredWork.availability;
     if (!item.runEvaluation) return;
     item.runEvaluation = projectRunEvaluationOperationCounts(
       item.id,
@@ -26281,6 +26343,10 @@ async function buildRunDiagnosticBundle(ctx) {
   const j = v => { try { return JSON.stringify(v, null, 2); } catch (_) { return 'unavailable'; } };
 
   const s = snapshot || {};
+  const declaredWork = run ? projectDeclaredWorkForRun(run) : {
+    availability: 'historical-unavailable',
+    snapshot: null
+  };
   const fs2 = failureSummary || {};
   const history = Array.isArray(operationHistory) ? operationHistory : [];
   const opPath = op => (op && (op.path != null ? op.path : (op.args && op.args.path))) || null;
@@ -26421,6 +26487,13 @@ async function buildRunDiagnosticBundle(ctx) {
   if (run) {
     out('- Run id: ' + dash(run.id));
     out('- Ticket id: ' + dash(run.ticketId));
+    out('- Declared work availability: ' + declaredWork.availability);
+    out('- Admitted objective: ' + dash(
+      declaredWork.snapshot && declaredWork.snapshot.objective.text
+    ));
+    out('- Declared work contract hash: ' + dash(
+      declaredWork.snapshot && declaredWork.snapshot.contractHash
+    ));
     out('- Acceptance criteria snapshot: ' + dash(run.acceptanceCriteriaSnapshot));
     out('- Agent id: ' + dash(run.agentId));
     out('- Agent name: ' + dash(run.agentName || (agent && agent.name)));
@@ -26916,6 +26989,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     recentEventSummary: eventSummary
   });
   const completionSummary = buildRunCompletionSummary(run, snapshot, runEvents, enrichedHistory, failureSummary);
+  const declaredWork = projectDeclaredWorkForRun(run);
   // Display-only: surface this run's permissioned cross-ticket delete audit events
   // (recorded in v0.1.18). Strictly scoped to this run's id. Derived for the view;
   // no runtime, permission, or event-writing behavior is affected.
@@ -26988,6 +27062,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     eventSummary,
     runStateInconsistency,
     completionSummary,
+    declaredWork,
     permissionedDeleteAuditEvents,
     runDiagnosticBundle,
     diagnosticsGeneratedAt,

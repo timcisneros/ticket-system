@@ -625,7 +625,7 @@
     <table class="tickets-table">
       <thead><tr>
         <% if (showAttemptCols) { %><th>Attempt</th><% } %>
-        <th>Run #</th><th>Agent</th><th>Status</th><th>Run Outcome</th><th>Verification Contract</th><th>Mutations</th>
+        <th>Run #</th><th>Agent</th><th>Status</th><th>Run Outcome</th><th>Admitted work</th><th>Verification Contract</th><th>Mutations</th>
         <% if (showAttemptCols) { %><th>Duration</th><th>Model reqs</th><th>Workspace ops</th><th>Mutating ops</th><th>Verification</th><th>Triage</th><% } %>
         <% if (hasScopedRuns) { %><th>Work Split</th><th>Work Unit</th><% } %>
         <th>Created</th>
@@ -638,6 +638,14 @@
             <td><%= run.agentName %></td>
             <td><span class="status-badge status-<%= run.status %>"><%= run.status %></span></td>
             <td><code><%= run.operationalOutcome || '-' %></code></td>
+            <td>
+              <% if (run.declaredWorkSnapshot) { %>
+                <span><%= run.declaredWorkSnapshot.objective.text %></span>
+                <div class="text-muted">frozen · <code><%= run.declaredWorkSnapshot.contractHash %></code></div>
+              <% } else { %>
+                <span class="text-muted">Historical unavailable · current ticket values not substituted</span>
+              <% } %>
+            </td>
             <td>
               <% const frozenPostconditions = run.verificationContractSnapshot && Array.isArray(run.verificationContractSnapshot.postconditions) ? run.verificationContractSnapshot.postconditions : []; %>
               <% if (frozenPostconditions.length === 0) { %>

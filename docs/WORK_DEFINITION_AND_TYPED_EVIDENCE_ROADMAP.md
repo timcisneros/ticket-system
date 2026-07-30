@@ -60,15 +60,94 @@ Work Primitive/playbook entity.
 
 ## Tranche 2 — Declared work snapshot
 
-### Outcome
+### Capability claim
 
-Add the smallest immutable admitted-run representation of explicitly declared
-expected outputs, success criteria, and evidence requirements through existing
-Ticket, Workflow, and Run authority.
+Every admitted run carries the smallest immutable, reconstructable declaration
+of the work it was authorized to attempt: its objective, explicitly declared
+expected outputs, success criteria, and evidence requirements.
+
+### Contract
+
+The version-1 `declaredWorkSnapshot` is immutable run authority:
+
+```text
+version
+objective
+expectedOutputs
+successCriteria
+evidenceRequirements
+contractHash
+```
+
+It is stored in the existing PostgreSQL run body and in run-created and replay
+authority. No new table, registry, product entity, or migration is involved.
+The hash covers canonical, locale-independent serialization of the declaration
+and every field's provenance. Unknown fields, unknown versions, invalid
+provenance, malformed declarations, contradictory equal-authority criteria,
+and hash mismatches fail closed.
+
+The closed provenance vocabulary, in descending authority order, is:
+
+```text
+ticket-authored
+workflow-defined
+deterministic-objective-contract
+validated-model-contract
+legacy-compatibility
+absent
+```
+
+Precedence is field-specific rather than a merge of unlike facts:
+
+- the ticket-authored objective is the admitted objective;
+- ticket-authored acceptance criteria remain textual declarations;
+- a workflow run takes expected-output declarations from its frozen verifier
+  contract and typed criteria from its frozen workflow postconditions;
+- a direct run takes only the existing deterministic objective postconditions;
+- workflow postconditions and direct objective postconditions are never merged;
+- model output is not an admission source today and cannot override ticket,
+  workflow, or deterministic authority.
+
+Equal-authority declarations with the same established identity must agree.
+They otherwise fail admission with `DECLARED_WORK_AUTHORITY_CONFLICT`.
+Empty arrays mean the corresponding declaration was absent; actions, process
+profiles, browser targets, produced artifacts, and observed evidence never
+become declarations by inference.
+
+### Declaration versus results
+
+The snapshot records admitted declarations. It does not say that an output was
+produced, evidence exists, a textual criterion was evaluated, or an objective
+completed. Existing deterministic postconditions remain the only hard typed
+success predicates, and the Tranche 6 completion-decision authority from the
+Process Execution Roadmap remains unchanged. Typed interpretation of additional
+declared criteria belongs to Tranche 3.
+
+Planning and model context receive one bounded projection of the admitted
+snapshot. Compatibility objective and acceptance-criteria prompt fields are
+derived from that projection for current runs. They do not read later mutable
+ticket or workflow values. The projection adds no actions and changes no
+workspace, browser, or process dispatch.
+
+### Historical compatibility
+
+Runs admitted before this contract remain readable as
+`historical-unavailable` with a null snapshot. Current ticket or workflow state
+is never synthesized as historical declared-work authority. Existing
+historical completion decisions and execution compatibility are not
+reinterpreted.
+
+Workflow remains the currently validated work primitive. The declared-work
+snapshot extends Ticket, Workflow, and Run authority; it is not a reusable Work
+Primitive or playbook entity. Whether such an entity has product value remains
+an evidence-dependent future decision.
 
 ### Scope boundary
 
-Do not add a new Work Primitive entity.
+This tranche admits and projects declarations only. It does not evaluate new
+criteria, change completion or terminalization, generalize the workspace,
+browser, or process operation families, or add a Work Primitive, playbook,
+Target, capability, or execution ontology.
 
 ## Tranche 3 — Typed criteria and completion
 
@@ -96,7 +175,7 @@ playbooks merit a separate product and persistence contract.
 
 ```text
 Tranche 1: COMPLETE
-Tranche 2: NOT STARTED — NEXT
-Tranche 3: NOT STARTED
+Tranche 2: COMPLETE
+Tranche 3: NOT STARTED — NEXT
 Tranche 4: NOT STARTED
 ```

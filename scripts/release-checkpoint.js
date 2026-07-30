@@ -13,6 +13,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'dev-environment-test.js',
   'catalog-consistency-test.js',
   'completion-decision-contract-test.js',
+  'declared-work-contract-test.js',
   'action-contract-streak-test.js',
   'evidence-truthfulness-contract-test.js',
   'event-integrity-negative-test.js',
@@ -98,6 +99,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'run-consequence-mutation-test.js',
   'required-replay-evidence-test.js',
   'delegated-run-logging-containment-test.js',
+  'declared-work-postgres-test.js',
   'reconciliation-evidence-failure-test.js',
   // A10 — PostgreSQL runtime integrity suites, restored from the JSON-era orphans.
   // Registered here rather than in CHECKPOINT_TEST_SCRIPTS because every one of them

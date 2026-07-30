@@ -1655,6 +1655,13 @@ async function cmdRunState(args) {
   console.log(`\n  ${bold(`Run #${runId}`)} ${statusTag(data.status)}`);
   if (data.agentName) console.log(`  ${dim('agent')} ${data.agentName}  ${dim('model')} ${data.executionMode || data.agentId || ''}`);
   if (data.ticketId) console.log(`  ${dim('ticket')} #${data.ticketId}`);
+  if (data.declaredWorkSnapshot) {
+    const declared = data.declaredWorkSnapshot;
+    console.log(`  ${dim('declared objective')} ${declared.objective.text.replace(/\r?\n/g, ' ')}`);
+    console.log(`  ${dim('declared outputs / criteria / evidence')} ${declared.expectedOutputs.length} / ${declared.successCriteria.length} / ${declared.evidenceRequirements.length}  ${dim(declared.contractHash)}`);
+  } else if (data.declaredWorkAvailability === 'historical-unavailable') {
+    console.log(`  ${dim('declared work')} historical unavailable — current ticket values are not substituted`);
+  }
   if (data.createdAt) console.log(`  ${dim('created')} ${datetime(data.createdAt)}`);
   if (data.startedAt) console.log(`  ${dim('started')} ${datetime(data.startedAt)}`);
   if (data.completedAt) console.log(`  ${dim('completed')} ${datetime(data.completedAt)}`);

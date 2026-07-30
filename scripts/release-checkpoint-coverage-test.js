@@ -40,6 +40,14 @@ for (const typedProjectionGate of [
     `typed projection parity releases must include ${typedProjectionGate}`);
 }
 
+for (const declaredWorkGate of [
+  'declared-work-contract-test.js',
+  'declared-work-postgres-test.js'
+]) {
+  assert.equal(all.includes(declaredWorkGate), true,
+    `declared-work snapshot releases must include ${declaredWorkGate}`);
+}
+
 for (const materializerGate of [
   'process-materializer-contract-test.js',
   'process-materializer-deployment-test.js',
