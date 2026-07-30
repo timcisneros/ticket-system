@@ -563,9 +563,38 @@ async function cmdReplay(args) {
   if (run.allocationPlanId) {
     const plan = data.plans.find(p => p.id === run.allocationPlanId);
     if (plan) {
+      const item = (plan.items || []).find(candidate =>
+        candidate.allocationItemId === run.allocationItemId) || null;
       console.log(`\n  ${bold('Allocation context:')}`);
       console.log(`  ${dim('plan')} #${plan.id} ${dim('mode')} ${plan.mode} ${statusTag(plan.status)}`);
-      if (run.allocationSubtask) console.log(`  ${dim('subtask')} ${truncate(run.allocationSubtask, 120)}`);
+      console.log(`  ${dim('version')} ${plan.version || '1 (historical unversioned)'}`);
+      if (plan.version === 2) {
+        console.log(`  ${dim('plan hash')} ${plan.planHash}`);
+        console.log(`  ${dim('parent declared work')} v${plan.parentDeclaredWorkSnapshot.version} ${plan.parentDeclaredWorkSnapshot.contractHash}`);
+        if (item) {
+          console.log(`  ${dim('objective')} ${truncate(item.objective.text, 160)} ${dim('(' + item.objective.provenance + ')')}`);
+          item.expectedOutputs.forEach(output => {
+            console.log(`  ${dim('expected output')} ${truncate(output.declaration, 160)} ${dim('(' + output.kind + ', ' + output.provenance + ')')}`);
+          });
+          item.successCriteria.forEach(criterion => {
+            const kind = criterion.kind === 'typed-postcondition'
+              ? criterion.criterionType
+              : criterion.kind;
+            console.log(`  ${dim('success criterion')} ${truncate(criterion.declaration, 160)} ${dim('(' + kind + ', ' + criterion.provenance + ')')}`);
+          });
+          if (item.evidenceRequirements.length === 0) {
+            console.log(`  ${dim('evidence requirements')} explicitly none`);
+          } else {
+            item.evidenceRequirements.forEach(requirement => {
+              console.log(`  ${dim('evidence requirement')} ${requirement.evidenceType} ${requirement.criterionHash} ${dim('(' + requirement.provenance + ')')}`);
+            });
+          }
+        }
+        const shared = plan.sharedConstraints.map(constraint => constraint.declaration);
+        console.log(`  ${dim('shared constraints')} ${shared.length > 0 ? shared.join('; ') : 'explicitly none'}`);
+      } else if (run.allocationSubtask) {
+        console.log(`  ${dim('subtask')} ${truncate(run.allocationSubtask, 120)}`);
+      }
     }
   }
 

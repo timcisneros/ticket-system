@@ -49,6 +49,14 @@ for (const declaredWorkGate of [
     `declared-work snapshot releases must include ${declaredWorkGate}`);
 }
 
+for (const allocationPlanV2Gate of [
+  'allocation-plan-v2-contract-test.js',
+  'allocation-plan-v2-postgres-test.js'
+]) {
+  assert.equal(all.includes(allocationPlanV2Gate), true,
+    `structured allocation plan v2 releases must include ${allocationPlanV2Gate}`);
+}
+
 for (const mixedFamilyGate of [
   'mixed-family-work-model-test.js',
   'declared-work-postgres-test.js',

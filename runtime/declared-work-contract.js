@@ -672,6 +672,22 @@ function normalizeDeclaredWorkSnapshot(value, options = {}) {
   return deepFreeze({ ...withoutHash, contractHash });
 }
 
+function buildDeclaredWorkSnapshotFromFields({
+  objective,
+  expectedOutputs,
+  successCriteria,
+  evidenceRequirements
+}) {
+  return normalizeDeclaredWorkSnapshot({
+    version: DECLARED_WORK_VERSION,
+    objective,
+    expectedOutputs,
+    successCriteria,
+    evidenceRequirements,
+    contractHash: '0'.repeat(64)
+  }, { build: true });
+}
+
 function projectDeclaredWorkForRun(run) {
   if (!run || !Object.prototype.hasOwnProperty.call(run, 'declaredWorkSnapshot') ||
       run.declaredWorkSnapshot === null || run.declaredWorkSnapshot === undefined) {
@@ -711,6 +727,7 @@ module.exports = {
   DeclaredWorkContractError,
   assertDeclaredWorkCompletionAuthorityBinding,
   buildDeclaredWorkSnapshot,
+  buildDeclaredWorkSnapshotFromFields,
   canonicalJson,
   compareCanonicalText,
   hashCanonical,

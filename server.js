@@ -26949,6 +26949,13 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }, request.session.userId));
   }
 
+  const allocationPlan = run.allocationPlanId
+    ? await findAllocationPlan(run.allocationPlanId)
+    : null;
+  const allocationItem = allocationPlan && Array.isArray(allocationPlan.items)
+    ? allocationPlan.items.find(item => item.allocationItemId === run.allocationItemId) || null
+    : null;
+
   const [runEvents, runOperations, ticketRuns, runLogs, processOperations] =
     await Promise.all([
     readAllRunTimelineEvents(runId),
@@ -27065,6 +27072,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     user: request.user,
     run,
     ticket,
+    allocationPlan,
+    allocationItem,
     snapshot: displaySnapshot,
     agent,
     authorityContext,

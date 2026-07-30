@@ -91,6 +91,8 @@ const TESTS = Object.freeze([
   { file: "allocated-live-openai-test.js", status: "excluded", reason: "live-provider" },
   { file: "allocation-attribution-redaction-test.js", status: "required" },
   { file: "allocation-lifecycle-isolation-test.js", status: "required" },
+  { file: "allocation-plan-v2-contract-test.js", status: "required" },
+  { file: "allocation-plan-v2-postgres-test.js", status: "required" },
   { file: "allocation-scope-authority-test.js", status: "required" },
   { file: "archive-local-events-test.js", status: "required" },
   { file: "artifact-prediction-capture-test.js", status: "orphaned", reason: "cutover-orphan" },

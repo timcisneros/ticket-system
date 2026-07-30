@@ -1,5 +1,13 @@
 'use strict';
 
+const {
+  ALLOCATION_PLAN_VERSION,
+  createAllocationPlanV2StorageBody,
+  materializeAllocationPlanV2Draft,
+  normalizeStoredAllocationPlanV2,
+  serializeAllocationPlanV2StorageBody
+} = require('../../runtime/allocation-plan-contract');
+
 function positiveSafeInteger(value, label) {
   const number = typeof value === 'string' && /^[1-9]\d*$/.test(value) ? Number(value) : value;
   if (!Number.isSafeInteger(number) || number <= 0) throw new TypeError(`${label} must be a positive safe integer`);
@@ -46,6 +54,17 @@ function catalogFromRow(row, label) {
 }
 
 function allocationPlanFromRow(row) {
+  if (row.body && row.body.version === ALLOCATION_PLAN_VERSION) {
+    return normalizeStoredAllocationPlanV2({
+      id: positiveSafeInteger(row.id, 'allocationPlan.id'),
+      ticketId: positiveSafeInteger(row.ticket_id, 'allocationPlan.ticketId'),
+      status: row.status,
+      revision: positiveSafeInteger(row.revision, 'allocationPlan.revision'),
+      createdAt: timestamp(row.created_at, 'allocationPlan.createdAt'),
+      updatedAt: timestamp(row.updated_at, 'allocationPlan.updatedAt'),
+      body: row.body
+    });
+  }
   return {
     ...(row.body || {}),
     id: positiveSafeInteger(row.id, 'allocationPlan.id'),
@@ -344,6 +363,39 @@ function methods({
         const clock = await client.query('SELECT clock_timestamp() AS ts');
         const now = timestamp(clock.rows[0].ts, 'allocation clock');
         const itemIds = await client.query(`SELECT nextval('${this.schemaSql}.allocation_item_id_seq') AS id FROM generate_series(1, $1)`, [items.length]);
+        if (draft.version === ALLOCATION_PLAN_VERSION) {
+          if (status !== 'pending') {
+            throw new TypeError('A new allocation plan v2 must start pending');
+          }
+          const planIdentity = await client.query(
+            'SELECT nextval(pg_get_serial_sequence($1, $2))::bigint AS id',
+            [`${this.schema}.allocation_plans`, 'id']
+          );
+          const authority = materializeAllocationPlanV2Draft(
+            documentBody(draft, ['status']),
+            {
+              id: positiveSafeInteger(
+                planIdentity.rows[0].id,
+                'allocationPlan.id'
+              ),
+              allocationItemIds: itemIds.rows.map(row =>
+                positiveSafeInteger(row.id, 'allocationItemId'))
+            }
+          );
+          const body = this.assertJsonRecord(
+            createAllocationPlanV2StorageBody(authority, now),
+            'allocation plan v2 body'
+          );
+          const result = await client.query(
+            `INSERT INTO ${this.table('allocation_plans')}
+               (id, ticket_id, status, body, created_at, updated_at)
+             OVERRIDING SYSTEM VALUE
+             VALUES ($1, $2, $3, $4::jsonb, $5, $5)
+             RETURNING *`,
+            [authority.id, ticketId, status, body, now]
+          );
+          return allocationPlanFromRow(result.rows[0]);
+        }
         const allocatedItems = items.map((item, index) => ({ ...item, allocationItemId: positiveSafeInteger(itemIds.rows[index].id, 'allocationItemId'), status: item.status || 'pending', createdAt: item.createdAt || now }));
         const body = this.assertJsonRecord(documentBody({ ...draft, items: allocatedItems }, ['id', 'ticketId', 'status', 'revision', 'createdAt', 'updatedAt']), 'allocation plan body');
         const result = await client.query(
@@ -362,6 +414,36 @@ function methods({
         const locked = await client.query(`SELECT * FROM ${this.table('allocation_plans')} WHERE id = $1 FOR UPDATE`, [id]);
         if (!locked.rowCount) return null;
         const plan = allocationPlanFromRow(locked.rows[0]);
+        if (plan.version === ALLOCATION_PLAN_VERSION) {
+          const current = plan.itemStatuses.find(candidate =>
+            candidate.allocationItemId === itemId);
+          if (!current) return null;
+          const itemStatuses = plan.itemStatuses.map(candidate =>
+            candidate.allocationItemId === itemId
+              ? { ...candidate, status: nextStatus }
+              : candidate);
+          const planStatus = itemStatuses.some(candidate => candidate.status === 'failed') ? 'failed'
+            : itemStatuses.some(candidate => candidate.status === 'interrupted') ? 'interrupted'
+              : itemStatuses.every(candidate => candidate.status === 'completed') ? 'completed'
+                : itemStatuses.some(candidate => candidate.status === 'running') ? 'running' : 'pending';
+          const body = this.assertJsonRecord(
+            serializeAllocationPlanV2StorageBody(plan, itemStatuses),
+            'allocation plan v2 body'
+          );
+          const result = await client.query(
+            `UPDATE ${this.table('allocation_plans')}
+             SET status = $2, body = $3::jsonb, revision = revision + 1,
+                 updated_at = clock_timestamp()
+             WHERE id = $1 RETURNING *`,
+            [id, planStatus, body]
+          );
+          const updatedPlan = allocationPlanFromRow(result.rows[0]);
+          return {
+            plan: updatedPlan,
+            item: updatedPlan.items.find(candidate =>
+              candidate.allocationItemId === itemId)
+          };
+        }
         const items = Array.isArray(plan.items) ? plan.items.map(item => ({ ...item })) : [];
         const item = items.find(candidate => candidate.allocationItemId === itemId);
         if (!item) return null;

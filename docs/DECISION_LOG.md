@@ -1,5 +1,20 @@
 # Decision Log
 
+## Structured Allocation Plan Authority (2026-07-30)
+
+Retain Ticket and Workflow as the product primitives and extend the existing Allocation Plan as
+the sole owner of allocated work decomposition. Historical unversioned plans remain v1. Allocation
+Plan v2 binds its existing plan/ticket/mode identities, the exact immutable parent
+`declaredWorkSnapshot`, provenance-bearing shared constraints, explicit typed declared work and
+owned paths for each existing Allocation Item identity, and a canonical authority hash. Mutable
+plan/item status and storage timestamps remain outside that hash. The existing PostgreSQL
+`allocation_plans.body` JSONB path stores both versions without a migration or bulk rewrite.
+
+Tranche 1 defines and projects authority only. It does not call a planner, dispatch v2 items, alter
+worker prompts, route models, schedule runs, charge budgets, evaluate completion, or broaden
+workspace/browser/process authority. Roadmap and later decision boundaries:
+`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`.
+
 ## Mixed-Family Work Model (2026-07-29)
 
 Keep Ticket and Workflow as the product primitives. Workspace, browser, and process remain

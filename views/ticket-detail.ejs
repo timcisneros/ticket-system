@@ -384,6 +384,25 @@
         <dd>#<%= allocationPlan.id %></dd>
       </div>
       <div>
+        <dt>Plan version</dt>
+        <dd><%= allocationPlan.version || '1 (historical unversioned)' %></dd>
+      </div>
+      <div>
+        <dt>Plan authority hash</dt>
+        <dd><%= allocationPlan.planHash ? allocationPlan.planHash : '-' %></dd>
+      </div>
+      <div>
+        <dt>Parent declared work</dt>
+        <dd>
+          <% if (allocationPlan.parentDeclaredWorkSnapshot) { %>
+            v<%= allocationPlan.parentDeclaredWorkSnapshot.version %> ·
+            <code><%= allocationPlan.parentDeclaredWorkSnapshot.contractHash %></code>
+          <% } else { %>
+            -
+          <% } %>
+        </dd>
+      </div>
+      <div>
         <dt>Status</dt>
         <dd><span class="status-badge status-<%= allocationPlan.status %>"><%= allocationPlan.status %></span></dd>
       </div>
@@ -396,6 +415,18 @@
         <dd><%= allocationPlan.ticketOpenedAt ? new Date(allocationPlan.ticketOpenedAt).toLocaleString() : '-' %></dd>
       </div>
     </dl>
+    <% if (allocationPlan.version === 2) { %>
+      <h3>Shared Constraints</h3>
+      <% if (allocationPlan.sharedConstraints.length === 0) { %>
+        <p class="text-muted">No shared constraints declared.</p>
+      <% } else { %>
+        <ul>
+          <% allocationPlan.sharedConstraints.forEach(constraint => { %>
+            <li><%= constraint.declaration %> <span class="text-muted">(<%= constraint.provenance %>)</span></li>
+          <% }) %>
+        </ul>
+      <% } %>
+    <% } %>
     <% const workUnitCount = allocationPlan.items ? allocationPlan.items.length : 0; %>
     <h3>Work Units<%= workUnitCount > 0 ? ' (' + workUnitCount + ')' : '' %></h3>
     <p class="text-muted">Group work — one work unit per assigned agent. Completes when all work units complete; fails if any required work unit fails.</p>
@@ -429,10 +460,51 @@
                   <% } %>
                 </span>
               </div>
+              <% if (allocationPlan.version === 2) { %>
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Objective</span>
+                <span class="allocation-item-value"><%= item.objective.text %> <span class="text-muted">(<%= item.objective.provenance %>)</span></span>
+              </div>
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Expected outputs</span>
+                <span class="allocation-item-value">
+                  <ul>
+                    <% item.expectedOutputs.forEach(output => { %>
+                      <li><%= output.declaration %> <span class="text-muted">(<%= output.kind %>, <%= output.provenance %>)</span></li>
+                    <% }) %>
+                  </ul>
+                </span>
+              </div>
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Success criteria</span>
+                <span class="allocation-item-value">
+                  <ul>
+                    <% item.successCriteria.forEach(criterion => { %>
+                      <li><%= criterion.declaration %> <span class="text-muted">(<%= criterion.kind === 'typed-postcondition' ? criterion.criterionType : criterion.kind %>, <%= criterion.provenance %>)</span></li>
+                    <% }) %>
+                  </ul>
+                </span>
+              </div>
+              <div class="allocation-item-row">
+                <span class="allocation-item-label">Evidence requirements</span>
+                <span class="allocation-item-value">
+                  <% if (item.evidenceRequirements.length === 0) { %>
+                    <span class="text-muted">Explicitly none.</span>
+                  <% } else { %>
+                    <ul>
+                      <% item.evidenceRequirements.forEach(requirement => { %>
+                        <li><%= requirement.evidenceType %> · <code><%= requirement.criterionHash %></code> <span class="text-muted">(<%= requirement.provenance %>)</span></li>
+                      <% }) %>
+                    </ul>
+                  <% } %>
+                </span>
+              </div>
+              <% } else { %>
               <div class="allocation-item-row">
                 <span class="allocation-item-label">Subtask</span>
                 <span class="allocation-item-value"><%= item.allocationSubtask || '-' %></span>
               </div>
+              <% } %>
               <div class="allocation-item-row">
                 <span class="allocation-item-label">Allowed Folders</span>
                 <span class="allocation-item-value">

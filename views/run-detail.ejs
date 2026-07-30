@@ -1112,6 +1112,25 @@
         <dt>Work Split</dt>
         <dd><%= run.allocationPlanId || (snapshot && snapshot.allocationPlanId) || '-' %></dd>
       </div>
+      <% if (typeof allocationPlan !== 'undefined' && allocationPlan) { %>
+      <div>
+        <dt>Allocation plan version</dt>
+        <dd><%= allocationPlan.version || '1 (historical unversioned)' %></dd>
+      </div>
+      <div>
+        <dt>Allocation plan hash</dt>
+        <dd><%= allocationPlan.planHash || '-' %></dd>
+      </div>
+      <div>
+        <dt>Parent declared work</dt>
+        <dd>
+          <% if (allocationPlan.parentDeclaredWorkSnapshot) { %>
+            v<%= allocationPlan.parentDeclaredWorkSnapshot.version %> ·
+            <code><%= allocationPlan.parentDeclaredWorkSnapshot.contractHash %></code>
+          <% } else { %>-<% } %>
+        </dd>
+      </div>
+      <% } %>
       <div>
         <dt>Work Unit</dt>
         <dd><%= run.allocationItemId || (snapshot && snapshot.allocationItemId) || '-' %></dd>
@@ -1135,6 +1154,50 @@
         <dt>Subtask</dt>
         <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
       </div>
+      <% if (typeof allocationPlan !== 'undefined' && allocationPlan && allocationPlan.version === 2 && allocationItem) { %>
+      <div>
+        <dt>Allocated objective</dt>
+        <dd><%= allocationItem.objective.text %> <span class="text-muted">(<%= allocationItem.objective.provenance %>)</span></dd>
+      </div>
+      <div>
+        <dt>Expected outputs</dt>
+        <dd>
+          <ul>
+            <% allocationItem.expectedOutputs.forEach(output => { %>
+              <li><%= output.declaration %> <span class="text-muted">(<%= output.kind %>, <%= output.provenance %>)</span></li>
+            <% }) %>
+          </ul>
+        </dd>
+      </div>
+      <div>
+        <dt>Success criteria</dt>
+        <dd>
+          <ul>
+            <% allocationItem.successCriteria.forEach(criterion => { %>
+              <li><%= criterion.declaration %> <span class="text-muted">(<%= criterion.kind === 'typed-postcondition' ? criterion.criterionType : criterion.kind %>, <%= criterion.provenance %>)</span></li>
+            <% }) %>
+          </ul>
+        </dd>
+      </div>
+      <div>
+        <dt>Evidence requirements</dt>
+        <dd>
+          <% if (allocationItem.evidenceRequirements.length === 0) { %>
+            <span class="text-muted">Explicitly none.</span>
+          <% } else { %>
+            <ul>
+              <% allocationItem.evidenceRequirements.forEach(requirement => { %>
+                <li><%= requirement.evidenceType %> · <code><%= requirement.criterionHash %></code> <span class="text-muted">(<%= requirement.provenance %>)</span></li>
+              <% }) %>
+            </ul>
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Shared constraints</dt>
+        <dd><%= allocationPlan.sharedConstraints.length > 0 ? allocationPlan.sharedConstraints.map(item => item.declaration).join('; ') : 'Explicitly none.' %></dd>
+      </div>
+      <% } %>
       <% if (snapshot && snapshot.provider) { %>
         <div>
           <dt>Provider</dt>
