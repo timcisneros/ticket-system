@@ -1605,12 +1605,23 @@ async function cmdTicket(args) {
   if (ticket.assignmentTargetType) console.log(`  ${dim('assigned to')} ${ticket.assignmentTargetType} #${ticket.assignmentTargetId}`);
   if (ticket.structuredAllocationAuthority) {
     const authority = ticket.structuredAllocationAuthority;
-    const eligibility = authority.structuredAllocationEligibility;
+    const eligibility = data.structuredAllocation
+      ? data.structuredAllocation.admissionEligibility
+      : authority.structuredAllocationEligibility;
+    const applicability = data.structuredAllocation
+      ? data.structuredAllocation.currentApplicability
+      : null;
     const planning = authority.planningAuthoritySnapshot;
     console.log(`  ${dim('parent declared work')} ${authority.parentDeclaredWorkSnapshot.contractHash}`);
-    console.log(`  ${dim('structured allocation')} ${eligibility.eligible ? 'eligible' : 'ineligible'} ${dim('authority ' + authority.authorityHash)}`);
+    console.log(`  ${dim('structured allocation admission')} ${eligibility.eligible ? 'eligible' : 'ineligible'} ${dim('authority ' + authority.authorityHash)}`);
     if (eligibility.refusalReasons.length > 0) {
-      console.log(`  ${dim('refusal reasons')} ${eligibility.refusalReasons.join(', ')}`);
+      console.log(`  ${dim('admission refusal reasons')} ${eligibility.refusalReasons.join(', ')}`);
+    }
+    if (applicability) {
+      console.log(`  ${dim('structured allocation current')} ${applicability.applicable ? 'applicable' : 'inapplicable'}`);
+      if (applicability.refusalReasons.length > 0) {
+        console.log(`  ${dim('current refusal reasons')} ${applicability.refusalReasons.join(', ')}`);
+      }
     }
     if (planning) {
       console.log(`  ${dim('planning principal')} ${planning.planner.name} (#${planning.planner.agentId}) ${planning.planner.provider}/${planning.planner.model}`);

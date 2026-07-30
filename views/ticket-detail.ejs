@@ -272,13 +272,15 @@
 </details>
 
 <%
-  const structuredAuthority = ticket.structuredAllocationAuthority || null;
+  const structuredProjection = structuredAllocation || null;
+  const structuredAuthority = structuredProjection ? structuredProjection.authority : null;
   const parentWork = structuredAuthority ? structuredAuthority.parentDeclaredWorkSnapshot : null;
   const planningSnapshot = structuredAuthority ? structuredAuthority.planningAuthoritySnapshot : null;
-  const structuredEligibility = structuredAuthority ? structuredAuthority.structuredAllocationEligibility : null;
+  const structuredEligibility = structuredProjection ? structuredProjection.admissionEligibility : null;
+  const structuredApplicability = structuredProjection ? structuredProjection.currentApplicability : null;
 %>
 <details class="disclosure" <%= structuredAuthority ? 'open' : '' %>>
-  <summary>Structured Allocation Authority <span class="sub"><%= structuredAuthority ? (structuredEligibility.eligible ? 'Eligible prerequisite snapshot' : 'Ineligible prerequisite snapshot') : 'Historical unavailable' %></span></summary>
+  <summary>Structured Allocation Authority <span class="sub"><%= structuredAuthority ? (structuredApplicability.applicable ? 'Currently applicable' : 'Currently inapplicable') : 'Historical unavailable' %></span></summary>
   <div class="body">
     <% if (!structuredAuthority) { %>
       <p class="text-muted">This ticket predates or omitted explicit ticket-level declared work. Current group, agent, workflow, workspace, objective, and acceptance state are not used to synthesize historical authority.</p>
@@ -288,8 +290,10 @@
         <div><dt>Authority hash</dt><dd><code><%= structuredAuthority.authorityHash %></code></dd></div>
         <div><dt>Parent declared-work hash</dt><dd><code><%= parentWork.contractHash %></code></dd></div>
         <div><dt>Captured</dt><dd><%= new Date(structuredAuthority.capturedAt).toLocaleString() %></dd></div>
-        <div><dt>Eligibility</dt><dd><%= structuredEligibility.eligible ? 'eligible' : 'ineligible' %></dd></div>
-        <div><dt>Refusal reasons</dt><dd><%= structuredEligibility.refusalReasons.length > 0 ? structuredEligibility.refusalReasons.join(', ') : 'none' %></dd></div>
+        <div><dt>Admission eligibility</dt><dd><%= structuredEligibility.eligible ? 'eligible' : 'ineligible' %></dd></div>
+        <div><dt>Admission refusal reasons</dt><dd><%= structuredEligibility.refusalReasons.length > 0 ? structuredEligibility.refusalReasons.join(', ') : 'none' %></dd></div>
+        <div><dt>Current applicability</dt><dd><%= structuredApplicability.applicable ? 'applicable' : 'inapplicable' %></dd></div>
+        <div><dt>Current refusal reasons</dt><dd><%= structuredApplicability.refusalReasons.length > 0 ? structuredApplicability.refusalReasons.join(', ') : 'none' %></dd></div>
       </dl>
       <h3>Explicit parent work</h3>
       <p><strong>Objective:</strong> <%= parentWork.objective.text %></p>

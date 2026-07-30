@@ -113,7 +113,8 @@ const {
   projectDeclaredWorkForRun
 } = require('./runtime/declared-work-contract');
 const {
-  buildStructuredAllocationAuthorityDraft
+  buildStructuredAllocationAuthorityDraft,
+  projectStructuredAllocationAuthorityForTicket
 } = require('./runtime/structured-allocation-prerequisites-contract');
 const {
   RuntimeBudgetController
@@ -8394,6 +8395,7 @@ async function serializeTicketRuntimeState(ticketId) {
 
   return {
     ticket,
+    structuredAllocation: projectStructuredAllocationAuthorityForTicket(ticket),
     currentRun: currentRun ? serializeRunRuntimeState(currentRun, logsByRunId, {
       eventSummary: summaryByRunId.get(currentRun.id),
       events: eventsByRunId.get(currentRun.id),
@@ -22977,6 +22979,7 @@ async function createTicketFromInput(input, actor, options = {}) {
         : null;
       structuredAllocationAuthorityDraft = buildStructuredAllocationAuthorityDraft({
         declaredWork: input.declaredWork,
+        ticketObjective: objective,
         assignmentTargetType,
         assignmentMode: resolvedAssignmentMode,
         assignmentGroup,
@@ -24546,10 +24549,12 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   const parentTicket = ticket.parentTicketId ? await repository.getTicket(ticket.parentTicketId) : null;
   const latestChildRuns = await readLatestRunsForTickets(rawChildTickets.map(child => child.id));
   const childTickets = buildChildTicketSummaries(rawChildTickets, latestChildRuns);
+  const structuredAllocation = projectStructuredAllocationAuthorityForTicket(ticket);
 
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
     ticket,
+    structuredAllocation,
     parentTicket,
     childTickets,
     browserTarget: ticket.targetRef && ticket.targetRef.kind === 'browser'

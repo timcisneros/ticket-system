@@ -109,6 +109,11 @@ const STRUCTURED_ALLOCATION_REFUSAL_MESSAGES = deepFreeze({
   invalid_owned_output_paths: 'Candidate owned output paths are malformed or not canonical',
   overlapping_owned_output_paths: 'Sibling candidate owned output paths overlap'
 });
+const STRUCTURED_ALLOCATION_CURRENT_APPLICABILITY_MESSAGES = deepFreeze({
+  historical_authority_unavailable: 'Ticket has no admitted structured-allocation authority',
+  admission_ineligible: 'Ticket was not eligible for structured allocation at admission',
+  assignment_changed_since_capture: 'Current ticket assignment no longer matches captured planning authority'
+});
 
 class StructuredAllocationPrerequisiteError extends TypeError {
   constructor(code, message) {
@@ -173,9 +178,36 @@ function normalizeArray(value, label, normalizer, { allowEmpty = true } = {}) {
   return value.map((item, index) => normalizer(item, index));
 }
 
-function normalizeTicketParentWorkInput(value) {
+function canonicalTicketObjective(value, label = 'ticketObjective') {
+  return requiredString(value, label);
+}
+
+function assertParentDeclaredWorkObjectiveMatchesTicket(
+  parentDeclaredWorkSnapshot,
+  ticketObjective,
+  label = 'ticket objective'
+) {
+  const objective = canonicalTicketObjective(ticketObjective, label);
+  const parent = normalizeDeclaredWorkSnapshot(parentDeclaredWorkSnapshot);
+  if (parent.objective.text !== objective) {
+    fail(
+      'Parent declared-work objective must exactly match the canonical Ticket objective',
+      'STRUCTURED_ALLOCATION_OBJECTIVE_CONFLICT'
+    );
+  }
+  return objective;
+}
+
+function normalizeTicketParentWorkInput(value, { ticketObjective } = {}) {
   exactFields(value, INPUT_FIELDS, 'declaredWork');
   const objective = requiredString(value.objective, 'declaredWork.objective');
+  const canonicalObjective = canonicalTicketObjective(ticketObjective);
+  if (objective !== canonicalObjective) {
+    fail(
+      'declaredWork.objective must exactly match the canonical Ticket objective',
+      'STRUCTURED_ALLOCATION_OBJECTIVE_CONFLICT'
+    );
+  }
   const expectedOutputs = normalizeArray(
     value.expectedOutputs,
     'declaredWork.expectedOutputs',
@@ -229,11 +261,16 @@ function normalizeTicketParentWorkInput(value) {
       };
     }
   );
-  return deepFreeze({ objective, expectedOutputs, successCriteria, evidenceRequirements });
+  return deepFreeze({
+    objective: canonicalObjective,
+    expectedOutputs,
+    successCriteria,
+    evidenceRequirements
+  });
 }
 
-function buildTicketParentDeclaredWorkSnapshot(value) {
-  const input = normalizeTicketParentWorkInput(value);
+function buildTicketParentDeclaredWorkSnapshot(value, { ticketObjective } = {}) {
+  const input = normalizeTicketParentWorkInput(value, { ticketObjective });
   return assertDeclaredWorkEvidenceConsistency(buildDeclaredWorkSnapshotFromFields({
     objective: { text: input.objective, provenance: 'ticket-authored' },
     expectedOutputs: input.expectedOutputs,
@@ -489,6 +526,7 @@ function evaluateStructuredAllocationEligibility({
 
 function buildStructuredAllocationAuthorityDraft({
   declaredWork,
+  ticketObjective,
   assignmentTargetType,
   assignmentMode,
   assignmentGroup,
@@ -496,7 +534,9 @@ function buildStructuredAllocationAuthorityDraft({
   candidateAgents,
   ownedOutputPaths
 }) {
-  const parentDeclaredWorkSnapshot = buildTicketParentDeclaredWorkSnapshot(declaredWork);
+  const parentDeclaredWorkSnapshot = buildTicketParentDeclaredWorkSnapshot(declaredWork, {
+    ticketObjective
+  });
   const structuredAllocationEligibility = evaluateStructuredAllocationEligibility({
     assignmentTargetType,
     assignmentMode,
@@ -582,7 +622,10 @@ function materializeStructuredAllocationAuthority(value, { ticketId, capturedAt 
   return deepFreeze({ ...withoutHash, authorityHash: hashCanonical(withoutHash) });
 }
 
-function normalizeStructuredAllocationAuthority(value, { expectedTicketId = null } = {}) {
+function normalizeStructuredAllocationAuthority(value, {
+  expectedTicketId = null,
+  expectedTicketObjective = null
+} = {}) {
   exactFields(value, STRUCTURED_AUTHORITY_FIELDS, 'structuredAllocationAuthority');
   if (value.version !== STRUCTURED_ALLOCATION_AUTHORITY_VERSION) {
     fail(`structuredAllocationAuthority.version must be ${STRUCTURED_ALLOCATION_AUTHORITY_VERSION}`);
@@ -590,6 +633,19 @@ function normalizeStructuredAllocationAuthority(value, { expectedTicketId = null
   const parentDeclaredWorkSnapshot = assertDeclaredWorkEvidenceConsistency(
     normalizeDeclaredWorkSnapshot(value.parentDeclaredWorkSnapshot)
   );
+  if (expectedTicketObjective !== null) {
+    assertParentDeclaredWorkObjectiveMatchesTicket(
+      parentDeclaredWorkSnapshot,
+      expectedTicketObjective,
+      'ticket.objective'
+    );
+    if (expectedTicketObjective !== parentDeclaredWorkSnapshot.objective.text) {
+      fail(
+        'Stored Ticket objective is not in canonical equality with parent declared work',
+        'STRUCTURED_ALLOCATION_OBJECTIVE_CONFLICT'
+      );
+    }
+  }
   const planningAuthoritySnapshot = value.planningAuthoritySnapshot == null
     ? null
     : normalizePlanningAuthoritySnapshot(value.planningAuthoritySnapshot, { expectedTicketId });
@@ -615,27 +671,96 @@ function normalizeStructuredAllocationAuthority(value, { expectedTicketId = null
   return deepFreeze({ ...withoutHash, authorityHash });
 }
 
+function ticketAssignmentMatchesPlanningAuthority(ticket, planningAuthority) {
+  if (!ticket || !planningAuthority ||
+      ticket.assignmentTargetType !== 'group' ||
+      Number(ticket.assignmentTargetId) !== planningAuthority.assignmentGroup.id ||
+      ticket.assignmentMode !== planningAuthority.allocationMode) {
+    return false;
+  }
+
+  const currentPaths = isPlainObject(ticket.ownedOutputPaths)
+    ? ticket.ownedOutputPaths
+    : {};
+  const expectedAgentIds = new Set(
+    planningAuthority.candidates.map(candidate => String(candidate.agentId))
+  );
+  if (Object.keys(currentPaths).length !== expectedAgentIds.size ||
+      Object.keys(currentPaths).some(agentId => !expectedAgentIds.has(String(agentId)))) {
+    return false;
+  }
+
+  return planningAuthority.candidates.every(candidate => {
+    const rawPath = currentPaths[String(candidate.agentId)] ?? currentPaths[candidate.agentId];
+    try {
+      return candidate.ownedOutputPaths.length === 1 &&
+        normalizeOwnedOutputPath(rawPath) === candidate.ownedOutputPaths[0];
+    } catch (_) {
+      return false;
+    }
+  });
+}
+
+function evaluateStructuredAllocationCurrentApplicability(ticket) {
+  if (!ticket || !Object.prototype.hasOwnProperty.call(ticket, 'structuredAllocationAuthority') ||
+      ticket.structuredAllocationAuthority == null) {
+    return deepFreeze({
+      applicable: false,
+      refusalReasons: ['historical_authority_unavailable']
+    });
+  }
+
+  const authority = normalizeStructuredAllocationAuthority(ticket.structuredAllocationAuthority, {
+    expectedTicketId: ticket.id,
+    expectedTicketObjective: ticket.objective
+  });
+  if (!authority.structuredAllocationEligibility.eligible ||
+      !authority.planningAuthoritySnapshot) {
+    return deepFreeze({
+      applicable: false,
+      refusalReasons: ['admission_ineligible']
+    });
+  }
+
+  const planning = authority.planningAuthoritySnapshot;
+  return deepFreeze(ticketAssignmentMatchesPlanningAuthority(ticket, planning)
+    ? { applicable: true, refusalReasons: [] }
+    : { applicable: false, refusalReasons: ['assignment_changed_since_capture'] });
+}
+
 function projectStructuredAllocationAuthorityForTicket(ticket) {
   if (!ticket || !Object.prototype.hasOwnProperty.call(ticket, 'structuredAllocationAuthority') ||
       ticket.structuredAllocationAuthority == null) {
-    return deepFreeze({ availability: 'historical-unavailable', authority: null });
+    return deepFreeze({
+      availability: 'historical-unavailable',
+      authority: null,
+      admissionEligibility: null,
+      currentApplicability: evaluateStructuredAllocationCurrentApplicability(ticket)
+    });
   }
+  const authority = normalizeStructuredAllocationAuthority(ticket.structuredAllocationAuthority, {
+    expectedTicketId: ticket.id,
+    expectedTicketObjective: ticket.objective
+  });
   return deepFreeze({
     availability: 'available',
-    authority: normalizeStructuredAllocationAuthority(ticket.structuredAllocationAuthority, {
-      expectedTicketId: ticket.id
-    })
+    authority,
+    admissionEligibility: authority.structuredAllocationEligibility,
+    currentApplicability: evaluateStructuredAllocationCurrentApplicability(ticket)
   });
 }
 
 module.exports = {
   PLANNING_AUTHORITY_SNAPSHOT_VERSION,
   STRUCTURED_ALLOCATION_AUTHORITY_VERSION,
+  STRUCTURED_ALLOCATION_CURRENT_APPLICABILITY_MESSAGES,
   STRUCTURED_ALLOCATION_REFUSAL_MESSAGES,
   SUPPORTED_ASSIGNMENT_MODES,
   StructuredAllocationPrerequisiteError,
+  assertParentDeclaredWorkObjectiveMatchesTicket,
   buildStructuredAllocationAuthorityDraft,
   buildTicketParentDeclaredWorkSnapshot,
+  evaluateStructuredAllocationCurrentApplicability,
   evaluateStructuredAllocationEligibility,
   materializePlanningAuthoritySnapshot,
   materializeStructuredAllocationAuthority,
@@ -644,5 +769,6 @@ module.exports = {
   normalizeStructuredAllocationAuthority,
   normalizeStructuredAllocationAuthorityDraft,
   normalizeTicketParentWorkInput,
-  projectStructuredAllocationAuthorityForTicket
+  projectStructuredAllocationAuthorityForTicket,
+  ticketAssignmentMatchesPlanningAuthority
 };

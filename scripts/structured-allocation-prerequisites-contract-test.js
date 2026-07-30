@@ -7,6 +7,7 @@ const path = require('path');
 const {
   buildStructuredAllocationAuthorityDraft,
   buildTicketParentDeclaredWorkSnapshot,
+  evaluateStructuredAllocationCurrentApplicability,
   evaluateStructuredAllocationEligibility,
   materializeStructuredAllocationAuthority,
   normalizeStructuredAllocationAuthority,
@@ -25,6 +26,18 @@ function textWork(overrides = {}) {
     evidenceRequirements: [],
     ...overrides
   };
+}
+
+function buildParent(work = textWork(), ticketObjective = work.objective) {
+  return buildTicketParentDeclaredWorkSnapshot(work, { ticketObjective });
+}
+
+function buildDraft(work = textWork(), authorityContext = context()) {
+  return buildStructuredAllocationAuthorityDraft({
+    declaredWork: work,
+    ticketObjective: work.objective,
+    ...authorityContext
+  });
 }
 
 function context(overrides = {}) {
@@ -59,15 +72,33 @@ function assertReason(options, reason) {
 }
 
 function main() {
-  const parent = buildTicketParentDeclaredWorkSnapshot(textWork());
+  const parent = buildParent();
   assert.equal(parent.objective.provenance, 'ticket-authored');
   assert.deepEqual(parent.expectedOutputs.map(item => item.provenance), ['ticket-authored']);
   assert.equal(Object.isFrozen(parent), true);
   assert.equal(Object.isFrozen(parent.expectedOutputs[0]), true);
 
+  const whitespaceParent = buildParent(
+    textWork({ objective: '  Produce two review reports  ' }),
+    '  Produce two review reports  '
+  );
+  assert.equal(whitespaceParent.objective.text, 'Produce two review reports');
+  for (const competingObjective of [
+    'Contradict the canonical ticket objective',
+    'Produce two review reports and an unrelated deployment',
+    ''
+  ]) {
+    assert.throws(
+      () => buildParent(textWork({ objective: competingObjective }), textWork().objective),
+      error => competingObjective === ''
+        ? /must not be empty/.test(error.message)
+        : error.code === 'STRUCTURED_ALLOCATION_OBJECTIVE_CONFLICT'
+    );
+  }
+
   const declaration = JSON.stringify({ id: 'report-exists', path: 'reports/a/report.md', type: 'fileExists' });
   const criterionHash = sha256(declaration);
-  const typedParent = buildTicketParentDeclaredWorkSnapshot(textWork({
+  const typedParent = buildParent(textWork({
     successCriteria: [{
       kind: 'typed-postcondition',
       criterionType: 'fileExists',
@@ -84,7 +115,7 @@ function main() {
   assert.equal(typedParent.evidenceRequirements[0].criterionHash, criterionHash);
 
   assert.throws(
-    () => buildTicketParentDeclaredWorkSnapshot(textWork({
+    () => buildParent(textWork({
       successCriteria: [{
         kind: 'typed-postcondition', criterionType: 'fileExists', declaration, criterionHash
       }],
@@ -93,7 +124,7 @@ function main() {
     error => error.code === 'DECLARED_WORK_EVIDENCE_MISMATCH'
   );
   assert.throws(
-    () => buildTicketParentDeclaredWorkSnapshot(textWork({
+    () => buildParent(textWork({
       successCriteria: [],
       evidenceRequirements: [{
         kind: 'postcondition-evidence', criterionHash,
@@ -110,7 +141,7 @@ function main() {
     { ...textWork(), successCriteria: [{ kind: 'text', declaration: 'x', extra: true }] },
     { ...textWork(), evidenceRequirements: [{ kind: 'postcondition-evidence', criterionHash, evidenceType: 'deterministic-postcondition-result', extra: true }] }
   ]) {
-    assert.throws(() => normalizeTicketParentWorkInput(invalid), /unknown/);
+    assert.throws(() => normalizeTicketParentWorkInput(invalid, { ticketObjective: invalid.objective }), /unknown/);
   }
 
   const reordered = textWork({
@@ -128,17 +159,25 @@ function main() {
     expectedOutputs: [...reordered.expectedOutputs].reverse(),
     successCriteria: [...reordered.successCriteria].reverse()
   };
-  const orderedParent = buildTicketParentDeclaredWorkSnapshot(reordered);
-  const reverseParent = buildTicketParentDeclaredWorkSnapshot(reverse);
+  const orderedParent = buildParent(reordered);
+  const reverseParent = buildParent(reverse);
   assert.deepEqual(orderedParent, reverseParent);
   assert.equal(orderedParent.contractHash, reverseParent.contractHash);
 
   const mutable = textWork();
-  const isolated = buildTicketParentDeclaredWorkSnapshot(mutable);
+  const isolated = buildParent(mutable);
   mutable.expectedOutputs[0].declaration = 'mutated later';
   assert.equal(isolated.expectedOutputs[0].declaration, 'Review reports in the assigned output folders');
 
-  const validDraft = buildStructuredAllocationAuthorityDraft({ declaredWork: textWork(), ...context() });
+  assert.throws(
+    () => buildStructuredAllocationAuthorityDraft({
+      declaredWork: textWork({ objective: 'Competing parent objective' }),
+      ticketObjective: textWork().objective,
+      ...context()
+    }),
+    error => error.code === 'STRUCTURED_ALLOCATION_OBJECTIVE_CONFLICT'
+  );
+  const validDraft = buildDraft();
   assert.equal(validDraft.structuredAllocationEligibility.eligible, true);
   assert.equal(validDraft.planningAuthorityDraft.planner.agentId, 21);
   assert.deepEqual(validDraft.planningAuthorityDraft.candidates.map(item => item.agentId), [21, 22]);
@@ -147,7 +186,8 @@ function main() {
     capturedAt: CAPTURED_AT
   });
   const reconstructed = normalizeStructuredAllocationAuthority(JSON.parse(JSON.stringify(authority)), {
-    expectedTicketId: 44
+    expectedTicketId: 44,
+    expectedTicketObjective: textWork().objective
   });
   assert.deepEqual(reconstructed, authority);
   assert.equal(Object.isFrozen(reconstructed), true);
@@ -170,11 +210,11 @@ function main() {
   assertReason({ ...complete, parentDeclaredWorkSnapshot: null }, 'missing_parent_declared_work');
   assertReason({
     ...complete,
-    parentDeclaredWorkSnapshot: buildTicketParentDeclaredWorkSnapshot(textWork({ expectedOutputs: [] }))
+    parentDeclaredWorkSnapshot: buildParent(textWork({ expectedOutputs: [] }))
   }, 'missing_parent_expected_outputs');
   assertReason({
     ...complete,
-    parentDeclaredWorkSnapshot: buildTicketParentDeclaredWorkSnapshot(textWork({ successCriteria: [] }))
+    parentDeclaredWorkSnapshot: buildParent(textWork({ successCriteria: [] }))
   }, 'missing_parent_success_criteria');
   const invalidParent = JSON.parse(JSON.stringify(parent));
   invalidParent.objective.text = 'tampered';
@@ -184,10 +224,8 @@ function main() {
     assignmentGroup: { ...complete.assignmentGroup, plannerAgentId: null }
   };
   assertReason(noDesignatedPlanner, 'missing_planner_principal');
-  const noFallbackDraft = buildStructuredAllocationAuthorityDraft({
-    declaredWork: textWork(),
-    ...context({ assignmentGroup: { ...context().assignmentGroup, plannerAgentId: null } })
-  });
+  const noFallbackDraft = buildDraft(textWork(),
+    context({ assignmentGroup: { ...context().assignmentGroup, plannerAgentId: null } }));
   assert.equal(noFallbackDraft.structuredAllocationEligibility.eligible, false);
   assert.equal(noFallbackDraft.planningAuthorityDraft, null, 'a candidate planner is never an implicit fallback');
   assertReason({ ...complete, assignmentGroup: { ...complete.assignmentGroup, plannerAgentId: 99 }, plannerAgent: { ...complete.plannerAgent, id: 99 } }, 'planner_not_group_member');
@@ -197,7 +235,7 @@ function main() {
   assertReason({ ...complete, ownedOutputPaths: { 21: '../escape', 22: 'reports/b/' } }, 'invalid_owned_output_paths');
   assertReason({ ...complete, ownedOutputPaths: { 21: 'reports/', 22: 'reports/b/' } }, 'overlapping_owned_output_paths');
 
-  const noOutputs = buildTicketParentDeclaredWorkSnapshot(textWork({ expectedOutputs: [] }));
+  const noOutputs = buildParent(textWork({ expectedOutputs: [] }));
   assertReason({ ...complete, parentDeclaredWorkSnapshot: noOutputs, ownedOutputPaths: { 21: 'deliverables/a/', 22: 'deliverables/b/' } }, 'missing_parent_expected_outputs');
   assertReason({
     ...complete,
@@ -206,16 +244,50 @@ function main() {
   }, 'missing_parent_declared_work');
   assert.equal(evaluateStructuredAllocationEligibility({
     ...complete,
-    parentDeclaredWorkSnapshot: buildTicketParentDeclaredWorkSnapshot(textWork({ expectedOutputs: [] }))
+    parentDeclaredWorkSnapshot: buildParent(textWork({ expectedOutputs: [] }))
   }).eligible, false, 'objective and acceptance-like prose do not create output authority');
 
-  assert.deepEqual(
-    projectStructuredAllocationAuthorityForTicket({ id: 1, objective: 'historical' }),
-    { availability: 'historical-unavailable', authority: null }
-  );
-  assert.equal(
-    projectStructuredAllocationAuthorityForTicket({ id: 44, structuredAllocationAuthority: authority }).authority.authorityHash,
-    authority.authorityHash
+  const historicalProjection = projectStructuredAllocationAuthorityForTicket({ id: 1, objective: 'historical' });
+  assert.equal(historicalProjection.availability, 'historical-unavailable');
+  assert.equal(historicalProjection.authority, null);
+  assert.deepEqual(historicalProjection.currentApplicability, {
+    applicable: false,
+    refusalReasons: ['historical_authority_unavailable']
+  });
+
+  const admittedTicket = {
+    id: 44,
+    objective: textWork().objective,
+    assignmentTargetType: 'group',
+    assignmentTargetId: 10,
+    assignmentMode: 'allocated',
+    ownedOutputPaths: { 21: 'reports/a', 22: 'reports/b/' },
+    structuredAllocationAuthority: authority
+  };
+  const admittedProjection = projectStructuredAllocationAuthorityForTicket(admittedTicket);
+  assert.equal(admittedProjection.authority.authorityHash, authority.authorityHash);
+  assert.equal(admittedProjection.admissionEligibility.eligible, true);
+  assert.deepEqual(admittedProjection.currentApplicability, { applicable: true, refusalReasons: [] });
+  assert.deepEqual(evaluateStructuredAllocationCurrentApplicability(admittedTicket),
+    admittedProjection.currentApplicability);
+
+  for (const reassigned of [
+    { ...admittedTicket, assignmentTargetType: 'agent', assignmentTargetId: 21, assignmentMode: 'individual' },
+    { ...admittedTicket, assignmentTargetId: 11 },
+    { ...admittedTicket, assignmentMode: 'dynamic' },
+    { ...admittedTicket, ownedOutputPaths: { 21: 'reports/a/', 22: 'reports/other/' } }
+  ]) {
+    const projection = projectStructuredAllocationAuthorityForTicket(reassigned);
+    assert.equal(projection.admissionEligibility.eligible, true,
+      'immutable admission eligibility remains historical evidence');
+    assert.deepEqual(projection.currentApplicability, {
+      applicable: false,
+      refusalReasons: ['assignment_changed_since_capture']
+    });
+  }
+  assert.throws(
+    () => projectStructuredAllocationAuthorityForTicket({ ...admittedTicket, objective: 'tampered objective' }),
+    error => error.code === 'STRUCTURED_ALLOCATION_OBJECTIVE_CONFLICT'
   );
 
   const contractSource = fs.readFileSync(path.join(__dirname, '..', 'runtime', 'structured-allocation-prerequisites-contract.js'), 'utf8');

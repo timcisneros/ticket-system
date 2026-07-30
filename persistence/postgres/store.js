@@ -18,9 +18,11 @@ const {
   normalizeDeclaredWorkSnapshot
 } = require('../../runtime/declared-work-contract');
 const {
+  assertParentDeclaredWorkObjectiveMatchesTicket,
   materializeStructuredAllocationAuthority,
   normalizeStructuredAllocationAuthority,
-  normalizeStructuredAllocationAuthorityDraft
+  normalizeStructuredAllocationAuthorityDraft,
+  ticketAssignmentMatchesPlanningAuthority
 } = require('../../runtime/structured-allocation-prerequisites-contract');
 const {
   normalizeCompletionAuthoritySnapshot,
@@ -618,7 +620,7 @@ function ticketFromRow(row) {
   if (Object.prototype.hasOwnProperty.call(ticket, 'structuredAllocationAuthority')) {
     ticket.structuredAllocationAuthority = normalizeStructuredAllocationAuthority(
       ticket.structuredAllocationAuthority,
-      { expectedTicketId: id }
+      { expectedTicketId: id, expectedTicketObjective: ticket.objective }
     );
   }
 
@@ -1869,17 +1871,23 @@ class PostgresRuntimeStore {
 
   async _assertStructuredAllocationAuthorityDraftReferences(connection, draftValue, ticket) {
     const draft = normalizeStructuredAllocationAuthorityDraft(draftValue);
-    const planning = draft.planningAuthorityDraft;
-    if (!planning) return draft;
-
     const conflict = message => {
       const error = new Error(message);
       error.code = 'STRUCTURED_ALLOCATION_REFERENCE_CONFLICT';
       throw error;
     };
-    if (ticket.assignmentTargetType !== 'group' ||
-        Number(ticket.assignmentTargetId) !== planning.assignmentGroup.id ||
-        ticket.assignmentMode !== planning.allocationMode) {
+    try {
+      assertParentDeclaredWorkObjectiveMatchesTicket(
+        draft.parentDeclaredWorkSnapshot,
+        ticket.objective,
+        'ticket.objective'
+      );
+    } catch (error) {
+      conflict(error.message);
+    }
+    const planning = draft.planningAuthorityDraft;
+    if (!planning) return draft;
+    if (!ticketAssignmentMatchesPlanningAuthority(ticket, planning)) {
       conflict('Planning-authority draft does not match the ticket assignment authority');
     }
 
@@ -1958,7 +1966,7 @@ class PostgresRuntimeStore {
     if (Object.prototype.hasOwnProperty.call(ticketBody, 'structuredAllocationAuthority')) {
       ticketBody.structuredAllocationAuthority = normalizeStructuredAllocationAuthority(
         ticketBody.structuredAllocationAuthority,
-        { expectedTicketId: explicitId }
+        { expectedTicketId: explicitId, expectedTicketObjective: ticketBody.objective }
       );
     }
     const values = [
@@ -2018,6 +2026,11 @@ class PostgresRuntimeStore {
         ...(Object.prototype.hasOwnProperty.call(body, 'changedAt') ? { changedAt: now } : {})
       };
       if (normalizedAuthorityDraft) {
+        record.objective = assertParentDeclaredWorkObjectiveMatchesTicket(
+          normalizedAuthorityDraft.parentDeclaredWorkSnapshot,
+          record.objective,
+          'ticket.objective'
+        );
         await this._assertStructuredAllocationAuthorityDraftReferences(
           connection,
           normalizedAuthorityDraft,
@@ -4788,6 +4801,23 @@ class PostgresRuntimeStore {
     const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
 
     const execute = async connection => {
+      if (Object.prototype.hasOwnProperty.call(bodyPatch, 'objective')) {
+        const currentResult = await connection.query(
+          `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
+        if (currentResult.rowCount > 0) {
+          const current = ticketFromRow(currentResult.rows[0]);
+          if (current.structuredAllocationAuthority &&
+              bodyPatch.objective !== current.objective) {
+            const error = new Error(
+              'Ticket objective cannot change after structured-allocation authority admission'
+            );
+            error.code = 'STRUCTURED_ALLOCATION_OBJECTIVE_IMMUTABLE';
+            throw error;
+          }
+        }
+      }
       const result = await connection.query(
         `WITH candidate AS (
            SELECT id, status

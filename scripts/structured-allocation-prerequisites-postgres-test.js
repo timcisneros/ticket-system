@@ -7,7 +7,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { PostgresRuntimeStore, OptimisticConcurrencyError } = require('../persistence/postgres/store');
-const { buildStructuredAllocationAuthorityDraft } = require('../runtime/structured-allocation-prerequisites-contract');
+const {
+  buildStructuredAllocationAuthorityDraft,
+  projectStructuredAllocationAuthorityForTicket
+} = require('../runtime/structured-allocation-prerequisites-contract');
 const { withHarness } = require('./postgres-test-harness');
 
 const STAMP = `${Date.now()}-${process.pid}`;
@@ -162,6 +165,7 @@ async function main() {
     const ownedOutputPaths = { [planner.id]: 'reports/planner/', [worker.id]: 'reports/worker/' };
     const authorityDraft = buildStructuredAllocationAuthorityDraft({
       declaredWork: declaredWork(objective),
+      ticketObjective: objective,
       assignmentTargetType: 'group',
       assignmentMode: 'allocated',
       assignmentGroup: designated,
@@ -170,6 +174,56 @@ async function main() {
       ownedOutputPaths
     });
     assert.equal(authorityDraft.structuredAllocationEligibility.eligible, true);
+
+    const canonicalObjective = `Canonical objective normalization ${STAMP}`;
+    const paddedCanonicalObjective = `  ${canonicalObjective}  `;
+    const canonicalDraft = buildStructuredAllocationAuthorityDraft({
+      declaredWork: declaredWork(paddedCanonicalObjective),
+      ticketObjective: paddedCanonicalObjective,
+      assignmentTargetType: 'group',
+      assignmentMode: 'allocated',
+      assignmentGroup: designated,
+      plannerAgent: planner,
+      candidateAgents: [worker, planner],
+      ownedOutputPaths
+    });
+    const canonicalTicket = (await store.createTicketWithEvent({
+      ticket: ticketBody(designated, paddedCanonicalObjective, ownedOutputPaths),
+      structuredAllocationAuthorityDraft: canonicalDraft
+    })).ticket;
+    assert.equal(canonicalTicket.objective, canonicalObjective);
+    assert.equal(canonicalTicket.structuredAllocationAuthority.parentDeclaredWorkSnapshot.objective.text,
+      canonicalObjective);
+
+    const competingObjective = `Competing parent objective ${STAMP}`;
+    const competingDraft = buildStructuredAllocationAuthorityDraft({
+      declaredWork: declaredWork(competingObjective),
+      ticketObjective: competingObjective,
+      assignmentTargetType: 'group',
+      assignmentMode: 'allocated',
+      assignmentGroup: designated,
+      plannerAgent: planner,
+      candidateAgents: [worker, planner],
+      ownedOutputPaths
+    });
+    await assert.rejects(
+      store.createTicketWithEvent({
+        ticket: ticketBody(designated, objective, ownedOutputPaths),
+        structuredAllocationAuthorityDraft: competingDraft
+      }),
+      error => error.code === 'STRUCTURED_ALLOCATION_OBJECTIVE_CONFLICT'
+    );
+
+    await assert.rejects(
+      store.createTicketWithEvent({
+        ticket: ticketBody(designated, objective, {
+          ...ownedOutputPaths,
+          [worker.id]: 'reports/different-worker/'
+        }),
+        structuredAllocationAuthorityDraft: authorityDraft
+      }),
+      error => error.code === 'STRUCTURED_ALLOCATION_REFERENCE_CONFLICT'
+    );
 
     const createdResult = await store.createTicketWithEvent({
       ticket: ticketBody(designated, objective, ownedOutputPaths),
@@ -185,6 +239,19 @@ async function main() {
     assert.equal(authority.parentDeclaredWorkSnapshot.objective.text, objective);
     assert.equal(Object.isFrozen(authority), true);
     assert.equal(Object.isFrozen(authority.planningAuthoritySnapshot.candidates[0]), true);
+
+    await assert.rejects(
+      store.transitionTicket({
+        ticketId: ticket.id,
+        expectedRevision: ticket.revision,
+        fromStatuses: ['blocked'],
+        toStatus: 'blocked',
+        patch: { objective: `Changed objective ${STAMP}` },
+        eventType: 'ticket.updated'
+      }),
+      error => error.code === 'STRUCTURED_ALLOCATION_OBJECTIVE_IMMUTABLE'
+    );
+    assert.equal((await store.getTicket(ticket.id)).objective, objective);
 
     await assert.rejects(
       store.createTicket({
@@ -266,9 +333,57 @@ async function main() {
       await peer.close();
     }
 
+    assert.equal(
+      projectStructuredAllocationAuthorityForTicket(await store.getTicket(ticket.id))
+        .currentApplicability.applicable,
+      true,
+      'live group planner changes do not reinterpret the admitted snapshot'
+    );
+    const reassigned = (await store.reassignTicket({
+      ticketId: ticket.id,
+      expectedRevision: reopened.revision,
+      fromStatuses: ['open'],
+      assignmentTargetType: 'agent',
+      assignmentTargetId: outsider.id,
+      assignmentMode: 'individual',
+      changedBy: 'prerequisite-pg-test'
+    })).ticket;
+    assert.equal(reassigned.structuredAllocationAuthority.authorityHash, authority.authorityHash);
+    const reassignedProjection = projectStructuredAllocationAuthorityForTicket(reassigned);
+    assert.equal(reassignedProjection.admissionEligibility.eligible, true);
+    assert.deepEqual(reassignedProjection.currentApplicability, {
+      applicable: false,
+      refusalReasons: ['assignment_changed_since_capture']
+    });
+
+    const blockedAfterReassignment = (await store.transitionTicketState({
+      ticketId: ticket.id,
+      fromStatuses: ['open'],
+      toStatus: 'blocked',
+      patch: { blockedReason: 'Reassignment applicability proof' },
+      eventType: 'ticket.blocked'
+    })).ticket;
+    const reopenedAfterReassignment = (await store.transitionTicketState({
+      ticketId: ticket.id,
+      fromStatuses: ['blocked'],
+      toStatus: 'open',
+      patch: { blockedReason: null },
+      eventType: 'ticket.reopened'
+    })).ticket;
+    assert.equal(blockedAfterReassignment.structuredAllocationAuthority.authorityHash,
+      authority.authorityHash);
+    assert.equal(reopenedAfterReassignment.structuredAllocationAuthority.authorityHash,
+      authority.authorityHash);
+    assert.deepEqual(
+      projectStructuredAllocationAuthorityForTicket(reopenedAfterReassignment).currentApplicability,
+      reassignedProjection.currentApplicability,
+      'block/reopen after reassignment cannot reactivate stale planning authority'
+    );
+
     const rollbackObjective = `Rollback structured authority ${STAMP}`;
     const rollbackDraft = buildStructuredAllocationAuthorityDraft({
       declaredWork: declaredWork(rollbackObjective),
+      ticketObjective: rollbackObjective,
       assignmentTargetType: 'group',
       assignmentMode: 'allocated',
       assignmentGroup: changedGroup,
@@ -357,13 +472,17 @@ async function main() {
 
     const api = await server.request('GET', `/api/tickets/${ticket.id}/runtime`, { cookie });
     assert.equal(api.statusCode, 200);
-    const apiTicket = JSON.parse(api.body).ticket;
+    const apiBody = JSON.parse(api.body);
+    const apiTicket = apiBody.ticket;
     assert.equal(apiTicket.structuredAllocationAuthority.authorityHash, authority.authorityHash);
+    assert.deepEqual(apiBody.structuredAllocation.currentApplicability,
+      reassignedProjection.currentApplicability);
     const page = await server.request('GET', `/tickets/${ticket.id}`, { cookie });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /Structured Allocation Authority/);
     assert.match(page.body, new RegExp(authority.parentDeclaredWorkSnapshot.contractHash));
     assert.match(page.body, /Planner|planning principal|Recorded route/i);
+    assert.match(page.body, /Current applicability[\s\S]*inapplicable/i);
 
     const cookieToken = /sessionId=([^;]+)/.exec(cookie)?.[1];
     assert(cookieToken);
@@ -380,8 +499,34 @@ async function main() {
       assert.match(cli, /parent declared work/);
       assert.match(cli, new RegExp(authority.authorityHash));
       assert.match(cli, /planning principal/);
+      assert.match(cli, /structured allocation current/);
+      assert.match(cli, /inapplicable/);
+      assert.match(cli, /assignment_changed_since_capture/);
     } finally {
       fs.rmSync(cookieFile, { force: true });
+    }
+
+    await store.pool.query(
+      `UPDATE ${store.table('tickets')}
+       SET body = jsonb_set(body, '{objective}', to_jsonb($2::text), true),
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [ticket.id, `Tampered stored objective ${STAMP}`]
+    );
+    await assert.rejects(
+      store.getTicket(ticket.id),
+      error => error.code === 'STRUCTURED_ALLOCATION_OBJECTIVE_CONFLICT'
+    );
+    const tamperedRestart = new PostgresRuntimeStore({ connectionString: databaseUrl, schema });
+    try {
+      assert.deepEqual(await tamperedRestart.migrate(), []);
+      await assert.rejects(
+        tamperedRestart.getTicket(ticket.id),
+        error => error.code === 'STRUCTURED_ALLOCATION_OBJECTIVE_CONFLICT'
+      );
+    } finally {
+      await tamperedRestart.close();
     }
 
     console.log('structured allocation prerequisites PostgreSQL tests passed');

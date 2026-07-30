@@ -86,6 +86,12 @@ server-assigned ticket-authored provenance; client provenance is not accepted. O
 paths, objectives, acceptance prose, group members, agent names, workspace contents,
 and planner output never stand in for an expected-output declaration.
 
+The Ticket objective is superior and singular authority. The parent declared-work objective is
+canonicalized from, and must exactly equal, that Ticket objective; it is not a second ticket-authored
+objective or an undocumented semantic narrowing. Once structured authority is admitted, the Ticket
+objective cannot be changed without creating new ticket authority. Admission and reconstruction
+reject mismatch or stored tampering.
+
 The group designation is nullable historical authority backed by a configured-agent
 foreign key and current-membership integrity. It has no implicit fallback and is not a
 role-aware routing system: the selected configured agent remains the owner of its
@@ -93,6 +99,12 @@ provider/model facts. Ticket admission stores those exact facts, group and agent
 revisions, candidate identities and owned paths, the parent declared-work hash, capture
 time, and canonical hashes. Eligibility and every refusal reason are admission-time
 facts, never recomputed from mutable catalogs. No credentials enter the snapshot.
+
+`structuredAllocationEligibility` records immutable admission-time facts. It is projected as
+admission eligibility and is distinct from current applicability. Current applicability is derived
+without mutating the snapshot and refuses with `assignment_changed_since_capture` when the Ticket's
+current target type, group identity, allocation mode, or canonical owned paths differ from the
+captured planning authority. A later planner/group/catalog change does not rewrite either snapshot.
 
 Tranche 2A performs no provider request, proposal parsing, Allocation Plan v2 admission,
 leaf-run admission, scheduler change, aggregate completion, role-aware routing,
@@ -108,6 +120,9 @@ principal created by Tranche 2A. Parse the closed proposal, deterministically
 validate it against Allocation Plan v2, materialize runtime identities, and admit
 Allocation Plan v2 atomically with its durable planning provenance and failure
 evidence. Tranche 2B stops before leaf-run admission and does not dispatch workers.
+Its entry rule requires both immutable admission eligibility and a true current-applicability
+projection; stored admission eligibility alone can never authorize planning after reassignment or
+scope/mode drift.
 
 ## Tranche 3 — Leaf-Run Admission and Aggregate Completion
 

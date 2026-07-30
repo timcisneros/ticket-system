@@ -11,6 +11,12 @@ may therefore admit an explicit closed ticket-authored declared-work input throu
 immutability. Historical tickets without that admission-time snapshot remain historical-unavailable;
 reread, rerun, reopen, reassignment, or live configuration changes never synthesize or rewrite it.
 
+The Ticket `objective` remains the single canonical objective: parent declared work must match its
+canonical whitespace-normalized text exactly, ticket admission stores that canonical text, and a
+Ticket carrying structured authority cannot later change it. Pure construction, transactional
+admission, and restart reconstruction all fail closed on a competing or tampered objective; source
+provenance is not treated as semantic-equivalence proof.
+
 A ticket-capable agent group may designate exactly one nullable `plannerAgentId`. The selected
 configured agent must be a current member; deletion or membership removal fails closed until the
 group selects another member or clears the designation. There is no first-member, lowest-ID,
@@ -27,6 +33,13 @@ contains no credentials and grants no provider request, routing role, budget, wo
 process operation, Allocation Plan v2, leaf run, scheduling, or completion authority. Tranche 2A
 continues the live historical v1 allocation path unchanged. Tranche 2B may consume only this stored
 parent and planning-principal authority to request, validate, and atomically admit a v2 plan.
+
+Admission eligibility is immutable historical evidence, not a perpetual planning grant. A separate
+pure current-applicability projection compares the current Ticket assignment target type, captured
+group identity, allocation mode, and canonical owned-path mapping against the immutable planning
+snapshot. Reassignment or scope/mode drift preserves the snapshot and its hash but returns
+`assignment_changed_since_capture`. Tranche 2B may enter planner lowering only when both admitted
+eligibility and current applicability are true.
 
 ## Structured Allocation Plan Authority (2026-07-30)
 
