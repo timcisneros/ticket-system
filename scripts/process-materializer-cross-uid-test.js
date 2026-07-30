@@ -68,7 +68,8 @@ function copyClientBundle(destination) {
     'runtime/process-materializer-client.js',
     'runtime/process-materializer-contract.js',
     'runtime/process-authority-constants.js',
-    'runtime/process-execution-contract.js'
+    'runtime/process-execution-contract.js',
+    'runtime/process-target-catalog.js'
   ]) {
     fs.copyFileSync(path.join(ROOT, relative), path.join(destination, relative));
     fs.chmodSync(path.join(destination, relative), 0o644);
@@ -115,8 +116,14 @@ async function main() {
   const config = path.join(root, 'materializer.json');
   const clientRoot = path.join(root, 'client');
   const clientScript = path.join(clientRoot, 'client.js');
+  const serviceRoot = path.join(root, 'bin');
+  const serviceBinary = path.join(serviceRoot, 'ticket-system-process-materializer');
   let service = null;
   try {
+    fs.mkdirSync(serviceRoot, { mode: 0o755 });
+    fs.copyFileSync(BINARY, serviceBinary);
+    fs.chownSync(serviceBinary, 0, 0);
+    fs.chmodSync(serviceBinary, 0o755);
     fs.mkdirSync(source, { mode: 0o750 });
     fs.chownSync(source, RUNTIME_UID, RUNTIME_GID);
     fs.mkdirSync(sealed, { mode: 0o750 });
@@ -157,7 +164,7 @@ async function main() {
       }
     });
     copyClientBundle(clientRoot);
-    const serviceArguments = setpriv(SERVICE_UID, BINARY, [config]);
+    const serviceArguments = setpriv(SERVICE_UID, serviceBinary, [config]);
     service = spawn('setpriv', serviceArguments, {
       stdio: ['ignore', 'ignore', 'pipe']
     });
