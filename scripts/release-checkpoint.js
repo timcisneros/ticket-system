@@ -51,6 +51,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'process-target-catalog-test.js',
   'release-manifest-test.js',
   'release-package-test.js',
+  'third-party-notices-test.js',
   'release-security-check-test.js',
   'postgres-persistence-contract-test.js',
   'recovery-state-reconstruction-test.js',

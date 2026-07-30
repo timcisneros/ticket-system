@@ -15,6 +15,8 @@ const {
 const root = path.resolve(__dirname, '..');
 const inventory = packageInventory(root);
 assert(inventory.includes('LICENSE'));
+assert(inventory.includes('CONTRIBUTING.md'));
+assert(inventory.includes('THIRD_PARTY_NOTICES.md'));
 assert(inventory.includes('server.js'));
 assert(inventory.includes('package.json'));
 assert(inventory.includes('pnpm-lock.yaml'));

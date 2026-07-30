@@ -40,6 +40,8 @@
     "release:compact-launcher": "node --env-file-if-exists=.env.local scripts/process-launcher-compact.js",
     "release:manifest": "node scripts/release-manifest.js",
     "release:package": "node scripts/release-package.js",
+    "release:licenses": "node scripts/third-party-notices.js --check",
+    "release:licenses:generate": "node scripts/third-party-notices.js",
     "release:security": "node scripts/release-security-check.js",
     "release:ga-check": "node scripts/process-execution-ga-check.js",
     "checkpoint:release": "node scripts/release-checkpoint.js",

@@ -19,7 +19,9 @@ const ALLOWED_ROOTS = Object.freeze([
   'views/'
 ]);
 const ALLOWED_FILES = new Set([
+  'CONTRIBUTING.md',
   'LICENSE',
+  'THIRD_PARTY_NOTICES.md',
   'package.json',
   'pnpm-lock.yaml',
   'server.js'

@@ -233,6 +233,7 @@ const TESTS = Object.freeze([
   { file: "release-manifest-test.js", status: "required" },
   { file: "release-package-test.js", status: "required" },
   { file: "release-security-check-test.js", status: "required" },
+  { file: "third-party-notices-test.js", status: "required" },
   { file: "recovery-regression-test.js", status: "required" },
   { file: "recovery-state-reconstruction-test.js", status: "required" },
   { file: "release-checkpoint-coverage-test.js", status: "required" },

@@ -40,6 +40,7 @@ function main() {
     ['release contracts', 'node', ['scripts/process-execution-release-contract-test.js']],
     ['release manifest contract', 'node', ['scripts/release-manifest-test.js']],
     ['release package inventory', 'node', ['scripts/release-package-test.js']],
+    ['third-party license notices', 'npm', ['run', 'release:licenses']],
     ['launcher formatting', 'npm', ['run', 'fmt:launcher-foundation']],
     ['launcher lint', 'npm', ['run', 'lint:launcher-foundation']],
     ['launcher release build', 'npm', ['run', 'build:launcher-foundation']],

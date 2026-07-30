@@ -146,11 +146,17 @@ Generate release evidence and a deterministic allowlisted tar inventory only
 from committed source:
 
 ```sh
+pnpm install --frozen-lockfile
+npm run release:licenses
 PROCESS_RELEASE_CHECKPOINT_REFERENCE=checkpoint:release:passed npm run release:manifest
 npm run release:package -- --output-directory /tmp/ticket-system-release
 ```
 
 The tar inventory, ownership normalization, file timestamps, and checksums are
-deterministic. Native bit identity additionally depends on the recorded Rust
+deterministic. The archive includes the project MIT license, contribution terms,
+and the generated third-party notice bundle tied to the exact Node and Cargo
+lockfiles. Regenerate the bundle after an intentional dependency update with
+`npm run release:licenses:generate`; a stale or incomplete notice bundle fails
+the release checkpoint. Native bit identity additionally depends on the recorded Rust
 toolchain and platform; the release does not claim cross-toolchain bit-identical
 binaries.

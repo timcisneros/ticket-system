@@ -14,7 +14,10 @@ Process-execution GA additionally uses `npm run release:ga-check`. That command 
 the ordinary release checkpoint plus native release builds/lints/tests, deployment and
 privileged active-containment validation, migration preflight, backup/restore, bounded
 soak, supply-chain audit, clean-source release manifest generation, and allowlisted
-package generation. It never prints the GA passing verdict when a mandatory gate is
+package generation. The checkpoint also verifies that `THIRD_PARTY_NOTICES.md` exactly
+matches the locked production Node and native Rust dependency graphs; the release archive
+contains that notice bundle, the project `LICENSE`, and `CONTRIBUTING.md`. It never prints
+the GA passing verdict when a mandatory gate is
 skipped, unavailable, or inconclusive.
 It stops on the first failure and reports the exact number of completed checks.
 

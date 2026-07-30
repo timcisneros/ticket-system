@@ -131,4 +131,6 @@ Targeted database checks are available as `test:persistence:postgres`,
 
 ## License
 
-This project is available under the [MIT License](LICENSE).
+This project is available under the [MIT License](LICENSE). Shipped dependency notices are recorded
+in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and contribution terms are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
