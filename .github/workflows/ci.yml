@@ -35,7 +35,12 @@ jobs:
           node-version: 24.17.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Fetch locked Rust dependencies
+        run: |
+          cargo fetch --locked --manifest-path native/process-launcher/Cargo.toml
+          cargo fetch --locked --manifest-path native/process-materializer/Cargo.toml
       - run: pnpm run build
       - run: pnpm run checkpoint:release
         env:
+          CARGO_NET_OFFLINE: "true"
           TEST_DATABASE_URL: postgresql://ticket_system:ticket_system@127.0.0.1:5432/ticket_system_test

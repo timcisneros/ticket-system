@@ -81,6 +81,30 @@ for (const launcherFoundationGate of [
     `process launcher foundation releases must include ${launcherFoundationGate}`);
 }
 
+const ciWorkflow = fs.readFileSync(
+  path.join(ROOT, '.github', 'workflows', 'ci.yml'),
+  'utf8'
+);
+const checkpointCommand = 'pnpm run checkpoint:release';
+const checkpointIndex = ciWorkflow.indexOf(checkpointCommand);
+assert.notEqual(checkpointIndex, -1, 'CI must run the release checkpoint');
+for (const manifest of [
+  'native/process-launcher/Cargo.toml',
+  'native/process-materializer/Cargo.toml'
+]) {
+  const fetchCommand = `cargo fetch --locked --manifest-path ${manifest}`;
+  const fetchIndex = ciWorkflow.indexOf(fetchCommand);
+  assert.notEqual(fetchIndex, -1,
+    `CI must fetch the locked native dependency graph for ${manifest}`);
+  assert.equal(fetchIndex < checkpointIndex, true,
+    `CI must fetch ${manifest} before the offline release checkpoint`);
+}
+assert.match(
+  ciWorkflow.slice(checkpointIndex),
+  /CARGO_NET_OFFLINE:\s*["']true["']/,
+  'CI must run native release gates offline after the explicit locked fetch'
+);
+
 // A10 — the fourteen restored PostgreSQL runtime integrity suites are MANDATORY.
 //
 // This list is the anti-rot guard, not bookkeeping. These suites were orphaned by the
