@@ -1657,10 +1657,28 @@ async function cmdRunState(args) {
   if (data.ticketId) console.log(`  ${dim('ticket')} #${data.ticketId}`);
   if (data.declaredWorkSnapshot) {
     const declared = data.declaredWorkSnapshot;
+    const textualCriteria = declared.successCriteria.filter(item => item.kind === 'text').length;
+    const typedCriteria = declared.successCriteria.filter(item => item.kind === 'typed-postcondition').length;
     console.log(`  ${dim('declared objective')} ${declared.objective.text.replace(/\r?\n/g, ' ')}`);
     console.log(`  ${dim('declared outputs / criteria / evidence')} ${declared.expectedOutputs.length} / ${declared.successCriteria.length} / ${declared.evidenceRequirements.length}  ${dim(declared.contractHash)}`);
+    console.log(`  ${dim('declared criteria')} ${textualCriteria} textual (not automatically evaluated) · ${typedCriteria} typed`);
+    if (data.declaredCompletionBinding) {
+      console.log(`  ${dim('typed-criterion authority')} ${data.declaredCompletionBinding.status} · ${data.declaredCompletionBinding.criteria.length} criterion(s)  ${dim(data.declaredCompletionBinding.bindingHash)}`);
+    }
   } else if (data.declaredWorkAvailability === 'historical-unavailable') {
     console.log(`  ${dim('declared work')} historical unavailable — current ticket values are not substituted`);
+  }
+  const completionDecision = data.runConsequence && data.runConsequence.completionDecision;
+  if (completionDecision) {
+    console.log(`  ${dim('completion decision')} execution ${completionDecision.executionDisposition} · verification ${completionDecision.verificationDisposition} · objective ${completionDecision.completionDisposition}`);
+    for (const criterion of completionDecision.evaluatedPostconditions || []) {
+      const status = criterion.passed === true
+        ? 'satisfied'
+        : criterion.passed === false
+          ? 'unsatisfied'
+          : 'unavailable';
+      console.log(`    ${criterion.id || criterion.type || 'criterion'}: ${status} · ${criterion.reasonCode}`);
+    }
   }
   if (data.createdAt) console.log(`  ${dim('created')} ${datetime(data.createdAt)}`);
   if (data.startedAt) console.log(`  ${dim('started')} ${datetime(data.startedAt)}`);

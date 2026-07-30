@@ -128,6 +128,7 @@ const TESTS = Object.freeze([
   { file: "complete-flag-truncation-guard-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "concurrency-conflict-test.js", status: "required" },
   { file: "debug-reset-contamination-test.js", status: "orphaned", reason: "cutover-orphan" },
+  { file: "declared-completion-authority-binding-test.js", status: "required" },
   { file: "declared-work-contract-test.js", status: "required" },
   { file: "declared-work-postgres-test.js", status: "required" },
   { file: "delegated-run-logging-containment-test.js", status: "required" },

@@ -290,6 +290,50 @@ async function main() {
         'produced evidence does not retroactively alter the declaration'
       );
 
+      const runCountBeforeBindingRefusals = (await store.listRuns({ limit: 400 })).runs.length;
+      await assert.rejects(
+        () => store.createRun({
+          ticketId: direct.ticket.id,
+          agentId: ordinaryAgent.id,
+          agentName: ordinaryAgent.name,
+          executionMode: 'agent',
+          status: 'pending',
+          completionAuthoritySnapshot: null,
+          verificationContractSnapshot: null,
+          declaredWorkSnapshot: directSnapshot
+        }),
+        error => error.code === 'DECLARED_COMPLETION_AUTHORITY_MISMATCH' &&
+          /require an immutable completionAuthoritySnapshot/.test(error.message),
+        'the PostgreSQL admission seam rejects a declared direct criterion without authority'
+      );
+      await assert.rejects(
+        () => store.createRun({
+          ticketId: workflow.ticket.id,
+          agentId: ordinaryAgent.id,
+          agentName: ordinaryAgent.name,
+          executionMode: 'workflow',
+          workflowId: workflow.run.workflowId,
+          status: 'pending',
+          completionAuthoritySnapshot: workflow.run.completionAuthoritySnapshot,
+          verificationContractSnapshot: {
+            ...workflow.run.verificationContractSnapshot,
+            postconditions: workflow.run.verificationContractSnapshot.postconditions.map(
+              (postcondition, index) => index === 0
+                ? { ...postcondition, path: `mismatched-${STAMP}.txt` }
+                : postcondition
+            )
+          },
+          declaredWorkSnapshot: workflowSnapshot
+        }),
+        error => error.code === 'DECLARED_COMPLETION_AUTHORITY_MISMATCH',
+        'the PostgreSQL admission seam rejects drift from the frozen workflow authority'
+      );
+      assert.equal(
+        (await store.listRuns({ limit: 400 })).runs.length,
+        runCountBeforeBindingRefusals,
+        'binding failures occur before any run row or execution can exist'
+      );
+
       await assert.rejects(
         () => store.transitionRun({
           runId: browser.run.id,
@@ -323,11 +367,41 @@ async function main() {
       const directProjection = JSON.parse(directState.body);
       assert.deepEqual(directProjection.declaredWorkSnapshot, directSnapshot);
       assert.equal(directProjection.declaredWorkAvailability, 'available');
+      assert.equal(directProjection.declaredCompletionBinding.status, 'bound');
+      assert.equal(directProjection.declaredCompletionBinding.criteria.length, 1);
+      assert.equal(
+        directProjection.declaredCompletionBinding.criteria[0].authoritySource,
+        'completion-authority-snapshot'
+      );
+      const workflowState = await first.request(
+        'GET',
+        `/api/runs/${workflow.run.id}/state`,
+        { cookie }
+      );
+      assert.equal(workflowState.statusCode, 200, workflowState.body);
+      const workflowProjection = JSON.parse(workflowState.body);
+      assert(workflowProjection.declaredCompletionBinding.criteria.length > 0);
+      assert(workflowProjection.declaredCompletionBinding.criteria.every(item =>
+        item.authoritySource === 'verification-contract-snapshot'));
+      const browserState = await first.request(
+        'GET',
+        `/api/runs/${browser.run.id}/state`,
+        { cookie }
+      );
+      assert.equal(browserState.statusCode, 200, browserState.body);
+      assert.equal(
+        JSON.parse(browserState.body).declaredCompletionBinding.criteria.length,
+        0,
+        'browser evidence does not retroactively create a typed criterion'
+      );
       const directPage = await first.request('GET', `/runs/${direct.run.id}`, { cookie });
       assert.equal(directPage.statusCode, 200, directPage.body.slice(0, 1000));
       assert.match(directPage.body, /Declared work/);
       assert.match(directPage.body, /Declarations are not produced evidence/);
       assert.match(directPage.body, /not automatically evaluated/);
+      assert.match(directPage.body, /Typed-criterion binding/);
+      assert.match(directPage.body, /bound to completion-authority-snapshot/);
+      assert.match(directPage.body, /deterministic result shown in the canonical completion decision/);
       const declaredSection = directPage.body.match(
         /<summary>Declared work[\s\S]*?<summary>Work Type Snapshot/
       );
@@ -376,6 +450,7 @@ async function main() {
         JSON.parse(historicalState.body).declaredWorkAvailability,
         'historical-unavailable'
       );
+      assert.equal(JSON.parse(historicalState.body).declaredCompletionBinding, null);
       const historicalPage = await first.request(
         'GET',
         `/runs/${historicalRun.id}`,
@@ -421,6 +496,11 @@ async function main() {
         JSON.parse(secondRead.body).declaredWorkSnapshot,
         directSnapshot,
         'restart reconstruction preserves exact authority and hash'
+      );
+      assert.deepEqual(
+        JSON.parse(firstRead.body).declaredCompletionBinding,
+        JSON.parse(secondRead.body).declaredCompletionBinding,
+        'two runtimes reconstruct the same typed-criterion binding and hash'
       );
 
       const exposed = JSON.stringify(JSON.parse(secondRead.body).declaredWorkSnapshot);

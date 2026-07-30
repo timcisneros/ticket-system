@@ -137,7 +137,16 @@ assert.deepEqual(historical, {
 });
 assert.deepEqual(projectDeclaredWorkForRun({
   id: 2,
-  declaredWorkSnapshot: workflowSnapshot
+  declaredWorkSnapshot: workflowSnapshot,
+  completionAuthoritySnapshot: {
+    objectiveContract: { kind: 'workflow', directPostconditions: [] }
+  },
+  verificationContractSnapshot: {
+    workflowId: 'declared-workflow',
+    postconditions: workflowSnapshot.successCriteria
+      .filter(item => item.kind === 'typed-postcondition')
+      .map(item => JSON.parse(item.declaration))
+  }
 }), {
   availability: 'available',
   snapshot: workflowSnapshot

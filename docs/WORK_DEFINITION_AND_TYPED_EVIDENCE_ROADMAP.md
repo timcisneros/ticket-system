@@ -151,15 +151,91 @@ Target, capability, or execution ontology.
 
 ## Tranche 3 — Typed criteria and completion
 
-### Outcome
+### Capability claim
 
-Bind only justified closed typed criteria to the existing completion authority
-and completion-decision system.
+An explicitly admitted closed typed criterion may participate in the existing
+deterministic completion decision only when its exact authority was frozen at
+admission and it can be evaluated solely from durable, bounded,
+integrity-checked evidence.
+
+### Existing criterion inventory
+
+Tranche 3 introduces no new criterion family. The complete supported
+vocabulary and its authority are:
+
+| Criterion | Admission source | Immutable authority | Durable evaluation evidence |
+| --- | --- | --- | --- |
+| `folder_exists` | deterministic objective contract | `completionAuthoritySnapshot.objectiveContract.directPostconditions` | finalized replay `run:postcondition_completed` checked-path evidence |
+| `path_absent` | deterministic objective contract | `completionAuthoritySnapshot.objectiveContract.directPostconditions` | finalized replay checked-path evidence |
+| `file_content_equals` | deterministic direct objective check | `completionAuthoritySnapshot.objectiveContract.directPostconditions` | finalized replay checked-path evidence, content bound by SHA-256 |
+| `fileExists` | workflow definition | `verificationContractSnapshot.postconditions` | one durable `run.postconditions_checked` result |
+| `fileContains` | workflow definition | `verificationContractSnapshot.postconditions` | one durable `run.postconditions_checked` result |
+| `jsonPathEquals` | workflow definition | `verificationContractSnapshot.postconditions` | one durable `run.postconditions_checked` result |
+| `outputFieldEquals` | workflow definition | `verificationContractSnapshot.postconditions` | frozen workflow output followed by one durable postcondition result |
+| `processOperationExists` | workflow definition | `verificationContractSnapshot.postconditions` | canonical `runProcess` receipt through `processOperations` plus process evidence integrity |
+| `processTerminalOutcomeEquals` | workflow definition | `verificationContractSnapshot.postconditions` | receipt terminal outcome plus matching process-terminal evidence |
+| `processArtifactEquals` | workflow definition | `verificationContractSnapshot.postconditions` | immutable artifact metadata plus matching process-artifact evidence |
+
+Direct postconditions and workflow postconditions remain separate established
+authorities. The completion decision already binds the direct objective
+contract hash and the frozen workflow declaration hash. Existing evaluators and
+completion-decision hashes are unchanged.
+
+### Declared/completion authority binding
+
+Every `typed-postcondition` in an available `declaredWorkSnapshot` must match
+exactly one criterion in the run's immutable completion authority before the run
+can be admitted:
+
+```text
+stable criterion identity
++ criterion type
++ canonical normalized declaration
++ criterion SHA-256
++ source-compatible provenance
++ exact deterministic evidence requirement
+```
+
+The supported provenance binding is closed:
+
+```text
+deterministic-objective-contract → completionAuthoritySnapshot
+workflow-defined                → verificationContractSnapshot
+```
+
+Missing, extra, contradictory, differently typed, differently normalized, or
+differently hashed authority fails with
+`DECLARED_COMPLETION_AUTHORITY_MISMATCH`. Textual criteria are excluded from
+this binding and remain explicitly unevaluated. Produced operations, receipts,
+artifacts, browser observations, model claims, and final consequences cannot
+create criteria retroactively.
+
+Historical runs without declared work retain
+`declaredWorkAvailability: historical-unavailable` and continue under their
+existing completion authority and decision. Current ticket or workflow state is
+never used to reconstruct missing declarations.
+
+### Rejected additions
+
+Browser receipts and bounded browser evidence are durable integrity inputs, but
+the repository has no explicit immutable browser-criterion admission source.
+Consequently no browser predicate is added. Evidence presence alone remains
+insufficient for semantic completion. Arbitrary page-text matching, selector
+evaluation, live page checks, screenshot interpretation, generic operation
+success, and universal evidence predicates remain prohibited.
+
+Process criteria require no addition: the existing workflow postconditions,
+generic process receipt, process consequence, immutable artifact metadata, and
+terminal/artifact evidence already form a closed deterministic path. Process
+exit zero by itself remains insufficient.
 
 ### Scope boundary
 
 Do not broaden the frozen natural-language grammar or make model interpretation
-hard completion authority.
+hard completion authority. This tranche adds an admission and reconstruction
+integrity invariant plus read-only presentation. It does not add an evaluator,
+completion engine, persistence object, migration, predicate language, browser
+criterion, Work Primitive, playbook, Target, or registry.
 
 ## Tranche 4 — Mixed-family validation and product decision
 
@@ -176,6 +252,6 @@ playbooks merit a separate product and persistence contract.
 ```text
 Tranche 1: COMPLETE
 Tranche 2: COMPLETE
-Tranche 3: NOT STARTED — NEXT
-Tranche 4: NOT STARTED
+Tranche 3: COMPLETE
+Tranche 4: NOT STARTED — NEXT
 ```

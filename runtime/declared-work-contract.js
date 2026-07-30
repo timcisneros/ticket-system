@@ -70,6 +70,7 @@ const MAX_OBJECTIVE_LENGTH = 20_000;
 const MAX_DECLARATION_LENGTH = 20_000;
 const MAX_DECLARATIONS = 64;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
+const DECLARED_COMPLETION_BINDING_VERSION = 1;
 
 class DeclaredWorkContractError extends Error {
   constructor(code, message) {
@@ -324,6 +325,228 @@ function collectTypedCriteria(entries) {
   return [...byIdentity.values()];
 }
 
+function indexedTypedCriteria(entries, label) {
+  const byIdentity = new Map();
+  for (const entry of entries) {
+    const normalized = normalizePostcondition(entry.postcondition, label);
+    const identity = postconditionIdentity(normalized, entry.provenance);
+    const candidate = {
+      ...typedCriterion(normalized, entry.provenance),
+      identity,
+      authoritySource: entry.authoritySource
+    };
+    const existing = byIdentity.get(identity);
+    if (existing && existing.criterionHash !== candidate.criterionHash) {
+      fail(
+        `${label} contains conflicting criteria for ${identity}`,
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+    if (!existing) byIdentity.set(identity, candidate);
+  }
+  return byIdentity;
+}
+
+function declaredTypedCriterionEntries(snapshot) {
+  return snapshot.successCriteria
+    .filter(item => item.kind === 'typed-postcondition')
+    .map(item => {
+      let postcondition;
+      try {
+        postcondition = JSON.parse(item.declaration);
+      } catch (_) {
+        fail(
+          'Declared typed criterion is not canonical JSON',
+          'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+        );
+      }
+      return {
+        postcondition,
+        provenance: item.provenance,
+        authoritySource: item.provenance === 'workflow-defined'
+          ? 'verification-contract-snapshot'
+          : item.provenance === 'deterministic-objective-contract'
+            ? 'completion-authority-snapshot'
+            : 'unsupported'
+      };
+    });
+}
+
+function completionAuthorityCriterionEntries({
+  completionAuthoritySnapshot = null,
+  verificationContractSnapshot = null
+}) {
+  const entries = [];
+  const directPostconditions = completionAuthoritySnapshot &&
+    completionAuthoritySnapshot.objectiveContract &&
+    Array.isArray(completionAuthoritySnapshot.objectiveContract.directPostconditions)
+    ? completionAuthoritySnapshot.objectiveContract.directPostconditions
+    : [];
+  for (const postcondition of directPostconditions) {
+    entries.push({
+      postcondition,
+      provenance: 'deterministic-objective-contract',
+      authoritySource: 'completion-authority-snapshot'
+    });
+  }
+
+  const workflowPostconditions = verificationContractSnapshot &&
+    typeof verificationContractSnapshot === 'object' &&
+    !Array.isArray(verificationContractSnapshot) &&
+    typeof verificationContractSnapshot.workflowId === 'string' &&
+    verificationContractSnapshot.workflowId.trim() &&
+    Array.isArray(verificationContractSnapshot.postconditions)
+    ? verificationContractSnapshot.postconditions
+    : [];
+  for (const postcondition of workflowPostconditions) {
+    entries.push({
+      postcondition,
+      provenance: 'workflow-defined',
+      authoritySource: 'verification-contract-snapshot'
+    });
+  }
+  return entries;
+}
+
+function assertDeclaredWorkCompletionAuthorityBinding({
+  declaredWorkSnapshot,
+  completionAuthoritySnapshot = null,
+  verificationContractSnapshot = null
+}) {
+  const snapshot = normalizeDeclaredWorkSnapshot(declaredWorkSnapshot);
+  const declaredEntries = declaredTypedCriterionEntries(snapshot);
+  if (declaredEntries.length > 0 &&
+      (!completionAuthoritySnapshot ||
+       typeof completionAuthoritySnapshot !== 'object' ||
+       Array.isArray(completionAuthoritySnapshot))) {
+    fail(
+      'Declared typed criteria require an immutable completionAuthoritySnapshot',
+      'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+    );
+  }
+  const objectiveKind = completionAuthoritySnapshot &&
+    completionAuthoritySnapshot.objectiveContract
+    ? completionAuthoritySnapshot.objectiveContract.kind
+    : null;
+  for (const entry of declaredEntries) {
+    if (!['workflow-defined', 'deterministic-objective-contract'].includes(entry.provenance)) {
+      fail(
+        `Typed criterion provenance ${entry.provenance} has no admitted completion authority`,
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+    if (entry.provenance === 'workflow-defined' && objectiveKind !== 'workflow') {
+      fail(
+        'Workflow-defined typed criteria require workflow completion authority',
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+    if (entry.provenance === 'deterministic-objective-contract' &&
+        objectiveKind !== 'deterministic') {
+      fail(
+        'Deterministic typed criteria require deterministic completion authority',
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+  }
+
+  const declared = indexedTypedCriteria(
+    declaredEntries,
+    'declaredWorkSnapshot.successCriteria'
+  );
+  const authority = indexedTypedCriteria(
+    completionAuthorityCriterionEntries({
+      completionAuthoritySnapshot,
+      verificationContractSnapshot
+    }),
+    'run completion authority'
+  );
+
+  for (const [identity, criterion] of declared) {
+    const admitted = authority.get(identity);
+    if (!admitted) {
+      fail(
+        `Declared typed criterion ${identity} is absent from immutable completion authority`,
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+    if (admitted.criterionType !== criterion.criterionType) {
+      fail(
+        `Declared typed criterion ${identity} has type ${criterion.criterionType}; ` +
+          `completion authority has ${admitted.criterionType}`,
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+    if (admitted.declaration !== criterion.declaration) {
+      fail(
+        `Declared typed criterion ${identity} does not match its normalized completion declaration`,
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+    if (admitted.criterionHash !== criterion.criterionHash) {
+      fail(
+        `Declared typed criterion ${identity} does not match its completion-authority hash`,
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+    if (admitted.authoritySource !== criterion.authoritySource) {
+      fail(
+        `Declared typed criterion ${identity} has incompatible authority provenance`,
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+  }
+
+  for (const identity of authority.keys()) {
+    if (!declared.has(identity)) {
+      fail(
+        `Immutable completion criterion ${identity} is absent from declared work`,
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+  }
+
+  const requiredEvidence = new Map();
+  for (const requirement of snapshot.evidenceRequirements) {
+    const identity = `${requirement.provenance}:${requirement.criterionHash}`;
+    requiredEvidence.set(identity, requirement);
+  }
+  for (const criterion of declared.values()) {
+    const evidenceIdentity = `${criterion.provenance}:${criterion.criterionHash}`;
+    if (!requiredEvidence.has(evidenceIdentity)) {
+      fail(
+        `Declared typed criterion ${criterion.identity} has no matching evidence requirement`,
+        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+      );
+    }
+    requiredEvidence.delete(evidenceIdentity);
+  }
+  if (requiredEvidence.size > 0) {
+    fail(
+      'Declared work contains evidence requirements without matching typed criteria',
+      'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
+    );
+  }
+
+  const criteria = [...declared.values()]
+    .sort((left, right) => compareCanonicalText(left.identity, right.identity))
+    .map(item => ({
+      criterionHash: item.criterionHash,
+      criterionType: item.criterionType,
+      provenance: item.provenance,
+      authoritySource: item.authoritySource
+    }));
+  const withoutHash = {
+    version: DECLARED_COMPLETION_BINDING_VERSION,
+    status: 'bound',
+    criteria
+  };
+  return deepFreeze({
+    ...withoutHash,
+    bindingHash: hashCanonical(withoutHash)
+  });
+}
+
 function dedupeBuiltItems(items) {
   const byIdentity = new Map();
   for (const item of items) {
@@ -457,9 +680,15 @@ function projectDeclaredWorkForRun(run) {
       snapshot: null
     });
   }
+  const snapshot = normalizeDeclaredWorkSnapshot(run.declaredWorkSnapshot);
+  assertDeclaredWorkCompletionAuthorityBinding({
+    declaredWorkSnapshot: snapshot,
+    completionAuthoritySnapshot: run.completionAuthoritySnapshot || null,
+    verificationContractSnapshot: run.verificationContractSnapshot || null
+  });
   return deepFreeze({
     availability: 'available',
-    snapshot: normalizeDeclaredWorkSnapshot(run.declaredWorkSnapshot)
+    snapshot
   });
 }
 
@@ -474,11 +703,13 @@ function projectDeclaredWorkForModel(value) {
 }
 
 module.exports = {
+  DECLARED_COMPLETION_BINDING_VERSION,
   DECLARED_WORK_AVAILABILITY,
   DECLARED_WORK_PROVENANCE,
   DECLARED_WORK_SOURCE_PRECEDENCE,
   DECLARED_WORK_VERSION,
   DeclaredWorkContractError,
+  assertDeclaredWorkCompletionAuthorityBinding,
   buildDeclaredWorkSnapshot,
   canonicalJson,
   compareCanonicalText,

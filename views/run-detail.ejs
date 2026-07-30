@@ -815,6 +815,14 @@
         availability: run.declaredWorkSnapshot ? 'available' : 'historical-unavailable',
         snapshot: run.declaredWorkSnapshot || null
       };
+  const admittedDeclaredBinding = typeof declaredCompletionBinding !== 'undefined'
+    ? declaredCompletionBinding
+    : null;
+  const declaredBindingByHash = new Map(
+    admittedDeclaredBinding && Array.isArray(admittedDeclaredBinding.criteria)
+      ? admittedDeclaredBinding.criteria.map(item => [item.criterionHash, item])
+      : []
+  );
 %>
 <details class="disclosure" open>
   <summary>Declared work <span class="sub"><%= admittedDeclaredWork.availability === 'available' ? 'Frozen at admission' : 'Historical compatibility' %></span></summary>
@@ -824,6 +832,9 @@
       <dl class="detail-grid">
         <div><dt>Objective</dt><dd style="white-space:pre-wrap;"><%= work.objective.text %> <span class="text-muted">· <%= work.objective.provenance %></span></dd></div>
         <div><dt>Contract</dt><dd>version <code><%= work.version %></code> · <code><%= work.contractHash %></code></dd></div>
+        <% if (admittedDeclaredBinding) { %>
+          <div><dt>Typed-criterion binding</dt><dd><code><%= admittedDeclaredBinding.status %></code> · <%= admittedDeclaredBinding.criteria.length %> criterion(s) · <code><%= admittedDeclaredBinding.bindingHash %></code></dd></div>
+        <% } %>
       </dl>
       <h3>Expected outputs</h3>
       <% if (work.expectedOutputs.length === 0) { %>
@@ -844,7 +855,8 @@
             <% if (item.kind === 'text') { %>
               <li><strong>Textual declaration:</strong> <span style="white-space:pre-wrap;"><%= item.declaration %></span> <span class="text-muted">· <%= item.provenance %> · not automatically evaluated</span></li>
             <% } else { %>
-              <li><strong>Existing deterministic postcondition:</strong> <code><%= item.criterionType %></code> <code><%= item.declaration %></code> <span class="text-muted">· <%= item.provenance %></span></li>
+              <% const binding = declaredBindingByHash.get(item.criterionHash); %>
+              <li><strong>Admitted typed criterion:</strong> <code><%= item.criterionType %></code> <code><%= item.declaration %></code> <span class="text-muted">· <%= item.provenance %><%= binding ? ' · bound to ' + binding.authoritySource : '' %> · deterministic result shown in the canonical completion decision</span></li>
             <% } %>
           <% }); %>
         </ul>

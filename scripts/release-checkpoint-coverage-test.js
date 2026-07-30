@@ -41,6 +41,7 @@ for (const typedProjectionGate of [
 }
 
 for (const declaredWorkGate of [
+  'declared-completion-authority-binding-test.js',
   'declared-work-contract-test.js',
   'declared-work-postgres-test.js'
 ]) {

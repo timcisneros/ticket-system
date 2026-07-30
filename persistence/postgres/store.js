@@ -14,6 +14,7 @@ const {
   normalizeRuntimeBudgetSnapshot
 } = require('../../runtime/runtime-budget-contract');
 const {
+  assertDeclaredWorkCompletionAuthorityBinding,
   normalizeDeclaredWorkSnapshot
 } = require('../../runtime/declared-work-contract');
 const {
@@ -108,6 +109,26 @@ function assertDeclaredWorkAuthorityNotPatched(patch, label) {
   const error = new Error(`${label} cannot mutate declaredWorkSnapshot after admission`);
   error.code = 'DECLARED_WORK_SNAPSHOT_IMMUTABLE';
   throw error;
+}
+
+function assertRunDeclaredCompletionAuthority(run, label) {
+  if (!run || run.declaredWorkSnapshot === null ||
+      run.declaredWorkSnapshot === undefined) return;
+  try {
+    normalizeDeclaredWorkSnapshot(run.declaredWorkSnapshot);
+    if (run.completionAuthoritySnapshot !== null &&
+        run.completionAuthoritySnapshot !== undefined) {
+      normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot);
+    }
+    assertDeclaredWorkCompletionAuthorityBinding({
+      declaredWorkSnapshot: run.declaredWorkSnapshot,
+      completionAuthoritySnapshot: run.completionAuthoritySnapshot || null,
+      verificationContractSnapshot: run.verificationContractSnapshot || null
+    });
+  } catch (error) {
+    error.message = `${label}: ${error.message}`;
+    throw error;
+  }
 }
 
 function processExecutionReleaseStateFromRow(row) {
@@ -1917,11 +1938,7 @@ class PostgresRuntimeStore {
 
   async createRun(record, { client = null } = {}) {
     const run = this.assertJsonRecord(record, 'run');
-    if (Object.prototype.hasOwnProperty.call(run, 'declaredWorkSnapshot') &&
-        run.declaredWorkSnapshot !== null &&
-        run.declaredWorkSnapshot !== undefined) {
-      normalizeDeclaredWorkSnapshot(run.declaredWorkSnapshot);
-    }
+    assertRunDeclaredCompletionAuthority(run, 'run declared/completion authority');
     const status = requiredString(run.status || 'pending', 'run.status');
     if (status !== 'pending') throw new TypeError('New runs must start pending');
     const currentPhase = normalizeRunPhase(run.currentPhase || 'planning', 'run.currentPhase');
@@ -2020,23 +2037,22 @@ class PostgresRuntimeStore {
         }
       });
       drafts.forEach((run, index) => {
-        if (run.completionAuthoritySnapshot === null ||
-            run.completionAuthoritySnapshot === undefined) return;
-        try {
-          normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot);
-        } catch (error) {
-          error.message = `runDrafts[${index}].completionAuthoritySnapshot: ${error.message}`;
-          throw error;
+        if (run.declaredWorkSnapshot !== null &&
+            run.declaredWorkSnapshot !== undefined) {
+          assertRunDeclaredCompletionAuthority(
+            run,
+            `runDrafts[${index}] declared/completion authority`
+          );
+          return;
         }
-      });
-      drafts.forEach((run, index) => {
-        if (run.declaredWorkSnapshot === null ||
-            run.declaredWorkSnapshot === undefined) return;
-        try {
-          normalizeDeclaredWorkSnapshot(run.declaredWorkSnapshot);
-        } catch (error) {
-          error.message = `runDrafts[${index}].declaredWorkSnapshot: ${error.message}`;
-          throw error;
+        if (run.completionAuthoritySnapshot !== null &&
+            run.completionAuthoritySnapshot !== undefined) {
+          try {
+            normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot);
+          } catch (error) {
+            error.message = `runDrafts[${index}].completionAuthoritySnapshot: ${error.message}`;
+            throw error;
+          }
         }
       });
       const effectiveAttemptLimits = budgetSnapshots

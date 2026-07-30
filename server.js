@@ -106,6 +106,7 @@ const {
   getRunRuntimeBudgetSnapshot
 } = require('./runtime/runtime-budget-contract');
 const {
+  assertDeclaredWorkCompletionAuthorityBinding,
   buildDeclaredWorkSnapshot,
   normalizeDeclaredWorkSnapshot,
   projectDeclaredWorkForModel,
@@ -7677,6 +7678,14 @@ function buildRunConsequence(run, {
   operations: suppliedOperations
 } = {}) {
   if (!run) return null;
+  if (run.declaredWorkSnapshot !== null &&
+      run.declaredWorkSnapshot !== undefined) {
+    assertDeclaredWorkCompletionAuthorityBinding({
+      declaredWorkSnapshot: run.declaredWorkSnapshot,
+      completionAuthoritySnapshot: run.completionAuthoritySnapshot || null,
+      verificationContractSnapshot: run.verificationContractSnapshot || null
+    });
+  }
   if (!Array.isArray(suppliedOperations)) {
     throw new TypeError(
       'buildRunConsequence requires an explicit operations array; '
@@ -8082,6 +8091,13 @@ async function readRunProcessSupervision(run, {
 function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
   if (!run) return null;
   const declaredWork = projectDeclaredWorkForRun(run);
+  const declaredCompletionBinding = declaredWork.snapshot
+    ? assertDeclaredWorkCompletionAuthorityBinding({
+        declaredWorkSnapshot: declaredWork.snapshot,
+        completionAuthoritySnapshot: run.completionAuthoritySnapshot || null,
+        verificationContractSnapshot: run.verificationContractSnapshot || null
+      })
+    : null;
   const suppliedEvents = Array.isArray(options.events) ? options.events : null;
   const suppliedOperations = Array.isArray(options.operations) ? options.operations : null;
   const summary = options.eventSummary || { currentStep: null, latestStatus: null, latestError: null, latestWorkspaceMutation: null };
@@ -8140,6 +8156,7 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
       : null,
     declaredWorkSnapshot: declaredWork.snapshot,
     declaredWorkAvailability: declaredWork.availability,
+    declaredCompletionBinding,
     triage: normalizeTriage(run.triage),
     lease: serializeRunLease(run),
     leaseExpiresAt: run.leaseExpiresAt || null,
@@ -15607,6 +15624,11 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     ticket,
     workflow,
     completionAuthoritySnapshot
+  });
+  assertDeclaredWorkCompletionAuthorityBinding({
+    declaredWorkSnapshot,
+    completionAuthoritySnapshot,
+    verificationContractSnapshot
   });
   const runtimeBudgetSnapshot = buildRuntimeBudgetSnapshot({
     runtimeLimits: {
@@ -26990,6 +27012,13 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   });
   const completionSummary = buildRunCompletionSummary(run, snapshot, runEvents, enrichedHistory, failureSummary);
   const declaredWork = projectDeclaredWorkForRun(run);
+  const declaredCompletionBinding = declaredWork.snapshot
+    ? assertDeclaredWorkCompletionAuthorityBinding({
+        declaredWorkSnapshot: declaredWork.snapshot,
+        completionAuthoritySnapshot: run.completionAuthoritySnapshot || null,
+        verificationContractSnapshot: run.verificationContractSnapshot || null
+      })
+    : null;
   // Display-only: surface this run's permissioned cross-ticket delete audit events
   // (recorded in v0.1.18). Strictly scoped to this run's id. Derived for the view;
   // no runtime, permission, or event-writing behavior is affected.
@@ -27063,6 +27092,7 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     runStateInconsistency,
     completionSummary,
     declaredWork,
+    declaredCompletionBinding,
     permissionedDeleteAuditEvents,
     runDiagnosticBundle,
     diagnosticsGeneratedAt,
