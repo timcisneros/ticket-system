@@ -50,10 +50,13 @@ function setpriv(uid, command, commandArguments) {
   const primaryGroup = uid === SERVICE_UID || uid === LAUNCHER_UID
     ? HANDOFF_GID
     : RUNTIME_GID;
+  const supplementaryGroups = uid === SERVICE_UID || uid === LAUNCHER_UID
+    ? `${RUNTIME_GID},${HANDOFF_GID}`
+    : String(primaryGroup);
   return [
     '--reuid', String(uid),
     '--regid', String(primaryGroup),
-    '--clear-groups',
+    '--groups', supplementaryGroups,
     command,
     ...commandArguments
   ];
