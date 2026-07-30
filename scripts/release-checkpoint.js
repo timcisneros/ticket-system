@@ -15,6 +15,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'completion-decision-contract-test.js',
   'declared-completion-authority-binding-test.js',
   'declared-work-contract-test.js',
+  'mixed-family-work-model-test.js',
   'action-contract-streak-test.js',
   'evidence-truthfulness-contract-test.js',
   'event-integrity-negative-test.js',

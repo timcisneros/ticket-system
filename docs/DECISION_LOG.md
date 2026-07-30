@@ -1,5 +1,14 @@
 # Decision Log
 
+## Mixed-Family Work Model (2026-07-29)
+
+Keep Ticket and Workflow as the product primitives. Workspace, browser, and process remain
+separate operation families; evidence aggregation does not authorize a generic cross-family
+router. The current scenario evidence does not justify a distinct reusable Work Primitive or
+playbook entity. Reuse pressure should first be evaluated through the existing versioned Workflow
+authority. Full scenario matrix, unsupported-composition findings, option comparison, and future
+decision triggers: `decision-memo-mixed-family-work-model.md`.
+
 ## Objective Interpretation Direction (2026-07-17)
 
 The deterministic objective grammar is frozen at its current scope (existing recognizers to be

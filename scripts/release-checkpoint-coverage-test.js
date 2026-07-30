@@ -49,6 +49,16 @@ for (const declaredWorkGate of [
     `declared-work snapshot releases must include ${declaredWorkGate}`);
 }
 
+for (const mixedFamilyGate of [
+  'mixed-family-work-model-test.js',
+  'declared-work-postgres-test.js',
+  'typed-projection-parity-postgres-test.js',
+  'completion-decision-contract-test.js'
+]) {
+  assert.equal(all.includes(mixedFamilyGate), true,
+    `mixed-family product validation must include ${mixedFamilyGate}`);
+}
+
 for (const materializerGate of [
   'process-materializer-contract-test.js',
   'process-materializer-deployment-test.js',

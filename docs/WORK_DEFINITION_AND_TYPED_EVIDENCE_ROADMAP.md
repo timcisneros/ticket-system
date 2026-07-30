@@ -239,13 +239,72 @@ criterion, Work Primitive, playbook, Target, or registry.
 
 ## Tranche 4 — Mixed-family validation and product decision
 
-### Outcome
+### Capability claim
 
-Validate browser, process, workspace, and justified mixed-operation work against
-the completed projection and completion model.
+The repository demonstrates, through representative product scenarios, that
+workspace, browser, and process work can contribute truthful typed
+declarations, operations, evidence, consequences, and completion decisions
+without flattening their semantics. The resulting evidence is sufficient to
+decide whether a reusable Work Primitive/playbook should become a distinct
+product and persistence contract.
 
-Only after that evidence exists, decide whether reusable Work Primitives or
-playbooks merit a separate product and persistence contract.
+### Mixed-family definitions
+
+The tranche distinguishes single-family runs, multi-family runs, multi-run
+tickets, workflow composition, and evidence aggregation. Projection of several
+typed families is not evidence that one generic executor can lawfully dispatch
+them together.
+
+Current composition is deliberately asymmetric:
+
+- browser runs are exclusive and use only bounded browser operations;
+- non-browser direct runs may use workspace operations and, when separately
+  admitted, `runProcess`;
+- workflows execute their existing bounded workspace/model-control action
+  graph and do not receive process grants;
+- tickets aggregate typed run facts while preserving each run's authority,
+  status, receipt type, evidence type, and artifact origin.
+
+### Scenario result
+
+Workspace direct work, workflow workspace work, process-authorized direct work,
+browser work, historical compatibility, reruns, restart reconstruction, and
+multi-run ticket aggregation remain truthful under the Tranches 1–3 contracts.
+Process exit zero and browser evidence alone remain insufficient for semantic
+completion. Process artifacts remain process artifacts unless a separate
+workspace mutation proves publication.
+
+The existing closed process postconditions are immutable and deterministically
+evaluable, but an ordinary Workflow cannot dispatch `runProcess` and receives no
+process grants. Enabling that composition would require a new authority,
+budgeting, recovery, and product-ordering contract. It is documented as
+unsupported composition rather than being silently generalized in this
+tranche.
+
+No qualifying production defect was found. Tranche 4 adds scenario evidence and
+the product decision only; it changes no runtime or persistence authority.
+
+### Product decision
+
+The accepted decision is Option A: retain Ticket and Workflow as the product
+primitives. Workflow remains the reusable, versioned work definition and each
+Run binds immutable declared-work and completion authority.
+
+Option B—improving Workflow's presentation as a reusable playbook—is the first
+future direction to evaluate if user evidence demonstrates reuse pressure.
+Option C—a distinct reusable Work Primitive/playbook entity—is not validated.
+It would duplicate authority and add lifecycle, migration, API/UI,
+authorization, and compatibility cost without a demonstrated product need.
+
+The complete scenario matrix, candidate composition analysis, A/B/C comparison,
+recommendation, and explicit future decision triggers are recorded in
+[`decision-memo-mixed-family-work-model.md`](decision-memo-mixed-family-work-model.md).
+
+### Scope boundary
+
+No generic operation router, universal operation language, browser predicate,
+new process/workflow composition, reusable Work Primitive entity, playbook
+registry, table, migration, or UI is authorized.
 
 ## Roadmap status
 
@@ -253,5 +312,5 @@ playbooks merit a separate product and persistence contract.
 Tranche 1: COMPLETE
 Tranche 2: COMPLETE
 Tranche 3: COMPLETE
-Tranche 4: NOT STARTED — NEXT
+Tranche 4: COMPLETE
 ```

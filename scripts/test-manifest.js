@@ -159,6 +159,7 @@ const TESTS = Object.freeze([
   { file: "model-contract-violation-recovery-test.js", status: "required" },
   { file: "model-contract-violation-test.js", status: "required" },
   { file: "model-provider-routing-test.js", status: "orphaned", reason: "cutover-orphan" },
+  { file: "mixed-family-work-model-test.js", status: "required" },
   { file: "moving-goalpost-regression-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "mutating-folder-bundle-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "mutating-limit-context-regression-test.js", status: "required" },

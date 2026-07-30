@@ -185,6 +185,13 @@ async function main() {
       assert.equal(browser.run.declaredWorkSnapshot.objective.text, browserObjective);
       assert.deepEqual(browser.run.declaredWorkSnapshot.expectedOutputs, [],
         'browser actions and target configuration are not inferred as outputs');
+      assert.deepEqual(browser.run.processPolicySnapshot.profiles, [],
+        'browser admission never acquires a process profile');
+      assert.equal(browser.run.processRuntimeCapabilitySnapshot, null,
+        'browser admission never acquires process runtime capability authority');
+      assert.equal(browser.run.declaredWorkSnapshot.successCriteria.some(item =>
+        item.kind === 'typed-postcondition'), false,
+      'browser admission invents no typed criterion from its target or future evidence');
 
       const workflowObjective = `Run declared legal intake ${STAMP}`;
       const workflow = await admit({
@@ -203,6 +210,10 @@ async function main() {
       );
       assert(workflow.run.declaredWorkSnapshot.successCriteria.some(item =>
         item.provenance === 'workflow-defined' && item.criterionType === 'fileExists'));
+      assert.equal(workflow.run.processPolicySnapshot.capabilityEnabled, false,
+        'ordinary workflow admission remains separate from process authority');
+      assert.deepEqual(workflow.run.processPolicySnapshot.profiles, [],
+        'ordinary workflow admission receives no process grants');
 
       const processObjective = `Use admitted process authority ${STAMP}`;
       const process = await admit({
@@ -215,6 +226,11 @@ async function main() {
       assert.equal(process.run.declaredWorkSnapshot.objective.text, processObjective);
       assert.deepEqual(process.run.declaredWorkSnapshot.expectedOutputs, [],
         'process profiles are not inferred as expected outputs');
+      assert.equal(process.run.targetRef, null,
+        'process authority does not turn a direct run into a browser or generic target run');
+      assert.equal(process.run.declaredWorkSnapshot.successCriteria.some(item =>
+        item.kind === 'typed-postcondition'), false,
+      'process authority and profiles do not retroactively invent completion criteria');
 
       const directSnapshot = JSON.parse(JSON.stringify(direct.run.declaredWorkSnapshot));
       const workflowSnapshot = JSON.parse(JSON.stringify(workflow.run.declaredWorkSnapshot));
@@ -264,6 +280,123 @@ async function main() {
         'rerun admits a new declaration from then-current ticket authority');
       assert.deepEqual((await store.getRun(direct.run.id)).declaredWorkSnapshot, directSnapshot,
         'rerun does not reinterpret its predecessor');
+
+      // A process-authorized direct ticket can retain distinct workspace and process
+      // facts across separate attempts without a generic router or artifact flattening.
+      const workspaceArtifactPath = `mixed-family-${STAMP}/workspace-result.txt`;
+      await store.recordOperationReceipt({
+        runId: process.run.id,
+        idempotencyKey: `mixed-family-workspace-${STAMP}`,
+        stepId: '1',
+        operation: 'writeFile',
+        outcome: 'succeeded',
+        receipt: {
+          args: { path: workspaceArtifactPath },
+          result: { path: workspaceArtifactPath, status: 'written' },
+          targetId: 'main',
+          targetKind: 'workspace',
+          targetPath: workspaceArtifactPath
+        },
+        eventType: null
+      });
+      const processRerunResponse = await first.request(
+        'POST',
+        `/api/tickets/${process.ticket.id}/rerun`,
+        { cookie, body: {} }
+      );
+      assert.equal(processRerunResponse.statusCode, 200, processRerunResponse.body);
+      const processRerun = await latestRun(store, process.ticket.id);
+      assert.notEqual(processRerun.id, process.run.id,
+        'a separate process-authorized attempt is admitted for the same ticket');
+      assert.deepEqual(
+        (await store.getRun(process.run.id)).declaredWorkSnapshot,
+        process.run.declaredWorkSnapshot,
+        'the predecessor declaration remains unchanged after a mixed-family rerun'
+      );
+      assert.equal(
+        processRerun.declaredWorkSnapshot.contractHash,
+        process.run.declaredWorkSnapshot.contractHash,
+        'unchanged admitted authority reconstructs to the same declaration hash'
+      );
+
+      const mixedProcessIdentity = `process-operation:${'6'.repeat(64)}`;
+      const mixedTerminalHash = '7'.repeat(64);
+      const mixedStdoutHash = '8'.repeat(64);
+      const mixedStderrHash = '9'.repeat(64);
+      await store.recordOperationReceipt({
+        runId: processRerun.id,
+        idempotencyKey: mixedProcessIdentity,
+        stepId: '1',
+        operation: 'runProcess',
+        outcome: 'succeeded',
+        receipt: {
+          version: 1,
+          operationIdentity: mixedProcessIdentity,
+          targetId: 'ticket-system-local',
+          profileId: 'syntax-check',
+          runtimePhase: 'inspection',
+          terminalOutcome: 'completed',
+          terminalResultHash: mixedTerminalHash,
+          stdoutArtifact: {
+            version: 1,
+            id: `mixed-process-stdout-${STAMP}`,
+            path: '/private/process/stdout',
+            stream: 'stdout',
+            byteCount: 11,
+            sha256: mixedStdoutHash
+          },
+          stderrArtifact: {
+            version: 1,
+            id: `mixed-process-stderr-${STAMP}`,
+            path: '/private/process/stderr',
+            stream: 'stderr',
+            byteCount: 0,
+            sha256: mixedStderrHash
+          }
+        },
+        eventType: null
+      });
+      const mixedTicketPage = await first.request(
+        'GET',
+        `/tickets/${process.ticket.id}`,
+        { cookie }
+      );
+      assert.equal(mixedTicketPage.statusCode, 200, mixedTicketPage.body.slice(0, 1000));
+      assert.match(mixedTicketPage.body, new RegExp(`Run #${process.run.id}`),
+        'ticket projection keeps the earlier workspace attempt visible');
+      assert.match(mixedTicketPage.body, new RegExp(`Run #${processRerun.id}`),
+        'ticket projection keeps the later process attempt visible');
+      assert.match(mixedTicketPage.body, new RegExp(workspaceArtifactPath),
+        'ticket projection retains the workspace artifact as a workspace path');
+      assert.match(mixedTicketPage.body, new RegExp(`mixed-process-stdout-${STAMP}`),
+        'ticket projection retains immutable process artifact identity');
+      assert.match(mixedTicketPage.body, /<td>workspace<\/td>/);
+      assert.match(mixedTicketPage.body, /<td>process<\/td>/);
+      assert.doesNotMatch(
+        mixedTicketPage.body,
+        new RegExp(`<code class="owned-path">mixed-process-stdout-${STAMP}</code>`),
+        'process artifacts are never presented as owned workspace paths'
+      );
+      const predecessorOperations = await store.listRunOperations(
+        process.run.id,
+        { limit: 20 }
+      );
+      const successorOperations = await store.listRunOperations(
+        processRerun.id,
+        { limit: 20 }
+      );
+      assert.equal(predecessorOperations.filter(item =>
+        item.operation === 'writeFile').length, 1,
+      'the predecessor retains one run-scoped workspace receipt');
+      assert.equal(successorOperations.filter(item =>
+        item.operation === 'runProcess').length, 1,
+      'the successor retains one run-scoped process receipt');
+      assert.equal(predecessorOperations.some(item =>
+        item.operation === 'runProcess'), false,
+      'the process receipt is not flattened into the predecessor run');
+      assert.equal(successorOperations.some(item =>
+        item.operation === 'writeFile'), false,
+      'the workspace receipt is not flattened into the successor run');
 
       await store.recordOperationReceipt({
         runId: browser.run.id,
@@ -463,6 +596,7 @@ async function main() {
         browser.run,
         workflow.run,
         process.run,
+        processRerun,
         rerun,
         historicalRun
       ];
@@ -502,6 +636,19 @@ async function main() {
         JSON.parse(secondRead.body).declaredCompletionBinding,
         'two runtimes reconstruct the same typed-criterion binding and hash'
       );
+      const [firstMixedRead, secondMixedRead] = await Promise.all([
+        first.request('GET', `/tickets/${process.ticket.id}`, { cookie }),
+        second.request('GET', `/tickets/${process.ticket.id}`, {
+          cookie: secondCookie
+        })
+      ]);
+      for (const response of [firstMixedRead, secondMixedRead]) {
+        assert.equal(response.statusCode, 200, response.body.slice(0, 1000));
+        assert.match(response.body, new RegExp(`Run #${process.run.id}`));
+        assert.match(response.body, new RegExp(`Run #${processRerun.id}`));
+        assert.match(response.body, new RegExp(workspaceArtifactPath));
+        assert.match(response.body, new RegExp(`mixed-process-stdout-${STAMP}`));
+      }
 
       const exposed = JSON.stringify(JSON.parse(secondRead.body).declaredWorkSnapshot);
       for (const forbidden of [

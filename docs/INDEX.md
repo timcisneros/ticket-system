@@ -26,6 +26,9 @@
   work-definition authority.
 - [`decision-memo-work-definition-and-typed-evidence.md`](decision-memo-work-definition-and-typed-evidence.md)
   — rejection of a universal Target framework and the evidence-scoped correction.
+- [`decision-memo-mixed-family-work-model.md`](decision-memo-mixed-family-work-model.md)
+  — representative scenario evidence and the decision to retain Ticket and Workflow as the
+  product primitives.
 - [`PRIMITIVE_GLOSSARY.md`](PRIMITIVE_GLOSSARY.md) — runtime terminology.
 - [`OPERATIONAL_TRANSPARENCY.md`](OPERATIONAL_TRANSPARENCY.md) — read-only operational surfaces.
 - [`OPERATOR_INBOX.md`](OPERATOR_INBOX.md) and [`BROWSER_ENVIRONMENT.md`](BROWSER_ENVIRONMENT.md) —
