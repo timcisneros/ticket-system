@@ -95,6 +95,11 @@ assert.notEqual(
   -1,
   'CI must install the PostgreSQL 17 client matching its PostgreSQL 17 service'
 );
+assert.match(
+  ciWorkflow.slice(0, postgresClientInstallIndex),
+  /https:\/\/apt\.postgresql\.org\/pub\/repos\/apt/,
+  'CI must configure the official PostgreSQL package source before installing client 17'
+);
 assert.equal(
   postgresClientInstallIndex < checkpointIndex,
   true,
