@@ -49,7 +49,7 @@ jobs:
             "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" \
             "CARGO_NET_OFFLINE=$CARGO_NET_OFFLINE" \
             "TEST_DATABASE_URL=$TEST_DATABASE_URL" \
-            pnpm run checkpoint:release
+            node scripts/release-checkpoint.js
         env:
           CARGO_NET_OFFLINE: "true"
           TEST_DATABASE_URL: postgresql://ticket_system:ticket_system@127.0.0.1:5432/ticket_system_test

@@ -85,7 +85,7 @@ const ciWorkflow = fs.readFileSync(
   path.join(ROOT, '.github', 'workflows', 'ci.yml'),
   'utf8'
 );
-const checkpointCommand = 'pnpm run checkpoint:release';
+const checkpointCommand = 'node scripts/release-checkpoint.js';
 const checkpointIndex = ciWorkflow.indexOf(checkpointCommand);
 assert.notEqual(checkpointIndex, -1, 'CI must run the release checkpoint');
 const checkpointStepStart = ciWorkflow.lastIndexOf('      - name:', checkpointIndex);
@@ -101,7 +101,7 @@ assert.match(
 );
 assert.match(
   checkpointStep,
-  /sudo env[\s\S]*pnpm run checkpoint:release/,
+  /sudo env[\s\S]*node scripts\/release-checkpoint\.js/,
   'CI must run the complete release checkpoint with the host authority required by native UID/GID fixtures'
 );
 assert.match(
