@@ -184,6 +184,16 @@ async function main() {
       groupIds: [],
       changedBy: 'allocation-plan-v2-test'
     })).agent;
+    const peerAgent = (await store.createConfiguredAgent({
+      value: {
+        name: `Allocation Plan V2 Peer ${STAMP}`,
+        provider: 'ollama',
+        model: 'allocation-plan-v2-test',
+        apiKey: ''
+      },
+      groupIds: [],
+      changedBy: 'allocation-plan-v2-test'
+    })).agent;
 
     const v1Ticket = await store.createTicket({
       status: 'open',
@@ -244,6 +254,11 @@ async function main() {
       type: 'fileExists',
       path: 'alpha/result.txt'
     });
+    const peerItemCriterion = typedCriterion({
+      id: 'allocated-beta-result',
+      type: 'fileExists',
+      path: 'beta/result.txt'
+    });
     const v2 = await store.createAllocationPlan({
       plan: {
         version: 2,
@@ -277,6 +292,27 @@ async function main() {
             itemCriterion
           ],
           evidenceRequirements: [evidenceFor(itemCriterion)]
+        }, {
+          assignedAgentId: peerAgent.id,
+          ownedOutputPaths: ['beta'],
+          objective: {
+            text: `Produce the Beta structured output ${STAMP}.`,
+            provenance: 'validated-model-contract'
+          },
+          expectedOutputs: [{
+            kind: 'workflow-artifact',
+            declaration: 'beta/result.txt',
+            provenance: 'workflow-defined'
+          }],
+          successCriteria: [
+            {
+              kind: 'text',
+              declaration: 'The allocated result must be ready for review.',
+              provenance: 'ticket-authored'
+            },
+            peerItemCriterion
+          ],
+          evidenceRequirements: [evidenceFor(peerItemCriterion)]
         }]
       }
     });
@@ -295,7 +331,7 @@ async function main() {
     assert.equal(rawV2.planHash, v2.planHash);
     assert.equal(Object.prototype.hasOwnProperty.call(rawV2.items[0], 'status'), false,
       'item status must not be embedded in hashed item authority');
-    assert.equal(rawV2.itemStatuses[0].status, 'pending');
+    assert.deepEqual(rawV2.itemStatuses.map(item => item.status), ['pending', 'pending']);
 
     const peer = new PostgresRuntimeStore({ connectionString: databaseUrl, schema });
     try {
@@ -311,29 +347,48 @@ async function main() {
       await peer.close();
     }
 
-    const update = await store.updateAllocationItemStatus({
-      planId: v2.id,
-      allocationItemId: v2.items[0].allocationItemId,
-      status: 'completed'
+    const immutableItemsBefore = v2.items.map(item => {
+      const { status: itemStatus, createdAt: itemCreatedAt, ...authority } = item;
+      void itemStatus;
+      void itemCreatedAt;
+      return authority;
     });
-    assert.equal(update.item.status, 'completed');
-    assert.equal(update.plan.status, 'completed');
-    assert.equal(update.plan.planHash, v2.planHash,
+    const statusUpdates = await Promise.all(v2.items.map(item =>
+      store.updateAllocationItemStatus({
+        planId: v2.id,
+        allocationItemId: item.allocationItemId,
+        status: 'completed'
+      })));
+    assert(statusUpdates.every(result => result.item.status === 'completed'));
+    const updatedPlan = await store.getAllocationPlan(v2.id);
+    assert.equal(updatedPlan.status, 'completed');
+    assert.equal(updatedPlan.planHash, v2.planHash,
       'mutable execution status must not alter plan authority');
-    assert.equal(update.plan.revision, v2.revision + 1);
+    assert.equal(updatedPlan.revision, v2.revision + 2,
+      'concurrent item status updates serialize and preserve every revision');
+    assert.deepEqual(updatedPlan.items.map(item => item.status), ['completed', 'completed']);
+    assert.deepEqual(updatedPlan.items.map(item => {
+      const { status: itemStatus, createdAt: itemCreatedAt, ...authority } = item;
+      void itemStatus;
+      void itemCreatedAt;
+      return authority;
+    }), immutableItemsBefore,
+    'updating one item status cannot rewrite either item authority');
     const rawUpdatedV2 = (await store.pool.query(
       `SELECT body FROM ${store.table('allocation_plans')} WHERE id = $1`,
       [v2.id]
     )).rows[0].body;
     assert.equal(rawUpdatedV2.planHash, v2.planHash);
-    assert.equal(rawUpdatedV2.itemStatuses[0].status, 'completed');
-    assert.equal(Object.prototype.hasOwnProperty.call(rawUpdatedV2.items[0], 'status'), false);
+    assert.deepEqual(rawUpdatedV2.itemStatuses.map(item => item.status),
+      ['completed', 'completed']);
+    assert(rawUpdatedV2.items.every(item =>
+      !Object.prototype.hasOwnProperty.call(item, 'status')));
 
     const restartStore = new PostgresRuntimeStore({ connectionString: databaseUrl, schema });
     try {
       assert.deepEqual(await restartStore.migrate(), []);
       assert.deepEqual(await restartStore.getAllocationPlan(v1.id), v1);
-      assert.deepEqual(await restartStore.getAllocationPlan(v2.id), update.plan,
+      assert.deepEqual(await restartStore.getAllocationPlan(v2.id), updatedPlan,
         'restart reconstruction preserves exact v1 and v2 meanings');
     } finally {
       await restartStore.close();
@@ -491,6 +546,67 @@ async function main() {
     } finally {
       try { fs.unlinkSync(cookieFile); } catch (_) {}
     }
+
+    const historicalDraft = {
+      ticketId: v1Ticket.id,
+      ticketOpenedAt: '2026-07-01T00:00:00.000Z',
+      mode: 'owned_paths',
+      status: 'pending',
+      items: [{
+        assignedAgentId: agent.id,
+        allocationSubtask: 'Version discriminator fixture.',
+        ownedOutputPaths: ['historical/']
+      }]
+    };
+    await assert.rejects(
+      store.createAllocationPlan({
+        plan: { ...historicalDraft, version: 1 }
+      }),
+      /Unsupported allocation plan version: 1/,
+      'present non-v2 versions must not enter historical creation'
+    );
+
+    const malformedVersionPlan = await store.createAllocationPlan({
+      plan: historicalDraft
+    });
+    await store.pool.query(
+      `UPDATE ${store.table('allocation_plans')}
+       SET body = jsonb_set(body, '{version}', to_jsonb($2::int)),
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [malformedVersionPlan.id, 1]
+    );
+    await assert.rejects(
+      store.getAllocationPlan(malformedVersionPlan.id),
+      /Unsupported allocation plan version: 1/,
+      'a present malformed version must not reconstruct as historical v1'
+    );
+
+    const partiallyVersionedPlan = await store.createAllocationPlan({
+      plan: {
+        ...historicalDraft,
+        items: [{
+          ...historicalDraft.items[0],
+          assignedAgentId: peerAgent.id,
+          ownedOutputPaths: ['partial/']
+        }]
+      }
+    });
+    await store.pool.query(
+      `UPDATE ${store.table('allocation_plans')}
+       SET body = jsonb_set(body, '{version}', to_jsonb($2::int)),
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [partiallyVersionedPlan.id, 2]
+    );
+    await assert.rejects(
+      store.getAllocationPlan(partiallyVersionedPlan.id),
+      error => error.code === 'ALLOCATION_PLAN_V2_INVALID' &&
+        /(unknown field|missing field)/.test(error.message),
+      'a partial v2 body must fail closed rather than fall back to v1'
+    );
   });
 
   console.log('PASS: Allocation Plan v1/v2 PostgreSQL persistence, restart, API, page, and CLI projections are deterministic');

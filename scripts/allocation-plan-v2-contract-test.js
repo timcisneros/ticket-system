@@ -9,7 +9,9 @@ const {
   createAllocationPlanV2StorageBody,
   materializeAllocationPlanV2Draft,
   normalizeAllocationPlanV2,
+  normalizeOwnedOutputPath,
   normalizeStoredAllocationPlanV2,
+  pathIsInsideOwnedOutputPaths,
   serializeAllocationPlanV2StorageBody
 } = require('../runtime/allocation-plan-contract');
 const {
@@ -17,6 +19,12 @@ const {
   hashCanonical,
   normalizeDeclaredWorkSnapshot
 } = require('../runtime/declared-work-contract');
+const {
+  isPathInsideOwnedOutputPaths,
+  normalizeWorkspaceOwnershipPath,
+  normalizeWorkspaceRelativePath,
+  workspaceOwnershipPathsOverlap
+} = require('../runtime/authority-paths');
 
 function typedCriterion(postcondition, provenance = 'workflow-defined') {
   const declaration = canonicalJson(postcondition);
@@ -172,6 +180,48 @@ assert.equal(minimal.items[0].objective.text, 'Produce the Alpha result file.');
 assert.deepEqual(minimal.items[0].evidenceRequirements, [],
   'an explicit empty evidence array remains canonical when no typed criterion requires evidence');
 assert.match(minimal.planHash, /^[0-9a-f]{64}$/);
+
+for (const [input, canonical] of [
+  ['alpha', 'alpha/'],
+  [' alpha/ ', 'alpha/'],
+  ['./alpha', 'alpha/'],
+  ['alpha//nested/..', 'alpha/']
+]) {
+  assert.equal(normalizeWorkspaceOwnershipPath(input), canonical);
+  if (!input.includes('..')) assert.equal(normalizeOwnedOutputPath(input), canonical);
+}
+assert.equal(normalizeWorkspaceOwnershipPath('/alpha'), 'alpha/',
+  'historical v1 strips a leading slash before persisting ownership');
+assert.equal(normalizeWorkspaceOwnershipPath('alpha\\nested'), 'alpha/nested/',
+  'historical v1 canonicalizes backslashes');
+assert.equal(normalizeWorkspaceRelativePath('alpha/../beta'), 'beta',
+  'the live provider permits internal normalization that remains inside its root');
+assert.equal(normalizeWorkspaceRelativePath('.hidden', { allowHidden: true }), '.hidden',
+  'historical v1 existence admission deliberately permits hidden ownership');
+assert.throws(() => normalizeOwnedOutputPath('/alpha'), /workspace-relative/);
+assert.throws(() => normalizeOwnedOutputPath('alpha\\nested'), /POSIX/);
+assert.throws(() => normalizeOwnedOutputPath('alpha/../beta'), /escape/);
+assert.throws(() => normalizeOwnedOutputPath('.hidden'), /hidden/);
+assert.throws(
+  () => normalizeWorkspaceRelativePath('/alpha'),
+  error => error.code === 'WORKSPACE_ABSOLUTE_PATH'
+);
+assert.throws(
+  () => normalizeWorkspaceRelativePath('../alpha'),
+  error => error.code === 'WORKSPACE_PATH_TRAVERSAL'
+);
+assert.throws(
+  () => normalizeWorkspaceRelativePath('.hidden'),
+  error => error.code === 'WORKSPACE_HIDDEN_PATH'
+);
+assert.equal(workspaceOwnershipPathsOverlap('alpha', 'alpha/nested'), true);
+assert.equal(workspaceOwnershipPathsOverlap('alpha', 'alphabet'), false);
+assert.equal(pathIsInsideOwnedOutputPaths('alpha/result.txt', ['alpha/']), true);
+assert.equal(
+  pathIsInsideOwnedOutputPaths('alpha/result.txt', ['alpha/']),
+  isPathInsideOwnedOutputPaths('alpha/result.txt', ['alpha/']),
+  'v2 output containment and live mutation containment share one predicate'
+);
 
 const full = buildAllocationPlanV2(planInput({
   sharedConstraints: [
@@ -342,6 +392,172 @@ expectInvalid(source => {
   source.items[0].evidenceRequirements = [evidenceFor(fileContains)];
 }, /adds authority absent/, 'ALLOCATION_PLAN_V2_AUTHORITY_EXPANSION');
 expectInvalid(source => {
+  source.items[0].expectedOutputs = [{
+    kind: 'text',
+    declaration: 'A new output family.',
+    provenance: 'workflow-defined'
+  }];
+}, /adds authority absent/, 'ALLOCATION_PLAN_V2_AUTHORITY_EXPANSION');
+expectInvalid(source => {
+  source.items = [typedItem()];
+  source.items[0].evidenceRequirements = [];
+}, /typed criterion without its declared evidence requirement/,
+'DECLARED_WORK_EVIDENCE_MISMATCH');
+expectInvalid(source => {
+  source.items[0].evidenceRequirements = [{
+    kind: 'postcondition-evidence',
+    criterionHash: 'a'.repeat(64),
+    evidenceType: 'deterministic-postcondition-result',
+    provenance: 'workflow-defined'
+  }];
+}, /evidence requirement without its typed criterion/,
+'DECLARED_WORK_EVIDENCE_MISMATCH');
+
+const workflowCriterion = typedCriterion({
+  id: 'mixed-workflow-result',
+  type: 'fileExists',
+  path: 'alpha/workflow.txt'
+}, 'workflow-defined');
+const validatedCriterion = typedCriterion({
+  id: 'mixed-validated-result',
+  type: 'fileExists',
+  path: 'alpha/validated.txt'
+}, 'validated-model-contract');
+const mixedParentWithoutHash = {
+  version: 1,
+  objective: {
+    text: 'Produce allocated results from mixed parent declarations.',
+    provenance: 'ticket-authored'
+  },
+  expectedOutputs: canonicalSort([
+    {
+      kind: 'workflow-artifact',
+      declaration: 'alpha/workflow.txt',
+      provenance: 'workflow-defined'
+    },
+    {
+      kind: 'workflow-artifact',
+      declaration: 'alpha/validated.txt',
+      provenance: 'validated-model-contract'
+    }
+  ]),
+  successCriteria: canonicalSort([workflowCriterion, validatedCriterion]),
+  evidenceRequirements: canonicalSort([
+    evidenceFor(workflowCriterion),
+    evidenceFor(validatedCriterion)
+  ])
+};
+const mixedParent = normalizeDeclaredWorkSnapshot({
+  ...mixedParentWithoutHash,
+  contractHash: hashCanonical(mixedParentWithoutHash)
+});
+const narrowedCriterion = typedCriterion({
+  id: 'mixed-narrowed-result',
+  type: 'fileExists',
+  path: 'alpha/narrowed.txt'
+}, 'deterministic-objective-contract');
+const mixedPlanInput = planInput({
+  parentDeclaredWorkSnapshot: mixedParent,
+  items: [{
+    ...textItem(),
+    expectedOutputs: [{
+      kind: 'workflow-artifact',
+      declaration: 'alpha/narrowed.txt',
+      provenance: 'deterministic-objective-contract'
+    }],
+    successCriteria: [narrowedCriterion],
+    evidenceRequirements: [evidenceFor(narrowedCriterion)]
+  }]
+});
+assert.equal(buildAllocationPlanV2(mixedPlanInput).items[0].expectedOutputs[0].provenance,
+  'deterministic-objective-contract',
+  'multiple parent declarations of one family admit a weaker source without ambiguity');
+const strongerMixedItem = clone(mixedPlanInput);
+strongerMixedItem.items[0].expectedOutputs[0].provenance = 'ticket-authored';
+assert.throws(
+  () => buildAllocationPlanV2(strongerMixedItem),
+  error => error.code === 'ALLOCATION_PLAN_V2_AUTHORITY_EXPANSION'
+);
+const strongerMixedCriterion = clone(mixedPlanInput);
+strongerMixedCriterion.items[0].successCriteria[0].provenance = 'ticket-authored';
+strongerMixedCriterion.items[0].evidenceRequirements[0].provenance = 'ticket-authored';
+assert.throws(
+  () => buildAllocationPlanV2(strongerMixedCriterion),
+  error => error.code === 'ALLOCATION_PLAN_V2_AUTHORITY_EXPANSION'
+);
+
+const parentWithoutEvidenceFields = {
+  ...mixedParentWithoutHash,
+  evidenceRequirements: []
+};
+const parentWithoutEvidence = normalizeDeclaredWorkSnapshot({
+  ...parentWithoutEvidenceFields,
+  contractHash: hashCanonical(parentWithoutEvidenceFields)
+});
+const evidenceExpansionCriterion = typedCriterion({
+  id: 'evidence-expansion-result',
+  type: 'fileExists',
+  path: 'alpha/evidence.txt'
+});
+assert.throws(
+  () => buildAllocationPlanV2(planInput({
+    parentDeclaredWorkSnapshot: parentWithoutEvidence,
+    items: [{
+      ...textItem(),
+      expectedOutputs: [{
+        kind: 'workflow-artifact',
+        declaration: 'alpha/evidence.txt',
+        provenance: 'workflow-defined'
+      }],
+      successCriteria: [evidenceExpansionCriterion],
+      evidenceRequirements: [evidenceFor(evidenceExpansionCriterion)]
+    }]
+  })),
+  error => error.code === 'ALLOCATION_PLAN_V2_AUTHORITY_EXPANSION' &&
+    /evidenceRequirements/.test(error.message)
+);
+
+const weakParentWithoutHash = {
+  version: 1,
+  objective: { text: 'Produce a validated result.', provenance: 'validated-model-contract' },
+  expectedOutputs: [{
+    kind: 'workflow-artifact',
+    declaration: 'alpha/result.txt',
+    provenance: 'validated-model-contract'
+  }],
+  successCriteria: [{
+    kind: 'text',
+    declaration: 'The result is reviewable.',
+    provenance: 'validated-model-contract'
+  }],
+  evidenceRequirements: []
+};
+const weakParent = normalizeDeclaredWorkSnapshot({
+  ...weakParentWithoutHash,
+  contractHash: hashCanonical(weakParentWithoutHash)
+});
+const weakPlan = planInput({
+  parentDeclaredWorkSnapshot: weakParent,
+  sharedConstraints: [{
+    kind: 'text',
+    declaration: 'Coordinate only within admitted authority.',
+    provenance: 'validated-model-contract'
+  }],
+  items: [{
+    ...textItem(),
+    objective: { text: 'Produce the validated result.', provenance: 'validated-model-contract' },
+    expectedOutputs: weakParent.expectedOutputs,
+    successCriteria: weakParent.successCriteria
+  }]
+});
+assert.equal(buildAllocationPlanV2(weakPlan).sharedConstraints.length, 1);
+const strongerConstraint = clone(weakPlan);
+strongerConstraint.sharedConstraints[0].provenance = 'workflow-defined';
+assert.throws(
+  () => buildAllocationPlanV2(strongerConstraint),
+  error => error.code === 'ALLOCATION_PLAN_V2_AUTHORITY_EXPANSION'
+);
+expectInvalid(source => {
   source.sharedConstraints = [{
     kind: 'text',
     declaration: 'Use the browser.',
@@ -418,6 +634,33 @@ const materialized = materializeAllocationPlanV2Draft(draft, {
 assert.equal(materialized.id, 99);
 assert.equal(materialized.items[0].allocationItemId, 501);
 
+const unorderedDraft = {
+  ...draft,
+  items: [
+    (() => {
+      const item = textItem({
+        allocationItemId: 12,
+        assignedAgentId: 102,
+        ownedOutputPaths: ['beta'],
+        outputPath: 'beta/result.txt'
+      });
+      delete item.allocationItemId;
+      return item;
+    })(),
+    draft.items[0]
+  ]
+};
+const orderedDraft = {
+  ...unorderedDraft,
+  items: [...unorderedDraft.items].reverse()
+};
+const draftIdentities = { id: 100, allocationItemIds: [601, 602] };
+assert.deepEqual(
+  materializeAllocationPlanV2Draft(unorderedDraft, draftIdentities),
+  materializeAllocationPlanV2Draft(orderedDraft, draftIdentities),
+  'identity assignment follows canonical agent ordering, not caller array order'
+);
+
 const historicalV1 = {
   id: 3,
   ticketId: 41,
@@ -460,6 +703,10 @@ for (const forbidden of [
 }
 assert.equal(contractSource.includes('.localeCompare('), false,
   'allocation plan ordering must not depend on locale');
+assert.equal(contractSource.includes('readProtectedWorkspacePaths'), false,
+  'mutable protected-path configuration must not enter plan authority');
+assert.equal(contractSource.includes('SENSITIVE_APPLICATION_PATHS'), false,
+  'execution-only sensitive path policy must not enter plan authority');
 for (const forbiddenPath of [
   'runtime/delegation-contract.js',
   'runtime/work-primitive.js',

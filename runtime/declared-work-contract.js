@@ -155,6 +155,27 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
+function declaredWorkEvidenceIdentity(value) {
+  return `${value.provenance}:${value.criterionHash}`;
+}
+
+function assertEvidenceConsistency(criteria, evidenceRequirements, {
+  code,
+  typedCriterionMessage,
+  unmatchedEvidenceMessage
+}) {
+  const evidence = new Map(evidenceRequirements.map(requirement => [
+    declaredWorkEvidenceIdentity(requirement),
+    requirement
+  ]));
+  for (const criterion of criteria) {
+    const identity = declaredWorkEvidenceIdentity(criterion);
+    if (!evidence.has(identity)) fail(typedCriterionMessage(criterion), code);
+    evidence.delete(identity);
+  }
+  if (evidence.size > 0) fail(unmatchedEvidenceMessage, code);
+}
+
 function normalizeObjective(value) {
   exactFields(value, OBJECTIVE_FIELDS, 'declaredWorkSnapshot.objective');
   return {
@@ -506,27 +527,17 @@ function assertDeclaredWorkCompletionAuthorityBinding({
     }
   }
 
-  const requiredEvidence = new Map();
-  for (const requirement of snapshot.evidenceRequirements) {
-    const identity = `${requirement.provenance}:${requirement.criterionHash}`;
-    requiredEvidence.set(identity, requirement);
-  }
-  for (const criterion of declared.values()) {
-    const evidenceIdentity = `${criterion.provenance}:${criterion.criterionHash}`;
-    if (!requiredEvidence.has(evidenceIdentity)) {
-      fail(
+  assertEvidenceConsistency(
+    [...declared.values()],
+    snapshot.evidenceRequirements,
+    {
+      code: 'DECLARED_COMPLETION_AUTHORITY_MISMATCH',
+      typedCriterionMessage: criterion =>
         `Declared typed criterion ${criterion.identity} has no matching evidence requirement`,
-        'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
-      );
+      unmatchedEvidenceMessage:
+        'Declared work contains evidence requirements without matching typed criteria'
     }
-    requiredEvidence.delete(evidenceIdentity);
-  }
-  if (requiredEvidence.size > 0) {
-    fail(
-      'Declared work contains evidence requirements without matching typed criteria',
-      'DECLARED_COMPLETION_AUTHORITY_MISMATCH'
-    );
-  }
+  );
 
   const criteria = [...declared.values()]
     .sort((left, right) => compareCanonicalText(left.identity, right.identity))
@@ -688,6 +699,22 @@ function buildDeclaredWorkSnapshotFromFields({
   }, { build: true });
 }
 
+function assertDeclaredWorkEvidenceConsistency(value) {
+  const snapshot = normalizeDeclaredWorkSnapshot(value);
+  assertEvidenceConsistency(
+    snapshot.successCriteria.filter(item => item.kind === 'typed-postcondition'),
+    snapshot.evidenceRequirements,
+    {
+      code: 'DECLARED_WORK_EVIDENCE_MISMATCH',
+      typedCriterionMessage: () =>
+        'Declared work has a typed criterion without its declared evidence requirement',
+      unmatchedEvidenceMessage:
+        'Declared work has an evidence requirement without its typed criterion'
+    }
+  );
+  return snapshot;
+}
+
 function projectDeclaredWorkForRun(run) {
   if (!run || !Object.prototype.hasOwnProperty.call(run, 'declaredWorkSnapshot') ||
       run.declaredWorkSnapshot === null || run.declaredWorkSnapshot === undefined) {
@@ -726,10 +753,12 @@ module.exports = {
   DECLARED_WORK_VERSION,
   DeclaredWorkContractError,
   assertDeclaredWorkCompletionAuthorityBinding,
+  assertDeclaredWorkEvidenceConsistency,
   buildDeclaredWorkSnapshot,
   buildDeclaredWorkSnapshotFromFields,
   canonicalJson,
   compareCanonicalText,
+  deepFreeze,
   hashCanonical,
   normalizeDeclaredWorkSnapshot,
   projectDeclaredWorkForModel,

@@ -15,6 +15,16 @@ worker prompts, route models, schedule runs, charge budgets, evaluate completion
 workspace/browser/process authority. Roadmap and later decision boundaries:
 `STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`.
 
+The merge-readiness audit consolidated lexical workspace path normalization,
+owned-path containment, and sibling overlap in `runtime/authority-paths.js`.
+Historical v1 keeps its permissive path spelling and hidden-directory admission;
+v2 keeps stricter canonical admission, with every difference recorded and
+tested. Protected/sensitive paths remain execution policy rather than plan
+authority. Declared-work normalization, evidence identity/consistency, hashing,
+ordering, and deep freezing remain canonical declared-work responsibilities.
+Only an absent plan version selects historical v1; malformed or partial versioned
+documents fail closed.
+
 ## Mixed-Family Work Model (2026-07-29)
 
 Keep Ticket and Workflow as the product primitives. Workspace, browser, and process remain

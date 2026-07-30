@@ -1,14 +1,21 @@
 'use strict';
 
-const path = require('path');
 const {
   DECLARED_WORK_PROVENANCE,
   DECLARED_WORK_SOURCE_PRECEDENCE,
+  assertDeclaredWorkEvidenceConsistency,
   buildDeclaredWorkSnapshotFromFields,
   compareCanonicalText,
+  deepFreeze,
   hashCanonical,
   normalizeDeclaredWorkSnapshot
 } = require('./declared-work-contract');
+const {
+  isPathInsideOwnedOutputPaths,
+  normalizeWorkspaceOwnershipPath,
+  normalizeWorkspaceRelativePath,
+  workspaceOwnershipPathsOverlap
+} = require('./authority-paths');
 
 const ALLOCATION_PLAN_VERSION = 2;
 const ALLOCATION_PLAN_MODES = Object.freeze(['owned_paths']);
@@ -130,75 +137,58 @@ function status(value, allowed, label) {
   return value;
 }
 
-function deepFreeze(value) {
-  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
-  Object.freeze(value);
-  Object.values(value).forEach(deepFreeze);
-  return value;
+function normalizePlanRelativePath(value, label, ownership) {
+  if (typeof value !== 'string') fail(`${label} must be a string`);
+  const raw = value.trim();
+  if (!raw) fail(`${label} must not be empty`);
+  if (raw.includes('\0')) fail(`${label} must not contain NUL`);
+  if (raw.includes('\\')) fail(`${label} must use POSIX separators`);
+  const rawSegments = raw.split('/').filter(Boolean);
+  if (rawSegments.some(segment => segment === '..')) {
+    fail(`${label} must not escape the workspace`);
+  }
+  let normalized;
+  try {
+    normalized = normalizeWorkspaceRelativePath(raw);
+  } catch (error) {
+    if (error.code === 'WORKSPACE_ABSOLUTE_PATH') {
+      fail(`${label} must be workspace-relative`);
+    }
+    if (error.code === 'WORKSPACE_PATH_TRAVERSAL') {
+      fail(`${label} must not escape the workspace`);
+    }
+    if (error.code === 'WORKSPACE_HIDDEN_PATH') {
+      fail(`${label} must not contain hidden or system path segments`);
+    }
+    throw error;
+  }
+  if (!normalized) {
+    fail(`${label} must identify a workspace child path`);
+  }
+  return ownership ? normalizeWorkspaceOwnershipPath(normalized) : normalized;
 }
 
 function normalizeOwnedOutputPath(value, label = 'ownedOutputPath') {
-  if (typeof value !== 'string') fail(`${label} must be a string`);
-  const raw = value.trim();
-  if (!raw) fail(`${label} must not be empty`);
-  if (raw.includes('\0')) fail(`${label} must not contain NUL`);
-  if (raw.includes('\\')) fail(`${label} must use POSIX separators`);
-  if (path.posix.isAbsolute(raw) || raw.startsWith('/')) {
-    fail(`${label} must be workspace-relative`);
-  }
-  const rawSegments = raw.split('/').filter(Boolean);
-  if (rawSegments.some(segment => segment === '..')) {
-    fail(`${label} must not escape the workspace`);
-  }
-  const normalized = path.posix.normalize(raw);
-  const segments = normalized.split('/').filter(Boolean);
-  if (!normalized || normalized === '.' || normalized === '..' ||
-      normalized.startsWith('../') || segments.some(segment => segment === '..')) {
-    fail(`${label} must identify a workspace child path`);
-  }
-  if (segments.some(segment => segment.startsWith('.'))) {
-    fail(`${label} must not contain hidden or system path segments`);
-  }
-  return normalized.endsWith('/') ? normalized : `${normalized}/`;
+  return normalizePlanRelativePath(value, label, true);
 }
 
 function normalizeExpectedOutputPath(value, label) {
-  if (typeof value !== 'string') fail(`${label} must be a string`);
-  const raw = value.trim();
-  if (!raw) fail(`${label} must not be empty`);
-  if (raw.includes('\0')) fail(`${label} must not contain NUL`);
-  if (raw.includes('\\')) fail(`${label} must use POSIX separators`);
-  if (path.posix.isAbsolute(raw) || raw.startsWith('/')) {
-    fail(`${label} must be workspace-relative`);
-  }
-  const rawSegments = raw.split('/').filter(Boolean);
-  if (rawSegments.some(segment => segment === '..')) {
-    fail(`${label} must not escape the workspace`);
-  }
-  const normalized = path.posix.normalize(raw);
-  const segments = normalized.split('/').filter(Boolean);
-  if (!normalized || normalized === '.' || normalized === '..' ||
-      normalized.startsWith('../') || segments.some(segment => segment === '..')) {
-    fail(`${label} must identify a workspace child path`);
-  }
-  if (segments.some(segment => segment.startsWith('.'))) {
-    fail(`${label} must not contain hidden or system path segments`);
-  }
-  return normalized;
+  return normalizePlanRelativePath(value, label, false);
 }
 
 function pathIsInsideOwnedOutputPaths(value, ownedOutputPaths) {
-  return ownedOutputPaths.some(ownedPath =>
-    value === ownedPath.slice(0, -1) || value.startsWith(ownedPath));
+  return isPathInsideOwnedOutputPaths(value, ownedOutputPaths);
 }
 
 function normalizeDeclaredWorkFields(value) {
-  const snapshot = buildDeclaredWorkSnapshotFromFields({
-    objective: value.objective,
-    expectedOutputs: value.expectedOutputs,
-    successCriteria: value.successCriteria,
-    evidenceRequirements: value.evidenceRequirements
-  });
+  const snapshot = assertDeclaredWorkEvidenceConsistency(
+    buildDeclaredWorkSnapshotFromFields({
+      objective: value.objective,
+      expectedOutputs: value.expectedOutputs,
+      successCriteria: value.successCriteria,
+      evidenceRequirements: value.evidenceRequirements
+    })
+  );
   return {
     objective: snapshot.objective,
     expectedOutputs: snapshot.expectedOutputs,
@@ -240,6 +230,9 @@ function provenanceRank(value) {
   return rank;
 }
 
+// This extracts only closed, runtime-provable vocabulary families and source
+// precedence. It deliberately makes no claim that one natural-language
+// declaration is a semantic subset of another.
 function strongestRank(items) {
   return Math.min(...items.map(item => provenanceRank(item.provenance)));
 }
@@ -308,29 +301,6 @@ function assertItemCapabilitiesWithinParent(item, capabilities, label) {
       capabilities.evidenceKinds.get(identity),
       `${label}.evidenceRequirements capability ${identity}`
     );
-  }
-}
-
-function assertItemEvidenceConsistency(item, label) {
-  const typedCriteria = new Map(item.successCriteria
-    .filter(criterion => criterion.kind === 'typed-postcondition')
-    .map(criterion => [
-      `${criterion.provenance}:${criterion.criterionHash}`,
-      criterion
-    ]));
-  const evidence = new Map(item.evidenceRequirements.map(requirement => [
-    `${requirement.provenance}:${requirement.criterionHash}`,
-    requirement
-  ]));
-  for (const identity of typedCriteria.keys()) {
-    if (!evidence.has(identity)) {
-      fail(`${label} has a typed criterion without its declared evidence requirement`);
-    }
-  }
-  for (const identity of evidence.keys()) {
-    if (!typedCriteria.has(identity)) {
-      fail(`${label} has an evidence requirement without its typed criterion`);
-    }
   }
 }
 
@@ -412,7 +382,6 @@ function normalizeItem(source, index, parentDeclaredWorkSnapshot, capabilities, 
     evidenceRequirements: declared.evidenceRequirements
   };
   assertItemCapabilitiesWithinParent(item, capabilities, label);
-  assertItemEvidenceConsistency(item, label);
   return item;
 }
 
@@ -427,9 +396,7 @@ function assertNoSiblingOwnedPathOverlap(items) {
       const left = owners[leftIndex];
       const right = owners[rightIndex];
       if (left.allocationItemId === right.allocationItemId) continue;
-      if (left.ownedPath === right.ownedPath ||
-          left.ownedPath.startsWith(right.ownedPath) ||
-          right.ownedPath.startsWith(left.ownedPath)) {
+      if (workspaceOwnershipPathsOverlap(left.ownedPath, right.ownedPath)) {
         fail(
           `Sibling owned output paths overlap: ${left.ownedPath} and ${right.ownedPath}`,
           'ALLOCATION_PLAN_V2_OWNERSHIP_OVERLAP'
@@ -462,6 +429,8 @@ function normalizePlanCore(source, draft = false) {
       ...parentDeclaredWorkSnapshot.evidenceRequirements
     ];
     const strongestParentRank = strongestRank(parentRanks);
+    // Shared constraints are closed text declarations, so this check can limit
+    // source strength but cannot grant any capability or operation family.
     for (const [index, constraint] of sharedConstraints.entries()) {
       if (provenanceRank(constraint.provenance) < strongestParentRank) {
         fail(

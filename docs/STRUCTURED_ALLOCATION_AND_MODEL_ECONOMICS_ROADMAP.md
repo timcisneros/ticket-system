@@ -43,6 +43,31 @@ This tranche adds no planner call, worker prompt change, v2 dispatch, scheduling
 change, routing change, budget action, completion change, or execution grant.
 The live allocation creator remains v1.
 
+### Merge-readiness authority audit
+
+Dependency-neutral lexical normalization, owned-path containment, and sibling
+overlap now live in `runtime/authority-paths.js`. Historical v1 allocation,
+runtime mutation checks, the workspace provider, and v2 validation consume
+those shared rules.
+
+Historical v1 spelling remains deliberately unchanged: it canonicalizes leading
+slashes, backslashes, dot segments, and trailing slashes, and its directory
+existence check permits hidden paths. The workspace provider still rejects
+absolute paths, escaping traversal, and hidden execution paths by default. V2
+is stricter at new-authority admission: it rejects leading slashes,
+backslashes, any raw parent traversal, hidden/system segments, NUL, and the
+workspace root, while canonicalizing safe dot/duplicate-slash spelling. Both
+versions use the same trailing-slash ownership form, containment predicate, and
+sibling-overlap predicate for canonical paths. These differences are explicit
+and regression-tested so historical v1 meaning does not change.
+
+Protected and sensitive path policy remains mutable execution authority and is
+not part of v2 plan hashing. Provenance comparisons prove only closed source
+precedence within admitted output, criterion, and evidence families; they do
+not claim that natural-language text is semantically narrower. A present plan
+`version` is authoritative: only numeric v2 is accepted, while only absence of
+the field identifies historical v1.
+
 ## Tranche 2 — Planner Lowering and Plan Admission
 
 Evaluate a bounded planner output contract and lower it into Allocation Plan v2

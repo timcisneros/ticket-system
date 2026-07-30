@@ -54,7 +54,12 @@ function catalogFromRow(row, label) {
 }
 
 function allocationPlanFromRow(row) {
-  if (row.body && row.body.version === ALLOCATION_PLAN_VERSION) {
+  const hasVersion = row.body &&
+    Object.prototype.hasOwnProperty.call(row.body, 'version');
+  if (hasVersion && row.body.version !== ALLOCATION_PLAN_VERSION) {
+    throw new TypeError(`Unsupported allocation plan version: ${String(row.body.version)}`);
+  }
+  if (hasVersion) {
     return normalizeStoredAllocationPlanV2({
       id: positiveSafeInteger(row.id, 'allocationPlan.id'),
       ticketId: positiveSafeInteger(row.ticket_id, 'allocationPlan.ticketId'),
@@ -355,6 +360,10 @@ function methods({
 
     async createAllocationPlan({ plan }) {
       const draft = this.assertJsonRecord(plan, 'plan');
+      const hasVersion = Object.prototype.hasOwnProperty.call(draft, 'version');
+      if (hasVersion && draft.version !== ALLOCATION_PLAN_VERSION) {
+        throw new TypeError(`Unsupported allocation plan version: ${String(draft.version)}`);
+      }
       const ticketId = positiveSafeInteger(draft.ticketId, 'plan.ticketId');
       const status = requiredString(draft.status || 'pending', 'plan.status');
       const items = Array.isArray(draft.items) ? draft.items : [];

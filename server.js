@@ -477,6 +477,10 @@ const processExecutionController = new ProcessExecutionController({
 // so the enforced rules and every operator-visible listing cannot drift.
 const {
   SENSITIVE_APPLICATION_PATHS,
+  isPathInsideOwnedOutputPaths,
+  normalizeWorkspaceOwnershipPath,
+  normalizeWorkspaceRelativePath,
+  workspaceOwnershipPathsOverlap,
   readProtectedWorkspacePaths: readProtectedWorkspacePathsFromFile
 } = require('./runtime/authority-paths');
 const WORKSPACE_FIXTURES = [
@@ -13609,23 +13613,6 @@ async function buildWorkspaceOperationTargetEvidence(run, operation, args, resul
   return evidence;
 }
 
-function normalizeWorkspaceOwnershipPath(relativePath) {
-  const normalized = path.posix.normalize(String(relativePath || '').replace(/\\/g, '/').trim());
-  const cleanPath = normalized === '.' ? '' : normalized.replace(/^\/+/, '');
-
-  if (!cleanPath) return '';
-  return cleanPath.endsWith('/') ? cleanPath : `${cleanPath}/`;
-}
-
-function isPathInsideOwnedOutputPaths(relativePath, ownedOutputPaths) {
-  const normalizedPath = path.posix.normalize(String(relativePath || '').replace(/\\/g, '/').trim()).replace(/^\/+/, '');
-
-  return ownedOutputPaths.some(ownedPath => {
-    const normalizedOwnedPath = normalizeWorkspaceOwnershipPath(ownedPath);
-    return normalizedPath === normalizedOwnedPath.slice(0, -1) || normalizedPath.startsWith(normalizedOwnedPath);
-  });
-}
-
 function createWorkspaceOwnershipError(run, operation, relativePath) {
   const error = new Error(`Workspace operation blocked outside owned output paths: ${operation} ${relativePath}`);
 
@@ -13987,7 +13974,7 @@ function assertNoOverlappingOwnedPaths(planItems) {
   ownedPaths.forEach((ownedPath, index) => {
     ownedPaths.forEach((otherPath, otherIndex) => {
       if (index === otherIndex) return;
-      if (ownedPath === otherPath || ownedPath.startsWith(otherPath) || otherPath.startsWith(ownedPath)) {
+      if (workspaceOwnershipPathsOverlap(ownedPath, otherPath)) {
         throw new Error(`Owned-scope paths overlap: ${ownedPath} and ${otherPath}`);
       }
     });
@@ -22284,31 +22271,7 @@ function createLocalWorkspaceProvider(root) {
   }
 
   function normalizeRelative(inputPath = '', options = {}) {
-    const rawPath = String(inputPath || '').trim();
-
-    if (path.isAbsolute(rawPath)) {
-      throw createStructuredWorkspaceError('Absolute paths are not allowed', 'WORKSPACE_ABSOLUTE_PATH', 'protected_path', {
-        path: rawPath
-      });
-    }
-
-    const normalized = path.posix.normalize(rawPath.replace(/\\/g, '/'));
-    const relativePath = normalized === '.' ? '' : normalized;
-    const segments = relativePath.split('/').filter(Boolean);
-
-    if (relativePath.startsWith('../') || relativePath === '..' || segments.includes('..')) {
-      throw createStructuredWorkspaceError('Path traversal is not allowed', 'WORKSPACE_PATH_TRAVERSAL', 'protected_path', {
-        path: rawPath
-      });
-    }
-
-    if (!options.allowHidden && segments.some(segment => segment.startsWith('.'))) {
-      throw createStructuredWorkspaceError('Hidden and system paths are not allowed', 'WORKSPACE_HIDDEN_PATH', 'protected_path', {
-        path: rawPath
-      });
-    }
-
-    return relativePath;
+    return normalizeWorkspaceRelativePath(inputPath, options);
   }
 
   function resolveInside(inputPath = '', options = {}) {
