@@ -88,6 +88,32 @@ const ciWorkflow = fs.readFileSync(
 const checkpointCommand = 'pnpm run checkpoint:release';
 const checkpointIndex = ciWorkflow.indexOf(checkpointCommand);
 assert.notEqual(checkpointIndex, -1, 'CI must run the release checkpoint');
+const checkpointStepStart = ciWorkflow.lastIndexOf('      - name:', checkpointIndex);
+const checkpointStepEnd = ciWorkflow.indexOf('\n      - ', checkpointIndex);
+const checkpointStep = ciWorkflow.slice(
+  checkpointStepStart,
+  checkpointStepEnd === -1 ? ciWorkflow.length : checkpointStepEnd
+);
+assert.match(
+  checkpointStep,
+  /sudo git config --global --add safe\.directory "\$GITHUB_WORKSPACE"/,
+  'CI must authorize the exact ephemeral checkout for privileged Git integrity checks'
+);
+assert.match(
+  checkpointStep,
+  /sudo env[\s\S]*pnpm run checkpoint:release/,
+  'CI must run the complete release checkpoint with the host authority required by native UID/GID fixtures'
+);
+assert.match(
+  checkpointStep,
+  /"CARGO_HOME=\$\{CARGO_HOME:-\$HOME\/\.cargo\}"/,
+  'CI must reuse the explicitly fetched locked Cargo dependency cache in the privileged checkpoint'
+);
+assert.match(
+  checkpointStep,
+  /"RUSTUP_HOME=\$\{RUSTUP_HOME:-\$HOME\/\.rustup\}"/,
+  'CI must reuse the configured Rust toolchain in the privileged checkpoint'
+);
 for (const manifest of [
   'native/process-launcher/Cargo.toml',
   'native/process-materializer/Cargo.toml'

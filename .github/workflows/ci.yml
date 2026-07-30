@@ -40,7 +40,16 @@ jobs:
           cargo fetch --locked --manifest-path native/process-launcher/Cargo.toml
           cargo fetch --locked --manifest-path native/process-materializer/Cargo.toml
       - run: pnpm run build
-      - run: pnpm run checkpoint:release
+      - name: Run privileged release checkpoint
+        run: |
+          sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo env \
+            "PATH=$PATH" \
+            "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" \
+            "RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" \
+            "CARGO_NET_OFFLINE=$CARGO_NET_OFFLINE" \
+            "TEST_DATABASE_URL=$TEST_DATABASE_URL" \
+            pnpm run checkpoint:release
         env:
           CARGO_NET_OFFLINE: "true"
           TEST_DATABASE_URL: postgresql://ticket_system:ticket_system@127.0.0.1:5432/ticket_system_test
