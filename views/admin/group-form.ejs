@@ -17,6 +17,21 @@
   </label>
 
   <div class="form-group">
+    <label for="plannerAgentId">Structured-allocation planner</label>
+    <% if (editGroup) { %>
+      <select id="plannerAgentId" name="plannerAgentId">
+        <option value="">No planner designated</option>
+        <% groupAgents.forEach(function(agent) { %>
+          <option value="<%= agent.id %>" <%= editGroup.plannerAgentId === agent.id ? 'selected' : '' %>><%= agent.name %> — <%= agent.provider %>/<%= agent.model || 'model not configured' %></option>
+        <% }); %>
+      </select>
+      <p class="form-hint">The planner must remain a current group member. Provider and model come from this configured agent and are snapshotted when explicit parent work is admitted.</p>
+    <% } else { %>
+      <p class="form-hint">Create the group, add an agent member, then edit the group to designate its planner. No member is selected implicitly.</p>
+    <% } %>
+  </div>
+
+  <div class="form-group">
     <label>Permissions</label>
     <div class="permission-grid">
       <% allPermissions.forEach(function(permission) { %>

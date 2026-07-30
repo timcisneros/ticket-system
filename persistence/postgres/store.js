@@ -18,6 +18,11 @@ const {
   normalizeDeclaredWorkSnapshot
 } = require('../../runtime/declared-work-contract');
 const {
+  materializeStructuredAllocationAuthority,
+  normalizeStructuredAllocationAuthority,
+  normalizeStructuredAllocationAuthorityDraft
+} = require('../../runtime/structured-allocation-prerequisites-contract');
+const {
   normalizeCompletionAuthoritySnapshot,
   normalizeCompletionDecision,
   completionEvidenceProjection
@@ -108,6 +113,13 @@ function assertDeclaredWorkAuthorityNotPatched(patch, label) {
   if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'declaredWorkSnapshot')) return;
   const error = new Error(`${label} cannot mutate declaredWorkSnapshot after admission`);
   error.code = 'DECLARED_WORK_SNAPSHOT_IMMUTABLE';
+  throw error;
+}
+
+function assertStructuredAllocationAuthorityNotPatched(patch, label) {
+  if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'structuredAllocationAuthority')) return;
+  const error = new Error(`${label} cannot mutate structuredAllocationAuthority after ticket admission`);
+  error.code = 'STRUCTURED_ALLOCATION_AUTHORITY_IMMUTABLE';
   throw error;
 }
 
@@ -592,9 +604,10 @@ function processTemplateTriggerFromRow(row) {
 }
 
 function ticketFromRow(row) {
-  return {
+  const id = positiveSafeInteger(row.id, 'ticket.id');
+  const ticket = {
     ...(row.body || {}),
-    id: positiveSafeInteger(row.id, 'ticket.id'),
+    id,
     status: row.status,
     assignmentTargetType: row.assignment_target_type,
     assignmentTargetId: nullablePositiveSafeInteger(row.assignment_target_id, 'ticket.assignmentTargetId'),
@@ -602,6 +615,14 @@ function ticketFromRow(row) {
     createdAt: rowTimestamp(row.created_at),
     updatedAt: rowTimestamp(row.updated_at)
   };
+  if (Object.prototype.hasOwnProperty.call(ticket, 'structuredAllocationAuthority')) {
+    ticket.structuredAllocationAuthority = normalizeStructuredAllocationAuthority(
+      ticket.structuredAllocationAuthority,
+      { expectedTicketId: id }
+    );
+  }
+
+  return ticket;
 }
 
 function runFromRow(row) {
@@ -1846,35 +1867,147 @@ class PostgresRuntimeStore {
     throw new StateTransitionConflictError(entity, id, expectedStatuses, current);
   }
 
-  async createTicket(record, { client = null } = {}) {
+  async _assertStructuredAllocationAuthorityDraftReferences(connection, draftValue, ticket) {
+    const draft = normalizeStructuredAllocationAuthorityDraft(draftValue);
+    const planning = draft.planningAuthorityDraft;
+    if (!planning) return draft;
+
+    const conflict = message => {
+      const error = new Error(message);
+      error.code = 'STRUCTURED_ALLOCATION_REFERENCE_CONFLICT';
+      throw error;
+    };
+    if (ticket.assignmentTargetType !== 'group' ||
+        Number(ticket.assignmentTargetId) !== planning.assignmentGroup.id ||
+        ticket.assignmentMode !== planning.allocationMode) {
+      conflict('Planning-authority draft does not match the ticket assignment authority');
+    }
+
+    const groupResult = await connection.query(
+      `SELECT * FROM ${this.table('access_groups')} WHERE id = $1 FOR KEY SHARE`,
+      [planning.assignmentGroup.id]
+    );
+    if (groupResult.rowCount !== 1) conflict('Snapshotted planning group no longer exists');
+    const group = groupResult.rows[0];
+    if (group.name !== planning.assignmentGroup.name ||
+        positiveSafeInteger(group.revision, 'group.revision') !== planning.assignmentGroup.revision ||
+        nullablePositiveSafeInteger(group.planner_agent_id, 'group.plannerAgentId') !== planning.planner.agentId) {
+      conflict('Snapshotted planning group changed before ticket admission');
+    }
+
+    const candidateIds = planning.candidates.map(candidate => candidate.agentId);
+    const agentResult = await connection.query(
+      `SELECT * FROM ${this.table('configured_agents')}
+       WHERE id = ANY($1::bigint[])
+       ORDER BY id
+       FOR KEY SHARE`,
+      [candidateIds]
+    );
+    if (agentResult.rowCount !== candidateIds.length) {
+      conflict('A snapshotted planning candidate no longer exists');
+    }
+    const agentById = new Map(agentResult.rows.map(row => [
+      positiveSafeInteger(row.id, 'configuredAgent.id'), row
+    ]));
+    for (const candidate of planning.candidates) {
+      const row = agentById.get(candidate.agentId);
+      if (!row || row.name !== candidate.name ||
+          positiveSafeInteger(row.revision, 'configuredAgent.revision') !== candidate.revision) {
+        conflict(`Snapshotted candidate agent ${candidate.agentId} changed before ticket admission`);
+      }
+    }
+    const plannerRow = agentById.get(planning.planner.agentId);
+    if (!plannerRow || plannerRow.name !== planning.planner.name ||
+        positiveSafeInteger(plannerRow.revision, 'configuredAgent.revision') !== planning.planner.revision ||
+        plannerRow.provider !== planning.planner.provider || plannerRow.model !== planning.planner.model) {
+      conflict('Snapshotted planner route changed before ticket admission');
+    }
+
+    const membershipResult = await connection.query(
+      `SELECT agent_id
+       FROM ${this.table('agent_group_memberships')}
+       WHERE group_id = $1
+       ORDER BY agent_id
+       FOR KEY SHARE`,
+      [planning.assignmentGroup.id]
+    );
+    const memberIds = membershipResult.rows.map(row => positiveSafeInteger(row.agent_id, 'membership.agentId'));
+    if (memberIds.length !== candidateIds.length ||
+        memberIds.some((agentId, index) => agentId !== candidateIds[index])) {
+      conflict('Snapshotted candidate membership changed before ticket admission');
+    }
+    return draft;
+  }
+
+  async _createTicketRecord(record, {
+    client = null,
+    allowStructuredAllocationAuthority = false
+  } = {}) {
     const ticket = this.assertJsonRecord(record, 'ticket');
+    if (Object.prototype.hasOwnProperty.call(ticket, 'structuredAllocationAuthority') &&
+        !allowStructuredAllocationAuthority) {
+      const error = new TypeError('structuredAllocationAuthority must be materialized by createTicketWithEvent');
+      error.code = 'STRUCTURED_ALLOCATION_AUTHORITY_ADMISSION_REQUIRED';
+      throw error;
+    }
+    const explicitId = ticket.id == null ? null : positiveSafeInteger(ticket.id, 'ticket.id');
     const status = requiredString(ticket.status || 'open', 'ticket.status');
     if (!TICKET_STATUSES.has(status)) throw new TypeError(`Unsupported ticket.status: ${status}`);
+    const ticketBody = { ...ticket };
+    delete ticketBody.id;
+    if (Object.prototype.hasOwnProperty.call(ticketBody, 'structuredAllocationAuthority')) {
+      ticketBody.structuredAllocationAuthority = normalizeStructuredAllocationAuthority(
+        ticketBody.structuredAllocationAuthority,
+        { expectedTicketId: explicitId }
+      );
+    }
     const values = [
       status,
       ticket.assignmentTargetType || null,
       nullablePositiveSafeInteger(ticket.assignmentTargetId, 'ticket.assignmentTargetId'),
-      ticket
+      ticketBody
     ];
     const execute = async connection => {
       await this._assertTicketAssignmentTarget(connection, ticket);
       await this._assertTicketWorkflow(connection, ticket);
       await this._assertTicketRoutingPolicy(connection, ticket);
-      const result = await connection.query(
-        `INSERT INTO ${this.table('tickets')}
-          (status, assignment_target_type, assignment_target_id, body)
-         VALUES ($1, $2, $3, $4::jsonb)
-         RETURNING *`,
-        values
-      );
+      const result = explicitId === null
+        ? await connection.query(
+          `INSERT INTO ${this.table('tickets')}
+            (status, assignment_target_type, assignment_target_id, body)
+           VALUES ($1, $2, $3, $4::jsonb)
+           RETURNING *`,
+          values
+        )
+        : await connection.query(
+          `INSERT INTO ${this.table('tickets')}
+            (id, status, assignment_target_type, assignment_target_id, body)
+           VALUES ($1, $2, $3, $4, $5::jsonb)
+           RETURNING *`,
+          [explicitId, ...values]
+        );
       return ticketFromRow(result.rows[0]);
     };
     return client ? execute(client) : this.withTransaction(execute);
   }
 
-  async createTicketWithEvent({ ticket, eventPayload = {} }, { client = null } = {}) {
+  async createTicket(record, { client = null } = {}) {
+    return this._createTicketRecord(record, { client });
+  }
+
+  async createTicketWithEvent({
+    ticket,
+    eventPayload = {},
+    structuredAllocationAuthorityDraft = null
+  }, { client = null } = {}) {
     const body = this.assertJsonRecord(ticket, 'ticket');
+    if (Object.prototype.hasOwnProperty.call(body, 'structuredAllocationAuthority')) {
+      throw new TypeError('ticket.structuredAllocationAuthority is store-materialized authority');
+    }
     const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+    const normalizedAuthorityDraft = structuredAllocationAuthorityDraft == null
+      ? null
+      : normalizeStructuredAllocationAuthorityDraft(structuredAllocationAuthorityDraft);
     const execute = async connection => {
       const clock = await connection.query('SELECT clock_timestamp() AS ts');
       const now = isoTimestamp(clock.rows[0].ts, 'ticket clock');
@@ -1884,6 +2017,22 @@ class PostgresRuntimeStore {
         updatedAt: now,
         ...(Object.prototype.hasOwnProperty.call(body, 'changedAt') ? { changedAt: now } : {})
       };
+      if (normalizedAuthorityDraft) {
+        await this._assertStructuredAllocationAuthorityDraftReferences(
+          connection,
+          normalizedAuthorityDraft,
+          record
+        );
+        const identityResult = await connection.query(
+          `SELECT nextval(pg_get_serial_sequence($1, 'id')) AS id`,
+          [`${this.schema}.tickets`]
+        );
+        record.id = positiveSafeInteger(identityResult.rows[0].id, 'ticket.id');
+        record.structuredAllocationAuthority = materializeStructuredAllocationAuthority(
+          normalizedAuthorityDraft,
+          { ticketId: record.id, capturedAt: now }
+        );
+      }
       const spawnIdempotencyKey = optionalString(record.spawnIdempotencyKey);
       if (spawnIdempotencyKey) record.spawnIdempotencyKey = spawnIdempotencyKey;
       let created;
@@ -1894,19 +2043,36 @@ class PostgresRuntimeStore {
         await this._assertTicketRoutingPolicy(connection, record);
         const status = requiredString(record.status || 'open', 'ticket.status');
         if (!TICKET_STATUSES.has(status)) throw new TypeError(`Unsupported ticket.status: ${status}`);
-        const result = await connection.query(
-          `INSERT INTO ${this.table('tickets')}
-            (status, assignment_target_type, assignment_target_id, body)
-           VALUES ($1, $2, $3, $4::jsonb)
-           ON CONFLICT DO NOTHING
-           RETURNING *`,
-          [
-            status,
-            record.assignmentTargetType || null,
-            nullablePositiveSafeInteger(record.assignmentTargetId, 'ticket.assignmentTargetId'),
-            record
-          ]
-        );
+        const storedBody = { ...record };
+        delete storedBody.id;
+        const result = record.id == null
+          ? await connection.query(
+            `INSERT INTO ${this.table('tickets')}
+              (status, assignment_target_type, assignment_target_id, body)
+             VALUES ($1, $2, $3, $4::jsonb)
+             ON CONFLICT DO NOTHING
+             RETURNING *`,
+            [
+              status,
+              record.assignmentTargetType || null,
+              nullablePositiveSafeInteger(record.assignmentTargetId, 'ticket.assignmentTargetId'),
+              storedBody
+            ]
+          )
+          : await connection.query(
+            `INSERT INTO ${this.table('tickets')}
+              (id, status, assignment_target_type, assignment_target_id, body)
+             VALUES ($1, $2, $3, $4, $5::jsonb)
+             ON CONFLICT DO NOTHING
+             RETURNING *`,
+            [
+              record.id,
+              status,
+              record.assignmentTargetType || null,
+              nullablePositiveSafeInteger(record.assignmentTargetId, 'ticket.assignmentTargetId'),
+              storedBody
+            ]
+          );
         if (result.rowCount > 0) {
           created = ticketFromRow(result.rows[0]);
         } else {
@@ -1919,16 +2085,27 @@ class PostgresRuntimeStore {
           inserted = false;
         }
       } else {
-        created = await this.createTicket(record, { client: connection });
+        created = await this._createTicketRecord(record, {
+          client: connection,
+          allowStructuredAllocationAuthority: true
+        });
       }
       if (!inserted) return { ticket: created, event: null, created: false };
+      const admittedAuthority = created.structuredAllocationAuthority || null;
       const event = await this._appendEvent(connection, {
         type: 'ticket.created',
         ticketId: created.id,
         payload: {
           ...callerPayload,
           status: created.status,
-          createdAt: created.createdAt
+          createdAt: created.createdAt,
+          ...(admittedAuthority ? {
+            parentDeclaredWorkHash: admittedAuthority.parentDeclaredWorkSnapshot.contractHash,
+            structuredAllocationAuthorityHash: admittedAuthority.authorityHash,
+            structuredAllocationEligible: admittedAuthority.structuredAllocationEligibility.eligible,
+            planningAuthoritySnapshotHash:
+              admittedAuthority.planningAuthoritySnapshot?.snapshotHash || null
+          } : {})
         }
       });
       return { ticket: created, event, created: true };
@@ -3186,7 +3363,30 @@ class PostgresRuntimeStore {
     return { memberships, nextCursor: result.rows.length > size && last ? { afterAgentId: last.agentId, afterGroupId: last.groupId } : null };
   }
 
+  async _assertConfiguredAgentPlannerMembershipsRetained(client, agentId, groupIds) {
+    const retained = new Set(groupIds);
+    const result = await client.query(
+      `SELECT id
+       FROM ${this.table('access_groups')}
+       WHERE planner_agent_id = $1
+       ORDER BY id
+       FOR UPDATE`,
+      [agentId]
+    );
+    const removedPlannerGroup = result.rows
+      .map(row => positiveSafeInteger(row.id, 'group.id'))
+      .find(groupId => !retained.has(groupId));
+    if (removedPlannerGroup !== undefined) {
+      const error = new Error(
+        `Agent ${agentId} is the designated planner for group ${removedPlannerGroup}; select another planner or clear it first`
+      );
+      error.code = 'GROUP_PLANNER_MEMBERSHIP_REQUIRED';
+      throw error;
+    }
+  }
+
   async _replaceConfiguredAgentMemberships(client, agentId, groupIds, actor) {
+    await this._assertConfiguredAgentPlannerMembershipsRetained(client, agentId, groupIds);
     await client.query(`DELETE FROM ${this.table('agent_group_memberships')} WHERE agent_id = $1`, [agentId]);
     if (groupIds.length === 0) return;
     await client.query(
@@ -3280,6 +3480,7 @@ class PostgresRuntimeStore {
       if (currentResult.rowCount === 0) return null;
       const agent = configuredAgentFromRow(currentResult.rows[0]);
       if (agent.revision !== revision) throw new OptimisticConcurrencyError('configuredAgent', id, revision, agent);
+      await this._assertConfiguredAgentPlannerMembershipsRetained(client, id, []);
       const changedAtResult = await client.query('SELECT clock_timestamp() AS changed_at');
       const changedAt = rowTimestamp(changedAtResult.rows[0].changed_at);
       const deleteResult = await client.query(
@@ -4582,6 +4783,7 @@ class PostgresRuntimeStore {
     const target = requiredString(toStatus, 'toStatus');
     if (!TICKET_STATUSES.has(target)) throw new TypeError(`Unsupported ticket status: ${target}`);
     const bodyPatch = this.assertJsonRecord(patch, 'ticket patch');
+    assertStructuredAllocationAuthorityNotPatched(bodyPatch, 'ticket patch');
     const type = requiredString(eventType, 'eventType');
     const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
 
@@ -4791,6 +4993,7 @@ class PostgresRuntimeStore {
       }
       const ticket = ticketFromRow(result.rows[0]);
       const bodyPatch = this.assertJsonRecord(patch, 'ticket patch');
+      assertStructuredAllocationAuthorityNotPatched(bodyPatch, 'ticket patch');
       let authoritativePatch = bodyPatch;
       let authoritativeEventPayload = eventPayload;
       if (Object.prototype.hasOwnProperty.call(bodyPatch, 'changedAt')) {

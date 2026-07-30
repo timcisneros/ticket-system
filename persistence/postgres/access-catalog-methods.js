@@ -41,6 +41,7 @@ function groupFromRow(row) {
     name: row.name,
     permissions: Array.isArray(row.permissions) ? [...row.permissions].sort(compareCatalogNames) : [],
     canReceiveTickets: row.can_receive_tickets === true,
+    plannerAgentId: row.planner_agent_id == null ? null : positiveSafeInteger(row.planner_agent_id, 'group.plannerAgentId'),
     revision: positiveSafeInteger(row.revision, 'group.revision'),
     createdAt: rowTimestamp(row.created_at),
     changedBy: row.updated_by,
@@ -84,18 +85,30 @@ function methods({ OptimisticConcurrencyError }) {
 
     _accessGroupValue(value) {
       const source = this.assertJsonRecord(value, 'value');
+      const allowedFields = new Set([
+        'id', 'name', 'permissions', 'canReceiveTickets', 'plannerAgentId',
+        'revision', 'createdAt', 'changedBy', 'changedAt'
+      ]);
+      const unknownFields = Object.keys(source).filter(field => !allowedFields.has(field));
+      if (unknownFields.length > 0) {
+        throw new TypeError(`value contains unknown group field(s): ${unknownFields.join(', ')}`);
+      }
       const name = requiredString(source.name, 'value.name');
       const permissions = source.permissions == null ? [] : source.permissions;
       if (!Array.isArray(permissions)) throw new TypeError('value.permissions must be an array');
       const permissionNames = [...new Set(permissions.map((item, index) => requiredString(item, `value.permissions[${index}]`)))];
       permissionNames.sort(compareCatalogNames);
       if (permissionNames.length > this.maxQueryRows) throw new RangeError(`permissions exceeds the configured maximum of ${this.maxQueryRows}`);
+      const plannerAgentId = source.plannerAgentId == null
+        ? null
+        : positiveSafeInteger(source.plannerAgentId, 'value.plannerAgentId');
       const body = { ...source };
-      for (const key of ['id', 'name', 'permissions', 'canReceiveTickets', 'revision', 'createdAt', 'changedBy', 'changedAt']) delete body[key];
+      for (const key of allowedFields) delete body[key];
       return {
         name,
         permissions: permissionNames,
         canReceiveTickets: source.canReceiveTickets === true,
+        plannerAgentId,
         body: this.assertJsonRecord(body, 'group body')
       };
     },
@@ -123,6 +136,26 @@ function methods({ OptimisticConcurrencyError }) {
         const found = new Set(result.rows.map(row => row.name));
         const missing = permissionNames.find(name => !found.has(name));
         throw new AccessCatalogReferenceError(`Permission does not exist: ${missing}`, 'PERMISSION_NOT_FOUND');
+      }
+    },
+
+    async _assertGroupPlannerMembership(connection, groupId, plannerAgentId) {
+      if (plannerAgentId == null) return;
+      const result = await connection.query(
+        `SELECT agent.id
+         FROM ${this.table('configured_agents')} AS agent
+         JOIN ${this.table('agent_group_memberships')} AS membership
+           ON membership.agent_id = agent.id
+          AND membership.group_id = $1
+         WHERE agent.id = $2
+         FOR KEY SHARE OF agent, membership`,
+        [groupId, plannerAgentId]
+      );
+      if (result.rowCount === 0) {
+        throw new AccessCatalogReferenceError(
+          `Planner agent ${plannerAgentId} must be a current member of group ${groupId}`,
+          'GROUP_PLANNER_MEMBERSHIP_REQUIRED'
+        );
       }
     },
 
@@ -401,17 +434,27 @@ function methods({ OptimisticConcurrencyError }) {
       const actor = requiredString(changedBy, 'changedBy');
       try {
         return await this.withTransaction(async client => {
+          if (normalized.plannerAgentId !== null) {
+            throw new AccessCatalogReferenceError(
+              'A new group has no members; add a member before designating its planner',
+              'GROUP_PLANNER_MEMBERSHIP_REQUIRED'
+            );
+          }
           await this._assertAccessPermissions(client, normalized.permissions);
           const result = await client.query(
-            `INSERT INTO ${this.table('access_groups')} (name, can_receive_tickets, body, created_by, updated_by)
-             VALUES ($1, $2, $3::jsonb, $4, $4) RETURNING *`,
-            [normalized.name, normalized.canReceiveTickets, normalized.body, actor]
+            `INSERT INTO ${this.table('access_groups')}
+               (name, can_receive_tickets, planner_agent_id, body, created_by, updated_by)
+             VALUES ($1, $2, $3, $4::jsonb, $5, $5) RETURNING *`,
+            [normalized.name, normalized.canReceiveTickets, normalized.plannerAgentId, normalized.body, actor]
           );
           await this._replaceAccessGroupPermissions(client, result.rows[0].id, normalized.permissions, actor);
           const group = groupFromRow({ ...result.rows[0], permissions: normalized.permissions });
           const auditLog = await this._appendSystemLog(client, {
             type: 'admin:group_create', message: `Group \"${group.name}\" created by ${actor}`,
-            metadata: { changedBy: actor, changedAt: group.changedAt, groupId: group.id, groupName: group.name }
+            metadata: {
+              changedBy: actor, changedAt: group.changedAt, groupId: group.id,
+              groupName: group.name, plannerAgentId: group.plannerAgentId
+            }
           });
           return { group, auditLog };
         });
@@ -443,20 +486,26 @@ function methods({ OptimisticConcurrencyError }) {
               throw new AccessCatalogReferenceError('Group has assigned tickets and must remain ticket-capable', 'GROUP_HAS_ASSIGNED_TICKETS');
             }
           }
+          await this._assertGroupPlannerMembership(client, id, normalized.plannerAgentId);
           await this._assertAccessPermissions(client, normalized.permissions);
           const result = await client.query(
             `UPDATE ${this.table('access_groups')}
-             SET name = $3, can_receive_tickets = $4, body = $5::jsonb,
-                 revision = revision + 1, updated_by = $6, updated_at = clock_timestamp()
+             SET name = $3, can_receive_tickets = $4, planner_agent_id = $5,
+                 body = $6::jsonb, revision = revision + 1,
+                 updated_by = $7, updated_at = clock_timestamp()
              WHERE id = $1 AND revision = $2 RETURNING *`,
-            [id, revision, normalized.name, normalized.canReceiveTickets, normalized.body, actor]
+            [id, revision, normalized.name, normalized.canReceiveTickets, normalized.plannerAgentId, normalized.body, actor]
           );
           if (result.rowCount === 0) throw new OptimisticConcurrencyError('group', id, revision, current);
           await this._replaceAccessGroupPermissions(client, id, normalized.permissions, actor);
           const group = groupFromRow({ ...result.rows[0], permissions: normalized.permissions });
           const auditLog = await this._appendSystemLog(client, {
             type: 'admin:group_edit', message: `Group \"${group.name}\" (#${id}) edited by ${actor}`,
-            metadata: { changedBy: actor, changedAt: group.changedAt, groupId: id, groupName: group.name }
+            metadata: {
+              changedBy: actor, changedAt: group.changedAt, groupId: id,
+              groupName: group.name, previousPlannerAgentId: current.plannerAgentId,
+              plannerAgentId: group.plannerAgentId
+            }
           });
           return { group, auditLog };
         });

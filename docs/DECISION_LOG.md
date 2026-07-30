@@ -1,5 +1,33 @@
 # Decision Log
 
+## Parent Work Authority and Planning Principal (2026-07-30)
+
+Split the former planner-lowering tranche into prerequisite Tranche 2A and planner-admission
+Tranche 2B. Owned output paths are capability boundaries and cannot be treated as expected
+outputs. Objective grammar, acceptance prose, agent ordering, group membership, workspace
+contents, or planner output likewise cannot synthesize missing parent work authority. New tickets
+may therefore admit an explicit closed ticket-authored declared-work input through the canonical
+`runtime/declared-work-contract.js` vocabulary, ordering, evidence consistency, hash, and deep
+immutability. Historical tickets without that admission-time snapshot remain historical-unavailable;
+reread, rerun, reopen, reassignment, or live configuration changes never synthesize or rewrite it.
+
+A ticket-capable agent group may designate exactly one nullable `plannerAgentId`. The selected
+configured agent must be a current member; deletion or membership removal fails closed until the
+group selects another member or clears the designation. There is no first-member, lowest-ID,
+provider/model, random, or other fallback. Migration 032 adds the nullable configured-agent foreign
+key and a deferred group-membership integrity constraint; provider and model remain configured-agent
+facts rather than group or role-routing authority.
+
+When explicit parent work is supplied, ticket admission deterministically evaluates structured
+allocation eligibility. Sufficient authority is snapshotted inside the existing ticket/event
+transaction: ticket identity, group identity/name/revision, planner identity/name/revision and exact
+provider/model, candidate member identities/revisions and canonical owned paths, allocation mode,
+parent declared-work hash, capture time, and canonical snapshot/aggregate hashes. The snapshot
+contains no credentials and grants no provider request, routing role, budget, workspace/browser/
+process operation, Allocation Plan v2, leaf run, scheduling, or completion authority. Tranche 2A
+continues the live historical v1 allocation path unchanged. Tranche 2B may consume only this stored
+parent and planning-principal authority to request, validate, and atomically admit a v2 plan.
+
 ## Structured Allocation Plan Authority (2026-07-30)
 
 Retain Ticket and Workflow as the product primitives and extend the existing Allocation Plan as

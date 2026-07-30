@@ -98,6 +98,8 @@ async function main() {
     assert.equal(migrationResults.flat().filter(name => name === '030_runtime_budget_and_capacity.sql').length, 1);
     assert.equal(migrationResults.flat().filter(name =>
       name === '031_process_execution_release_authority.sql').length, 1);
+    assert.equal(migrationResults.flat().filter(name =>
+      name === '032_structured_allocation_planning_prerequisites.sql').length, 1);
     assert.equal(await store.health(), true);
     assert.equal((await store.acquireRuntimeAuthority()).mode, 'shared_transactional');
     const emptyRuntimeIntegrity = await store.prepareRuntimePersistence();

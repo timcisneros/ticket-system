@@ -16,8 +16,8 @@ async function main() {
     schema
   }) => {
     const migration = await store.getMigrationStatus();
-    assert.equal(migration.currentVersion, 31);
-    assert.equal(migration.headVersion, 31);
+    assert.equal(migration.currentVersion, 32);
+    assert.equal(migration.headVersion, 32);
     assert.equal(migration.fullyApplied, true);
     assert.equal(migration.checksumsValid, true);
     assert.equal(migration.unknownMigrations, 0);
@@ -25,7 +25,7 @@ async function main() {
       connectionString: databaseUrl,
       schema
     });
-    assert.equal(preflight.currentVersion, 31);
+    assert.equal(preflight.currentVersion, 32);
     assert.equal(preflight.fullyApplied, true,
       'production migration preflight accepts the isolated fully migrated schema');
 

@@ -68,12 +68,46 @@ not claim that natural-language text is semantically narrower. A present plan
 `version` is authoritative: only numeric v2 is accepted, while only absence of
 the field identifies historical v1.
 
-## Tranche 2 — Planner Lowering and Plan Admission
+## Tranche 2A — Parent Work Authority and Planning Principal
 
-Evaluate a bounded planner output contract and lower it into Allocation Plan v2
-only after deterministic validation against parent declared work and existing
-authority. Define the admission transaction and failure evidence. This tranche
-is not implemented by Tranche 1.
+Define explicit immutable parent declared work before allocation planning and an
+explicitly designated, immutable planning principal. This prerequisite split is
+required because current direct and group tickets have no explicit expected-output
+authority and current groups have no planner principal. Owned output paths are
+capability boundaries rather than work declarations; objective or acceptance text,
+group membership, agent ordering, workspace contents, and mutable provider/model
+configuration cannot truthfully supply either missing authority by inference.
+
+Tranche 2A adds ticket-authored parent declared-work snapshots, a group-designated
+planner principal, an admission-time planning-authority snapshot, persistence and
+read-only projections, and deterministic eligibility evaluation. Explicit parent input
+uses the existing declared-work output, criterion, and evidence vocabulary with
+server-assigned ticket-authored provenance; client provenance is not accepted. Owned
+paths, objectives, acceptance prose, group members, agent names, workspace contents,
+and planner output never stand in for an expected-output declaration.
+
+The group designation is nullable historical authority backed by a configured-agent
+foreign key and current-membership integrity. It has no implicit fallback and is not a
+role-aware routing system: the selected configured agent remains the owner of its
+provider/model facts. Ticket admission stores those exact facts, group and agent
+revisions, candidate identities and owned paths, the parent declared-work hash, capture
+time, and canonical hashes. Eligibility and every refusal reason are admission-time
+facts, never recomputed from mutable catalogs. No credentials enter the snapshot.
+
+Tranche 2A performs no provider request, proposal parsing, Allocation Plan v2 admission,
+leaf-run admission, scheduler change, aggregate completion, role-aware routing,
+economics, or recursive allocation. The existing live v1 allocation/run path remains
+operational and unchanged when a ticket is created. Historical tickets without the new
+field remain historical-unavailable and cannot gain authority from later planner,
+membership, route, workflow, ticket-text, or workspace changes.
+
+## Tranche 2B — Planner Lowering and Plan Admission
+
+Perform one bounded planner request using the admitted parent work and planning
+principal created by Tranche 2A. Parse the closed proposal, deterministically
+validate it against Allocation Plan v2, materialize runtime identities, and admit
+Allocation Plan v2 atomically with its durable planning provenance and failure
+evidence. Tranche 2B stops before leaf-run admission and does not dispatch workers.
 
 ## Tranche 3 — Leaf-Run Admission and Aggregate Completion
 
@@ -105,7 +139,8 @@ Tranche 1.
 
 ```text
 Tranche 1: COMPLETE
-Tranche 2: NOT STARTED
+Tranche 2A: COMPLETE
+Tranche 2B: NOT STARTED
 Tranche 3: NOT STARTED
 Tranche 4: NOT STARTED
 Tranche 5: NOT STARTED

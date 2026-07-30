@@ -57,6 +57,14 @@ for (const allocationPlanV2Gate of [
     `structured allocation plan v2 releases must include ${allocationPlanV2Gate}`);
 }
 
+for (const prerequisiteGate of [
+  'structured-allocation-prerequisites-contract-test.js',
+  'structured-allocation-prerequisites-postgres-test.js'
+]) {
+  assert.equal(all.includes(prerequisiteGate), true,
+    `structured allocation planning prerequisites must include ${prerequisiteGate}`);
+}
+
 for (const mixedFamilyGate of [
   'mixed-family-work-model-test.js',
   'declared-work-postgres-test.js',

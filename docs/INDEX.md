@@ -25,8 +25,9 @@
   — authoritative four-tranche roadmap for typed projection parity and later structured
   work-definition authority.
 - [`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`](STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md)
-  — authoritative six-tranche roadmap for structured Allocation Plan authority, later planner
-  admission, leaf execution, bounded economics, coordination controls, and product evaluation.
+  — authoritative roadmap for structured Allocation Plan authority, the 2A parent-work/planning-principal
+  prerequisite, later 2B planner admission, leaf execution, bounded economics, coordination controls,
+  and product evaluation.
 - [`decision-memo-work-definition-and-typed-evidence.md`](decision-memo-work-definition-and-typed-evidence.md)
   — rejection of a universal Target framework and the evidence-scoped correction.
 - [`decision-memo-mixed-family-work-model.md`](decision-memo-mixed-family-work-model.md)

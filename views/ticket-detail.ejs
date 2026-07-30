@@ -271,6 +271,58 @@
   </div>
 </details>
 
+<%
+  const structuredAuthority = ticket.structuredAllocationAuthority || null;
+  const parentWork = structuredAuthority ? structuredAuthority.parentDeclaredWorkSnapshot : null;
+  const planningSnapshot = structuredAuthority ? structuredAuthority.planningAuthoritySnapshot : null;
+  const structuredEligibility = structuredAuthority ? structuredAuthority.structuredAllocationEligibility : null;
+%>
+<details class="disclosure" <%= structuredAuthority ? 'open' : '' %>>
+  <summary>Structured Allocation Authority <span class="sub"><%= structuredAuthority ? (structuredEligibility.eligible ? 'Eligible prerequisite snapshot' : 'Ineligible prerequisite snapshot') : 'Historical unavailable' %></span></summary>
+  <div class="body">
+    <% if (!structuredAuthority) { %>
+      <p class="text-muted">This ticket predates or omitted explicit ticket-level declared work. Current group, agent, workflow, workspace, objective, and acceptance state are not used to synthesize historical authority.</p>
+    <% } else { %>
+      <dl class="detail-grid">
+        <div><dt>Authority version</dt><dd>v<%= structuredAuthority.version %></dd></div>
+        <div><dt>Authority hash</dt><dd><code><%= structuredAuthority.authorityHash %></code></dd></div>
+        <div><dt>Parent declared-work hash</dt><dd><code><%= parentWork.contractHash %></code></dd></div>
+        <div><dt>Captured</dt><dd><%= new Date(structuredAuthority.capturedAt).toLocaleString() %></dd></div>
+        <div><dt>Eligibility</dt><dd><%= structuredEligibility.eligible ? 'eligible' : 'ineligible' %></dd></div>
+        <div><dt>Refusal reasons</dt><dd><%= structuredEligibility.refusalReasons.length > 0 ? structuredEligibility.refusalReasons.join(', ') : 'none' %></dd></div>
+      </dl>
+      <h3>Explicit parent work</h3>
+      <p><strong>Objective:</strong> <%= parentWork.objective.text %></p>
+      <p><strong>Expected outputs:</strong></p>
+      <% if (parentWork.expectedOutputs.length === 0) { %><p class="text-muted">None explicitly declared.</p><% } else { %>
+        <ul><% parentWork.expectedOutputs.forEach(output => { %><li><code><%= output.kind %></code> — <%= output.declaration %> <span class="text-muted">(<%= output.provenance %>)</span></li><% }) %></ul>
+      <% } %>
+      <p><strong>Success criteria:</strong></p>
+      <% if (parentWork.successCriteria.length === 0) { %><p class="text-muted">None explicitly declared.</p><% } else { %>
+        <ul><% parentWork.successCriteria.forEach(criterion => { %><li><code><%= criterion.kind %></code> — <%= criterion.declaration %> <span class="text-muted">(<%= criterion.provenance %>)</span></li><% }) %></ul>
+      <% } %>
+      <p><strong>Evidence requirements:</strong></p>
+      <% if (parentWork.evidenceRequirements.length === 0) { %><p class="text-muted">Explicitly empty.</p><% } else { %>
+        <ul><% parentWork.evidenceRequirements.forEach(requirement => { %><li><code><%= requirement.evidenceType %></code> for <code><%= requirement.criterionHash %></code> <span class="text-muted">(<%= requirement.provenance %>)</span></li><% }) %></ul>
+      <% } %>
+      <h3>Planning principal snapshot</h3>
+      <% if (!planningSnapshot) { %>
+        <p class="text-muted">No planning authority was admitted. The refusal reasons above are immutable admission-time evidence.</p>
+      <% } else { %>
+        <dl class="detail-grid">
+          <div><dt>Group</dt><dd><%= planningSnapshot.assignmentGroup.name %> (#<%= planningSnapshot.assignmentGroup.id %>, rev <%= planningSnapshot.assignmentGroup.revision %>)</dd></div>
+          <div><dt>Planner</dt><dd><%= planningSnapshot.planner.name %> (#<%= planningSnapshot.planner.agentId %>, rev <%= planningSnapshot.planner.revision %>)</dd></div>
+          <div><dt>Recorded route</dt><dd><%= planningSnapshot.planner.provider %>/<%= planningSnapshot.planner.model %></dd></div>
+          <div><dt>Snapshot hash</dt><dd><code><%= planningSnapshot.snapshotHash %></code></dd></div>
+          <div><dt>Allocation mode</dt><dd><code><%= planningSnapshot.allocationMode %></code></dd></div>
+          <div><dt>Candidate agents</dt><dd><%= planningSnapshot.candidates.map(candidate => candidate.name + ' (#' + candidate.agentId + ')').join(', ') %></dd></div>
+        </dl>
+        <p class="text-muted">This snapshot grants no provider request, workspace operation, browser operation, process launch, route role, budget, allocation-plan admission, or worker-run authority.</p>
+      <% } %>
+    <% } %>
+  </div>
+</details>
+
 <% if (typeof childTickets !== 'undefined' && childTickets && childTickets.length > 0) { %>
 <details class="disclosure" open>
   <summary>Child Tickets <span class="sub"><%= childTickets.length %> spawned</span></summary>

@@ -64,6 +64,12 @@
     <p class="form-hint">Stored for review; not automatically verified. Run completed &ne; objective verified.</p>
   </div>
 
+  <div class="form-group">
+    <label for="declaredWork">Explicit Parent Declared Work</label>
+    <textarea id="declaredWork" name="declaredWork" rows="10" spellcheck="false" placeholder="{&quot;objective&quot;:&quot;Must exactly match Objective&quot;,&quot;expectedOutputs&quot;:[{&quot;kind&quot;:&quot;text&quot;,&quot;declaration&quot;:&quot;Explicit deliverable&quot;}],&quot;successCriteria&quot;:[{&quot;kind&quot;:&quot;text&quot;,&quot;declaration&quot;:&quot;Explicit success condition&quot;}],&quot;evidenceRequirements&quot;:[]}"></textarea>
+    <p class="form-hint">Optional immutable authority for future structured allocation. It never infers outputs from folder scopes, objective wording, acceptance prose, agents, or workspace contents. This tranche stores and evaluates it but does not call a planner.</p>
+  </div>
+
   <div class="form-group" id="workflowGroup" hidden>
     <label for="workflowId">Workflow *</label>
     <select id="workflowId" name="workflowId">

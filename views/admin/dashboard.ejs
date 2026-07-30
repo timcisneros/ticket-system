@@ -182,6 +182,7 @@
           <th>ID</th>
           <th>Name</th>
           <th>Ticket Assignment</th>
+          <th>Planner</th>
           <th>Permissions</th>
           <th>Last Changed</th>
           <th>Actions</th>
@@ -193,6 +194,14 @@
             <td><%= group.id %></td>
             <td><%= group.name %></td>
             <td><%= group.canReceiveTickets ? 'Can receive tickets' : '-' %></td>
+            <td>
+              <% if (group.plannerAgent) { %>
+                <%= group.plannerAgent.name %> (#<%= group.plannerAgent.id %>)<br>
+                <span class="text-muted"><%= group.plannerIsCurrentMember ? 'current member' : 'invalid membership' %></span>
+              <% } else { %>
+                <span class="text-muted">Not designated</span>
+              <% } %>
+            </td>
             <td>
               <% if (group.permissions && group.permissions.length > 0) { %>
                 <%= group.permissions.join(', ') %>

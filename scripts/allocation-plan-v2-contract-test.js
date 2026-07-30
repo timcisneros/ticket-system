@@ -716,11 +716,15 @@ for (const forbiddenPath of [
   assert.equal(fs.existsSync(path.join(__dirname, '..', forbiddenPath)), false,
     `Tranche 1 must not introduce ${forbiddenPath}`);
 }
+const migrationDirectory = path.join(__dirname, '..', 'persistence', 'postgres', 'migrations');
+const postTrancheOneMigrations = fs.readdirSync(migrationDirectory)
+  .filter(name => Number(name.slice(0, 3)) > 31);
 assert.equal(
-  fs.readdirSync(path.join(__dirname, '..', 'persistence', 'postgres', 'migrations'))
-    .some(name => /allocation.*v2|structured.*allocation/i.test(name)),
+  postTrancheOneMigrations.some(name => /\ballocation_plans\b/i.test(
+    fs.readFileSync(path.join(migrationDirectory, name), 'utf8')
+  )),
   false,
-  'allocation plan v2 must reuse the existing JSONB allocation body without a migration'
+  'later prerequisite migrations must not alter Allocation Plan v2 JSONB storage'
 );
 
 console.log('PASS: Allocation Plan v2 is closed, canonical, immutable, authority-bounded, and status-separated');

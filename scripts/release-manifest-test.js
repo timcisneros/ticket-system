@@ -24,7 +24,7 @@ const manifest = buildReleaseManifest({
 });
 assert.equal(manifest.sourceRevision, revision);
 assert.equal(manifest.databaseMigrationHead,
-  '031_process_execution_release_authority.sql');
+  '032_structured_allocation_planning_prerequisites.sql');
 assert.equal(manifest.releaseContract.sourceRevision, revision);
 assert.equal(validateReleaseManifest(manifest), manifest);
 assert.equal(JSON.stringify(manifest).includes('/home/'), false);

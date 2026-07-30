@@ -113,6 +113,9 @@ const {
   projectDeclaredWorkForRun
 } = require('./runtime/declared-work-contract');
 const {
+  buildStructuredAllocationAuthorityDraft
+} = require('./runtime/structured-allocation-prerequisites-contract');
+const {
   RuntimeBudgetController
 } = require('./runtime/runtime-budget-controller');
 const {
@@ -10967,6 +10970,7 @@ async function renderAdminGroupForm(reply, request, options = {}) {
   return reply.view('admin/group-form.ejs', viewData({
     user: request.user,
     editGroup,
+    groupAgents: editGroup ? await getAgentsInGroup(editGroup.id) : [],
     allPermissions: await listAccessPermissions(),
     groupPermissions,
     error: options.error || null
@@ -22811,11 +22815,16 @@ async function createTicketFromInput(input, actor, options = {}) {
   if (assignmentTargetType === 'group' && !['allocated', 'dynamic'].includes(resolvedAssignmentMode)) {
     return { ok: false, error: 'Group assignments require allocated or dynamic mode' };
   }
+  let assignmentGroup = null;
   if (assignmentTargetType === 'agent' && !await getConfiguredAgentRepository().getConfiguredAgentById(parsedAssignmentTargetId)) {
     return { ok: false, error: 'Selected agent does not exist' };
   }
-  if (assignmentTargetType === 'group' && !(await getTicketAssignableGroups()).some(group => group.id === parsedAssignmentTargetId)) {
-    return { ok: false, error: 'Selected ticket-capable group does not exist' };
+  if (assignmentTargetType === 'group') {
+    assignmentGroup = (await getTicketAssignableGroups())
+      .find(group => group.id === parsedAssignmentTargetId) || null;
+    if (!assignmentGroup) {
+      return { ok: false, error: 'Selected ticket-capable group does not exist' };
+    }
   }
 
   const resolvedCapabilityType = input.capabilityType === 'workflow' || input.executionMode === 'workflow' ? 'workflow' : 'directAction';
@@ -22928,27 +22937,21 @@ async function createTicketFromInput(input, actor, options = {}) {
     newTicket.workContextSnapshot = contextCheck.snapshot;
   }
 
-  if (newTicket.assignmentMode === 'dynamic') {
+  let assignedGroupAgents = [];
+  if (assignmentTargetType === 'group') {
     try {
-      const agents = await getAgentsInGroup(newTicket.assignmentTargetId);
-      newTicket.ownedOutputPaths = deriveDynamicOwnedPaths(agents);
+      assignedGroupAgents = await getAgentsInGroup(newTicket.assignmentTargetId);
+      if (newTicket.assignmentMode === 'dynamic') {
+        newTicket.ownedOutputPaths = deriveDynamicOwnedPaths(assignedGroupAgents);
+      }
+      if (usesOwnedScopeAllocation(newTicket)) {
+        assertAllocatedTicketCanStart(newTicket, assignedGroupAgents);
+      }
     } catch (error) {
       appendSystemLog('allocation:setup_failed', error.message, null, {
-        code: error.code || 'DYNAMIC_ALLOCATION_ERROR',
-        ticketId: newTicket.id || null,
-        assignmentTargetId: newTicket.assignmentTargetId,
-        createdBy: newTicket.createdBy
-      });
-      return { ok: false, error: error.message };
-    }
-  }
-
-  if (usesOwnedScopeAllocation(newTicket)) {
-    try {
-      assertAllocatedTicketCanStart(newTicket, await getAgentsInGroup(newTicket.assignmentTargetId));
-    } catch (error) {
-      appendSystemLog('allocation:setup_failed', error.message, null, {
-        code: error.code || 'VALIDATION_ERROR',
+        code: error.code || (newTicket.assignmentMode === 'dynamic'
+          ? 'DYNAMIC_ALLOCATION_ERROR'
+          : 'VALIDATION_ERROR'),
         path: error.path || null,
         assignedAgentId: error.assignedAgentId || null,
         ticketId: newTicket.id || null,
@@ -22959,9 +22962,37 @@ async function createTicketFromInput(input, actor, options = {}) {
     }
   }
 
+  let structuredAllocationAuthorityDraft = null;
+  if (input.declaredWork !== undefined && input.declaredWork !== null) {
+    try {
+      if (!input.declaredWork || typeof input.declaredWork !== 'object' || Array.isArray(input.declaredWork)) {
+        throw new TypeError('declaredWork must be a JSON object');
+      }
+      if (typeof input.declaredWork.objective !== 'string' ||
+          input.declaredWork.objective.trim() !== objective) {
+        throw new TypeError('declaredWork.objective must exactly match the ticket objective');
+      }
+      const plannerAgent = assignmentGroup && assignmentGroup.plannerAgentId != null
+        ? await getConfiguredAgentRepository().getConfiguredAgentById(assignmentGroup.plannerAgentId)
+        : null;
+      structuredAllocationAuthorityDraft = buildStructuredAllocationAuthorityDraft({
+        declaredWork: input.declaredWork,
+        assignmentTargetType,
+        assignmentMode: resolvedAssignmentMode,
+        assignmentGroup,
+        plannerAgent,
+        candidateAgents: assignedGroupAgents,
+        ownedOutputPaths: newTicket.ownedOutputPaths
+      });
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  }
+
   try {
     const created = await getTicketRunLifecycleRepository().createTicketWithEvent({
       ticket: newTicket,
+      structuredAllocationAuthorityDraft,
       eventPayload: {
         status: newTicket.status,
         assignmentTargetType: newTicket.assignmentTargetType,
@@ -23001,7 +23032,7 @@ fastify.post('/tickets', {
     return 'Permission denied';
   }
 
-  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy, executionTargetKind, browserTargetId, workTypeId, acceptanceCriteria } = request.body;
+  const { objective, assignmentTargetType, assignmentTargetId, assignmentMode, capabilityType, executionMode, workflowId, workflowInput, executionPolicy, executionTargetKind, browserTargetId, workTypeId, acceptanceCriteria, declaredWork } = request.body;
 
   async function renderTicketForm(error) {
     reply.code(400);
@@ -23030,6 +23061,20 @@ fastify.post('/tickets', {
     if (!parsedWorkflowInput || typeof parsedWorkflowInput !== 'object' || Array.isArray(parsedWorkflowInput)) {
       return await renderTicketForm('Workflow input must be a JSON object');
     }
+  }
+
+  let parsedDeclaredWork = null;
+  if (typeof declaredWork === 'string' && declaredWork.trim()) {
+    try {
+      parsedDeclaredWork = JSON.parse(declaredWork);
+    } catch (error) {
+      return await renderTicketForm('Parent declared work must be valid JSON');
+    }
+    if (!parsedDeclaredWork || typeof parsedDeclaredWork !== 'object' || Array.isArray(parsedDeclaredWork)) {
+      return await renderTicketForm('Parent declared work must be a JSON object');
+    }
+  } else if (declaredWork && typeof declaredWork === 'object' && !Array.isArray(declaredWork)) {
+    parsedDeclaredWork = declaredWork;
   }
 
   let parsedOwnedPaths = null;
@@ -23076,6 +23121,7 @@ fastify.post('/tickets', {
   const result = await createTicketFromInput({
     objective,
     acceptanceCriteria,
+    declaredWork: parsedDeclaredWork,
     assignmentTargetType,
     assignmentTargetId,
     assignmentMode,
@@ -28023,7 +28069,18 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
     (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
   );
 
-  const groupsWithPermissions = groups;
+  const agentById = new Map(agents.map(agent => [agent.id, agent]));
+  const membershipKeys = new Set(agentMemberships.map(membership =>
+    `${membership.groupId}:${membership.agentId}`
+  ));
+  const groupsWithPermissions = groups.map(group => {
+    const plannerAgent = group.plannerAgentId == null ? null : agentById.get(group.plannerAgentId) || null;
+    return {
+      ...group,
+      plannerAgent,
+      plannerIsCurrentMember: Boolean(plannerAgent && membershipKeys.has(`${group.id}:${plannerAgent.id}`))
+    };
+  });
   let workTypeCatalog = [];
   let workTypeCatalogError = null;
   try {
@@ -28302,6 +28359,9 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
       if (error && error.code === 'CONFIGURED_AGENT_NAME_CONFLICT') {
         return renderAdminUserForm(reply, request, { editAccount: existingAgent, accountType: 'agent', error: 'Agent name already exists' });
       }
+      if (error && error.code === 'GROUP_PLANNER_MEMBERSHIP_REQUIRED') {
+        return renderAdminUserForm(reply, request, { editAccount: existingAgent, accountType: 'agent', error: error.message });
+      }
       if (error && error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
         reply.code(409);
         return renderAdminUserForm(reply, request, { editAccount: error.current || existingAgent, accountType: 'agent', error: 'Agent changed concurrently; reload and retry' });
@@ -28400,6 +28460,10 @@ fastify.post('/admin/users/:id/delete', { preHandler: fastify.requireAuth }, asy
       reply.code(409);
       return 'Account changed concurrently; reload and retry';
     }
+    if (error && error.code === 'GROUP_PLANNER_MEMBERSHIP_REQUIRED') {
+      reply.code(400);
+      return error.message;
+    }
     throw error;
   }
 
@@ -28486,11 +28550,19 @@ fastify.post('/admin/groups/:id', { preHandler: fastify.requireAuth }, async (re
   }
 
   const groupId = parseInt(request.params.id);
-  const { name, permissions, canReceiveTickets, revision } = request.body;
+  const { name, permissions, canReceiveTickets, plannerAgentId, revision } = request.body;
   const expectedRevision = parseInt(revision, 10);
+  const normalizedPlannerAgentId = plannerAgentId === undefined || plannerAgentId === ''
+    ? null
+    : parseInt(plannerAgentId, 10);
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
     reply.code(400);
     return 'Invalid group revision';
+  }
+  if (normalizedPlannerAgentId !== null &&
+      (!Number.isSafeInteger(normalizedPlannerAgentId) || normalizedPlannerAgentId <= 0)) {
+    reply.code(400);
+    return 'Invalid planner agent';
   }
   const ticketAssignable = canReceiveTickets === 'on';
 
@@ -28526,7 +28598,8 @@ fastify.post('/admin/groups/:id', { preHandler: fastify.requireAuth }, async (re
       value: {
         name: name.trim(),
         permissions: normalizedPermissions,
-        canReceiveTickets: ticketAssignable
+        canReceiveTickets: ticketAssignable,
+        plannerAgentId: normalizedPlannerAgentId
       },
       changedBy
     });
@@ -28535,6 +28608,9 @@ fastify.post('/admin/groups/:id', { preHandler: fastify.requireAuth }, async (re
       return renderAdminGroupForm(reply, request, { editGroup: existingGroup, error: 'Group name already exists' });
     }
     if (error && error.code === 'GROUP_HAS_ASSIGNED_TICKETS') {
+      return renderAdminGroupForm(reply, request, { editGroup: existingGroup, error: error.message });
+    }
+    if (error && error.code === 'GROUP_PLANNER_MEMBERSHIP_REQUIRED') {
       return renderAdminGroupForm(reply, request, { editGroup: existingGroup, error: error.message });
     }
     if (error && error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {

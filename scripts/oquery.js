@@ -1603,6 +1603,22 @@ async function cmdTicket(args) {
   console.log(`\n  ${bold(`Ticket #${ticketId}`)} ${statusTag(ticket.status)}`);
   console.log(`  ${dim('objective')} ${(ticket.objective || '').replace(/\r?\n/g, ' ')}`);
   if (ticket.assignmentTargetType) console.log(`  ${dim('assigned to')} ${ticket.assignmentTargetType} #${ticket.assignmentTargetId}`);
+  if (ticket.structuredAllocationAuthority) {
+    const authority = ticket.structuredAllocationAuthority;
+    const eligibility = authority.structuredAllocationEligibility;
+    const planning = authority.planningAuthoritySnapshot;
+    console.log(`  ${dim('parent declared work')} ${authority.parentDeclaredWorkSnapshot.contractHash}`);
+    console.log(`  ${dim('structured allocation')} ${eligibility.eligible ? 'eligible' : 'ineligible'} ${dim('authority ' + authority.authorityHash)}`);
+    if (eligibility.refusalReasons.length > 0) {
+      console.log(`  ${dim('refusal reasons')} ${eligibility.refusalReasons.join(', ')}`);
+    }
+    if (planning) {
+      console.log(`  ${dim('planning principal')} ${planning.planner.name} (#${planning.planner.agentId}) ${planning.planner.provider}/${planning.planner.model}`);
+      console.log(`  ${dim('planning snapshot')} ${planning.snapshotHash}`);
+    }
+  } else {
+    console.log(`  ${dim('structured allocation')} historical authority unavailable`);
+  }
   if (latestRun) console.log(`  ${dim('latest run')} #${latestRun.id} ${statusTag(latestRun.status)} agent: ${latestRun.agentName || latestRun.agentId}`);
   if (currentRun) console.log(`  ${dim('current run')} #${currentRun.id} ${statusTag(currentRun.status)}`);
   if (currentRun && currentRun.eventSummary) {
