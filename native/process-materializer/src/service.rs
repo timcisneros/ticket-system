@@ -1372,7 +1372,7 @@ fn send_descriptors(stream: &UnixStream, descriptors: &[File]) -> Result<()> {
         ));
     }
     let raw: Vec<RawFd> = descriptors.iter().map(AsRawFd::as_raw_fd).collect();
-    let mut marker = [b'D'];
+    let mut marker = *b"D";
     let mut iovec = libc::iovec {
         iov_base: marker.as_mut_ptr().cast(),
         iov_len: marker.len(),
