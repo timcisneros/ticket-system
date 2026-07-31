@@ -19,11 +19,23 @@ const {
 } = require('../../runtime/declared-work-contract');
 const {
   assertParentDeclaredWorkObjectiveMatchesTicket,
+  evaluateStructuredAllocationCurrentApplicability,
   materializeStructuredAllocationAuthority,
   normalizeStructuredAllocationAuthority,
   normalizeStructuredAllocationAuthorityDraft,
   ticketAssignmentMatchesPlanningAuthority
 } = require('../../runtime/structured-allocation-prerequisites-contract');
+const {
+  advancePlanningAttempt,
+  buildPlanningProvenance,
+  evaluatePlannerInvocationReadiness,
+  normalizePlanningAttempt
+} = require('../../runtime/structured-allocation-planning-contract');
+const {
+  createAllocationPlanV2StorageBody,
+  materializeAllocationPlanV2Draft,
+  normalizeAllocationPlanV2
+} = require('../../runtime/allocation-plan-contract');
 const {
   normalizeCompletionAuthoritySnapshot,
   normalizeCompletionDecision,
@@ -46,7 +58,10 @@ const { installConnectorAuthorityMethods } = require('./connector-authority-meth
 const { installWatcherAuthorityMethods } = require('./watcher-authority-methods');
 const { installRuntimeLimitsMethods } = require('./runtime-limits-methods');
 const { installRuntimeBudgetMethods } = require('./runtime-budget-methods');
-const { installApplicationStateMethods } = require('./application-state-methods');
+const {
+  allocationPlanFromRow,
+  installApplicationStateMethods
+} = require('./application-state-methods');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const MIGRATION_FILE_PATTERN = /^[0-9]{3}_[a-z0-9_]+\.sql$/;
@@ -122,6 +137,21 @@ function assertStructuredAllocationAuthorityNotPatched(patch, label) {
   if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'structuredAllocationAuthority')) return;
   const error = new Error(`${label} cannot mutate structuredAllocationAuthority after ticket admission`);
   error.code = 'STRUCTURED_ALLOCATION_AUTHORITY_IMMUTABLE';
+  throw error;
+}
+
+// The planning attempt has exactly two writers — writeStructuredAllocationPlanningAttempt
+// and admitStructuredAllocationPlan — because both enforce the closed lifecycle and the
+// optimistic attempt-state guard. A generic ticket patch reaching this field would let a
+// status change or a reassignment silently rewrite planning evidence, so it is refused
+// with the same shape as the authority guard above.
+function assertStructuredAllocationPlanningAttemptNotPatched(patch, label) {
+  if (!patch ||
+      !Object.prototype.hasOwnProperty.call(patch, 'structuredAllocationPlanningAttempt')) return;
+  const error = new Error(
+    `${label} cannot mutate structuredAllocationPlanningAttempt outside planning admission`
+  );
+  error.code = 'STRUCTURED_ALLOCATION_PLANNING_ATTEMPT_IMMUTABLE';
   throw error;
 }
 
@@ -621,6 +651,15 @@ function ticketFromRow(row) {
     ticket.structuredAllocationAuthority = normalizeStructuredAllocationAuthority(
       ticket.structuredAllocationAuthority,
       { expectedTicketId: id, expectedTicketObjective: ticket.objective }
+    );
+  }
+  // Malformed, hash-conflicting or hand-edited planning state must fail closed
+  // on read rather than project as if a planner had produced it.
+  if (Object.prototype.hasOwnProperty.call(ticket, 'structuredAllocationPlanningAttempt') &&
+      ticket.structuredAllocationPlanningAttempt != null) {
+    ticket.structuredAllocationPlanningAttempt = normalizePlanningAttempt(
+      ticket.structuredAllocationPlanningAttempt,
+      { expectedTicketId: id }
     );
   }
 
@@ -2122,6 +2161,385 @@ class PostgresRuntimeStore {
         }
       });
       return { ticket: created, event, created: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // ── Tranche 2B: structured allocation planning ────────────────────────────
+  //
+  // The planning attempt lives in the Ticket JSONB body under
+  // `structuredAllocationPlanningAttempt`, and every write appends a Ticket
+  // event in the same transaction. No new table and no migration are involved:
+  // Ticket already provides row locking, revision-checked patching and
+  // transactional event append, which is exactly the durability the attempt
+  // needs. `structuredAllocationAuthority` remains untouched by all of this —
+  // the attempt is a separate field, so the existing immutability guard on the
+  // authority still holds.
+
+  // Re-derive every catalog fact the planning-authority snapshot captured, in
+  // the caller's transaction. `plannerCredentialsAvailable` is supplied by the
+  // caller because credential resolution can fall back to process environment,
+  // which is not a database fact and cannot be re-read transactionally.
+  async _currentPlanningRouteFacts(connection, planning) {
+    const groupResult = await connection.query(
+      `SELECT * FROM ${this.table('access_groups')} WHERE id = $1 FOR KEY SHARE`,
+      [planning.assignmentGroup.id]
+    );
+    const group = groupResult.rowCount === 1 ? groupResult.rows[0] : null;
+    const agentResult = await connection.query(
+      `SELECT * FROM ${this.table('configured_agents')}
+       WHERE id = ANY($1::bigint[]) ORDER BY id FOR KEY SHARE`,
+      [planning.candidates.map(candidate => candidate.agentId)]
+    );
+    const agents = agentResult.rows.map(configuredAgentFromRow);
+    const membershipResult = group === null ? { rows: [] } : await connection.query(
+      `SELECT agent_id FROM ${this.table('agent_group_memberships')}
+       WHERE group_id = $1 ORDER BY agent_id FOR KEY SHARE`,
+      [planning.assignmentGroup.id]
+    );
+    return {
+      plannerAgent: agents.find(agent => agent.id === planning.planner.agentId) || null,
+      groupPlannerAgentId: group === null
+        ? null
+        : nullablePositiveSafeInteger(group.planner_agent_id, 'group.plannerAgentId'),
+      groupMemberAgentIds: membershipResult.rows.map(row =>
+        positiveSafeInteger(row.agent_id, 'membership.agentId')),
+      candidateAgents: agents
+    };
+  }
+
+  // One durable planning-attempt write. `expectedAttemptStateHash` is the
+  // optimistic guard: null means "no attempt may exist yet", any hash means
+  // "the stored attempt must still be exactly this one". Two concurrent
+  // planners therefore cannot both start, and a stale caller cannot overwrite
+  // a newer stage.
+  async writeStructuredAllocationPlanningAttempt({
+    ticketId,
+    attempt,
+    expectedAttemptStateHash = null,
+    eventType = 'ticket.structured_planning_attempt',
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const nextAttempt = normalizePlanningAttempt(attempt, { expectedTicketId: id });
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (result.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(result.rows[0]);
+      const authority = ticket.structuredAllocationAuthority || null;
+      if (!authority || !authority.planningAuthoritySnapshot) {
+        const error = new Error(`ticket ${id} has no admitted structured planning authority`);
+        error.code = 'STRUCTURED_ALLOCATION_PLANNING_AUTHORITY_MISSING';
+        throw error;
+      }
+      if (nextAttempt.structuredAuthorityHash !== authority.authorityHash ||
+          nextAttempt.planningAuthoritySnapshotHash !==
+            authority.planningAuthoritySnapshot.snapshotHash ||
+          nextAttempt.parentDeclaredWorkHash !==
+            authority.parentDeclaredWorkSnapshot.contractHash) {
+        const error = new Error(
+          `ticket ${id} planning attempt does not bind its admitted structured authority`
+        );
+        error.code = 'STRUCTURED_ALLOCATION_PLANNING_AUTHORITY_CONFLICT';
+        throw error;
+      }
+      const storedAttempt = ticket.structuredAllocationPlanningAttempt == null
+        ? null
+        : normalizePlanningAttempt(ticket.structuredAllocationPlanningAttempt, {
+          expectedTicketId: id
+        });
+      const storedHash = storedAttempt === null ? null : storedAttempt.attemptStateHash;
+      if (storedHash !== expectedAttemptStateHash) {
+        const error = new Error(
+          `ticket ${id} planning attempt state changed before this write`
+        );
+        error.code = 'STRUCTURED_ALLOCATION_PLANNING_ATTEMPT_CONFLICT';
+        throw error;
+      }
+      if (storedAttempt !== null && storedAttempt.attemptId !== nextAttempt.attemptId) {
+        const error = new Error(`ticket ${id} already owns a different planning attempt`);
+        error.code = 'STRUCTURED_ALLOCATION_PLANNING_ATTEMPT_CONFLICT';
+        throw error;
+      }
+      const updated = await connection.query(
+        `UPDATE ${this.table('tickets')}
+         SET body = body || $2::jsonb,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 RETURNING *`,
+        [id, { structuredAllocationPlanningAttempt: nextAttempt }]
+      );
+      const event = await this._appendEvent(connection, {
+        type: requiredString(eventType, 'eventType'),
+        ticketId: id,
+        payload: {
+          ...callerPayload,
+          attemptId: nextAttempt.attemptId,
+          attemptState: nextAttempt.state,
+          attemptStateHash: nextAttempt.attemptStateHash,
+          planningAuthoritySnapshotHash: nextAttempt.planningAuthoritySnapshotHash,
+          requestHash: nextAttempt.requestHash,
+          responseHash: nextAttempt.responseHash,
+          proposalHash: nextAttempt.proposalHash,
+          failureStage: nextAttempt.failureStage,
+          failureReason: nextAttempt.failureReason
+        }
+      });
+      return { ticket: ticketFromRow(updated.rows[0]), attempt: nextAttempt, event };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Atomic Allocation Plan v2 admission. Every final fact — the plan, its
+  // durable planning provenance, the terminal attempt state and the admission
+  // event — commits together or not at all. It creates NO worker runs; leaf-run
+  // admission is Tranche 3 and is deliberately absent from this transaction.
+  async admitStructuredAllocationPlan({
+    ticketId,
+    attempt,
+    allocationPlanDraft,
+    plannerCredentialsAvailable = false,
+    eventType = 'ticket.allocation_plan_admitted',
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const validatedAttempt = normalizePlanningAttempt(attempt, { expectedTicketId: id });
+    if (validatedAttempt.state !== 'proposal_validated') {
+      throw new TypeError('Only a proposal_validated planning attempt can admit a plan');
+    }
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+    const conflict = message => {
+      const error = new Error(message);
+      error.code = 'STRUCTURED_ALLOCATION_PLAN_ADMISSION_CONFLICT';
+      throw error;
+    };
+
+    const execute = async connection => {
+      // 1. Re-lock and re-read the ticket. ticketFromRow re-validates the
+      //    structured authority and its objective binding on the way in.
+      const ticketResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (ticketResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(ticketResult.rows[0]);
+      const authority = ticket.structuredAllocationAuthority || null;
+      if (!authority || !authority.planningAuthoritySnapshot) {
+        conflict(`ticket ${id} has no admitted structured planning authority`);
+      }
+      const planning = authority.planningAuthoritySnapshot;
+
+      // 2. Immutable authority hashes.
+      if (validatedAttempt.structuredAuthorityHash !== authority.authorityHash ||
+          validatedAttempt.planningAuthoritySnapshotHash !== planning.snapshotHash ||
+          validatedAttempt.parentDeclaredWorkHash !==
+            authority.parentDeclaredWorkSnapshot.contractHash) {
+        conflict('Planning attempt no longer binds its admitted structured authority');
+      }
+
+      // 3. Current applicability, re-derived from the locked ticket.
+      const applicability = evaluateStructuredAllocationCurrentApplicability(ticket);
+      if (!applicability.applicable) {
+        conflict(
+          `Structured allocation is no longer applicable: ${applicability.refusalReasons.join(', ')}`
+        );
+      }
+
+      // 4. Invocation readiness, re-derived from live catalog rows in this
+      //    transaction. The captured authority is read, never rebuilt.
+      const routeFacts = await this._currentPlanningRouteFacts(connection, planning);
+      const readiness = evaluatePlannerInvocationReadiness({
+        planningAuthoritySnapshot: planning,
+        current: {
+          ...routeFacts,
+          plannerCredentialsAvailable: plannerCredentialsAvailable === true,
+          assignmentMatchesCapturedAuthority:
+            ticketAssignmentMatchesPlanningAuthority(ticket, planning)
+        }
+      });
+      if (!readiness.ready) {
+        conflict(`Planner invocation readiness failed: ${readiness.refusalReasons.join(', ')}`);
+      }
+
+      // 5. The attempt is uniquely active and is exactly the one we validated.
+      const storedAttempt = ticket.structuredAllocationPlanningAttempt == null
+        ? null
+        : normalizePlanningAttempt(ticket.structuredAllocationPlanningAttempt, {
+          expectedTicketId: id
+        });
+      if (storedAttempt === null) conflict('Ticket has no durable planning attempt to admit');
+      if (storedAttempt.attemptId === validatedAttempt.attemptId &&
+          storedAttempt.state === 'plan_admitted') {
+        // Idempotent: a retried admission observes the committed outcome and
+        // re-reports it instead of admitting a second plan.
+        const existing = await connection.query(
+          `SELECT * FROM ${this.table('allocation_plans')} WHERE id = $1 AND ticket_id = $2`,
+          [storedAttempt.admittedPlanId, id]
+        );
+        if (existing.rowCount !== 1) conflict('Admitted attempt has no allocation plan');
+        return {
+          ticket,
+          plan: allocationPlanFromRow(existing.rows[0]),
+          attempt: storedAttempt,
+          event: null,
+          admitted: false
+        };
+      }
+      if (storedAttempt.attemptStateHash !== validatedAttempt.attemptStateHash) {
+        conflict('Planning attempt state changed between proposal validation and admission');
+      }
+
+      // 6. Request, response and proposal evidence.
+      for (const field of ['requestHash', 'responseHash', 'proposalHash']) {
+        if (storedAttempt[field] !== validatedAttempt[field] || storedAttempt[field] === null) {
+          conflict(`Planning attempt ${field} is missing or changed before admission`);
+        }
+      }
+
+      // Exactly one allocation plan. There is no unique constraint on
+      // allocation_plans.ticket_id — historical v1 tickets legitimately have
+      // one plan per ticket but nothing enforces it — so the invariant is
+      // enforced here, under the ticket lock.
+      const existingPlans = await connection.query(
+        `SELECT id FROM ${this.table('allocation_plans')} WHERE ticket_id = $1`,
+        [id]
+      );
+      if (existingPlans.rowCount > 0) {
+        conflict(`ticket ${id} already has an allocation plan`);
+      }
+      // Proof of the Tranche 2B stopping boundary, enforced rather than
+      // asserted: admission refuses if any run already exists for this ticket.
+      const existingRuns = await connection.query(
+        `SELECT 1 FROM ${this.table('runs')} WHERE ticket_id = $1 LIMIT 1`,
+        [id]
+      );
+      if (existingRuns.rowCount > 0) {
+        conflict(`ticket ${id} already has runs; structured plan admission would not be first`);
+      }
+
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const now = isoTimestamp(clock.rows[0].ts, 'allocation plan admission clock');
+
+      // 7. Reserve plan and item identities.
+      const draftItemCount = Array.isArray(allocationPlanDraft && allocationPlanDraft.items)
+        ? allocationPlanDraft.items.length
+        : 0;
+      if (draftItemCount === 0) conflict('Allocation plan draft has no items');
+      const planIdentity = await connection.query(
+        'SELECT nextval(pg_get_serial_sequence($1, $2))::bigint AS id',
+        [`${this.schema}.allocation_plans`, 'id']
+      );
+      const itemIdentities = await connection.query(
+        `SELECT nextval('${this.schemaSql}.allocation_item_id_seq') AS id
+         FROM generate_series(1, $1)`,
+        [draftItemCount]
+      );
+
+      // 8-9. Materialize and validate immutable v2 authority and its planHash.
+      const planAuthority = materializeAllocationPlanV2Draft(allocationPlanDraft, {
+        id: positiveSafeInteger(planIdentity.rows[0].id, 'allocationPlan.id'),
+        allocationItemIds: itemIdentities.rows.map(row =>
+          positiveSafeInteger(row.id, 'allocationItemId'))
+      });
+      if (planAuthority.ticketId !== id) conflict('Allocation plan draft targets another ticket');
+      if (planAuthority.parentDeclaredWorkSnapshot.contractHash !==
+          authority.parentDeclaredWorkSnapshot.contractHash) {
+        conflict('Allocation plan draft does not carry the admitted parent declared work');
+      }
+      normalizeAllocationPlanV2(planAuthority);
+
+      // 11. Immutable planning provenance, bound to this exact plan.
+      const provenance = buildPlanningProvenance({
+        attemptId: storedAttempt.attemptId,
+        plannerAgentId: storedAttempt.planner.agentId,
+        provider: storedAttempt.planner.provider,
+        model: storedAttempt.planner.model,
+        planningAuthoritySnapshotHash: storedAttempt.planningAuthoritySnapshotHash,
+        parentDeclaredWorkHash: storedAttempt.parentDeclaredWorkHash,
+        requestHash: storedAttempt.requestHash,
+        responseHash: storedAttempt.responseHash,
+        proposalHash: storedAttempt.proposalHash,
+        planHash: planAuthority.planHash,
+        admittedAt: now
+      });
+
+      // 10. Persist the plan with its provenance in one row.
+      const body = this.assertJsonRecord(
+        createAllocationPlanV2StorageBody(planAuthority, now, provenance),
+        'allocation plan v2 body'
+      );
+      const planResult = await connection.query(
+        `INSERT INTO ${this.table('allocation_plans')}
+           (id, ticket_id, status, body, created_at, updated_at)
+         OVERRIDING SYSTEM VALUE
+         VALUES ($1, $2, $3, $4::jsonb, $5, $5)
+         RETURNING *`,
+        [planAuthority.id, id, 'pending', body, now]
+      );
+      const plan = allocationPlanFromRow(planResult.rows[0]);
+
+      // 12. Mark the attempt admitted.
+      const admittedAttempt = advancePlanningAttempt(storedAttempt, {
+        state: 'plan_admitted',
+        admittedPlanId: plan.id,
+        admittedPlanHash: plan.planHash,
+        completedAt: now
+      });
+      const updatedTicket = await connection.query(
+        `UPDATE ${this.table('tickets')}
+         SET body = body || $2::jsonb,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 RETURNING *`,
+        [id, { structuredAllocationPlanningAttempt: admittedAttempt }]
+      );
+
+      // 13. Append the admission event.
+      const event = await this._appendEvent(connection, {
+        type: requiredString(eventType, 'eventType'),
+        ticketId: id,
+        payload: {
+          ...callerPayload,
+          attemptId: admittedAttempt.attemptId,
+          attemptState: admittedAttempt.state,
+          attemptStateHash: admittedAttempt.attemptStateHash,
+          allocationPlanId: plan.id,
+          allocationPlanVersion: plan.version,
+          allocationPlanStatus: plan.status,
+          planHash: plan.planHash,
+          planningProvenanceHash: provenance.provenanceHash,
+          plannerAgentId: provenance.plannerAgentId,
+          provider: provenance.provider,
+          model: provenance.model,
+          requestHash: provenance.requestHash,
+          responseHash: provenance.responseHash,
+          proposalHash: provenance.proposalHash,
+          workerRunsCreated: 0,
+          leafExecutionAvailable: false,
+          leafExecutionRefusalReason: 'structured_leaf_run_admission_not_available'
+        }
+      });
+
+      // 14. Commit is the caller's transaction boundary.
+      return {
+        ticket: ticketFromRow(updatedTicket.rows[0]),
+        plan,
+        attempt: admittedAttempt,
+        event,
+        admitted: true
+      };
     };
     return client ? execute(client) : this.withTransaction(execute);
   }
@@ -4797,6 +5215,7 @@ class PostgresRuntimeStore {
     if (!TICKET_STATUSES.has(target)) throw new TypeError(`Unsupported ticket status: ${target}`);
     const bodyPatch = this.assertJsonRecord(patch, 'ticket patch');
     assertStructuredAllocationAuthorityNotPatched(bodyPatch, 'ticket patch');
+    assertStructuredAllocationPlanningAttemptNotPatched(bodyPatch, 'ticket patch');
     const type = requiredString(eventType, 'eventType');
     const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
 
@@ -5024,6 +5443,7 @@ class PostgresRuntimeStore {
       const ticket = ticketFromRow(result.rows[0]);
       const bodyPatch = this.assertJsonRecord(patch, 'ticket patch');
       assertStructuredAllocationAuthorityNotPatched(bodyPatch, 'ticket patch');
+      assertStructuredAllocationPlanningAttemptNotPatched(bodyPatch, 'ticket patch');
       let authoritativePatch = bodyPatch;
       let authoritativeEventPayload = eventPayload;
       if (Object.prototype.hasOwnProperty.call(bodyPatch, 'changedAt')) {

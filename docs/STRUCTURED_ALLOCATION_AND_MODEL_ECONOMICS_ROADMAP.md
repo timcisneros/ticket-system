@@ -124,6 +124,127 @@ Its entry rule requires both immutable admission eligibility and a true current-
 projection; stored admission eligibility alone can never authorize planning after reassignment or
 scope/mode drift.
 
+### Admitted behavior
+
+The integration boundary is `createRunsForTicketAdmitted()` in `server.js`, before
+any branch that creates runs. Every path that can create runs — ticket creation,
+rerun, reopen, status change to open, reassignment, and watcher proposal — funnels
+through that function, so one gate contains all of them. A ticket holding
+structured planning authority either plans through Tranche 2B or is blocked with a
+canonical reason; it never falls back to v1 allocation.
+
+Containment applies to tickets whose admission was eligible AND that captured a
+planning-authority snapshot. Admission-ineligible structured tickets keep the v1
+path unchanged, because Tranche 2A guarantees the live v1 allocation/run path
+remains operational and a ticket that never earned a planning principal has no
+structured planning authority to protect.
+
+Immediately before the provider call, invocation readiness is re-evaluated against
+live catalog facts and fails closed on a missing planner, lost planner
+designation, lost membership, provider drift, model drift, unavailable
+credentials, a missing or unauthorized candidate, and assignment, mode or
+owned-path drift. Model drift is compared against the configured agent's own
+recorded model rather than a resolved provider config, because
+`getAgentOpenAIConfig`/`getAgentOllamaConfig` fall back to `OPENAI_MODEL`/
+`OLLAMA_MODEL`. Live catalog state can make captured authority unusable; it never
+rewrites it, and no replacement planner, provider, model, candidate or owned path
+is ever selected.
+
+The planning attempt is a closed, versioned, hash-bound record in the Ticket JSONB
+body under `structuredAllocationPlanningAttempt`, with one append-only Ticket event
+per stage. It is not a new top-level product entity: Ticket already provides row
+locking, revision-checked patching and transactional event append. Its lifecycle is
+`created → request_started → response_received → proposal_validated → plan_admitted`,
+with terminal `failed` and `interrupted` states that always name the exact failed
+stage. It has exactly two writers, both enforcing the closed lifecycle and an
+optimistic attempt-state guard; a generic ticket patch reaching the field is refused.
+
+Exactly one provider request per attempt, through the existing run-free
+`callModelProvider` adapter seam: fixed 120,000 ms timeout via a dedicated
+`AbortController`, 262,144-character maximum response, 65,536 characters of bounded
+stored response evidence hashed over the complete response, and no tools, workspace,
+browser, process, workflow, handoff, recursion, provider fallback, model fallback,
+repair request or automatic retry. The response-size bound is enforced on receipt
+rather than on the socket, because the shared adapters buffer a complete response
+and adding a streaming cap would change behavior for every production run. Request
+evidence is durable before the wire, so a process that stops after request
+initiation resolves to `interrupted`/`outcome_unknown` and the provider call is
+never repeated automatically.
+
+The planner context carries only immutable admitted facts, is closed and
+hash-bound, and is deterministically reconstructible. It contains no credentials,
+secrets, live mutable catalog state as authority, host paths, raw database state,
+unrelated runs, workspace contents or process-launch material.
+
+The model proposes decomposition content only. The runtime supplies every identity,
+owned path, provenance label, criterion hash, evidence identity, and authority
+hash. Evidence requirements must be proposed empty and are bound one-to-one from
+typed criteria by the runtime. Exactly one JSON document is accepted; fences,
+commentary, surrounding prose, multiple values, malformed JSON and non-object
+documents are refused, and no repair request is issued. Any runtime-owned authority
+field appearing anywhere in the proposal is refused distinctly as
+`proposal_model_owned_authority` rather than silently dropped. Cardinality mirrors
+current v1 production: every captured candidate exactly once. The known legacy
+placeholder `Produce your allocated output for ticket N inside your owned path
+only.` is refused by whitespace-collapsed, case-insensitive identity with the
+ticket number as the only variable; this makes no claim to recognize paraphrases
+and must not be widened into one.
+
+Admission is one transaction: re-lock the Ticket, validate immutable authority
+hashes, re-evaluate current applicability, re-evaluate invocation readiness from
+live rows, verify the attempt is uniquely active, verify request/response/proposal
+hashes, verify no existing plan and no existing runs, reserve plan and item
+identities, materialize and validate v2 authority and its `planHash`, persist the
+plan with its provenance, mark the attempt `plan_admitted`, and append the
+admission event. An already-admitted attempt is idempotent: it re-reports the
+committed plan instead of admitting a second one.
+
+Planning provenance binds the attempt identity, planner identity, provider, model,
+planning-authority snapshot hash, parent declared-work hash, request hash, response
+hash, proposal hash, admitted plan hash and admission timestamp. It is stored
+beside the v2 authority rather than inside `planHash`, in the stored body's ALLOWED
+but not REQUIRED field set. `AUTHORITY_FIELDS` is a closed required list: adding
+provenance there would make every Tranche 1 v2 plan fail validation on read and
+would change the meaning of every stored `planHash`, which this roadmap forbids.
+Provenance therefore carries its own canonical hash and embeds the `planHash` it
+describes, so it verifies independently, cannot be transplanted onto another plan,
+and is validated on every read. Item-status writes carry it forward unchanged.
+
+On success exactly one v2 plan exists with status `pending`, the attempt is
+`plan_admitted`, the Ticket remains open or blocked as before, zero worker Runs
+exist, and nothing is scheduler-visible — the scheduler selects only pending Runs,
+so an admitted plan is structurally invisible to it. On any refusal there is no v1
+fallback, no generic allocation, no partial v2 plan, no worker Run, no scheduler
+visibility, no completion and no hidden retry: a blocked Ticket with no plan and no
+Runs is the canonical truthful state, carrying the exact stage, canonical reason and
+available bounded evidence.
+
+Recovery is conservative by design. An attempt found in `request_started` becomes
+`interrupted`/`outcome_unknown` and the provider call is never repeated. An attempt
+found in `response_received` or `proposal_validated` — a process that stopped after
+a complete response — is refused rather than resumed. Its stored response, request
+hash and context hash remain durable and deterministically reparseable, and the
+contract functions that would reparse and revalidate it are pure, so a later
+operator-initiated resumption is possible without a new provider request; Tranche 2B
+deliberately does not perform that automatically, because no automatic repair or
+retry is authorized. Malformed or hash-conflicting stored planning state fails closed
+on read, admitted attempts stay idempotently admitted, and recovery creates no worker
+Runs.
+
+Tranche 2B adds no migration. Historical Tickets without structured authority, v1
+plans and runs, and existing Tranche 1 v2 plans are all unchanged, and no planner
+provenance is synthesized historically.
+
+### Remaining Tranche 3 boundary
+
+An admitted v2 plan is decomposition authority only. Nothing in Tranche 2B calls
+`prepareAgentRunDraft()`, persists a worker Run, writes a worker prompt, makes an
+execution unit scheduler-visible, dispatches a worker, aggregates completion,
+routes by role, applies model economics, or delegates recursively. Execution of an
+admitted plan is refused with `structured_leaf_run_admission_not_available`, and
+the API, page and CLI state that boundary explicitly. Tranche 3 begins at the point
+where an admitted v2 allocation item becomes leaf-run authority.
+
 ## Tranche 3 — Leaf-Run Admission and Aggregate Completion
 
 Define how admitted v2 items become leaf-run authority and how ticket-level
@@ -155,7 +276,7 @@ Tranche 1.
 ```text
 Tranche 1: COMPLETE
 Tranche 2A: COMPLETE
-Tranche 2B: NOT STARTED
+Tranche 2B: COMPLETE
 Tranche 3: NOT STARTED
 Tranche 4: NOT STARTED
 Tranche 5: NOT STARTED

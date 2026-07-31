@@ -114,8 +114,25 @@ const {
 } = require('./runtime/declared-work-contract');
 const {
   buildStructuredAllocationAuthorityDraft,
-  projectStructuredAllocationAuthorityForTicket
+  evaluateStructuredAllocationCurrentApplicability,
+  projectStructuredAllocationAuthorityForTicket,
+  ticketAssignmentMatchesPlanningAuthority
 } = require('./runtime/structured-allocation-prerequisites-contract');
+const {
+  PLANNER_REQUEST_LIMITS,
+  PLANNING_REFUSAL_MESSAGES,
+  advancePlanningAttempt,
+  buildPlannerRequestContext,
+  buildPlannerRequestMessages,
+  createPlanningAttempt,
+  evaluatePlannerInvocationReadiness,
+  lowerPlannerProposalToAllocationPlanDraft,
+  normalizePlannerProposal,
+  parsePlannerProposalDocument,
+  plannerRequestHash,
+  projectStructuredAllocationPlanningForTicket,
+  recoverInterruptedPlanningAttempt
+} = require('./runtime/structured-allocation-planning-contract');
 const {
   RuntimeBudgetController
 } = require('./runtime/runtime-budget-controller');
@@ -137,6 +154,7 @@ const {
   assertRunPhaseRepository,
   assertRunTerminalizationRepository,
   assertTicketRunLifecycleRepository,
+  assertStructuredAllocationPlanningRepository,
   assertNonTerminalEvidenceRepository,
   assertWorkspaceMutationBoundaryRepository,
   assertWorkspaceOwnershipRepository,
@@ -5862,6 +5880,14 @@ function getTicketRunLifecycleRepository() {
   return ticketRunLifecycleRepository;
 }
 
+let structuredAllocationPlanningRepository = null;
+function getStructuredAllocationPlanningRepository() {
+  if (structuredAllocationPlanningRepository) return structuredAllocationPlanningRepository;
+  structuredAllocationPlanningRepository =
+    assertStructuredAllocationPlanningRepository(postgresRuntimeStore);
+  return structuredAllocationPlanningRepository;
+}
+
 function getRunReplayRepository() {
   if (runReplayRepository) return runReplayRepository;
   runReplayRepository = assertRunReplayRepository(postgresRuntimeStore);
@@ -8396,6 +8422,10 @@ async function serializeTicketRuntimeState(ticketId) {
   return {
     ticket,
     structuredAllocation: projectStructuredAllocationAuthorityForTicket(ticket),
+    structuredAllocationPlanning: projectStructuredAllocationPlanningForTicket(ticket, {
+      allocationPlan: await getStructuredAllocationPlanningRepository()
+        .getAllocationPlanForTicket(ticket.id)
+    }),
     currentRun: currentRun ? serializeRunRuntimeState(currentRun, logsByRunId, {
       eventSummary: summaryByRunId.get(currentRun.id),
       events: eventsByRunId.get(currentRun.id),
@@ -9063,10 +9093,32 @@ async function buildTicketTimeline(ticketId) {
     });
   }
 
+  // Structured planning events carry closed evidence rather than prose. Their
+  // timeline summary is composed from that evidence so no model text is ever
+  // presented as an authoritative timeline statement.
+  const structuredPlanningTimelineSummary = (type, payload) => {
+    if (!String(type || '').startsWith('ticket.structured_planning') &&
+        type !== 'ticket.allocation_plan_admitted') return null;
+    if (type === 'ticket.allocation_plan_admitted') {
+      return `Allocation Plan v2 #${payload.allocationPlanId} admitted pending; ` +
+        `${payload.workerRunsCreated || 0} worker runs; leaf execution awaits Tranche 3`;
+    }
+    if (payload.failureReason) {
+      return `Planning failed at ${payload.failureStage}: ${payload.failureReason}`;
+    }
+    return `Planning attempt ${payload.attemptId || ''} is ${payload.attemptState || 'unknown'}`;
+  };
+
   const lifecycleTitles = {
     'ticket.created': 'Ticket created',
     'ticket.updated': 'Ticket updated',
     'ticket.blocked': 'Ticket blocked',
+    'ticket.structured_planning_started': 'Structured planning attempt created',
+    'ticket.structured_planning_requested': 'Structured planner request started',
+    'ticket.structured_planning_responded': 'Structured planner response received',
+    'ticket.structured_planning_validated': 'Structured planner proposal validated',
+    'ticket.structured_planning_failed': 'Structured planning failed',
+    'ticket.allocation_plan_admitted': 'Allocation Plan v2 admitted',
     'run.created': 'Run created',
     'run.lease_acquired': 'Run lease acquired',
     'run.started': 'Run started',
@@ -9128,7 +9180,9 @@ async function buildTicketTimeline(ticketId) {
         timestamp: event.ts || null,
         type: event.type,
         title: lifecycleTitles[event.type],
-        summary: payload.message || payload.error || (payload.status ? `Status ${payload.status}` : event.type),
+        summary: payload.message || payload.error ||
+          structuredPlanningTimelineSummary(event.type, payload) ||
+          (payload.status ? `Status ${payload.status}` : event.type),
         sourceType: 'event',
         sourceRef,
         sourceRole: 'append_only_event',
@@ -15796,6 +15850,486 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
   return runs[0] || null;
 }
 
+// ── Tranche 2B: structured allocation planning and plan admission ───────────
+//
+// This is the entire integration boundary. It sits between ticket persistence
+// and run creation, and it is the ONLY place structured planning is entered.
+// Everything it can do is: refuse, or perform one bounded planner request and
+// atomically admit one Allocation Plan v2. It never creates a worker Run, never
+// calls prepareAgentRunDraft, and never makes anything scheduler-visible —
+// leaf-run admission is Tranche 3.
+
+const STRUCTURED_PLANNING_EVENT_TYPES = Object.freeze({
+  started: 'ticket.structured_planning_started',
+  requested: 'ticket.structured_planning_requested',
+  responded: 'ticket.structured_planning_responded',
+  validated: 'ticket.structured_planning_validated',
+  failed: 'ticket.structured_planning_failed',
+  admitted: 'ticket.allocation_plan_admitted'
+});
+
+// Does this ticket hold structured PLANNING authority — an eligible admission
+// with a planning-authority snapshot?
+//
+// Admission-INELIGIBLE structured tickets are deliberately excluded. Tranche 2A
+// states that "the existing live v1 allocation/run path remains operational and
+// unchanged", and a ticket that declared parent work but never earned a planning
+// principal has no structured planning authority to protect. Containment applies
+// to tickets that actually captured a planner; everything else keeps v1 exactly
+// as it behaved before this tranche.
+function hasStructuredPlanningAuthority(ticket) {
+  const authority = ticket && ticket.structuredAllocationAuthority
+    ? ticket.structuredAllocationAuthority
+    : null;
+  return Boolean(
+    authority &&
+    authority.structuredAllocationEligibility &&
+    authority.structuredAllocationEligibility.eligible === true &&
+    authority.planningAuthoritySnapshot
+  );
+}
+
+// Whether credentials for the SNAPSHOTTED provider resolve at all. Deliberately
+// separate from the model comparison: getAgentOpenAIConfig falls back to
+// OPENAI_MODEL, so it can succeed with a model the snapshot never captured.
+// Model drift is checked against the agent's own recorded model instead.
+function structuredPlannerCredentialsAvailable(agent, provider) {
+  if (!agent) return false;
+  try {
+    if (provider === 'ollama') {
+      getAgentOllamaConfig(agent);
+    } else if (provider === 'openai') {
+      getAgentOpenAIConfig(agent);
+    } else {
+      return false;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Live catalog facts for the readiness check. Read-only: a drifted catalog can
+// make the captured authority UNUSABLE, but nothing here selects a replacement
+// planner, provider, model, candidate or owned path.
+async function resolveStructuredPlanningRouteFacts(ticket, planning) {
+  const [groups, plannerAgent, memberAgents] = await Promise.all([
+    getAccessCatalogRepository().getGroupsByIds({ groupIds: [planning.assignmentGroup.id] }),
+    getConfiguredAgentRepository().getConfiguredAgentById(planning.planner.agentId),
+    getAgentsInGroup(planning.assignmentGroup.id).catch(() => [])
+  ]);
+  const group = groups.find(candidate => Number(candidate.id) === planning.assignmentGroup.id) || null;
+  const candidateAgents = await getConfiguredAgentRepository().getConfiguredAgentsByIds({
+    agentIds: planning.candidates.map(candidate => candidate.agentId)
+  });
+  return {
+    plannerAgent: plannerAgent || null,
+    groupPlannerAgentId: group && group.plannerAgentId != null ? Number(group.plannerAgentId) : null,
+    groupMemberAgentIds: memberAgents.map(agent => Number(agent.id)),
+    candidateAgents: Array.isArray(candidateAgents) ? candidateAgents : [],
+    plannerCredentialsAvailable: structuredPlannerCredentialsAvailable(
+      plannerAgent,
+      planning.planner.provider
+    ),
+    assignmentMatchesCapturedAuthority: ticketAssignmentMatchesPlanningAuthority(ticket, planning)
+  };
+}
+
+// Refusal is a durable, truthful terminal state: blocked ticket, no plan, no
+// runs, exact stage and canonical reason. There is no v1 fallback, no partial
+// v2 plan, no generic allocation and no hidden retry.
+async function blockTicketForStructuredPlanning(ticket, { stage, reason, detail = null }) {
+  const message = PLANNING_REFUSAL_MESSAGES[reason] || reason;
+  const summary = `Structured allocation planning refused at ${stage}: ${message}`;
+  const persisted = await getTicketById(ticket.id);
+  if (!persisted) return null;
+  // Planning only runs on open tickets, so an already-blocked ticket here means
+  // a concurrent refusal won. The first refusal reason is the true one and is
+  // deliberately not overwritten.
+  if (persisted.status === 'blocked') {
+    appendSystemLog('allocation:structured_planning_refused', summary, null, {
+      ticketId: persisted.id,
+      stage,
+      reason,
+      detail
+    });
+    return persisted;
+  }
+  const now = new Date().toISOString();
+  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
+    ticketId: persisted.id,
+    fromStatuses: [persisted.status],
+    toStatus: 'blocked',
+    patch: { blockedReason: summary, changedAt: now },
+    eventType: 'ticket.blocked',
+    eventPayload: {
+      reason: summary,
+      reasonCode: reason,
+      structuredPlanningStage: stage,
+      workerRunsCreated: 0
+    }
+  });
+  appendSystemLog('allocation:structured_planning_refused', summary, null, {
+    ticketId: persisted.id,
+    stage,
+    reason,
+    detail
+  });
+  broadcastTicketChange();
+  return transitioned.ticket;
+}
+
+// Exactly one provider request, under the fixed limits in PLANNER_REQUEST_LIMITS.
+// No tools, no workspace/browser/process operations, no workflow creation, no
+// handoff, no recursion, no provider fallback, no model fallback, no repair
+// request and no automatic retry: the caller owns the single call site and
+// treats every outcome as terminal for the attempt.
+//
+// The response-size bound is enforced on receipt rather than on the socket. The
+// shared adapters buffer a complete response before returning, and adding a
+// streaming cap inside providerHttpJsonRequest would change behaviour for every
+// production run. The limit is therefore a hard admission bound: an oversized
+// response is refused and never parsed.
+async function callPlannerProviderOnce(agent, messages) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PLANNER_REQUEST_LIMITS.timeoutMs);
+  try {
+    const response = await callModelProvider(agent, messages, { signal: controller.signal });
+    const text = String(response && response.text ? response.text : '');
+    if (!text.trim()) {
+      return { status: 'provider_response_empty', text: null, detail: 'Planner returned no output' };
+    }
+    if (text.length > PLANNER_REQUEST_LIMITS.maxResponseBytes) {
+      return {
+        status: 'response_too_large',
+        text: null,
+        detail: `Planner response of ${text.length} characters exceeds ` +
+          `${PLANNER_REQUEST_LIMITS.maxResponseBytes}`
+      };
+    }
+    return { status: 'received', text, detail: null };
+  } catch (error) {
+    if (error && error.name === 'AbortError') {
+      return {
+        status: 'timeout',
+        text: null,
+        detail: `Planner request exceeded ${PLANNER_REQUEST_LIMITS.timeoutMs}ms`
+      };
+    }
+    // Provider errors carry request/response payloads that may name the model
+    // and URL. Only the message is retained, and credentials never appear in it
+    // because the adapters redact Authorization before building the snapshot.
+    return {
+      status: 'provider_error',
+      text: null,
+      detail: String((error && error.message) || 'Planner request failed').slice(
+        0,
+        PLANNER_REQUEST_LIMITS.maxStoredFailureDetail
+      )
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function boundedPlannerResponseEvidence(text) {
+  const responseHash = crypto.createHash('sha256').update(text).digest('hex');
+  const truncated = text.length > PLANNER_REQUEST_LIMITS.maxStoredResponseBytes;
+  return {
+    responseText: truncated ? text.slice(0, PLANNER_REQUEST_LIMITS.maxStoredResponseBytes) : text,
+    responseBytes: text.length,
+    responseTruncated: truncated,
+    // Hashed over the COMPLETE response, so a truncated stored excerpt is still
+    // provably an excerpt of what the provider actually returned.
+    responseHash
+  };
+}
+
+// Entry rule. Stored admission eligibility alone never authorizes planning:
+// a planning-authority snapshot must be present AND current applicability must
+// be true, evaluated now rather than at admission time.
+async function evaluateStructuredPlanningEntry(ticket) {
+  if (!hasStructuredPlanningAuthority(ticket)) return { enter: false, refusal: null };
+
+  const attempt = ticket.structuredAllocationPlanningAttempt || null;
+  const existingPlan = await getStructuredAllocationPlanningRepository()
+    .getAllocationPlanForTicket(ticket.id);
+  if (existingPlan) {
+    return {
+      enter: false,
+      refusal: {
+        stage: 'entry',
+        reason: attempt && attempt.state === 'plan_admitted'
+          ? 'structured_leaf_run_admission_not_available'
+          : 'allocation_plan_already_admitted'
+      }
+    };
+  }
+  if (attempt) {
+    if (attempt.state === 'failed') {
+      return { enter: false, refusal: { stage: 'entry', reason: 'planning_attempt_already_failed' } };
+    }
+    // An attempt that started a request and never recorded a durable response
+    // is resolved to outcome-unknown. The provider call is NOT repeated.
+    if (attempt.state === 'interrupted' || attempt.state === 'request_started') {
+      return {
+        enter: false,
+        refusal: { stage: 'response', reason: 'provider_outcome_unknown' },
+        interrupted: attempt.state === 'request_started' ? attempt : null
+      };
+    }
+    return { enter: false, refusal: { stage: 'entry', reason: 'planning_attempt_already_active' } };
+  }
+
+  const applicability = evaluateStructuredAllocationCurrentApplicability(ticket);
+  if (!applicability.applicable) {
+    return {
+      enter: false,
+      refusal: { stage: 'entry', reason: applicability.refusalReasons[0] }
+    };
+  }
+  return { enter: true, refusal: null };
+}
+
+// The orchestrator. Returns { handled } — when handled is true the caller must
+// NOT continue into v1 allocation or individual run creation for this ticket.
+async function runStructuredAllocationPlanning(ticket) {
+  const entry = await evaluateStructuredPlanningEntry(ticket);
+  if (!entry.enter) {
+    if (!entry.refusal) return { handled: false };
+    if (entry.interrupted) {
+      // Durably close the interrupted attempt before refusing, so recovery is
+      // idempotent and no later path can mistake it for resumable.
+      const recovered = recoverInterruptedPlanningAttempt(entry.interrupted, {
+        completedAt: new Date().toISOString(),
+        detail: 'Process stopped after request initiation with no durable response'
+      });
+      await getStructuredAllocationPlanningRepository().writeStructuredAllocationPlanningAttempt({
+        ticketId: ticket.id,
+        attempt: recovered,
+        expectedAttemptStateHash: entry.interrupted.attemptStateHash,
+        eventType: STRUCTURED_PLANNING_EVENT_TYPES.failed,
+        eventPayload: { workerRunsCreated: 0 }
+      });
+    }
+    await blockTicketForStructuredPlanning(ticket, entry.refusal);
+    return { handled: true };
+  }
+
+  const repository = getStructuredAllocationPlanningRepository();
+  const authority = ticket.structuredAllocationAuthority;
+  const planning = authority.planningAuthoritySnapshot;
+
+  // Invocation readiness, immediately before the provider call, against live
+  // catalog facts. The captured authority is read, never modified or rebuilt.
+  const routeFacts = await resolveStructuredPlanningRouteFacts(ticket, planning);
+  const readiness = evaluatePlannerInvocationReadiness({
+    planningAuthoritySnapshot: planning,
+    current: routeFacts
+  });
+  if (!readiness.ready) {
+    await blockTicketForStructuredPlanning(ticket, {
+      stage: 'invocation_readiness',
+      reason: readiness.refusalReasons[0],
+      detail: readiness.refusalReasons.join(', ')
+    });
+    return { handled: true };
+  }
+
+  const context = buildPlannerRequestContext(authority, { ticketId: ticket.id });
+  const messages = buildPlannerRequestMessages(context);
+  const requestHash = plannerRequestHash({
+    provider: planning.planner.provider,
+    model: planning.planner.model,
+    messages
+  });
+  const requestBytes = messages.reduce((total, message) => total + message.content.length, 0);
+
+  let attempt = createPlanningAttempt({
+    attemptId: crypto.randomUUID(),
+    ticketId: ticket.id,
+    authority,
+    createdAt: new Date().toISOString()
+  });
+  let written = await repository.writeStructuredAllocationPlanningAttempt({
+    ticketId: ticket.id,
+    attempt,
+    expectedAttemptStateHash: null,
+    eventType: STRUCTURED_PLANNING_EVENT_TYPES.started,
+    eventPayload: { workerRunsCreated: 0 }
+  });
+  attempt = written.attempt;
+
+  const failAttempt = async (stage, reason, detail, evidence = {}) => {
+    const failed = advancePlanningAttempt(attempt, {
+      ...evidence,
+      state: 'failed',
+      failureStage: stage,
+      failureReason: reason,
+      failureDetail: detail
+        ? String(detail).slice(0, PLANNER_REQUEST_LIMITS.maxStoredFailureDetail)
+        : null,
+      completedAt: new Date().toISOString()
+    });
+    await repository.writeStructuredAllocationPlanningAttempt({
+      ticketId: ticket.id,
+      attempt: failed,
+      expectedAttemptStateHash: attempt.attemptStateHash,
+      eventType: STRUCTURED_PLANNING_EVENT_TYPES.failed,
+      eventPayload: { workerRunsCreated: 0 }
+    });
+    attempt = failed;
+    await blockTicketForStructuredPlanning(ticket, { stage, reason, detail });
+    return { handled: true };
+  };
+
+  // Request evidence is durable BEFORE the wire. That ordering is what makes
+  // "process stopped after request initiation" recoverable as outcome-unknown
+  // rather than as an attempt that may or may not have happened.
+  const requestStarted = advancePlanningAttempt(attempt, {
+    state: 'request_started',
+    requestHash,
+    requestMetadata: {
+      contextVersion: context.version,
+      contextHash: context.contextHash,
+      messageCount: messages.length,
+      requestBytes,
+      timeoutMs: PLANNER_REQUEST_LIMITS.timeoutMs,
+      maxResponseBytes: PLANNER_REQUEST_LIMITS.maxResponseBytes
+    },
+    requestStartedAt: new Date().toISOString()
+  });
+  written = await repository.writeStructuredAllocationPlanningAttempt({
+    ticketId: ticket.id,
+    attempt: requestStarted,
+    expectedAttemptStateHash: attempt.attemptStateHash,
+    eventType: STRUCTURED_PLANNING_EVENT_TYPES.requested,
+    eventPayload: { workerRunsCreated: 0 }
+  });
+  attempt = written.attempt;
+
+  // The one and only provider request. Every outcome other than a received
+  // response is terminal for this attempt: there is no second call, no fallback
+  // route and no repair.
+  const call = await callPlannerProviderOnce(routeFacts.plannerAgent, messages);
+  if (call.status !== 'received') {
+    const reason = call.status === 'timeout' ? 'provider_request_timed_out'
+      : call.status === 'response_too_large' ? 'provider_response_too_large'
+        : call.status === 'provider_response_empty' ? 'provider_response_empty'
+          : 'provider_request_failed';
+    return failAttempt('response', reason, call.detail, {
+      responseStatus: call.status === 'response_too_large' ? 'response_too_large'
+        : call.status === 'timeout' ? 'timeout' : 'provider_error'
+    });
+  }
+
+  const evidence = boundedPlannerResponseEvidence(call.text);
+  written = await repository.writeStructuredAllocationPlanningAttempt({
+    ticketId: ticket.id,
+    attempt: advancePlanningAttempt(attempt, {
+      state: 'response_received',
+      responseStatus: 'received',
+      ...evidence
+    }),
+    expectedAttemptStateHash: attempt.attemptStateHash,
+    eventType: STRUCTURED_PLANNING_EVENT_TYPES.responded,
+    eventPayload: { workerRunsCreated: 0 }
+  });
+  attempt = written.attempt;
+
+  // Strict parse, then closed validation, then runtime-owned lowering. No
+  // repair request is issued at any point.
+  let proposal = null;
+  let planDraft = null;
+  try {
+    proposal = normalizePlannerProposal(parsePlannerProposalDocument(call.text));
+  } catch (error) {
+    // The response text was durably stored before parsing, so a rejected
+    // proposal keeps the exact evidence that justified the rejection.
+    const notExactJson = error.reason === 'proposal_not_exact_json';
+    return failAttempt(
+      notExactJson ? 'parse' : 'proposal_validation',
+      error.reason || 'proposal_contract_violation',
+      error.message,
+      notExactJson
+        ? { parseStatus: 'failed' }
+        : { parseStatus: 'ok', validationStatus: 'failed' }
+    );
+  }
+
+  try {
+    planDraft = lowerPlannerProposalToAllocationPlanDraft({
+      ticketId: ticket.id,
+      authority,
+      proposal
+    });
+  } catch (error) {
+    return failAttempt(
+      'lowering',
+      error.reason || 'proposal_lowering_rejected',
+      error.message,
+      { parseStatus: 'ok', validationStatus: 'failed' }
+    );
+  }
+
+  written = await repository.writeStructuredAllocationPlanningAttempt({
+    ticketId: ticket.id,
+    attempt: advancePlanningAttempt(attempt, {
+      state: 'proposal_validated',
+      parseStatus: 'ok',
+      validationStatus: 'ok',
+      proposalHash: proposal.proposalHash
+    }),
+    expectedAttemptStateHash: attempt.attemptStateHash,
+    eventType: STRUCTURED_PLANNING_EVENT_TYPES.validated,
+    eventPayload: { workerRunsCreated: 0 }
+  });
+  attempt = written.attempt;
+
+  // Atomic admission. The store re-locks the ticket, re-validates authority
+  // hashes, re-evaluates applicability and readiness against live rows, checks
+  // attempt uniqueness and evidence hashes, reserves identities, materializes
+  // and validates v2 authority, persists the plan with its provenance, marks
+  // the attempt admitted and appends the event — all in one transaction.
+  let admission;
+  try {
+    admission = await repository.admitStructuredAllocationPlan({
+      ticketId: ticket.id,
+      attempt,
+      allocationPlanDraft: planDraft,
+      plannerCredentialsAvailable: routeFacts.plannerCredentialsAvailable,
+      eventType: STRUCTURED_PLANNING_EVENT_TYPES.admitted,
+      eventPayload: { source: 'structured_allocation_planning' }
+    });
+  } catch (error) {
+    return failAttempt(
+      'admission',
+      error.code === 'ALLOCATION_PLAN_V2_INVALID' ||
+        error.code === 'ALLOCATION_PLAN_V2_HASH_MISMATCH'
+        ? 'plan_validation_failed'
+        : 'plan_admission_conflict',
+      error.message
+    );
+  }
+
+  appendSystemLog(
+    'allocation:structured_plan_admitted',
+    `Ticket #${ticket.id} admitted Allocation Plan v2 #${admission.plan.id} ` +
+      '(pending; zero worker runs; leaf execution awaits Tranche 3)',
+    null,
+    {
+      ticketId: ticket.id,
+      allocationPlanId: admission.plan.id,
+      planHash: admission.plan.planHash,
+      attemptId: admission.attempt.attemptId,
+      workerRunsCreated: 0,
+      leafExecutionAvailable: false
+    }
+  );
+  broadcastTicketChange();
+  return { handled: true };
+}
+
 async function createRunsForTicket(ticket, delegated = null, options = {}) {
   return runWithRequiredMutationAdmission({
     source: 'ticket_run_creation',
@@ -15806,6 +16340,19 @@ async function createRunsForTicket(ticket, delegated = null, options = {}) {
 async function createRunsForTicketAdmitted(ticket, delegated = null, options = {}) {
   if (!ticket || ticket.status !== 'open') return [];
   if (hasUnresolvedTicketTriage(ticket)) return [];
+
+  // Tranche 2B containment. Every path that can create runs — ticket creation,
+  // rerun, reopen, status change to open, reassignment, watcher proposal —
+  // funnels through this function, so one gate here contains all of them.
+  //
+  // A ticket holding structured PLANNING authority never falls back to v1
+  // allocation: it either plans through Tranche 2B or is blocked with a
+  // canonical reason. Tickets without that authority, including admission-
+  // ineligible structured tickets, keep the v1 path unchanged.
+  if (hasStructuredPlanningAuthority(ticket)) {
+    const planning = await runStructuredAllocationPlanning(ticket);
+    if (planning.handled) return [];
+  }
 
   // Direct-action tickets: check objective clarity before creating any run.
   if (ticket.executionMode !== 'workflow') {
@@ -24550,11 +25097,15 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   const latestChildRuns = await readLatestRunsForTickets(rawChildTickets.map(child => child.id));
   const childTickets = buildChildTicketSummaries(rawChildTickets, latestChildRuns);
   const structuredAllocation = projectStructuredAllocationAuthorityForTicket(ticket);
+  const structuredAllocationPlanning = projectStructuredAllocationPlanningForTicket(ticket, {
+    allocationPlan
+  });
 
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
     ticket,
     structuredAllocation,
+    structuredAllocationPlanning,
     parentTicket,
     childTickets,
     browserTarget: ticket.targetRef && ticket.targetRef.kind === 'browser'

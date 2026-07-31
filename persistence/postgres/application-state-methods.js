@@ -7,6 +7,9 @@ const {
   normalizeStoredAllocationPlanV2,
   serializeAllocationPlanV2StorageBody
 } = require('../../runtime/allocation-plan-contract');
+const {
+  normalizePlanningProvenance
+} = require('../../runtime/structured-allocation-planning-contract');
 
 function positiveSafeInteger(value, label) {
   const number = typeof value === 'string' && /^[1-9]\d*$/.test(value) ? Number(value) : value;
@@ -60,7 +63,7 @@ function allocationPlanFromRow(row) {
     throw new TypeError(`Unsupported allocation plan version: ${String(row.body.version)}`);
   }
   if (hasVersion) {
-    return normalizeStoredAllocationPlanV2({
+    const plan = normalizeStoredAllocationPlanV2({
       id: positiveSafeInteger(row.id, 'allocationPlan.id'),
       ticketId: positiveSafeInteger(row.ticket_id, 'allocationPlan.ticketId'),
       status: row.status,
@@ -69,6 +72,14 @@ function allocationPlanFromRow(row) {
       updatedAt: timestamp(row.updated_at, 'allocationPlan.updatedAt'),
       body: row.body
     });
+    // The allocation-plan contract carries planningProvenance opaquely so it
+    // does not need to depend on the planning contract. Validation happens
+    // here, on every read, so a tampered or transplanted provenance record
+    // fails closed rather than projecting as authority.
+    if (plan.planningProvenance != null) {
+      normalizePlanningProvenance(plan.planningProvenance, { expectedPlanHash: plan.planHash });
+    }
+    return plan;
   }
   return {
     ...(row.body || {}),
@@ -642,4 +653,4 @@ function installApplicationStateMethods(PostgresRuntimeStore, dependencies) {
   Object.assign(PostgresRuntimeStore.prototype, methods(dependencies));
 }
 
-module.exports = { installApplicationStateMethods };
+module.exports = { installApplicationStateMethods, allocationPlanFromRow };

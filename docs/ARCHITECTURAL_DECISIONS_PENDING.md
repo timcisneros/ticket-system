@@ -12,6 +12,43 @@ governing design memo, that memo holds the rationale and this register holds the
 
 ---
 
+### A27. The ticket-simulation provider call is unbounded
+
+| Field | Value |
+|-------|-------|
+| **Status** | **Open.** Found during the Tranche 2B provider-seam audit; not fixed there because it is outside that tranche's scope |
+| **Severity** | **Medium** — an operator-triggered endpoint can hold a request open indefinitely against a hung provider |
+| **Discovered by** | Auditing every `callModelProvider` call site for Tranche 2B reuse |
+
+`POST /api/tickets/:id/simulate` (`server.js`, the `includeModelPlan` branch) calls:
+
+```js
+modelResponse = await callModelProvider(agent, input, { simulation: true, timeout: 30000 });
+```
+
+`callModelProvider` reads only `options.signal` and `options.onRequest`. Both
+`simulation` and `timeout` are silently ignored, so this call has **no timeout and no
+abort path at all**. For `ollama` it goes through `providerHttpJsonRequest`, which is
+documented as having no implicit timeout by design because the run's `AbortController`
+is meant to be the sole budget — and here there is no controller. For `openai` it
+inherits only undici's default header timeout.
+
+Every other provider call site passes a real `AbortSignal`
+(`callModelProviderWithRunTimeout` for runs; a dedicated `AbortController` for the
+Tranche 2B planner request). This endpoint is the only one that does not.
+
+**Why it was not fixed in Tranche 2B.** The tranche's authorized surface is structured
+allocation planning. Changing simulation-endpoint timeout behavior is an unrelated
+runtime policy change with its own operator-visible effect, and folding it into a
+planner-admission commit would hide it. Tranche 2B instead constructs its own
+`AbortController` and does not reuse the simulation call's option shape.
+
+**Decision needed.** Either give the simulation endpoint an explicit
+`AbortController` with a documented bound, or delete the two dead options so the
+absence of a timeout is visible in the source rather than implied by them.
+
+---
+
 ## Process-execution GA release blockers (2026-07-29)
 
 | Field | Value |

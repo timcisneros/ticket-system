@@ -321,11 +321,63 @@
           <div><dt>Allocation mode</dt><dd><code><%= planningSnapshot.allocationMode %></code></dd></div>
           <div><dt>Candidate agents</dt><dd><%= planningSnapshot.candidates.map(candidate => candidate.name + ' (#' + candidate.agentId + ')').join(', ') %></dd></div>
         </dl>
-        <p class="text-muted">This snapshot grants no provider request, workspace operation, browser operation, process launch, route role, budget, allocation-plan admission, or worker-run authority.</p>
+        <p class="text-muted">This snapshot grants no worker-run authority, workspace operation, browser operation, process launch, route role, or budget. It authorizes exactly one bounded planner request and one Allocation Plan v2 admission.</p>
       <% } %>
     <% } %>
   </div>
 </details>
+
+<%
+  const planningProjection = typeof structuredAllocationPlanning !== 'undefined'
+    ? structuredAllocationPlanning : null;
+  const planningAttempt = planningProjection ? planningProjection.attempt : null;
+  const planningProvenance = planningProjection ? planningProjection.planningProvenance : null;
+%>
+<% if (structuredAuthority && planningSnapshot) { %>
+<details class="disclosure" <%= planningAttempt ? 'open' : '' %>>
+  <summary>Structured Allocation Planning <span class="sub"><%= planningAttempt ? planningAttempt.state.replace(/_/g, ' ') : 'Not attempted' %></span></summary>
+  <div class="body">
+    <% if (!planningAttempt) { %>
+      <p class="text-muted">No planner request has been made for this ticket. Planning requires both admitted admission eligibility and a currently applicable assignment; stored eligibility alone never authorizes a planner request.</p>
+    <% } else { %>
+      <dl class="detail-grid">
+        <div><dt>Attempt</dt><dd><code><%= planningAttempt.attemptId %></code></dd></div>
+        <div><dt>Attempt state</dt><dd><%= planningAttempt.state %></dd></div>
+        <div><dt>Planner</dt><dd>#<%= planningAttempt.planner.agentId %> · <%= planningAttempt.planner.provider %>/<%= planningAttempt.planner.model %></dd></div>
+        <div><dt>Request hash</dt><dd><code><%= planningAttempt.requestHash || '-' %></code></dd></div>
+        <div><dt>Response hash</dt><dd><code><%= planningAttempt.responseHash || '-' %></code></dd></div>
+        <div><dt>Proposal hash</dt><dd><code><%= planningAttempt.proposalHash || '-' %></code></dd></div>
+        <div><dt>Response status</dt><dd><%= planningAttempt.responseStatus || '-' %></dd></div>
+        <div><dt>Parse / validation</dt><dd><%= planningAttempt.parseStatus || '-' %> / <%= planningAttempt.validationStatus || '-' %></dd></div>
+        <div><dt>Failure stage</dt><dd><%= planningAttempt.failureStage || 'none' %></dd></div>
+        <div><dt>Failure reason</dt><dd><%= planningAttempt.failureReason || 'none' %></dd></div>
+        <div><dt>Admitted plan</dt><dd><%= planningAttempt.admittedPlanId ? '#' + planningAttempt.admittedPlanId : 'none' %></dd></div>
+        <div><dt>Admitted plan hash</dt><dd><code><%= planningAttempt.admittedPlanHash || '-' %></code></dd></div>
+      </dl>
+      <% if (planningAttempt.responseText) { %>
+        <h3>Bounded planner response evidence</h3>
+        <p class="text-muted">Stored verbatim as evidence of what the provider returned, bounded to <%= planningAttempt.responseBytes %> characters<%= planningAttempt.responseTruncated ? ' (truncated for storage; the hash covers the complete response)' : '' %>. This is model output, not authority.</p>
+        <pre style="white-space:pre-wrap;max-height:18rem;overflow:auto;"><%= planningAttempt.responseText %></pre>
+      <% } %>
+    <% } %>
+    <% if (planningProvenance) { %>
+      <h3>Admitted plan provenance</h3>
+      <dl class="detail-grid">
+        <div><dt>Provenance hash</dt><dd><code><%= planningProvenance.provenanceHash %></code></dd></div>
+        <div><dt>Planning snapshot hash</dt><dd><code><%= planningProvenance.planningAuthoritySnapshotHash %></code></dd></div>
+        <div><dt>Parent declared-work hash</dt><dd><code><%= planningProvenance.parentDeclaredWorkHash %></code></dd></div>
+        <div><dt>Admitted</dt><dd><%= new Date(planningProvenance.admittedAt).toLocaleString() %></dd></div>
+      </dl>
+    <% } %>
+    <h3>Leaf execution</h3>
+    <p class="text-muted">
+      <strong>Unavailable.</strong>
+      <%= planningProjection ? planningProjection.leafExecutionRefusalMessage : 'Structured leaf-run admission is not available until Tranche 3.' %>
+      An admitted plan is decomposition authority only: it creates zero worker runs, is not visible to the scheduler, and is not a completion claim.
+    </p>
+  </div>
+</details>
+<% } %>
 
 <% if (typeof childTickets !== 'undefined' && childTickets && childTickets.length > 0) { %>
 <details class="disclosure" open>

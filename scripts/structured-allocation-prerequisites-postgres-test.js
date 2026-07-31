@@ -434,9 +434,24 @@ async function main() {
       tamperClient.release();
     }
 
+    // Re-designate the openai planner for the live-path assertion below. Earlier
+    // tickets keep their immutable captured snapshots — that a later designation
+    // change cannot rewrite them is exactly the Tranche 2A guarantee.
+    const openAiPlannerGroup = (await store.updateGroup({
+      groupId: changedGroup.id,
+      expectedRevision: changedGroup.revision,
+      value: { ...changedGroup, plannerAgentId: planner.id },
+      changedBy: 'prerequisite-pg-test'
+    })).group;
+    assert.equal(openAiPlannerGroup.plannerAgentId, planner.id);
+
     const server = await startServer({
       TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
-      RUNTIME_SCHEDULER_INTERVAL_MS: '3600000'
+      RUNTIME_SCHEDULER_INTERVAL_MS: '3600000',
+      // Deterministic planner refusal: an openai planner with no resolvable key
+      // fails invocation readiness with planner_credentials_unavailable on every
+      // machine, so this suite never touches a network provider.
+      OPENAI_API_KEY: ''
     });
     const cookie = await server.login();
 
@@ -450,7 +465,7 @@ async function main() {
         acceptanceCriteria: 'Legacy review prose does not supply output authority.',
         declaredWork: JSON.stringify(declaredWork(liveObjective)),
         assignmentTargetType: 'group',
-        assignmentTargetId: String(changedGroup.id),
+        assignmentTargetId: String(openAiPlannerGroup.id),
         assignmentMode: 'allocated',
         capabilityType: 'directAction',
         executionTargetKind: 'workspace',
@@ -462,13 +477,23 @@ async function main() {
       .find(candidate => candidate.objective === liveObjective);
     assert(liveTicket);
     assert.equal(liveTicket.structuredAllocationAuthority.structuredAllocationEligibility.eligible, true);
-    assert.equal(liveTicket.structuredAllocationAuthority.planningAuthoritySnapshot.planner.agentId, worker.id);
+    assert.equal(liveTicket.structuredAllocationAuthority.planningAuthoritySnapshot.planner.agentId, planner.id);
+    // Tranche 2B changed this deliberately. A ticket holding structured PLANNING
+    // authority no longer falls through to v1 allocation: it enters the planner
+    // path, and any refusal there leaves a blocked ticket with no plan and no
+    // runs. Here the designated planner is an openai agent whose credentials do
+    // not resolve, so invocation readiness refuses before any provider request.
     const livePlans = (await store.listAllocationPlans({ ticketId: liveTicket.id, limit: 20 })).plans;
-    assert.equal(livePlans.length, 1, 'existing v1 allocation remains operational');
-    assert.equal(Object.prototype.hasOwnProperty.call(livePlans[0], 'version'), false,
-      'Tranche 2A does not admit Allocation Plan v2');
-    assert.equal((await store.listRunsForTicket({ ticketId: liveTicket.id, limit: 20 })).runs.length, 2,
-      'existing v1 run creation remains unchanged');
+    assert.equal(livePlans.length, 0,
+      'structured planning authority never falls back to v1 allocation');
+    assert.equal((await store.listRunsForTicket({ ticketId: liveTicket.id, limit: 20 })).runs.length, 0,
+      'a structured planning refusal creates zero worker runs');
+    const refusedTicket = await store.getTicket(liveTicket.id);
+    assert.equal(refusedTicket.status, 'blocked',
+      'blocked with no plan and no runs is the canonical truthful refusal state');
+    assert.match(refusedTicket.blockedReason, /invocation_readiness/);
+    assert.equal(refusedTicket.structuredAllocationPlanningAttempt, undefined,
+      'a readiness refusal precedes any planning attempt and issues no provider request');
 
     const api = await server.request('GET', `/api/tickets/${ticket.id}/runtime`, { cookie });
     assert.equal(api.statusCode, 200);

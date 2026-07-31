@@ -73,6 +73,21 @@ const STORED_BODY_FIELDS = Object.freeze([
   'planHash',
   'itemStatuses'
 ]);
+// Tranche 2B durable planning provenance. ALLOWED in a stored v2 body but not
+// REQUIRED, and deliberately outside `planHash`.
+//
+// AUTHORITY_FIELDS is a closed required list: adding provenance there would make
+// every Tranche 1 v2 plan fail exactFields on read and would change the meaning
+// of every planHash already stored. Provenance therefore sits beside the
+// authority, carrying its own hash and embedding the planHash it describes, so
+// it verifies independently and cannot be transplanted onto another plan.
+// Plans admitted before Tranche 2B, and any plan not produced by a planner,
+// simply omit the field.
+const STORED_BODY_OPTIONAL_FIELDS = Object.freeze(['planningProvenance']);
+const STORED_BODY_ALLOWED_FIELDS = Object.freeze([
+  ...STORED_BODY_FIELDS,
+  ...STORED_BODY_OPTIONAL_FIELDS
+]);
 const ITEM_STATUS_FIELDS = Object.freeze([
   'allocationItemId',
   'status',
@@ -548,7 +563,7 @@ function normalizeItemStatuses(value, items) {
   return normalized;
 }
 
-function createAllocationPlanV2StorageBody(authorityValue, createdAt) {
+function createAllocationPlanV2StorageBody(authorityValue, createdAt, planningProvenance = null) {
   const authority = normalizeAllocationPlanV2(authorityValue);
   const itemStatuses = authority.items.map(item => ({
     allocationItemId: item.allocationItemId,
@@ -562,7 +577,8 @@ function createAllocationPlanV2StorageBody(authorityValue, createdAt) {
     sharedConstraints: authority.sharedConstraints,
     items: authority.items,
     planHash: authority.planHash,
-    itemStatuses
+    itemStatuses,
+    ...(planningProvenance === null ? {} : { planningProvenance })
   });
 }
 
@@ -581,6 +597,9 @@ function authorityFromV2Projection(value) {
   });
 }
 
+// Status writes re-serialize the whole body, so provenance is carried forward
+// explicitly here. Dropping it would let an ordinary item-status update erase
+// durable admission evidence.
 function serializeAllocationPlanV2StorageBody(value, itemStatusesValue = value.itemStatuses) {
   const authority = authorityFromV2Projection(value);
   const itemStatuses = normalizeItemStatuses(itemStatusesValue, authority.items);
@@ -591,7 +610,10 @@ function serializeAllocationPlanV2StorageBody(value, itemStatusesValue = value.i
     sharedConstraints: authority.sharedConstraints,
     items: authority.items,
     planHash: authority.planHash,
-    itemStatuses
+    itemStatuses,
+    ...(value.planningProvenance == null
+      ? {}
+      : { planningProvenance: value.planningProvenance })
   });
 }
 
@@ -604,7 +626,7 @@ function normalizeStoredAllocationPlanV2({
   updatedAt,
   body
 }) {
-  exactFields(body, STORED_BODY_FIELDS, STORED_BODY_FIELDS, 'allocationPlan.body');
+  exactFields(body, STORED_BODY_ALLOWED_FIELDS, STORED_BODY_FIELDS, 'allocationPlan.body');
   const authority = normalizeAllocationPlanV2({
     version: body.version,
     id,
@@ -619,6 +641,9 @@ function normalizeStoredAllocationPlanV2({
   const statusById = new Map(itemStatuses.map(item => [item.allocationItemId, item]));
   return deepFreeze({
     ...authority,
+    ...(Object.prototype.hasOwnProperty.call(body, 'planningProvenance')
+      ? { planningProvenance: body.planningProvenance }
+      : {}),
     status: status(planStatus, ALLOCATION_PLAN_STATUSES, 'allocationPlan.status'),
     items: authority.items.map(item => ({
       ...item,
@@ -644,5 +669,7 @@ module.exports = {
   normalizeOwnedOutputPath,
   normalizeStoredAllocationPlanV2,
   pathIsInsideOwnedOutputPaths,
-  serializeAllocationPlanV2StorageBody
+  serializeAllocationPlanV2StorageBody,
+  STORED_BODY_ALLOWED_FIELDS,
+  STORED_BODY_OPTIONAL_FIELDS
 };

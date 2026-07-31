@@ -1627,6 +1627,24 @@ async function cmdTicket(args) {
       console.log(`  ${dim('planning principal')} ${planning.planner.name} (#${planning.planner.agentId}) ${planning.planner.provider}/${planning.planner.model}`);
       console.log(`  ${dim('planning snapshot')} ${planning.snapshotHash}`);
     }
+    const planningProjection = data.structuredAllocationPlanning || null;
+    const attempt = planningProjection ? planningProjection.attempt : null;
+    if (attempt) {
+      console.log(`  ${dim('planning attempt')} ${attempt.attemptId} ${attempt.state}`);
+      console.log(`  ${dim('planning route')} ${attempt.planner.provider}/${attempt.planner.model} (agent #${attempt.planner.agentId})`);
+      console.log(`  ${dim('planning hashes')} request ${attempt.requestHash || '-'} response ${attempt.responseHash || '-'} proposal ${attempt.proposalHash || '-'}`);
+      if (attempt.failureReason) {
+        console.log(`  ${red('planning failed')} stage ${attempt.failureStage}: ${attempt.failureReason}`);
+      }
+      if (attempt.admittedPlanId) {
+        console.log(`  ${dim('admitted plan')} #${attempt.admittedPlanId} ${attempt.admittedPlanHash}`);
+      }
+    } else if (planningProjection) {
+      console.log(`  ${dim('planning attempt')} none`);
+    }
+    if (planningProjection) {
+      console.log(`  ${dim('leaf execution')} unavailable (${planningProjection.leafExecutionRefusalReason}); zero worker runs from planning`);
+    }
   } else {
     console.log(`  ${dim('structured allocation')} historical authority unavailable`);
   }
