@@ -160,14 +160,31 @@ stage. It has exactly two writers, both enforcing the closed lifecycle and an
 optimistic attempt-state guard; a generic ticket patch reaching the field is refused.
 
 Exactly one provider request per attempt, through the existing run-free
-`callModelProvider` adapter seam: fixed 120,000 ms timeout via a dedicated
-`AbortController`, 262,144-character maximum response, 65,536 characters of bounded
-stored response evidence hashed over the complete response, and no tools, workspace,
-browser, process, workflow, handoff, recursion, provider fallback, model fallback,
-repair request or automatic retry. The response-size bound is enforced on receipt
-rather than on the socket, because the shared adapters buffer a complete response
-and adding a streaming cap would change behavior for every production run. Request
-evidence is durable before the wire, so a process that stops after request
+`callModelProvider` adapter seam: a fixed 120,000 ms timeout via a dedicated
+`AbortController`, a single `MAX_PLANNER_RESPONSE_BYTES = 65,536` limit governing
+both acceptance and storage, and no tools, workspace, browser, process, workflow,
+handoff, recursion, provider fallback, model fallback, repair request or automatic
+retry. The environment may shorten the timeout but never extend it.
+
+The response bound is enforced **at transport receipt, in bytes**. Both adapters
+accept an optional `maxResponseBytes`; when it is supplied, reading stops at the
+first chunk crossing the limit, the request is destroyed, and a canonical
+`PROVIDER_RESPONSE_TOO_LARGE` refusal is raised carrying no body. When the option is
+absent — every pre-existing caller — behavior is exactly as before. An oversized
+response is therefore never fully buffered, never parsed, and never persisted.
+
+Automated end-to-end coverage of the transport bound uses the `ollama` adapter,
+because `callOllama` reaches a configured-agent `baseUrl` and a local stub can stand
+in for a real server. The `openai` adapter's equivalent bounded read cannot be
+covered the same way: `callOpenAI` hardcodes `https://api.openai.com/v1/responses`,
+so no local stub can intercept it without introducing a production URL seam that
+this tranche is not authorized to add. Both adapters share the same limit, the same
+canonical `PROVIDER_RESPONSE_TOO_LARGE` refusal and the same absent-option default;
+the OpenAI path was verified by direct exercise but is not gated by a registered
+suite. Closing that gap needs a configurable OpenAI base URL, which is a separate
+decision.
+
+Request evidence is durable before the wire, so a process that stops after request
 initiation resolves to `interrupted`/`outcome_unknown` and the provider call is
 never repeated automatically.
 
@@ -201,9 +218,17 @@ committed plan instead of admitting a second one.
 
 Planning provenance binds the attempt identity, planner identity, provider, model,
 planning-authority snapshot hash, parent declared-work hash, request hash, response
-hash, proposal hash, admitted plan hash and admission timestamp. It is stored
-beside the v2 authority rather than inside `planHash`, in the stored body's ALLOWED
-but not REQUIRED field set. `AUTHORITY_FIELDS` is a closed required list: adding
+hash, proposal hash, admitted plan hash and admission timestamp. Admission is
+validated through **three independent values**: `planHash` (the immutable plan
+authority), `provenanceHash` (the planning facts that produced it), and
+`admissionHash = hash({planHash, provenanceHash})` (the pairing itself).
+`admissionHash` can be checked on its own without rebuilding the provenance record,
+makes a half-written pair structurally impossible, and is re-derived from the
+persisted row inside the admission transaction. Provenance requires all three fields,
+so partial provenance or a partial binding cannot be represented. One attempt binds
+to one plan and one plan to one attempt, enforced under the ticket lock. Provenance
+is stored beside the v2 authority rather than inside `planHash`, in the stored body's
+ALLOWED but not REQUIRED field set. `AUTHORITY_FIELDS` is a closed required list: adding
 provenance there would make every Tranche 1 v2 plan fail validation on read and
 would change the meaning of every stored `planHash`, which this roadmap forbids.
 Provenance therefore carries its own canonical hash and embeds the `planHash` it
@@ -219,17 +244,29 @@ visibility, no completion and no hidden retry: a blocked Ticket with no plan and
 Runs is the canonical truthful state, carrying the exact stage, canonical reason and
 available bounded evidence.
 
-Recovery is conservative by design. An attempt found in `request_started` becomes
-`interrupted`/`outcome_unknown` and the provider call is never repeated. An attempt
-found in `response_received` or `proposal_validated` — a process that stopped after
-a complete response — is refused rather than resumed. Its stored response, request
-hash and context hash remain durable and deterministically reparseable, and the
-contract functions that would reparse and revalidate it are pure, so a later
-operator-initiated resumption is possible without a new provider request; Tranche 2B
-deliberately does not perform that automatically, because no automatic repair or
-retry is authorized. Malformed or hash-conflicting stored planning state fails closed
-on read, admitted attempts stay idempotently admitted, and recovery creates no worker
-Runs.
+Recovery completeness is a structural invariant, not a hope. A `response_received`,
+`proposal_validated` or `plan_admitted` attempt must carry the **complete** response
+text, with `responseTruncated: false`, `responseBytes` equal to the UTF-8 byte length
+of the stored text, and `responseHash` equal to the SHA-256 of exactly those bytes.
+All three are re-checked on every read, so such a state always contains enough
+hash-validated durable material to reparse and revalidate deterministically without a
+second provider request. Truncation is not representable: `responseTruncated: true`
+fails closed, and anything over the byte limit was refused at transport receipt before
+`response_received` could be recorded.
+
+An earlier split — accept up to 262,144 characters, store only 65,536 — did not have
+this property. Response persistence and proposal persistence are separate
+transactions, the proposal is persisted only as a hash, and a crash in that window
+left a durable `response_received` holding a truncated excerpt that could not be
+continued. Collapsing to one byte limit at transport receipt removes the window
+entirely rather than narrowing it.
+
+Recovery remains conservative about *action*. An attempt found in `request_started`
+becomes `interrupted`/`outcome_unknown`. An attempt found in `response_received` or
+`proposal_validated` is refused rather than auto-resumed, even though it is now
+provably resumable, because no automatic repair or retry is authorized. Malformed or
+hash-conflicting stored planning state fails closed on read, admitted attempts stay
+idempotently admitted, and recovery creates no worker Runs.
 
 Tranche 2B adds no migration. Historical Tickets without structured authority, v1
 plans and runs, and existing Tranche 1 v2 plans are all unchanged, and no planner

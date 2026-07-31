@@ -48,11 +48,21 @@ const RUNTIME_EVIDENCE_TYPE = 'deterministic-postcondition-result';
 // Exactly one provider request per attempt, under these fixed bounds. There is
 // no budget policy here — Tranche 4 owns economics. These are hard safety
 // limits, not a spend decision.
+//
+// One number governs both acceptance and storage. An earlier split — accept up
+// to 262,144 characters but store only 65,536 — produced a durable
+// `response_received` state whose stored text was a truncated excerpt, and the
+// proposal is persisted in a LATER transaction, so a crash in between left a
+// record that could not be deterministically continued without re-asking the
+// provider. A single byte limit enforced at transport receipt removes that
+// window: whatever reaches `response_received` is the complete accepted
+// response, hashed over exactly the bytes stored.
+const MAX_PLANNER_RESPONSE_BYTES = 65_536;
 const PLANNER_REQUEST_LIMITS = deepFreeze({
   maxRequests: 1,
   timeoutMs: 120_000,
-  maxResponseBytes: 262_144,
-  maxStoredResponseBytes: 65_536,
+  maxResponseBytes: MAX_PLANNER_RESPONSE_BYTES,
+  maxStoredResponseBytes: MAX_PLANNER_RESPONSE_BYTES,
   maxStoredFailureDetail: 2_000,
   maxProposalItems: 64,
   maxSharedConstraints: 64,
@@ -286,8 +296,25 @@ const PLANNING_PROVENANCE_FIELDS = Object.freeze([
   'proposalHash',
   'planHash',
   'admittedAt',
-  'provenanceHash'
+  'provenanceHash',
+  'admissionHash'
 ]);
+
+// Three independently validated values, not two.
+//
+//   planHash        immutable plan authority
+//   provenanceHash  the planning facts that produced it
+//   admissionHash   hash({planHash, provenanceHash}) — the PAIRING itself
+//
+// planHash already sits inside provenanceHash's preimage, so a transplant was
+// already detectable; admissionHash makes the binding a first-class value that
+// can be validated on its own, without recomputing the whole provenance record,
+// and makes a half-written pair structurally impossible rather than merely
+// improbable. It is stored beside the authority and is not part of planHash, so
+// no historical plan changes meaning.
+function computeAdmissionHash({ planHash, provenanceHash }) {
+  return hashCanonical({ planHash, provenanceHash });
+}
 
 const PLANNER_REQUEST_CONTEXT_FIELDS = Object.freeze([
   'version',
@@ -1006,10 +1033,23 @@ function buildPlanningProvenance({
     planHash: hash(planHash, 'planningProvenance.planHash'),
     admittedAt: timestamp(admittedAt, 'planningProvenance.admittedAt')
   };
-  return deepFreeze({ ...withoutHash, provenanceHash: hashCanonical(withoutHash) });
+  const provenanceHash = hashCanonical(withoutHash);
+  return deepFreeze({
+    ...withoutHash,
+    provenanceHash,
+    admissionHash: computeAdmissionHash({
+      planHash: withoutHash.planHash,
+      provenanceHash
+    })
+  });
 }
 
-function normalizePlanningProvenance(value, { expectedPlanHash = null } = {}) {
+function normalizePlanningProvenance(value, {
+  expectedPlanHash = null,
+  expectedAttemptId = null
+} = {}) {
+  // exactFields requires BOTH hashes, so partial provenance or a partial
+  // binding cannot be represented at all.
   exactFields(value, PLANNING_PROVENANCE_FIELDS, 'planningProvenance');
   if (value.version !== PLANNING_PROVENANCE_VERSION) {
     fail(`planningProvenance.version must be ${PLANNING_PROVENANCE_VERSION}`);
@@ -1019,10 +1059,30 @@ function normalizePlanningProvenance(value, { expectedPlanHash = null } = {}) {
   if (provenanceHash !== rebuilt.provenanceHash) {
     fail('planningProvenance.provenanceHash does not match its admitted facts');
   }
+  const admissionHash = hash(value.admissionHash, 'planningProvenance.admissionHash');
+  if (admissionHash !== rebuilt.admissionHash) {
+    fail('planningProvenance.admissionHash does not bind its plan and provenance');
+  }
   if (expectedPlanHash !== null && rebuilt.planHash !== expectedPlanHash) {
     fail('planningProvenance.planHash does not identify its allocation plan');
   }
+  // One plan binds to one attempt, and one attempt to one plan.
+  if (expectedAttemptId !== null && rebuilt.attemptId !== expectedAttemptId) {
+    fail('planningProvenance.attemptId does not identify its planning attempt');
+  }
   return rebuilt;
+}
+
+// Validate the pairing on its own, without rebuilding the provenance record.
+function assertAdmissionBinding({ planHash, provenanceHash, admissionHash }) {
+  const expected = computeAdmissionHash({
+    planHash: hash(planHash, 'admissionBinding.planHash'),
+    provenanceHash: hash(provenanceHash, 'admissionBinding.provenanceHash')
+  });
+  if (hash(admissionHash, 'admissionBinding.admissionHash') !== expected) {
+    fail('admissionHash does not bind this plan hash to this provenance hash');
+  }
+  return true;
 }
 
 // ── Planning attempt ────────────────────────────────────────────────────────
@@ -1104,7 +1164,7 @@ function attemptWithoutHash(value) {
       : nonNegativeSafeInteger(value.responseBytes, 'planningAttempt.responseBytes'),
     responseTruncated: value.responseTruncated === null
       ? null
-      : assertBoolean(value.responseTruncated, 'planningAttempt.responseTruncated'),
+      : assertNotTruncated(value.responseTruncated, 'planningAttempt.responseTruncated'),
     responseHash: nullableHash(value.responseHash, 'planningAttempt.responseHash'),
     parseStatus: nullableEnumerated(
       value.parseStatus,
@@ -1148,10 +1208,26 @@ function assertBoolean(value, label) {
   return value;
 }
 
+// The field remains in the closed schema so the invariant is explicit in the
+// record, but only `false` is representable: a truncated response is refused at
+// transport receipt and never reaches a durable attempt. A stored `true` means
+// the record predates this rule or was hand-edited, and it fails closed.
+function assertNotTruncated(value, label) {
+  assertBoolean(value, label);
+  if (value === true) {
+    fail(`${label} must be false; a truncated planner response is never durable`);
+  }
+  return false;
+}
+
+// Measured in BYTES, not UTF-16 code units: a multibyte response whose
+// character count is under the limit can still exceed it on the wire, and the
+// transport bound counts bytes.
 function boundedEvidenceText(value, label) {
   if (typeof value !== 'string') fail(`${label} must be a string`);
-  if (value.length > PLANNER_REQUEST_LIMITS.maxStoredResponseBytes) {
-    fail(`${label} exceeds ${PLANNER_REQUEST_LIMITS.maxStoredResponseBytes} characters`);
+  const bytes = Buffer.byteLength(value, 'utf8');
+  if (bytes > MAX_PLANNER_RESPONSE_BYTES) {
+    fail(`${label} exceeds ${MAX_PLANNER_RESPONSE_BYTES} bytes`);
   }
   return value;
 }
@@ -1185,6 +1261,19 @@ function assertAttemptStateConsistency(attempt) {
   if (['response_received', 'proposal_validated', 'plan_admitted'].includes(attempt.state)) {
     if (attempt.responseHash === null || attempt.responseStatus !== 'received') {
       fail(`planningAttempt state ${attempt.state} requires a durable received response`);
+    }
+    // Recovery completeness: these states must carry enough hash-validated
+    // durable material to deterministically continue with no second provider
+    // request. That means the COMPLETE response text, whose byte count and hash
+    // both agree with the stored bytes.
+    if (typeof attempt.responseText !== 'string' || attempt.responseTruncated !== false) {
+      fail(`planningAttempt state ${attempt.state} requires the complete durable response text`);
+    }
+    if (attempt.responseBytes !== Buffer.byteLength(attempt.responseText, 'utf8')) {
+      fail('planningAttempt.responseBytes does not match its stored response text');
+    }
+    if (attempt.responseHash !== sha256(attempt.responseText)) {
+      fail('planningAttempt.responseHash does not hash its stored response text');
     }
   }
   if (['proposal_validated', 'plan_admitted'].includes(attempt.state)) {
@@ -1359,8 +1448,11 @@ module.exports = {
   PLANNING_REFUSAL_MESSAGES,
   PLANNING_RESPONSE_STATUSES,
   RUNTIME_EVIDENCE_TYPE,
+  MAX_PLANNER_RESPONSE_BYTES,
   StructuredAllocationPlanningError,
   advancePlanningAttempt,
+  assertAdmissionBinding,
+  computeAdmissionHash,
   buildPlannerRequestContext,
   buildPlannerRequestMessages,
   buildPlanningProvenance,

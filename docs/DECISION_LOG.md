@@ -1,5 +1,50 @@
 # Decision Log
 
+## Planner Response Bound and Admission Binding (2026-07-31)
+
+Merge-readiness audit of Tranche 2B corrected three findings before merge.
+
+**The response bound was post-buffer only.** Both adapters buffered the entire body
+before any check — Ollama accumulated unbounded chunks then `Buffer.concat`, OpenAI
+did `await response.text()` — and the check counted UTF-16 code units on the
+extracted model text, not bytes on the wire. A post-buffer length check is not an
+operational bound. Both adapters now accept an optional `maxResponseBytes`: reading
+stops at the first chunk crossing the limit, the request is destroyed, and a
+canonical `PROVIDER_RESPONSE_TOO_LARGE` refusal carrying no body is raised. Absent
+the option, every pre-existing caller behaves exactly as before, so this is a new
+optional boundary rather than a provider-architecture rewrite.
+
+**Truncated response evidence was a recovery gap.** Accepting 262,144 characters
+while storing 65,536 produced a durable `response_received` whose text was an
+excerpt. Response persistence and proposal persistence are separate transactions and
+the proposal is persisted only as a hash, so a crash between them left a record that
+could not be continued without re-asking the provider — which no rule authorizes.
+`MAX_PLANNER_RESPONSE_BYTES = 65,536` now governs both acceptance and storage,
+enforced in bytes at transport receipt. A `response_received`, `proposal_validated`
+or `plan_admitted` attempt must carry the complete text with `responseTruncated:
+false`, byte count matching the stored text, and a hash over exactly those bytes;
+all three are re-checked on every read. Truncation is no longer representable. The
+window is removed rather than narrowed.
+
+**Admission binding was implicit.** `planHash` sat inside `provenanceHash`'s
+preimage, so a transplant was already detectable, but there was no third
+independently validated value. Provenance now carries `admissionHash =
+hash({planHash, provenanceHash})`, checkable on its own without rebuilding the
+provenance record, re-derived from the persisted row inside the admission
+transaction, and required — so partial provenance or a partial binding cannot be
+represented. Historical Tranche 1 v2 plans omit provenance and binding entirely and
+gain neither; neither value enters or changes any `planHash`.
+
+A live provider-path suite was added. It reaches a local HTTP stub through the
+existing configured-agent `baseUrl` seam, so the server issues a genuine request
+through `callOllama` and `providerHttpJsonRequest` with nothing stubbed inside
+production. The planner timeout gained an environment override that may only shorten
+the contract bound, never extend it.
+
+The A27 simulation-endpoint timeout finding was deliberately not fixed here: the
+simulation call passes no `maxResponseBytes`, its behavior is unchanged, and it
+remains an open documentation-only entry.
+
 ## Planner Lowering and Plan Admission (2026-07-31)
 
 Tranche 2B admits Allocation Plan v2 from planner output. The integration boundary is

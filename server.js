@@ -15990,30 +15990,52 @@ async function blockTicketForStructuredPlanning(ticket, { stage, reason, detail 
 // streaming cap inside providerHttpJsonRequest would change behaviour for every
 // production run. The limit is therefore a hard admission bound: an oversized
 // response is refused and never parsed.
+// The planner request timeout. The contract limit is the operating value and
+// the ceiling; the environment may only shorten it, never extend it, so a
+// deployment or a test can never widen the bound this tranche committed to.
+function getPlannerRequestTimeoutMs() {
+  return Math.min(
+    getPositiveIntegerEnv('STRUCTURED_PLANNER_REQUEST_TIMEOUT_MS', PLANNER_REQUEST_LIMITS.timeoutMs),
+    PLANNER_REQUEST_LIMITS.timeoutMs
+  );
+}
+
 async function callPlannerProviderOnce(agent, messages) {
+  const timeoutMs = getPlannerRequestTimeoutMs();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PLANNER_REQUEST_LIMITS.timeoutMs);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await callModelProvider(agent, messages, { signal: controller.signal });
+    const response = await callModelProvider(agent, messages, {
+      signal: controller.signal,
+      maxResponseBytes: PLANNER_REQUEST_LIMITS.maxResponseBytes
+    });
     const text = String(response && response.text ? response.text : '');
     if (!text.trim()) {
       return { status: 'provider_response_empty', text: null, detail: 'Planner returned no output' };
     }
-    if (text.length > PLANNER_REQUEST_LIMITS.maxResponseBytes) {
+    // Belt-and-braces on the extracted model text. The transport already
+    // refused an oversized HTTP body; this catches the case where a compliant
+    // body carries model text that is itself over the limit, and it counts
+    // BYTES so a multibyte response cannot slip past a character check.
+    const textBytes = Buffer.byteLength(text, 'utf8');
+    if (textBytes > PLANNER_REQUEST_LIMITS.maxResponseBytes) {
       return {
         status: 'response_too_large',
         text: null,
-        detail: `Planner response of ${text.length} characters exceeds ` +
+        detail: `Planner response of ${textBytes} bytes exceeds ` +
           `${PLANNER_REQUEST_LIMITS.maxResponseBytes}`
       };
     }
     return { status: 'received', text, detail: null };
   } catch (error) {
+    if (error && error.responseTooLarge === true) {
+      return { status: 'response_too_large', text: null, detail: error.message };
+    }
     if (error && error.name === 'AbortError') {
       return {
         status: 'timeout',
         text: null,
-        detail: `Planner request exceeded ${PLANNER_REQUEST_LIMITS.timeoutMs}ms`
+        detail: `Planner request exceeded ${timeoutMs}ms`
       };
     }
     // Provider errors carry request/response payloads that may name the model
@@ -16032,16 +16054,17 @@ async function callPlannerProviderOnce(agent, messages) {
   }
 }
 
-function boundedPlannerResponseEvidence(text) {
-  const responseHash = crypto.createHash('sha256').update(text).digest('hex');
-  const truncated = text.length > PLANNER_REQUEST_LIMITS.maxStoredResponseBytes;
+// The complete accepted response, hashed over exactly the bytes stored. There
+// is no truncation path: anything over the limit was refused at transport
+// receipt and never reaches this function, so a durable `response_received`
+// always carries enough material to deterministically continue without a second
+// provider request.
+function plannerResponseEvidence(text) {
   return {
-    responseText: truncated ? text.slice(0, PLANNER_REQUEST_LIMITS.maxStoredResponseBytes) : text,
-    responseBytes: text.length,
-    responseTruncated: truncated,
-    // Hashed over the COMPLETE response, so a truncated stored excerpt is still
-    // provably an excerpt of what the provider actually returned.
-    responseHash
+    responseText: text,
+    responseBytes: Buffer.byteLength(text, 'utf8'),
+    responseTruncated: false,
+    responseHash: crypto.createHash('sha256').update(text, 'utf8').digest('hex')
   };
 }
 
@@ -16194,7 +16217,7 @@ async function runStructuredAllocationPlanning(ticket) {
       contextHash: context.contextHash,
       messageCount: messages.length,
       requestBytes,
-      timeoutMs: PLANNER_REQUEST_LIMITS.timeoutMs,
+      timeoutMs: getPlannerRequestTimeoutMs(),
       maxResponseBytes: PLANNER_REQUEST_LIMITS.maxResponseBytes
     },
     requestStartedAt: new Date().toISOString()
@@ -16223,7 +16246,7 @@ async function runStructuredAllocationPlanning(ticket) {
     });
   }
 
-  const evidence = boundedPlannerResponseEvidence(call.text);
+  const evidence = plannerResponseEvidence(call.text);
   written = await repository.writeStructuredAllocationPlanningAttempt({
     ticketId: ticket.id,
     attempt: advancePlanningAttempt(attempt, {
@@ -16901,6 +16924,7 @@ async function callOpenAI(agent, input, options = {}) {
     if (fetchError && fetchError.name === 'AbortError') {
       throw fetchError;
     }
+    if (fetchError && fetchError.responseTooLarge === true) throw fetchError;
     const error = createProviderError(fetchError.message || 'OpenAI request failed before response', 'OPENAI_TRANSPORT_ERROR', {
       phase: 'request',
       provider: 'openai',
@@ -16912,7 +16936,13 @@ async function callOpenAI(agent, input, options = {}) {
   const responseHeaders = Object.fromEntries(response.headers.entries());
   const requestId = providerRequestId(responseHeaders);
 
-  const responseText = await response.text();
+  // Without an explicit limit this is the original unbounded read. With one,
+  // the body is read incrementally and the request is cancelled at the first
+  // byte past the limit.
+  const responseText = Number.isSafeInteger(options.maxResponseBytes) &&
+    options.maxResponseBytes > 0
+    ? await readFetchBodyBounded(response, options.maxResponseBytes)
+    : await response.text();
   let data = null;
 
   if (responseText) {
@@ -17019,15 +17049,46 @@ async function callOpenAI(agent, input, options = {}) {
 // AbortSignal (the run's maxRuntimeDurationMs controller); fetch/undici's
 // hidden headersTimeout (300s) must not preempt a configured longer budget.
 // Response mirrors the subset of the fetch interface callOllama consumes.
-function providerHttpJsonRequest(url, { method = 'POST', headers = {}, body = null, signal } = {}) {
+function providerHttpJsonRequest(url, {
+  method = 'POST',
+  headers = {},
+  body = null,
+  signal,
+  maxResponseBytes = null
+} = {}) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
     const transport = target.protocol === 'https:' ? https : http;
     const request = transport.request(target, { method, headers, signal }, response => {
       const chunks = [];
-      response.on('data', chunk => chunks.push(chunk));
-      response.on('error', reject);
+      let received = 0;
+      let overflowed = false;
+      response.on('data', chunk => {
+        // Optional transport-level bound. Absent (the default for every
+        // existing caller), this branch never runs and behavior is unchanged.
+        // Present, reading stops at the first chunk that crosses the limit and
+        // the request is destroyed, so an oversized body is never fully
+        // buffered and never reaches a caller that could persist it.
+        if (maxResponseBytes !== null) {
+          received += chunk.length;
+          if (received > maxResponseBytes) {
+            if (overflowed) return;
+            overflowed = true;
+            chunks.length = 0;
+            response.destroy();
+            request.destroy();
+            reject(createProviderResponseTooLargeError(maxResponseBytes, received));
+            return;
+          }
+        }
+        chunks.push(chunk);
+      });
+      response.on('error', error => {
+        if (overflowed) return;
+        reject(error);
+      });
       response.on('end', () => {
+        if (overflowed) return;
         const bodyText = Buffer.concat(chunks).toString('utf8');
         resolve({
           ok: response.statusCode >= 200 && response.statusCode < 300,
@@ -17037,10 +17098,48 @@ function providerHttpJsonRequest(url, { method = 'POST', headers = {}, body = nu
         });
       });
     });
-    request.on('error', reject);
+    request.on('error', error => reject(error));
     if (body !== null && body !== undefined) request.write(body);
     request.end();
   });
+}
+
+// Canonical transport-overflow refusal. Distinct from every other provider
+// failure so a caller can record a response-size refusal without inspecting a
+// message, and deliberately carries no response body.
+function createProviderResponseTooLargeError(limitBytes, receivedBytes) {
+  const error = createProviderError(
+    `Provider response exceeded the configured maximum of ${limitBytes} bytes`,
+    'PROVIDER_RESPONSE_TOO_LARGE',
+    { phase: 'response_body', limitBytes, receivedBytes }
+  );
+  error.responseTooLarge = true;
+  error.limitBytes = limitBytes;
+  return error;
+}
+
+// Bounded read of a fetch Response body. Used only when a caller supplies an
+// explicit byte limit; otherwise callers keep using response.text() unchanged.
+async function readFetchBodyBounded(response, maxResponseBytes) {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.length;
+      if (received > maxResponseBytes) {
+        await reader.cancel().catch(() => {});
+        throw createProviderResponseTooLargeError(maxResponseBytes, received);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 async function callOllama(agent, input, options = {}) {
@@ -17081,12 +17180,17 @@ async function callOllama(agent, input, options = {}) {
         'Content-Type': 'application/json'
       },
       signal: options.signal,
-      body: JSON.stringify(responseBody)
+      body: JSON.stringify(responseBody),
+      maxResponseBytes: Number.isSafeInteger(options.maxResponseBytes) &&
+        options.maxResponseBytes > 0
+        ? options.maxResponseBytes
+        : null
     });
   } catch (fetchError) {
     if (fetchError && fetchError.name === 'AbortError') {
       throw fetchError;
     }
+    if (fetchError && fetchError.responseTooLarge === true) throw fetchError;
     // Name the underlying transport cause — "fetch failed" alone is not
     // diagnosable (ECONNREFUSED vs timeout vs socket reset all render alike).
     const causeSource = fetchError && fetchError.cause ? fetchError.cause : fetchError;

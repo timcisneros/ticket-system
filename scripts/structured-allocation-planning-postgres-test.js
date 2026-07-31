@@ -24,7 +24,9 @@ const {
 } = require('../runtime/structured-allocation-prerequisites-contract');
 const {
   advancePlanningAttempt,
+  assertAdmissionBinding,
   buildPlannerRequestMessages,
+  computeAdmissionHash,
   buildPlannerRequestContext,
   createPlanningAttempt,
   lowerPlannerProposalToAllocationPlanDraft,
@@ -265,6 +267,29 @@ async function main() {
       ticket.structuredAllocationAuthority.parentDeclaredWorkSnapshot.contractHash);
     assert.equal(plan.planningProvenance.planHash, plan.planHash);
     assert.equal(plan.planningProvenance.attemptId, attempt.attemptId);
+    // Three independently validated values survive the round trip.
+    assertAdmissionBinding({
+      planHash: plan.planHash,
+      provenanceHash: plan.planningProvenance.provenanceHash,
+      admissionHash: plan.planningProvenance.admissionHash
+    });
+    assert.equal(plan.planningProvenance.admissionHash, computeAdmissionHash({
+      planHash: plan.planHash,
+      provenanceHash: plan.planningProvenance.provenanceHash
+    }));
+    // The complete response is durable: bytes and hash both agree with the
+    // stored text, so response_received onward reparses without a new request.
+    assert.equal(attempt.responseTruncated, false);
+    assert.equal(attempt.responseBytes, Buffer.byteLength(attempt.responseText, 'utf8'));
+    assert.equal(
+      crypto.createHash('sha256').update(attempt.responseText, 'utf8').digest('hex'),
+      attempt.responseHash
+    );
+    assert.equal(
+      normalizePlannerProposal(JSON.parse(attempt.responseText)).proposalHash,
+      attempt.proposalHash,
+      'the durable response deterministically reproduces the admitted proposal hash'
+    );
     assert.equal(plan.planningProvenance.provider, 'openai');
     assert.equal(plan.planningProvenance.requestHash, attempt.requestHash);
     assert.equal(plan.planningProvenance.responseHash, attempt.responseHash);
@@ -366,6 +391,9 @@ async function main() {
     });
     assert.equal(statusWrite.plan.planningProvenance.provenanceHash,
       plan.planningProvenance.provenanceHash);
+    assert.equal(statusWrite.plan.planningProvenance.admissionHash,
+      plan.planningProvenance.admissionHash,
+      'an item-status update preserves the admission binding');
     await store.updateAllocationItemStatus({
       planId: plan.id,
       allocationItemId: plan.items[0].allocationItemId,
@@ -597,6 +625,51 @@ async function main() {
            updated_at = clock_timestamp()
        WHERE id = $1`,
       [plan.id]
+    );
+    assert.equal((await store.getAllocationPlan(plan.id)).planHash, plan.planHash);
+
+    // Tampering only the admission binding also fails closed.
+    await store.pool.query(
+      `UPDATE ${store.table('allocation_plans')}
+       SET body = jsonb_set(body, '{planningProvenance,admissionHash}', $2::jsonb, true),
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [plan.id, JSON.stringify('0'.repeat(64))]
+    );
+    await assert.rejects(store.getAllocationPlan(plan.id),
+      error => /does not bind its plan and provenance/.test(error.message));
+    await store.pool.query(
+      `UPDATE ${store.table('allocation_plans')}
+       SET body = jsonb_set(body, '{planningProvenance,admissionHash}', $2::jsonb, true),
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [plan.id, JSON.stringify(plan.planningProvenance.admissionHash)]
+    );
+
+    // A planner-admitted plan cannot project with provenance removed.
+    await store.pool.query(
+      `UPDATE ${store.table('allocation_plans')}
+       SET body = jsonb_set(body, '{planningProvenance}', $2::jsonb, true),
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [plan.id, JSON.stringify({
+        ...plan.planningProvenance,
+        admissionHash: undefined
+      })]
+    );
+    await assert.rejects(store.getAllocationPlan(plan.id),
+      error => /missing field/.test(error.message),
+      'partial provenance fails closed');
+    await store.pool.query(
+      `UPDATE ${store.table('allocation_plans')}
+       SET body = jsonb_set(body, '{planningProvenance}', $2::jsonb, true),
+           revision = revision + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1`,
+      [plan.id, JSON.stringify(plan.planningProvenance)]
     );
     assert.equal((await store.getAllocationPlan(plan.id)).planHash, plan.planHash);
 

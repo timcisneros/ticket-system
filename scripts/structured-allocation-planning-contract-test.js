@@ -23,10 +23,13 @@ const {
   materializeStructuredAllocationAuthority
 } = require('../runtime/structured-allocation-prerequisites-contract');
 const {
+  MAX_PLANNER_RESPONSE_BYTES,
   PLANNER_PROPOSAL_PROVENANCE,
   PLANNER_REQUEST_LIMITS,
   PLANNING_ATTEMPT_STATES,
   advancePlanningAttempt,
+  assertAdmissionBinding,
+  computeAdmissionHash,
   buildPlannerRequestContext,
   buildPlannerRequestMessages,
   buildPlanningProvenance,
@@ -137,7 +140,11 @@ function main() {
   // ── Request bounds are fixed and forbid every escalation ─────────────────
   assert.equal(PLANNER_REQUEST_LIMITS.maxRequests, 1);
   assert.equal(PLANNER_REQUEST_LIMITS.timeoutMs, 120_000);
-  assert.equal(PLANNER_REQUEST_LIMITS.maxResponseBytes, 262_144);
+  // Acceptance and storage share one byte limit, so nothing durable is ever a
+  // truncated excerpt of a larger accepted response.
+  assert.equal(MAX_PLANNER_RESPONSE_BYTES, 65_536);
+  assert.equal(PLANNER_REQUEST_LIMITS.maxResponseBytes, MAX_PLANNER_RESPONSE_BYTES);
+  assert.equal(PLANNER_REQUEST_LIMITS.maxStoredResponseBytes, MAX_PLANNER_RESPONSE_BYTES);
   for (const forbidden of [
     'tools', 'workspaceOperations', 'browserOperations', 'processOperations',
     'workflowCreation', 'handoff', 'recursion', 'providerFallback', 'modelFallback',
@@ -468,12 +475,75 @@ function main() {
     assert.equal(normalizePlanningAttempt(terminal).attemptStateHash, terminal.attemptStateHash);
   }
 
-  // Response evidence is bounded, and the hash always covers the whole response.
-  const oversized = 'x'.repeat(PLANNER_REQUEST_LIMITS.maxStoredResponseBytes + 10);
+  // ── Response bound is byte-exact, and durable response text is complete ──
+  const durableResponse = (text, state = 'response_received') => advancePlanningAttempt(
+    advancePlanningAttempt(fresh, {
+      state: 'request_started', requestHash, requestMetadata, requestStartedAt: CAPTURED_AT
+    }),
+    {
+      state,
+      responseStatus: 'received',
+      responseText: text,
+      responseBytes: Buffer.byteLength(text, 'utf8'),
+      responseTruncated: false,
+      responseHash: crypto.createHash('sha256').update(text, 'utf8').digest('hex')
+    }
+  );
+
+  // Exactly at the limit is accepted.
+  const atLimit = 'x'.repeat(MAX_PLANNER_RESPONSE_BYTES);
+  const atLimitAttempt = durableResponse(atLimit);
+  assert.equal(atLimitAttempt.responseBytes, MAX_PLANNER_RESPONSE_BYTES);
+  assert.equal(atLimitAttempt.responseTruncated, false);
+
+  // One byte above the limit is refused.
   assert.throws(
-    () => advancePlanningAttempt(staged, { responseText: oversized }),
-    /exceeds/,
-    'stored response evidence is bounded'
+    () => durableResponse('x'.repeat(MAX_PLANNER_RESPONSE_BYTES + 1)),
+    /exceeds 65536 bytes/,
+    'one byte above the limit must be refused'
+  );
+
+  // Multibyte UTF-8: under the limit by characters, over it by bytes.
+  const multibyte = 'é'.repeat(MAX_PLANNER_RESPONSE_BYTES / 2 + 1);
+  assert.equal(multibyte.length < MAX_PLANNER_RESPONSE_BYTES, true,
+    'the multibyte fixture is under the limit when counted as characters');
+  assert.equal(Buffer.byteLength(multibyte, 'utf8') > MAX_PLANNER_RESPONSE_BYTES, true,
+    'the multibyte fixture is over the limit when counted as bytes');
+  assert.throws(() => durableResponse(multibyte), /exceeds 65536 bytes/,
+    'the bound counts bytes, not UTF-16 code units');
+  const multibyteAtLimit = 'é'.repeat(MAX_PLANNER_RESPONSE_BYTES / 2);
+  assert.equal(Buffer.byteLength(multibyteAtLimit, 'utf8'), MAX_PLANNER_RESPONSE_BYTES);
+  assert.equal(durableResponse(multibyteAtLimit).responseBytes, MAX_PLANNER_RESPONSE_BYTES);
+
+  // No partial durable response: truncation is not representable, and a
+  // response_received state must carry the complete hash-validated text.
+  assert.throws(
+    () => durableResponse(valid).constructor && advancePlanningAttempt(
+      durableResponse(valid), { responseTruncated: true }
+    ),
+    /must be false/,
+    'a truncated planner response is never durable'
+  );
+  const complete = durableResponse(valid);
+  assert.throws(
+    () => normalizePlanningAttempt({ ...complete, responseText: valid.slice(0, 10) }),
+    /does not match its stored response text|does not hash its stored response text/,
+    'a response_received state whose text does not match its bytes/hash fails closed'
+  );
+  assert.throws(
+    () => normalizePlanningAttempt({ ...complete, responseText: null }),
+    /requires the complete durable response text/,
+    'response_received cannot omit the response text'
+  );
+
+  // Restart from response_received is deterministic with no second request:
+  // the stored bytes reparse and revalidate to the same proposal hash.
+  const reconstructed = normalizePlanningAttempt(complete);
+  assert.equal(reconstructed.responseHash, complete.responseHash);
+  assert.equal(
+    normalizePlannerProposal(parsePlannerProposalDocument(reconstructed.responseText)).proposalHash,
+    proposal.proposalHash,
+    'a durable response_received deterministically continues without another provider request'
   );
 
   // Every terminal failure names its exact stage.
@@ -521,6 +591,46 @@ function main() {
     () => normalizePlanningProvenance(provenance, { expectedPlanHash: 'b'.repeat(64) }),
     /does not identify its allocation plan/,
     'provenance cannot be transplanted onto another plan'
+  );
+
+  // Three independently validated values: planHash, provenanceHash, admissionHash.
+  assert.equal(provenance.admissionHash, computeAdmissionHash({
+    planHash: plan.planHash,
+    provenanceHash: provenance.provenanceHash
+  }));
+  assert.equal(assertAdmissionBinding({
+    planHash: plan.planHash,
+    provenanceHash: provenance.provenanceHash,
+    admissionHash: provenance.admissionHash
+  }), true);
+  assert.throws(
+    () => assertAdmissionBinding({
+      planHash: 'b'.repeat(64),
+      provenanceHash: provenance.provenanceHash,
+      admissionHash: provenance.admissionHash
+    }),
+    /does not bind this plan hash/,
+    'the binding is validated independently of the provenance record'
+  );
+  assert.throws(
+    () => normalizePlanningProvenance({ ...provenance, admissionHash: 'c'.repeat(64) }),
+    /does not bind its plan and provenance/
+  );
+  // Partial provenance or partial binding is not representable.
+  for (const missing of ['provenanceHash', 'admissionHash', 'planHash', 'attemptId']) {
+    const partial = { ...provenance };
+    delete partial[missing];
+    assert.throws(() => normalizePlanningProvenance(partial), /missing field/,
+      `provenance without ${missing} must fail closed`);
+  }
+  // One attempt binds to one plan and one plan to one attempt.
+  assert.equal(
+    normalizePlanningProvenance(provenance, { expectedAttemptId: attemptId }).attemptId,
+    attemptId
+  );
+  assert.throws(
+    () => normalizePlanningProvenance(provenance, { expectedAttemptId: crypto.randomUUID() }),
+    /does not identify its planning attempt/
   );
 
   // ── Stored body carries provenance without changing planHash ─────────────

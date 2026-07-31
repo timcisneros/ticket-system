@@ -77,6 +77,8 @@ function allocationPlanFromRow(row) {
     // here, on every read, so a tampered or transplanted provenance record
     // fails closed rather than projecting as authority.
     if (plan.planningProvenance != null) {
+      // Validates provenanceHash, admissionHash and the planHash binding on
+      // every read. A planner-admitted plan cannot project without all three.
       normalizePlanningProvenance(plan.planningProvenance, { expectedPlanHash: plan.planHash });
     }
     return plan;

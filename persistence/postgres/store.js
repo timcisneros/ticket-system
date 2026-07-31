@@ -27,6 +27,7 @@ const {
 } = require('../../runtime/structured-allocation-prerequisites-contract');
 const {
   advancePlanningAttempt,
+  assertAdmissionBinding,
   buildPlanningProvenance,
   evaluatePlannerInvocationReadiness,
   normalizePlanningAttempt
@@ -2419,6 +2420,17 @@ class PostgresRuntimeStore {
       if (existingPlans.rowCount > 0) {
         conflict(`ticket ${id} already has an allocation plan`);
       }
+      // One attempt binds to exactly one plan. The ticket lock plus the
+      // one-attempt-per-ticket guard already make this true transitively; the
+      // check is explicit so a future writer cannot weaken it silently.
+      const attemptPlans = await connection.query(
+        `SELECT id FROM ${this.table('allocation_plans')}
+         WHERE body->'planningProvenance'->>'attemptId' = $1`,
+        [storedAttempt.attemptId]
+      );
+      if (attemptPlans.rowCount > 0) {
+        conflict(`planning attempt ${storedAttempt.attemptId} already admitted a plan`);
+      }
       // Proof of the Tranche 2B stopping boundary, enforced rather than
       // asserted: admission refuses if any run already exists for this ticket.
       const existingRuns = await connection.query(
@@ -2489,6 +2501,14 @@ class PostgresRuntimeStore {
         [planAuthority.id, id, 'pending', body, now]
       );
       const plan = allocationPlanFromRow(planResult.rows[0]);
+      // Re-validate the three independently checked values off the persisted
+      // row, not the in-memory objects, so a serialization defect cannot admit
+      // an unverifiable binding.
+      assertAdmissionBinding({
+        planHash: plan.planHash,
+        provenanceHash: plan.planningProvenance.provenanceHash,
+        admissionHash: plan.planningProvenance.admissionHash
+      });
 
       // 12. Mark the attempt admitted.
       const admittedAttempt = advancePlanningAttempt(storedAttempt, {
@@ -2520,6 +2540,7 @@ class PostgresRuntimeStore {
           allocationPlanStatus: plan.status,
           planHash: plan.planHash,
           planningProvenanceHash: provenance.provenanceHash,
+          admissionHash: provenance.admissionHash,
           plannerAgentId: provenance.plannerAgentId,
           provider: provenance.provider,
           model: provenance.model,
