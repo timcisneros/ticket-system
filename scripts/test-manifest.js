@@ -272,6 +272,8 @@ const TESTS = Object.freeze([
   { file: "startup-data-integrity-test.js", status: "required" },
   { file: "status-transition-evidence-test.js", status: "required" },
   { file: "structured-allocation-planner-provider-test.js", status: "required" },
+  { file: "structured-allocation-leaf-run-contract-test.js", status: "required" },
+  { file: "structured-allocation-leaf-run-postgres-test.js", status: "required" },
   { file: "structured-allocation-planning-contract-test.js", status: "required" },
   { file: "structured-allocation-planning-postgres-test.js", status: "required" },
   { file: "structured-allocation-prerequisites-contract-test.js", status: "required" },

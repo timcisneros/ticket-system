@@ -669,12 +669,21 @@ function main() {
   );
   assert.equal(projection.attempt.state, 'plan_admitted');
   assert.equal(projection.planningProvenance.provenanceHash, provenance.provenanceHash);
-  assert.equal(projection.leafExecutionAvailable, false);
-  assert.equal(projection.leafExecutionRefusalReason, 'structured_leaf_run_admission_not_available');
+  // Tranche 3 landed: leaf-run admission is available. This projection reports
+  // only that the capability exists — whether a given plan HAS been leaf-admitted
+  // is a durable fact owned by the leaf-run contract, never inferred here.
+  assert.equal(projection.leafExecutionAvailable, true);
+  assert.equal(projection.leafExecutionRefusalReason, null);
+  assert.equal(projection.leafExecutionRefusalMessage, null);
   const emptyProjection = projectStructuredAllocationPlanningForTicket({ id: 42 });
   assert.equal(emptyProjection.attempt, null);
   assert.equal(emptyProjection.planningProvenance, null);
-  assert.equal(emptyProjection.leafExecutionAvailable, false);
+  assert.equal(emptyProjection.leafExecutionAvailable, true);
+  // The planning contract still owns no leaf fact of its own.
+  for (const leafField of ['leafBindings', 'leafRuns', 'aggregateDecision']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(projection, leafField), false,
+      `the planning projection must not restate ${leafField}`);
+  }
 
   // ── Source boundary: no Tranche 3 behavior is reachable from here ────────
   const source = fs.readFileSync(

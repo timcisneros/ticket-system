@@ -1,0 +1,1119 @@
+#!/usr/bin/env node
+'use strict';
+
+// Tranche 3 PostgreSQL suite: atomic leaf-run admission, exact item-to-Run
+// binding, store-owned item-status derivation, deterministic aggregate
+// completion, and the containment boundaries this tranche must not cross.
+//
+// No provider is contacted anywhere in this suite. Plan admission is driven
+// directly against the store with a synthetic validated attempt, which is
+// exactly the transaction production runs, and leaf admission is then exercised
+// against the real PostgreSQL runtime.
+
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const { PostgresRuntimeStore } = require('../persistence/postgres/store');
+const {
+  buildStructuredAllocationAuthorityDraft
+} = require('../runtime/structured-allocation-prerequisites-contract');
+const {
+  advancePlanningAttempt,
+  createPlanningAttempt,
+  buildPlannerRequestContext,
+  buildPlannerRequestMessages,
+  lowerPlannerProposalToAllocationPlanDraft,
+  normalizePlannerProposal,
+  plannerRequestHash
+} = require('../runtime/structured-allocation-planning-contract');
+const {
+  buildLeafDeclaredWorkSnapshot,
+  normalizeAggregatePlanDecision,
+  normalizeLeafRunBinding,
+  projectStructuredAllocationLeafExecution
+} = require('../runtime/structured-allocation-leaf-run-contract');
+const {
+  buildCompletionAuthoritySnapshot,
+  buildCompletionDecision
+} = require('../runtime/completion-decision-contract');
+const { canonicalJson } = require('../runtime/declared-work-contract');
+const { withHarness } = require('./postgres-test-harness');
+
+const STAMP = `${Date.now()}-${process.pid}`;
+const ACTOR = 'structured-allocation-leaf-run-postgres-test';
+
+// The parent declaration. `typedFamily` widens it with a ticket-authored
+// typed-postcondition family so an item may legitimately carry one: the
+// allocation-plan contract refuses any item capability the parent lacks, which
+// is what makes the leaf typed-criterion refusal reachable at all.
+function declaredWork(objective, { typedFamily = false } = {}) {
+  const postcondition = { id: 'parent-report', type: 'fileExists', path: 'reports/report.md' };
+  const declaration = canonicalJson(postcondition);
+  const criterionHash = crypto.createHash('sha256').update(declaration).digest('hex');
+  return {
+    objective,
+    expectedOutputs: [{ kind: 'text', declaration: 'One review report per assigned folder' }],
+    successCriteria: [
+      { kind: 'text', declaration: 'Every report records concrete findings' },
+      ...(typedFamily
+        ? [{ kind: 'typed-postcondition', criterionType: 'fileExists', declaration, criterionHash }]
+        : [])
+    ],
+    evidenceRequirements: typedFamily
+      ? [{
+        kind: 'postcondition-evidence',
+        criterionHash,
+        evidenceType: 'deterministic-postcondition-result'
+      }]
+      : []
+  };
+}
+
+function ticketBody(group, objective, ownedOutputPaths, status = 'open') {
+  const now = new Date().toISOString();
+  return {
+    objective,
+    acceptanceCriteria: 'Review the explicit reports.',
+    assignmentTargetType: 'group',
+    assignmentTargetId: group.id,
+    assignmentMode: 'allocated',
+    ownedOutputPaths,
+    targetRef: null,
+    executionMode: 'agent',
+    workflowId: null,
+    workflowInput: null,
+    capabilityType: 'directAction',
+    capabilityId: 'agent-selected-actions',
+    capabilityInput: null,
+    executionPolicy: {
+      mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+      maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null,
+      maxWorkspaceOperations: null, allowWorkspaceWrites: true,
+      allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'owned_paths'
+    },
+    status,
+    blockedReason: null,
+    createdBy: ACTOR,
+    changedBy: ACTOR,
+    changedAt: now,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function proposalFor(candidates, { typedItemAgentId = null } = {}) {
+  return {
+    version: 1,
+    sharedConstraints: [{ kind: 'text', declaration: 'Stay inside your own folder' }],
+    items: candidates.map(candidate => {
+      const typed = candidate.agentId === typedItemAgentId;
+      const postcondition = {
+        id: `item-${candidate.agentId}`,
+        type: 'fileExists',
+        path: `${candidate.ownedOutputPaths[0]}report.md`
+      };
+      return {
+        assignedAgentId: candidate.agentId,
+        objective: `Review ${candidate.ownedOutputPaths[0]} and record concrete findings`,
+        expectedOutputs: [{
+          kind: 'text',
+          declaration: `Findings report for ${candidate.ownedOutputPaths[0]}`
+        }],
+        successCriteria: [
+          { kind: 'text', declaration: 'Report names at least one finding' },
+          ...(typed
+            ? [{
+              kind: 'typed-postcondition',
+              criterionType: 'fileExists',
+              declaration: JSON.stringify(postcondition)
+            }]
+            : [])
+        ],
+        evidenceRequirements: []
+      };
+    })
+  };
+}
+
+async function validatedAttempt(store, ticket, responseText, proposal) {
+  const authority = ticket.structuredAllocationAuthority;
+  const planning = authority.planningAuthoritySnapshot;
+  const context = buildPlannerRequestContext(authority, { ticketId: ticket.id });
+  const messages = buildPlannerRequestMessages(context);
+  const requestHash = plannerRequestHash({
+    provider: planning.planner.provider,
+    model: planning.planner.model,
+    messages
+  });
+  const responseHash = crypto.createHash('sha256').update(responseText).digest('hex');
+
+  let attempt = createPlanningAttempt({
+    attemptId: crypto.randomUUID(),
+    ticketId: ticket.id,
+    authority,
+    createdAt: new Date().toISOString()
+  });
+  const write = async (patch, eventType) => {
+    attempt = (await store.writeStructuredAllocationPlanningAttempt({
+      ticketId: ticket.id,
+      attempt: advancePlanningAttempt(attempt, patch),
+      expectedAttemptStateHash: attempt.attemptStateHash,
+      eventType
+    })).attempt;
+  };
+  attempt = (await store.writeStructuredAllocationPlanningAttempt({
+    ticketId: ticket.id,
+    attempt,
+    expectedAttemptStateHash: null,
+    eventType: 'ticket.structured_planning_started'
+  })).attempt;
+  await write({
+    state: 'request_started',
+    requestHash,
+    requestMetadata: {
+      contextVersion: context.version,
+      contextHash: context.contextHash,
+      messageCount: messages.length,
+      requestBytes: messages.reduce((total, message) => total + message.content.length, 0),
+      timeoutMs: 120_000,
+      maxResponseBytes: 262_144
+    },
+    requestStartedAt: new Date().toISOString()
+  }, 'ticket.structured_planning_requested');
+  await write({
+    state: 'response_received',
+    responseStatus: 'received',
+    responseText,
+    responseBytes: responseText.length,
+    responseTruncated: false,
+    responseHash
+  }, 'ticket.structured_planning_responded');
+  await write({
+    state: 'proposal_validated',
+    parseStatus: 'ok',
+    validationStatus: 'ok',
+    proposalHash: proposal.proposalHash
+  }, 'ticket.structured_planning_validated');
+  return attempt;
+}
+
+// The leaf run draft production builds: item-derived declared work, exact
+// admitted ownership, ticket-derived completion authority, no allocation subtask.
+function leafRunDraft(ticket, plan, item, agent, { completionAuthority = null } = {}) {
+  const completionAuthoritySnapshot = completionAuthority || buildCompletionAuthoritySnapshot({
+    objective: ticket.objective,
+    kind: 'unrecognized',
+    recognized: false,
+    intent: 'model_driven',
+    completionPolicy: 'explicit_evidence_required',
+    directPostconditions: [],
+    verificationPolicy: 'when_declared',
+    capturedAt: new Date().toISOString()
+  });
+  return {
+    ticketId: ticket.id,
+    agentId: agent.id,
+    agentName: agent.name,
+    targetRef: null,
+    workspaceRoot: '/tmp',
+    mainWorkspaceRoot: '/tmp',
+    executionWorkspaceType: 'main_owned_paths',
+    executionPolicySnapshot: ticket.executionPolicy,
+    completionAuthoritySnapshot,
+    declaredWorkSnapshot: buildLeafDeclaredWorkSnapshot(item, {
+      sharedConstraints: plan.sharedConstraints,
+      completionAuthoritySnapshot
+    }),
+    acceptanceCriteriaSnapshot: null,
+    allocationPlanId: plan.id,
+    allocationItemId: item.allocationItemId,
+    allocationSubtask: null,
+    ownedOutputPaths: [...item.ownedOutputPaths],
+    executionMode: 'agent',
+    capabilityType: 'directAction',
+    capabilityId: 'agent-selected-actions',
+    currentPhase: 'planning',
+    status: 'pending'
+  };
+}
+
+// Drive a leaf run to a terminal state through the real lease lifecycle, exactly
+// as the scheduler and runner do. Nothing here shortcuts the lease authority.
+async function terminalizeRunTo(store, runId, status) {
+  const claimed = await store.claimPendingRun({
+    leaseOwner: ACTOR,
+    leaseDurationMs: 600_000,
+    eligibleRunIds: [runId]
+  });
+  assert.ok(claimed && claimed.run && claimed.run.id === runId,
+    `run ${runId} could not be claimed for terminalization`);
+  const running = (await store.startClaimedRun({
+    runId,
+    leaseOwner: ACTOR,
+    leaseDurationMs: 600_000
+  })).run;
+  if (status === 'running') return running;
+  return (await store.transitionRun({
+    runId,
+    expectedRevision: running.revision,
+    fromStatuses: ['running'],
+    toStatus: status,
+    leaseOwner: ACTOR
+  })).run;
+}
+
+function completionConsequence(run, disposition) {
+  const base = {
+    version: 1,
+    runId: run.id,
+    ticketId: run.ticketId,
+    verification: { browserEvidence: null }
+  };
+  const replaySnapshot = {
+    events: disposition === 'completed'
+      ? [{ type: 'run:postcondition_completed', runId: run.id }]
+      : [],
+    modelResponses: [],
+    parsedModelPlans: [],
+    workspaceOperations: [],
+    providerRequests: []
+  };
+  return {
+    ...base,
+    completionDecision: buildCompletionDecision({
+      run: {
+        ...run,
+        status: disposition === 'completed' ? 'completed' : run.status,
+        runtimeBudgetSnapshot: null
+      },
+      replaySnapshot,
+      events: [],
+      operations: [],
+      consequence: base,
+      verificationContract: null,
+      evaluatedAt: new Date().toISOString()
+    })
+  };
+}
+
+// A run whose deterministic completion authority is satisfied reaches
+// disposition `completed` through the canonical builder; nothing here forces it.
+function verifiedCompletionAuthority(item) {
+  return buildCompletionAuthoritySnapshot({
+    objective: `Review ${item.ownedOutputPaths[0]} and record concrete findings`,
+    kind: 'deterministic',
+    recognized: true,
+    intent: 'create_folder',
+    completionPolicy: 'declared_postconditions',
+    directPostconditions: [{
+      type: 'folder_exists',
+      path: item.ownedOutputPaths[0].replace(/\/$/, '')
+    }],
+    verificationPolicy: 'when_declared',
+    capturedAt: new Date().toISOString()
+  });
+}
+
+// Durable replay evidence that the item's declared folder postcondition really
+// was checked and passed. The canonical decision builder evaluates it; nothing
+// here forces a disposition.
+function satisfiedConsequence(run, item) {
+  const ownedPath = item.ownedOutputPaths[0].replace(/\/$/, '');
+  const base = {
+    version: 1,
+    runId: run.id,
+    ticketId: run.ticketId,
+    verification: { browserEvidence: null }
+  };
+  return {
+    ...base,
+    completionDecision: buildCompletionDecision({
+      run: { ...run, runtimeBudgetSnapshot: null },
+      replaySnapshot: {
+        events: [{
+          type: 'run:postcondition_completed',
+          checkedPaths: [{ type: 'folder', path: ownedPath }]
+        }],
+        modelResponses: [],
+        parsedModelPlans: [],
+        workspaceOperations: [],
+        providerRequests: []
+      },
+      events: [],
+      operations: [],
+      consequence: base,
+      verificationContract: null,
+      evaluatedAt: new Date().toISOString()
+    })
+  };
+}
+
+async function main() {
+  await withHarness('structured allocation leaf-run PostgreSQL', async ({ store }) => {
+    const group = (await store.createGroup({
+      value: { name: `Leaf Admission ${STAMP}`, permissions: [], canReceiveTickets: true },
+      changedBy: ACTOR
+    })).group;
+    const planner = (await store.createConfiguredAgent({
+      value: { name: `Planner ${STAMP}`, provider: 'openai', model: 'gpt-planner-test', apiKey: '' },
+      groupIds: [group.id],
+      changedBy: ACTOR
+    })).agent;
+    const worker = (await store.createConfiguredAgent({
+      value: { name: `Worker ${STAMP}`, provider: 'openai', model: 'gpt-worker-test', apiKey: '' },
+      groupIds: [group.id],
+      changedBy: ACTOR
+    })).agent;
+    const designated = (await store.updateGroup({
+      groupId: group.id,
+      expectedRevision: group.revision,
+      value: { ...group, plannerAgentId: planner.id },
+      changedBy: ACTOR
+    })).group;
+
+    const ownedOutputPaths = {
+      [planner.id]: 'reports/planner/',
+      [worker.id]: 'reports/worker/'
+    };
+    const agentById = new Map([[planner.id, planner], [worker.id, worker]]);
+
+    const admitPlan = async (objective, { typedItemAgentId = null } = {}) => {
+      const catalog = await store.getConfiguredAgentsByIds({ agentIds: [planner.id, worker.id] });
+      const authorityDraft = buildStructuredAllocationAuthorityDraft({
+        declaredWork: declaredWork(objective, { typedFamily: typedItemAgentId !== null }),
+        ticketObjective: objective,
+        assignmentTargetType: 'group',
+        assignmentMode: 'allocated',
+        assignmentGroup: designated,
+        plannerAgent: catalog.find(agent => agent.id === planner.id),
+        candidateAgents: catalog,
+        ownedOutputPaths
+      });
+      const ticket = (await store.createTicketWithEvent({
+        ticket: ticketBody(designated, objective, ownedOutputPaths),
+        structuredAllocationAuthorityDraft: authorityDraft,
+        eventPayload: { source: ACTOR }
+      })).ticket;
+      const planning = ticket.structuredAllocationAuthority.planningAuthoritySnapshot;
+      const responseText = JSON.stringify(proposalFor(planning.candidates, { typedItemAgentId }));
+      const proposal = normalizePlannerProposal(JSON.parse(responseText));
+      const planDraft = lowerPlannerProposalToAllocationPlanDraft({
+        ticketId: ticket.id,
+        authority: ticket.structuredAllocationAuthority,
+        proposal
+      });
+      const attempt = await validatedAttempt(store, ticket, responseText, proposal);
+      const admission = await store.admitStructuredAllocationPlan({
+        ticketId: ticket.id,
+        attempt,
+        allocationPlanDraft: planDraft,
+        plannerCredentialsAvailable: true,
+        eventPayload: { source: ACTOR }
+      });
+      assert.equal(admission.admitted, true);
+      return { ticket: await store.getTicket(ticket.id), plan: admission.plan };
+    };
+
+    const draftsFor = (ticket, plan, options = {}) => plan.items.map(item => ({
+      allocationItemId: item.allocationItemId,
+      run: leafRunDraft(ticket, plan, item, agentById.get(item.assignedAgentId), options)
+    }));
+
+    // ── One Run per item, admitted atomically ────────────────────────────────
+    const primary = await admitPlan(`Admit structured leaf runs ${STAMP}`);
+    assert.deepEqual(
+      (await store.listRunsForTicket({ ticketId: primary.ticket.id, limit: 20 })).runs,
+      [],
+      'plan admission alone still creates zero worker runs'
+    );
+
+    const admission = await store.admitStructuredAllocationLeafRuns({
+      ticketId: primary.ticket.id,
+      allocationPlanId: primary.plan.id,
+      leafDrafts: draftsFor(primary.ticket, primary.plan),
+      eventPayload: { source: ACTOR }
+    });
+    assert.equal(admission.admitted, true);
+    assert.equal(admission.runs.length, primary.plan.items.length,
+      'exactly one initial Run per immutable allocation item');
+    assert.equal(new Set(admission.runs.map(run => run.allocationItemId)).size,
+      primary.plan.items.length, 'each item is bound exactly once');
+
+    // ── Exact item-to-Run bindings ───────────────────────────────────────────
+    const itemsById = new Map(primary.plan.items.map(item => [item.allocationItemId, item]));
+    for (const run of admission.runs) {
+      const item = itemsById.get(run.allocationItemId);
+      const binding = normalizeLeafRunBinding(run.leafRunBinding, {
+        expectedRunId: run.id,
+        expectedTicketId: primary.ticket.id,
+        expectedPlanId: primary.plan.id,
+        expectedPlanHash: primary.plan.planHash,
+        expectedAllocationItemId: item.allocationItemId
+      });
+      assert.equal(binding.assignedAgentId, item.assignedAgentId,
+        'the worker principal is the agent the item admitted');
+      assert.equal(run.agentId, item.assignedAgentId,
+        'the Run is dispatched to the admitted agent, never a replacement');
+      assert.deepEqual(binding.ownedOutputPaths, item.ownedOutputPaths,
+        'ownership is the exact admitted item ownership');
+      assert.deepEqual(run.ownedOutputPaths, item.ownedOutputPaths,
+        'the Run carries the exact admitted owned paths');
+      assert.equal(binding.parentDeclaredWorkHash,
+        primary.plan.parentDeclaredWorkSnapshot.contractHash);
+      assert.equal(binding.planningAttemptId, primary.plan.planningProvenance.attemptId);
+      assert.equal(binding.planningAdmissionHash, primary.plan.planningProvenance.admissionHash);
+      assert.equal(binding.runId, run.id, 'the binding carries its runtime-assigned Run ID');
+
+      // Declared work comes from the item, not from the parent Ticket, and the
+      // generic v1 allocation subtask is absent entirely.
+      assert.equal(run.declaredWorkSnapshot.contractHash, binding.itemDeclaredWorkHash,
+        'the Run declares exactly the work its binding records');
+      assert.equal(run.declaredWorkSnapshot.objective.text, item.objective.text,
+        'the leaf objective is the allocation item objective');
+      assert.notEqual(run.declaredWorkSnapshot.objective.text, primary.ticket.objective,
+        'the leaf objective is not the parent ticket objective');
+      assert.notEqual(run.declaredWorkSnapshot.contractHash,
+        primary.plan.parentDeclaredWorkSnapshot.contractHash);
+      assert.equal(run.allocationSubtask ?? null, null,
+        'no generic allocation subtask is produced');
+      assert.equal(canonicalJson(run.declaredWorkSnapshot).includes('allocated output for ticket'),
+        false, 'the v1 placeholder sentence never reaches a leaf declaration');
+      assert.equal(
+        run.declaredWorkSnapshot.successCriteria.some(criterion =>
+          criterion.declaration === 'Stay inside your own folder'),
+        true,
+        'admitted shared constraints are carried onto every leaf'
+      );
+    }
+    assert.equal(
+      new Set(admission.runs.map(run => run.leafRunBinding.bindingHash)).size,
+      admission.runs.length,
+      'every leaf binding hash is distinct'
+    );
+    assert.equal(
+      new Set(admission.runs.map(run => run.declaredWorkSnapshot.contractHash)).size,
+      admission.runs.length,
+      'sibling leaves declare distinct work'
+    );
+
+    // ── Worker route is distinct from the planner route ──────────────────────
+    const plannerRun = admission.runs.find(run => run.agentId === planner.id);
+    assert.ok(plannerRun, 'the planner agent is also a captured candidate and gets a worker run');
+    assert.equal(plannerRun.capabilityId, 'agent-selected-actions',
+      'leaf runs use the existing worker capability route');
+    const admittedTicket = await store.getTicket(primary.ticket.id);
+    assert.equal(admittedTicket.structuredAllocationPlanningAttempt.state, 'plan_admitted');
+    assert.equal(
+      admittedTicket.structuredAllocationAuthority.planningAuthoritySnapshot.planner.agentId,
+      planner.id,
+      'the planning route is a separate captured principal and is unchanged'
+    );
+    assert.equal(
+      admittedTicket.structuredAllocationPlanningAttempt.planner.model,
+      'gpt-planner-test',
+      'the planner model remains the planning route, not a worker route'
+    );
+
+    // ── Scheduler sees the runs only after commit, and all together ──────────
+    const pending = await store.listPendingRuns({ limit: 100 });
+    const visible = pending.runs.filter(run => run.ticketId === primary.ticket.id);
+    assert.equal(visible.length, admission.runs.length,
+      'every leaf run becomes scheduler-visible together');
+    assert.equal(visible.every(run => Boolean(run.leafRunBinding)), true,
+      'no leaf run is scheduler-visible without its immutable binding');
+    assert.equal((await store.getTicket(primary.ticket.id)).status, 'in_progress');
+
+    const leafEvents = (await store.listTicketEvents(primary.ticket.id, { limit: 100 })).events;
+    const leafEvent = leafEvents.find(event => event.type === 'ticket.allocation_leaf_runs_admitted');
+    assert.ok(leafEvent, 'leaf admission appends its event');
+    assert.equal(leafEvent.payload.workerRunsCreated, admission.runs.length);
+    assert.equal(leafEvent.payload.leafBindings.length, admission.runs.length);
+    assert.equal(
+      leafEvents.filter(event => event.type === 'ticket.allocation_leaf_runs_admitted').length,
+      1,
+      'leaf admission is evidenced exactly once'
+    );
+
+    // ── Idempotent re-admission creates no duplicate ─────────────────────────
+    const repeat = await store.admitStructuredAllocationLeafRuns({
+      ticketId: primary.ticket.id,
+      allocationPlanId: primary.plan.id,
+      leafDrafts: draftsFor(primary.ticket, primary.plan)
+    });
+    assert.equal(repeat.admitted, false, 'a committed leaf set re-reports itself');
+    assert.deepEqual(repeat.runs.map(run => run.id).sort(), admission.runs.map(run => run.id).sort());
+    assert.equal(
+      (await store.listRunsForTicket({ ticketId: primary.ticket.id, limit: 50 })).runs.length,
+      admission.runs.length,
+      'no duplicate leaf run is created'
+    );
+
+    // ── Concurrent admission cannot duplicate ────────────────────────────────
+    const concurrent = await admitPlan(`Concurrent leaf admission ${STAMP}`);
+    const concurrentDrafts = draftsFor(concurrent.ticket, concurrent.plan);
+    const outcomes = await Promise.allSettled([
+      store.admitStructuredAllocationLeafRuns({
+        ticketId: concurrent.ticket.id,
+        allocationPlanId: concurrent.plan.id,
+        leafDrafts: concurrentDrafts
+      }),
+      store.admitStructuredAllocationLeafRuns({
+        ticketId: concurrent.ticket.id,
+        allocationPlanId: concurrent.plan.id,
+        leafDrafts: concurrentDrafts
+      })
+    ]);
+    const admittedOnce = outcomes.filter(outcome =>
+      outcome.status === 'fulfilled' && outcome.value.admitted === true);
+    assert.equal(admittedOnce.length, 1, 'exactly one concurrent admission wins');
+    const concurrentRuns =
+      (await store.listRunsForTicket({ ticketId: concurrent.ticket.id, limit: 50 })).runs;
+    assert.equal(concurrentRuns.length, concurrent.plan.items.length,
+      'concurrent admission cannot duplicate the leaf set');
+    assert.equal(
+      new Set(concurrentRuns.map(run => run.leafRunBinding.allocationItemId)).size,
+      concurrent.plan.items.length,
+      'no allocation item receives two initial bindings'
+    );
+
+    // ── Typed model-provenance criteria refuse the entire admission ──────────
+    const typedPlan = await admitPlan(`Typed criteria refusal ${STAMP}`, {
+      typedItemAgentId: worker.id
+    });
+    assert.equal(
+      typedPlan.plan.items.some(item =>
+        item.successCriteria.some(criterion => criterion.kind === 'typed-postcondition')),
+      true,
+      'the admitted plan really does carry a model-provenance typed criterion'
+    );
+    const textOnlyItem = typedPlan.plan.items.find(item =>
+      item.successCriteria.every(criterion => criterion.kind === 'text'));
+    const typedItem = typedPlan.plan.items.find(item =>
+      item.successCriteria.some(criterion => criterion.kind === 'typed-postcondition'));
+    assert.equal(
+      typedItem.successCriteria.find(criterion => criterion.kind === 'typed-postcondition')
+        .provenance,
+      'validated-model-contract',
+      'the typed criterion carries model provenance, which admits no completion authority'
+    );
+    // The typed item's declared work is not constructible at all, so its draft
+    // borrows the text-only sibling's declaration. Preflight must still refuse
+    // on the typed criterion, and must refuse the WHOLE admission rather than
+    // admitting the text-only sibling.
+    await assert.rejects(
+      () => store.admitStructuredAllocationLeafRuns({
+        ticketId: typedPlan.ticket.id,
+        allocationPlanId: typedPlan.plan.id,
+        leafDrafts: [
+          {
+            allocationItemId: textOnlyItem.allocationItemId,
+            run: leafRunDraft(typedPlan.ticket, typedPlan.plan, textOnlyItem,
+              agentById.get(textOnlyItem.assignedAgentId))
+          },
+          {
+            allocationItemId: typedItem.allocationItemId,
+            run: {
+              ...leafRunDraft(typedPlan.ticket, typedPlan.plan, textOnlyItem,
+                agentById.get(typedItem.assignedAgentId)),
+              agentId: typedItem.assignedAgentId,
+              allocationItemId: typedItem.allocationItemId,
+              ownedOutputPaths: [...typedItem.ownedOutputPaths]
+            }
+          }
+        ]
+      }),
+      error => error.reason === 'leaf_item_typed_criteria_unsupported',
+      'a typed model-provenance criterion refuses the entire leaf admission'
+    );
+    assert.deepEqual(
+      (await store.listRunsForTicket({ ticketId: typedPlan.ticket.id, limit: 20 })).runs,
+      [],
+      'a refused admission creates zero Runs and zero bindings'
+    );
+    const preservedPlan = await store.getAllocationPlan(typedPlan.plan.id);
+    assert.equal(preservedPlan.planHash, typedPlan.plan.planHash,
+      'the admitted plan is preserved by a refusal');
+    assert.equal(preservedPlan.status, 'pending');
+
+    // ── Rollback leaves zero Runs and zero bindings ──────────────────────────
+    const rollback = await admitPlan(`Leaf admission rollback ${STAMP}`);
+    const rollbackDrafts = draftsFor(rollback.ticket, rollback.plan);
+    await assert.rejects(
+      () => store.admitStructuredAllocationLeafRuns({
+        ticketId: rollback.ticket.id,
+        allocationPlanId: rollback.plan.id,
+        // The second draft names an agent the item never admitted, so the whole
+        // transaction must roll back rather than persist the first.
+        leafDrafts: [
+          rollbackDrafts[0],
+          {
+            ...rollbackDrafts[1],
+            run: { ...rollbackDrafts[1].run, agentId: rollbackDrafts[0].run.agentId }
+          }
+        ]
+      }),
+      error => error.reason === 'leaf_agent_not_authorized'
+    );
+    assert.deepEqual(
+      (await store.listRunsForTicket({ ticketId: rollback.ticket.id, limit: 20 })).runs,
+      [],
+      'a rolled-back admission leaves zero Runs and zero bindings'
+    );
+    // Ownership drift refuses too, and equally atomically.
+    await assert.rejects(
+      () => store.admitStructuredAllocationLeafRuns({
+        ticketId: rollback.ticket.id,
+        allocationPlanId: rollback.plan.id,
+        leafDrafts: [
+          rollbackDrafts[0],
+          {
+            ...rollbackDrafts[1],
+            run: { ...rollbackDrafts[1].run, ownedOutputPaths: ['reports/elsewhere/'] }
+          }
+        ]
+      }),
+      error => error.reason === 'leaf_ownership_drift'
+    );
+    // A partial leaf set is refused: leaf admission is one item per plan item.
+    await assert.rejects(
+      () => store.admitStructuredAllocationLeafRuns({
+        ticketId: rollback.ticket.id,
+        allocationPlanId: rollback.plan.id,
+        leafDrafts: [rollbackDrafts[0]]
+      }),
+      error => error.reason === 'leaf_ownership_drift'
+    );
+    assert.deepEqual(
+      (await store.listRunsForTicket({ ticketId: rollback.ticket.id, limit: 20 })).runs,
+      [],
+      'no partial leaf set is ever persisted'
+    );
+    assert.equal((await store.getTicket(rollback.ticket.id)).status, 'open',
+      'a refused admission does not start the parent ticket');
+
+    // ── A raw completed Run cannot complete an item ──────────────────────────
+    const [firstRun, secondRun] = admission.runs;
+    await terminalizeRunTo(store, firstRun.id, 'completed');
+    let reconciled = await store.reconcileStructuredAllocationLeafItems({
+      ticketId: primary.ticket.id,
+      allocationPlanId: primary.plan.id
+    });
+    assert.equal(reconciled.reconciled, true);
+    const rawCompletedItem = reconciled.decision.items.find(item =>
+      item.runId === firstRun.id);
+    assert.notEqual(rawCompletedItem.itemStatus, 'completed',
+      'a terminal completed Run with no durable decision never completes its item');
+    assert.equal(rawCompletedItem.itemStatus, 'interrupted');
+    assert.equal(rawCompletedItem.reason, 'completion_decision_missing');
+    assert.equal(rawCompletedItem.completionDecisionHash, null);
+    assert.notEqual(reconciled.decision.aggregateStatus, 'completed');
+    assert.equal((await store.getAllocationPlan(primary.plan.id)).status,
+      reconciled.decision.aggregateStatus);
+
+    // The caller cannot supply or force the derived status.
+    await assert.rejects(
+      () => store.updateAllocationItemStatus({
+        planId: primary.plan.id,
+        allocationItemId: firstRun.allocationItemId,
+        status: 'completed'
+      }),
+      error => error.code === 'ALLOCATION_ITEM_STATUS_NOT_CALLER_OWNED',
+      'a caller may request reconciliation but may not supply an item status'
+    );
+    assert.equal(
+      (await store.getAllocationPlan(primary.plan.id)).items
+        .find(item => item.allocationItemId === firstRun.allocationItemId).status,
+      'interrupted',
+      'the refused caller write changed nothing'
+    );
+
+    // ── Repeated reconciliation is idempotent ────────────────────────────────
+    const planBefore = await store.getAllocationPlan(primary.plan.id);
+    const again = await store.reconcileStructuredAllocationLeafItems({
+      ticketId: primary.ticket.id,
+      allocationPlanId: primary.plan.id
+    });
+    assert.equal(again.changed, false, 'unchanged facts write nothing');
+    const planAfter = await store.getAllocationPlan(primary.plan.id);
+    assert.equal(planAfter.revision, planBefore.revision,
+      'idempotent reconciliation does not bump the plan revision');
+    assert.equal(planAfter.aggregateDecision.decisionHash,
+      planBefore.aggregateDecision.decisionHash);
+
+    // ── A valid durable decision completes exactly its own item ──────────────
+    await store.recordRunConsequence({
+      runId: firstRun.id,
+      consequence: completionConsequence(await store.getRun(firstRun.id), 'completed')
+    });
+    reconciled = await store.reconcileStructuredAllocationLeafItems({
+      ticketId: primary.ticket.id,
+      allocationPlanId: primary.plan.id
+    });
+    const decidedFirst = reconciled.decision.items.find(item => item.runId === firstRun.id);
+    // This objective is model-driven, so the canonical decision builder cannot
+    // report completion for it. The item therefore stays unresolved, which is
+    // exactly the fail-closed rule: only a decision that says `completed` completes.
+    assert.equal(decidedFirst.itemStatus === 'completed', false,
+      'a decision that does not say completed cannot complete an item');
+    assert.equal(reconciled.decision.aggregateStatus === 'completed', false);
+
+    // ── Full aggregate completion requires every item ────────────────────────
+    const completing = await admitPlan(`Aggregate completion ${STAMP}`);
+    const completingAdmission = await store.admitStructuredAllocationLeafRuns({
+      ticketId: completing.ticket.id,
+      allocationPlanId: completing.plan.id,
+      leafDrafts: completing.plan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        run: leafRunDraft(
+          completing.ticket, completing.plan, item, agentById.get(item.assignedAgentId),
+          { completionAuthority: verifiedCompletionAuthority(item) }
+        )
+      }))
+    });
+    assert.equal(completingAdmission.runs.length, completing.plan.items.length);
+    const completingItems = new Map(
+      completing.plan.items.map(item => [item.allocationItemId, item]));
+
+    // Complete only the first item.
+    const runA = completingAdmission.runs[0];
+    const runB = completingAdmission.runs[1];
+    await terminalizeRunTo(store, runA.id, 'completed');
+    await store.recordRunConsequence({
+      runId: runA.id,
+      consequence: satisfiedConsequence(
+        await store.getRun(runA.id),
+        completingItems.get(runA.allocationItemId)
+      )
+    });
+    let aggregate = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: completing.ticket.id,
+      allocationPlanId: completing.plan.id
+    })).decision;
+    const itemA = aggregate.items.find(item => item.runId === runA.id);
+    assert.equal(itemA.itemStatus, 'completed',
+      'a valid durable successful decision completes its item');
+    assert.equal(itemA.reason, 'completion_verified');
+    assert.match(itemA.completionDecisionHash, /^[0-9a-f]{64}$/,
+      'the completion-decision identity supporting the item is recorded');
+    assert.notEqual(aggregate.aggregateStatus, 'completed',
+      'aggregate completion requires every required item');
+    assert.deepEqual(aggregate.completedItemIds, [itemA.allocationItemId]);
+    assert.deepEqual(aggregate.unresolvedItemIds, [
+      aggregate.items.find(item => item.runId === runB.id).allocationItemId
+    ]);
+
+    // Now complete the second item too.
+    await terminalizeRunTo(store, runB.id, 'completed');
+    await store.recordRunConsequence({
+      runId: runB.id,
+      consequence: satisfiedConsequence(
+        await store.getRun(runB.id),
+        completingItems.get(runB.allocationItemId)
+      )
+    });
+    aggregate = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: completing.ticket.id,
+      allocationPlanId: completing.plan.id
+    })).decision;
+    assert.equal(aggregate.aggregateStatus, 'completed',
+      'the plan completes only when every item has a valid completed decision');
+    assert.equal(aggregate.completedItemIds.length, completing.plan.items.length);
+    assert.deepEqual(aggregate.unresolvedItemIds, []);
+    assert.deepEqual(aggregate.failedItemIds, []);
+    const completedPlan = await store.getAllocationPlan(completing.plan.id);
+    assert.equal(completedPlan.status, 'completed');
+    // The reconciliation write re-serializes the whole plan body, so it must
+    // carry durable admission provenance and immutable authority forward intact.
+    assert.equal(completedPlan.planHash, completing.plan.planHash,
+      'reconciliation never alters plan authority');
+    assert.equal(completedPlan.planningProvenance.provenanceHash,
+      completing.plan.planningProvenance.provenanceHash);
+    assert.equal(completedPlan.planningProvenance.admissionHash,
+      completing.plan.planningProvenance.admissionHash,
+      'reconciliation preserves the admission binding');
+    assert.deepEqual(
+      completedPlan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        assignedAgentId: item.assignedAgentId,
+        ownedOutputPaths: item.ownedOutputPaths
+      })),
+      completing.plan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        assignedAgentId: item.assignedAgentId,
+        ownedOutputPaths: item.ownedOutputPaths
+      })),
+      'reconciliation rewrites no item authority'
+    );
+    assert.equal(completedPlan.items.every(item => item.status === 'completed'), true);
+    normalizeAggregatePlanDecision(completedPlan.aggregateDecision, {
+      expectedPlanHash: completedPlan.planHash,
+      expectedPlanId: completedPlan.id
+    });
+
+    // ── Parent completion through the canonical transaction, exactly once ────
+    const parentBefore = await store.getTicket(completing.ticket.id);
+    assert.equal(parentBefore.status, 'in_progress');
+    const transitioned = await store.transitionTicketAfterRun({ runId: runB.id });
+    assert.equal(transitioned.changed, true);
+    assert.equal(transitioned.ticket.status, 'completed',
+      'the parent Ticket completes through the canonical transition');
+    const repeatTransition = await store.transitionTicketAfterRun({ runId: runB.id });
+    assert.equal(repeatTransition.changed, false,
+      'the parent completion is not re-applied');
+    // Ticket-level status events only: run events carry their own `status`.
+    const completionEvents = (await store.listTicketEvents(completing.ticket.id, { limit: 200 }))
+      .events.filter(event =>
+        (event.runId === null || event.runId === undefined) &&
+        event.payload && event.payload.status === 'completed' &&
+        event.payload.previousStatus && event.payload.previousStatus !== 'completed');
+    assert.equal(completionEvents.length, 1,
+      'the parent completion event is emitted exactly once');
+    assert.equal(completionEvents[0].payload.previousStatus, 'in_progress');
+
+    // Reconciliation stays idempotent after parent completion.
+    const settled = await store.reconcileStructuredAllocationLeafItems({
+      ticketId: completing.ticket.id,
+      allocationPlanId: completing.plan.id
+    });
+    assert.equal(settled.changed, false);
+    assert.equal(settled.decision.aggregateStatus, 'completed');
+
+    // ── One failed item prevents parent completion ───────────────────────────
+    const failing = await admitPlan(`One failed item ${STAMP}`);
+    const failingAdmission = await store.admitStructuredAllocationLeafRuns({
+      ticketId: failing.ticket.id,
+      allocationPlanId: failing.plan.id,
+      leafDrafts: failing.plan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        run: leafRunDraft(
+          failing.ticket, failing.plan, item, agentById.get(item.assignedAgentId),
+          { completionAuthority: verifiedCompletionAuthority(item) }
+        )
+      }))
+    });
+    const failingItems = new Map(failing.plan.items.map(item => [item.allocationItemId, item]));
+    const okRun = failingAdmission.runs[0];
+    const badRun = failingAdmission.runs[1];
+    await terminalizeRunTo(store, okRun.id, 'completed');
+    await store.recordRunConsequence({
+      runId: okRun.id,
+      consequence: satisfiedConsequence(
+        await store.getRun(okRun.id),
+        failingItems.get(okRun.allocationItemId)
+      )
+    });
+    await terminalizeRunTo(store, badRun.id, 'failed');
+    await store.recordRunConsequence({
+      runId: badRun.id,
+      consequence: completionConsequence(await store.getRun(badRun.id), 'failed')
+    });
+    const failedAggregate = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: failing.ticket.id,
+      allocationPlanId: failing.plan.id
+    })).decision;
+    assert.equal(failedAggregate.aggregateStatus, 'failed',
+      'one failed item prevents aggregate completion');
+    assert.deepEqual(failedAggregate.failedItemIds,
+      [failedAggregate.items.find(item => item.runId === badRun.id).allocationItemId]);
+    assert.equal(failedAggregate.completedItemIds.length, 1,
+      'the completed sibling is still reported truthfully');
+    const failedParent = await store.transitionTicketAfterRun({ runId: badRun.id });
+    assert.notEqual(failedParent.ticket.status, 'completed',
+      'one failed item prevents parent completion');
+
+    // ── One interrupted item remains unresolved ──────────────────────────────
+    const interrupted = await admitPlan(`One interrupted item ${STAMP}`);
+    const interruptedAdmission = await store.admitStructuredAllocationLeafRuns({
+      ticketId: interrupted.ticket.id,
+      allocationPlanId: interrupted.plan.id,
+      leafDrafts: interrupted.plan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        run: leafRunDraft(
+          interrupted.ticket, interrupted.plan, item, agentById.get(item.assignedAgentId),
+          { completionAuthority: verifiedCompletionAuthority(item) }
+        )
+      }))
+    });
+    const interruptedItems = new Map(
+      interrupted.plan.items.map(item => [item.allocationItemId, item]));
+    const doneRun = interruptedAdmission.runs[0];
+    const stoppedRun = interruptedAdmission.runs[1];
+    await terminalizeRunTo(store, doneRun.id, 'completed');
+    await store.recordRunConsequence({
+      runId: doneRun.id,
+      consequence: satisfiedConsequence(
+        await store.getRun(doneRun.id),
+        interruptedItems.get(doneRun.allocationItemId)
+      )
+    });
+    await terminalizeRunTo(store, stoppedRun.id, 'interrupted');
+    const interruptedAggregate = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: interrupted.ticket.id,
+      allocationPlanId: interrupted.plan.id
+    })).decision;
+    assert.equal(interruptedAggregate.aggregateStatus, 'interrupted',
+      'one interrupted item leaves the plan unresolved');
+    const stoppedItem = interruptedAggregate.items.find(item => item.runId === stoppedRun.id);
+    assert.equal(stoppedItem.itemStatus, 'interrupted');
+    assert.equal(interruptedAggregate.unresolvedItemIds.includes(stoppedItem.allocationItemId),
+      true);
+    assert.equal(interruptedAggregate.failedItemIds.length, 0,
+      'an interrupted item is unresolved, never asserted as failure');
+    const interruptedParent = await store.getTicket(interrupted.ticket.id);
+    assert.notEqual(interruptedParent.status, 'completed',
+      'an unresolved plan never completes its parent');
+
+    // ── Projection surfaces the durable facts ────────────────────────────────
+    const projected = projectStructuredAllocationLeafExecution({
+      allocationPlan: await store.getAllocationPlan(completing.plan.id),
+      runs: (await store.listRunsForTicket({ ticketId: completing.ticket.id, limit: 50 })).runs,
+      ticketStatus: (await store.getTicket(completing.ticket.id)).status
+    });
+    assert.equal(projected.available, true);
+    assert.equal(projected.items.length, completing.plan.items.length);
+    assert.equal(projected.items.every(item =>
+      item.runId !== null && item.leafBindingHash !== null &&
+      item.itemDeclaredWorkHash !== null && item.ownedOutputPaths.length > 0 &&
+      item.runLineage.length === 1 && item.completionDecisionHash !== null), true,
+    'the projection exposes bindings, ownership, lineage and decision identity');
+    assert.equal(projected.aggregateDecision.aggregateStatus, 'completed');
+    assert.equal(projected.parentTicketStatus, 'completed');
+    assert.deepEqual(projected.unresolvedItemIds, []);
+    assert.equal(
+      projectStructuredAllocationLeafExecution({ allocationPlan: null }).available,
+      false,
+      'a ticket with no planner-admitted plan projects no leaf execution'
+    );
+
+    // ── Historical compatibility: v1 keeps caller-supplied item status ───────
+    const v1Ticket = (await store.createTicketWithEvent({
+      ticket: ticketBody(designated, `Historical v1 allocation ${STAMP}`, ownedOutputPaths),
+      eventPayload: { source: ACTOR }
+    })).ticket;
+    const v1Plan = await store.createAllocationPlan({
+      plan: {
+        ticketId: v1Ticket.id,
+        status: 'pending',
+        mode: 'owned_paths',
+        items: [{
+          assignedAgentId: worker.id,
+          allocationSubtask: 'Produce your allocated output inside your owned path only.',
+          ownedOutputPaths: ['reports/worker/']
+        }]
+      }
+    });
+    const v1Updated = await store.updateAllocationItemStatus({
+      planId: v1Plan.id,
+      allocationItemId: v1Plan.items[0].allocationItemId,
+      status: 'completed'
+    });
+    assert.equal(v1Updated.item.status, 'completed',
+      'historical v1 item-status writes are unchanged');
+    assert.equal((await store.getAllocationPlan(v1Plan.id)).status, 'completed');
+    await assert.rejects(
+      () => store.reconcileStructuredAllocationLeafItems({ ticketId: v1Ticket.id }),
+      error => error.reason === 'admitted_plan_mismatch',
+      'v1 plans are never reconciled through the Tranche 3 derivation'
+    );
+
+    // ── No replanning, no v1 fallback, no Tranche 4 ──────────────────────────
+    const afterExecution = await store.getTicket(completing.ticket.id);
+    assert.equal(
+      (await store.listAllocationPlans({ ticketId: completing.ticket.id, limit: 20 })).plans.length,
+      1,
+      'leaf admission and reconciliation never create a second plan'
+    );
+    assert.equal(afterExecution.structuredAllocationPlanningAttempt.state, 'plan_admitted',
+      'no second planning attempt is created');
+    assert.equal(afterExecution.structuredAllocationAuthority.authorityHash,
+      completing.ticket.structuredAllocationAuthority.authorityHash,
+      'leaf execution does not rewrite the immutable structured authority');
+    const reopened = await store.reopenTicket({ ticketId: completing.ticket.id });
+    assert.equal(reopened.ticket.status, 'open');
+    assert.equal(
+      (await store.listAllocationPlans({ ticketId: completing.ticket.id, limit: 20 })).plans.length,
+      1,
+      'reopening does not replan and creates no v1 plan'
+    );
+    assert.equal(
+      (await store.getTicket(completing.ticket.id)).structuredAllocationPlanningAttempt.state,
+      'plan_admitted',
+      'reopening leaves the admitted attempt terminal'
+    );
+    const reopenedRuns =
+      (await store.listRunsForTicket({ ticketId: completing.ticket.id, limit: 50 })).runs;
+    assert.equal(reopenedRuns.length, completing.plan.items.length,
+      'reopening duplicates no initial item binding');
+    await assert.rejects(
+      () => store.admitStructuredAllocationLeafRuns({
+        ticketId: completing.ticket.id,
+        allocationPlanId: completing.plan.id,
+        leafDrafts: draftsFor(completing.ticket, completing.plan)
+      }),
+      error => error.reason === 'plan_not_pending',
+      'a settled plan is never re-admitted'
+    );
+
+    for (const run of reopenedRuns) {
+      assert.equal(run.parentRunId ?? null, null, 'no leaf run has a parent run');
+      assert.equal(run.delegatedRunId ?? null, null, 'no leaf run delegates');
+    }
+    assert.deepEqual(
+      (await store.listChildTickets({ parentTicketId: completing.ticket.id, limit: 20 })).tickets,
+      [],
+      'leaf execution spawns no child ticket and no recursive delegation'
+    );
+
+    // ── Source boundary ──────────────────────────────────────────────────────
+    // Executable code only: the module explains WHY it excludes these, and that
+    // explanation must not itself trip the boundary check.
+    const leafSource = fs.readFileSync(
+      path.join(__dirname, '..', 'runtime', 'structured-allocation-leaf-run-contract.js'),
+      'utf8'
+    ).replace(/^\s*\/\/.*$/gm, '');
+    for (const forbidden of [
+      'lowerPlannerProposalToAllocationPlanDraft',
+      'createPlanningAttempt',
+      'admitStructuredAllocationPlan',
+      'allocationSubtask',
+      'createRetryRun',
+      'childTicket'
+    ]) {
+      assert.equal(leafSource.includes(forbidden), false,
+        `the leaf-run contract must not reference ${forbidden}`);
+    }
+
+    // A peer store reconstructs every durable leaf fact deterministically.
+    const peer = new PostgresRuntimeStore({
+      connectionString: store.connectionString || process.env.TEST_DATABASE_URL ||
+        process.env.DATABASE_URL,
+      schema: store.schema
+    });
+    try {
+      const peerPlan = await peer.getAllocationPlan(completing.plan.id);
+      assert.equal(peerPlan.aggregateDecision.decisionHash,
+        completedPlan.aggregateDecision.decisionHash,
+        'a separate store instance reconstructs the aggregate decision deterministically');
+      const peerRuns = (await peer.listRunsForTicket({
+        ticketId: completing.ticket.id, limit: 50
+      })).runs;
+      for (const run of peerRuns) {
+        normalizeLeafRunBinding(run.leafRunBinding, {
+          expectedRunId: run.id,
+          expectedPlanId: completing.plan.id,
+          expectedPlanHash: completing.plan.planHash
+        });
+      }
+    } finally {
+      await peer.close();
+    }
+
+    console.log('structured allocation leaf-run PostgreSQL test passed');
+  });
+}
+
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
+});

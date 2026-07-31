@@ -317,9 +317,10 @@ async function main() {
     assert.equal(admittedEvent.payload.allocationPlanId, plan.id);
     assert.equal(admittedEvent.payload.planHash, plan.planHash);
     assert.equal(admittedEvent.payload.workerRunsCreated, 0);
-    assert.equal(admittedEvent.payload.leafExecutionAvailable, false);
-    assert.equal(admittedEvent.payload.leafExecutionRefusalReason,
-      'structured_leaf_run_admission_not_available');
+    assert.equal(admittedEvent.payload.leafExecutionAvailable, true);
+    assert.equal(admittedEvent.payload.leafExecutionRefusalReason, null);
+    assert.equal(admittedEvent.payload.workerRunsCreated, 0,
+      'plan admission itself still creates zero worker runs');
     for (const stage of ['started', 'requested', 'responded', 'validated']) {
       assert.equal(
         admissionEvents.some(e => e.type === `ticket.structured_planning_${stage}`),
@@ -383,22 +384,31 @@ async function main() {
     assert.equal(afterDrift.planningProvenance.provenanceHash, plan.planningProvenance.provenanceHash);
     assert.deepEqual((await store.listRunsForTicket({ ticketId: ticket.id, limit: 20 })).runs, []);
 
-    // Item-status writes must not erase durable admission provenance.
-    const statusWrite = await store.updateAllocationItemStatus({
-      planId: plan.id,
-      allocationItemId: plan.items[0].allocationItemId,
-      status: 'running'
-    });
-    assert.equal(statusWrite.plan.planningProvenance.provenanceHash,
+    // Tranche 3: for a planner-admitted v2 plan the item status is derived from
+    // persisted execution facts inside the store, so a caller-supplied write is
+    // refused outright rather than preserved. The provenance-preservation
+    // invariant now belongs to the reconciliation write path and is proven in
+    // scripts/structured-allocation-leaf-run-postgres-test.js.
+    await assert.rejects(
+      () => store.updateAllocationItemStatus({
+        planId: plan.id,
+        allocationItemId: plan.items[0].allocationItemId,
+        status: 'running'
+      }),
+      error => error.code === 'ALLOCATION_ITEM_STATUS_NOT_CALLER_OWNED',
+      'a caller cannot supply the item status of a planner-admitted plan'
+    );
+    const afterRefusedWrite = await store.getAllocationPlan(plan.id);
+    assert.equal(afterRefusedWrite.revision, afterDrift.revision,
+      'the refused write does not bump the plan revision');
+    assert.equal(afterRefusedWrite.planningProvenance.provenanceHash,
       plan.planningProvenance.provenanceHash);
-    assert.equal(statusWrite.plan.planningProvenance.admissionHash,
+    assert.equal(afterRefusedWrite.planningProvenance.admissionHash,
       plan.planningProvenance.admissionHash,
-      'an item-status update preserves the admission binding');
-    await store.updateAllocationItemStatus({
-      planId: plan.id,
-      allocationItemId: plan.items[0].allocationItemId,
-      status: 'pending'
-    });
+      'the refused write preserves the admission binding');
+    assert.deepEqual(afterRefusedWrite.items.map(item => item.status),
+      plan.items.map(() => 'pending'),
+      'every item status is unchanged by the refused write');
 
     // ── Rollback: a rejected plan leaves no partial state ────────────────────
     const rollbackTicket = await createStructuredTicket(`Rollback on invalid plan ${STAMP}`);
@@ -760,15 +770,28 @@ async function main() {
       );
     }
 
-    // Projections tell the truth about the admitted plan and the Tranche 3 boundary.
+    // Projections tell the truth about the admitted plan. Tranche 3 landed, so
+    // leaf-run admission is reported as available — but this suite drives the
+    // store directly and never calls it, so the plan below still holds zero
+    // worker runs, which the assertions above and below prove independently.
     const api = await server.request('GET', `/api/tickets/${ticket.id}/runtime`, { cookie });
     assert.equal(api.statusCode, 200);
     const apiBody = JSON.parse(api.body);
     assert.equal(apiBody.structuredAllocationPlanning.attempt.state, 'plan_admitted');
     assert.equal(apiBody.structuredAllocationPlanning.attempt.admittedPlanId, plan.id);
-    assert.equal(apiBody.structuredAllocationPlanning.leafExecutionAvailable, false);
-    assert.equal(apiBody.structuredAllocationPlanning.leafExecutionRefusalReason,
-      'structured_leaf_run_admission_not_available');
+    assert.equal(apiBody.structuredAllocationPlanning.leafExecutionAvailable, true);
+    assert.equal(apiBody.structuredAllocationPlanning.leafExecutionRefusalReason, null);
+    // No leaf admission has run for this plan, so the leaf projection reports
+    // no binding, no decision and no completion.
+    assert.equal(apiBody.structuredAllocationLeafExecution.available, true);
+    assert.equal(
+      apiBody.structuredAllocationLeafExecution.items.every(item =>
+        item.runId === null && item.leafBindingHash === null),
+      true,
+      'an unadmitted plan projects no item-to-Run binding'
+    );
+    assert.equal(apiBody.structuredAllocationLeafExecution.aggregateDecision, null);
+    assert.deepEqual(apiBody.structuredAllocationLeafExecution.completedItemIds, []);
     assert.equal(apiBody.structuredAllocationPlanning.planningProvenance.planHash, plan.planHash);
     assert.equal(JSON.stringify(apiBody).includes('apiKey'), false,
       'projections never expose credentials');
@@ -778,7 +801,8 @@ async function main() {
     assert.match(page.body, /Structured Allocation Planning/);
     assert.match(page.body, /plan_admitted/);
     assert.match(page.body, new RegExp(plan.planHash));
-    assert.match(page.body, /leaf-run admission is not available until Tranche 3/i);
+    assert.match(page.body, /Leaf execution capability/i);
+    assert.match(page.body, /Plan admission itself still creates zero worker runs/i);
 
     const timeline = await server.request('GET', `/api/tickets/${ticket.id}/timeline`, { cookie });
     assert.equal(timeline.statusCode, 200);
@@ -802,8 +826,9 @@ async function main() {
       assert.match(cli, /planning attempt/);
       assert.match(cli, /plan_admitted/);
       assert.match(cli, new RegExp(plan.planHash));
-      assert.match(cli, /leaf execution.*unavailable/);
-      assert.match(cli, /structured_leaf_run_admission_not_available/);
+      assert.match(cli, /leaf execution.*available/);
+      assert.match(cli, /aggregate decision.*not yet reconciled/);
+      assert.match(cli, /work unit.*run none/);
     } finally {
       fs.rmSync(cookieFile, { force: true });
     }

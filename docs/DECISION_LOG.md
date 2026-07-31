@@ -107,8 +107,69 @@ rather than asserted. Success means exactly one pending v2 plan, a `plan_admitte
 worker Runs, and nothing scheduler-visible — the scheduler selects only pending Runs, so an
 admitted plan is structurally invisible to it. Failure means a blocked Ticket with no plan and no
 Runs, carrying the exact stage and canonical reason, with no v1 fallback and no hidden retry.
-Execution of an admitted plan is refused with `structured_leaf_run_admission_not_available` until
-Tranche 3, and the API, page, and CLI state that boundary explicitly.
+Execution of an admitted plan is Tranche 3 leaf-run admission, which runs as a separate
+transaction immediately after admission commits; plan admission itself still creates zero worker
+Runs, and the API, page, and CLI report that split explicitly.
+
+## Structured Allocation Leaf-Run Admission and Aggregate Completion (2026-07-31)
+
+An admitted, pending Allocation Plan v2 becomes execution through exactly one atomic leaf
+admission: one initial Run per immutable allocation item, or none. Each Run carries an immutable
+leaf binding — Ticket, plan id and hash, allocation item, assigned agent, item declared-work
+hash, exact admitted owned paths, parent declared-work hash, planning-attempt id, admission hash,
+runtime-assigned Run id, and its own canonical binding hash. The runtime derives the binding; no
+model creates or modifies it, and it cannot be transplanted or rebuilt from current group, agent,
+or route configuration. Run identities are reserved from the runs sequence inside the admission
+transaction so the binding is complete at INSERT rather than patched in afterwards.
+
+A leaf Run declares the ITEM, not the parent Ticket: objective, expected outputs and success
+criteria come from the immutable item, the plan's shared constraints are carried unchanged, the
+Run's own completion authority contributes its deterministic typed criteria through the canonical
+declared-work builder, and the generic v1 `allocationSubtask` never appears. The assigned agent is
+the worker principal, dispatched through the existing worker route; an unavailable or
+unauthorized agent refuses the whole admission rather than selecting a replacement.
+
+A v2 item that declares a `typed-postcondition` criterion has no admitted completion authority:
+`assertDeclaredWorkCompletionAuthorityBinding` admits only `workflow-defined` and
+`deterministic-objective-contract` typed criteria and additionally requires declared and admitted
+criteria to be the same set in both directions, which no per-item subset of parent authority can
+satisfy. Leaf admission therefore refuses the entire admission with
+`leaf_item_typed_criteria_unsupported`, before any Run identity is reserved. The provenance is not
+promoted, the criterion is not dropped or converted to text, no model is asked to validate it, and
+text-only siblings are not admitted partially. The admitted plan is preserved.
+
+For planner-admitted v2 plans the durable item status is derived inside the PostgreSQL
+transaction from the immutable item-to-Run binding, the persisted Run lifecycle, the durable
+completion decision, and declared-work/completion-authority hash agreement. A caller may request
+reconciliation but may not supply or force the resulting status;
+`updateAllocationItemStatus()` refuses such a write with `ALLOCATION_ITEM_STATUS_NOT_CALLER_OWNED`.
+A terminal `completed` Run whose completion decision is absent, stale, conflicting, or
+unsuccessful never makes the item completed — it resolves to `interrupted` or `failed` with a
+closed reason. Historical v1 behavior, and v2 plans with no planner provenance, are unchanged.
+
+One deterministic aggregate decision is built from the item bindings and completion decisions and
+stored beside the plan authority, outside `planHash`, on the same terms as planning provenance.
+The plan completes only when every item holds a valid completed decision with its supporting
+decision hash. "All Runs terminal", agent prose, `complete: true`, file existence, and the absence
+of running Runs are all explicitly insufficient. Any failed item prevents completion; interrupted
+or evidence-incomplete items stay unresolved. Repeated reconciliation over unchanged facts writes
+nothing and bumps no revision.
+
+The parent Ticket outcome is NOT restated here. `transitionTicketAfterRun()` already projects
+every Run in the batch through its durable completion decision and owns the
+completed/failed/blocked/interrupted mapping including the owned-scope "every sibling completed"
+rule; the leaf contract deliberately exports no second parent-completion authority.
+
+Retry boundary, fail-closed: Tranche 3 admits exactly one initial Run per item and never replans,
+never creates a v1 plan, and never duplicates an initial binding. Automatic retry already refuses
+owned-scope tickets, so no leaf retry lineage arises; the aggregate decision represents lineage so
+a future retry that preserves the same allocation-item authority remains expressible without a
+schema change. A partially persisted leaf set is reported as an integrity defect, never completed
+from mutable configuration.
+
+No migration. Leaf bindings live in the existing run JSONB body and the aggregate decision in the
+existing allocation-plan body. Workflow-mode leaf admission is refused with
+`leaf_execution_mode_unsupported` rather than synthesizing workflow typed criteria per item.
 
 ## Parent Work Authority and Planning Principal (2026-07-30)
 

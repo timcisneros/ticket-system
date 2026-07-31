@@ -272,21 +272,43 @@ Tranche 2B adds no migration. Historical Tickets without structured authority, v
 plans and runs, and existing Tranche 1 v2 plans are all unchanged, and no planner
 provenance is synthesized historically.
 
-### Remaining Tranche 3 boundary
+### Tranche 2B / Tranche 3 boundary
 
-An admitted v2 plan is decomposition authority only. Nothing in Tranche 2B calls
-`prepareAgentRunDraft()`, persists a worker Run, writes a worker prompt, makes an
-execution unit scheduler-visible, dispatches a worker, aggregates completion,
-routes by role, applies model economics, or delegates recursively. Execution of an
-admitted plan is refused with `structured_leaf_run_admission_not_available`, and
-the API, page and CLI state that boundary explicitly. Tranche 3 begins at the point
-where an admitted v2 allocation item becomes leaf-run authority.
+Nothing in Tranche 2B calls `prepareAgentRunDraft()`, persists a worker Run, writes
+a worker prompt, makes an execution unit scheduler-visible, dispatches a worker,
+aggregates completion, routes by role, applies model economics, or delegates
+recursively. Plan admission remains one transaction ending at its event, still
+creating zero worker Runs. Tranche 3 begins at the point where an admitted v2
+allocation item becomes leaf-run authority, in a separate transaction.
 
-## Tranche 3 — Leaf-Run Admission and Aggregate Completion
+## Tranche 3 — Leaf-Run Admission and Aggregate Completion (implemented)
 
-Define how admitted v2 items become leaf-run authority and how ticket-level
-completion consumes leaf outcomes without rewriting item authority or historical
-v1 behavior. This tranche is not implemented by Tranche 1.
+An admitted, pending v2 plan becomes execution through exactly one atomic leaf
+admission: one initial Run per immutable allocation item, all scheduler-visible
+together or none at all. Each Run carries an immutable leaf binding derived by the
+runtime and hashed over Ticket, plan identity and hash, allocation item, assigned
+agent, item declared-work hash, exact admitted owned paths, parent declared-work
+hash, planning-attempt id, admission hash and the runtime-assigned Run id.
+
+A leaf Run declares its allocation ITEM, not the parent Ticket, and never the
+generic v1 `allocationSubtask`. The item's assigned agent is the worker principal,
+dispatched through the existing worker route with no role-aware routing. An item
+declaring a `typed-postcondition` criterion has no admitted completion authority
+and refuses the whole admission with `leaf_item_typed_criteria_unsupported`,
+before any Run identity is reserved and with the admitted plan preserved.
+
+Item status for planner-admitted plans is derived transactionally from the
+immutable binding, the persisted Run lifecycle, the durable completion decision
+and declared-work/completion-authority hash agreement. Callers may request
+reconciliation but never supply a status. A raw `completed` Run with absent,
+stale, conflicting or unsuccessful evidence never completes its item. One
+deterministic aggregate decision is stored beside the plan authority, outside
+`planHash`; the plan completes only when every item holds a valid completed
+decision. The parent Ticket outcome stays with `transitionTicketAfterRun()`, which
+already owns that mapping — Tranche 3 adds no second parent-completion authority.
+
+Tranche 3 adds no migration, no replanning, no v1 fallback, no recursion and no
+delegation. Historical v1 behavior and non-planner v2 plans are unchanged.
 
 ## Tranche 4 — Role-Aware Routing and Bounded Economics
 

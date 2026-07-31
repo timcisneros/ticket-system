@@ -1154,6 +1154,72 @@
         <dt>Subtask</dt>
         <dd><%= run.allocationSubtask || (snapshot && snapshot.allocationSubtask) || '-' %></dd>
       </div>
+      <%
+        const leafBinding = typeof leafRunBinding !== 'undefined' ? leafRunBinding : null;
+        const leafItem = typeof leafExecution !== 'undefined' && leafExecution && leafExecution.available
+          ? leafExecution.items.find(entry => leafBinding && entry.allocationItemId === leafBinding.allocationItemId) || null
+          : null;
+        const leafAggregate = typeof leafExecution !== 'undefined' && leafExecution
+          ? leafExecution.aggregateDecision : null;
+      %>
+      <% if (leafBinding) { %>
+      <div>
+        <dt>Leaf binding</dt>
+        <dd><code><%= leafBinding.bindingHash %></code></dd>
+      </div>
+      <div>
+        <dt>Bound work unit</dt>
+        <dd>#<%= leafBinding.allocationItemId %> · agent #<%= leafBinding.assignedAgentId %> · run #<%= leafBinding.runId %></dd>
+      </div>
+      <div>
+        <dt>Item declared work</dt>
+        <dd><code><%= leafBinding.itemDeclaredWorkHash %></code></dd>
+      </div>
+      <div>
+        <dt>Parent declared work</dt>
+        <dd><code><%= leafBinding.parentDeclaredWorkHash %></code></dd>
+      </div>
+      <div>
+        <dt>Bound owned paths</dt>
+        <dd><code class="owned-path"><%= leafBinding.ownedOutputPaths.join(', ') %></code></dd>
+      </div>
+      <div>
+        <dt>Planning admission</dt>
+        <dd>attempt <code><%= leafBinding.planningAttemptId %></code> · <code><%= leafBinding.planningAdmissionHash %></code></dd>
+      </div>
+      <div>
+        <dt>Work unit disposition</dt>
+        <dd>
+          <% if (leafItem && leafItem.dispositionReason) { %>
+            <span class="status-badge status-<%= leafItem.itemStatus %>"><%= leafItem.itemStatus %></span>
+            <span class="text-muted"><%= leafItem.dispositionReason %></span>
+          <% } else { %>
+            <span class="text-muted">Not yet reconciled.</span>
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Completion decision</dt>
+        <dd>
+          <% if (leafItem && leafItem.completionDecisionHash) { %>
+            <code><%= leafItem.completionDecisionHash %></code>
+          <% } else { %>
+            <span class="text-muted">No durable completion decision supports this work unit.</span>
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Aggregate plan decision</dt>
+        <dd>
+          <% if (leafAggregate) { %>
+            <span class="status-badge status-<%= leafAggregate.aggregateStatus %>"><%= leafAggregate.aggregateStatus %></span>
+            · <code><%= leafAggregate.decisionHash %></code>
+          <% } else { %>
+            <span class="text-muted">Not yet reconciled.</span>
+          <% } %>
+        </dd>
+      </div>
+      <% } %>
       <% if (typeof allocationPlan !== 'undefined' && allocationPlan && allocationPlan.version === 2 && allocationItem) { %>
       <div>
         <dt>Allocated objective</dt>

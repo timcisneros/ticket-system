@@ -10,6 +10,9 @@ const {
 const {
   normalizePlanningProvenance
 } = require('../../runtime/structured-allocation-planning-contract');
+const {
+  normalizeAggregatePlanDecision
+} = require('../../runtime/structured-allocation-leaf-run-contract');
 
 function positiveSafeInteger(value, label) {
   const number = typeof value === 'string' && /^[1-9]\d*$/.test(value) ? Number(value) : value;
@@ -80,6 +83,16 @@ function allocationPlanFromRow(row) {
       // Validates provenanceHash, admissionHash and the planHash binding on
       // every read. A planner-admitted plan cannot project without all three.
       normalizePlanningProvenance(plan.planningProvenance, { expectedPlanHash: plan.planHash });
+    }
+    // Same treatment for the Tranche 3 aggregate decision: re-derived and
+    // hash-checked on every read, so a tampered stored decision — including one
+    // whose aggregateStatus disagrees with its own items — never projects as
+    // completion authority.
+    if (plan.aggregateDecision != null) {
+      normalizeAggregatePlanDecision(plan.aggregateDecision, {
+        expectedPlanHash: plan.planHash,
+        expectedPlanId: plan.id
+      });
     }
     return plan;
   }
@@ -436,6 +449,21 @@ function methods({
         const locked = await client.query(`SELECT * FROM ${this.table('allocation_plans')} WHERE id = $1 FOR UPDATE`, [id]);
         if (!locked.rowCount) return null;
         const plan = allocationPlanFromRow(locked.rows[0]);
+        // Tranche 3: for a planner-admitted v2 plan the durable item status is
+        // derived inside reconcileStructuredAllocationLeafItems() from the
+        // immutable item-to-Run binding, the persisted Run lifecycle, the
+        // durable completion decision and declared-work/completion-authority
+        // hash agreement. A caller may request that reconciliation; it may not
+        // supply the resulting status. Historical v1 plans, and v2 plans with no
+        // planner provenance, keep the previous behavior unchanged.
+        if (plan.version === ALLOCATION_PLAN_VERSION && plan.planningProvenance != null) {
+          const error = new Error(
+            `Allocation plan ${id} item status is derived from persisted execution facts ` +
+            'and cannot be supplied by a caller'
+          );
+          error.code = 'ALLOCATION_ITEM_STATUS_NOT_CALLER_OWNED';
+          throw error;
+        }
         if (plan.version === ALLOCATION_PLAN_VERSION) {
           const current = plan.itemStatuses.find(candidate =>
             candidate.allocationItemId === itemId);

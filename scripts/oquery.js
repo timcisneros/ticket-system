@@ -592,6 +592,32 @@ async function cmdReplay(args) {
         }
         const shared = plan.sharedConstraints.map(constraint => constraint.declaration);
         console.log(`  ${dim('shared constraints')} ${shared.length > 0 ? shared.join('; ') : 'explicitly none'}`);
+        // Tranche 3 leaf execution: the immutable item-to-Run binding this run
+        // executes under, and the durable disposition derived from it.
+        const binding = run.leafRunBinding || null;
+        if (binding) {
+          console.log(`  ${dim('leaf binding')} ${binding.bindingHash}`);
+          console.log(`  ${dim('bound item')} #${binding.allocationItemId} agent #${binding.assignedAgentId} run #${binding.runId}`);
+          console.log(`  ${dim('item declared work')} ${binding.itemDeclaredWorkHash}`);
+          console.log(`  ${dim('bound owned paths')} ${binding.ownedOutputPaths.join(', ')}`);
+          console.log(`  ${dim('planning admission')} attempt ${binding.planningAttemptId} ${binding.planningAdmissionHash}`);
+        } else {
+          console.log(`  ${dim('leaf binding')} none (this run holds no item-to-Run binding)`);
+        }
+        const decided = plan.aggregateDecision && Array.isArray(plan.aggregateDecision.items)
+          ? plan.aggregateDecision.items.find(entry =>
+            entry.allocationItemId === run.allocationItemId) || null
+          : null;
+        if (decided) {
+          console.log(`  ${dim('item disposition')} ${statusTag(decided.itemStatus)} ${dim(decided.reason)}`);
+          console.log(`  ${dim('completion decision')} ${decided.completionDecisionHash || 'none'}`);
+          console.log(`  ${dim('run lineage')} ${decided.runLineage.join(', ')}`);
+        } else {
+          console.log(`  ${dim('item disposition')} not yet reconciled`);
+        }
+        if (plan.aggregateDecision) {
+          console.log(`  ${dim('aggregate decision')} ${statusTag(plan.aggregateDecision.aggregateStatus)} ${plan.aggregateDecision.decisionHash}`);
+        }
       } else if (run.allocationSubtask) {
         console.log(`  ${dim('subtask')} ${truncate(run.allocationSubtask, 120)}`);
       }
@@ -1643,7 +1669,29 @@ async function cmdTicket(args) {
       console.log(`  ${dim('planning attempt')} none`);
     }
     if (planningProjection) {
-      console.log(`  ${dim('leaf execution')} unavailable (${planningProjection.leafExecutionRefusalReason}); zero worker runs from planning`);
+      console.log(`  ${dim('leaf execution')} ${planningProjection.leafExecutionAvailable
+        ? 'available'
+        : `unavailable (${planningProjection.leafExecutionRefusalReason})`}`);
+    }
+    const leafExecution = data.structuredAllocationLeafExecution || null;
+    if (leafExecution && leafExecution.available) {
+      console.log(`  ${dim('leaf plan')} #${leafExecution.allocationPlanId} ${statusTag(leafExecution.planStatus)} ${leafExecution.planHash}`);
+      for (const item of leafExecution.items) {
+        console.log(`  ${dim('work unit')} #${item.allocationItemId} agent #${item.assignedAgentId} ` +
+          `run ${item.runId ? '#' + item.runId : 'none'} ${statusTag(item.itemStatus || 'pending')} ` +
+          `${dim(item.dispositionReason || 'not yet reconciled')}`);
+        console.log(`    ${dim('owned paths')} ${item.ownedOutputPaths.join(', ')}`);
+        console.log(`    ${dim('binding')} ${item.leafBindingHash || 'none'} ${dim('declared work')} ${item.itemDeclaredWorkHash || 'none'}`);
+        console.log(`    ${dim('lineage')} ${item.runLineage.length > 0 ? item.runLineage.join(', ') : 'none'} ` +
+          `${dim('completion decision')} ${item.completionDecisionHash || 'none'}`);
+      }
+      console.log(`  ${dim('completed items')} ${leafExecution.completedItemIds.join(', ') || 'none'}`);
+      console.log(`  ${dim('failed items')} ${leafExecution.failedItemIds.join(', ') || 'none'}`);
+      console.log(`  ${dim('unresolved items')} ${leafExecution.unresolvedItemIds.join(', ') || 'none'}`);
+      console.log(`  ${dim('aggregate decision')} ${leafExecution.aggregateDecision
+        ? `${leafExecution.aggregateDecision.aggregateStatus} ${leafExecution.aggregateDecision.decisionHash}`
+        : 'not yet reconciled'}`);
+      console.log(`  ${dim('parent ticket result')} ${statusTag(leafExecution.parentTicketStatus)}`);
     }
   } else {
     console.log(`  ${dim('structured allocation')} historical authority unavailable`);

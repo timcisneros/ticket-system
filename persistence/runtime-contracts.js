@@ -11,6 +11,7 @@ const CONTRACTS = Object.freeze({
   runTerminalization: ['terminalizeRun', 'repairRunTerminalization'],
   ticketRunLifecycle: ['createTicketWithEvent', 'transitionTicketState', 'reassignTicket', 'createRunsAndStartTicket', 'transitionTicketAfterRun', 'reopenTicket', 'createRetryRun'],
   structuredAllocationPlanning: ['writeStructuredAllocationPlanningAttempt', 'admitStructuredAllocationPlan', 'getAllocationPlanForTicket'],
+  structuredAllocationLeafExecution: ['admitStructuredAllocationLeafRuns', 'reconcileStructuredAllocationLeafItems', 'getAllocationPlanForTicket'],
   nonTerminalEvidence: ['appendRunEvidence', 'completeActionReceipt', 'prepareTargetOperation', 'completeTargetOperation', 'getTargetOperation', 'withTargetOperationLock'],
   workspaceMutationBoundary: ['withTargetOperationLock', 'withWorkspaceMutationBoundary'],
   workspaceOwnership: ['findMutationConflict', 'listArtifactOwners'],
@@ -90,6 +91,8 @@ module.exports = {
   assertTicketRunLifecycleRepository: assertion('ticketRunLifecycle', 'ticket/run lifecycle'),
   assertStructuredAllocationPlanningRepository:
     assertion('structuredAllocationPlanning', 'structured allocation planning'),
+  assertStructuredAllocationLeafExecutionRepository:
+    assertion('structuredAllocationLeafExecution', 'structured allocation leaf execution'),
   assertNonTerminalEvidenceRepository: assertion('nonTerminalEvidence', 'non-terminal evidence'),
   assertWorkspaceMutationBoundaryRepository: assertion('workspaceMutationBoundary', 'workspace mutation boundary'),
   assertWorkspaceOwnershipRepository: assertion('workspaceOwnership', 'workspace ownership'),

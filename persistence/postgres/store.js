@@ -33,10 +33,22 @@ const {
   normalizePlanningAttempt
 } = require('../../runtime/structured-allocation-planning-contract');
 const {
+  ALLOCATION_PLAN_VERSION,
   createAllocationPlanV2StorageBody,
   materializeAllocationPlanV2Draft,
-  normalizeAllocationPlanV2
+  normalizeAllocationPlanV2,
+  serializeAllocationPlanV2StorageBody
 } = require('../../runtime/allocation-plan-contract');
+const {
+  assertLeafBindingSetComplete,
+  buildAggregatePlanDecision,
+  buildLeafDeclaredWorkSnapshot,
+  buildLeafRunBinding,
+  deriveLeafItemDisposition,
+  normalizeAggregatePlanDecision,
+  normalizeLeafRunBinding,
+  refuseLeafAdmission
+} = require('../../runtime/structured-allocation-leaf-run-contract');
 const {
   normalizeCompletionAuthoritySnapshot,
   normalizeCompletionDecision,
@@ -2547,9 +2559,12 @@ class PostgresRuntimeStore {
           requestHash: provenance.requestHash,
           responseHash: provenance.responseHash,
           proposalHash: provenance.proposalHash,
+          // Plan admission itself still creates zero worker runs: leaf-run
+          // admission is a separate atomic transaction that runs immediately
+          // after this one commits. Both facts are reported, not conflated.
           workerRunsCreated: 0,
-          leafExecutionAvailable: false,
-          leafExecutionRefusalReason: 'structured_leaf_run_admission_not_available'
+          leafExecutionAvailable: true,
+          leafExecutionRefusalReason: null
         }
       });
 
@@ -2565,6 +2580,477 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+  // ── Tranche 3: structured allocation leaf-run admission ───────────────────
+  //
+  // Two transactions, both store-owned:
+  //
+  //   admitStructuredAllocationLeafRuns()      one initial Run per immutable item
+  //   reconcileStructuredAllocationLeafItems() persisted facts -> item status
+  //
+  // Neither creates authority. Admission binds Runs to items the planner already
+  // admitted; reconciliation reads the durable Run lifecycle and completion
+  // decisions and writes back the item status they imply. No caller supplies an
+  // item status for a planner-admitted plan, and no model participates in either.
+  //
+  // Lock order for both is tickets -> allocation_plans -> runs. Reconciliation
+  // takes a strict subset (allocation_plans only, runs read-only), so the pair
+  // cannot deadlock against each other, against updateAllocationItemStatus,
+  // which takes allocation_plans alone, or against createRunsAndStartTicket,
+  // which takes tickets then runs.
+
+  // The plan row a leaf operation is allowed to act on: exactly one v2 plan,
+  // carrying planner provenance whose admission binding still verifies.
+  async _lockedPlannerAdmittedPlan(connection, ticketId, { allocationPlanId = null } = {}) {
+    const result = await connection.query(
+      `SELECT * FROM ${this.table('allocation_plans')}
+       WHERE ticket_id = $1 ORDER BY id FOR UPDATE`,
+      [ticketId]
+    );
+    if (result.rowCount === 0) refuseLeafAdmission('admitted_plan_missing');
+    if (result.rowCount > 1) {
+      refuseLeafAdmission('admitted_plan_mismatch',
+        `ticket ${ticketId} holds ${result.rowCount} allocation plans`);
+    }
+    const plan = allocationPlanFromRow(result.rows[0]);
+    if (plan.version !== ALLOCATION_PLAN_VERSION) {
+      refuseLeafAdmission('admitted_plan_mismatch',
+        'Structured leaf admission applies only to Allocation Plan v2');
+    }
+    if (allocationPlanId !== null && plan.id !== allocationPlanId) {
+      refuseLeafAdmission('admitted_plan_mismatch',
+        `ticket ${ticketId} allocation plan is ${plan.id}, not ${allocationPlanId}`);
+    }
+    if (!plan.planningProvenance) refuseLeafAdmission('plan_provenance_missing');
+    try {
+      assertAdmissionBinding({
+        planHash: plan.planHash,
+        provenanceHash: plan.planningProvenance.provenanceHash,
+        admissionHash: plan.planningProvenance.admissionHash
+      });
+    } catch (error) {
+      refuseLeafAdmission('plan_admission_binding_invalid', error.message);
+    }
+    return plan;
+  }
+
+  // Every persisted leaf binding for this plan, verified against the plan on the
+  // way out. A run that carries no binding, or one bound to another plan, is not
+  // a leaf of this plan and is reported separately so the caller can refuse
+  // rather than silently reconcile a mixed run set.
+  _leafRunsForPlan(runs, plan) {
+    const leaves = [];
+    const foreign = [];
+    for (const run of runs) {
+      const binding = run.leafRunBinding || null;
+      if (!binding || binding.allocationPlanId !== plan.id) {
+        foreign.push(run);
+        continue;
+      }
+      leaves.push({
+        run,
+        binding: normalizeLeafRunBinding(binding, {
+          expectedRunId: run.id,
+          expectedTicketId: plan.ticketId,
+          expectedPlanId: plan.id,
+          expectedPlanHash: plan.planHash
+        })
+      });
+    }
+    return { leaves, foreign };
+  }
+
+  // Atomic leaf-run admission. Exactly one initial Run per immutable allocation
+  // item, every Run carrying its immutable binding at INSERT, all of them
+  // scheduler-visible together or none at all. A refusal creates zero Runs and
+  // zero bindings and leaves the admitted plan untouched.
+  async admitStructuredAllocationLeafRuns({
+    ticketId,
+    allocationPlanId = null,
+    leafDrafts,
+    runEventPayload = () => ({}),
+    eventType = 'ticket.allocation_leaf_runs_admitted',
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    if (!Array.isArray(leafDrafts) || leafDrafts.length === 0) {
+      throw new TypeError('leafDrafts must be a non-empty array');
+    }
+    if (typeof runEventPayload !== 'function') {
+      throw new TypeError('runEventPayload must be a function');
+    }
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+
+    const execute = async connection => {
+      const ticketResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (ticketResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(ticketResult.rows[0]);
+      const plan = await this._lockedPlannerAdmittedPlan(connection, id, { allocationPlanId });
+
+      // The plan must still be the one the ticket's planning attempt admitted.
+      const attempt = ticket.structuredAllocationPlanningAttempt == null
+        ? null
+        : normalizePlanningAttempt(ticket.structuredAllocationPlanningAttempt, {
+          expectedTicketId: id
+        });
+      if (!attempt || attempt.state !== 'plan_admitted') {
+        refuseLeafAdmission('planning_attempt_not_admitted');
+      }
+      if (attempt.admittedPlanId !== plan.id || attempt.admittedPlanHash !== plan.planHash) {
+        refuseLeafAdmission('admitted_plan_mismatch');
+      }
+      if (attempt.attemptId !== plan.planningProvenance.attemptId) {
+        refuseLeafAdmission('admitted_plan_mismatch',
+          'The stored plan provenance names a different planning attempt');
+      }
+      if (plan.status !== 'pending') refuseLeafAdmission('plan_not_pending');
+
+      // Exactly-once, enforced under the ticket lock rather than asserted. A
+      // committed complete leaf set re-reports itself; anything else refuses.
+      const existingRunsResult = await connection.query(
+        `SELECT * FROM ${this.table('runs')} WHERE ticket_id = $1 ORDER BY id FOR UPDATE`,
+        [id]
+      );
+      const existingRuns = existingRunsResult.rows.map(runFromRow);
+      if (existingRuns.length > 0) {
+        const { leaves, foreign } = this._leafRunsForPlan(existingRuns, plan);
+        if (foreign.length > 0) refuseLeafAdmission('leaf_runs_already_exist');
+        try {
+          assertLeafBindingSetComplete(leaves.map(leaf => leaf.binding), plan, {
+            declaredWorkHashByItemId: new Map(leaves.map(leaf => [
+              leaf.binding.allocationItemId,
+              leaf.run.declaredWorkSnapshot ? leaf.run.declaredWorkSnapshot.contractHash : null
+            ]))
+          });
+        } catch (_) {
+          refuseLeafAdmission('leaf_runs_already_exist');
+        }
+        return {
+          ticket,
+          plan,
+          runs: leaves.map(leaf => leaf.run),
+          bindings: leaves.map(leaf => leaf.binding),
+          event: null,
+          admitted: false
+        };
+      }
+
+      // Every item exactly once, and every draft carrying exactly the authority
+      // its item admitted. Preflight completes before any Run identity is
+      // reserved, so an unsupported item refuses the whole admission.
+      const itemsById = new Map(plan.items.map(item => [item.allocationItemId, item]));
+      const drafts = leafDrafts.map((leaf, index) => {
+        const label = `leafDrafts[${index}]`;
+        const source = this.assertJsonRecord(leaf, label);
+        const allocationItemId = positiveSafeInteger(
+          source.allocationItemId,
+          `${label}.allocationItemId`
+        );
+        const item = itemsById.get(allocationItemId);
+        if (!item) {
+          refuseLeafAdmission('leaf_ownership_drift',
+            `${label} names allocation item ${allocationItemId}, which this plan does not contain`);
+        }
+        const run = this.assertJsonRecord(source.run, `${label}.run`);
+        if (positiveSafeInteger(run.ticketId, `${label}.run.ticketId`) !== id) {
+          throw new TypeError('Every leaf run draft must belong to ticketId');
+        }
+        if (positiveSafeInteger(run.agentId, `${label}.run.agentId`) !== item.assignedAgentId) {
+          refuseLeafAdmission('leaf_agent_not_authorized',
+            `${label} assigns agent ${run.agentId}, but the item admitted ${item.assignedAgentId}`);
+        }
+        if (run.allocationPlanId !== plan.id || run.allocationItemId !== allocationItemId) {
+          refuseLeafAdmission('leaf_ownership_drift',
+            `${label} does not identify its allocation item`);
+        }
+        // Ownership is the admitted item ownership, never regenerated from the
+        // current group. buildLeafDeclaredWorkSnapshot re-runs the typed-criterion
+        // preflight, so an unsupported criterion refuses here, before any
+        // identity is reserved.
+        if (run.executionMode === 'workflow') {
+          refuseLeafAdmission('leaf_execution_mode_unsupported');
+        }
+        const declared = buildLeafDeclaredWorkSnapshot(item, {
+          sharedConstraints: plan.sharedConstraints,
+          completionAuthoritySnapshot: run.completionAuthoritySnapshot || null
+        });
+        const draftPaths = Array.isArray(run.ownedOutputPaths) ? [...run.ownedOutputPaths].sort() : [];
+        const itemPaths = [...item.ownedOutputPaths].sort();
+        if (draftPaths.length !== itemPaths.length ||
+            draftPaths.some((ownedPath, position) => ownedPath !== itemPaths[position])) {
+          refuseLeafAdmission('leaf_ownership_drift',
+            `${label} does not carry the exact admitted owned paths`);
+        }
+        if (!run.declaredWorkSnapshot ||
+            run.declaredWorkSnapshot.contractHash !== declared.contractHash) {
+          refuseLeafAdmission('leaf_ownership_drift',
+            `${label} declared work does not come from its allocation item`);
+        }
+        return { allocationItemId, item, run, declaredWorkHash: declared.contractHash };
+      });
+      const draftItemIds = drafts.map(draft => draft.allocationItemId);
+      if (new Set(draftItemIds).size !== draftItemIds.length ||
+          draftItemIds.length !== plan.items.length) {
+        refuseLeafAdmission('leaf_ownership_drift',
+          'Leaf admission must supply exactly one run draft per allocation item');
+      }
+
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const now = isoTimestamp(clock.rows[0].ts, 'leaf run admission clock');
+      const identities = await connection.query(
+        `SELECT nextval(pg_get_serial_sequence($1, $2))::bigint AS id
+         FROM generate_series(1, $3)`,
+        [`${this.schema}.runs`, 'id', drafts.length]
+      );
+      const bindings = drafts.map((draft, index) => buildLeafRunBinding({
+        ticketId: id,
+        allocationPlanId: plan.id,
+        planHash: plan.planHash,
+        allocationItemId: draft.allocationItemId,
+        assignedAgentId: draft.item.assignedAgentId,
+        itemDeclaredWorkHash: draft.declaredWorkHash,
+        ownedOutputPaths: draft.item.ownedOutputPaths,
+        parentDeclaredWorkHash: plan.parentDeclaredWorkSnapshot.contractHash,
+        planningAttemptId: plan.planningProvenance.attemptId,
+        planningAdmissionHash: plan.planningProvenance.admissionHash,
+        runId: positiveSafeInteger(identities.rows[index].id, 'run.id'),
+        admittedAt: now
+      }));
+      // One-to-one with the admitted items, no reused Run, every binding
+      // re-derived from the plan. Checked before anything is written.
+      const declaredWorkHashByItemId = new Map(drafts.map(draft =>
+        [draft.allocationItemId, draft.declaredWorkHash]));
+      assertLeafBindingSetComplete(bindings, plan, { declaredWorkHashByItemId });
+
+      const created = await this.createRunsAndStartTicket({
+        ticketId: id,
+        runDrafts: drafts.map((draft, index) => ({
+          ...draft.run,
+          id: bindings[index].runId,
+          leafRunBinding: bindings[index]
+        })),
+        runEventPayload,
+        ticketEventPayload: {
+          source: 'structured_allocation_leaf_admission',
+          allocationPlanId: plan.id,
+          planHash: plan.planHash,
+          workerRunsCreated: bindings.length
+        }
+      }, { client: connection });
+
+      // Re-verify off the persisted rows, not the in-memory drafts, so a
+      // serialization defect cannot leave an unverifiable binding committed.
+      const persisted = this._leafRunsForPlan(created.runs, plan);
+      if (persisted.foreign.length > 0) {
+        throw new TypeError('Leaf admission persisted a run without its immutable binding');
+      }
+      assertLeafBindingSetComplete(persisted.leaves.map(leaf => leaf.binding), plan, {
+        declaredWorkHashByItemId: new Map(persisted.leaves.map(leaf => [
+          leaf.binding.allocationItemId,
+          leaf.run.declaredWorkSnapshot ? leaf.run.declaredWorkSnapshot.contractHash : null
+        ]))
+      });
+
+      const event = await this._appendEvent(connection, {
+        type: requiredString(eventType, 'eventType'),
+        ticketId: id,
+        payload: {
+          ...callerPayload,
+          allocationPlanId: plan.id,
+          allocationPlanVersion: plan.version,
+          planHash: plan.planHash,
+          planningAttemptId: plan.planningProvenance.attemptId,
+          admissionHash: plan.planningProvenance.admissionHash,
+          workerRunsCreated: bindings.length,
+          leafBindings: bindings.map(binding => ({
+            allocationItemId: binding.allocationItemId,
+            assignedAgentId: binding.assignedAgentId,
+            runId: binding.runId,
+            itemDeclaredWorkHash: binding.itemDeclaredWorkHash,
+            ownedOutputPaths: binding.ownedOutputPaths,
+            bindingHash: binding.bindingHash
+          }))
+        }
+      });
+
+      return {
+        ticket: created.ticket,
+        plan,
+        runs: created.runs,
+        bindings: persisted.leaves.map(leaf => leaf.binding),
+        event,
+        admitted: true
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Store-owned item-status derivation. The caller may request reconciliation;
+  // it may not supply, propose or force any item status. Every value written
+  // here comes from the immutable binding, the persisted Run lifecycle, the
+  // durable completion decision and declared-work/completion-authority hash
+  // agreement — nothing else. Repeated calls over unchanged facts write nothing.
+  async reconcileStructuredAllocationLeafItems({
+    ticketId,
+    allocationPlanId = null
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const planId = allocationPlanId === null || allocationPlanId === undefined
+      ? null
+      : positiveSafeInteger(allocationPlanId, 'allocationPlanId');
+
+    const execute = async connection => {
+      const plan = await this._lockedPlannerAdmittedPlan(connection, id, {
+        allocationPlanId: planId
+      });
+      const runsResult = await connection.query(
+        `SELECT * FROM ${this.table('runs')} WHERE ticket_id = $1 ORDER BY id`,
+        [id]
+      );
+      const { leaves } = this._leafRunsForPlan(runsResult.rows.map(runFromRow), plan);
+      if (leaves.length === 0) {
+        // Leaf admission has not happened yet. There is nothing to derive, and
+        // inventing a status here would be exactly the caller-forced write this
+        // method exists to prevent.
+        return { plan, decision: null, reconciled: false, changed: false };
+      }
+
+      const byItem = new Map();
+      for (const leaf of leaves) {
+        const existing = byItem.get(leaf.binding.allocationItemId) || [];
+        existing.push(leaf);
+        byItem.set(leaf.binding.allocationItemId, existing);
+      }
+      const missing = plan.items
+        .map(item => item.allocationItemId)
+        .filter(allocationItemId => !byItem.has(allocationItemId));
+      if (missing.length > 0) {
+        // A partially persisted leaf set is an integrity defect. It is reported,
+        // never filled in from mutable configuration.
+        const error = new Error(
+          `Allocation plan ${plan.id} has no leaf run for item(s): ${missing.join(', ')}`
+        );
+        error.code = 'STRUCTURED_ALLOCATION_LEAF_BINDING_INCOMPLETE';
+        throw error;
+      }
+
+      const decisionResult = await connection.query(
+        `SELECT run_id, consequence FROM ${this.table('run_consequences')}
+         WHERE run_id = ANY($1::bigint[])`,
+        [leaves.map(leaf => leaf.run.id)]
+      );
+      const decisionByRunId = new Map(decisionResult.rows.map(row => [
+        positiveSafeInteger(row.run_id, 'runConsequence.runId'),
+        row.consequence && row.consequence.completionDecision
+          ? normalizeCompletionDecision(row.consequence.completionDecision)
+          : null
+      ]));
+
+      const aggregateItems = plan.items.map(item => {
+        const lineage = [...byItem.get(item.allocationItemId)]
+          .sort((left, right) => left.run.id - right.run.id);
+        // Retry lineage is representable, but Tranche 3 admits exactly one
+        // initial Run per item and auto-retry already refuses owned-scope
+        // tickets, so this is a single element in practice. The most recent Run
+        // is the one whose durable facts decide the item.
+        const current = lineage[lineage.length - 1];
+        const disposition = deriveLeafItemDisposition({
+          binding: current.binding,
+          runId: current.run.id,
+          runTicketId: current.run.ticketId,
+          runStatus: current.run.status,
+          runDeclaredWorkHash: current.run.declaredWorkSnapshot
+            ? current.run.declaredWorkSnapshot.contractHash
+            : null,
+          runCompletionAuthorityHash: current.run.completionAuthoritySnapshot
+            ? current.run.completionAuthoritySnapshot.objectiveContractHash
+            : null,
+          decision: decisionByRunId.get(current.run.id) || null
+        });
+        return {
+          allocationItemId: item.allocationItemId,
+          assignedAgentId: item.assignedAgentId,
+          runId: current.run.id,
+          runLineage: lineage.map(leaf => leaf.run.id),
+          itemStatus: disposition.itemStatus,
+          completionDecisionHash: disposition.completionDecisionHash,
+          reason: disposition.reason
+        };
+      });
+
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const now = isoTimestamp(clock.rows[0].ts, 'leaf reconciliation clock');
+      const decision = buildAggregatePlanDecision({
+        ticketId: id,
+        allocationPlanId: plan.id,
+        planHash: plan.planHash,
+        planningAdmissionHash: plan.planningProvenance.admissionHash,
+        items: aggregateItems,
+        decidedAt: now
+      });
+
+      const statusByItem = new Map(decision.items.map(item =>
+        [item.allocationItemId, item.itemStatus]));
+      const itemStatuses = plan.itemStatuses.map(itemStatus => ({
+        ...itemStatus,
+        status: statusByItem.get(itemStatus.allocationItemId)
+      }));
+      const stored = plan.aggregateDecision || null;
+      const unchanged = stored !== null &&
+        stored.aggregateStatus === decision.aggregateStatus &&
+        plan.status === decision.aggregateStatus &&
+        itemStatuses.every((itemStatus, index) =>
+          itemStatus.status === plan.itemStatuses[index].status) &&
+        decision.items.every((item, index) =>
+          item.itemStatus === stored.items[index].itemStatus &&
+          item.completionDecisionHash === stored.items[index].completionDecisionHash &&
+          item.reason === stored.items[index].reason);
+      if (unchanged) {
+        // Idempotent: identical facts produce no write, no revision bump and no
+        // event. `decidedAt` is deliberately excluded from that comparison —
+        // otherwise the wall clock alone would make reconciliation non-idempotent.
+        return {
+          plan,
+          decision: normalizeAggregatePlanDecision(stored, {
+            expectedPlanHash: plan.planHash,
+            expectedPlanId: plan.id
+          }),
+          reconciled: true,
+          changed: false
+        };
+      }
+
+      const body = this.assertJsonRecord(
+        serializeAllocationPlanV2StorageBody(plan, itemStatuses, {
+          aggregateDecision: decision
+        }),
+        'allocation plan v2 body'
+      );
+      const updated = await connection.query(
+        `UPDATE ${this.table('allocation_plans')}
+         SET status = $2, body = $3::jsonb, revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 RETURNING *`,
+        [plan.id, decision.aggregateStatus, body]
+      );
+      const reconciledPlan = allocationPlanFromRow(updated.rows[0]);
+      // Verify off the persisted row: a stored aggregate decision that does not
+      // reproduce its own hash and item projection is not authority.
+      normalizeAggregatePlanDecision(reconciledPlan.aggregateDecision, {
+        expectedPlanHash: reconciledPlan.planHash,
+        expectedPlanId: reconciledPlan.id
+      });
+      return { plan: reconciledPlan, decision, reconciled: true, changed: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async createRun(record, { client = null } = {}) {
     const run = this.assertJsonRecord(record, 'run');
     assertRunDeclaredCompletionAuthority(run, 'run declared/completion authority');
@@ -2572,8 +3058,18 @@ class PostgresRuntimeStore {
     if (status !== 'pending') throw new TypeError('New runs must start pending');
     const currentPhase = normalizeRunPhase(run.currentPhase || 'planning', 'run.currentPhase');
     if (currentPhase !== 'planning') throw new TypeError('New runs must start in planning phase');
+    // An explicit identity is admitted only when the caller reserved it from the
+    // runs sequence in this same transaction. Structured leaf admission needs it
+    // because the immutable leaf binding hashes the Run ID, so the binding must
+    // exist complete at INSERT rather than be patched in afterwards. The column
+    // is GENERATED BY DEFAULT AS IDENTITY, so an explicit value is legal; the id
+    // never enters the JSONB body, where runFromRow would shadow it anyway.
+    const reservedId = run.id === null || run.id === undefined
+      ? null
+      : positiveSafeInteger(run.id, 'run.id');
     const runBody = { ...run };
     delete runBody.currentPhase;
+    delete runBody.id;
     const leaseOwner = typeof run.leaseOwner === 'string' && run.leaseOwner.trim() ? run.leaseOwner.trim() : null;
     const leaseExpiresAt = leaseOwner ? isoTimestamp(run.leaseExpiresAt, 'run.leaseExpiresAt') : null;
     const values = [
@@ -2588,15 +3084,28 @@ class PostgresRuntimeStore {
       runBody
     ];
     const execute = async connection => {
-      const result = await connection.query(
-        `INSERT INTO ${this.table('runs')}
-          (ticket_id, agent_id, status, execution_mode, lease_owner, lease_expires_at,
-           last_heartbeat_at, current_phase, body)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
-         RETURNING *`,
-        values
-      );
-      return runFromRow(result.rows[0]);
+      const result = reservedId === null
+        ? await connection.query(
+          `INSERT INTO ${this.table('runs')}
+            (ticket_id, agent_id, status, execution_mode, lease_owner, lease_expires_at,
+             last_heartbeat_at, current_phase, body)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+           RETURNING *`,
+          values
+        )
+        : await connection.query(
+          `INSERT INTO ${this.table('runs')}
+            (ticket_id, agent_id, status, execution_mode, lease_owner, lease_expires_at,
+             last_heartbeat_at, current_phase, body, id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+           RETURNING *`,
+          [...values, reservedId]
+        );
+      const created = runFromRow(result.rows[0]);
+      if (reservedId !== null && created.id !== reservedId) {
+        throw new TypeError('run.id was not honoured by the runs table');
+      }
+      return created;
     };
     return client ? execute(client) : this.withTransaction(execute);
   }

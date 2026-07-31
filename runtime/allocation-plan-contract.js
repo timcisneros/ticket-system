@@ -83,7 +83,15 @@ const STORED_BODY_FIELDS = Object.freeze([
 // it verifies independently and cannot be transplanted onto another plan.
 // Plans admitted before Tranche 2B, and any plan not produced by a planner,
 // simply omit the field.
-const STORED_BODY_OPTIONAL_FIELDS = Object.freeze(['planningProvenance']);
+//
+// Tranche 3 adds `aggregateDecision` on exactly the same terms: it is a durable
+// EXECUTION fact derived from item-to-Run bindings and completion decisions, not
+// plan authority, so it stays outside planHash and outside AUTHORITY_FIELDS. A
+// plan that has not yet been reconciled simply omits it.
+const STORED_BODY_OPTIONAL_FIELDS = Object.freeze([
+  'planningProvenance',
+  'aggregateDecision'
+]);
 const STORED_BODY_ALLOWED_FIELDS = Object.freeze([
   ...STORED_BODY_FIELDS,
   ...STORED_BODY_OPTIONAL_FIELDS
@@ -600,7 +608,11 @@ function authorityFromV2Projection(value) {
 // Status writes re-serialize the whole body, so provenance is carried forward
 // explicitly here. Dropping it would let an ordinary item-status update erase
 // durable admission evidence.
-function serializeAllocationPlanV2StorageBody(value, itemStatusesValue = value.itemStatuses) {
+function serializeAllocationPlanV2StorageBody(
+  value,
+  itemStatusesValue = value.itemStatuses,
+  { aggregateDecision = value.aggregateDecision } = {}
+) {
   const authority = authorityFromV2Projection(value);
   const itemStatuses = normalizeItemStatuses(itemStatusesValue, authority.items);
   return deepFreeze({
@@ -613,7 +625,8 @@ function serializeAllocationPlanV2StorageBody(value, itemStatusesValue = value.i
     itemStatuses,
     ...(value.planningProvenance == null
       ? {}
-      : { planningProvenance: value.planningProvenance })
+      : { planningProvenance: value.planningProvenance }),
+    ...(aggregateDecision == null ? {} : { aggregateDecision })
   });
 }
 
@@ -643,6 +656,9 @@ function normalizeStoredAllocationPlanV2({
     ...authority,
     ...(Object.prototype.hasOwnProperty.call(body, 'planningProvenance')
       ? { planningProvenance: body.planningProvenance }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(body, 'aggregateDecision')
+      ? { aggregateDecision: body.aggregateDecision }
       : {}),
     status: status(planStatus, ALLOCATION_PLAN_STATUSES, 'allocationPlan.status'),
     items: authority.items.map(item => ({

@@ -18,6 +18,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'allocation-plan-v2-contract-test.js',
   'structured-allocation-prerequisites-contract-test.js',
   'structured-allocation-planning-contract-test.js',
+  'structured-allocation-leaf-run-contract-test.js',
   'mixed-family-work-model-test.js',
   'action-contract-streak-test.js',
   'evidence-truthfulness-contract-test.js',
@@ -110,6 +111,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'structured-allocation-prerequisites-postgres-test.js',
   'structured-allocation-planning-postgres-test.js',
   'structured-allocation-planner-provider-test.js',
+  'structured-allocation-leaf-run-postgres-test.js',
   'reconciliation-evidence-failure-test.js',
   // A10 — PostgreSQL runtime integrity suites, restored from the JSON-era orphans.
   // Registered here rather than in CHECKPOINT_TEST_SCRIPTS because every one of them

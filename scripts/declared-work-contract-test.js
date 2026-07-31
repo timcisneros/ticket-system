@@ -219,12 +219,25 @@ for (const forbidden of [
 }
 assert.equal(completionSource.includes('declaredWorkSnapshot'), false,
   'declared work must not enter completion-decision authority in this tranche');
-const builderIndex = serverSource.indexOf(
-  'const declaredWorkSnapshot = buildDeclaredWorkSnapshot({'
-);
+// Tranche 3 gave run admission a second declared-work source: a structured leaf
+// Run declares its Allocation Plan v2 item rather than the parent Ticket. Both
+// branches are still built once, before the admitted run draft is assembled, and
+// both still pass through assertDeclaredWorkCompletionAuthorityBinding.
+const builderIndex = serverSource.indexOf('const declaredWorkSnapshot = ');
 assert(builderIndex >= 0 &&
   serverSource.indexOf('\n    declaredWorkSnapshot,', builderIndex) > builderIndex,
   'declared work is constructed before the admitted run draft is assembled');
+const bindingIndex = serverSource.indexOf(
+  'assertDeclaredWorkCompletionAuthorityBinding({',
+  builderIndex
+);
+assert(bindingIndex > builderIndex &&
+  bindingIndex < serverSource.indexOf('\n    declaredWorkSnapshot,', builderIndex),
+  'every admitted declared work is bound to its completion authority before use');
+for (const branch of ['buildLeafDeclaredWorkSnapshot(', 'buildDeclaredWorkSnapshot({']) {
+  assert(serverSource.slice(builderIndex, bindingIndex).includes(branch),
+    `run admission builds declared work through ${branch}`);
+}
 assert(serverSource.includes('const promptTicket = buildAdmittedTicketProjection(run, ticket);'),
   'one canonical admitted projection supplies planning and model context');
 assert.equal(

@@ -5270,4 +5270,43 @@ cap-feedback path regresses.
 
 ---
 
-*Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16.*
+## Structured Allocation Leaf-Run Retry Boundary
+
+| Field | Value |
+|-------|-------|
+| **Status** | Deliberately deferred by Tranche 3 (2026-07-31); fail-closed, not a defect |
+| **Surfaced** | 2026-07-31, implementing structured-allocation leaf-run admission |
+| **Evidence** | `runtime/structured-allocation-leaf-run-contract.js`, `persistence/postgres/store.js` (`admitStructuredAllocationLeafRuns`, `reconcileStructuredAllocationLeafItems`), `scripts/structured-allocation-leaf-run-postgres-test.js` |
+| **Decision required** | Whether, and how, a failed structured leaf Run may be retried while preserving the same immutable allocation-item authority |
+
+**Description:**
+
+Tranche 3 admits exactly ONE initial Run per immutable Allocation Plan v2 item. It
+does not retry a failed leaf.
+
+The existing retry seam cannot be reused as-is. `createRetryRun()` persists a run
+draft built by `prepareAgentRunDraft()`, which does not carry a leaf binding — the
+binding is derived by the store during leaf admission and hashes the
+runtime-assigned Run ID, so a retry would need its own freshly derived binding for
+the same allocation item. Separately, `assessAutoRetryAfterFailureIfPolicyAllows()`
+already refuses every owned-scope ticket (`unsupported_ticket_shape`), so automatic
+retry cannot reach a structured leaf today by either route.
+
+The tranche therefore fails closed: a failed leaf item resolves to a `failed` item
+and prevents aggregate completion, and there is no automatic second attempt. The
+aggregate decision already represents a per-item `runLineage`, and
+`reconcileStructuredAllocationLeafItems()` already decides an item from the most
+recent Run bound to it, so a future retry that preserves the same allocation-item
+authority is expressible without a schema change or a new primitive.
+
+Open questions for the diagnosis:
+
+- Should a structured leaf retry exist at all, or should a failed item require operator reopen?
+- If it exists, must the retry Run carry a NEW binding over the same allocation item, and must the binding record its predecessor explicitly rather than only through `runLineage`?
+- Should the per-item attempt ceiling come from the existing runtime budget (which currently counts one attempt per allocation plan, not per item), or from a new per-item bound?
+- Does a retried leaf invalidate the item's prior completion-decision identity, or is the lineage's latest valid decision sufficient?
+- Should partial retry of a multi-item plan be permitted while sibling items are still running?
+
+---
+
+*Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31.*

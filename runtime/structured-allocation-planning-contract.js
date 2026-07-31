@@ -120,8 +120,7 @@ const PLANNING_ENTRY_REFUSALS = Object.freeze([
   'assignment_changed_since_capture',
   'planning_attempt_already_active',
   'planning_attempt_already_failed',
-  'allocation_plan_already_admitted',
-  'structured_leaf_run_admission_not_available'
+  'allocation_plan_already_admitted'
 ]);
 
 const PLANNING_READINESS_REFUSALS = Object.freeze([
@@ -161,7 +160,6 @@ const PLANNING_REFUSAL_MESSAGES = deepFreeze({
   planning_attempt_already_active: 'A structured planning attempt is already in flight for this ticket',
   planning_attempt_already_failed: 'Structured planning already failed; no automatic retry is authorized',
   allocation_plan_already_admitted: 'An Allocation Plan v2 has already been admitted for this ticket',
-  structured_leaf_run_admission_not_available: 'Structured leaf-run admission is not available until Tranche 3',
   planner_agent_missing: 'Snapshotted planner agent no longer exists',
   planner_not_group_planner: 'Snapshotted planner is no longer the group designated planner',
   planner_not_group_member: 'Snapshotted planner is no longer a member of the assignment group',
@@ -1421,12 +1419,14 @@ function projectStructuredAllocationPlanningForTicket(ticket, { allocationPlan =
   return deepFreeze({
     attempt,
     planningProvenance: provenance,
-    // Tranche 3 owns leaf-run admission. Until it lands, an admitted plan is
-    // authority only: nothing schedules it and nothing may claim it executed.
-    leafExecutionAvailable: false,
-    leafExecutionRefusalReason: 'structured_leaf_run_admission_not_available',
-    leafExecutionRefusalMessage:
-      PLANNING_REFUSAL_MESSAGES.structured_leaf_run_admission_not_available
+    // Tranche 3 owns leaf-run admission and it has landed: an admitted plan is
+    // followed by one atomic leaf admission. This projection reports only that
+    // the capability exists; whether a specific plan HAS been leaf-admitted is a
+    // durable fact, projected by the leaf-run contract from the persisted
+    // bindings, never inferred here.
+    leafExecutionAvailable: true,
+    leafExecutionRefusalReason: null,
+    leafExecutionRefusalMessage: null
   });
 }
 

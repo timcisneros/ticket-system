@@ -23,6 +23,9 @@ const { withHarness } = require('./postgres-test-harness');
 const {
   MAX_PLANNER_RESPONSE_BYTES
 } = require('../runtime/structured-allocation-planning-contract');
+const {
+  normalizeLeafRunBinding
+} = require('../runtime/structured-allocation-leaf-run-contract');
 
 const STAMP = `${Date.now()}-${process.pid}`;
 const ACTOR = 'structured-allocation-planner-provider-test';
@@ -223,14 +226,41 @@ async function main() {
       assert.equal(capturedCandidates.length, 2,
         'the context carried both captured candidates');
 
-      // One pending Allocation Plan v2, zero worker Runs.
+      // Exactly one v2 allocation plan, and Tranche 3 leaf admission has turned
+      // it into exactly one initial Run per immutable item.
       const plans = await plansFor(ticket.id);
       assert.equal(plans.length, 1, 'exactly one v2 allocation plan exists');
       const plan = plans[0];
       assert.equal(plan.version, 2);
-      assert.equal(plan.status, 'pending');
       assert.equal(plan.items.length, 2);
-      assert.deepEqual(await runsFor(ticket.id), [], 'zero worker runs after live admission');
+      const leafRuns = await runsFor(ticket.id);
+      assert.equal(leafRuns.length, plan.items.length,
+        'live admission is followed by exactly one leaf run per allocation item');
+      assert.deepEqual(
+        leafRuns.map(run => run.allocationItemId).sort((a, b) => a - b),
+        plan.items.map(item => item.allocationItemId).sort((a, b) => a - b),
+        'every item is bound exactly once'
+      );
+      for (const run of leafRuns) {
+        const item = plan.items.find(candidate =>
+          candidate.allocationItemId === run.allocationItemId);
+        const binding = normalizeLeafRunBinding(run.leafRunBinding, {
+          expectedRunId: run.id,
+          expectedTicketId: ticket.id,
+          expectedPlanId: plan.id,
+          expectedPlanHash: plan.planHash,
+          expectedAllocationItemId: item.allocationItemId
+        });
+        assert.equal(run.agentId, item.assignedAgentId,
+          'the worker principal is the agent the item admitted');
+        assert.deepEqual(binding.ownedOutputPaths, item.ownedOutputPaths);
+        assert.equal(run.declaredWorkSnapshot.contractHash, binding.itemDeclaredWorkHash);
+        assert.equal(run.declaredWorkSnapshot.objective.text, item.objective.text,
+          'the leaf declares its allocation item, not the parent ticket');
+        assert.equal(run.allocationSubtask ?? null, null,
+          'no generic v1 allocation subtask is produced');
+        assert.equal(run.status, 'pending');
+      }
 
       // Provenance and admission binding came from the real route.
       assert.equal(plan.planningProvenance.provider, 'ollama');
@@ -238,13 +268,21 @@ async function main() {
       assert.equal(plan.planningProvenance.planHash, plan.planHash);
       assert.equal(typeof plan.planningProvenance.admissionHash, 'string');
 
-      // The ticket remains open; nothing is scheduler-visible; no completion.
+      // Leaf admission started the ticket and made every leaf visible together.
+      // No completion is claimed: the plan has no aggregate decision yet.
       const admitted = await store.getTicket(ticket.id);
-      assert.equal(admitted.status, 'open', 'successful admission leaves the ticket open');
+      assert.equal(admitted.status, 'in_progress',
+        'leaf admission starts the ticket through the canonical transition');
       assert.equal(admitted.structuredAllocationPlanningAttempt.state, 'plan_admitted');
       const pending = await store.listPendingRuns({ limit: 100 });
-      assert.equal((pending.runs || []).some(run => run.ticketId === ticket.id), false,
-        'no scheduler-visible execution unit exists');
+      const visible = (pending.runs || []).filter(run => run.ticketId === ticket.id);
+      assert.equal(visible.length, leafRuns.length,
+        'every leaf run becomes scheduler-visible together');
+      assert.equal(visible.every(run => Boolean(run.leafRunBinding)), true,
+        'no leaf run is scheduler-visible without its immutable binding');
+      assert.equal(plan.aggregateDecision ?? null, null,
+        'admission alone makes no completion claim');
+      assert.notEqual(admitted.status, 'completed');
 
       // The complete response is durable and reparses to the admitted proposal.
       const attempt = admitted.structuredAllocationPlanningAttempt;
@@ -271,7 +309,14 @@ async function main() {
         const after = await plansFor(ticket.id);
         assert.equal(after.length, 1, `${label} must not create a second plan`);
         assert.equal(after[0].version, 2, `${label} must never produce a legacy v1 plan`);
-        assert.deepEqual(await runsFor(ticket.id), [], `${label} must create no worker runs`);
+        const afterRuns = await runsFor(ticket.id);
+        assert.equal(afterRuns.length, leafRuns.length,
+          `${label} must not duplicate the initial item bindings`);
+        assert.deepEqual(
+          afterRuns.map(run => run.leafRunBinding.bindingHash).sort(),
+          leafRuns.map(run => run.leafRunBinding.bindingHash).sort(),
+          `${label} must preserve the exact admitted leaf bindings`
+        );
       }
       assert.equal(stub.requests.length, 0,
         'rerun and reopen issue no further provider request');

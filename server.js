@@ -134,6 +134,16 @@ const {
   recoverInterruptedPlanningAttempt
 } = require('./runtime/structured-allocation-planning-contract');
 const {
+  LEAF_ADMISSION_MESSAGES,
+  StructuredAllocationLeafRunError,
+  buildLeafDeclaredWorkSnapshot,
+  projectLeafRunBindingForRun,
+  projectStructuredAllocationLeafExecution
+} = require('./runtime/structured-allocation-leaf-run-contract');
+const {
+  ALLOCATION_PLAN_VERSION: ALLOCATION_PLAN_V2_VERSION
+} = require('./runtime/allocation-plan-contract');
+const {
   RuntimeBudgetController
 } = require('./runtime/runtime-budget-controller');
 const {
@@ -154,6 +164,7 @@ const {
   assertRunPhaseRepository,
   assertRunTerminalizationRepository,
   assertTicketRunLifecycleRepository,
+  assertStructuredAllocationLeafExecutionRepository,
   assertStructuredAllocationPlanningRepository,
   assertNonTerminalEvidenceRepository,
   assertWorkspaceMutationBoundaryRepository,
@@ -5888,6 +5899,14 @@ function getStructuredAllocationPlanningRepository() {
   return structuredAllocationPlanningRepository;
 }
 
+let structuredAllocationLeafExecutionRepository = null;
+function getStructuredAllocationLeafExecutionRepository() {
+  if (structuredAllocationLeafExecutionRepository) return structuredAllocationLeafExecutionRepository;
+  structuredAllocationLeafExecutionRepository =
+    assertStructuredAllocationLeafExecutionRepository(postgresRuntimeStore);
+  return structuredAllocationLeafExecutionRepository;
+}
+
 function getRunReplayRepository() {
   if (runReplayRepository) return runReplayRepository;
   runReplayRepository = assertRunReplayRepository(postgresRuntimeStore);
@@ -8419,12 +8438,27 @@ async function serializeTicketRuntimeState(ticketId) {
     })
     : null;
 
+  const structuredAllocationPlan = await getStructuredAllocationPlanningRepository()
+    .getAllocationPlanForTicket(ticket.id);
   return {
     ticket,
     structuredAllocation: projectStructuredAllocationAuthorityForTicket(ticket),
     structuredAllocationPlanning: projectStructuredAllocationPlanningForTicket(ticket, {
-      allocationPlan: await getStructuredAllocationPlanningRepository()
-        .getAllocationPlanForTicket(ticket.id)
+      allocationPlan: structuredAllocationPlan
+    }),
+    // Tranche 3: the durable leaf-execution facts for this ticket — item-to-Run
+    // bindings, item authority and owned paths, Run lineage, per-item durable
+    // disposition with its completion-decision identity, the aggregate decision
+    // and the parent Ticket result. Read-only, and empty for every ticket that
+    // holds no planner-admitted v2 plan.
+    structuredAllocationLeafExecution: projectStructuredAllocationLeafExecution({
+      allocationPlan: structuredAllocationPlan &&
+        structuredAllocationPlan.version === ALLOCATION_PLAN_V2_VERSION &&
+        structuredAllocationPlan.planningProvenance
+        ? structuredAllocationPlan
+        : null,
+      runs: ticketRuns,
+      ticketStatus: ticket.status
     }),
     currentRun: currentRun ? serializeRunRuntimeState(currentRun, logsByRunId, {
       eventSummary: summaryByRunId.get(currentRun.id),
@@ -9098,10 +9132,20 @@ async function buildTicketTimeline(ticketId) {
   // presented as an authoritative timeline statement.
   const structuredPlanningTimelineSummary = (type, payload) => {
     if (!String(type || '').startsWith('ticket.structured_planning') &&
-        type !== 'ticket.allocation_plan_admitted') return null;
+        type !== 'ticket.allocation_plan_admitted' &&
+        type !== 'ticket.allocation_leaf_runs_admitted') return null;
     if (type === 'ticket.allocation_plan_admitted') {
       return `Allocation Plan v2 #${payload.allocationPlanId} admitted pending; ` +
-        `${payload.workerRunsCreated || 0} worker runs; leaf execution awaits Tranche 3`;
+        `${payload.workerRunsCreated || 0} worker runs created by plan admission`;
+    }
+    if (type === 'ticket.allocation_leaf_runs_admitted') {
+      const bindings = Array.isArray(payload.leafBindings) ? payload.leafBindings : [];
+      return `Allocation Plan v2 #${payload.allocationPlanId} admitted ` +
+        `${payload.workerRunsCreated || 0} leaf run(s): ` +
+        (bindings.length > 0
+          ? bindings.map(binding =>
+            `item ${binding.allocationItemId}\u2192run ${binding.runId}`).join(', ')
+          : 'no bindings recorded');
     }
     if (payload.failureReason) {
       return `Planning failed at ${payload.failureStage}: ${payload.failureReason}`;
@@ -9119,6 +9163,7 @@ async function buildTicketTimeline(ticketId) {
     'ticket.structured_planning_validated': 'Structured planner proposal validated',
     'ticket.structured_planning_failed': 'Structured planning failed',
     'ticket.allocation_plan_admitted': 'Allocation Plan v2 admitted',
+    'ticket.allocation_leaf_runs_admitted': 'Structured leaf runs admitted',
     'run.created': 'Run created',
     'run.lease_acquired': 'Run lease acquired',
     'run.started': 'Run started',
@@ -11110,6 +11155,9 @@ function createReplaySnapshotBase(run, overrides = {}) {
     allocationItemId: run.allocationItemId || null,
     allocationItem: getRunAllocationItem(run),
     allocationSubtask: run.allocationSubtask || null,
+    // Tranche 3: the immutable item-to-Run binding this Run executes under.
+    // null for every historical and v1 Run, which hold no binding at all.
+    leafRunBinding: projectLeafRunBindingForRun(run),
     ownedOutputPaths: getRunOwnedOutputPaths(run),
     ticketOpenedAt: run.ticketOpenedAt || null,
     runtimeLimits: pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run)),
@@ -14415,8 +14463,28 @@ async function getRecentLogsForRun(runId, limit = 5) {
   }));
 }
 
+// Tranche 3 splits this seam by authority, not by caller.
+//
+// A structured leaf Run carries an immutable item-to-Run binding, and its item
+// status is DERIVED inside PostgreSQL from that binding plus the persisted Run
+// lifecycle, the durable completion decision and declared-work/completion-
+// authority hash agreement. The caller's proposed status is deliberately
+// ignored: a raw `completed` Run status is exactly the claim that must not be
+// able to complete an item. Historical v1 runs keep the caller-supplied write
+// unchanged.
 async function updateAllocationItemStatus(run, status) {
   if (!run || !run.allocationPlanId || !run.allocationItemId) return null;
+  if (run.leafRunBinding) {
+    const reconciled = await getStructuredAllocationLeafExecutionRepository()
+      .reconcileStructuredAllocationLeafItems({
+        ticketId: run.ticketId,
+        allocationPlanId: run.allocationPlanId
+      });
+    if (!reconciled || !reconciled.reconciled) return null;
+    if (reconciled.changed) broadcastTicketChange();
+    return reconciled.plan.items.find(item =>
+      item.allocationItemId === run.allocationItemId) || null;
+  }
   const result = await postgresRuntimeStore.updateAllocationItemStatus({
     planId: run.allocationPlanId,
     allocationItemId: run.allocationItemId,
@@ -15667,11 +15735,28 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     executionPolicySnapshot,
     now
   );
-  const declaredWorkSnapshot = buildDeclaredWorkSnapshot({
-    ticket,
-    workflow,
-    completionAuthoritySnapshot
-  });
+  // Tranche 3 preparation seam. A structured leaf Run declares the immutable
+  // Allocation Plan v2 ITEM, not the parent Ticket: its objective, expected
+  // outputs and success criteria come from the item, the plan's shared
+  // constraints are carried unchanged, and the generic v1 allocationSubtask is
+  // absent entirely. The parent declaration remains superior authority and is
+  // bound separately on the leaf binding by parentDeclaredWorkHash.
+  //
+  // The Run's own completion authority is unchanged — it is still derived from
+  // the ticket exactly as every other Run's is — so the item declaration is
+  // projected through it, keeping declared typed criteria and admitted
+  // completion criteria the same set in both directions.
+  const structuredLeafItem = options.structuredLeafItem || null;
+  const declaredWorkSnapshot = structuredLeafItem
+    ? buildLeafDeclaredWorkSnapshot(structuredLeafItem.item, {
+      sharedConstraints: structuredLeafItem.sharedConstraints || [],
+      completionAuthoritySnapshot
+    })
+    : buildDeclaredWorkSnapshot({
+      ticket,
+      workflow,
+      completionAuthoritySnapshot
+    });
   assertDeclaredWorkCompletionAuthorityBinding({
     declaredWorkSnapshot,
     completionAuthoritySnapshot,
@@ -15765,7 +15850,12 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     routingSnapshot: routeDecision.routingSnapshot,
     allocationPlanId: allocationPlanId || null,
     allocationItemId: allocationItem ? allocationItem.allocationItemId : null,
-    allocationSubtask: allocationItem ? allocationItem.allocationSubtask : null,
+    // A structured leaf Run carries no allocation subtask: the v1 placeholder
+    // sentence exists only because a v1 plan has no per-item declaration, and a
+    // v2 item declares its own work.
+    allocationSubtask: structuredLeafItem
+      ? null
+      : (allocationItem ? allocationItem.allocationSubtask || null : null),
     ownedOutputPaths,
     executionMode: ticket.executionMode === 'workflow' ? 'workflow' : 'agent',
     workflowId: ticket.executionMode === 'workflow' ? ticket.workflowId : null,
@@ -16078,14 +16168,16 @@ async function evaluateStructuredPlanningEntry(ticket) {
   const existingPlan = await getStructuredAllocationPlanningRepository()
     .getAllocationPlanForTicket(ticket.id);
   if (existingPlan) {
+    // Tranche 3: an admitted plan is no longer a dead end. Planning does not
+    // re-enter — there is exactly one plan and it is never replanned — but leaf
+    // admission continues from it. Anything else with a plan but no admitted
+    // attempt is still a refusal.
+    if (attempt && attempt.state === 'plan_admitted') {
+      return { enter: false, refusal: null, leafAdmission: { plan: existingPlan } };
+    }
     return {
       enter: false,
-      refusal: {
-        stage: 'entry',
-        reason: attempt && attempt.state === 'plan_admitted'
-          ? 'structured_leaf_run_admission_not_available'
-          : 'allocation_plan_already_admitted'
-      }
+      refusal: { stage: 'entry', reason: 'allocation_plan_already_admitted' }
     };
   }
   if (attempt) {
@@ -16119,6 +16211,9 @@ async function evaluateStructuredPlanningEntry(ticket) {
 async function runStructuredAllocationPlanning(ticket) {
   const entry = await evaluateStructuredPlanningEntry(ticket);
   if (!entry.enter) {
+    if (entry.leafAdmission) {
+      return admitStructuredAllocationLeafRuns(ticket, entry.leafAdmission.plan);
+    }
     if (!entry.refusal) return { handled: false };
     if (entry.interrupted) {
       // Durably close the interrupted attempt before refusing, so recovery is
@@ -16338,7 +16433,7 @@ async function runStructuredAllocationPlanning(ticket) {
   appendSystemLog(
     'allocation:structured_plan_admitted',
     `Ticket #${ticket.id} admitted Allocation Plan v2 #${admission.plan.id} ` +
-      '(pending; zero worker runs; leaf execution awaits Tranche 3)',
+      '(pending; zero worker runs; leaf admission runs next)',
     null,
     {
       ticketId: ticket.id,
@@ -16346,11 +16441,171 @@ async function runStructuredAllocationPlanning(ticket) {
       planHash: admission.plan.planHash,
       attemptId: admission.attempt.attemptId,
       workerRunsCreated: 0,
-      leafExecutionAvailable: false
+      leafExecutionAvailable: true
     }
   );
   broadcastTicketChange();
+  // Leaf admission is a separate transaction on purpose: plan admission must
+  // remain atomic and complete on its own, and a leaf refusal must leave the
+  // admitted plan intact rather than roll it back. The freshly admitted plan is
+  // reread under the ticket lock inside admitStructuredAllocationLeafRuns.
+  const refreshed = await getTicketById(ticket.id);
+  if (!refreshed || refreshed.status !== 'open') return { handled: true };
+  await admitStructuredAllocationLeafRuns(refreshed, admission.plan);
   return { handled: true };
+}
+
+// ── Tranche 3: leaf-run admission ───────────────────────────────────────────
+//
+// One initial Run per immutable Allocation Plan v2 item, admitted atomically.
+// Every route/authority fact is preflighted before the store transaction opens,
+// so a refusal creates zero Runs and zero bindings and never leaves a partial
+// leaf set behind. There is no replanning here, no second v1 plan, no role-aware
+// routing, no recursion and no delegation: the worker principal is the agent the
+// admitted item already names, dispatched through the existing worker route.
+
+async function blockTicketForStructuredLeafAdmission(ticket, { reason, detail = null }) {
+  const message = LEAF_ADMISSION_MESSAGES[reason] || reason;
+  const summary = `Structured leaf-run admission refused: ${message}`;
+  const persisted = await getTicketById(ticket.id);
+  if (!persisted) return null;
+  if (persisted.status === 'blocked') {
+    appendSystemLog('allocation:structured_leaf_admission_refused', summary, null, {
+      ticketId: persisted.id, reason, detail
+    });
+    return persisted;
+  }
+  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
+    ticketId: persisted.id,
+    fromStatuses: [persisted.status],
+    toStatus: 'blocked',
+    patch: { blockedReason: summary, changedAt: new Date().toISOString() },
+    eventType: 'ticket.blocked',
+    eventPayload: {
+      reason: summary,
+      reasonCode: reason,
+      structuredLeafAdmissionStage: 'leaf_admission',
+      workerRunsCreated: 0
+    }
+  });
+  appendSystemLog('allocation:structured_leaf_admission_refused', summary, null, {
+    ticketId: persisted.id, reason, detail
+  });
+  broadcastTicketChange();
+  return transitioned.ticket;
+}
+
+async function admitStructuredAllocationLeafRuns(ticket, plan) {
+  const refuse = async (reason, detail = null) => {
+    await blockTicketForStructuredLeafAdmission(ticket, { reason, detail });
+    return { handled: true, admitted: false, reason };
+  };
+  // Unreachable in production — admitStructuredAllocationPlan only ever admits
+  // v2 — but it fails closed rather than falling through to the v1 allocation
+  // path, which containment forbids for a ticket holding planning authority.
+  if (!plan || plan.version !== ALLOCATION_PLAN_V2_VERSION) {
+    return refuse('admitted_plan_mismatch',
+      'Structured leaf admission applies only to Allocation Plan v2');
+  }
+  if (plan.status !== 'pending') {
+    // A plan that already moved past pending has either been leaf-admitted or
+    // has reached a durable outcome. Reconciliation, not admission, owns it.
+    return { handled: true, admitted: false, reason: null };
+  }
+  if (ticket.executionMode === 'workflow') {
+    return refuse('leaf_execution_mode_unsupported');
+  }
+
+  // Preflight: agents, group authorization, typed criteria and worker route are
+  // all resolved before the admission transaction opens.
+  const authority = ticket.structuredAllocationAuthority || null;
+  if (!authority || !authority.planningAuthoritySnapshot) {
+    return refuse('historical_authority_unavailable');
+  }
+  if (!ticketAssignmentMatchesPlanningAuthority(ticket, authority.planningAuthoritySnapshot)) {
+    return refuse('assignment_changed_since_capture');
+  }
+  const groupAgents = await getAgentsInGroup(ticket.assignmentTargetId);
+  const groupAgentIds = new Set(groupAgents.map(agent => agent.id));
+
+  const leafDrafts = [];
+  for (const item of plan.items) {
+    // The assigned agent is the worker principal. It is never replaced: an
+    // unavailable or unauthorized agent refuses the whole admission.
+    const agent = groupAgents.find(candidate => candidate.id === item.assignedAgentId) ||
+      await getConfiguredAgentRepository().getConfiguredAgentById(item.assignedAgentId);
+    if (!agent) return refuse('leaf_agent_missing', `allocation item ${item.allocationItemId}`);
+    if (!groupAgentIds.has(agent.id)) {
+      return refuse('leaf_agent_not_authorized', `agent ${agent.id}`);
+    }
+    let prepared;
+    try {
+      prepared = await prepareAgentRunDraft(
+        ticket,
+        agent,
+        item,
+        plan.id,
+        null,
+        { structuredLeafItem: { item, sharedConstraints: plan.sharedConstraints } }
+      );
+    } catch (error) {
+      if (error instanceof StructuredAllocationLeafRunError && error.reason) {
+        return refuse(error.reason, error.message);
+      }
+      throw error;
+    }
+    // prepareAgentRunDraft returns null when the worker route is refused or an
+    // in-memory execution key is held. Either way no truthful worker admission
+    // exists for this item, so nothing is persisted for any item.
+    if (!prepared || prepared.existingRun || !prepared.run) {
+      return refuse('leaf_route_refused', `allocation item ${item.allocationItemId}`);
+    }
+    leafDrafts.push({ allocationItemId: item.allocationItemId, run: prepared.run });
+  }
+
+  let admission;
+  try {
+    admission = await getStructuredAllocationLeafExecutionRepository()
+      .admitStructuredAllocationLeafRuns({
+        ticketId: ticket.id,
+        allocationPlanId: plan.id,
+        leafDrafts,
+        runEventPayload: buildRunCreatedEventPayload,
+        eventPayload: { source: 'structured_allocation_leaf_admission' }
+      });
+  } catch (error) {
+    if (error instanceof StructuredAllocationLeafRunError && error.reason) {
+      return refuse(error.reason, error.message);
+    }
+    return refuse('leaf_admission_conflict', error.message);
+  }
+
+  broadcastTicketChange();
+  for (const run of admission.runs) {
+    appendRunLog(run, 'run:created',
+      `Structured leaf run created for allocation item ${run.allocationItemId}`, null, {
+        allocationPlanId: run.allocationPlanId,
+        allocationItemId: run.allocationItemId,
+        leafBindingHash: run.leafRunBinding ? run.leafRunBinding.bindingHash : null
+      });
+    await maybeTestInterrupt(run, 'after_run.created');
+  }
+  if (admission.admitted) {
+    appendSystemLog(
+      'allocation:structured_leaf_runs_admitted',
+      `Ticket #${ticket.id} admitted ${admission.runs.length} structured leaf run(s) ` +
+        `for Allocation Plan v2 #${plan.id}`,
+      null,
+      {
+        ticketId: ticket.id,
+        allocationPlanId: plan.id,
+        planHash: plan.planHash,
+        workerRunsCreated: admission.runs.length,
+        leafBindingHashes: admission.bindings.map(binding => binding.bindingHash)
+      }
+    );
+  }
+  return { handled: true, admitted: admission.admitted, runs: admission.runs };
 }
 
 async function createRunsForTicket(ticket, delegated = null, options = {}) {
@@ -25204,12 +25459,22 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   const structuredAllocationPlanning = projectStructuredAllocationPlanningForTicket(ticket, {
     allocationPlan
   });
+  const structuredAllocationLeafExecution = projectStructuredAllocationLeafExecution({
+    allocationPlan: allocationPlan &&
+      allocationPlan.version === ALLOCATION_PLAN_V2_VERSION &&
+      allocationPlan.planningProvenance
+      ? allocationPlan
+      : null,
+    runs: ticketRuns,
+    ticketStatus: ticket.status
+  });
 
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
     ticket,
     structuredAllocation,
     structuredAllocationPlanning,
+    structuredAllocationLeafExecution,
     parentTicket,
     childTickets,
     browserTarget: ticket.targetRef && ticket.targetRef.kind === 'browser'
@@ -27743,6 +28008,18 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     ticket,
     allocationPlan,
     allocationItem,
+    // Tranche 3: the immutable item-to-Run binding, plus the durable per-item
+    // disposition and aggregate decision this Run contributes to.
+    leafRunBinding: projectLeafRunBindingForRun(run),
+    leafExecution: projectStructuredAllocationLeafExecution({
+      allocationPlan: allocationPlan &&
+        allocationPlan.version === ALLOCATION_PLAN_V2_VERSION &&
+        allocationPlan.planningProvenance
+        ? allocationPlan
+        : null,
+      runs: [run],
+      ticketStatus: ticket ? ticket.status : null
+    }),
     snapshot: displaySnapshot,
     agent,
     authorityContext,

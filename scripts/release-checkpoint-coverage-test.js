@@ -74,6 +74,14 @@ for (const planningGate of [
     `structured allocation planner lowering and plan admission must include ${planningGate}`);
 }
 
+for (const leafGate of [
+  'structured-allocation-leaf-run-contract-test.js',
+  'structured-allocation-leaf-run-postgres-test.js'
+]) {
+  assert.equal(all.includes(leafGate), true,
+    `structured allocation leaf-run admission and aggregate completion must include ${leafGate}`);
+}
+
 for (const mixedFamilyGate of [
   'mixed-family-work-model-test.js',
   'declared-work-postgres-test.js',
