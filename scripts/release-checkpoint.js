@@ -22,6 +22,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'execution-target-registry-test.js',
   'economic-authority-contract-test.js',
   'economic-settlement-receipt-contract-test.js',
+  'governed-planner-cutover-boundary-test.js',
   'governed-policy-source-test.js',
   'governed-provider-transport-test.js',
   'governed-provider-request-contract-test.js',
@@ -124,6 +125,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'economic-accounting-schema-postgres-test.js',
   'economic-accounting-store-postgres-test.js',
   'governed-planner-dispatch-postgres-test.js',
+  'governed-planner-production-path-postgres-test.js',
   'reconciliation-evidence-failure-test.js',
   // A10 — PostgreSQL runtime integrity suites, restored from the JSON-era orphans.
   // Registered here rather than in CHECKPOINT_TEST_SCRIPTS because every one of them

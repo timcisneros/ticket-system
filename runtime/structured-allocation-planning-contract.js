@@ -150,10 +150,21 @@ const PLANNING_FAILURE_REASONS = Object.freeze([
   'proposal_legacy_placeholder',
   'proposal_lowering_rejected',
   'plan_validation_failed',
-  'plan_admission_conflict'
+  'plan_admission_conflict',
+  // Tranche 4 governed dispatch. Each of these is decided BEFORE any provider
+  // contact, so an attempt carrying one of them provably issued no request.
+  'planner_route_unavailable',
+  'planner_economic_authority_unavailable',
+  'planner_credentials_unavailable'
 ]);
 
 const PLANNING_REFUSAL_MESSAGES = deepFreeze({
+  planner_route_unavailable:
+    'No governed route, pricing or immutable dispatch target could be captured for the planner',
+  planner_economic_authority_unavailable:
+    'The planner role account has insufficient authority to reserve this request',
+  planner_credentials_unavailable:
+    'No credential is available for the captured planner provider',
   historical_authority_unavailable: 'Ticket has no admitted structured-allocation authority',
   admission_ineligible: 'Ticket was not eligible for structured allocation at admission',
   assignment_changed_since_capture: 'Current ticket assignment no longer matches captured planning authority',

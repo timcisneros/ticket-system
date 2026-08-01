@@ -156,6 +156,20 @@ const {
   buildOllamaChatBody,
   buildOpenAiResponsesBody
 } = require('./runtime/provider-request-body');
+const {
+  capturePlannerGovernance,
+  PLANNER_ROLE,
+  PlannerGovernanceError
+} = require('./runtime/structured-planner-governance');
+const {
+  classifyGovernedPlannerRecovery,
+  persistAndSettleGovernedPlannerResponse,
+  runGovernedPlannerRequest
+} = require('./runtime/governed-planner-orchestration');
+const {
+  createOpenAiGovernedTransport,
+  GOVERNED_OPENAI_ENDPOINT
+} = require('./runtime/governed-openai-transport');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -169,6 +183,7 @@ const {
   assertRunTerminalizationRepository,
   assertTicketRunLifecycleRepository,
   assertStructuredAllocationLeafExecutionRepository,
+  assertGovernedPlannerDispatchRepository,
   assertStructuredAllocationPlanningRepository,
   assertNonTerminalEvidenceRepository,
   assertWorkspaceMutationBoundaryRepository,
@@ -15993,6 +16008,51 @@ function hasStructuredPlanningAuthority(ticket) {
 // separate from the model comparison: getAgentOpenAIConfig falls back to
 // OPENAI_MODEL, so it can succeed with a model the snapshot never captured.
 // Model drift is checked against the agent's own recorded model instead.
+// ── Governed planner seams (Tranche 4) ──────────────────────────────────────
+
+// The administrator container. Exactly one active `model_routing_policies` row
+// may carry governed configuration: two would make the choice ambiguous, and an
+// ambiguous budget is not a budget. Both "none" and "more than one" refuse, so
+// no request is ever priced against a policy nobody selected.
+async function loadGovernedPlannerPolicyContainer() {
+  const page = await getModelRoutingPolicyRepository().listModelRoutingPolicies({
+    statuses: ['active'], limit: 100
+  });
+  const rows = Array.isArray(page) ? page : (page && page.policies) || [];
+  const governed = rows.filter(row => row && row.governedExecution);
+  if (governed.length === 0) {
+    const error = new Error('no active model routing policy carries governed execution configuration');
+    error.code = 'GOVERNED_PLANNER_POLICY_ABSENT';
+    throw error;
+  }
+  if (governed.length > 1) {
+    const error = new Error(
+      `${governed.length} active model routing policies carry governed execution configuration`);
+    error.code = 'GOVERNED_PLANNER_POLICY_AMBIGUOUS';
+    throw error;
+  }
+  return { body: governed[0] };
+}
+
+let governedPlannerTransport = null;
+function resolveGovernedPlannerTransport() {
+  if (!governedPlannerTransport) governedPlannerTransport = createOpenAiGovernedTransport();
+  return governedPlannerTransport;
+}
+
+// Credentials for the CAPTURED provider only. This reads a key and returns it;
+// it selects nothing, and its return value is never consulted for a route.
+async function resolveGovernedPlannerCredentials({ provider }) {
+  if (provider !== 'openai') return null;
+  const key = process.env.OPENAI_API_KEY;
+  return key ? { apiKey: key } : null;
+}
+
+function getGovernedPlannerDispatchRepository() {
+  assertGovernedPlannerDispatchRepository(postgresRuntimeStore);
+  return postgresRuntimeStore;
+}
+
 function structuredPlannerCredentialsAvailable(agent, provider) {
   if (!agent) return false;
   try {
@@ -16098,60 +16158,6 @@ function getPlannerRequestTimeoutMs() {
     getPositiveIntegerEnv('STRUCTURED_PLANNER_REQUEST_TIMEOUT_MS', PLANNER_REQUEST_LIMITS.timeoutMs),
     PLANNER_REQUEST_LIMITS.timeoutMs
   );
-}
-
-async function callPlannerProviderOnce(agent, messages) {
-  const timeoutMs = getPlannerRequestTimeoutMs();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await callModelProvider(agent, messages, {
-      signal: controller.signal,
-      maxResponseBytes: PLANNER_REQUEST_LIMITS.maxResponseBytes
-    });
-    const text = String(response && response.text ? response.text : '');
-    if (!text.trim()) {
-      return { status: 'provider_response_empty', text: null, detail: 'Planner returned no output' };
-    }
-    // Belt-and-braces on the extracted model text. The transport already
-    // refused an oversized HTTP body; this catches the case where a compliant
-    // body carries model text that is itself over the limit, and it counts
-    // BYTES so a multibyte response cannot slip past a character check.
-    const textBytes = Buffer.byteLength(text, 'utf8');
-    if (textBytes > PLANNER_REQUEST_LIMITS.maxResponseBytes) {
-      return {
-        status: 'response_too_large',
-        text: null,
-        detail: `Planner response of ${textBytes} bytes exceeds ` +
-          `${PLANNER_REQUEST_LIMITS.maxResponseBytes}`
-      };
-    }
-    return { status: 'received', text, detail: null };
-  } catch (error) {
-    if (error && error.responseTooLarge === true) {
-      return { status: 'response_too_large', text: null, detail: error.message };
-    }
-    if (error && error.name === 'AbortError') {
-      return {
-        status: 'timeout',
-        text: null,
-        detail: `Planner request exceeded ${timeoutMs}ms`
-      };
-    }
-    // Provider errors carry request/response payloads that may name the model
-    // and URL. Only the message is retained, and credentials never appear in it
-    // because the adapters redact Authorization before building the snapshot.
-    return {
-      status: 'provider_error',
-      text: null,
-      detail: String((error && error.message) || 'Planner request failed').slice(
-        0,
-        PLANNER_REQUEST_LIMITS.maxStoredFailureDetail
-      )
-    };
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // The complete accepted response, hashed over exactly the bytes stored. There
@@ -16311,59 +16317,130 @@ async function runStructuredAllocationPlanning(ticket) {
     return { handled: true };
   };
 
-  // Request evidence is durable BEFORE the wire. That ordering is what makes
-  // "process stopped after request initiation" recoverable as outcome-unknown
-  // rather than as an attempt that may or may not have happened.
+  // ── Governed dispatch (Tranche 4) ────────────────────────────────────────
+  //
+  // Everything from here to the durable response goes through the governed
+  // path. There is no ungoverned branch: a structured planner request that
+  // cannot be captured, priced and reserved is not issued at all.
+
+  let capture;
+  try {
+    capture = capturePlannerGovernance({
+      ticketId: ticket.id,
+      planningAttemptId: attempt.attemptId,
+      plannerAgentId: planning.planner.agentId,
+      policyContainer: await loadGovernedPlannerPolicyContainer(),
+      plannerInput: messages,
+      endpointIdentity: GOVERNED_OPENAI_ENDPOINT,
+      capturedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    // Missing policy, missing pricing, an uncapturable or mutable target, or an
+    // unboundable paid route. All of them refuse with ZERO provider contact and
+    // no started reservation.
+    const reason = error instanceof PlannerGovernanceError
+      ? 'planner_route_unavailable'
+      : 'planner_route_unavailable';
+    return failAttempt('invocation_readiness', reason,
+      `${error.detail && error.detail.reason ? error.detail.reason : 'capture_failed'}: ` +
+      `${error.message}`);
+  }
+
+  // Request evidence is durable BEFORE the wire, and now the reservation is
+  // durable before it too. "Process stopped after request initiation" is
+  // recoverable as outcome-unknown, and the economic reservation — not this
+  // marker — is what guarantees the request is never repeated.
   const requestStarted = advancePlanningAttempt(attempt, {
     state: 'request_started',
-    requestHash,
+    requestHash: capture.preparedRequest.requestHash,
     requestMetadata: {
       contextVersion: context.version,
       contextHash: context.contextHash,
       messageCount: messages.length,
-      requestBytes,
+      requestBytes: capture.preparedRequest.serializedByteCount,
       timeoutMs: getPlannerRequestTimeoutMs(),
       maxResponseBytes: PLANNER_REQUEST_LIMITS.maxResponseBytes
     },
     requestStartedAt: new Date().toISOString()
   });
-  written = await repository.writeStructuredAllocationPlanningAttempt({
+
+  const governedResult = await runGovernedPlannerRequest({
+    repository: getGovernedPlannerDispatchRepository(),
     ticketId: ticket.id,
     attempt: requestStarted,
+    capture,
+    transport: resolveGovernedPlannerTransport(),
+    resolveCredentials: resolveGovernedPlannerCredentials,
+    timeoutMs: getPlannerRequestTimeoutMs(),
+    maxResponseBytes: PLANNER_REQUEST_LIMITS.maxResponseBytes,
+    // The attempt carries the reservation identity, which does not exist until
+    // the reservation commits, so the governed block is attached here rather
+    // than at attempt creation.
+    // The `created` state this start replaces.
     expectedAttemptStateHash: attempt.attemptStateHash,
-    eventType: STRUCTURED_PLANNING_EVENT_TYPES.requested,
-    eventPayload: { workerRunsCreated: 0 }
+    attachGovernedExecution: (base, governedExecution) =>
+      advancePlanningAttempt(attempt, {
+        ...Object.fromEntries(Object.entries(base).filter(([field]) =>
+          ['state', 'requestHash', 'requestMetadata', 'requestStartedAt'].includes(field))),
+        governedExecution
+      })
   });
-  attempt = written.attempt;
 
-  // The one and only provider request. Every outcome other than a received
-  // response is terminal for this attempt: there is no second call, no fallback
-  // route and no repair.
-  const call = await callPlannerProviderOnce(routeFacts.plannerAgent, messages);
-  if (call.status !== 'received') {
-    const reason = call.status === 'timeout' ? 'provider_request_timed_out'
-      : call.status === 'response_too_large' ? 'provider_response_too_large'
-        : call.status === 'provider_response_empty' ? 'provider_response_empty'
-          : 'provider_request_failed';
-    return failAttempt('response', reason, call.detail, {
-      responseStatus: call.status === 'response_too_large' ? 'response_too_large'
-        : call.status === 'timeout' ? 'timeout' : 'provider_error'
-    });
+  if (governedResult.status !== 'received') {
+    // Every governed failure is terminal for this attempt. A request that may
+    // have reached the provider has already settled conservatively inside the
+    // orchestration; one that provably did not has already been released.
+    const responseStatus = governedResult.possiblyDispatched ? 'provider_error' : null;
+    return failAttempt(
+      governedResult.status === 'dispatch_failed' ? 'response' : 'invocation_readiness',
+      governedResult.failureReason,
+      governedResult.failureDetail,
+      responseStatus ? { responseStatus } : {}
+    );
   }
 
-  const evidence = plannerResponseEvidence(call.text);
-  written = await repository.writeStructuredAllocationPlanningAttempt({
+  attempt = governedResult.attempt;
+
+  // Both durable response markers commit together, then settlement runs from
+  // the reservation's own captured pricing basis.
+  const evidence = plannerResponseEvidence(governedResult.responseText);
+  const settledResponse = await persistAndSettleGovernedPlannerResponse({
+    repository: getGovernedPlannerDispatchRepository(),
     ticketId: ticket.id,
     attempt: advancePlanningAttempt(attempt, {
       state: 'response_received',
       responseStatus: 'received',
-      ...evidence
+      ...evidence,
+      governedExecution: {
+        ...governedResult.governedExecution,
+        economicState: 'response_persisted'
+      }
+    }),
+    reservationId: governedResult.reservationId,
+    responseIdentity: governedResult.responseIdentity,
+    responseHash: evidence.responseHash,
+    reportedUsage: governedResult.reportedUsage,
+    expectedAttemptStateHash: attempt.attemptStateHash
+  });
+  attempt = settledResponse.attempt;
+
+  // The receipt hash becomes part of the attempt's governed provenance.
+  written = await repository.writeStructuredAllocationPlanningAttempt({
+    ticketId: ticket.id,
+    attempt: advancePlanningAttempt(attempt, {
+      governedExecution: {
+        ...attempt.governedExecution,
+        economicState: 'settled',
+        settlementReceiptHash: settledResponse.settlementReceiptHash
+      }
     }),
     expectedAttemptStateHash: attempt.attemptStateHash,
     eventType: STRUCTURED_PLANNING_EVENT_TYPES.responded,
     eventPayload: { workerRunsCreated: 0 }
   });
   attempt = written.attempt;
+
+  const call = { text: governedResult.responseText };
 
   // Strict parse, then closed validation, then runtime-owned lowering. No
   // repair request is issued at any point.
