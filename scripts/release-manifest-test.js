@@ -24,7 +24,7 @@ const manifest = buildReleaseManifest({
 });
 assert.equal(manifest.sourceRevision, revision);
 assert.equal(manifest.databaseMigrationHead,
-  '033_role_scoped_economic_accounting.sql');
+  '034_governed_request_logical_source.sql');
 assert.equal(manifest.releaseContract.sourceRevision, revision);
 assert.equal(validateReleaseManifest(manifest), manifest);
 assert.equal(JSON.stringify(manifest).includes('/home/'), false);

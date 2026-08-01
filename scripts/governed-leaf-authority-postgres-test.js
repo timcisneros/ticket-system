@@ -332,7 +332,8 @@ async function main() {
       'an absent envelope is historical, never partial');
     await code(
       store.prepareAndReserveNextGovernedRunRequest({
-        runId: historicalRun.id, canonicalBody: workerBody(), endpointIdentity: ENDPOINT
+        runId: historicalRun.id, logicalSourceIdentity: 'model-request:agent:x:provider',
+      canonicalBody: workerBody(), endpointIdentity: ENDPOINT
       }),
       'GOVERNED_RUN_NOT_LEAF',
       'a historical Run cannot prepare a governed request');
@@ -467,7 +468,8 @@ async function main() {
 
     const runId = runs[0].id;
     const first = await store.prepareAndReserveNextGovernedRunRequest({
-      runId, canonicalBody: workerBody('first'), endpointIdentity: ENDPOINT
+      runId, logicalSourceIdentity: 'model-request:agent:first:provider',
+      canonicalBody: workerBody('first'), endpointIdentity: ENDPOINT
     });
     assert.equal(first.ordinal, 1, 'the first request receives ordinal 1');
     assert.equal(first.reservation.modelRequestOrdinal, 1,
@@ -476,7 +478,8 @@ async function main() {
     assert.equal(first.reservation.runId, runId);
 
     const second = await store.prepareAndReserveNextGovernedRunRequest({
-      runId, canonicalBody: workerBody('second'), endpointIdentity: ENDPOINT
+      runId, logicalSourceIdentity: 'model-request:agent:second:provider',
+      canonicalBody: workerBody('second'), endpointIdentity: ENDPOINT
     });
     assert.equal(second.ordinal, 2, 'the second request receives ordinal 2');
     assert.notEqual(second.reservation.id, first.reservation.id,
@@ -488,7 +491,8 @@ async function main() {
       connectionString: process.env.TEST_DATABASE_URL, schema: store.schema });
     try {
       const third = await restarted.prepareAndReserveNextGovernedRunRequest({
-        runId, canonicalBody: workerBody('third'), endpointIdentity: ENDPOINT
+        runId, logicalSourceIdentity: 'model-request:agent:third:provider',
+      canonicalBody: workerBody('third'), endpointIdentity: ENDPOINT
       });
       assert.equal(third.ordinal, 3,
         'a restarted process derives the next ordinal with no process memory');
@@ -499,7 +503,8 @@ async function main() {
     // The economic maximum request count refuses the next ordinal.
     await code(
       store.prepareAndReserveNextGovernedRunRequest({
-        runId, canonicalBody: workerBody('fourth'), endpointIdentity: ENDPOINT
+        runId, logicalSourceIdentity: 'model-request:agent:fourth:provider',
+      canonicalBody: workerBody('fourth'), endpointIdentity: ENDPOINT
       }),
       'GOVERNED_RUN_REQUEST_COUNT_EXCEEDED',
       'the economic authority request ceiling refuses the next ordinal');
@@ -508,7 +513,8 @@ async function main() {
     const siblingRunId = runs[1].id;
     await code(
       store.prepareAndReserveNextGovernedRunRequest({
-        runId: siblingRunId, canonicalBody: workerBody('budget'),
+        runId: siblingRunId, logicalSourceIdentity: 'model-request:agent:budget:provider',
+        canonicalBody: workerBody('budget'),
         endpointIdentity: ENDPOINT, runtimeModelRequestMaximum: 4,
         // Claims five prior requests while the durable ledger holds none.
         runtimeModelRequestsUsed: 5
@@ -517,7 +523,8 @@ async function main() {
       'a runtime/economic ledger disagreement is an integrity refusal');
 
     const sibling = await store.prepareAndReserveNextGovernedRunRequest({
-      runId: siblingRunId, canonicalBody: workerBody('sibling'),
+      runId: siblingRunId, logicalSourceIdentity: 'model-request:agent:sibling:provider',
+      canonicalBody: workerBody('sibling'),
       endpointIdentity: ENDPOINT, runtimeModelRequestMaximum: 4,
       runtimeModelRequestsUsed: 0
     });
@@ -539,34 +546,67 @@ async function main() {
     assert.equal(first.reservation.preparedRequestHash,
       first.preparedRequest.preparedRequestHash);
 
-    // ── Concurrency for the same Run ───────────────────────────────────────
+    // ── Duplicate logical request cannot become a second ordinal ──────────
+    //
+    // THE INVARIANT THIS PROVES. Account locking serializes two concurrent
+    // callers, but serialization alone would hand the second the NEXT ordinal —
+    // turning duplicate execution of one logical request into two charged
+    // requests. The canonical source identity is what makes the second an
+    // idempotent re-report instead.
 
     const raceRunId = runs[1].id;
+    const sameLogicalRequest = 'model-request:agent:7:provider';
     const raced = await Promise.allSettled([
       store.prepareAndReserveNextGovernedRunRequest({
-        runId: raceRunId, canonicalBody: workerBody('race'), endpointIdentity: ENDPOINT }),
+        runId: raceRunId, logicalSourceIdentity: sameLogicalRequest,
+        canonicalBody: workerBody('race'), endpointIdentity: ENDPOINT }),
       store.prepareAndReserveNextGovernedRunRequest({
-        runId: raceRunId, canonicalBody: workerBody('race'), endpointIdentity: ENDPOINT })
+        runId: raceRunId, logicalSourceIdentity: sameLogicalRequest,
+        canonicalBody: workerBody('race'), endpointIdentity: ENDPOINT })
     ]);
-    const won = raced.filter(r => r.status === 'fulfilled');
-    // The Run lock SERIALIZES the two callers rather than letting them collide:
-    // the second waits, reads the ledger the first committed, and takes the next
-    // ordinal. Without the lock both would read the same ledger and one would
-    // die on the unique constraint, so "both succeeded" is the observable proof
-    // that the lock is doing the work.
     for (const lost of raced.filter(r => r.status === 'rejected')) {
-      assert.fail(`concurrent preparation must serialize, not collide: ${lost.reason.message}`);
+      assert.equal(lost.reason.code, 'ECONOMIC_LOGICAL_REQUEST_DUPLICATE',
+        `a losing duplicate must be a closed concurrency refusal: ${lost.reason.message}`);
     }
-    assert.equal(won.length, 2, 'both concurrent preparations succeed under the Run lock');
-    const ordinalsUsed = won.map(r => r.value.ordinal);
-    assert.equal(new Set(ordinalsUsed).size, ordinalsUsed.length,
-      'concurrent preparation never assigns one ordinal twice');
+    const racedWon = raced.filter(r => r.status === 'fulfilled');
+    assert.ok(racedWon.length >= 1, 'at least one caller reserves the logical request');
+    const racedOrdinals = new Set(racedWon.map(r => r.value.ordinal));
+    assert.equal(racedOrdinals.size, 1,
+      'duplicate execution of one logical request yields exactly one ordinal');
+    const racedReservations = new Set(racedWon.map(r => r.value.reservation.id));
+    assert.equal(racedReservations.size, 1,
+      'duplicate execution of one logical request yields exactly one reservation');
+    if (racedWon.length === 2) {
+      assert.equal(racedWon.filter(r => r.value.alreadyReserved === true).length, 1,
+        'exactly one caller is told the reservation already existed');
+    }
+
     const raceRows = await store.pool.query(
-      `SELECT model_request_ordinal FROM ${store.table('economic_request_reservations')}
-        WHERE run_id = $1 ORDER BY model_request_ordinal`, [raceRunId]);
-    const distinct = new Set(raceRows.rows.map(r => Number(r.model_request_ordinal)));
-    assert.equal(distinct.size, raceRows.rowCount,
-      'the durable ledger holds no duplicate ordinal for one Run');
+      `SELECT model_request_ordinal, logical_source_identity
+         FROM ${store.table('economic_request_reservations')}
+        WHERE run_id = $1 AND logical_source_identity = $2`,
+      [raceRunId, sameLogicalRequest]);
+    assert.equal(raceRows.rowCount, 1,
+      'the durable ledger holds exactly one reservation for the logical request');
+
+    // Sequential re-invocation of the SAME logical request is also idempotent.
+    const repeated = await store.prepareAndReserveNextGovernedRunRequest({
+      runId: raceRunId, logicalSourceIdentity: sameLogicalRequest,
+      canonicalBody: workerBody('race'), endpointIdentity: ENDPOINT });
+    assert.equal(repeated.alreadyReserved, true,
+      'repeating a logical request re-reports rather than reserving again');
+    assert.equal(repeated.reservation.id, [...racedReservations][0]);
+
+    // A DIFFERENT logical request legitimately receives the next ordinal.
+    const laterOrdinal = repeated.ordinal + 1;
+    const later = await store.prepareAndReserveNextGovernedRunRequest({
+      runId: raceRunId, logicalSourceIdentity: 'model-request:agent:8:provider',
+      canonicalBody: workerBody('later'), endpointIdentity: ENDPOINT });
+    assert.equal(later.alreadyReserved, false,
+      'a distinct logical request is a new reservation');
+    assert.equal(later.ordinal, laterOrdinal,
+      'a legitimate later request receives the next durable ordinal');
+    assert.notEqual(later.reservation.id, repeated.reservation.id);
 
     // ── Shared-account concurrency ─────────────────────────────────────────
 
@@ -594,7 +634,8 @@ async function main() {
     assert.ok(boundaryRuns.length >= 2, 'the boundary fixture has sibling Runs');
     const boundaryRaced = await Promise.allSettled(boundaryRuns.map(run =>
       store.prepareAndReserveNextGovernedRunRequest({
-        runId: run.id, canonicalBody: workerBody('boundary'), endpointIdentity: ENDPOINT
+        runId: run.id, logicalSourceIdentity: 'model-request:agent:boundary:provider',
+      canonicalBody: workerBody('boundary'), endpointIdentity: ENDPOINT
       })));
     const boundaryWon = boundaryRaced.filter(r => r.status === 'fulfilled');
     assert.equal(boundaryWon.length, 1,

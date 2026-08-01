@@ -3260,6 +3260,7 @@ class PostgresRuntimeStore {
       modelCapabilityHash: row.model_capability_hash,
       pricingCatalogHash: row.pricing_catalog_hash,
       pricingEntryHash: row.pricing_entry_hash,
+      logicalSourceIdentity: row.logical_source_identity,
       economicAuthority: row.economic_authority,
       pricingEntrySnapshot: row.pricing_entry_snapshot,
       preparedRequest: row.prepared_request,
@@ -3412,6 +3413,9 @@ class PostgresRuntimeStore {
     preparedRequest,
     economicAuthority,
     pricingEntry,
+    // The canonical model-request source identity. When supplied, the database
+    // permits exactly one reservation per logical request for this Run.
+    logicalSourceIdentity = null,
     eventType = 'ticket.economic_request_reserved'
   }, { client = null } = {}) {
     const request = normalizeGovernedProviderRequest(preparedRequest);
@@ -3471,9 +3475,9 @@ class PostgresRuntimeStore {
              pricing_catalog_hash, pricing_entry_hash,
              economic_authority, pricing_entry_snapshot,
              prepared_request, serialized_request, serialized_request_byte_count,
-             prepared_request_hash, reserved_max_micro_usd, state)
+             prepared_request_hash, reserved_max_micro_usd, logical_source_identity, state)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,
-             $17::jsonb,$18,$19,$20,$21,'reserved')
+             $17::jsonb,$18,$19,$20,$21,$22,'reserved')
            RETURNING *`,
           [
             Number(account.id), request.ticketId, request.role,
@@ -3484,7 +3488,8 @@ class PostgresRuntimeStore {
             request.pricingEntryHash,
             JSON.stringify(authority), JSON.stringify(pricingEntry),
             JSON.stringify(request), governedRequestBytes(request).serializedRequest,
-            request.serializedByteCount, request.preparedRequestHash, amount
+            request.serializedByteCount, request.preparedRequestHash, amount,
+            logicalSourceIdentity
           ]
         );
       } catch (error) {
@@ -3493,9 +3498,18 @@ class PostgresRuntimeStore {
         // request ordinal twice, so a retried reservation is refused rather than
         // double-charging the account.
         if (error && error.code === '23505') {
-          const conflict = new Error(
-            `request ordinal ${request.modelRequestOrdinal} is already reserved for this subject`);
-          conflict.code = 'ECONOMIC_RESERVATION_DUPLICATE';
+          // Two distinct conflicts live here. A repeated ORDINAL means the
+          // caller re-derived a number already spent; a repeated LOGICAL SOURCE
+          // means two callers meant the same request. The second is idempotent
+          // rather than exceptional, so it is named separately.
+          const logicalConflict = String(error.constraint || '')
+            .includes('logical_source_unique');
+          const conflict = new Error(logicalConflict
+            ? `logical request ${logicalSourceIdentity} is already reserved for this run`
+            : `request ordinal ${request.modelRequestOrdinal} is already reserved for this subject`);
+          conflict.code = logicalConflict
+            ? 'ECONOMIC_LOGICAL_REQUEST_DUPLICATE'
+            : 'ECONOMIC_RESERVATION_DUPLICATE';
           conflict.detail = { constraint: error.constraint || null };
           throw conflict;
         }
@@ -4280,6 +4294,11 @@ class PostgresRuntimeStore {
   // the exact bytes that a later dispatch will send.
   async prepareAndReserveNextGovernedRunRequest({
     runId,
+    // The canonical model-request source identity — the SAME string the runtime
+    // budget ledger uses (`model-request:<evidence slot>`). It is required, not
+    // optional: without it two concurrent orchestrations of one logical request
+    // become ordinals 1 and 2, which is the defect this parameter closes.
+    logicalSourceIdentity,
     canonicalBody,
     endpointIdentity,
     runtimeModelRequestMaximum = null,
@@ -4287,6 +4306,8 @@ class PostgresRuntimeStore {
     preparedAt = null
   }, { client = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
+    const logicalIdentity = requiredString(
+      logicalSourceIdentity, 'logicalSourceIdentity', 512);
     if (!canonicalBody || typeof canonicalBody !== 'object') {
       throw new TypeError('canonicalBody must be the caller-built worker request body');
     }
@@ -4348,12 +4369,33 @@ class PostgresRuntimeStore {
       // from the count but not from the ordinal sequence: an ordinal is spent
       // once, so a released request never lets a later one reuse its number.
       const ledger = await connection.query(
-        `SELECT model_request_ordinal, state
+        `SELECT id, model_request_ordinal, state, logical_source_identity
            FROM ${this.table('economic_request_reservations')}
           WHERE run_id = $1 AND ticket_id = $2 AND role = $3
           ORDER BY model_request_ordinal`,
         [id, run.ticketId, GOVERNED_WORKER_ROLE]
       );
+      // IDEMPOTENT RE-REPORT. If this exact logical request already has a
+      // reservation, that IS the answer. Deriving a new ordinal here would turn
+      // duplicate execution of one request into two charged requests.
+      const existing = ledger.rows.find(
+        row => row.logical_source_identity === logicalIdentity);
+      if (existing) {
+        const reservation = this._economicReservationFromRow(
+          (await connection.query(
+            `SELECT * FROM ${this.table('economic_request_reservations')} WHERE id = $1`,
+            [existing.id])).rows[0]);
+        return {
+          reservation,
+          preparedRequest: reservation.preparedRequest,
+          ordinal: reservation.modelRequestOrdinal,
+          run,
+          // The caller must be able to tell "I reserved this" from "this was
+          // already reserved", because only the former should log a new request.
+          alreadyReserved: true
+        };
+      }
+
       const ordinals = ledger.rows.map(row => Number(row.model_request_ordinal));
       const nextOrdinal = ordinals.length === 0 ? 1 : Math.max(...ordinals) + 1;
       const chargeableRequests = ledger.rows.filter(row => row.state !== 'released').length;
@@ -4419,10 +4461,14 @@ class PostgresRuntimeStore {
       const reservation = await this.reserveEconomicRequest({
         preparedRequest: prepared,
         economicAuthority: authority.economicAuthority,
-        pricingEntry
+        pricingEntry,
+        logicalSourceIdentity: logicalIdentity
       }, { client: connection });
 
-      return { reservation, preparedRequest: prepared, ordinal: nextOrdinal, run };
+      return {
+        reservation, preparedRequest: prepared, ordinal: nextOrdinal, run,
+        alreadyReserved: false
+      };
     };
     return client ? execute(client) : this.withTransaction(execute);
   }
