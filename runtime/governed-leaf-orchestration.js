@@ -46,6 +46,8 @@ const GOVERNED_LEAF_OUTCOMES = Object.freeze([
   'credentials_unavailable',
   'dispatch_failed',
   'already_dispatched_unresolved',
+  // The winner is still working. Not a failure, not a result — a report.
+  'request_in_flight',
   'request_released'
 ]);
 
@@ -203,10 +205,32 @@ async function runGovernedLeafRequest({
   switch (reservation.state) {
     case 'reserved':
       break; // A first start may still be attempted.
-    case 'request_started':
-      // The bytes may already have reached the provider. Settle conservatively
-      // and never issue again.
+    case 'request_started': {
+      // ACTIVE IS NOT ABANDONED.
+      //
+      // The bytes may already have reached the provider, so this is never
+      // re-dispatched. But whether it may be SETTLED depends on something this
+      // reservation cannot know: is the executor that started it still alive?
+      //
+      // Settling an active request would charge the reserved maximum while the
+      // winner is mid-flight, discard the metered usage it is about to report,
+      // and close books the winner still owns. So the Run's lease decides,
+      // using the same predicate the canonical recovery path uses.
+      const executor = await repository.isRunExecutorActive(run.id);
+      if (executor.active) {
+        return outcome('request_in_flight', {
+          possiblyDispatched: true,
+          reservationId: reservation.id,
+          ordinal,
+          failureReason: 'governed_leaf_request_in_flight',
+          failureDetail:
+            `run ${run.id} is still executing under lease ${executor.leaseOwner}`
+        });
+      }
+      // The executor is durably gone and this caller holds the Run under the
+      // existing lease authority. Conservative settlement is permitted.
       return await closeUnconfirmed(repository, reservation, ordinal);
+    }
     case 'response_persisted': {
       const settled = await settleFromDurableFacts(repository, reservation);
       return outcome('reused_durable_response', {

@@ -613,6 +613,172 @@ async function main() {
     assert.equal(tamperTransport.calls.length, 0,
       'a drifted captured route contacts no provider');
 
+    // ── Active transport must not be prematurely settled ───────────────────
+    //
+    // The winner blocks inside the injected transport while a duplicate caller
+    // arrives. The duplicate must observe an ACTIVE executor, dispatch nothing,
+    // settle nothing, and leave the account reserved — then the winner returns
+    // and performs the single response persistence and settlement.
+
+    const flightTicket = await admitLeafSet('Governed leaf in flight');
+    const flightRun = await store.getRun(
+      (await store.listRunsForTicket({ ticketId: flightTicket.ticket.id })).runs[0].id);
+    // Claim the Run through the real lease lifecycle, so the executor is alive
+    // by the same authority recovery uses to decide it is not.
+    const claimed = await store.claimPendingRun({
+      leaseOwner: 'governed-leaf-in-flight-test',
+      leaseDurationMs: 600_000,
+      eligibleRunIds: [flightRun.id]
+    });
+    assert.ok(claimed && claimed.run && claimed.run.id === flightRun.id,
+      'the Run is leased by a live executor');
+    const leasedRun = await store.getRun(flightRun.id);
+
+    let releaseTransport;
+    const blocked = new Promise(resolve => { releaseTransport = resolve; });
+    let transportEntered;
+    const enteredTransport = new Promise(resolve => { transportEntered = resolve; });
+    const flightCalls = [];
+    const blockingTransport = async args => {
+      flightCalls.push(args);
+      transportEntered();
+      await blocked;
+      return { text: '{"ok":true}', identity: 'resp_in_flight',
+        usage: { input_tokens: 1_000, output_tokens: 500 } };
+    };
+    const duplicateCalls = [];
+    const duplicateTransport = async args => { duplicateCalls.push(args); return { text: '{}' }; };
+
+    const flightSource = 'model-request:agent:1:provider';
+    const winner = runGovernedLeafRequest({
+      repository: store, run: leasedRun, logicalSourceIdentity: flightSource,
+      canonicalBody: workerBody('in flight'), endpointIdentity: ENDPOINT,
+      transport: blockingTransport, resolveCredentials: withKey,
+      timeoutMs: 60_000, maxResponseBytes: 65_536, runtimeModelRequestMaximum: 8
+    });
+    await enteredTransport;
+
+    // 1-6. While the winner is inside the transport, a duplicate arrives.
+    const reservationBefore = await store.pool.query(
+      `SELECT r.state, a.reserved_micro_usd, a.settled_micro_usd
+         FROM ${store.table('economic_request_reservations')} r
+         JOIN ${store.table('ticket_economic_accounts')} a ON a.id = r.account_id
+        WHERE r.run_id = $1`, [leasedRun.id]);
+    assert.equal(reservationBefore.rows[0].state, 'request_started');
+    assert.ok(Number(reservationBefore.rows[0].reserved_micro_usd) > 0,
+      'the account is reserved while transport is active');
+
+    const duplicate = await runGovernedLeafRequest({
+      repository: store, run: leasedRun, logicalSourceIdentity: flightSource,
+      canonicalBody: workerBody('in flight'), endpointIdentity: ENDPOINT,
+      transport: duplicateTransport, resolveCredentials: withKey,
+      timeoutMs: 60_000, maxResponseBytes: 65_536, runtimeModelRequestMaximum: 8
+    });
+    assert.equal(duplicate.status, 'request_in_flight',
+      'a duplicate observes the active winner rather than settling it');
+    assert.equal(duplicateCalls.length, 0, 'the duplicate makes zero transport calls');
+    assert.equal(duplicate.settlementReceiptHash, null,
+      'the duplicate performs zero settlement');
+
+    const midFlight = await store.pool.query(
+      `SELECT r.state, r.settled_micro_usd, a.reserved_micro_usd, a.settled_micro_usd
+              AS account_settled
+         FROM ${store.table('economic_request_reservations')} r
+         JOIN ${store.table('ticket_economic_accounts')} a ON a.id = r.account_id
+        WHERE r.run_id = $1`, [leasedRun.id]);
+    assert.equal(midFlight.rows[0].state, 'request_started',
+      'the reservation remains request_started');
+    assert.equal(midFlight.rows[0].settled_micro_usd, null,
+      'nothing was settled while the winner was in flight');
+    assert.equal(
+      Number(midFlight.rows[0].reserved_micro_usd),
+      Number(reservationBefore.rows[0].reserved_micro_usd),
+      'the account remains reserved, unchanged, while transport is active');
+
+    // 7-8. The winner returns and performs the single settlement.
+    releaseTransport();
+    const winnerResult = await winner;
+    assert.equal(winnerResult.status, 'received');
+    assert.equal(flightCalls.length, 1, 'exactly one transport call was made');
+    const flightFinal = await store.getEconomicReservation(winnerResult.reservationId);
+    assert.equal(flightFinal.state, 'settled');
+    // The winner's METERED usage was preserved, not replaced by the maximum a
+    // premature settlement would have charged.
+    assert.equal(flightFinal.settlementReceipt.usageSource, 'provider_reported',
+      'the winner settled from its own reported usage');
+    assert.ok(flightFinal.settledMicroUsd < flightFinal.reservedMaxMicroUsd,
+      'metered settlement is strictly less than the conservative maximum');
+    const receipts = await store.pool.query(
+      `SELECT settlement_receipt FROM ${store.table('economic_request_reservations')}
+        WHERE run_id = $1 AND settlement_receipt IS NOT NULL`, [leasedRun.id]);
+    assert.equal(receipts.rowCount, 1, 'exactly one settlement receipt exists');
+
+    // ── Abandoned recovery settles conservatively, exactly once ────────────
+
+    const lostTicket = await admitLeafSet('Governed leaf abandoned');
+    const lostRun = await store.getRun(
+      (await store.listRunsForTicket({ ticketId: lostTicket.ticket.id })).runs[0].id);
+    const lostClaim = await store.claimPendingRun({
+      leaseOwner: 'governed-leaf-abandoned-test',
+      leaseDurationMs: 600_000,
+      eligibleRunIds: [lostRun.id]
+    });
+    assert.ok(lostClaim && lostClaim.run, 'the abandoned Run was leased');
+    const lostLeased = await store.getRun(lostRun.id);
+    const lostReserved = await store.prepareAndReserveNextGovernedRunRequest({
+      runId: lostLeased.id, logicalSourceIdentity: flightSource,
+      canonicalBody: workerBody('abandoned'), endpointIdentity: ENDPOINT
+    });
+    await store.markEconomicRequestStarted({ reservationId: lostReserved.reservation.id });
+
+    // Durably lose the executor: expire the lease exactly as an executor death
+    // presents to the canonical recovery path.
+    await store.pool.query(
+      `UPDATE ${store.table('runs')}
+          SET lease_expires_at = clock_timestamp() - interval '1 minute',
+              revision = revision + 1
+        WHERE id = $1`, [lostLeased.id]);
+    const executorState = await store.isRunExecutorActive(lostLeased.id);
+    assert.equal(executorState.active, false,
+      'the executor is durably gone by the canonical lease predicate');
+
+    const recoveryTransport = recordingTransport();
+    const recovered = await runGovernedLeafRequest({
+      repository: store, run: await store.getRun(lostLeased.id),
+      logicalSourceIdentity: flightSource,
+      canonicalBody: workerBody('abandoned'), endpointIdentity: ENDPOINT,
+      transport: recoveryTransport, resolveCredentials: withKey,
+      timeoutMs: 60_000, maxResponseBytes: 65_536, runtimeModelRequestMaximum: 8
+    });
+    assert.equal(recovered.status, 'already_dispatched_unresolved');
+    assert.equal(recoveryTransport.calls.length, 0, 'recovery makes zero provider calls');
+    const recoveredRow = await store.getEconomicReservation(lostReserved.reservation.id);
+    assert.equal(recoveredRow.state, 'settled');
+    assert.equal(recoveredRow.settledMicroUsd, recoveredRow.reservedMaxMicroUsd,
+      'abandoned recovery settles conservatively at the reserved maximum');
+
+    // Repeated recovery is idempotent.
+    const balanceBeforeRepeat = await store.pool.query(
+      `SELECT reserved_micro_usd, settled_micro_usd
+         FROM ${store.table('ticket_economic_accounts')} WHERE ticket_id = $1 AND role = $2`,
+      [lostTicket.ticket.id, WORKER_ROLE]);
+    const repeatTransport = recordingTransport();
+    const repeated = await runGovernedLeafRequest({
+      repository: store, run: await store.getRun(lostLeased.id),
+      logicalSourceIdentity: flightSource,
+      canonicalBody: workerBody('abandoned'), endpointIdentity: ENDPOINT,
+      transport: repeatTransport, resolveCredentials: withKey,
+      timeoutMs: 60_000, maxResponseBytes: 65_536, runtimeModelRequestMaximum: 8
+    });
+    assert.equal(repeatTransport.calls.length, 0, 'repeated recovery contacts no provider');
+    assert.equal(repeated.status, 'reused_durable_response');
+    const balanceAfterRepeat = await store.pool.query(
+      `SELECT reserved_micro_usd, settled_micro_usd
+         FROM ${store.table('ticket_economic_accounts')} WHERE ticket_id = $1 AND role = $2`,
+      [lostTicket.ticket.id, WORKER_ROLE]);
+    assert.deepEqual(balanceAfterRepeat.rows[0], balanceBeforeRepeat.rows[0],
+      'repeated recovery changes no balance');
+
     // ── Historical and malformed Runs ──────────────────────────────────────
 
     // A Run with neither a leaf binding nor an envelope: the historical path.

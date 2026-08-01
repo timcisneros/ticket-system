@@ -3899,6 +3899,46 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+  // Is a Run's executor still alive?
+  //
+  // This reuses the EXACT predicate the canonical recovery path uses to decide
+  // a Run is recoverable — `lease_owner IS NULL OR lease_expires_at <=
+  // clock_timestamp()` — so there is one definition of abandonment in the
+  // system rather than two that can disagree. Elapsed wall-clock time alone is
+  // never the proof: the lease is, and it is evaluated against the database
+  // clock inside the query so a skewed application clock cannot declare a live
+  // executor dead.
+  async isRunExecutorActive(runId, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT status, lease_owner,
+                (lease_owner IS NOT NULL AND lease_expires_at > clock_timestamp())
+                  AS lease_live
+           FROM ${this.table('runs')} WHERE id = $1`,
+        [id]
+      );
+      if (result.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const row = result.rows[0];
+      return {
+        // A LIVE LEASE is the executor, and the status is deliberately not part
+        // of this test: `claimPendingRun` takes the lease before the Run
+        // advances to `running`, so requiring `running` would report a
+        // just-claimed executor as gone and let a duplicate settle its request.
+        // Abandonment is exactly the absence of a live lease, which is the same
+        // condition the canonical recovery query uses.
+        active: row.lease_live === true,
+        status: row.status,
+        leaseOwner: row.lease_owner
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async getEconomicReservation(reservationId, { client = null } = {}) {
     const id = positiveSafeInteger(reservationId, 'reservationId');
     const execute = async connection => {
