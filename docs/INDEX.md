@@ -27,7 +27,9 @@
 - [`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`](STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md)
   — authoritative roadmap for structured Allocation Plan authority, the 2A parent-work/planning-principal
   prerequisite, later 2B planner admission, leaf execution, bounded economics, coordination controls,
-  and product evaluation.
+  and product evaluation. Tranches 1-4 are COMPLETE; the Tranche 4 section is the reference for
+  role-aware routing, immutable execution targets, bounded economics, the request lifecycle, the
+  active-versus-abandoned lease rule, the formal fallback boundary, and the provider-support table.
 - [`decision-memo-work-definition-and-typed-evidence.md`](decision-memo-work-definition-and-typed-evidence.md)
   — rejection of a universal Target framework and the evidence-scoped correction.
 - [`decision-memo-mixed-family-work-model.md`](decision-memo-mixed-family-work-model.md)

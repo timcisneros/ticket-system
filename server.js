@@ -174,6 +174,10 @@ const {
   runGovernedLeafRequest,
   selectRunProviderPath
 } = require('./runtime/governed-leaf-orchestration');
+const {
+  projectRunGovernedExecution,
+  projectTicketGovernedEconomics
+} = require('./runtime/governed-execution-projection');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -187,6 +191,7 @@ const {
   assertRunTerminalizationRepository,
   assertTicketRunLifecycleRepository,
   assertStructuredAllocationLeafExecutionRepository,
+  assertGovernedEconomicsReadRepository,
   assertGovernedPlannerDispatchRepository,
   assertStructuredAllocationPlanningRepository,
   assertNonTerminalEvidenceRepository,
@@ -8463,12 +8468,19 @@ async function serializeTicketRuntimeState(ticketId) {
 
   const structuredAllocationPlan = await getStructuredAllocationPlanningRepository()
     .getAllocationPlanForTicket(ticket.id);
+  // Tranche 4: role-scoped accounts and the governed request lifecycle, read
+  // once from durable rows and projected through the single canonical seam so
+  // the page, the API and the CLI cannot disagree about money.
+  const governedEconomicsRows = await getGovernedEconomicsReadRepository()
+    .readTicketGovernedEconomics(ticket.id);
   return {
     ticket,
     structuredAllocation: projectStructuredAllocationAuthorityForTicket(ticket),
     structuredAllocationPlanning: projectStructuredAllocationPlanningForTicket(ticket, {
       allocationPlan: structuredAllocationPlan
     }),
+    // null for every ticket that never used governed execution.
+    governedEconomics: projectTicketGovernedEconomics(governedEconomicsRows),
     // Tranche 3: the durable leaf-execution facts for this ticket — item-to-Run
     // bindings, item authority and owned paths, Run lineage, per-item durable
     // disposition with its completion-decision identity, the aggregate decision
@@ -11182,6 +11194,11 @@ function createReplaySnapshotBase(run, overrides = {}) {
     // Tranche 3: the immutable item-to-Run binding this Run executes under.
     // null for every historical and v1 Run, which hold no binding at all.
     leafRunBinding: projectLeafRunBindingForRun(run),
+    // Tranche 4: the exact captured authority this Run executes under. The
+    // replay snapshot is synchronous, so it carries the CAPTURED authority
+    // only; per-request lifecycle comes from the Run detail read, which can
+    // consult the reservation rows. null for historical and v1 Runs.
+    governedExecution: projectRunGovernedExecution(run, []),
     ownedOutputPaths: getRunOwnedOutputPaths(run),
     ticketOpenedAt: run.ticketOpenedAt || null,
     runtimeLimits: pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run)),
@@ -16152,6 +16169,11 @@ async function resolveGovernedPlannerCredentials({ provider }) {
   if (provider !== 'openai') return null;
   const key = process.env.OPENAI_API_KEY;
   return key ? { apiKey: key } : null;
+}
+
+function getGovernedEconomicsReadRepository() {
+  assertGovernedEconomicsReadRepository(postgresRuntimeStore);
+  return postgresRuntimeStore;
 }
 
 function getGovernedPlannerDispatchRepository() {
@@ -28180,6 +28202,12 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
   const runtimeLimitsDisplay = buildRunRuntimeLimitsDisplay(run, snapshot, runDetailAttemptUsage, ticket && ticket.objective);
   const routingDisplay = buildRoutingDisplay(run, snapshot);
   const recentRunLogs = await getRecentLogsForRun(runId);
+  // Tranche 4: this Run's durable reservation rows, read through the canonical
+  // read seam so the Run surface and the Ticket surface observe the same rows.
+  const governedReservationsForRun = run && run.ticketId
+    ? (await getGovernedEconomicsReadRepository()
+      .readTicketGovernedEconomics(run.ticketId)).reservations
+    : [];
   const [permissionCatalog, delegatedAuthorization] = await Promise.all([
     listAccessPermissions(),
     run.delegatedUserId != null ? getAccessCatalogRepository().getUserAuthorization(run.delegatedUserId) : null
@@ -28203,6 +28231,12 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     // Tranche 3: the immutable item-to-Run binding, plus the durable per-item
     // disposition and aggregate decision this Run contributes to.
     leafRunBinding: projectLeafRunBindingForRun(run),
+    // Tranche 4: the exact captured authority this Run executes under and the
+    // durable lifecycle of each provider request it has made. Built from the
+    // same canonical seam the Ticket surfaces use.
+    governedExecution: run
+      ? projectRunGovernedExecution(run, governedReservationsForRun)
+      : null,
     leafExecution: projectStructuredAllocationLeafExecution({
       allocationPlan: allocationPlan &&
         allocationPlan.version === ALLOCATION_PLAN_V2_VERSION &&

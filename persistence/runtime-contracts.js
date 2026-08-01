@@ -12,6 +12,7 @@ const CONTRACTS = Object.freeze({
   ticketRunLifecycle: ['createTicketWithEvent', 'transitionTicketState', 'reassignTicket', 'createRunsAndStartTicket', 'transitionTicketAfterRun', 'reopenTicket', 'createRetryRun'],
   structuredAllocationPlanning: ['writeStructuredAllocationPlanningAttempt', 'admitStructuredAllocationPlan', 'getAllocationPlanForTicket'],
   structuredAllocationLeafExecution: ['admitStructuredAllocationLeafRuns', 'reconcileStructuredAllocationLeafItems', 'getAllocationPlanForTicket'],
+  governedEconomicsRead: ['readTicketGovernedEconomics', 'getEconomicReservation'],
   governedPlannerDispatch: ['startGovernedPlannerRequest', 'persistGovernedPlannerResponse', 'settleEconomicRequest', 'getEconomicReservation'],
   economicAccounting: ['admitTicketEconomicAccount', 'reserveEconomicRequest', 'markEconomicRequestStarted', 'markEconomicResponsePersisted', 'settleEconomicRequest', 'releaseUndispatchedEconomicReservation', 'getEconomicReservation', 'listRecoverableEconomicReservations'],
   nonTerminalEvidence: ['appendRunEvidence', 'completeActionReceipt', 'prepareTargetOperation', 'completeTargetOperation', 'getTargetOperation', 'withTargetOperationLock'],
@@ -96,6 +97,8 @@ module.exports = {
   assertStructuredAllocationLeafExecutionRepository:
     assertion('structuredAllocationLeafExecution', 'structured allocation leaf execution'),
   assertEconomicAccountingRepository: assertion('economicAccounting', 'economic accounting'),
+  assertGovernedEconomicsReadRepository:
+    assertion('governedEconomicsRead', 'governed economics read'),
   assertGovernedPlannerDispatchRepository:
     assertion('governedPlannerDispatch', 'governed planner dispatch'),
   assertNonTerminalEvidenceRepository: assertion('nonTerminalEvidence', 'non-terminal evidence'),

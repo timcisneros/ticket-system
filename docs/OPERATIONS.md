@@ -724,3 +724,63 @@ The system performs best when:
 This is **operational authoring discipline**, not infrastructure capability.
 The runtime provides the guarantees. The operator provides the precision.
 They are not interchangeable.
+
+## 12. Governed Execution Economics (Tranche 4)
+
+### Where to look
+
+Ticket Detail and `GET` Ticket API expose `governedEconomics`: one entry per
+role account (`structured_planner`, `structured_leaf_executor`) with authorized,
+reserved, settled and remaining micro-USD **read from the durable account row**.
+The structured-leaf summary lists governed Run IDs, reservation counts by
+lifecycle, and — the two an operator usually wants — `unresolvedStartedReservationIds`
+and `awaitingSettlementReservationIds`.
+
+Run Detail and `GET` Run API expose `governedExecution`: the captured route,
+immutable target, target evidence, authority hashes, ceilings, and one entry per
+provider request with its ordinal, logical source, lifecycle, hashes, receipt
+and amounts.
+
+`node scripts/oquery.js` prints the same facts for both Tickets and Runs.
+
+### Reading the lifecycle
+
+```text
+reserved            money is held; no provider was contacted
+request_started     bytes may be on the wire; never re-dispatched
+response_persisted  a response is durable; settlement may proceed
+settled             books closed for this request
+released            reserve returned; the request provably never ran
+```
+
+A `request_started` reservation on a Run whose lease is still live is **in
+flight** — leave it alone. The same state on a Run with no live lease is
+recoverable and will settle conservatively at the reserved maximum.
+
+### Common situations
+
+**A request is stuck in `request_started`.** Check whether the Run holds a live
+lease. If it does, the request is running. If not, recovery will settle it at
+the reserved maximum on the next invocation; the provider is never called again.
+
+**An account shows reserved money and no activity.** Look for reservations in
+`reserved` with no start. Those are provably undispatched and may be released
+through the canonical store method.
+
+**Settlement charged the maximum.** That is the fail-closed path: the provider
+reported no usable usage, or the response was never confirmed. It is never an
+error to investigate as over-charging — it is the designed conservative outcome.
+
+**An administrator re-priced the catalog.** Requests already reserved are
+unaffected: they settle from the pricing entry captured at reservation.
+
+### What is not available
+
+Fallback selection and execution. Policy can authorize a fallback route, but the
+runtime refuses to select one because it has no canonical preflight-evidence
+authority proving the primary route is unavailable. It refuses rather than
+inventing availability evidence.
+
+Ollama cannot be used for governed structured planning or leaf execution: a tag
+is a moving reference and its liability is unboundable. Ollama remains fully
+supported on historical ungoverned paths.

@@ -24,9 +24,13 @@ const {
 } = require('./process-supervision');
 
 const PROCESS_EXECUTION_RELEASE_CONTRACT_VERSION = 1;
-const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 32;
-const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 32;
-const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 32;
+// Bumped by Tranche 4, which added migrations 033 (role-scoped economic
+// accounting) and 034 (logical request identity). Neither touches process
+// execution, but the release preflight requires the head to match exactly, and
+// the same bump was made by Tranche 2A when it added migration 032.
+const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 34;
+const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 34;
+const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 34;
 const PROCESS_OPERATION_SCHEMA_VERSION = 29;
 const PROCESS_EXECUTION_ROOTFS_REGISTRY_SCHEMA_VERSION = 1;
 const PROCESS_EXECUTION_RELEASE_READINESS_VERSION = 1;

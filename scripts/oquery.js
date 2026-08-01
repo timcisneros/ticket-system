@@ -584,7 +584,36 @@ async function cmdReplay(args) {
           });
           if (item.evidenceRequirements.length === 0) {
             console.log(`  ${dim('evidence requirements')} explicitly none`);
-          } else {
+            // Tranche 4: the captured authority and durable request lifecycle.
+          const governed = run.governedExecution || null;
+          if (governed) {
+            console.log(`  ${dim('governed role')} ${governed.role}`);
+            console.log(`  ${dim('authorized route')} ${governed.authorizedRouteReference}`);
+            console.log(`  ${dim('immutable target')} ${governed.immutableDispatchTarget}`);
+            console.log(`  ${dim('target evidence')} ${governed.targetEvidenceHash}`);
+            console.log(`  ${dim('routing decision')} ${governed.routingDecisionHash}`);
+            console.log(`  ${dim('economic authority')} ${governed.economicAuthorityHash}`);
+            console.log(`  ${dim('pricing entry')} ${governed.pricingEntryHash}`);
+            console.log(`  ${dim('worker account')} #${governed.workerAccountId} ` +
+              `max ${governed.maximumProviderRequests} requests, ` +
+              `cap ${governed.authorizedOutputTokens} output tokens, ` +
+              `<= ${governed.maximumPerRequestMicroUsd} uUSD each`);
+            for (const request of governed.requests) {
+              console.log(`  ${dim('request')} #${request.modelRequestOrdinal} ` +
+                `${request.lifecycle} reservation #${request.reservationId}`);
+              console.log(`    ${dim('logical source')} ${request.logicalSourceIdentity}`);
+              console.log(`    ${dim('exact request')} ${request.exactRequestHash}`);
+              if (request.responseHash) {
+                console.log(`    ${dim('response')} ${request.responseHash}`);
+              }
+              if (request.settlementReceiptHash) {
+                console.log(`    ${dim('receipt')} ${request.settlementReceiptHash} ` +
+                  `${request.usageSource} settled ${request.settledMicroUsd} uUSD ` +
+                  `of ${request.reservedMicroUsd} reserved`);
+              }
+            }
+          }
+        } else {
             item.evidenceRequirements.forEach(requirement => {
               console.log(`  ${dim('evidence requirement')} ${requirement.evidenceType} ${requirement.criterionHash} ${dim('(' + requirement.provenance + ')')}`);
             });
@@ -1629,6 +1658,31 @@ async function cmdTicket(args) {
   console.log(`\n  ${bold(`Ticket #${ticketId}`)} ${statusTag(ticket.status)}`);
   console.log(`  ${dim('objective')} ${(ticket.objective || '').replace(/\r?\n/g, ' ')}`);
   if (ticket.assignmentTargetType) console.log(`  ${dim('assigned to')} ${ticket.assignmentTargetType} #${ticket.assignmentTargetId}`);
+  // Tranche 4: role-scoped accounts, kept visibly separate.
+  const governedEconomics = ticket.governedEconomics || null;
+  if (governedEconomics) {
+    for (const account of governedEconomics.accounts) {
+      console.log(`  ${dim('account')} ${account.role} #${account.accountId} ` +
+        `policy ${account.economicPolicyId} rev ${account.revision}`);
+      console.log(`    ${dim('uUSD')} authorized ${account.authorizedMicroUsd} ` +
+        `reserved ${account.reservedMicroUsd} settled ${account.settledMicroUsd} ` +
+        `remaining ${account.remainingMicroUsd}`);
+    }
+    const leaf = governedEconomics.structuredLeaf;
+    if (leaf) {
+      console.log(`  ${dim('worker runs')} ${leaf.governedRunIds.join(', ') || 'none'}`);
+      console.log(`  ${dim('requests')} ` + Object.entries(leaf.reservationCountsByLifecycle)
+        .map(([state, count]) => `${state}=${count}`).join(' '));
+      if (leaf.unresolvedStartedReservationIds.length > 0) {
+        console.log(`    ${dim('unresolved started')} ` +
+          leaf.unresolvedStartedReservationIds.join(', '));
+      }
+      if (leaf.awaitingSettlementReservationIds.length > 0) {
+        console.log(`    ${dim('awaiting settlement')} ` +
+          leaf.awaitingSettlementReservationIds.join(', '));
+      }
+    }
+  }
   if (ticket.structuredAllocationAuthority) {
     const authority = ticket.structuredAllocationAuthority;
     const eligibility = data.structuredAllocation

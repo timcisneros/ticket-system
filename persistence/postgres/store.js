@@ -3939,6 +3939,50 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+  // The single READ-ONLY seam every governed-economics projection is built
+  // from. One transaction, so an account row and the reservations charged
+  // against it are always read at the same instant — a projection assembled
+  // from two separate reads could show a balance that never existed.
+  //
+  // No mutation happens anywhere in this method. Projections observe; they do
+  // not repair.
+  async readTicketGovernedEconomics(ticketId, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const execute = async connection => {
+      const accounts = await connection.query(
+        `SELECT * FROM ${this.table('ticket_economic_accounts')}
+          WHERE ticket_id = $1 ORDER BY role`,
+        [id]
+      );
+      const reservations = await connection.query(
+        `SELECT * FROM ${this.table('economic_request_reservations')}
+          WHERE ticket_id = $1
+          ORDER BY role, run_id NULLS FIRST, model_request_ordinal`,
+        [id]
+      );
+      return {
+        accounts: accounts.rows.map(row => ({
+          id: Number(row.id),
+          ticketId: Number(row.ticket_id),
+          role: row.role,
+          economicPolicyId: row.economic_policy_id,
+          economicPolicyHash: row.economic_policy_hash,
+          // Every amount comes from the DURABLE ROW. Nothing here is derived
+          // from process memory or from summing reservations, because a sum of
+          // reservations is not the account and can disagree with it.
+          authorizedMicroUsd: Number(row.authorized_micro_usd),
+          reservedMicroUsd: Number(row.reserved_micro_usd),
+          settledMicroUsd: Number(row.settled_micro_usd),
+          remainingMicroUsd: Number(row.authorized_micro_usd) -
+            Number(row.reserved_micro_usd) - Number(row.settled_micro_usd),
+          revision: Number(row.revision)
+        })),
+        reservations: reservations.rows.map(row => this._economicReservationFromRow(row))
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async getEconomicReservation(reservationId, { client = null } = {}) {
     const id = positiveSafeInteger(reservationId, 'reservationId');
     const execute = async connection => {

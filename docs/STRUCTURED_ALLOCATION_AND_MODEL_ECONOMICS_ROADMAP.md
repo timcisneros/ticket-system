@@ -310,12 +310,232 @@ already owns that mapping — Tranche 3 adds no second parent-completion authori
 Tranche 3 adds no migration, no replanning, no v1 fallback, no recursion and no
 delegation. Historical v1 behavior and non-planner v2 plans are unchanged.
 
-## Tranche 4 — Role-Aware Routing and Bounded Economics
+## Tranche 4 — Role-Aware Routing and Bounded Economics — COMPLETE
 
-Evaluate role-aware model selection and explicit bounded economic authority for
-planning and leaf execution. Preserve existing provider, model, routing, and
-budget contracts until this tranche admits a change. This tranche is not
-implemented by Tranche 1.
+Role-aware model selection and explicit bounded economic authority for planning
+and leaf execution.
+
+### The authority chain
+
+```text
+work authority
+→ canonical role
+→ closed role-routing policy
+→ immutable execution target
+→ immutable economic authority
+→ role-scoped Ticket account
+→ exact prepared request
+→ durable reservation
+→ one-winner request start
+→ exact-byte dispatch
+→ response persistence
+→ captured-basis settlement
+```
+
+Authority flows one way. Routing never consults capability or pricing;
+economics never selects a route.
+
+### Canonical roles
+
+Exactly two, and they are closed:
+
+* `structured_planner` — one provider request per planning attempt.
+* `structured_leaf_executor` — many requests per Run, against one shared
+  Ticket account.
+
+Ordinary historical execution has no role and no account.
+
+### Routing authorization is not target capture
+
+A policy authorizes a route *reference*. Capture resolves that reference to an
+immutable *artifact* and records the evidence. The two are separate fields on
+every captured decision precisely because a reference can move and an artifact
+cannot. A reference that cannot be resolved to an immutable artifact is refused;
+it is never dispatched on the assumption that it will still mean the same thing
+when the request lands.
+
+### Routing is not economics
+
+Routing answers *which exact route is authorized for this role*. Economics
+answers *whether that captured route has capability, pricing and budget*. Two
+independent documents, two independent hashes. An earlier draft had routing
+consult model capability; that was removed, because it made an unpriced route
+unroutable rather than unaffordable and hid the distinction.
+
+### Exact OpenAI snapshot requirement
+
+A governed route must name an exact dated snapshot (`gpt-4o-mini-2024-07-18`).
+A mutable alias (`gpt-4o-mini`) is policy-representable but cannot be captured,
+because the artifact it names today is not the artifact it will name tomorrow
+and no evidence can bind it.
+
+### Conservative liability: the full context ceiling
+
+`model_context_window_ceiling` prices the **entire context window** as maximum
+input. This needs no framing estimate: every accepted input is subject to the
+finite window, so pricing the whole window can never understate the request.
+
+Liability = fixed request charge + ceil(contextWindowTokens × input rate) +
+ceil(maxOutputTokens × output rate), all in integer micro-USD, every division
+rounding up.
+
+A route is eligible only when the adapter transmits an enforceable output cap,
+all chargeable output is covered by it, the input bound is proven, and fixed
+charges and authorized fallback liability are included. Otherwise the runtime
+refuses with `provider_path_not_hard_boundable` **before** provider contact.
+
+### Explicit zero prices
+
+`catalog_maximum_exactly_zero` admits a route whose catalog maximum is exactly
+zero. It is eligible because its stated price is zero — never because a route
+is assumed free for being local.
+
+### Role-scoped Ticket accounts
+
+`UNIQUE (ticket_id, role)`. Sibling leaf Runs contend against one shared worker
+account; the planner account is separate and neither can spend the other's
+authority. The database enforces `reserved + settled <= authorized`, so
+oversubscription is impossible rather than merely unlikely.
+
+### Durable logical-request identity
+
+The runtime budget already names each model-request opportunity as
+`model-request:<evidence slot>`, unique per Run and derived from the durable
+execution step. Economic reservations reuse **that exact string** rather than
+inventing a second counter that could drift:
+
+```text
+one canonical model-request source
+→ one runtime-budget reservation
+→ one economic reservation
+→ one ordinal
+```
+
+Account locking proves economic serialization. It cannot prove logical
+uniqueness, because it does not know two callers meant the same request. Without
+the shared identity, duplicate orchestration of one request became requests 1
+and 2 — two reservations, two charges, two provider calls.
+
+### Request lifecycle
+
+```text
+reserved → request_started → response_persisted → settled
+reserved → released
+```
+
+Release is legal **only** before start. Once started, the bytes may be on the
+wire, so the request settles — conservatively if necessary — and is never
+handed back.
+
+### Exact bytes, not hashes
+
+A request is serialized once; those bytes are hashed, reserved, persisted, and
+later dispatched. A hash alone proves equality only against bytes someone still
+holds and does not survive process failure. The winning start transition returns
+the persisted bytes; a caller cannot supply its own.
+
+### Captured pricing basis
+
+Each reservation retains the complete normalized economic authority and the
+exact pricing entry. Settlement reads only those. An administrator who re-prices
+or deletes a catalog entry can neither change nor block the settlement of a
+request already reserved against it.
+
+Unknown, absent, partial or malformed usage settles at the **reserved maximum**,
+never zero.
+
+### Active versus abandoned
+
+A `request_started` reservation is never re-dispatched. Whether it may be
+*settled* depends on the Run lease:
+
+```text
+request_started + live lease → report in flight; no call, no settlement
+request_started + no lease   → recovery may settle conservatively
+```
+
+Abandonment is proven by the lease against the database clock, never by elapsed
+wall-clock time, and it reuses the same predicate the canonical recovery path
+already uses. Liveness deliberately does not require `status = 'running'`:
+`claimPendingRun` takes the lease before the Run advances, so requiring the
+status would report a just-claimed executor as gone.
+
+### No-repeat recovery
+
+```text
+reserved            → first start may occur using the persisted bytes
+request_started     → never automatically dispatch again
+response_persisted  → settle without dispatch
+settled             → consume the durable response without dispatch
+released            → terminal undispatched request
+```
+
+Recovery selects no new route, model, target, policy, catalog, prompt or
+ordinal, and never replans.
+
+### Historical compatibility
+
+Three states, and the third is why the contracts exist:
+
+```text
+no governed envelope       → historical, unchanged behaviour
+complete governed envelope → governed execution required
+partial governed envelope  → FAIL CLOSED, never treated as historical
+```
+
+Age is consulted nowhere. A Run's timestamp says nothing about whether it was
+admitted with authority; the admission path is what guarantees completeness.
+
+### Formal fallback boundary
+
+```text
+Fallback authorization is representable in policy.
+
+Fallback selection and execution are unavailable because the
+runtime has no canonical preflight-evidence authority proving
+that the primary route is unavailable.
+
+The runtime therefore refuses fallback rather than inventing
+availability evidence.
+```
+
+`selectRoleRoute` refuses fallback with `fallback_preflight_evidence_unavailable`.
+This is a recorded boundary, not a quiet deferral.
+
+### Not implemented
+
+Recorded explicitly so no reader infers otherwise:
+
+* paid Ollama governance;
+* Ollama digest resolution;
+* mutable OpenAI aliases;
+* live price lookup;
+* price optimization;
+* cached-token discount optimization;
+* dynamic provider hopping;
+* fallback selection/execution;
+* recursive delegation;
+* worker-created child work;
+* scheduler changes;
+* retry-policy changes.
+
+### Provider support
+
+| Provider | Governed planning | Governed leaf | Why |
+|---|---|---|---|
+| OpenAI (exact dated snapshot) | Yes | Yes | Immutable artifact, documented context window, enforceable output cap |
+| OpenAI (mutable alias) | No | No | No immutable artifact can be captured |
+| Ollama | No | No | A tag is a moving reference; no digest resolution and no context proof, so liability is unboundable |
+
+Ollama remains fully supported on historical ungoverned paths.
+
+### Operational projection
+
+One canonical read-only seam, `runtime/governed-execution-projection.js`, feeds
+Ticket Detail, Run Detail, both runtime APIs, replay snapshots and the CLI.
+Balances come from the durable account row, never from summing reservations.
+The durable lifecycle vocabulary is used verbatim; there is no overloaded
+`governed: true`.
 
 ## Tranche 5 — Coordination and Verified-Progress Controls
 
@@ -336,8 +556,8 @@ Tranche 1.
 Tranche 1: COMPLETE
 Tranche 2A: COMPLETE
 Tranche 2B: COMPLETE
-Tranche 3: NOT STARTED
-Tranche 4: NOT STARTED
+Tranche 3: COMPLETE
+Tranche 4: COMPLETE
 Tranche 5: NOT STARTED
 Tranche 6: NOT STARTED
 ```

@@ -37,3 +37,28 @@ Profiles may specialize guidance (e.g., tighter listDirectory limits for bulk-in
 ## 9. Evidence Preservation
 
 Do not destroy runtime-generated evidence when injecting enforcement feedback. Operation results, state observations, and action outcomes must remain accessible to downstream consumers. Enforcement warnings may be added to the feedback loop, but they must not overwrite the evidence that downstream logic (transition guidance, postcondition checks, replay reconstruction) depends on.
+
+## 10. Governed Execution (Tranche 4)
+
+No governed provider request may occur before a durable reservation exists and a
+one-winner start transition has been won. This is structural, not conventional:
+the transport is handed the start result and there is no other way to reach it.
+
+`reserved + settled <= authorized` is enforced by the database, so an account
+cannot be oversubscribed even if application logic is wrong.
+
+Exactly one reservation exists per (Run, logical request source). Duplicate
+orchestration of one logical request is re-reported idempotently; it never
+receives the next ordinal.
+
+Release is legal only before start. A started request settles — conservatively
+if its outcome is unknown — and is never handed back.
+
+Settlement never reads current pricing, policy or catalog configuration.
+
+A structured leaf Run with complete governed authority cannot reach an
+ungoverned provider adapter. A Run with partial authority reaches neither path.
+
+Projections read durable rows. A balance is never derived by summing
+reservations, and the durable lifecycle vocabulary is never collapsed into a
+single boolean.

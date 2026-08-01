@@ -329,3 +329,59 @@ benchmark gating: `decision-memo-objective-interpretation-direction.md`.
 ## Branching Workflow Generation
 
 Branching and conditional workflow generation is a separate capability from flat workflow draft intent. Do not treat branching objectives as `createWorkflowDraftIntent` failures unless that capability envelope changes.
+
+## Tranche 4 — Role-Aware Routing and Bounded Economics
+
+**Two canonical roles, closed.** `structured_planner` and
+`structured_leaf_executor`. Adding a third is a schema change, not configuration.
+
+**Routing authorization is not target capture.** A policy authorizes a route
+*reference*; capture resolves it to an immutable *artifact*. Both are recorded
+separately because a reference can move and an artifact cannot.
+
+**Routing is separate from economics.** An early draft had routing resolve model
+capability. That made an unpriced route look unroutable rather than
+unaffordable, so capability resolution was removed from routing entirely.
+
+**Liability is bounded by the full context window.** Pricing the entire window
+as maximum input needs no framing estimate, because all accepted input is
+subject to the finite window. Integer micro-USD throughout; every division
+rounds up.
+
+**Zero prices are explicit.** A route is eligible at zero cost because its
+catalog says zero, never because "local" is assumed free.
+
+**Exactness is bytes, not hashes.** A hash proves equality only against bytes
+someone still holds. Reservations retain the serialized request itself, so the
+winning start returns the authorized bytes rather than trusting a caller to
+re-supply them.
+
+**Settlement reads only captured facts.** The reservation retains the complete
+economic authority and the exact pricing entry. Re-pricing or deleting a catalog
+can neither alter nor block settlement of a request already reserved against it.
+Unproven usage settles at the reserved maximum, never zero.
+
+**One logical identity for two ledgers.** The runtime budget's
+`model-request:<slot>` is reused as the economic reservation's logical source.
+Account locking proves economic serialization but not logical uniqueness;
+without the shared identity, duplicate orchestration of one request became
+requests 1 and 2.
+
+**Active is not abandoned.** A started request is never re-dispatched, but it
+may only be *settled* when the Run lease proves the executor is gone. Elapsed
+time is never the proof. Liveness is the lease alone — requiring
+`status = 'running'` would report a just-claimed executor as dead.
+
+**Partial governed state fails closed.** It is never read as historical. A Run
+admitted with authority running ungoverned is the outcome the cutover exists to
+prevent, so damaged authority throws rather than selecting a path.
+
+**Fallback is authorizable but unavailable.** Policy can express a fallback
+route; the runtime refuses to select one because it has no canonical
+preflight-evidence authority proving the primary route is unavailable. It
+refuses rather than inventing availability evidence.
+
+**Ollama cannot be governed.** A tag is a moving reference. Without digest
+resolution and a context-window proof, liability is unboundable, so Ollama
+structured planning was withdrawn rather than governed on assumptions. Ollama
+remains fully supported on historical ungoverned paths.
