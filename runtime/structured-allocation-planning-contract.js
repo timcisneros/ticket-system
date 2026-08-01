@@ -266,6 +266,48 @@ const PLANNING_ATTEMPT_FIELDS = Object.freeze([
   'attemptStateHash'
 ]);
 
+// Tranche 4 governed state. OPTIONAL, and absent means absent — not null.
+//
+// A historical attempt carries no `governedExecution` key at all, so its
+// canonical form is byte-for-byte what it was before Tranche 4 existed and its
+// stored `attemptStateHash` still verifies. Storing an explicit null instead
+// would change every historical hash and break every historical attempt, so the
+// key is omitted rather than nulled.
+const OPTIONAL_PLANNING_ATTEMPT_FIELDS = Object.freeze(['governedExecution']);
+
+// The captured authority an attempt was admitted under. Closed: every field is
+// a hash or an identity, so current configuration can never be mistaken for it,
+// and none of it is a rate, a price or a credential.
+const GOVERNED_EXECUTION_FIELDS = Object.freeze([
+  'version',
+  'role',
+  // The three independently hashed administrator documents, as captured.
+  'roleRoutingPolicyHash',
+  'economicPolicyHash',
+  'pricingCatalogHash',
+  // What was decided from them, immutably.
+  'routingDecisionHash',
+  'economicAuthorityHash',
+  'dispatchTarget',
+  'targetEvidenceHash',
+  // Where the money lives and what was reserved.
+  'economicAccountId',
+  'reservationId',
+  'preparedRequestHash',
+  'exactRequestHash',
+  // Filled in as the attempt progresses; absent stages stay null.
+  'settlementReceiptHash',
+  'economicState'
+]);
+
+const GOVERNED_EXECUTION_VERSION = 1;
+
+// Mirrors the reservation lifecycle. The attempt records what it observed; the
+// reservation remains the authority.
+const GOVERNED_ECONOMIC_STATES = Object.freeze([
+  'reserved', 'request_started', 'response_persisted', 'settled', 'released'
+]);
+
 const PLANNING_ATTEMPT_PLANNER_FIELDS = Object.freeze([
   'agentId',
   'provider',
@@ -383,14 +425,16 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
-function exactFields(value, fields, label, onFail = fail) {
+function exactFields(value, fields, label, onFail = fail, optionalAware = false) {
   if (!isPlainObject(value)) onFail(`${label} must be an object`);
   const unknown = Object.keys(value).filter(field => !fields.includes(field));
   const missing = fields.filter(field => !Object.prototype.hasOwnProperty.call(value, field));
   if (unknown.length > 0) {
     onFail(`${label} contains unknown field(s): ${unknown.sort(compareCanonicalText).join(', ')}`);
   }
-  if (missing.length > 0) onFail(`${label} is missing field(s): ${missing.join(', ')}`);
+  if (missing.length > 0 && !optionalAware) {
+    onFail(`${label} is missing field(s): ${missing.join(', ')}`);
+  }
 }
 
 function positiveSafeInteger(value, label) {
@@ -1127,8 +1171,52 @@ function normalizeAttemptRequestMetadata(value) {
   };
 }
 
+// Normalizes the optional governed block. Partial or conflicting state fails
+// closed: an attempt that names a reservation but no request, or a settled
+// economic state with no receipt, describes a situation that cannot have
+// happened, and admitting it would let recovery draw false conclusions.
+function normalizeGovernedExecution(value) {
+  exactFields(value, GOVERNED_EXECUTION_FIELDS, 'planningAttempt.governedExecution');
+  if (value.version !== GOVERNED_EXECUTION_VERSION) {
+    fail(`planningAttempt.governedExecution.version must be ${GOVERNED_EXECUTION_VERSION}`);
+  }
+  const economicState = enumerated(
+    value.economicState, GOVERNED_ECONOMIC_STATES, 'governedExecution.economicState');
+  const normalized = {
+    version: GOVERNED_EXECUTION_VERSION,
+    role: requiredString(value.role, 'governedExecution.role'),
+    roleRoutingPolicyHash: hash(
+      value.roleRoutingPolicyHash, 'governedExecution.roleRoutingPolicyHash'),
+    economicPolicyHash: hash(value.economicPolicyHash, 'governedExecution.economicPolicyHash'),
+    pricingCatalogHash: hash(value.pricingCatalogHash, 'governedExecution.pricingCatalogHash'),
+    routingDecisionHash: hash(value.routingDecisionHash, 'governedExecution.routingDecisionHash'),
+    economicAuthorityHash: hash(
+      value.economicAuthorityHash, 'governedExecution.economicAuthorityHash'),
+    dispatchTarget: requiredString(value.dispatchTarget, 'governedExecution.dispatchTarget'),
+    targetEvidenceHash: hash(value.targetEvidenceHash, 'governedExecution.targetEvidenceHash'),
+    economicAccountId: positiveSafeInteger(
+      value.economicAccountId, 'governedExecution.economicAccountId'),
+    reservationId: positiveSafeInteger(value.reservationId, 'governedExecution.reservationId'),
+    preparedRequestHash: hash(
+      value.preparedRequestHash, 'governedExecution.preparedRequestHash'),
+    exactRequestHash: hash(value.exactRequestHash, 'governedExecution.exactRequestHash'),
+    settlementReceiptHash: nullableHash(
+      value.settlementReceiptHash, 'governedExecution.settlementReceiptHash'),
+    economicState
+  };
+  // A settled attempt must name the receipt that settled it, and only a settled
+  // attempt may name one.
+  if (economicState === 'settled' && normalized.settlementReceiptHash === null) {
+    fail('a settled governed attempt must record its settlement receipt hash');
+  }
+  if (economicState !== 'settled' && normalized.settlementReceiptHash !== null) {
+    fail('only a settled governed attempt may record a settlement receipt hash');
+  }
+  return normalized;
+}
+
 function attemptWithoutHash(value) {
-  return {
+  const base = {
     version: PLANNING_ATTEMPT_VERSION,
     attemptId: attemptIdentity(value.attemptId, 'planningAttempt.attemptId'),
     ticketId: positiveSafeInteger(value.ticketId, 'planningAttempt.ticketId'),
@@ -1199,6 +1287,13 @@ function attemptWithoutHash(value) {
     createdAt: timestamp(value.createdAt, 'planningAttempt.createdAt'),
     completedAt: nullableTimestamp(value.completedAt, 'planningAttempt.completedAt')
   };
+  // Present only when governed. An ungoverned attempt's canonical form is
+  // exactly what it was before Tranche 4, so its stored hash still verifies.
+  if (Object.prototype.hasOwnProperty.call(value, 'governedExecution') &&
+      value.governedExecution !== undefined && value.governedExecution !== null) {
+    base.governedExecution = normalizeGovernedExecution(value.governedExecution);
+  }
+  return base;
 }
 
 function assertBoolean(value, label) {
@@ -1334,7 +1429,19 @@ function createPlanningAttempt({ attemptId, ticketId, authority, createdAt }) {
 }
 
 function normalizePlanningAttempt(value, { expectedTicketId = null } = {}) {
-  exactFields(value, PLANNING_ATTEMPT_FIELDS, 'planningAttempt');
+  exactFields(
+    value,
+    [...PLANNING_ATTEMPT_FIELDS, ...OPTIONAL_PLANNING_ATTEMPT_FIELDS],
+    'planningAttempt',
+    fail,
+    true
+  );
+  // The optional field is genuinely optional; the required ones are not.
+  const missingRequired = PLANNING_ATTEMPT_FIELDS.filter(
+    field => !Object.prototype.hasOwnProperty.call(value, field));
+  if (missingRequired.length > 0) {
+    fail(`planningAttempt is missing field(s): ${missingRequired.join(', ')}`);
+  }
   if (value.version !== PLANNING_ATTEMPT_VERSION) {
     fail(`planningAttempt.version must be ${PLANNING_ATTEMPT_VERSION}`);
   }
@@ -1358,8 +1465,9 @@ function normalizePlanningAttempt(value, { expectedTicketId = null } = {}) {
 function advancePlanningAttempt(attempt, patch) {
   const current = normalizePlanningAttempt(attempt);
   if (!isPlainObject(patch)) fail('planningAttempt patch must be an object');
+  const patchable = [...PLANNING_ATTEMPT_FIELDS, ...OPTIONAL_PLANNING_ATTEMPT_FIELDS];
   const unknown = Object.keys(patch).filter(field =>
-    !PLANNING_ATTEMPT_FIELDS.includes(field) || field === 'attemptStateHash');
+    !patchable.includes(field) || field === 'attemptStateHash');
   if (unknown.length > 0) {
     fail(`planningAttempt patch contains unknown field(s): ${unknown.join(', ')}`);
   }

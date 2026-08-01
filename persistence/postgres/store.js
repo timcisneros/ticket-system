@@ -3903,6 +3903,240 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+
+  // ── Governed structured-planner alignment (Tranche 4) ──────────────────────
+  //
+  // Two facts about one planner request live in two places: the economic
+  // reservation and the planning attempt. Writing them in separate transactions
+  // would create a window in which they disagree, and the disagreement that
+  // matters is the dangerous one:
+  //
+  //   planning attempt says the request may run
+  //   while the reservation never granted the one winning start
+  //
+  // A process that crashed in that window would re-issue a provider request
+  // that may already have been billed. So both transitions commit together, and
+  // THE RESERVATION IS THE NO-REPEAT AUTHORITY: if the reservation says
+  // `request_started`, the request is never dispatched again, whatever the
+  // attempt marker says.
+  //
+  // Lock order is tickets → account → reservation, matching every other path
+  // that touches these rows, so no deadlock is possible.
+
+  async startGovernedPlannerRequest({
+    ticketId,
+    attempt,
+    reservationId,
+    // The hash of the attempt state this write expects to replace. Supplied by
+    // the caller, exactly as the plain attempt writer requires, so a concurrent
+    // writer cannot be silently overwritten.
+    expectedAttemptStateHash = null,
+    reservationEventType = 'ticket.economic_request_started',
+    attemptEventType = 'ticket.structured_planning_attempt_requested'
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const reservation = positiveSafeInteger(reservationId, 'reservationId');
+    // Normalized before the transaction so a malformed attempt never takes locks.
+    const nextAttempt = normalizePlanningAttempt(attempt, { expectedTicketId: id });
+    if (nextAttempt.state !== 'request_started') {
+      throw new TypeError('startGovernedPlannerRequest requires a request_started attempt');
+    }
+    const governed = nextAttempt.governedExecution;
+    if (!governed) {
+      throw new TypeError('a governed planner start requires captured governedExecution state');
+    }
+    if (governed.reservationId !== reservation) {
+      throw new TypeError('the attempt names a different reservation than the one being started');
+    }
+
+    const execute = async connection => {
+      await connection.query(
+        `SELECT id FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`, [id]);
+
+      // The one-winner transition. Exactly one caller leaves this with a row.
+      const won = await connection.query(
+        `UPDATE ${this.table('economic_request_reservations')}
+         SET state = 'request_started',
+             started_at = clock_timestamp(),
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 AND state = 'reserved' AND ticket_id = $2
+         RETURNING *`,
+        [reservation, id]
+      );
+      if (won.rowCount === 0) {
+        const current = await connection.query(
+          `SELECT state FROM ${this.table('economic_request_reservations')} WHERE id = $1`,
+          [reservation]);
+        const error = new Error(current.rowCount === 0
+          ? `economic reservation ${reservation} was not found`
+          : `economic reservation ${reservation} is ${current.rows[0].state} and cannot start`);
+        error.code = current.rowCount === 0
+          ? 'ECONOMIC_RESERVATION_NOT_FOUND'
+          : 'ECONOMIC_REQUEST_ALREADY_STARTED';
+        error.detail = { state: current.rowCount === 0 ? null : current.rows[0].state };
+        // A loser dispatches nothing.
+        error.dispatchAuthorized = false;
+        error.startedNow = false;
+        throw error;
+      }
+
+      const row = this._economicReservationFromRow(won.rows[0]);
+
+      // Everything the winner is about to send is re-verified from storage.
+      // A caller cannot influence any of it: no bytes, route or authority are
+      // parameters to this method.
+      const actual = hashSerializedRequest(row.serializedRequest);
+      if (actual !== row.exactRequestHash) {
+        const error = new Error(
+          `persisted request bytes for reservation ${reservation} do not match the reserved hash`);
+        error.code = 'ECONOMIC_REQUEST_BYTES_CORRUPT';
+        throw error;
+      }
+      for (const [field, expected] of [
+        ['economicAuthorityHash', governed.economicAuthorityHash],
+        ['exactRequestHash', governed.exactRequestHash],
+        ['preparedRequestHash', governed.preparedRequestHash]
+      ]) {
+        if (row[field] !== expected) {
+          const error = new Error(
+            `reservation ${reservation} ${field} disagrees with the captured attempt`);
+          error.code = 'GOVERNED_ATTEMPT_RESERVATION_MISMATCH';
+          throw error;
+        }
+      }
+      if (row.preparedRequest.dispatchTarget !== governed.dispatchTarget ||
+          row.preparedRequest.targetEvidenceHash !== governed.targetEvidenceHash) {
+        const error = new Error(
+          `reservation ${reservation} targets a route the captured attempt did not authorize`);
+        error.code = 'GOVERNED_ATTEMPT_ROUTE_MISMATCH';
+        throw error;
+      }
+
+      // Same transaction: the attempt marker.
+      const written = await this.writeStructuredAllocationPlanningAttempt({
+        ticketId: id,
+        attempt: nextAttempt,
+        expectedAttemptStateHash,
+        eventType: attemptEventType,
+        eventPayload: {
+          reservationId: reservation,
+          exactRequestHash: row.exactRequestHash
+        }
+      }, { client: connection });
+
+      await this._appendEvent(connection, {
+        type: reservationEventType,
+        ticketId: id,
+        payload: {
+          reservationId: reservation,
+          role: row.role,
+          modelRequestOrdinal: row.modelRequestOrdinal,
+          exactRequestHash: row.exactRequestHash,
+          reservedMaxMicroUsd: row.reservedMaxMicroUsd,
+          planningAttemptId: row.planningAttemptId
+        }
+      });
+
+      return {
+        // The two facts a caller needs, and the only two that authorize a call.
+        startedNow: true,
+        dispatchAuthorized: true,
+        reservation: row,
+        // The authorized bytes, from storage.
+        serializedRequest: row.serializedRequest,
+        attempt: written.attempt
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // The mirror of the start: one transaction, both durable response markers.
+  // Neither may exist without the other, so no recovery path can conclude "the
+  // response is missing" for a request whose response was in fact received.
+  async persistGovernedPlannerResponse({
+    ticketId,
+    attempt,
+    reservationId,
+    responseIdentity,
+    responseHash,
+    expectedAttemptStateHash = null,
+    reservationEventType = 'ticket.economic_response_persisted',
+    attemptEventType = 'ticket.structured_planning_attempt_responded'
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const reservation = positiveSafeInteger(reservationId, 'reservationId');
+    const identity = requiredString(responseIdentity, 'responseIdentity');
+    if (typeof responseHash !== 'string' || !/^[0-9a-f]{64}$/.test(responseHash)) {
+      throw new TypeError('responseHash must be a lowercase SHA-256');
+    }
+    const nextAttempt = normalizePlanningAttempt(attempt, { expectedTicketId: id });
+    if (nextAttempt.state !== 'response_received') {
+      throw new TypeError('persistGovernedPlannerResponse requires a response_received attempt');
+    }
+
+    const execute = async connection => {
+      await connection.query(
+        `SELECT id FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`, [id]);
+      const updated = await connection.query(
+        `UPDATE ${this.table('economic_request_reservations')}
+         SET state = 'response_persisted',
+             response_persisted_at = clock_timestamp(),
+             response_identity = $2,
+             response_hash = $3,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 AND state = 'request_started' AND ticket_id = $4
+         RETURNING *`,
+        [reservation, identity, responseHash, id]
+      );
+      if (updated.rowCount === 0) {
+        const current = await connection.query(
+          `SELECT state, response_hash FROM ${this.table('economic_request_reservations')}
+           WHERE id = $1`, [reservation]);
+        // Already persisted with the SAME response is idempotent success, not a
+        // conflict: a retried orchestration must not be told the response is
+        // missing and must never trigger another provider call.
+        if (current.rowCount === 1 &&
+            current.rows[0].state !== 'request_started' &&
+            current.rows[0].response_hash === responseHash) {
+          return { reservation: await this.getEconomicReservation(reservation,
+            { client: connection }), attempt: nextAttempt, alreadyPersisted: true };
+        }
+        const error = new Error(
+          `economic reservation ${reservation} was not awaiting a response`);
+        error.code = 'ECONOMIC_RESERVATION_STATE_CONFLICT';
+        error.detail = { state: current.rowCount === 0 ? null : current.rows[0].state };
+        throw error;
+      }
+
+      const written = await this.writeStructuredAllocationPlanningAttempt({
+        ticketId: id,
+        attempt: nextAttempt,
+        expectedAttemptStateHash,
+        eventType: attemptEventType,
+        eventPayload: { reservationId: reservation, responseIdentity: identity }
+      }, { client: connection });
+
+      await this._appendEvent(connection, {
+        type: reservationEventType,
+        ticketId: id,
+        payload: {
+          reservationId: reservation,
+          responseIdentity: identity,
+          responseHash
+        }
+      });
+
+      return {
+        reservation: this._economicReservationFromRow(updated.rows[0]),
+        attempt: written.attempt,
+        alreadyPersisted: false
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async createRun(record, { client = null, reservedId = null } = {}) {
     const run = this.assertJsonRecord(record, 'run');
     assertRunDeclaredCompletionAuthority(run, 'run declared/completion authority');
