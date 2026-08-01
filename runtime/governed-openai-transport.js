@@ -15,12 +15,21 @@
 
 const https = require('node:https');
 
-const GOVERNED_OPENAI_ENDPOINT = 'https://api.openai.com/v1/responses';
+const GOVERNED_OPENAI_HOSTNAME = 'api.openai.com';
+const GOVERNED_OPENAI_PATH = '/v1/responses';
+const GOVERNED_OPENAI_ENDPOINT = `https://${GOVERNED_OPENAI_HOSTNAME}${GOVERNED_OPENAI_PATH}`;
 
 // Creates the transport function the orchestration calls. Everything it needs
 // arrives per-request from the reservation; the factory itself holds no route,
 // model or credential.
-function createOpenAiGovernedTransport() {
+//
+// `httpsRequest` is a DEPENDENCY SEAM, not configuration. It is the Node
+// `https.request` function itself, and substituting it lets a test observe the
+// exact options, headers and bytes this module produces. It cannot redirect
+// anything: the host and path are constants below and are asserted per request,
+// so no injected factory — and no configuration value that could ever reach one
+// — can point a governed request somewhere else.
+function createOpenAiGovernedTransport({ httpsRequest = https.request } = {}) {
   return async function openAiGovernedTransport({
     endpointIdentity,
     serializedRequest,
@@ -42,7 +51,13 @@ function createOpenAiGovernedTransport() {
     const payload = Buffer.from(serializedRequest, 'utf8');
 
     return await new Promise((resolve, reject) => {
-      const request = https.request(GOVERNED_OPENAI_ENDPOINT, {
+      const request = httpsRequest({
+        // Spelled as discrete options rather than a URL string so a test can
+        // read back exactly what production sends.
+        protocol: 'https:',
+        hostname: GOVERNED_OPENAI_HOSTNAME,
+        port: 443,
+        path: GOVERNED_OPENAI_PATH,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -51,6 +66,7 @@ function createOpenAiGovernedTransport() {
         },
         timeout: timeoutMs
       }, response => {
+        const statusCode = response.statusCode;
         const chunks = [];
         let received = 0;
         let overflowed = false;
@@ -74,11 +90,22 @@ function createOpenAiGovernedTransport() {
             return;
           }
           const text = Buffer.concat(chunks).toString('utf8');
+          // A provider status failure is a failure, not a response. Resolving
+          // it as one would let an error page be parsed as a proposal and
+          // settled as a successful request.
+          if (typeof statusCode !== 'number' || statusCode < 200 || statusCode > 299) {
+            reject(new Error(
+              `governed OpenAI request failed with status ${String(statusCode)}`));
+            return;
+          }
           let parsed = null;
           try {
             parsed = JSON.parse(text);
           } catch (_) {
-            resolve({ text });
+            // A body that is not JSON is not a governed response. Passing the
+            // raw bytes through would hand unvalidated text to the proposal
+            // parser as though the provider had answered.
+            reject(new Error('governed OpenAI response was not valid JSON'));
             return;
           }
           resolve({
@@ -122,6 +149,8 @@ function extractResponseText(parsed) {
 
 module.exports = {
   GOVERNED_OPENAI_ENDPOINT,
+  GOVERNED_OPENAI_HOSTNAME,
+  GOVERNED_OPENAI_PATH,
   createOpenAiGovernedTransport,
   extractResponseText
 };

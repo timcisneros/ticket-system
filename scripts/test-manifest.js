@@ -168,6 +168,7 @@ const TESTS = Object.freeze([
   { file: "governed-planner-production-path-postgres-test.js", status: "required" },
   { file: "economic-authority-contract-test.js", status: "required" },
   { file: "economic-settlement-receipt-contract-test.js", status: "required" },
+  { file: "governed-openai-transport-test.js", status: "required" },
   { file: "governed-planner-cutover-boundary-test.js", status: "required" },
   { file: "governed-policy-source-test.js", status: "required" },
   { file: "governed-provider-transport-test.js", status: "required" },

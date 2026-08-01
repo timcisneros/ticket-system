@@ -63,8 +63,12 @@ assert.equal(/JSON\.stringify/.test(orchestrationSource), false,
 
 const transportSource = fs.readFileSync(
   path.join(__dirname, '..', 'runtime', 'governed-openai-transport.js'), 'utf8');
-assert.ok(transportSource.includes("'https://api.openai.com/v1/responses'"),
-  'the production endpoint is the fixed official one');
+// The endpoint is assembled from two literal constants; neither may be derived
+// from configuration or the environment.
+assert.ok(transportSource.includes("const GOVERNED_OPENAI_HOSTNAME = 'api.openai.com';"),
+  'the production hostname is a fixed literal');
+assert.ok(transportSource.includes("const GOVERNED_OPENAI_PATH = '/v1/responses';"),
+  'the production path is a fixed literal');
 for (const configurable of ['OPENAI_BASE_URL', 'OPENAI_API_BASE', 'baseUrl']) {
   assert.equal(transportSource.includes(configurable), false,
     `no ${configurable} may redirect a governed request`);
