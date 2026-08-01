@@ -179,8 +179,27 @@ that window left a completed parent with no aggregate decision.
 The fix keeps exactly one parent-status mapping and makes it consume the proof. For a
 planner-admitted v2 plan, `transitionTicketAfterRun()` now runs the same store-owned leaf
 derivation inside its own transaction, persists item statuses and the aggregate decision, and
-refuses to reach `completed` unless the persisted aggregate independently agrees. `failed` and
-`blocked` keep their canonical mapping unchanged, as the audit requires. Because the derivation and
+requires the persisted aggregate to authorize the outcome the canonical mapping proposed.
+
+Gating only `completed` was not enough, and left the failure paths as parallel authorities. An
+aggregate reporting `interrupted` — because a decision was absent, stale, conflicting, or evaluated
+against other completion authority — could sit beside a batch projection that independently reached
+`blocked` or `failed`, and the parent terminalized on the weaker evidence. EVERY terminal parent
+outcome is therefore gated:
+
+| aggregateStatus                    | permitted parent outcome                          |
+|------------------------------------|---------------------------------------------------|
+| `completed`                        | `completed`                                       |
+| `failed`                           | whichever of `blocked` or `failed` the canonical mapping chose |
+| `pending` / `running` / `interrupted` | none — no terminal transition                  |
+| absent or not yet persisted        | none — no terminal transition                     |
+| malformed or hash-conflicting      | none — the transaction aborts on read             |
+
+The aggregate decides only WHETHER a terminal outcome is provable. It never chooses between
+`blocked` and `failed`: that distinction stays entirely with the existing canonical Run/consequence
+logic and is used verbatim. `open` is deliberately outside the gate — returning an interrupted
+owned-scope ticket to `open` is recovery, not terminalization, and must remain reachable without a
+completion proof. Because the derivation and
 the transition now share one transaction, no caller can order them wrongly, no crash can leave a
 completed parent without its aggregate, and the parent event names the plan and the exact
 `aggregateDecisionHash` that authorized it. Lock order is `allocation_plans → runs → tickets`

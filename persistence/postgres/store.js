@@ -82,6 +82,10 @@ const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/;
 const TICKET_STATUSES = new Set(['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed']);
 const RUN_STATUSES = new Set(['pending', 'running', 'completed', 'failed', 'interrupted']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'interrupted']);
+// The parent Ticket outcomes that END execution. `open` is deliberately absent:
+// returning an interrupted owned-scope ticket to `open` is recovery, not
+// terminalization, and must stay reachable without a leaf completion proof.
+const TERMINAL_TICKET_STATUSES = new Set(['completed', 'failed', 'blocked']);
 const RUN_RECOVERY_MODES = new Set(['lease_expiry', 'process_restart']);
 const OPERATION_OUTCOMES = new Set(['succeeded', 'failed', 'refused']);
 const PROCESS_OPERATION_STATES = new Set(['intent', 'active', 'finalizing', 'terminal']);
@@ -6257,11 +6261,31 @@ class PostgresRuntimeStore {
         if (reconciled.reconciled) {
           leafDecision = reconciled.decision;
           leafPlanId = reconciled.plan.id;
-          if (targetStatus === 'completed' && leafDecision.aggregateStatus !== 'completed') {
-            // The batch projection would complete the Ticket, but the durable
-            // leaf proof does not support it. Fail closed: no transition.
-            targetStatus = null;
-          }
+        }
+        // EVERY terminal parent outcome is gated, not just completion. Gating
+        // only `completed` left the failure paths as parallel authorities: an
+        // aggregate reporting `interrupted` because a decision was stale,
+        // conflicting or evaluated against other completion authority could sit
+        // beside a batch projection that independently reached `blocked` or
+        // `failed`, and the parent terminalized on the weaker evidence.
+        //
+        // This does NOT re-map anything. The canonical logic above still chooses
+        // blocked versus failed, and its choice is used verbatim; the aggregate
+        // only decides whether ANY terminal outcome is provable yet.
+        if (TERMINAL_TICKET_STATUSES.has(targetStatus)) {
+          const provenTerminal = leafDecision !== null && (
+            targetStatus === 'completed'
+              ? leafDecision.aggregateStatus === 'completed'
+              : leafDecision.aggregateStatus === 'failed'
+          );
+          // Absent, unpersisted or non-terminal proof all resolve the same way:
+          // no terminal transition. `pending`, `running` and `interrupted` mean
+          // the leaf set is unresolved, and an unresolved leaf set cannot end
+          // the parent in any outcome. A malformed or hash-conflicting stored
+          // aggregate never reaches here at all — allocationPlanFromRow and
+          // normalizeAggregatePlanDecision reject it on read, aborting this
+          // transaction before any transition.
+          if (!provenTerminal) targetStatus = null;
         }
       }
 

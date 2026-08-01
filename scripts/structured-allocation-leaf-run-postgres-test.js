@@ -349,6 +349,53 @@ function satisfiedConsequence(run, item) {
   };
 }
 
+// One decision builder for every terminal-gate fixture. The completion decision
+// is always produced by the canonical builder from real evidence; the only
+// variables are WHICH completion authority it is evaluated against and whether
+// the postcondition evidence satisfies it.
+//
+//   authority === the run's own + satisfying evidence   -> completed
+//   authority === the run's own + no evidence           -> blocked
+//   authority === the run's own + wrong-path evidence   -> incomplete
+//   authority === another item's                        -> hash mismatch, so the
+//                                                          leaf derivation refuses
+//                                                          whatever the disposition
+function decisionConsequence(run, { authority, checkedPath = null }) {
+  const base = {
+    version: 1,
+    runId: run.id,
+    ticketId: run.ticketId,
+    verification: { browserEvidence: null }
+  };
+  return {
+    ...base,
+    completionDecision: buildCompletionDecision({
+      run: { ...run, completionAuthoritySnapshot: authority, runtimeBudgetSnapshot: null },
+      replaySnapshot: {
+        events: checkedPath === null
+          ? []
+          : [{
+            type: 'run:postcondition_completed',
+            checkedPaths: [{ type: 'folder', path: checkedPath }]
+          }],
+        modelResponses: [],
+        parsedModelPlans: [],
+        workspaceOperations: [],
+        providerRequests: []
+      },
+      events: [],
+      operations: [],
+      consequence: base,
+      verificationContract: null,
+      evaluatedAt: new Date().toISOString()
+    })
+  };
+}
+
+function ownedFolder(item) {
+  return item.ownedOutputPaths[0].replace(/\/$/, '');
+}
+
 async function main() {
   await withHarness('structured allocation leaf-run PostgreSQL', async ({ store }) => {
     const group = (await store.createGroup({
@@ -1168,6 +1215,272 @@ async function main() {
       admission.runs.every(run => Number.isSafeInteger(run.id) && run.id > 0),
       true
     );
+
+    // ── EVERY terminal parent outcome is gated by the aggregate proof ────────
+    //
+    // Gating only `completed` left the failure paths as parallel authorities.
+    // These fixtures drive the canonical projection to `blocked` and to `failed`
+    // while the aggregate says the leaf set is unresolved, and require the parent
+    // to stay nonterminal in both.
+    const terminalGateCase = async (label, { foreignAuthority, checkedPath }) => {
+      const scenario = await admitPlan(`${label} ${STAMP}`);
+      const admitted = await store.admitStructuredAllocationLeafRuns({
+        ticketId: scenario.ticket.id,
+        allocationPlanId: scenario.plan.id,
+        leafDrafts: scenario.plan.items.map(item => ({
+          allocationItemId: item.allocationItemId,
+          run: leafRunDraft(
+            scenario.ticket, scenario.plan, item, agentById.get(item.assignedAgentId),
+            { completionAuthority: verifiedCompletionAuthority(item) }
+          )
+        }))
+      });
+      const itemsById = new Map(scenario.plan.items.map(item => [item.allocationItemId, item]));
+      const [subjectRun, siblingRun] = admitted.runs;
+      const subjectItem = itemsById.get(subjectRun.allocationItemId);
+      const siblingItem = itemsById.get(siblingRun.allocationItemId);
+
+      // The sibling is genuinely, provably complete throughout.
+      await terminalizeRunTo(store, siblingRun.id, 'completed');
+      await store.recordRunConsequence({
+        runId: siblingRun.id,
+        consequence: satisfiedConsequence(await store.getRun(siblingRun.id), siblingItem)
+      });
+
+      await terminalizeRunTo(store, subjectRun.id, 'completed');
+      const persistedSubject = await store.getRun(subjectRun.id);
+      const authority = foreignAuthority
+        ? verifiedCompletionAuthority(siblingItem)
+        : persistedSubject.completionAuthoritySnapshot;
+      await store.recordRunConsequence({
+        runId: subjectRun.id,
+        consequence: decisionConsequence(persistedSubject, {
+          authority,
+          checkedPath: checkedPath === null ? null : checkedPath(subjectItem, siblingItem)
+        })
+      });
+      return { scenario, subjectRun, siblingRun, subjectItem, siblingItem };
+    };
+
+    // aggregate interrupted + Run consequence says blocked -> parent nonterminal
+    const interruptedBlocked = await terminalGateCase('Aggregate interrupted blocked', {
+      foreignAuthority: true,
+      checkedPath: null
+    });
+    let gateDecision = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: interruptedBlocked.scenario.ticket.id
+    })).decision;
+    assert.equal(gateDecision.aggregateStatus, 'interrupted');
+    assert.equal(
+      (await store.getRunConsequence(interruptedBlocked.subjectRun.id))
+        .consequence.completionDecision.completionDisposition,
+      'blocked',
+      'the canonical projection really does see a blocked disposition'
+    );
+    let gated = await store.transitionTicketAfterRun({ runId: interruptedBlocked.subjectRun.id });
+    assert.equal(gated.changed, false);
+    assert.equal(gated.ticket.status, 'in_progress',
+      'an interrupted aggregate permits no blocked parent transition');
+
+    // aggregate interrupted + Run consequence says failed -> parent nonterminal.
+    // Foreign completion authority whose postcondition the evidence does NOT
+    // satisfy: the canonical projection therefore reaches `failed`, while the
+    // leaf derivation refuses on the authority mismatch.
+    const interruptedFailed = await terminalGateCase('Aggregate interrupted failed', {
+      foreignAuthority: true,
+      checkedPath: subject => ownedFolder(subject)
+    });
+    gateDecision = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: interruptedFailed.scenario.ticket.id
+    })).decision;
+    assert.equal(gateDecision.aggregateStatus, 'interrupted');
+    assert.equal(
+      gateDecision.items.find(item => item.runId === interruptedFailed.subjectRun.id).reason,
+      'completion_authority_mismatch'
+    );
+    assert.equal(
+      (await store.getRunConsequence(interruptedFailed.subjectRun.id))
+        .consequence.completionDecision.completionDisposition,
+      'incomplete',
+      'the canonical projection really does see a failing disposition'
+    );
+    gated = await store.transitionTicketAfterRun({ runId: interruptedFailed.subjectRun.id });
+    assert.equal(gated.changed, false);
+    assert.equal(gated.ticket.status, 'in_progress',
+      'an interrupted aggregate permits no failed parent transition');
+
+    // aggregate failed + canonical blocked disposition -> parent becomes blocked
+    const failedBlocked = await terminalGateCase('Aggregate failed blocked', {
+      foreignAuthority: false,
+      checkedPath: null
+    });
+    gateDecision = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: failedBlocked.scenario.ticket.id
+    })).decision;
+    assert.equal(gateDecision.aggregateStatus, 'failed');
+    assert.equal(
+      gateDecision.items.find(item => item.runId === failedBlocked.subjectRun.id).reason,
+      'completion_blocked'
+    );
+    const blockedParent = await store.transitionTicketAfterRun({
+      runId: failedBlocked.subjectRun.id
+    });
+    assert.equal(blockedParent.ticket.status, 'blocked',
+      'a proven failed leaf set keeps the canonical blocked outcome');
+    assert.equal(blockedParent.aggregateDecision.aggregateStatus, 'failed');
+
+    // aggregate failed + canonical failed disposition -> parent becomes failed
+    const failedFailed = await terminalGateCase('Aggregate failed failed', {
+      foreignAuthority: false,
+      checkedPath: (subject, sibling) => ownedFolder(sibling)
+    });
+    gateDecision = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: failedFailed.scenario.ticket.id
+    })).decision;
+    assert.equal(gateDecision.aggregateStatus, 'failed');
+    assert.equal(
+      gateDecision.items.find(item => item.runId === failedFailed.subjectRun.id).reason,
+      'completion_unsuccessful'
+    );
+    const failedParentGated = await store.transitionTicketAfterRun({
+      runId: failedFailed.subjectRun.id
+    });
+    assert.equal(failedParentGated.ticket.status, 'failed',
+      'a proven failed leaf set keeps the canonical failed outcome');
+    assert.notEqual(blockedParent.ticket.status, failedParentGated.ticket.status,
+      'the blocked/failed distinction survives the gate unchanged');
+
+    // Repeating a proven terminal transition emits no duplicate terminal event.
+    const repeatFailed = await store.transitionTicketAfterRun({
+      runId: failedFailed.subjectRun.id
+    });
+    assert.equal(repeatFailed.changed, false);
+    assert.equal(
+      (await store.listTicketEvents(failedFailed.scenario.ticket.id, { limit: 200 })).events
+        .filter(event => (event.runId === null || event.runId === undefined) &&
+          event.payload && event.payload.status === 'failed').length,
+      1,
+      'repeated terminalization emits no duplicate terminal parent event'
+    );
+
+    // Concurrent sibling terminalization cannot bypass the gate.
+    const concurrentGate = await terminalGateCase('Aggregate gate concurrency', {
+      foreignAuthority: true,
+      checkedPath: null
+    });
+    const concurrentOutcomes = await Promise.allSettled([
+      store.transitionTicketAfterRun({ runId: concurrentGate.subjectRun.id }),
+      store.transitionTicketAfterRun({ runId: concurrentGate.siblingRun.id })
+    ]);
+    for (const outcome of concurrentOutcomes) {
+      if (outcome.status !== 'fulfilled') continue;
+      assert.equal(outcome.value.changed, false);
+    }
+    assert.equal((await store.getTicket(concurrentGate.scenario.ticket.id)).status, 'in_progress',
+      'concurrent sibling terminalization cannot bypass the aggregate gate');
+
+    // ── Missing aggregate proof permits no terminal transition ───────────────
+    //
+    // A planner-admitted plan whose Runs never went through leaf admission holds
+    // no binding, so no aggregate can be derived at all.
+    const unbound = await admitPlan(`Missing aggregate proof ${STAMP}`);
+    const unboundItem = unbound.plan.items[0];
+    const unboundCreated = await store.createRunsAndStartTicket({
+      ticketId: unbound.ticket.id,
+      runDrafts: [leafRunDraft(
+        unbound.ticket, unbound.plan, unboundItem, agentById.get(unboundItem.assignedAgentId),
+        { completionAuthority: verifiedCompletionAuthority(unboundItem) }
+      )]
+    });
+    const unboundRun = unboundCreated.runs[0];
+    assert.equal(unboundRun.leafRunBinding ?? null, null,
+      'this run deliberately bypassed leaf admission and holds no binding');
+    await terminalizeRunTo(store, unboundRun.id, 'completed');
+    await store.recordRunConsequence({
+      runId: unboundRun.id,
+      consequence: satisfiedConsequence(await store.getRun(unboundRun.id), unboundItem)
+    });
+    assert.equal(
+      (await store.reconcileStructuredAllocationLeafItems({ ticketId: unbound.ticket.id }))
+        .reconciled,
+      false,
+      'no leaf binding means no aggregate can be derived'
+    );
+    const unboundTransition = await store.transitionTicketAfterRun({ runId: unboundRun.id });
+    assert.equal(unboundTransition.changed, false);
+    assert.notEqual((await store.getTicket(unbound.ticket.id)).status, 'completed',
+      'a missing aggregate proof permits no terminal transition');
+    assert.equal((await store.getAllocationPlan(unbound.plan.id)).aggregateDecision ?? null, null);
+
+    // ── A stale or hash-conflicting aggregate permits no terminal transition ──
+    const tampered = await terminalGateCase('Aggregate hash conflict', {
+      foreignAuthority: false,
+      checkedPath: (subject) => ownedFolder(subject)
+    });
+    const tamperedDecision = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: tampered.scenario.ticket.id
+    })).decision;
+    assert.equal(tamperedDecision.aggregateStatus, 'completed');
+    // Rewrite the stored aggregate so its own hash no longer describes its items.
+    await store.pool.query(
+      `UPDATE ${store.table('allocation_plans')}
+       SET body = jsonb_set(body, '{aggregateDecision,aggregateStatus}', '"failed"'::jsonb),
+           revision = revision + 1
+       WHERE id = $1`,
+      [tampered.scenario.plan.id]
+    );
+    await assert.rejects(
+      () => store.transitionTicketAfterRun({ runId: tampered.subjectRun.id }),
+      error => /aggregatePlanDecision/.test(error.message),
+      'a hash-conflicting aggregate aborts the transition instead of terminalizing'
+    );
+    assert.equal((await store.getTicket(tampered.scenario.ticket.id)).status, 'in_progress',
+      'a conflicting aggregate leaves the parent nonterminal');
+
+    // ── Nonterminal recovery is unaffected by the gate ───────────────────────
+    //
+    // An interrupted leaf returns an owned-scope ticket to `open`. That is
+    // recovery, not terminalization, so it must stay reachable even though the
+    // aggregate reports the leaf set unresolved.
+    const recovering = await admitPlan(`Aggregate gate recovery ${STAMP}`);
+    const recoveringAdmission = await store.admitStructuredAllocationLeafRuns({
+      ticketId: recovering.ticket.id,
+      allocationPlanId: recovering.plan.id,
+      leafDrafts: recovering.plan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        run: leafRunDraft(
+          recovering.ticket, recovering.plan, item, agentById.get(item.assignedAgentId),
+          { completionAuthority: verifiedCompletionAuthority(item) }
+        )
+      }))
+    });
+    const recoveringItems = new Map(
+      recovering.plan.items.map(item => [item.allocationItemId, item]));
+    const [interruptedLeaf, completedLeaf] = recoveringAdmission.runs;
+    await terminalizeRunTo(store, completedLeaf.id, 'completed');
+    await store.recordRunConsequence({
+      runId: completedLeaf.id,
+      consequence: satisfiedConsequence(
+        await store.getRun(completedLeaf.id),
+        recoveringItems.get(completedLeaf.allocationItemId)
+      )
+    });
+    await terminalizeRunTo(store, interruptedLeaf.id, 'interrupted');
+    const interruptedPersisted = await store.getRun(interruptedLeaf.id);
+    await store.recordRunConsequence({
+      runId: interruptedLeaf.id,
+      consequence: decisionConsequence(interruptedPersisted, {
+        authority: interruptedPersisted.completionAuthoritySnapshot,
+        checkedPath: null
+      })
+    });
+    const recoveringDecision = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: recovering.ticket.id
+    })).decision;
+    assert.notEqual(recoveringDecision.aggregateStatus, 'completed');
+    const recovered = await store.transitionTicketAfterRun({ runId: interruptedLeaf.id });
+    assert.equal(recovered.ticket.status, 'open',
+      'the gate does not block nonterminal recovery to open');
 
     // ── One failed item prevents parent completion ───────────────────────────
     const failing = await admitPlan(`One failed item ${STAMP}`);
