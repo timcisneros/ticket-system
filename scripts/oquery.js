@@ -1669,12 +1669,15 @@ async function cmdTicket(args) {
       console.log(`  ${dim('planning attempt')} none`);
     }
     if (planningProjection) {
-      console.log(`  ${dim('leaf execution')} ${planningProjection.leafExecutionAvailable
-        ? 'available'
-        : `unavailable (${planningProjection.leafExecutionRefusalReason})`}`);
+      console.log(`  ${dim('leaf execution capability')} ${planningProjection.leafExecutionCapabilityAvailable ? 'available' : 'unavailable'}`);
     }
     const leafExecution = data.structuredAllocationLeafExecution || null;
-    if (leafExecution && leafExecution.available) {
+    if (leafExecution) {
+      console.log(`  ${dim('leaf admission state')} ${leafExecution.admissionState}` +
+        `${leafExecution.admissionBlockedReason ? ` ${dim('blocked')} ${leafExecution.admissionBlockedReason}` : ''}`);
+      console.log(`  ${dim('scheduler-visible leaf runs')} ${leafExecution.schedulerVisibleRunIds.join(', ') || 'none'}`);
+    }
+    if (leafExecution && leafExecution.plannerAdmittedPlan) {
       console.log(`  ${dim('leaf plan')} #${leafExecution.allocationPlanId} ${statusTag(leafExecution.planStatus)} ${leafExecution.planHash}`);
       for (const item of leafExecution.items) {
         console.log(`  ${dim('work unit')} #${item.allocationItemId} agent #${item.assignedAgentId} ` +

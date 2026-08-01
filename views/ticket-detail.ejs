@@ -369,18 +369,36 @@
         <div><dt>Admitted</dt><dd><%= new Date(planningProvenance.admittedAt).toLocaleString() %></dd></div>
       </dl>
     <% } %>
+    <%
+      const leafProjection = typeof structuredAllocationLeafExecution !== 'undefined'
+        ? structuredAllocationLeafExecution : null;
+    %>
     <h3>Leaf execution capability</h3>
-    <p class="text-muted">
-      <% if (planningProjection && planningProjection.leafExecutionAvailable) { %>
-        <strong>Available.</strong>
-        An admitted plan is followed by one atomic leaf admission: exactly one Run per immutable work unit, all scheduler-visible together or none at all.
-        Plan admission itself still creates zero worker runs and is never a completion claim.
-      <% } else { %>
-        <strong>Unavailable.</strong>
-        <%= planningProjection ? planningProjection.leafExecutionRefusalMessage : 'Structured leaf-run admission is unavailable.' %>
-        An admitted plan is decomposition authority only: it creates zero worker runs, is not visible to the scheduler, and is not a completion claim.
-      <% } %>
-    </p>
+    <dl class="detail-grid">
+      <div>
+        <dt>Product capability</dt>
+        <dd><%= planningProjection && planningProjection.leafExecutionCapabilityAvailable ? 'Available' : 'Unavailable' %></dd>
+      </div>
+      <div>
+        <dt>Admission state</dt>
+        <dd><%= leafProjection ? leafProjection.admissionState : 'none' %></dd>
+      </div>
+      <div>
+        <dt>Known admission blocker</dt>
+        <dd>
+          <% if (leafProjection && leafProjection.admissionBlockedReason) { %>
+            <code><%= leafProjection.admissionBlockedReason %></code>
+          <% } else { %>
+            <span class="text-muted">None derivable from durable authority. Agent, group and worker-route readiness are proven only inside the admission transaction.</span>
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Scheduler-visible leaf runs</dt>
+        <dd><%= leafProjection && leafProjection.schedulerVisibleRunIds.length > 0 ? leafProjection.schedulerVisibleRunIds.join(', ') : '-' %></dd>
+      </div>
+    </dl>
+    <p class="text-muted">Plan admission itself creates zero worker runs and is never a completion claim.</p>
   </div>
 </details>
 <% } %>
@@ -543,7 +561,7 @@
     <% } %>
     <%
       const leafExecution = typeof structuredAllocationLeafExecution !== 'undefined' &&
-        structuredAllocationLeafExecution && structuredAllocationLeafExecution.available
+        structuredAllocationLeafExecution && structuredAllocationLeafExecution.plannerAdmittedPlan
         ? structuredAllocationLeafExecution : null;
       const leafByItemId = new Map(leafExecution
         ? leafExecution.items.map(item => [item.allocationItemId, item])

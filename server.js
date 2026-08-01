@@ -8458,7 +8458,8 @@ async function serializeTicketRuntimeState(ticketId) {
         ? structuredAllocationPlan
         : null,
       runs: ticketRuns,
-      ticketStatus: ticket.status
+      ticketStatus: ticket.status,
+      ticketExecutionMode: ticket.executionMode || null
     }),
     currentRun: currentRun ? serializeRunRuntimeState(currentRun, logsByRunId, {
       eventSummary: summaryByRunId.get(currentRun.id),
@@ -14804,13 +14805,18 @@ async function reconcileTerminalRunUnlocked(run) {
     runEvaluation: result.evaluation,
     runConsequence: result.consequence
   };
+  // Item reconciliation precedes the parent transition. transitionTicketAfterRun
+  // now reconciles a planner-admitted v2 plan inside its own transaction too, so
+  // this ordering is belt-and-braces rather than the only guarantee — but a
+  // repair path that transitioned the parent first and derived item state
+  // afterwards was the ordering defect this corrects.
+  await updateAllocationItemStatus(repairedRun, targetStatus);
   await finalizeTicketForRun(repairedRun, targetStatus);
 
   runningRunKeys.delete(runExecutionKey(run));
   startingRunIds.delete(runId);
   startingLocalModelRunIds.delete(runId);
 
-  await updateAllocationItemStatus(repairedRun, targetStatus);
   broadcastEvent('run:status-changed', {
     runId: repairedRun.id,
     ticketId: repairedRun.ticketId,
@@ -16441,7 +16447,7 @@ async function runStructuredAllocationPlanning(ticket) {
       planHash: admission.plan.planHash,
       attemptId: admission.attempt.attemptId,
       workerRunsCreated: 0,
-      leafExecutionAvailable: true
+      leafExecutionCapabilityAvailable: true
     }
   );
   broadcastTicketChange();
@@ -25466,7 +25472,8 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
       ? allocationPlan
       : null,
     runs: ticketRuns,
-    ticketStatus: ticket.status
+    ticketStatus: ticket.status,
+    ticketExecutionMode: ticket.executionMode || null
   });
 
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
@@ -28018,7 +28025,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
         ? allocationPlan
         : null,
       runs: [run],
-      ticketStatus: ticket ? ticket.status : null
+      ticketStatus: ticket ? ticket.status : null,
+      ticketExecutionMode: ticket ? ticket.executionMode || null : null
     }),
     snapshot: displaySnapshot,
     agent,

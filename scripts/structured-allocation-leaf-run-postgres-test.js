@@ -879,6 +879,296 @@ async function main() {
     assert.equal(settled.changed, false);
     assert.equal(settled.decision.aggregateStatus, 'completed');
 
+    // ── The parent transition CONSUMES the aggregate proof ───────────────────
+    //
+    // Ordering: no path may transition the Ticket first and persist the
+    // aggregate later. transitionTicketAfterRun reconciles the planner-admitted
+    // plan inside its own transaction, so the aggregate is always durable before
+    // any parent status change that depends on it.
+    const ordering = await admitPlan(`Aggregate ordering ${STAMP}`);
+    const orderingAdmission = await store.admitStructuredAllocationLeafRuns({
+      ticketId: ordering.ticket.id,
+      allocationPlanId: ordering.plan.id,
+      leafDrafts: ordering.plan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        run: leafRunDraft(
+          ordering.ticket, ordering.plan, item, agentById.get(item.assignedAgentId),
+          { completionAuthority: verifiedCompletionAuthority(item) }
+        )
+      }))
+    });
+    const orderingItems = new Map(ordering.plan.items.map(item => [item.allocationItemId, item]));
+    const [orderingFirst, orderingLast] = orderingAdmission.runs;
+    for (const run of [orderingFirst, orderingLast]) {
+      await terminalizeRunTo(store, run.id, 'completed');
+      await store.recordRunConsequence({
+        runId: run.id,
+        consequence: satisfiedConsequence(
+          await store.getRun(run.id),
+          orderingItems.get(run.allocationItemId)
+        )
+      });
+    }
+    // No reconciliation has been requested at all: the plan still holds no
+    // aggregate decision, and both leaf runs are already durably completed.
+    assert.equal((await store.getAllocationPlan(ordering.plan.id)).aggregateDecision ?? null, null);
+    assert.equal((await store.getTicket(ordering.ticket.id)).status, 'in_progress');
+
+    const orderingTransition = await store.transitionTicketAfterRun({ runId: orderingLast.id });
+    assert.equal(orderingTransition.ticket.status, 'completed');
+    const orderingPlan = await store.getAllocationPlan(ordering.plan.id);
+    assert.notEqual(orderingPlan.aggregateDecision ?? null, null,
+      'the parent transition cannot complete without a durable aggregate decision');
+    assert.equal(orderingPlan.aggregateDecision.aggregateStatus, 'completed');
+    assert.equal(orderingTransition.aggregateDecision.decisionHash,
+      orderingPlan.aggregateDecision.decisionHash,
+      'the transition reports the exact aggregate decision that authorized it');
+    // The completed parent event names its plan and its proof.
+    const orderingEvents = (await store.listTicketEvents(ordering.ticket.id, { limit: 200 })).events;
+    const orderingCompletion = orderingEvents.filter(event =>
+      (event.runId === null || event.runId === undefined) &&
+      event.payload && event.payload.status === 'completed' &&
+      event.payload.previousStatus && event.payload.previousStatus !== 'completed');
+    assert.equal(orderingCompletion.length, 1,
+      'the parent completion event is emitted exactly once');
+    assert.equal(orderingCompletion[0].payload.allocationPlanId, ordering.plan.id,
+      'the completed parent event identifies its allocation plan');
+    assert.equal(orderingCompletion[0].payload.aggregateDecisionHash,
+      orderingPlan.aggregateDecision.decisionHash,
+      'the completed parent event identifies the aggregate decision hash');
+    // The reconciliation write is journalled in the same transaction.
+    const reconciliationEvents = orderingEvents.filter(event =>
+      event.type === 'ticket.allocation_leaf_items_reconciled');
+    assert.equal(reconciliationEvents.length >= 1, true,
+      'reconciliation appends a canonical event');
+    const lastReconciliation = reconciliationEvents[reconciliationEvents.length - 1];
+    assert.equal(lastReconciliation.payload.aggregateDecisionHash,
+      orderingPlan.aggregateDecision.decisionHash);
+    assert.equal(lastReconciliation.payload.allocationPlanId, ordering.plan.id);
+    assert.equal(Array.isArray(lastReconciliation.payload.changedItems), true);
+    // Repeating the transition performs no write and emits no duplicate event.
+    const repeatTransitionOrdering = await store.transitionTicketAfterRun({ runId: orderingLast.id });
+    assert.equal(repeatTransitionOrdering.changed, false);
+    assert.equal(
+      (await store.listTicketEvents(ordering.ticket.id, { limit: 200 })).events
+        .filter(event => event.type === 'ticket.allocation_leaf_items_reconciled').length,
+      reconciliationEvents.length,
+      'repeated reconciliation over unchanged facts emits no duplicate event'
+    );
+
+    // ── A raw completed Run set cannot complete the parent without proof ─────
+    //
+    // Every leaf Run is terminal `completed` and every completion decision says
+    // completed, but one decision was evaluated against different completion
+    // authority. The batch projection alone would complete the Ticket; the leaf
+    // proof refuses, so the Ticket must not complete.
+    const unproven = await admitPlan(`Aggregate refuses unproven completion ${STAMP}`);
+    const unprovenAdmission = await store.admitStructuredAllocationLeafRuns({
+      ticketId: unproven.ticket.id,
+      allocationPlanId: unproven.plan.id,
+      leafDrafts: unproven.plan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        run: leafRunDraft(
+          unproven.ticket, unproven.plan, item, agentById.get(item.assignedAgentId),
+          { completionAuthority: verifiedCompletionAuthority(item) }
+        )
+      }))
+    });
+    const unprovenItems = new Map(unproven.plan.items.map(item => [item.allocationItemId, item]));
+    const provenRun = unprovenAdmission.runs[0];
+    const forgedRun = unprovenAdmission.runs[1];
+    await terminalizeRunTo(store, provenRun.id, 'completed');
+    await store.recordRunConsequence({
+      runId: provenRun.id,
+      consequence: satisfiedConsequence(
+        await store.getRun(provenRun.id),
+        unprovenItems.get(provenRun.allocationItemId)
+      )
+    });
+    await terminalizeRunTo(store, forgedRun.id, 'completed');
+    // A decision that genuinely reports `completed` for the right run and the
+    // right ticket, and therefore satisfies transitionTicketAfterRun's own
+    // projection — but which was EVALUATED against different completion
+    // authority than the Run durably holds. Only the leaf derivation checks
+    // that, which is precisely the divergence this gate exists for.
+    const forgedPersisted = await store.getRun(forgedRun.id);
+    const foreignAuthority = verifiedCompletionAuthority(
+      unprovenItems.get(provenRun.allocationItemId)
+    );
+    assert.notEqual(
+      foreignAuthority.objectiveContractHash,
+      forgedPersisted.completionAuthoritySnapshot.objectiveContractHash,
+      'the fixture really does evaluate against different completion authority'
+    );
+    const forgedBase = {
+      version: 1,
+      runId: forgedPersisted.id,
+      ticketId: forgedPersisted.ticketId,
+      verification: { browserEvidence: null }
+    };
+    const forgedDecision = buildCompletionDecision({
+      run: {
+        ...forgedPersisted,
+        completionAuthoritySnapshot: foreignAuthority,
+        runtimeBudgetSnapshot: null
+      },
+      replaySnapshot: {
+        events: [{
+          type: 'run:postcondition_completed',
+          checkedPaths: [{
+            type: 'folder',
+            path: unprovenItems.get(provenRun.allocationItemId)
+              .ownedOutputPaths[0].replace(/\/$/, '')
+          }]
+        }],
+        modelResponses: [],
+        parsedModelPlans: [],
+        workspaceOperations: [],
+        providerRequests: []
+      },
+      events: [],
+      operations: [],
+      consequence: forgedBase,
+      verificationContract: null,
+      evaluatedAt: new Date().toISOString()
+    });
+    assert.equal(forgedDecision.completionDisposition, 'completed',
+      'the forged decision really does claim completion');
+    assert.equal(forgedDecision.runId, forgedPersisted.id);
+    assert.equal(forgedDecision.ticketId, forgedPersisted.ticketId);
+    assert.notEqual(forgedDecision.objectiveContractHash,
+      forgedPersisted.completionAuthoritySnapshot.objectiveContractHash);
+    await store.recordRunConsequence({
+      runId: forgedRun.id,
+      consequence: { ...forgedBase, completionDecision: forgedDecision }
+    });
+    const unprovenAggregate = (await store.reconcileStructuredAllocationLeafItems({
+      ticketId: unproven.ticket.id,
+      allocationPlanId: unproven.plan.id
+    })).decision;
+    const forgedItem = unprovenAggregate.items.find(item => item.runId === forgedRun.id);
+    assert.equal(forgedItem.itemStatus, 'interrupted');
+    assert.equal(forgedItem.reason, 'completion_authority_mismatch');
+    assert.equal(forgedItem.completionDecisionHash, null);
+    assert.notEqual(unprovenAggregate.aggregateStatus, 'completed',
+      'a decision evaluated against other completion authority cannot complete an item');
+    const unprovenTransition = await store.transitionTicketAfterRun({ runId: forgedRun.id });
+    assert.notEqual(unprovenTransition.ticket.status, 'completed',
+      'the parent cannot complete while the aggregate proof refuses');
+    assert.equal(
+      (await store.getAllocationPlan(unproven.plan.id)).aggregateDecision.aggregateStatus,
+      unprovenAggregate.aggregateStatus,
+      'the refused transition still leaves a durable, validated aggregate'
+    );
+
+    // ── Rollback around the final sibling completion ─────────────────────────
+    //
+    // The parent transition and the aggregate write share one transaction, so a
+    // failure after the aggregate write must leave BOTH untouched.
+    const rollbackFinal = await admitPlan(`Final sibling rollback ${STAMP}`);
+    const rollbackFinalAdmission = await store.admitStructuredAllocationLeafRuns({
+      ticketId: rollbackFinal.ticket.id,
+      allocationPlanId: rollbackFinal.plan.id,
+      leafDrafts: rollbackFinal.plan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        run: leafRunDraft(
+          rollbackFinal.ticket, rollbackFinal.plan, item, agentById.get(item.assignedAgentId),
+          { completionAuthority: verifiedCompletionAuthority(item) }
+        )
+      }))
+    });
+    const rollbackFinalItems = new Map(
+      rollbackFinal.plan.items.map(item => [item.allocationItemId, item]));
+    for (const run of rollbackFinalAdmission.runs) {
+      await terminalizeRunTo(store, run.id, 'completed');
+      await store.recordRunConsequence({
+        runId: run.id,
+        consequence: satisfiedConsequence(
+          await store.getRun(run.id),
+          rollbackFinalItems.get(run.allocationItemId)
+        )
+      });
+    }
+    const finalRun = rollbackFinalAdmission.runs[1];
+    const planBeforeRollback = await store.getAllocationPlan(rollbackFinal.plan.id);
+    const ticketBeforeRollback = await store.getTicket(rollbackFinal.ticket.id);
+    assert.equal(planBeforeRollback.aggregateDecision ?? null, null);
+    await assert.rejects(
+      () => store.withTransaction(async client => {
+        const inner = await store.transitionTicketAfterRun({ runId: finalRun.id }, { client });
+        assert.equal(inner.ticket.status, 'completed');
+        assert.equal(inner.aggregateDecision.aggregateStatus, 'completed');
+        const error = new Error('injected failure after the parent transition');
+        error.code = 'TEST_INJECTED_ROLLBACK';
+        throw error;
+      }),
+      error => error.code === 'TEST_INJECTED_ROLLBACK'
+    );
+    const planAfterRollback = await store.getAllocationPlan(rollbackFinal.plan.id);
+    const ticketAfterRollback = await store.getTicket(rollbackFinal.ticket.id);
+    assert.equal(planAfterRollback.aggregateDecision ?? null, null,
+      'rollback leaves no aggregate decision');
+    assert.equal(planAfterRollback.revision, planBeforeRollback.revision,
+      'rollback bumps no plan revision');
+    assert.equal(ticketAfterRollback.status, ticketBeforeRollback.status,
+      'rollback leaves the parent ticket status untouched');
+    assert.equal(
+      (await store.listTicketEvents(rollbackFinal.ticket.id, { limit: 200 })).events
+        .some(event => event.type === 'ticket.allocation_leaf_items_reconciled'),
+      false,
+      'a rolled-back reconciliation emits no event claiming a transition that did not commit'
+    );
+    // Replaying it for real now commits both together.
+    const committedFinal = await store.transitionTicketAfterRun({ runId: finalRun.id });
+    assert.equal(committedFinal.ticket.status, 'completed');
+    assert.equal(
+      (await store.getAllocationPlan(rollbackFinal.plan.id)).aggregateDecision.aggregateStatus,
+      'completed',
+      'a crash before commit is deterministically recoverable by retrying the same transition'
+    );
+
+    // ── Reserved Run identity is not caller data ─────────────────────────────
+    const identityTicket = (await store.createTicketWithEvent({
+      ticket: ticketBody(designated, `Run identity confinement ${STAMP}`, ownedOutputPaths),
+      eventPayload: { source: ACTOR }
+    })).ticket;
+    await assert.rejects(
+      () => store.createRun({
+        id: 999999,
+        ticketId: identityTicket.id,
+        agentId: worker.id,
+        status: 'pending'
+      }),
+      error => error.code === 'RUN_IDENTITY_NOT_CALLER_OWNED',
+      'a caller cannot select a Run identity through the record'
+    );
+    await assert.rejects(
+      () => store.createRunsAndStartTicket({
+        ticketId: identityTicket.id,
+        runDrafts: [{ id: 999998, ticketId: identityTicket.id, agentId: worker.id }]
+      }),
+      error => error.code === 'RUN_IDENTITY_NOT_CALLER_OWNED',
+      'a run draft cannot smuggle a Run identity through the batch admission path'
+    );
+    await assert.rejects(
+      () => store.createRunsAndStartTicket({
+        ticketId: identityTicket.id,
+        runDrafts: [{ ticketId: identityTicket.id, agentId: worker.id }]
+      }, { reservedRunIds: [999997] }),
+      error => /reserving transaction/.test(error.message),
+      'reserved identities are refused outside the reserving transaction'
+    );
+    assert.deepEqual(
+      (await store.listRunsForTicket({ ticketId: identityTicket.id, limit: 20 })).runs,
+      [],
+      'every refused identity injection created no run'
+    );
+    // Ordinary admission still assigns identities from the sequence.
+    assert.equal(
+      admission.runs.every(run => Number.isSafeInteger(run.id) && run.id > 0),
+      true
+    );
+
     // ── One failed item prevents parent completion ───────────────────────────
     const failing = await admitPlan(`One failed item ${STAMP}`);
     const failingAdmission = await store.admitStructuredAllocationLeafRuns({
@@ -968,9 +1258,15 @@ async function main() {
     const projected = projectStructuredAllocationLeafExecution({
       allocationPlan: await store.getAllocationPlan(completing.plan.id),
       runs: (await store.listRunsForTicket({ ticketId: completing.ticket.id, limit: 50 })).runs,
-      ticketStatus: (await store.getTicket(completing.ticket.id)).status
+      ticketStatus: (await store.getTicket(completing.ticket.id)).status,
+      ticketExecutionMode: 'agent'
     });
-    assert.equal(projected.available, true);
+    assert.equal(projected.plannerAdmittedPlan, true);
+    assert.equal(projected.admissionState, 'settled',
+      'a fully reconciled plan reports settled, not an unqualified availability');
+    assert.equal(projected.admissionBlockedReason, null);
+    assert.deepEqual(projected.schedulerVisibleRunIds, [],
+      'a settled plan exposes no claimable leaf run');
     assert.equal(projected.items.length, completing.plan.items.length);
     assert.equal(projected.items.every(item =>
       item.runId !== null && item.leafBindingHash !== null &&
@@ -981,9 +1277,13 @@ async function main() {
     assert.equal(projected.parentTicketStatus, 'completed');
     assert.deepEqual(projected.unresolvedItemIds, []);
     assert.equal(
-      projectStructuredAllocationLeafExecution({ allocationPlan: null }).available,
+      projectStructuredAllocationLeafExecution({ allocationPlan: null }).plannerAdmittedPlan,
       false,
       'a ticket with no planner-admitted plan projects no leaf execution'
+    );
+    assert.equal(
+      projectStructuredAllocationLeafExecution({ allocationPlan: null }).admissionState,
+      'none'
     );
 
     // ── Historical compatibility: v1 keeps caller-supplied item status ───────

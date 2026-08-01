@@ -160,6 +160,56 @@ every Run in the batch through its durable completion decision and owns the
 completed/failed/blocked/interrupted mapping including the owned-scope "every sibling completed"
 rule; the leaf contract deliberately exports no second parent-completion authority.
 
+### Correction (2026-07-31, merge-readiness audit)
+
+Owning the mapping is not the same as consuming the proof, and the first implementation only did
+the former. `transitionTicketAfterRun()` never read the plan, the leaf bindings or the aggregate
+decision: it derived the parent status from `run_consequences` alone, using a rule strictly weaker
+than the leaf derivation, which additionally proves item-to-Run binding, declared-work agreement,
+completion-authority agreement and run-lifecycle agreement. The two could therefore disagree, with
+the weaker one owning the Ticket. A completion decision that reports `completed` for the right Run
+and Ticket but was evaluated against different completion authority completed the parent while the
+aggregate refused — reproduced, and now covered by a regression test that fails when the gate is
+removed.
+
+Two call sites also transitioned the parent BEFORE deriving item state: operator terminal repair,
+and startup reconciliation of an unfinalized ticket, which reconciled no items at all. A crash in
+that window left a completed parent with no aggregate decision.
+
+The fix keeps exactly one parent-status mapping and makes it consume the proof. For a
+planner-admitted v2 plan, `transitionTicketAfterRun()` now runs the same store-owned leaf
+derivation inside its own transaction, persists item statuses and the aggregate decision, and
+refuses to reach `completed` unless the persisted aggregate independently agrees. `failed` and
+`blocked` keep their canonical mapping unchanged, as the audit requires. Because the derivation and
+the transition now share one transaction, no caller can order them wrongly, no crash can leave a
+completed parent without its aggregate, and the parent event names the plan and the exact
+`aggregateDecisionHash` that authorized it. Lock order is `allocation_plans → runs → tickets`
+everywhere a leaf plan is involved.
+
+Reconciliation also appends `ticket.allocation_leaf_items_reconciled` in the same transaction as
+the write it describes, carrying the aggregate hash and every changed item disposition, so the
+write is journalled and an event can never claim a reconciliation that rolled back.
+
+Run identity is no longer caller data. The first implementation admitted `record.id` on the public
+`createRun()`, and `createRunsAndStartTicket()` forwarded drafts verbatim, so any caller could
+select an identity — a comment saying the caller had reserved it is not enforcement. `createRun()`
+now REFUSES a record carrying `id` (`RUN_IDENTITY_NOT_CALLER_OWNED`), and reserved identities
+arrive only through the options argument and only from a caller already composing inside the
+reserving transaction.
+
+Leaf admission additionally re-derives structured applicability and assignment from the LOCKED
+ticket, matching what plan admission already did, so a reassignment committed between preflight and
+commit cannot admit worker Runs against authority the ticket no longer holds.
+
+Finally, `leafExecutionAvailable` was a single boolean answering four different questions and
+hardcoded `true` on a ticket-scoped projection, so it claimed availability for tickets whose
+admission would refuse. It is replaced by `leafExecutionCapabilityAvailable` (product capability,
+planning-scoped) plus closed per-ticket fields on the leaf projection: `plannerAdmittedPlan`,
+`admissionState` (`none`/`not_admitted`/`admitted`/`settled`), `admissionBlockedReason` from the
+closed refusal vocabulary, and `schedulerVisibleRunIds`. There is deliberately no positive
+`ready: true`: agent, group and worker-route readiness are live catalog facts proven only inside
+the admission transaction, so a null blocker means "no known blocker", never a promise.
+
 Retry boundary, fail-closed: Tranche 3 admits exactly one initial Run per item and never replans,
 never creates a v1 plan, and never duplicates an initial binding. Automatic retry already refuses
 owned-scope tickets, so no leaf retry lineage arises; the aggregate decision represents lineage so

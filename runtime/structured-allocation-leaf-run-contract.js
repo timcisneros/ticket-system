@@ -756,14 +756,50 @@ function normalizeAggregatePlanDecision(value, {
 // and nothing new is asserted about the parent Ticket, whose status stays the
 // canonical transitionTicketAfterRun result and is reported verbatim.
 
+// Four different questions, four fields. One boolean cannot answer them without
+// lying about at least one:
+//
+//   plannerAdmittedPlan     does this ticket hold planner-admitted v2 authority
+//   capabilityAvailable     does the PRODUCT support leaf-run admission at all
+//   admissionState          none | not_admitted | admitted | settled
+//   admissionBlockedReason  a closed refusal this ticket would hit right now
+//   schedulerVisibleRunIds  which leaf Runs are actually claimable right now
+//
+// `admissionBlockedReason` reports only refusals derivable from durable
+// authority. Agent existence, group authorization and worker-route readiness are
+// live catalog facts proven inside the admission transaction, so a null here is
+// "no KNOWN blocker", never a promise that admission would succeed — which is
+// why there is deliberately no positive `ready: true`.
+const LEAF_ADMISSION_STATES = Object.freeze([
+  'none',
+  'not_admitted',
+  'admitted',
+  'settled'
+]);
+
+function leafAdmissionBlockedReason(allocationPlan, ticketExecutionMode) {
+  if (ticketExecutionMode === 'workflow') return 'leaf_execution_mode_unsupported';
+  if (allocationPlan.items.some(item =>
+    item.successCriteria.some(criterion => criterion.kind === 'typed-postcondition'))) {
+    return 'leaf_item_typed_criteria_unsupported';
+  }
+  if (allocationPlan.status && allocationPlan.status !== 'pending') return 'plan_not_pending';
+  return null;
+}
+
 function projectStructuredAllocationLeafExecution({
   allocationPlan = null,
   runs = [],
-  ticketStatus = null
+  ticketStatus = null,
+  ticketExecutionMode = null
 } = {}) {
   if (!allocationPlan || !Array.isArray(allocationPlan.items)) {
     return deepFreeze({
-      available: false,
+      plannerAdmittedPlan: false,
+      capabilityAvailable: true,
+      admissionState: 'none',
+      admissionBlockedReason: null,
+      schedulerVisibleRunIds: [],
       allocationPlanId: null,
       planHash: null,
       planStatus: null,
@@ -820,8 +856,25 @@ function projectStructuredAllocationLeafExecution({
       completionDecisionHash: decided ? decided.completionDecisionHash : null
     };
   });
+  const boundItemCount = items.filter(item => item.runId !== null).length;
+  const admissionState = boundItemCount === 0
+    ? 'not_admitted'
+    : ['completed', 'failed', 'interrupted'].includes(allocationPlan.status)
+      ? 'settled'
+      : 'admitted';
   return deepFreeze({
-    available: true,
+    plannerAdmittedPlan: true,
+    capabilityAvailable: true,
+    admissionState: enumerated(admissionState, LEAF_ADMISSION_STATES, 'admissionState'),
+    admissionBlockedReason: admissionState === 'not_admitted'
+      ? leafAdmissionBlockedReason(allocationPlan, ticketExecutionMode)
+      : null,
+    schedulerVisibleRunIds: (Array.isArray(runs) ? runs : [])
+      .filter(run => run && run.leafRunBinding &&
+        run.leafRunBinding.allocationPlanId === allocationPlan.id &&
+        ['pending', 'running'].includes(run.status))
+      .map(run => run.id)
+      .sort((left, right) => left - right),
     allocationPlanId: allocationPlan.id,
     planHash: allocationPlan.planHash,
     planStatus: allocationPlan.status || null,
@@ -847,6 +900,7 @@ function projectLeafRunBindingForRun(run) {
 
 module.exports = {
   AGGREGATE_DECISION_FIELDS,
+  LEAF_ADMISSION_STATES,
   AGGREGATE_ITEM_FIELDS,
   AGGREGATE_PLAN_DECISION_VERSION,
   LEAF_ADMISSION_MESSAGES,

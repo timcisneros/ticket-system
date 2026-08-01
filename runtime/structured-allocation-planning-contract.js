@@ -1419,14 +1419,18 @@ function projectStructuredAllocationPlanningForTicket(ticket, { allocationPlan =
   return deepFreeze({
     attempt,
     planningProvenance: provenance,
-    // Tranche 3 owns leaf-run admission and it has landed: an admitted plan is
-    // followed by one atomic leaf admission. This projection reports only that
-    // the capability exists; whether a specific plan HAS been leaf-admitted is a
-    // durable fact, projected by the leaf-run contract from the persisted
-    // bindings, never inferred here.
-    leafExecutionAvailable: true,
-    leafExecutionRefusalReason: null,
-    leafExecutionRefusalMessage: null
+    // Tranche 3 owns leaf-run admission and it has landed, so the PRODUCT
+    // capability exists. That is all this planning-scoped field asserts, and it
+    // is named for exactly that.
+    //
+    // It deliberately does NOT say this ticket would be admitted now. Whether a
+    // specific plan is admissible, has already been admitted, or has claimable
+    // worker Runs are per-ticket facts derived from persisted bindings and
+    // current authority by projectStructuredAllocationLeafExecution() in the
+    // leaf-run contract. Collapsing four different questions into one boolean is
+    // how a projection ends up claiming availability for a ticket whose
+    // admission would refuse.
+    leafExecutionCapabilityAvailable: true
   });
 }
 

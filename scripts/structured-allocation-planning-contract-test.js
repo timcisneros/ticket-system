@@ -672,15 +672,25 @@ function main() {
   // Tranche 3 landed: leaf-run admission is available. This projection reports
   // only that the capability exists — whether a given plan HAS been leaf-admitted
   // is a durable fact owned by the leaf-run contract, never inferred here.
-  assert.equal(projection.leafExecutionAvailable, true);
-  assert.equal(projection.leafExecutionRefusalReason, null);
-  assert.equal(projection.leafExecutionRefusalMessage, null);
+  // This planning-scoped field asserts the PRODUCT capability only, and is named
+  // for exactly that. Whether this ticket would be admitted now, has been
+  // admitted, or is scheduler-visible are per-ticket facts owned by the leaf-run
+  // projection — a single boolean answering all four is how a projection ends up
+  // claiming availability for a ticket whose admission would refuse.
+  assert.equal(projection.leafExecutionCapabilityAvailable, true);
   const emptyProjection = projectStructuredAllocationPlanningForTicket({ id: 42 });
   assert.equal(emptyProjection.attempt, null);
   assert.equal(emptyProjection.planningProvenance, null);
-  assert.equal(emptyProjection.leafExecutionAvailable, true);
-  // The planning contract still owns no leaf fact of its own.
-  for (const leafField of ['leafBindings', 'leafRuns', 'aggregateDecision']) {
+  assert.equal(emptyProjection.leafExecutionCapabilityAvailable, true);
+  // The planning contract still owns no leaf or per-ticket admission fact.
+  for (const leafField of [
+    'leafExecutionAvailable',
+    'leafExecutionRefusalReason',
+    'leafBindings',
+    'leafRuns',
+    'admissionState',
+    'aggregateDecision'
+  ]) {
     assert.equal(Object.prototype.hasOwnProperty.call(projection, leafField), false,
       `the planning projection must not restate ${leafField}`);
   }

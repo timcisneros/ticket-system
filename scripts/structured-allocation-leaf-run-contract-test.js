@@ -17,6 +17,7 @@ const {
   AGGREGATE_PLAN_DECISION_VERSION,
   LEAF_ADMISSION_MESSAGES,
   LEAF_ADMISSION_REFUSALS,
+  LEAF_ADMISSION_STATES,
   LEAF_ITEM_DISPOSITION_REASONS,
   LEAF_ITEM_STATUSES,
   LEAF_RUN_BINDING_FIELDS,
@@ -32,6 +33,7 @@ const {
   deriveLeafItemDisposition,
   normalizeAggregatePlanDecision,
   normalizeLeafRunBinding,
+  projectStructuredAllocationLeafExecution,
   refuseLeafAdmission
 } = require('../runtime/structured-allocation-leaf-run-contract');
 const {
@@ -822,6 +824,113 @@ invalid(() => normalizeAggregatePlanDecision({
   ...bothComplete,
   completedItemIds: [501]
 }));
+
+// ── Projection semantics: four questions, four fields ───────────────────────
+
+const emptyLeaf = projectStructuredAllocationLeafExecution({ allocationPlan: null });
+assert.equal(emptyLeaf.plannerAdmittedPlan, false);
+assert.equal(emptyLeaf.admissionState, 'none');
+assert.equal(emptyLeaf.admissionBlockedReason, null);
+assert.deepEqual(emptyLeaf.schedulerVisibleRunIds, []);
+assert.equal(Object.prototype.hasOwnProperty.call(emptyLeaf, 'available'), false,
+  'the overloaded availability boolean is gone');
+
+const pendingPlan = { ...admitted, status: 'pending', aggregateDecision: null };
+const notAdmitted = projectStructuredAllocationLeafExecution({
+  allocationPlan: pendingPlan,
+  runs: [],
+  ticketStatus: 'open',
+  ticketExecutionMode: 'agent'
+});
+assert.equal(notAdmitted.plannerAdmittedPlan, true);
+assert.equal(notAdmitted.capabilityAvailable, true,
+  'the product capability is reported separately from this ticket state');
+assert.equal(notAdmitted.admissionState, 'not_admitted');
+assert.equal(notAdmitted.admissionBlockedReason, null,
+  'no blocker is derivable from durable authority for an ordinary pending plan');
+assert.deepEqual(notAdmitted.schedulerVisibleRunIds, []);
+
+// A ticket whose admission WOULD refuse never reports an unqualified capability
+// for itself: the blocker is named from the closed refusal vocabulary.
+assert.equal(
+  projectStructuredAllocationLeafExecution({
+    allocationPlan: pendingPlan,
+    runs: [],
+    ticketExecutionMode: 'workflow'
+  }).admissionBlockedReason,
+  'leaf_execution_mode_unsupported'
+);
+// A plan whose parent authority permitted a typed family: the projection reads
+// the stored item declarations, so the item is shaped directly here rather than
+// rebuilt through the plan builder, whose parent-capability check is a separate
+// concern already covered above.
+const typedItemPlan = {
+  ...pendingPlan,
+  items: [
+    { ...alpha, successCriteria: [...alpha.successCriteria, typed] },
+    beta
+  ]
+};
+assert.equal(
+  projectStructuredAllocationLeafExecution({
+    allocationPlan: typedItemPlan,
+    runs: [],
+    ticketExecutionMode: 'agent'
+  }).admissionBlockedReason,
+  'leaf_item_typed_criteria_unsupported'
+);
+assert.equal(
+  projectStructuredAllocationLeafExecution({
+    allocationPlan: { ...pendingPlan, status: 'running' },
+    runs: [],
+    ticketExecutionMode: 'agent'
+  }).admissionBlockedReason,
+  'plan_not_pending'
+);
+for (const blocked of ['leaf_execution_mode_unsupported', 'leaf_item_typed_criteria_unsupported',
+  'plan_not_pending']) {
+  assert.equal(LEAF_ADMISSION_REFUSALS.includes(blocked), true,
+    `${blocked} comes from the closed refusal vocabulary`);
+}
+
+// Admitted and settled are distinct states, and scheduler visibility is its own
+// field rather than an inference from either.
+const leafRuns = [
+  { id: 3001, status: 'running', leafRunBinding: alphaBinding },
+  { id: 3002, status: 'completed', leafRunBinding: betaBinding }
+];
+const admittedProjection = projectStructuredAllocationLeafExecution({
+  allocationPlan: { ...admitted, status: 'running', aggregateDecision: null },
+  runs: leafRuns,
+  ticketStatus: 'in_progress',
+  ticketExecutionMode: 'agent'
+});
+assert.equal(admittedProjection.admissionState, 'admitted');
+assert.equal(admittedProjection.admissionBlockedReason, null,
+  'an already-admitted plan reports state, not a blocker');
+assert.deepEqual(admittedProjection.schedulerVisibleRunIds, [3001],
+  'only claimable leaf runs are reported as scheduler-visible');
+assert.equal(
+  projectStructuredAllocationLeafExecution({
+    allocationPlan: { ...admitted, status: 'completed', aggregateDecision: bothComplete },
+    runs: leafRuns.map(run => ({ ...run, status: 'completed' })),
+    ticketStatus: 'completed',
+    ticketExecutionMode: 'agent'
+  }).admissionState,
+  'settled'
+);
+assert.deepEqual(
+  projectStructuredAllocationLeafExecution({
+    allocationPlan: { ...admitted, status: 'completed', aggregateDecision: bothComplete },
+    runs: leafRuns.map(run => ({ ...run, status: 'completed' })),
+    ticketExecutionMode: 'agent'
+  }).schedulerVisibleRunIds,
+  [],
+  'a settled plan exposes no claimable run'
+);
+for (const state of ['none', 'not_admitted', 'admitted', 'settled']) {
+  assert.equal(LEAF_ADMISSION_STATES.includes(state), true);
+}
 
 // ── The module states no parent-ticket rule and no Tranche 4 primitive ──────
 

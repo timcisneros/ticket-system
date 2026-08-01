@@ -2563,8 +2563,7 @@ class PostgresRuntimeStore {
           // admission is a separate atomic transaction that runs immediately
           // after this one commits. Both facts are reported, not conflated.
           workerRunsCreated: 0,
-          leafExecutionAvailable: true,
-          leafExecutionRefusalReason: null
+          leafExecutionCapabilityAvailable: true
         }
       });
 
@@ -2633,6 +2632,27 @@ class PostgresRuntimeStore {
     return plan;
   }
 
+  // Lenient sibling of _lockedPlannerAdmittedPlan for callers that must work for
+  // EVERY ticket. Returns null when this ticket simply holds no planner-admitted
+  // v2 plan (no plan, a historical v1 plan, or a v2 plan with no provenance);
+  // a plan that IS planner-admitted but no longer verifies still fails closed.
+  async _findLockedPlannerAdmittedPlan(connection, ticketId) {
+    const result = await connection.query(
+      `SELECT * FROM ${this.table('allocation_plans')}
+       WHERE ticket_id = $1 ORDER BY id FOR UPDATE`,
+      [ticketId]
+    );
+    if (result.rowCount !== 1) return null;
+    const plan = allocationPlanFromRow(result.rows[0]);
+    if (plan.version !== ALLOCATION_PLAN_VERSION || !plan.planningProvenance) return null;
+    assertAdmissionBinding({
+      planHash: plan.planHash,
+      provenanceHash: plan.planningProvenance.provenanceHash,
+      admissionHash: plan.planningProvenance.admissionHash
+    });
+    return plan;
+  }
+
   // Every persisted leaf binding for this plan, verified against the plan on the
   // way out. A run that carries no binding, or one bound to another plan, is not
   // a leaf of this plan and is reported separately so the caller can refuse
@@ -2681,6 +2701,16 @@ class PostgresRuntimeStore {
     const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
 
     const execute = async connection => {
+      // Lock order is allocation_plans -> runs -> tickets, matching
+      // transitionTicketAfterRun so the two cannot deadlock. The runs lock is
+      // taken before the ticket lock even though the set is normally empty: the
+      // ticket lock is what actually serializes two concurrent admissions, and
+      // the existing-run set is re-read below, after it is held.
+      const plan = await this._lockedPlannerAdmittedPlan(connection, id, { allocationPlanId });
+      await connection.query(
+        `SELECT id FROM ${this.table('runs')} WHERE ticket_id = $1 ORDER BY id FOR UPDATE`,
+        [id]
+      );
       const ticketResult = await connection.query(
         `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
         [id]
@@ -2691,7 +2721,23 @@ class PostgresRuntimeStore {
         throw error;
       }
       const ticket = ticketFromRow(ticketResult.rows[0]);
-      const plan = await this._lockedPlannerAdmittedPlan(connection, id, { allocationPlanId });
+
+      // Re-derived from the LOCKED ticket, not from the caller's preflight.
+      // Plan admission already re-evaluates both in its own transaction; leaf
+      // admission must too, or a reassignment or eligibility change committed
+      // between preflight and this lock would admit worker Runs against
+      // authority the ticket no longer holds.
+      const authority = ticket.structuredAllocationAuthority || null;
+      if (!authority || !authority.planningAuthoritySnapshot) {
+        refuseLeafAdmission('historical_authority_unavailable');
+      }
+      const applicability = evaluateStructuredAllocationCurrentApplicability(ticket);
+      if (!applicability.applicable) {
+        refuseLeafAdmission('admission_ineligible', applicability.refusalReasons.join(', '));
+      }
+      if (!ticketAssignmentMatchesPlanningAuthority(ticket, authority.planningAuthoritySnapshot)) {
+        refuseLeafAdmission('assignment_changed_since_capture');
+      }
 
       // The plan must still be the one the ticket's planning attempt admitted.
       const attempt = ticket.structuredAllocationPlanningAttempt == null
@@ -2832,7 +2878,6 @@ class PostgresRuntimeStore {
         ticketId: id,
         runDrafts: drafts.map((draft, index) => ({
           ...draft.run,
-          id: bindings[index].runId,
           leafRunBinding: bindings[index]
         })),
         runEventPayload,
@@ -2842,7 +2887,12 @@ class PostgresRuntimeStore {
           planHash: plan.planHash,
           workerRunsCreated: bindings.length
         }
-      }, { client: connection });
+      }, {
+        client: connection,
+        // The identities this transaction reserved from the runs sequence, and
+        // only those. They travel beside the drafts, never inside them.
+        reservedRunIds: bindings.map(binding => binding.runId)
+      });
 
       // Re-verify off the persisted rows, not the in-memory drafts, so a
       // serialization defect cannot leave an unverifiable binding committed.
@@ -2896,19 +2946,13 @@ class PostgresRuntimeStore {
   // here comes from the immutable binding, the persisted Run lifecycle, the
   // durable completion decision and declared-work/completion-authority hash
   // agreement — nothing else. Repeated calls over unchanged facts write nothing.
-  async reconcileStructuredAllocationLeafItems({
-    ticketId,
-    allocationPlanId = null
-  }, { client = null } = {}) {
-    const id = positiveSafeInteger(ticketId, 'ticketId');
-    const planId = allocationPlanId === null || allocationPlanId === undefined
-      ? null
-      : positiveSafeInteger(allocationPlanId, 'allocationPlanId');
-
-    const execute = async connection => {
-      const plan = await this._lockedPlannerAdmittedPlan(connection, id, {
-        allocationPlanId: planId
-      });
+  // The single leaf derivation, applied to an ALREADY-LOCKED planner-admitted
+  // plan. Both entry points call exactly this: the caller-requested
+  // reconciliation, and the canonical Ticket transition, which must consume the
+  // aggregate proof rather than re-derive a parallel one.
+  async _reconcileLeafItemsLocked(connection, plan) {
+    const id = plan.ticketId;
+    {
       const runsResult = await connection.query(
         `SELECT * FROM ${this.table('runs')} WHERE ticket_id = $1 ORDER BY id`,
         [id]
@@ -3042,31 +3086,100 @@ class PostgresRuntimeStore {
       const reconciledPlan = allocationPlanFromRow(updated.rows[0]);
       // Verify off the persisted row: a stored aggregate decision that does not
       // reproduce its own hash and item projection is not authority.
-      normalizeAggregatePlanDecision(reconciledPlan.aggregateDecision, {
-        expectedPlanHash: reconciledPlan.planHash,
-        expectedPlanId: reconciledPlan.id
+      const persistedDecision = normalizeAggregatePlanDecision(
+        reconciledPlan.aggregateDecision,
+        { expectedPlanHash: reconciledPlan.planHash, expectedPlanId: reconciledPlan.id }
+      );
+      // Journalled in the SAME transaction as the write it describes, so the
+      // event can never claim a reconciliation that rolled back, and a replay
+      // can reconstruct every item disposition change from the event stream.
+      const previousByItem = new Map((stored ? stored.items : [])
+        .map(item => [item.allocationItemId, item]));
+      const event = await this._appendEvent(connection, {
+        type: 'ticket.allocation_leaf_items_reconciled',
+        ticketId: id,
+        payload: {
+          allocationPlanId: reconciledPlan.id,
+          planHash: reconciledPlan.planHash,
+          allocationPlanStatus: reconciledPlan.status,
+          aggregateStatus: persistedDecision.aggregateStatus,
+          aggregateDecisionHash: persistedDecision.decisionHash,
+          completedItemIds: persistedDecision.completedItemIds,
+          failedItemIds: persistedDecision.failedItemIds,
+          unresolvedItemIds: persistedDecision.unresolvedItemIds,
+          changedItems: persistedDecision.items
+            .filter(item => {
+              const previous = previousByItem.get(item.allocationItemId) || null;
+              return !previous || previous.itemStatus !== item.itemStatus ||
+                previous.reason !== item.reason ||
+                previous.completionDecisionHash !== item.completionDecisionHash;
+            })
+            .map(item => ({
+              allocationItemId: item.allocationItemId,
+              runId: item.runId,
+              itemStatus: item.itemStatus,
+              reason: item.reason,
+              completionDecisionHash: item.completionDecisionHash
+            }))
+        }
       });
-      return { plan: reconciledPlan, decision, reconciled: true, changed: true };
-    };
+      return {
+        plan: reconciledPlan,
+        decision: persistedDecision,
+        reconciled: true,
+        changed: true,
+        event
+      };
+    }
+  }
+
+  // Caller-requested reconciliation. It may request; it may not supply a status.
+  // Lock order is allocation_plans -> runs -> tickets everywhere a leaf plan is
+  // involved, so this, leaf admission and the canonical Ticket transition cannot
+  // deadlock against each other.
+  async reconcileStructuredAllocationLeafItems({
+    ticketId,
+    allocationPlanId = null
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const planId = allocationPlanId === null || allocationPlanId === undefined
+      ? null
+      : positiveSafeInteger(allocationPlanId, 'allocationPlanId');
+    const execute = async connection => this._reconcileLeafItemsLocked(
+      connection,
+      await this._lockedPlannerAdmittedPlan(connection, id, { allocationPlanId: planId })
+    );
     return client ? execute(client) : this.withTransaction(execute);
   }
 
-  async createRun(record, { client = null } = {}) {
+  async createRun(record, { client = null, reservedId = null } = {}) {
     const run = this.assertJsonRecord(record, 'run');
     assertRunDeclaredCompletionAuthority(run, 'run declared/completion authority');
     const status = requiredString(run.status || 'pending', 'run.status');
     if (status !== 'pending') throw new TypeError('New runs must start pending');
     const currentPhase = normalizeRunPhase(run.currentPhase || 'planning', 'run.currentPhase');
     if (currentPhase !== 'planning') throw new TypeError('New runs must start in planning phase');
-    // An explicit identity is admitted only when the caller reserved it from the
-    // runs sequence in this same transaction. Structured leaf admission needs it
-    // because the immutable leaf binding hashes the Run ID, so the binding must
-    // exist complete at INSERT rather than be patched in afterwards. The column
-    // is GENERATED BY DEFAULT AS IDENTITY, so an explicit value is legal; the id
-    // never enters the JSONB body, where runFromRow would shadow it anyway.
-    const reservedId = run.id === null || run.id === undefined
+    // Run identity is NEVER caller data. A record carrying `id` is refused
+    // outright rather than silently ignored, so no HTTP body, import payload,
+    // recovery record, fixture or model-controlled value can select an identity
+    // by smuggling a field into a run draft.
+    if (Object.prototype.hasOwnProperty.call(run, 'id')) {
+      const error = new TypeError('run.id must not be supplied by a caller');
+      error.code = 'RUN_IDENTITY_NOT_CALLER_OWNED';
+      throw error;
+    }
+    // The one exception is transaction-scoped and arrives through the OPTIONS
+    // argument, never through the record: structured leaf admission reserves
+    // identities from the runs sequence and must insert exactly those, because
+    // the immutable leaf binding hashes the Run ID and has to be complete at
+    // INSERT rather than patched in afterwards. Requiring an explicit client
+    // confines it to a caller already composing inside one transaction.
+    const reserved = reservedId === null || reservedId === undefined
       ? null
-      : positiveSafeInteger(run.id, 'run.id');
+      : positiveSafeInteger(reservedId, 'reservedId');
+    if (reserved !== null && client === null) {
+      throw new TypeError('A reserved run identity requires the reserving transaction');
+    }
     const runBody = { ...run };
     delete runBody.currentPhase;
     delete runBody.id;
@@ -3084,7 +3197,7 @@ class PostgresRuntimeStore {
       runBody
     ];
     const execute = async connection => {
-      const result = reservedId === null
+      const result = reserved === null
         ? await connection.query(
           `INSERT INTO ${this.table('runs')}
             (ticket_id, agent_id, status, execution_mode, lease_owner, lease_expires_at,
@@ -3099,10 +3212,10 @@ class PostgresRuntimeStore {
              last_heartbeat_at, current_phase, body, id)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
            RETURNING *`,
-          [...values, reservedId]
+          [...values, reserved]
         );
       const created = runFromRow(result.rows[0]);
-      if (reservedId !== null && created.id !== reservedId) {
+      if (reserved !== null && created.id !== reserved) {
         throw new TypeError('run.id was not honoured by the runs table');
       }
       return created;
@@ -3116,10 +3229,28 @@ class PostgresRuntimeStore {
     afterTerminalRunId = null,
     runEventPayload = () => ({}),
     ticketEventPayload = {}
-  }, { client = null } = {}) {
+  }, { client = null, reservedRunIds = null } = {}) {
     const id = positiveSafeInteger(ticketId, 'ticketId');
     if (!Array.isArray(runDrafts) || runDrafts.length === 0) {
       throw new TypeError('runDrafts must be a non-empty array');
+    }
+    // Reserved identities are call-site authority, not draft content, and are
+    // only meaningful to a caller composing inside the transaction that reserved
+    // them. Every ordinary caller omits this and gets sequence-assigned ids.
+    const reserved = reservedRunIds === null || reservedRunIds === undefined
+      ? null
+      : reservedRunIds.map((value, index) =>
+        positiveSafeInteger(value, `reservedRunIds[${index}]`));
+    if (reserved !== null) {
+      if (client === null) {
+        throw new TypeError('Reserved run identities require the reserving transaction');
+      }
+      if (reserved.length !== runDrafts.length) {
+        throw new TypeError('reservedRunIds must supply one identity per run draft');
+      }
+      if (new Set(reserved).size !== reserved.length) {
+        throw new TypeError('reservedRunIds must not repeat an identity');
+      }
     }
     if (typeof runEventPayload !== 'function') throw new TypeError('runEventPayload must be a function');
     const drafts = runDrafts.map((draft, index) => {
@@ -3274,7 +3405,7 @@ class PostgresRuntimeStore {
       const now = isoTimestamp(clock.rows[0].ts, 'run creation clock');
       const runs = [];
       const events = [];
-      for (const draft of drafts) {
+      for (const [draftIndex, draft] of drafts.entries()) {
         const run = await this.createRun({
           ...draft,
           status: 'pending',
@@ -3284,7 +3415,10 @@ class PostgresRuntimeStore {
           ticketOpenedAt: ticket.updatedAt,
           createdAt: now,
           updatedAt: now
-        }, { client: connection });
+        }, {
+          client: connection,
+          reservedId: reserved === null ? null : reserved[draftIndex]
+        });
         runs.push(run);
         const payload = this.assertJsonRecord(runEventPayload(run), `run ${run.id} event payload`);
         events.push(await this._appendEvent(connection, {
@@ -5998,16 +6132,34 @@ class PostgresRuntimeStore {
   async transitionTicketAfterRun({ runId }, { client = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const execute = async connection => {
-      // Lock the terminal run (and then every run in its allocation batch)
-      // before the owning ticket. Required run evidence takes the run row before
-      // its event insert obtains the ticket foreign-key lock. The former
-      // ticket-first order could therefore deadlock operator cancellation:
+      // Lock order is allocation_plans -> runs -> tickets.
+      //
+      // Runs are still locked before the owning ticket. Required run evidence
+      // takes the run row before its event insert obtains the ticket foreign-key
+      // lock, so the former ticket-first order could deadlock operator
+      // cancellation:
       //
       //   ticket projection  tickets FOR UPDATE -> runs FOR UPDATE
       //   process evidence   runs FOR KEY SHARE -> events(ticket FK)
       //
-      // Run-first ordering lets the evidence transaction finish and release
-      // before ticket projection proceeds.
+      // The allocation plan is taken FIRST because a planner-admitted v2 ticket
+      // is reconciled inside this transaction, and leaf admission takes the same
+      // three locks in the same order. Finding the plan needs the run's ticket,
+      // so the run is read once WITHOUT a lock purely to route; every value that
+      // decides anything is re-read under lock below.
+      const routing = await connection.query(
+        `SELECT ticket_id FROM ${this.table('runs')} WHERE id = $1`,
+        [id]
+      );
+      if (routing.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const leafPlan = await this._findLockedPlannerAdmittedPlan(
+        connection,
+        positiveSafeInteger(routing.rows[0].ticket_id, 'run.ticketId')
+      );
       const runResult = await connection.query(
         `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
         [id]
@@ -6083,8 +6235,44 @@ class PostgresRuntimeStore {
         targetStatus = 'completed';
       }
 
+      // ── Tranche 3: the aggregate decision is the completion proof ──────────
+      //
+      // This method remains the ONE owner of the parent status mapping. For a
+      // planner-admitted v2 plan it does not get to reach that mapping's
+      // `completed` on its own evidence: the store-owned leaf derivation runs
+      // here, in this transaction, and its persisted aggregate decision must
+      // independently agree. The two are not parallel authorities — the leaf
+      // derivation is strictly stronger (it also proves item-to-Run binding,
+      // declared-work agreement, completion-authority agreement and
+      // run-lifecycle agreement), so the aggregate is consumed as a gate rather
+      // than re-mapped into a second status vocabulary.
+      //
+      // Reconciling HERE also removes every ordering obligation from callers: no
+      // path can transition the Ticket first and persist the aggregate later,
+      // and no crash can leave a completed parent with an absent aggregate.
+      let leafDecision = null;
+      let leafPlanId = null;
+      if (leafPlan) {
+        const reconciled = await this._reconcileLeafItemsLocked(connection, leafPlan);
+        if (reconciled.reconciled) {
+          leafDecision = reconciled.decision;
+          leafPlanId = reconciled.plan.id;
+          if (targetStatus === 'completed' && leafDecision.aggregateStatus !== 'completed') {
+            // The batch projection would complete the Ticket, but the durable
+            // leaf proof does not support it. Fail closed: no transition.
+            targetStatus = null;
+          }
+        }
+      }
+
       if (!targetStatus || ticket.status === targetStatus) {
-        return { ticket, event: null, previousStatus: ticket.status, changed: false };
+        return {
+          ticket,
+          event: null,
+          previousStatus: ticket.status,
+          changed: false,
+          aggregateDecision: leafDecision
+        };
       }
       const patch = ['completed', 'failed', 'interrupted'].includes(targetStatus)
         ? { rerunMode: null }
@@ -6094,9 +6282,17 @@ class PostgresRuntimeStore {
         expectedRevision: ticket.revision,
         fromStatuses: [ticket.status],
         toStatus: targetStatus,
-        patch
+        patch,
+        // The parent outcome names the plan and the exact aggregate decision that
+        // authorized it, so a completed parent is traceable to its proof.
+        eventPayload: leafDecision === null ? {} : {
+          allocationPlanId: leafPlanId,
+          planHash: leafDecision.planHash,
+          aggregateStatus: leafDecision.aggregateStatus,
+          aggregateDecisionHash: leafDecision.decisionHash
+        }
       }, { client: connection });
-      return { ...transitioned, changed: true };
+      return { ...transitioned, changed: true, aggregateDecision: leafDecision };
     };
     return client ? execute(client) : this.withTransaction(execute);
   }

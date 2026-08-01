@@ -1156,7 +1156,7 @@
       </div>
       <%
         const leafBinding = typeof leafRunBinding !== 'undefined' ? leafRunBinding : null;
-        const leafItem = typeof leafExecution !== 'undefined' && leafExecution && leafExecution.available
+        const leafItem = typeof leafExecution !== 'undefined' && leafExecution && leafExecution.plannerAdmittedPlan
           ? leafExecution.items.find(entry => leafBinding && entry.allocationItemId === leafBinding.allocationItemId) || null
           : null;
         const leafAggregate = typeof leafExecution !== 'undefined' && leafExecution

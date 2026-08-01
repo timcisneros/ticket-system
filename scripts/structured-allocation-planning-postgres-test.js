@@ -317,8 +317,8 @@ async function main() {
     assert.equal(admittedEvent.payload.allocationPlanId, plan.id);
     assert.equal(admittedEvent.payload.planHash, plan.planHash);
     assert.equal(admittedEvent.payload.workerRunsCreated, 0);
-    assert.equal(admittedEvent.payload.leafExecutionAvailable, true);
-    assert.equal(admittedEvent.payload.leafExecutionRefusalReason, null);
+    assert.equal(admittedEvent.payload.leafExecutionCapabilityAvailable, true,
+      'the admission event reports the product capability, not a per-ticket claim');
     assert.equal(admittedEvent.payload.workerRunsCreated, 0,
       'plan admission itself still creates zero worker runs');
     for (const stage of ['started', 'requested', 'responded', 'validated']) {
@@ -779,19 +779,29 @@ async function main() {
     const apiBody = JSON.parse(api.body);
     assert.equal(apiBody.structuredAllocationPlanning.attempt.state, 'plan_admitted');
     assert.equal(apiBody.structuredAllocationPlanning.attempt.admittedPlanId, plan.id);
-    assert.equal(apiBody.structuredAllocationPlanning.leafExecutionAvailable, true);
-    assert.equal(apiBody.structuredAllocationPlanning.leafExecutionRefusalReason, null);
-    // No leaf admission has run for this plan, so the leaf projection reports
-    // no binding, no decision and no completion.
-    assert.equal(apiBody.structuredAllocationLeafExecution.available, true);
+    // The planning projection reports the PRODUCT capability only.
+    assert.equal(apiBody.structuredAllocationPlanning.leafExecutionCapabilityAvailable, true);
     assert.equal(
-      apiBody.structuredAllocationLeafExecution.items.every(item =>
+      Object.prototype.hasOwnProperty.call(
+        apiBody.structuredAllocationPlanning, 'leafExecutionAvailable'),
+      false,
+      'the overloaded per-ticket availability boolean is gone'
+    );
+    // Per-ticket state is a separate, closed projection. No leaf admission has
+    // run for this plan, so it reports not_admitted with no binding, no decision
+    // and nothing claimable — never an unqualified "available".
+    const leafProjection = apiBody.structuredAllocationLeafExecution;
+    assert.equal(leafProjection.plannerAdmittedPlan, true);
+    assert.equal(leafProjection.admissionState, 'not_admitted');
+    assert.deepEqual(leafProjection.schedulerVisibleRunIds, []);
+    assert.equal(
+      leafProjection.items.every(item =>
         item.runId === null && item.leafBindingHash === null),
       true,
       'an unadmitted plan projects no item-to-Run binding'
     );
-    assert.equal(apiBody.structuredAllocationLeafExecution.aggregateDecision, null);
-    assert.deepEqual(apiBody.structuredAllocationLeafExecution.completedItemIds, []);
+    assert.equal(leafProjection.aggregateDecision, null);
+    assert.deepEqual(leafProjection.completedItemIds, []);
     assert.equal(apiBody.structuredAllocationPlanning.planningProvenance.planHash, plan.planHash);
     assert.equal(JSON.stringify(apiBody).includes('apiKey'), false,
       'projections never expose credentials');
@@ -802,7 +812,9 @@ async function main() {
     assert.match(page.body, /plan_admitted/);
     assert.match(page.body, new RegExp(plan.planHash));
     assert.match(page.body, /Leaf execution capability/i);
-    assert.match(page.body, /Plan admission itself still creates zero worker runs/i);
+    assert.match(page.body, /Admission state/i);
+    assert.match(page.body, /not_admitted/);
+    assert.match(page.body, /Plan admission itself creates zero worker runs/i);
 
     const timeline = await server.request('GET', `/api/tickets/${ticket.id}/timeline`, { cookie });
     assert.equal(timeline.statusCode, 200);
@@ -826,7 +838,9 @@ async function main() {
       assert.match(cli, /planning attempt/);
       assert.match(cli, /plan_admitted/);
       assert.match(cli, new RegExp(plan.planHash));
-      assert.match(cli, /leaf execution.*available/);
+      assert.match(cli, /leaf execution capability.*available/);
+      assert.match(cli, /leaf admission state.*not_admitted/);
+      assert.match(cli, /scheduler-visible leaf runs.*none/);
       assert.match(cli, /aggregate decision.*not yet reconciled/);
       assert.match(cli, /work unit.*run none/);
     } finally {
