@@ -170,6 +170,10 @@ const {
   createOpenAiGovernedTransport,
   GOVERNED_OPENAI_ENDPOINT
 } = require('./runtime/governed-openai-transport');
+const {
+  runGovernedLeafRequest,
+  selectRunProviderPath
+} = require('./runtime/governed-leaf-orchestration');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -11965,12 +11969,114 @@ function redactProviderInput(run, input) {
     : message));
 }
 
+// The governed leaf provider request. Everything the orchestration needs that
+// is specific to THIS deployment — the transport, the credential resolver, the
+// canonical response-evidence writer — is supplied here; the orchestration owns
+// the ordering and the refusals.
+async function dispatchGovernedLeafModelRequest({
+  run, agent, input, startedAtMs, limits, options, slot, budgetSourceIdentity
+}) {
+  const canonicalBody = buildOpenAiResponsesBody({
+    // The model comes from the CAPTURED authority inside the orchestration's
+    // prepared request, not from here; this body carries the prompt and format.
+    model: run.governedExecution.economicAuthority.dispatchTarget,
+    input,
+    options: {
+      governed: true,
+      maxOutputTokens: run.governedExecution.economicAuthority.maximumOutputTokensPerRequest
+    }
+  });
+
+  const result = await runGovernedLeafRequest({
+    repository: getGovernedPlannerDispatchRepository(),
+    run,
+    // The SAME identity the runtime budget uses.
+    logicalSourceIdentity: budgetSourceIdentity,
+    canonicalBody,
+    endpointIdentity: GOVERNED_OPENAI_ENDPOINT,
+    transport: resolveGovernedPlannerTransport(),
+    resolveCredentials: resolveGovernedPlannerCredentials,
+    // The same remaining-run-time bound the ungoverned path applies, so
+    // governed dispatch is not permitted to outlive the Run's duration limit.
+    timeoutMs: Math.max(1, getRemainingRunTimeMs(startedAtMs, limits)),
+    // The existing 65,536-byte provider response bound, unchanged.
+    maxResponseBytes: PLANNER_REQUEST_LIMITS.maxResponseBytes,
+    runtimeModelRequestMaximum: limits && limits.maxModelRequestsPerRun
+      ? limits.maxModelRequestsPerRun
+      : null,
+    persistResponseEvidence: async ({ text, responseIdentity, responseHash }) => {
+      // The existing canonical provider evidence, unchanged and written BEFORE
+      // the economic response marker, so a response the worker loop consumes is
+      // always recoverable without another provider request.
+      await recordNonTerminalRunEvidence(run, {
+        category: 'provider-response',
+        slot,
+        payload: sanitizeSnapshotValue({
+          governed: true,
+          responseIdentity,
+          responseHash,
+          text: typeof options.sanitizeResponseText === 'function'
+            ? options.sanitizeResponseText(text)
+            : text
+        }),
+        metadata: sanitizeSnapshotValue(options.metadata || {})
+      });
+    }
+  });
+
+  if (result.status === 'received' || result.status === 'reused_durable_response') {
+    // The runtime budget is committed only once the request is durable, using
+    // the same source identity it was reserved under.
+    await runtimeBudgetController.commit(run, 'model_request', budgetSourceIdentity, 1);
+    return {
+      response: { text: result.text, provider: 'openai' },
+      governed: true,
+      reservationId: result.reservationId,
+      modelRequestOrdinal: result.ordinal,
+      settlementReceiptHash: result.settlementReceiptHash
+    };
+  }
+
+  // Every other outcome is terminal for this request. The reservation has
+  // already been released or conservatively settled inside the orchestration.
+  const error = createProviderError(
+    result.failureDetail || result.failureReason || 'governed leaf request failed',
+    'GOVERNED_LEAF_REQUEST_FAILED',
+    {
+      governedStatus: result.status,
+      possiblyDispatched: result.possiblyDispatched,
+      reservationId: result.reservationId,
+      failureReason: result.failureReason
+    }
+  );
+  error.governedLeafOutcome = result.status;
+  throw error;
+}
+
 async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, limits, options = {}) {
   runtimeBudgetController.assertDuration(run);
   input = redactProviderInput(run, input);
   const slot = String(options.slot || '').trim();
   if (!slot) throw new TypeError('A stable provider evidence slot is required');
   const budgetSourceIdentity = `model-request:${slot}`;
+
+  // ── Governed structured leaf dispatch (Tranche 4) ────────────────────────
+  //
+  // One branch, at the narrowest seam every structured leaf model request
+  // already passes through. `selectRunProviderPath` is the only decision:
+  // historical Runs continue below unchanged, governed Runs never reach the
+  // adapter, and a Run with damaged authority throws rather than choosing.
+  //
+  // The logical identity is `budgetSourceIdentity` — computed one line above
+  // for the runtime budget — so the two ledgers cannot derive different names
+  // for the same request.
+  const providerPath = selectRunProviderPath(run);
+  if (providerPath.path === 'governed') {
+    return await dispatchGovernedLeafModelRequest({
+      run, agent, input, startedAtMs, limits, options, slot, budgetSourceIdentity
+    });
+  }
+
   await runtimeBudgetController.reserve(run, 'model_request', budgetSourceIdentity, 1);
   const requestStartedAt = Date.now();
   const startedAt = new Date(requestStartedAt).toISOString();
