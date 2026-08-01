@@ -15,6 +15,7 @@ const {
 } = require('../../runtime/runtime-budget-contract');
 const {
   assertDeclaredWorkCompletionAuthorityBinding,
+  hashCanonical,
   normalizeDeclaredWorkSnapshot
 } = require('../../runtime/declared-work-contract');
 const {
@@ -54,6 +55,20 @@ const {
   normalizeCompletionDecision,
   completionEvidenceProjection
 } = require('../../runtime/completion-decision-contract');
+const {
+  normalizeEconomicAuthority,
+  normalizeEconomicPolicy
+} = require('../../runtime/economic-authority-contract');
+const {
+  governedRequestBytes,
+  hashSerializedRequest,
+  normalizeGovernedProviderRequest
+} = require('../../runtime/governed-provider-request-contract');
+const {
+  assertReceiptMatchesPreparedRequest,
+  buildSettlementReceiptFromCapturedBasis,
+  normalizeSettlementReceipt
+} = require('../../runtime/economic-settlement-receipt-contract');
 const {
   buildProcessTemplateState,
   emptyGeneratedTicketCounts
@@ -3153,6 +3168,738 @@ class PostgresRuntimeStore {
       connection,
       await this._lockedPlannerAdmittedPlan(connection, id, { allocationPlanId: planId })
     );
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+
+  // ── Role-scoped economic accounting (Tranche 4) ────────────────────────────
+  //
+  // Money moves through exactly one path here, and every transition is a single
+  // transaction that both changes state and appends its event. There is no
+  // "record it and journal it later": a state change whose event failed to
+  // append is a state change nobody can audit.
+  //
+  // The lifecycle is deliberately one-way:
+  //
+  //   reserved ─▶ request_started ─▶ response_persisted ─▶ settled
+  //      └──────▶ released   (only from `reserved`; see below)
+  //
+  // RELEASE IS ONLY LEGAL BEFORE START. Once `markEconomicRequestStarted` wins,
+  // the bytes may already be on the wire, so the reservation can never be handed
+  // back — it settles, conservatively if the provider never reported usage.
+  //
+  // ONE-WINNER START. `markEconomicRequestStarted` is a conditional UPDATE
+  // predicated on the row still being `reserved`. Two concurrent workers issue
+  // the same statement; PostgreSQL serializes them on the row lock and the
+  // second sees zero rows, so exactly one caller ever receives dispatch
+  // authority for a given reservation.
+  //
+  // THE WINNER RECEIVES BYTES, NOT A HASH. The reservation stores the exact
+  // serialized request, so the winner is handed the bytes that were priced
+  // rather than being trusted to re-supply them. A caller cannot substitute a
+  // different body after reservation, and a process that died mid-dispatch can
+  // recover the authorized bytes without remembering anything.
+
+  _economicReservationFromRow(row) {
+    if (!row) return null;
+    return {
+      id: Number(row.id),
+      accountId: Number(row.account_id),
+      ticketId: Number(row.ticket_id),
+      role: row.role,
+      planningAttemptId: row.planning_attempt_id,
+      runId: row.run_id === null ? null : Number(row.run_id),
+      modelRequestOrdinal: Number(row.model_request_ordinal),
+      exactRequestHash: row.exact_request_hash,
+      routingDecisionHash: row.routing_decision_hash,
+      economicAuthorityHash: row.economic_authority_hash,
+      targetEvidenceHash: row.target_evidence_hash,
+      adapterCapabilityHash: row.adapter_capability_hash,
+      modelCapabilityHash: row.model_capability_hash,
+      pricingCatalogHash: row.pricing_catalog_hash,
+      pricingEntryHash: row.pricing_entry_hash,
+      economicAuthority: row.economic_authority,
+      pricingEntrySnapshot: row.pricing_entry_snapshot,
+      preparedRequest: row.prepared_request,
+      serializedRequest: row.serialized_request,
+      serializedRequestByteCount: Number(row.serialized_request_byte_count),
+      preparedRequestHash: row.prepared_request_hash,
+      reservedMaxMicroUsd: Number(row.reserved_max_micro_usd),
+      state: row.state,
+      settlementReceipt: row.settlement_receipt,
+      settledMicroUsd: row.settled_micro_usd === null ? null : Number(row.settled_micro_usd),
+      responseIdentity: row.response_identity,
+      responseHash: row.response_hash,
+      createdAt: row.created_at,
+      startedAt: row.started_at,
+      responsePersistedAt: row.response_persisted_at,
+      settledAt: row.settled_at,
+      releasedAt: row.released_at,
+      revision: Number(row.revision)
+    };
+  }
+
+  // Locks the account row FIRST and always. Every balance-changing method takes
+  // this lock before reading any amount, so two concurrent reservations against
+  // one account cannot both read the same pre-reservation balance and both
+  // conclude there is room. Without the lock the CHECK constraint would still
+  // refuse the overdraft, but as a constraint violation rather than a governed
+  // refusal, and only after the second transaction had already done its work.
+  async _lockedEconomicAccount(client, { ticketId, role }) {
+    const result = await client.query(
+      `SELECT * FROM ${this.table('ticket_economic_accounts')}
+       WHERE ticket_id = $1 AND role = $2 FOR UPDATE`,
+      [ticketId, role]
+    );
+    if (result.rowCount === 0) {
+      const error = new Error(
+        `no economic account exists for ticket ${ticketId} role ${role}`);
+      error.code = 'ECONOMIC_ACCOUNT_NOT_FOUND';
+      throw error;
+    }
+    return result.rows[0];
+  }
+
+  // Takes the account lock through the reservation, so callers holding only a
+  // reservation id still serialize against concurrent reservations on the same
+  // account. The account is locked BEFORE the reservation to preserve a single
+  // global lock order (account → reservation) and keep deadlock impossible.
+  async _lockedEconomicReservation(client, reservationId, { expectedStates = null } = {}) {
+    const located = await client.query(
+      `SELECT ticket_id, role FROM ${this.table('economic_request_reservations')}
+       WHERE id = $1`,
+      [reservationId]
+    );
+    if (located.rowCount === 0) {
+      const error = new Error(`economic reservation ${reservationId} was not found`);
+      error.code = 'ECONOMIC_RESERVATION_NOT_FOUND';
+      throw error;
+    }
+    const account = await this._lockedEconomicAccount(client, {
+      ticketId: Number(located.rows[0].ticket_id),
+      role: located.rows[0].role
+    });
+    const result = await client.query(
+      `SELECT * FROM ${this.table('economic_request_reservations')}
+       WHERE id = $1 FOR UPDATE`,
+      [reservationId]
+    );
+    const reservation = this._economicReservationFromRow(result.rows[0]);
+    if (expectedStates && !expectedStates.includes(reservation.state)) {
+      const error = new Error(
+        `economic reservation ${reservationId} is ${reservation.state}, ` +
+        `not ${expectedStates.join(' or ')}`);
+      error.code = 'ECONOMIC_RESERVATION_STATE_CONFLICT';
+      error.detail = { state: reservation.state, expected: expectedStates };
+      throw error;
+    }
+    return { account, reservation };
+  }
+
+  // Admits the role-scoped account. Idempotent by (ticket, role): re-admitting
+  // the SAME policy returns the existing account untouched, and re-admitting a
+  // DIFFERENT policy refuses rather than silently re-authorizing a budget that
+  // reservations have already been taken against.
+  async admitTicketEconomicAccount({
+    ticketId,
+    role,
+    economicPolicy,
+    eventType = 'ticket.economic_account_admitted'
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const policy = normalizeEconomicPolicy(economicPolicy);
+    if (policy.role !== role) {
+      throw new TypeError(`economic policy authorizes ${policy.role}, not ${String(role)}`);
+    }
+
+    const execute = async connection => {
+      // Lock the ticket so account admission serializes with ticket lifecycle,
+      // matching the lock order used by the leaf-admission path.
+      const ticket = await connection.query(
+        `SELECT id FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`, [id]);
+      if (ticket.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const existing = await connection.query(
+        `SELECT * FROM ${this.table('ticket_economic_accounts')}
+         WHERE ticket_id = $1 AND role = $2 FOR UPDATE`,
+        [id, policy.role]
+      );
+      if (existing.rowCount > 0) {
+        const row = existing.rows[0];
+        if (row.economic_policy_hash !== policy.policyHash) {
+          const error = new Error(
+            `ticket ${id} role ${policy.role} is already governed by a different economic policy`);
+          error.code = 'ECONOMIC_POLICY_CONFLICT';
+          error.detail = {
+            existingPolicyHash: row.economic_policy_hash,
+            presentedPolicyHash: policy.policyHash
+          };
+          throw error;
+        }
+        // Same policy, same account: admission is a no-op and appends no event.
+        return { account: row, admitted: false };
+      }
+      const inserted = await connection.query(
+        `INSERT INTO ${this.table('ticket_economic_accounts')}
+          (ticket_id, role, economic_policy_id, economic_policy_hash, authorized_micro_usd)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [id, policy.role, policy.policyId, policy.policyHash, policy.authorizedMicroUsd]
+      );
+      await this._appendEvent(connection, {
+        type: eventType,
+        ticketId: id,
+        payload: {
+          role: policy.role,
+          economicPolicyId: policy.policyId,
+          economicPolicyHash: policy.policyHash,
+          authorizedMicroUsd: policy.authorizedMicroUsd,
+          maximumProviderRequests: policy.maximumProviderRequests
+        }
+      });
+      return { account: inserted.rows[0], admitted: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Reserves the maximum liability for ONE prepared request, before any provider
+  // contact. The reservation stores the authorized bytes themselves.
+  async reserveEconomicRequest({
+    preparedRequest,
+    economicAuthority,
+    pricingEntry,
+    eventType = 'ticket.economic_request_reserved'
+  }, { client = null } = {}) {
+    const request = normalizeGovernedProviderRequest(preparedRequest);
+    const authority = normalizeEconomicAuthority(economicAuthority);
+    if (request.economicAuthorityHash !== authority.authorityHash) {
+      throw new TypeError('preparedRequest was not prepared under this economic authority');
+    }
+    // The exact rates are captured HERE, at reservation, and never consulted
+    // from live configuration again. Settlement after a restart, a re-pricing
+    // or a catalog deletion reads only what this row retains.
+    if (!pricingEntry || typeof pricingEntry !== 'object') {
+      throw new TypeError('pricingEntry must be the exact captured pricing entry');
+    }
+    if (hashCanonical(pricingEntry) !== authority.pricingEntryHash) {
+      const error = new Error(
+        'pricingEntry does not match the pricing entry hash the authority captured');
+      error.code = 'ECONOMIC_PRICING_BASIS_MISMATCH';
+      throw error;
+    }
+
+    const execute = async connection => {
+      const account = await this._lockedEconomicAccount(connection, {
+        ticketId: request.ticketId,
+        role: request.role
+      });
+      // The account must be governed by the policy this authority was captured
+      // under, or the ceilings being charged against were never authorized.
+      if (account.economic_policy_hash !== authority.economicPolicyHash) {
+        const error = new Error(
+          `economic authority cites a policy the account is not governed by`);
+        error.code = 'ECONOMIC_POLICY_CONFLICT';
+        throw error;
+      }
+
+      const amount = request.maximumLiabilityMicroUsd;
+      const reserved = Number(account.reserved_micro_usd);
+      const settled = Number(account.settled_micro_usd);
+      const authorized = Number(account.authorized_micro_usd);
+      // Checked against the LOCKED balance, so this is a governed refusal rather
+      // than a constraint violation discovered after the fact.
+      if (reserved + settled + amount > authorized) {
+        const error = new Error(
+          `reserving ${amount} would exceed the ${authorized} micro-USD authorized ` +
+          `for ticket ${request.ticketId} role ${request.role}`);
+        error.code = 'ECONOMIC_AUTHORITY_EXCEEDED';
+        error.detail = { authorized, reserved, settled, requested: amount };
+        throw error;
+      }
+
+      let inserted;
+      try {
+        inserted = await connection.query(
+          `INSERT INTO ${this.table('economic_request_reservations')}
+            (account_id, ticket_id, role, planning_attempt_id, run_id, model_request_ordinal,
+             exact_request_hash, routing_decision_hash, economic_authority_hash,
+             target_evidence_hash, adapter_capability_hash, model_capability_hash,
+             pricing_catalog_hash, pricing_entry_hash,
+             economic_authority, pricing_entry_snapshot,
+             prepared_request, serialized_request, serialized_request_byte_count,
+             prepared_request_hash, reserved_max_micro_usd, state)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,
+             $17::jsonb,$18,$19,$20,$21,'reserved')
+           RETURNING *`,
+          [
+            Number(account.id), request.ticketId, request.role,
+            request.planningAttemptId, request.runId, request.modelRequestOrdinal,
+            request.requestHash, request.routingDecisionHash, authority.authorityHash,
+            request.targetEvidenceHash, request.adapterCapabilityHash,
+            request.modelCapabilityHash, authority.pricingCatalogHash,
+            request.pricingEntryHash,
+            JSON.stringify(authority), JSON.stringify(pricingEntry),
+            JSON.stringify(request), governedRequestBytes(request).serializedRequest,
+            request.serializedByteCount, request.preparedRequestHash, amount
+          ]
+        );
+      } catch (error) {
+        // The per-source ordinal uniqueness constraint is what makes reservation
+        // idempotent under retry: the same subject cannot reserve the same
+        // request ordinal twice, so a retried reservation is refused rather than
+        // double-charging the account.
+        if (error && error.code === '23505') {
+          const conflict = new Error(
+            `request ordinal ${request.modelRequestOrdinal} is already reserved for this subject`);
+          conflict.code = 'ECONOMIC_RESERVATION_DUPLICATE';
+          conflict.detail = { constraint: error.constraint || null };
+          throw conflict;
+        }
+        throw error;
+      }
+
+      await connection.query(
+        `UPDATE ${this.table('ticket_economic_accounts')}
+         SET reserved_micro_usd = reserved_micro_usd + $2,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [Number(account.id), amount]
+      );
+
+      const reservation = this._economicReservationFromRow(inserted.rows[0]);
+      // Identities and hashes only. No credentials, no provider secrets, and no
+      // request body: the bytes live in the reservation row, not in the journal.
+      await this._appendEvent(connection, {
+        type: eventType,
+        ticketId: request.ticketId,
+        runId: request.runId,
+        payload: {
+          reservationId: reservation.id,
+          role: request.role,
+          modelRequestOrdinal: request.modelRequestOrdinal,
+          exactRequestHash: request.requestHash,
+          preparedRequestHash: request.preparedRequestHash,
+          economicAuthorityHash: authority.authorityHash,
+          routingDecisionHash: request.routingDecisionHash,
+          reservedMaxMicroUsd: amount
+        }
+      });
+      return reservation;
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // ONE-WINNER dispatch authority. Returns the exact bytes to send; every other
+  // concurrent caller is refused.
+  async markEconomicRequestStarted({
+    reservationId,
+    eventType = 'ticket.economic_request_started'
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(reservationId, 'reservationId');
+
+    const execute = async connection => {
+      // The conditional predicate is the whole guarantee: `state = 'reserved'`
+      // can only be true for one caller, because the row lock serializes them
+      // and the winner leaves the row in `request_started`.
+      const won = await connection.query(
+        `UPDATE ${this.table('economic_request_reservations')}
+         SET state = 'request_started',
+             started_at = clock_timestamp(),
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 AND state = 'reserved'
+         RETURNING *`,
+        [id]
+      );
+      if (won.rowCount === 0) {
+        const current = await connection.query(
+          `SELECT state FROM ${this.table('economic_request_reservations')} WHERE id = $1`,
+          [id]
+        );
+        if (current.rowCount === 0) {
+          const error = new Error(`economic reservation ${id} was not found`);
+          error.code = 'ECONOMIC_RESERVATION_NOT_FOUND';
+          throw error;
+        }
+        const error = new Error(
+          `economic reservation ${id} was already started or closed ` +
+          `(state ${current.rows[0].state})`);
+        error.code = 'ECONOMIC_REQUEST_ALREADY_STARTED';
+        error.detail = { state: current.rows[0].state };
+        throw error;
+      }
+
+      const reservation = this._economicReservationFromRow(won.rows[0]);
+      // The persisted bytes are re-verified against the persisted hash before
+      // being handed out. Storage that returned different bytes than were priced
+      // must fail here rather than reach a provider.
+      const actual = hashSerializedRequest(reservation.serializedRequest);
+      if (actual !== reservation.exactRequestHash) {
+        const error = new Error(
+          `persisted request bytes for reservation ${id} do not match the reserved hash`);
+        error.code = 'ECONOMIC_REQUEST_BYTES_CORRUPT';
+        error.detail = { expected: reservation.exactRequestHash, actual };
+        throw error;
+      }
+
+      await this._appendEvent(connection, {
+        type: eventType,
+        ticketId: reservation.ticketId,
+        runId: reservation.runId,
+        payload: {
+          reservationId: reservation.id,
+          role: reservation.role,
+          modelRequestOrdinal: reservation.modelRequestOrdinal,
+          exactRequestHash: reservation.exactRequestHash,
+          reservedMaxMicroUsd: reservation.reservedMaxMicroUsd
+        }
+      });
+      return {
+        reservation,
+        // The authorized bytes, from storage — not from the caller.
+        serializedRequest: reservation.serializedRequest
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async markEconomicResponsePersisted({
+    reservationId,
+    responseIdentity,
+    responseHash,
+    eventType = 'ticket.economic_response_persisted'
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(reservationId, 'reservationId');
+    const identity = requiredString(responseIdentity, 'responseIdentity');
+    if (typeof responseHash !== 'string' || !/^[0-9a-f]{64}$/.test(responseHash)) {
+      throw new TypeError('responseHash must be a lowercase SHA-256');
+    }
+
+    const execute = async connection => {
+      const { reservation } = await this._lockedEconomicReservation(connection, id, {
+        expectedStates: ['request_started']
+      });
+      const updated = await connection.query(
+        `UPDATE ${this.table('economic_request_reservations')}
+         SET state = 'response_persisted',
+             response_persisted_at = clock_timestamp(),
+             response_identity = $2,
+             response_hash = $3,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 AND state = 'request_started'
+         RETURNING *`,
+        [id, identity, responseHash]
+      );
+      if (updated.rowCount === 0) {
+        const error = new Error(`economic reservation ${id} was not awaiting a response`);
+        error.code = 'ECONOMIC_RESERVATION_STATE_CONFLICT';
+        throw error;
+      }
+      await this._appendEvent(connection, {
+        type: eventType,
+        ticketId: reservation.ticketId,
+        runId: reservation.runId,
+        payload: {
+          reservationId: id,
+          role: reservation.role,
+          exactRequestHash: reservation.exactRequestHash,
+          responseIdentity: identity,
+          responseHash
+        }
+      });
+      return this._economicReservationFromRow(updated.rows[0]);
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Settles once. The receipt is verified against the PERSISTED prepared request
+  // rather than against whatever the caller presents alongside it, so a receipt
+  // for different bytes cannot close this reservation.
+  //
+  // The caller supplies USAGE, never rates. There is deliberately no parameter
+  // through which a replacement price, catalog or authority could enter: the
+  // basis is read from the reservation row and verified against the hashes it
+  // was reserved under. Current configuration is not consulted, so an
+  // administrator who re-prices or deletes a catalog entry can neither change
+  // nor block the settlement of a request already reserved against it.
+  async settleEconomicRequest({
+    reservationId,
+    usage,
+    eventType = 'ticket.economic_request_settled'
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(reservationId, 'reservationId');
+
+    const execute = async connection => {
+      const { account, reservation } = await this._lockedEconomicReservation(connection, id);
+      // Settlement from `request_started` is legal and deliberate: a request
+      // that reached the provider but whose response was never persisted must
+      // still settle, conservatively, rather than leak a reservation forever.
+      //
+      // A reservation already in a terminal state reports the SAME code whether
+      // the second attempt arrived sequentially or lost the conditional UPDATE
+      // race below, so a caller handling double settlement never has to
+      // distinguish the two.
+      if (reservation.state === 'settled' || reservation.state === 'released') {
+        const error = new Error(
+          `economic reservation ${id} was already ${reservation.state}`);
+        error.code = 'ECONOMIC_RESERVATION_ALREADY_SETTLED';
+        error.detail = { state: reservation.state };
+        throw error;
+      }
+      if (reservation.state === 'reserved') {
+        const error = new Error(
+          `economic reservation ${id} was never started and cannot be settled`);
+        error.code = 'ECONOMIC_RESERVATION_STATE_CONFLICT';
+        error.detail = { state: reservation.state };
+        throw error;
+      }
+
+      // A request with no persisted response has no metered usage anyone can
+      // trust, so it settles at the reserved maximum and nothing else.
+      if (reservation.responseHash === null &&
+          (!usage || usage.source !== 'authorized_maximum_assumed')) {
+        const error = new Error(
+          `reservation ${id} has no persisted response and must settle conservatively`);
+        error.code = 'ECONOMIC_SETTLEMENT_USAGE_UNPROVEN';
+        throw error;
+      }
+      // Built here, from the durable captured basis alone.
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const builtReceipt = buildSettlementReceiptFromCapturedBasis({
+        preparedRequest: reservation.preparedRequest,
+        authority: reservation.economicAuthority,
+        pricingEntry: reservation.pricingEntrySnapshot,
+        reservedMaximumMicroUsd: reservation.reservedMaxMicroUsd,
+        // A request that started but never persisted a response still has to
+        // settle. It is bound to the reservation's own identity so the receipt
+        // never claims a provider response that was never received.
+        responseIdentity: reservation.responseIdentity === null
+          ? `unconfirmed:reservation:${id}`
+          : reservation.responseIdentity,
+        responseHash: reservation.responseHash === null
+          ? hashCanonical({ unconfirmedReservation: id, requestHash: reservation.exactRequestHash })
+          : reservation.responseHash,
+        usage,
+        settledAt: new Date(clock.rows[0].ts).toISOString()
+      });
+      // Re-normalized against the captured entry, so a tampered stored basis is
+      // caught even though the receipt was just built from it.
+      const receipt = normalizeSettlementReceipt(builtReceipt, {
+        pricingEntry: reservation.pricingEntrySnapshot
+      });
+      // Bind to the bytes THIS reservation authorized, read from the row.
+      assertReceiptMatchesPreparedRequest(receipt, reservation.preparedRequest);
+      // The stored authority must still be the one the reservation names.
+      if (receipt.economicAuthorityHash !== reservation.economicAuthorityHash) {
+        const error = new Error(
+          `stored economic authority for reservation ${id} does not match its recorded hash`);
+        error.code = 'ECONOMIC_CAPTURED_BASIS_CORRUPT';
+        throw error;
+      }
+      if (receipt.requestHash !== reservation.exactRequestHash ||
+          receipt.preparedRequestHash !== reservation.preparedRequestHash) {
+        const error = new Error(
+          `settlement receipt does not settle the bytes reservation ${id} authorized`);
+        error.code = 'ECONOMIC_SETTLEMENT_REQUEST_MISMATCH';
+        throw error;
+      }
+      if (receipt.economicAuthorityHash !== reservation.economicAuthorityHash) {
+        const error = new Error(
+          `settlement receipt cites a different economic authority than reservation ${id}`);
+        error.code = 'ECONOMIC_SETTLEMENT_AUTHORITY_MISMATCH';
+        throw error;
+      }
+      if (receipt.reservedMaximumMicroUsd !== reservation.reservedMaxMicroUsd) {
+        const error = new Error(
+          `settlement receipt reserves ${receipt.reservedMaximumMicroUsd} but reservation ` +
+          `${id} reserved ${reservation.reservedMaxMicroUsd}`);
+        error.code = 'ECONOMIC_SETTLEMENT_RESERVATION_MISMATCH';
+        throw error;
+      }
+      // A response-bearing reservation must settle against the response it
+      // actually persisted.
+      if (reservation.responseHash !== null && receipt.responseHash !== reservation.responseHash) {
+        const error = new Error(
+          `settlement receipt settles a different response than reservation ${id} persisted`);
+        error.code = 'ECONOMIC_SETTLEMENT_RESPONSE_MISMATCH';
+        throw error;
+      }
+
+      const settled = receipt.settledMicroUsd;
+      const updated = await connection.query(
+        `UPDATE ${this.table('economic_request_reservations')}
+         SET state = 'settled',
+             settled_at = clock_timestamp(),
+             settlement_receipt = $2::jsonb,
+             settled_micro_usd = $3,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 AND state IN ('response_persisted', 'request_started')
+         RETURNING *`,
+        [id, JSON.stringify(receipt), settled]
+      );
+      // Zero rows here means another transaction settled or closed this
+      // reservation first. Refusing rather than retrying is what keeps a single
+      // dispatch from being charged twice.
+      if (updated.rowCount === 0) {
+        const error = new Error(`economic reservation ${id} was already settled or closed`);
+        error.code = 'ECONOMIC_RESERVATION_ALREADY_SETTLED';
+        throw error;
+      }
+
+      // The reserve is released in full and only the actual cost is charged, in
+      // the same statement, so the account can never briefly show both.
+      await connection.query(
+        `UPDATE ${this.table('ticket_economic_accounts')}
+         SET reserved_micro_usd = reserved_micro_usd - $2,
+             settled_micro_usd = settled_micro_usd + $3,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [Number(account.id), reservation.reservedMaxMicroUsd, settled]
+      );
+
+      await this._appendEvent(connection, {
+        type: eventType,
+        ticketId: reservation.ticketId,
+        runId: reservation.runId,
+        payload: {
+          reservationId: id,
+          role: reservation.role,
+          exactRequestHash: reservation.exactRequestHash,
+          receiptHash: receipt.receiptHash,
+          usageSource: receipt.usageSource,
+          settledMicroUsd: settled,
+          reservedMaxMicroUsd: reservation.reservedMaxMicroUsd,
+          unusedReservationMicroUsd: receipt.unusedReservationMicroUsd
+        }
+      });
+      return this._economicReservationFromRow(updated.rows[0]);
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Releases a reservation that was NEVER started. A started request may have
+  // reached the provider, so releasing it would give back money that may be
+  // owed; those settle instead.
+  async releaseUndispatchedEconomicReservation({
+    reservationId,
+    reason,
+    eventType = 'ticket.economic_reservation_released'
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(reservationId, 'reservationId');
+    const releaseReason = requiredString(reason, 'reason');
+
+    const execute = async connection => {
+      const { account, reservation } = await this._lockedEconomicReservation(connection, id);
+      if (reservation.state !== 'reserved') {
+        const error = new Error(
+          `economic reservation ${id} is ${reservation.state} and can no longer be released`);
+        error.code = 'ECONOMIC_RESERVATION_NOT_RELEASABLE';
+        error.detail = { state: reservation.state };
+        throw error;
+      }
+      const updated = await connection.query(
+        `UPDATE ${this.table('economic_request_reservations')}
+         SET state = 'released',
+             released_at = clock_timestamp(),
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 AND state = 'reserved'
+         RETURNING *`,
+        [id]
+      );
+      if (updated.rowCount === 0) {
+        const error = new Error(`economic reservation ${id} was no longer releasable`);
+        error.code = 'ECONOMIC_RESERVATION_NOT_RELEASABLE';
+        throw error;
+      }
+      await connection.query(
+        `UPDATE ${this.table('ticket_economic_accounts')}
+         SET reserved_micro_usd = reserved_micro_usd - $2,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1`,
+        [Number(account.id), reservation.reservedMaxMicroUsd]
+      );
+      await this._appendEvent(connection, {
+        type: eventType,
+        ticketId: reservation.ticketId,
+        runId: reservation.runId,
+        payload: {
+          reservationId: id,
+          role: reservation.role,
+          exactRequestHash: reservation.exactRequestHash,
+          releasedMicroUsd: reservation.reservedMaxMicroUsd,
+          reason: releaseReason
+        }
+      });
+      return this._economicReservationFromRow(updated.rows[0]);
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  async getEconomicReservation(reservationId, { client = null } = {}) {
+    const id = positiveSafeInteger(reservationId, 'reservationId');
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT * FROM ${this.table('economic_request_reservations')} WHERE id = $1`, [id]);
+      return this._economicReservationFromRow(result.rows[0] || null);
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Classifies reservations a crashed process left open. Classification only —
+  // nothing is settled, released or dispatched here. Acting on these is a
+  // separate authority that this method deliberately does not exercise.
+  //
+  //   never_dispatched      — reserved, never started. Releasable: the bytes
+  //                           provably never reached a provider.
+  //   dispatch_uncertain    — started, no response persisted. NOT releasable:
+  //                           the provider may have been billed, so it must
+  //                           settle, conservatively if usage is unknown.
+  //   awaiting_settlement   — a response is persisted and metered settlement
+  //                           can proceed from the recorded response.
+  async listRecoverableEconomicReservations({
+    ticketId = null,
+    role = null,
+    olderThanSeconds = 0,
+    limit = 100
+  } = {}, { client = null } = {}) {
+    const id = ticketId === null ? null : positiveSafeInteger(ticketId, 'ticketId');
+    const age = nonNegativeSafeInteger(olderThanSeconds, 'olderThanSeconds');
+    const cap = positiveSafeInteger(limit, 'limit');
+
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT * FROM ${this.table('economic_request_reservations')}
+         WHERE state IN ('reserved', 'request_started', 'response_persisted')
+           AND ($1::bigint IS NULL OR ticket_id = $1)
+           AND ($2::text IS NULL OR role = $2)
+           AND updated_at <= clock_timestamp() - make_interval(secs => $3)
+         ORDER BY id
+         LIMIT $4`,
+        [id, role, age, cap]
+      );
+      return result.rows.map(row => {
+        const reservation = this._economicReservationFromRow(row);
+        const classification = reservation.state === 'reserved'
+          ? 'never_dispatched'
+          : (reservation.state === 'request_started'
+            ? 'dispatch_uncertain'
+            : 'awaiting_settlement');
+        return {
+          ...reservation,
+          classification,
+          // Only a provably undispatched reservation may be handed back.
+          releasable: classification === 'never_dispatched'
+        };
+      });
+    };
     return client ? execute(client) : this.withTransaction(execute);
   }
 

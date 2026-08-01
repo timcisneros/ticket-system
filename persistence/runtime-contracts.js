@@ -12,6 +12,7 @@ const CONTRACTS = Object.freeze({
   ticketRunLifecycle: ['createTicketWithEvent', 'transitionTicketState', 'reassignTicket', 'createRunsAndStartTicket', 'transitionTicketAfterRun', 'reopenTicket', 'createRetryRun'],
   structuredAllocationPlanning: ['writeStructuredAllocationPlanningAttempt', 'admitStructuredAllocationPlan', 'getAllocationPlanForTicket'],
   structuredAllocationLeafExecution: ['admitStructuredAllocationLeafRuns', 'reconcileStructuredAllocationLeafItems', 'getAllocationPlanForTicket'],
+  economicAccounting: ['admitTicketEconomicAccount', 'reserveEconomicRequest', 'markEconomicRequestStarted', 'markEconomicResponsePersisted', 'settleEconomicRequest', 'releaseUndispatchedEconomicReservation', 'getEconomicReservation', 'listRecoverableEconomicReservations'],
   nonTerminalEvidence: ['appendRunEvidence', 'completeActionReceipt', 'prepareTargetOperation', 'completeTargetOperation', 'getTargetOperation', 'withTargetOperationLock'],
   workspaceMutationBoundary: ['withTargetOperationLock', 'withWorkspaceMutationBoundary'],
   workspaceOwnership: ['findMutationConflict', 'listArtifactOwners'],
@@ -93,6 +94,7 @@ module.exports = {
     assertion('structuredAllocationPlanning', 'structured allocation planning'),
   assertStructuredAllocationLeafExecutionRepository:
     assertion('structuredAllocationLeafExecution', 'structured allocation leaf execution'),
+  assertEconomicAccountingRepository: assertion('economicAccounting', 'economic accounting'),
   assertNonTerminalEvidenceRepository: assertion('nonTerminalEvidence', 'non-terminal evidence'),
   assertWorkspaceMutationBoundaryRepository: assertion('workspaceMutationBoundary', 'workspace mutation boundary'),
   assertWorkspaceOwnershipRepository: assertion('workspaceOwnership', 'workspace ownership'),

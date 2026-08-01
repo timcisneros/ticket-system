@@ -152,6 +152,10 @@ const {
   buildCompletionDecision,
   normalizeCompletionDecision
 } = require('./runtime/completion-decision-contract');
+const {
+  buildOllamaChatBody,
+  buildOpenAiResponsesBody
+} = require('./runtime/provider-request-body');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -17147,15 +17151,14 @@ function createProviderError(message, code, detail = {}) {
 async function callOpenAI(agent, input, options = {}) {
   const openAIConfig = getAgentOpenAIConfig(agent);
 
-  const responseBody = {
+  // Tranche 4: the body is built (and, for a governed dispatch, cap-proven) by
+  // the single canonical builder, so what a test inspects is what is serialized
+  // below. An ungoverned call produces the pre-Tranche-4 body unchanged.
+  const responseBody = buildOpenAiResponsesBody({
     model: openAIConfig.model,
     input,
-    text: {
-      format: {
-        type: 'json_object'
-      }
-    }
-  };
+    options
+  });
   const requestSnapshot = {
     url: 'https://api.openai.com/v1/responses',
     method: 'POST',
@@ -17409,12 +17412,11 @@ async function callOllama(agent, input, options = {}) {
     role: item.role || 'user',
     content: String(item.content || '')
   }));
-  const responseBody = {
+  const responseBody = buildOllamaChatBody({
     model: ollamaConfig.model,
     messages,
-    stream: false,
-    format: 'json'
-  };
+    options
+  });
   const requestSnapshot = {
     url: `${ollamaConfig.baseUrl}/api/chat`,
     method: 'POST',
