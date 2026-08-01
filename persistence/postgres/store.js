@@ -65,6 +65,23 @@ const {
   normalizeGovernedProviderRequest
 } = require('../../runtime/governed-provider-request-contract');
 const {
+  buildGovernedRunAuthority,
+  classifyRunGovernance,
+  normalizeGovernedRunAuthority
+} = require('../../runtime/governed-run-authority-contract');
+const {
+  buildRoleRoutingDecision
+} = require('../../runtime/role-routing-contract');
+const {
+  buildEconomicAuthority
+} = require('../../runtime/economic-authority-contract');
+const {
+  findPricingEntry
+} = require('../../runtime/model-pricing-catalog');
+const {
+  prepareGovernedProviderRequest
+} = require('../../runtime/governed-provider-request-contract');
+const {
   assertReceiptMatchesPreparedRequest,
   buildSettlementReceiptFromCapturedBasis,
   normalizeSettlementReceipt
@@ -1018,6 +1035,7 @@ function projectOperationReceipt(envelope, intentRecord = null) {
 
 // Transaction-level conflicts PostgreSQL resolves by aborting one side and expects the
 // caller to retry: serialization failure, deadlock, and lock-timeout.
+const GOVERNED_WORKER_ROLE = 'structured_leaf_executor';
 const RETRYABLE_TRANSACTION_CODES = new Set(['40001', '40P01', '55P03']);
 
 class PostgresRuntimeStore {
@@ -2706,6 +2724,11 @@ class PostgresRuntimeStore {
     ticketId,
     allocationPlanId = null,
     leafDrafts,
+    // Tranche 4. When supplied, EVERY sibling Run receives complete governed
+    // authority or none is admitted. Absent, the admission behaves exactly as
+    // it did before Tranche 4 — which is what keeps historical and v1 paths
+    // untouched.
+    governedLeafCapture = null,
     runEventPayload = () => ({}),
     eventType = 'ticket.allocation_leaf_runs_admitted',
     eventPayload = {}
@@ -2893,11 +2916,30 @@ class PostgresRuntimeStore {
         [draft.allocationItemId, draft.declaredWorkHash]));
       assertLeafBindingSetComplete(bindings, plan, { declaredWorkHashByItemId });
 
+      // Governed authority is captured HERE, inside the admission transaction
+      // and after Run identities are reserved, because the authority binds the
+      // Run ID. Capturing it earlier would require guessing an identity; later
+      // would mean a Run briefly existed without the authority that governs it.
+      //
+      // All siblings or none: any refusal below aborts the transaction, so no
+      // partially governed leaf set can become scheduler-visible.
+      const governedEnvelopes = governedLeafCapture === null
+        ? null
+        : await this._captureGovernedLeafAuthority(connection, {
+          ticketId: id,
+          drafts,
+          runIds: drafts.map((_, index) =>
+            positiveSafeInteger(identities.rows[index].id, 'run.id')),
+          capture: governedLeafCapture,
+          capturedAt: now
+        });
+
       const created = await this.createRunsAndStartTicket({
         ticketId: id,
         runDrafts: drafts.map((draft, index) => ({
           ...draft.run,
-          leafRunBinding: bindings[index]
+          leafRunBinding: bindings[index],
+          ...(governedEnvelopes ? { governedExecution: governedEnvelopes[index] } : {})
         })),
         runEventPayload,
         ticketEventPayload: {
@@ -4133,6 +4175,254 @@ class PostgresRuntimeStore {
         attempt: written.attempt,
         alreadyPersisted: false
       };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+
+  // ── Governed structured leaf authority (Tranche 4) ─────────────────────────
+  //
+  // Captures one routing decision and one economic authority per sibling Run,
+  // admits the single shared worker-role account, and returns one complete
+  // envelope per draft. Every refusal throws, which aborts the enclosing
+  // admission transaction, so the guarantee is structural:
+  //
+  //   all Runs with complete governed authority, or zero Runs
+  //
+  // No provider-request reservation is created here. Admission establishes what
+  // a Run MAY spend; reservations are created per request, later.
+  async _captureGovernedLeafAuthority(connection, {
+    ticketId, drafts, runIds, capture, capturedAt
+  }) {
+    const source = capture && capture.policySource;
+    if (!source || !source.roleRoutingPolicy || !source.economicPolicy ||
+        !source.pricingCatalog) {
+      const error = new Error(
+        'governed leaf admission requires all three closed policy documents');
+      error.code = 'GOVERNED_LEAF_POLICY_INCOMPLETE';
+      throw error;
+    }
+    if (source.economicPolicy.role !== GOVERNED_WORKER_ROLE) {
+      const error = new Error(
+        `governed leaf admission requires a ${GOVERNED_WORKER_ROLE} economic policy`);
+      error.code = 'GOVERNED_LEAF_ROLE_MISMATCH';
+      throw error;
+    }
+
+    // The shared account, admitted once for the whole Ticket and role. Sibling
+    // Runs contend against this one balance; a conflicting policy refuses here
+    // rather than letting half the siblings be governed by a different budget.
+    const account = await this.admitTicketEconomicAccount({
+      ticketId,
+      role: GOVERNED_WORKER_ROLE,
+      economicPolicy: source.economicPolicy
+    }, { client: connection });
+    const economicAccountId = Number(account.account.id);
+
+    const envelopes = [];
+    for (let index = 0; index < drafts.length; index += 1) {
+      const draft = drafts[index];
+      const runId = runIds[index];
+      // The worker principal is the agent the ITEM admitted. It is never
+      // replaced, and the routing policy must authorize that exact agent's
+      // route rather than a default or the planner's.
+      const assignedAgentId = positiveSafeInteger(
+        draft.item.assignedAgentId, 'allocationItem.assignedAgentId');
+
+      const routingDecision = buildRoleRoutingDecision({
+        policy: source.roleRoutingPolicy,
+        role: GOVERNED_WORKER_ROLE,
+        ticketId,
+        subjectKind: 'run',
+        subjectId: runId,
+        actingAgentId: assignedAgentId,
+        decidedAt: capturedAt
+      });
+      const economicAuthority = buildEconomicAuthority({
+        policy: source.economicPolicy,
+        routingDecision,
+        pricingCatalog: source.pricingCatalog,
+        capturedAt
+      });
+      envelopes.push(buildGovernedRunAuthority({
+        policySource: source,
+        routingDecision,
+        economicAuthority,
+        // The exact entry the authority priced against, from the CAPTURED
+        // catalog — never resolved from current configuration later.
+        pricingEntry: findPricingEntry(source.pricingCatalog, {
+          provider: economicAuthority.provider,
+          model: economicAuthority.dispatchTarget,
+          adapterId: economicAuthority.adapterId
+        }),
+        economicAccountId,
+        ticketId,
+        runId,
+        allocationItemId: positiveSafeInteger(
+          draft.allocationItemId, 'leafDraft.allocationItemId'),
+        capturedAt
+      }));
+    }
+    return envelopes;
+  }
+
+  // ── Durable next-request ordinal and reservation (Tranche 4) ───────────────
+  //
+  // THE ORDINAL IS DERIVED, NOT REMEMBERED. A process-local counter cannot
+  // survive a restart, and a mutable `nextOrdinal` column would be a second
+  // source of truth that could disagree with the reservations it counts. The
+  // reservation ledger already proves the sequence, so the next ordinal is read
+  // from it under the Run lock:
+  //
+  //   existing reservations for this Run + locked Run identity -> next ordinal
+  //
+  // This method contacts NO provider. It ends with a committed reservation and
+  // the exact bytes that a later dispatch will send.
+  async prepareAndReserveNextGovernedRunRequest({
+    runId,
+    canonicalBody,
+    endpointIdentity,
+    runtimeModelRequestMaximum = null,
+    runtimeModelRequestsUsed = null,
+    preparedAt = null
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    if (!canonicalBody || typeof canonicalBody !== 'object') {
+      throw new TypeError('canonicalBody must be the caller-built worker request body');
+    }
+
+    const execute = async connection => {
+      // Lock the RUN first, so its captured authority cannot be mutated while a
+      // request is prepared against it.
+      //
+      // ORDERING NOTE, because it is easy to misread this lock as the one that
+      // makes ordinals safe: it is not. `reserveEconomicRequest` takes the
+      // shared account row lock, and THAT is what serializes two concurrent
+      // preparations for the same Run — the second waits there, then reads the
+      // ledger the first committed. Removing this Run lock alone does not
+      // duplicate an ordinal; removing the account lock does. The account lock
+      // is taken here too, before any balance or ledger is read, so the lock
+      // order is runs -> account everywhere and no deadlock is possible.
+      const runResult = await connection.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`, [id]);
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const run = runFromRow(runResult.rows[0]);
+
+      // A structured leaf Run with COMPLETE authority, or nothing. A partial
+      // envelope throws here and never degrades to the historical path.
+      if (!run.leafRunBinding) {
+        const error = new Error(`run ${id} is not a structured leaf run`);
+        error.code = 'GOVERNED_RUN_NOT_LEAF';
+        throw error;
+      }
+      const classified = classifyRunGovernance(run);
+      if (!classified.governed) {
+        const error = new Error(`run ${id} carries no governed authority`);
+        error.code = 'GOVERNED_RUN_AUTHORITY_ABSENT';
+        throw error;
+      }
+      const authority = normalizeGovernedRunAuthority(run.governedExecution, {
+        expectedRunId: id,
+        expectedTicketId: run.ticketId,
+        expectedAllocationItemId: run.leafRunBinding.allocationItemId
+      });
+
+      // The shared worker account, locked before any balance or ledger is read.
+      // This is the lock that orders sibling Runs against one budget.
+      const accountRow = await this._lockedEconomicAccount(connection, {
+        ticketId: run.ticketId, role: GOVERNED_WORKER_ROLE
+      });
+      if (Number(accountRow.id) !== authority.economicAccountId) {
+        const error = new Error(
+          `run ${id} names economic account ${authority.economicAccountId}, ` +
+          `but ticket ${run.ticketId} holds ${accountRow.id}`);
+        error.code = 'GOVERNED_RUN_ACCOUNT_MISMATCH';
+        throw error;
+      }
+
+      // The durable ledger for THIS Run. Released reservations are excluded
+      // from the count but not from the ordinal sequence: an ordinal is spent
+      // once, so a released request never lets a later one reuse its number.
+      const ledger = await connection.query(
+        `SELECT model_request_ordinal, state
+           FROM ${this.table('economic_request_reservations')}
+          WHERE run_id = $1 AND ticket_id = $2 AND role = $3
+          ORDER BY model_request_ordinal`,
+        [id, run.ticketId, GOVERNED_WORKER_ROLE]
+      );
+      const ordinals = ledger.rows.map(row => Number(row.model_request_ordinal));
+      const nextOrdinal = ordinals.length === 0 ? 1 : Math.max(...ordinals) + 1;
+      const chargeableRequests = ledger.rows.filter(row => row.state !== 'released').length;
+
+      // Economic ceiling.
+      const maximumRequests = authority.economicAuthority.maximumProviderRequests;
+      if (nextOrdinal > maximumRequests) {
+        const error = new Error(
+          `run ${id} request ${nextOrdinal} exceeds the ${maximumRequests} ` +
+          'provider requests its economic authority permits');
+        error.code = 'GOVERNED_RUN_REQUEST_COUNT_EXCEEDED';
+        error.detail = { nextOrdinal, maximumRequests };
+        throw error;
+      }
+
+      // The existing runtime model-request budget. Economic governance
+      // SUPPLEMENTS it; both must admit the request, and neither is bypassed.
+      if (runtimeModelRequestMaximum !== null) {
+        const runtimeMaximum = positiveSafeInteger(
+          runtimeModelRequestMaximum, 'runtimeModelRequestMaximum');
+        if (nextOrdinal > runtimeMaximum) {
+          const error = new Error(
+            `run ${id} request ${nextOrdinal} exceeds the runtime maximum of ` +
+            `${runtimeMaximum} model requests`);
+          error.code = 'GOVERNED_RUN_RUNTIME_BUDGET_EXCEEDED';
+          error.detail = { nextOrdinal, runtimeMaximum };
+          throw error;
+        }
+      }
+      // A disagreement between the two ledgers is an integrity problem, not
+      // something to quietly reconcile: one of them has lost a request.
+      if (runtimeModelRequestsUsed !== null &&
+          Number(runtimeModelRequestsUsed) !== chargeableRequests) {
+        const error = new Error(
+          `run ${id} runtime model-request count ${runtimeModelRequestsUsed} disagrees ` +
+          `with ${chargeableRequests} durable economic reservations`);
+        error.code = 'GOVERNED_RUN_BUDGET_DISAGREEMENT';
+        error.detail = { runtimeModelRequestsUsed, chargeableRequests };
+        throw error;
+      }
+
+      // The request is built from the CAPTURED route: the model, the cap and
+      // the truncation mode all come from the authority, never from the agent
+      // row or the environment.
+      // The durable captured entry, read from the Run's own envelope. No
+      // current catalog is consulted anywhere in this transaction.
+      const pricingEntry = authority.pricingEntry;
+      const prepared = prepareGovernedProviderRequest({
+        routingDecision: authority.routingDecision,
+        economicAuthority: authority.economicAuthority,
+        modelRequestOrdinal: nextOrdinal,
+        endpointIdentity,
+        canonicalBody,
+        authorizedOutputTokens: authority.economicAuthority.maximumOutputTokensPerRequest,
+        truncationMode: 'disabled',
+        pricingEntryHash: authority.economicAuthority.pricingEntryHash,
+        maximumLiabilityMicroUsd: authority.economicAuthority.maximumPerRequestMicroUsd,
+        preparedAt: preparedAt || isoTimestamp(
+          (await connection.query('SELECT clock_timestamp() AS ts')).rows[0].ts,
+          'governed run request clock')
+      });
+
+      const reservation = await this.reserveEconomicRequest({
+        preparedRequest: prepared,
+        economicAuthority: authority.economicAuthority,
+        pricingEntry
+      }, { client: connection });
+
+      return { reservation, preparedRequest: prepared, ordinal: nextOrdinal, run };
     };
     return client ? execute(client) : this.withTransaction(execute);
   }
