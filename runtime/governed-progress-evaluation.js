@@ -91,7 +91,15 @@ function evaluateGovernedRunProgress({
   satisfiedFactIdentitiesByReceiptId = new Map()
 }) {
   const policy = normalizeProgressControlPolicy(progressPolicy);
-  const { run, reservations, receipts, cumulativeResources, sourceCutoff } = progressState;
+  const {
+    run, reservations, receipts, cumulativeResources, sourceCutoff, executionEpochAt
+  } = progressState;
+  // Duration is measured from the immutable execution epoch, never from the
+  // latest attempt's `started_at`, which recovery resets to NULL.
+  if (progressState.latestAttemptStartedAt !== undefined && !executionEpochAt) {
+    throw new Error(
+      'governed progress evaluation requires an immutable execution epoch');
+  }
   const { windows } = partitionReceiptsIntoWindows({ reservations, receipts });
 
   // Replay every window in order so the satisfied-fact set and the consecutive
@@ -171,6 +179,7 @@ function evaluateGovernedRunProgress({
     decision,
     consecutiveNoProgressWindows,
     windowCount: windows.length,
+    executionEpochAt,
     sourceCutoff
   });
 }

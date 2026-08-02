@@ -934,6 +934,59 @@ async function main() {
     assert.ok(evaluated.decision.cumulativeResources.providerRequests >= 3,
       'and never erases cumulative resource history');
 
+    // ── The execution epoch survives recovery; started_at does not ────────
+    //
+    // `recoverExpiredRun` sets `started_at = NULL`, so it measures the latest
+    // attempt rather than the Run's lifetime. A Run that recovers N times would
+    // otherwise receive N wall-clock budgets — the A3 defect exactly.
+
+    const epochTicket = await admitLeafSet('Governed leaf epoch');
+    const epochRun = await store.getRun(
+      (await store.listRunsForTicket({ ticketId: epochTicket.ticket.id })).runs[0].id);
+    const epochBefore = (await store.readGovernedRunProgressState(epochRun.id))
+      .executionEpochAt;
+    assert.ok(epochBefore, 'a governed Run carries an immutable execution epoch');
+    assert.equal(epochBefore, epochRun.governedExecution.capturedAt,
+      'the epoch is the hash-bound admission timestamp');
+
+    // Drive the Run through a real lease claim and a real expiry recovery.
+    await store.claimPendingRun({
+      leaseOwner: 'epoch-test', leaseDurationMs: 600_000,
+      eligibleRunIds: [epochRun.id] });
+    const claimedState = await store.readGovernedRunProgressState(epochRun.id);
+    assert.equal(claimedState.executionEpochAt, epochBefore,
+      'claiming a lease does not move the epoch');
+
+    await store.pool.query(
+      `UPDATE ${store.table('runs')}
+          SET status = 'running', started_at = clock_timestamp(),
+              lease_owner = 'epoch-test',
+              lease_expires_at = clock_timestamp() - interval '1 hour',
+              revision = revision + 1
+        WHERE id = $1`, [epochRun.id]);
+    await store.recoverExpiredRun({ runId: epochRun.id });
+
+    const recoveredRun = await store.getRun(epochRun.id);
+    const recoveredState = await store.readGovernedRunProgressState(epochRun.id);
+    // The proof: the attempt timestamp was cleared, the epoch was not.
+    assert.equal(recoveredRun.startedAt, null,
+      'recovery really does clear the latest-attempt timestamp');
+    assert.equal(recoveredState.latestAttemptStartedAt, null);
+    assert.equal(recoveredState.executionEpochAt, epochBefore,
+      'the execution epoch is unchanged by recovery, so duration cannot reset');
+
+    // A progress state with no epoch cannot be evaluated at all: measuring
+    // duration from a resettable stamp is the defect, so its absence refuses.
+    assert.throws(
+      () => require('../runtime/governed-progress-evaluation')
+        .evaluateGovernedRunProgress({
+          progressState: { ...recoveredState, executionEpochAt: null },
+          declaredWorkSnapshot: epochRun.declaredWorkSnapshot,
+          progressPolicy: epochRun.governedExecution.progressControlPolicy
+        }),
+      /immutable execution epoch/,
+      'evaluation without an immutable execution epoch refuses');
+
     // ── Explicit evaluation cutoff ────────────────────────────────────────
     //
     // `withTransaction` runs at READ COMMITTED and receipts are written on an

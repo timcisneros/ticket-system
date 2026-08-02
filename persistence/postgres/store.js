@@ -4741,10 +4741,26 @@ class PostgresRuntimeStore {
           settledMicroUsd,
           budgetChargedUnits
         },
-        // Duration measured from the DURABLE run start, not a loop-entry
-        // variable. This is the half of A3 that needed no new schema: a Run
-        // that recovers N times no longer receives N wall-clock budgets.
-        startedAt: run.startedAt,
+        // THE EXECUTION EPOCH — and why it is NOT `runs.started_at`.
+        //
+        // `recoverExpiredRun` sets `started_at = NULL` when a lease expires, and
+        // the next claim re-stamps it through
+        // `COALESCE(run.started_at, clock_timestamp())`. So `started_at` measures
+        // the latest execution attempt, not the Run's lifetime: a Run that
+        // recovers N times would receive N wall-clock budgets, which is exactly
+        // the defect pending decision A3 records.
+        //
+        // `governedExecution.capturedAt` is stamped once at leaf admission,
+        // before the Run is scheduler-visible, and lives inside the immutable
+        // hash-verified envelope — so no recovery, lease claim, retry
+        // preparation or status transition can rewrite it. A genuinely new
+        // retry Run is admitted separately and receives its own epoch, which is
+        // the correct behaviour.
+        executionEpochAt: run.governedExecution
+          ? run.governedExecution.capturedAt
+          : null,
+        // Retained for diagnostics only. Never used as duration authority.
+        latestAttemptStartedAt: run.startedAt,
         reservations: reservations.rows.map(row => ({
           reservationId: Number(row.id),
           modelRequestOrdinal: Number(row.model_request_ordinal),
