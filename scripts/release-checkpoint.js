@@ -23,6 +23,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'economic-authority-contract-test.js',
   'economic-settlement-receipt-contract-test.js',
   'governed-leaf-slice-boundary-test.js',
+  'verified-progress-contract-test.js',
   'governed-openai-transport-test.js',
   'governed-planner-cutover-boundary-test.js',
   'governed-policy-source-test.js',

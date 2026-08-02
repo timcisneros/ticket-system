@@ -172,6 +172,7 @@ const TESTS = Object.freeze([
   { file: "economic-authority-contract-test.js", status: "required" },
   { file: "economic-settlement-receipt-contract-test.js", status: "required" },
   { file: "governed-leaf-slice-boundary-test.js", status: "required" },
+  { file: "verified-progress-contract-test.js", status: "required" },
   { file: "governed-openai-transport-test.js", status: "required" },
   { file: "governed-planner-cutover-boundary-test.js", status: "required" },
   { file: "governed-policy-source-test.js", status: "required" },
