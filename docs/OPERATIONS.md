@@ -847,9 +847,11 @@ worthless.
 ### Reading a block
 
 ```text
-verified_progress_exhausted             tolerance for no-progress windows spent
-                                        (see the note above: progress is not yet
-                                        credited, so this is the expected stop)
+verified_progress_exhausted             NOT currently reliable — see the note
+                                        above. Progress cannot be credited, so
+                                        this reason appears whether or not the
+                                        Run advanced declared work. It is not
+                                        evidence that nothing was accomplished.
 repeated_no_op                          the same no-op pattern, repeatedly
 repeated_failed_operation               a failed/refused operation streak
 mutation_reversal_churn                 work written then reverted

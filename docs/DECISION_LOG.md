@@ -1,5 +1,54 @@
 # Decision Log
 
+## Verified progress has no durable evidence substrate (2026-08-02)
+
+The Tranche 5 merge-readiness audit found that production never credits verified
+progress, and that the gap cannot be closed inside Tranche 5.
+
+**The classification was wrong the first time.** It was recorded as a
+non-blocking documented boundary on the reasoning that the error direction is
+conservative — the runtime stops spending earlier than the policy intends and
+can never overspend. That reasoning does not survive contact with what the
+system tells an operator. A Run that genuinely advanced declared work is stopped
+and labelled `verified_progress_exhausted`, and that persisted reason is false.
+Erring toward less spend does not make incorrect execution authority correct.
+
+**Three of the four pieces exist.** A canonical deterministic evaluator
+(`directPostconditionResult`), a canonical identity rule (the typed criterion's
+`criterionHash`), and a canonical objective compiler (`buildObjectiveContract`)
+that yields `folder_exists` and `path_absent` postconditions for recognized
+objectives. The missing piece is the durable substrate.
+
+**The substrate is the whole problem.** `run:postcondition_completed` claims go
+to `replay_snapshots` — one mutable row per run, keyed `run_id PRIMARY KEY`,
+carrying a JSONB document and a `revision` counter. Items are stamped with
+`new Date()`, the process clock, and have no per-item monotonic identity. The
+append-only events path is workflow-only and returns null for the `agent` Runs
+that governed structured leaf execution uses. No migration defines a
+postcondition table or column.
+
+Tranche 5's evaluation discipline cannot be satisfied by that: no cutoff is
+expressible without a monotonic id; ordering authority would revert to the
+process clock, which the execution-epoch work deliberately removed; and a row
+rewritten in place cannot support "later facts do not rewrite an existing
+evaluation". Wiring it would break the stable-cutoff proof, the database-time
+proof, and the A3 closure that depends on both.
+
+**The alternative was worse.** Deriving satisfaction from `operation_receipts`
+would mean writing a second postcondition evaluator alongside the completion
+one. Two authorities answering "did this postcondition pass" is exactly the
+failure mode this tranche exists to prevent, and the first time they disagreed
+the disagreement would be silent.
+
+**So the work stopped rather than proceeding.** Verified-progress credit is
+recorded as unresolved, the Tranche 5 completion claim is withdrawn, and the
+prerequisite is named: a durable, append-only, database-ordered
+postcondition-result record owned by the typed-evidence work. Churn termination,
+coordination, duration bounding and stop persistence remain implemented and
+proved; they do not depend on the missing piece. A3's persistence closure is
+scoped separately and is unaffected.
+
+
 ## Tranche 5 — Coordination and Verified-Progress Controls (2026-08-02)
 
 **Activity is not progress, and four levels are not one number.** A run that is

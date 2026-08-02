@@ -442,8 +442,8 @@ them: tightening their wall clock will fail runs that previously passed.
 
 | Field | Value |
 |-------|-------|
-| **Status** | Open |
-| **Severity** | Medium — conservative in effect, untruthful in explanation |
+| **Status** | Open — BLOCKS Tranche 5 merge |
+| **Severity** | High — verified-progress accounting is a core Tranche 5 behaviour and is absent in production |
 | **Evidence** | `persistence/postgres/store.js` `prepareAndReserveNextGovernedRunRequest` passes `satisfiedFactIdentitiesByReceiptId: null`; no production caller supplies it |
 | **Decision required** | Where the receipt-to-declared-fact derivation lives, and whether the stop reason should distinguish "no progress" from "progress not measured" |
 
@@ -464,12 +464,37 @@ the captured policy intends and never permitting extra spend. It is a truthfulne
 defect in the explanation given to an operator, which is why it is recorded here rather
 than treated as acceptable rounding.
 
-It was NOT fixed inside Tranche 5 deliberately. Deriving satisfied facts from typed
-evidence is the typed-evidence work's concern, and wiring it here would have meant
-inventing an evidence-to-declared-fact mapping inside churn control — exactly the kind of
-second authority the tranche exists to avoid. The boundary is documented in
-`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md` and `OPERATIONS.md` so no operator
-reads a zero count as proof that nothing happened.
+**Reclassified 2026-08-02 after merge-readiness audit.** This was first recorded as a
+non-blocking documented boundary. That was wrong: false blocking is incorrect execution
+authority, and a persisted stop reason that can be untrue is not made acceptable by
+erring toward less spend. It blocks merge.
+
+**Why it cannot be wired inside Tranche 5.** The audit traced every candidate authority.
+An evaluator exists (`directPostconditionResult`), an identity rule exists (typed
+`criterionHash`), and an objective compiler exists (`buildObjectiveContract`). The
+DURABLE SUBSTRATE does not. `run:postcondition_completed` claims are written by
+`recordRunEvent` into `replay_snapshots` — one mutable row per run (`run_id PRIMARY KEY`,
+`revision` counter), items stamped `capturedAt: new Date()` (process clock), no per-item
+monotonic id. The append-only path `buildRunPostconditionEvidence` returns `null` unless
+`executionMode === 'workflow'`; governed leaf Runs are `agent`. No migration defines a
+postcondition table or column.
+
+That substrate admits no cutoff (`id <= N` is not expressible), would make the process
+clock the ordering authority, and is rewritten in place. Feeding it into governed
+progress evaluation would break the stable-cutoff proof, the database-time proof, and the
+A3 closure that rests on both. Deriving satisfaction from `operation_receipts` instead
+would require a second independent postcondition evaluator, which is precisely the second
+authority this tranche exists to avoid.
+
+**Prerequisite to close.** A durable, append-only, database-ordered postcondition-result
+record — a typed-evidence seam writing deterministic postcondition results to an ordered
+table with a monotonic id and a database timestamp, as `operation_receipts` and `events`
+already do. Owner: the typed-evidence work, not churn control.
+
+**Do not**, while this is open: weaken the contract to call candidate progress verified;
+describe `verified_progress_exhausted` as proof that no declared work advanced; or merge
+Tranche 5 as feature-complete. A3's persistence closure is scoped separately and is
+unaffected — see the A3 verdict above.
 
 #### Tranche 5 coordination scope deliberately NOT implemented (2026-08-02)
 

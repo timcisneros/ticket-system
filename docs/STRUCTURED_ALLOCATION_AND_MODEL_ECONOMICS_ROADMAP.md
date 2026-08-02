@@ -572,9 +572,13 @@ The durable lifecycle vocabulary is used verbatim; there is no overloaded
 
 ## Tranche 5 — Coordination and Verified-Progress Controls
 
-**COMPLETE.** Bounded coordination signals, verified-progress accounting and
-churn termination, evaluated entirely from durable evidence. No recursive
-delegation and no generic decision-claim registry were introduced.
+**NOT COMPLETE — verified-progress credit is unresolved.** Bounded coordination
+signals and churn termination are implemented and enforced from durable evidence.
+Verified-progress ACCOUNTING is not: production cannot credit a newly satisfied
+admitted declared-work fact, because the evidence prerequisite it depends on does
+not exist durably. See "Verified progress requires an unimplemented evidence
+prerequisite" below. No recursive delegation and no generic decision-claim
+registry were introduced.
 
 ### The authority chain
 
@@ -674,6 +678,62 @@ durable settlement facts Tranche 4 reads. Authoritative balances remain the
 role-scoped economic accounts in `runtime/governed-execution-projection.js`;
 Tranche 5 introduces no second ledger.
 
+### Verified progress requires an unimplemented evidence prerequisite
+
+**This is a blocking gap, not a documentation boundary.** It was previously
+recorded as the latter; that classification was wrong. False blocking is
+incorrect execution authority, and a persisted stop reason that can be untrue is
+not made acceptable by the fact that it errs toward spending less.
+
+The three pieces that DO exist:
+
+* a canonical deterministic evaluator — `directPostconditionResult` in
+  `runtime/completion-decision-contract.js`, which maps a postcondition
+  declaration plus `run:postcondition_completed` claims to passed/failed;
+* a canonical identity rule — a typed criterion's `criterionHash`, which is what
+  `inventoryDeclaredFacts` uses as the declared-fact identity;
+* a canonical objective compiler — `buildObjectiveContract`, which yields
+  `folder_exists` and `path_absent` postconditions for recognized objectives.
+
+The piece that does NOT exist is the durable substrate. `run:postcondition_completed`
+claims are written by `recordRunEvent` into `replay_snapshots`: ONE MUTABLE ROW PER
+RUN (`run_id PRIMARY KEY`, a `revision` counter), whose items are stamped
+`capturedAt: new Date()` — the process clock — and carry no per-item monotonic
+identity. The append-only events path, `buildRunPostconditionEvidence`, returns
+`null` unless `executionMode === 'workflow'`, and governed structured leaf Runs
+are `agent`. No migration defines a postcondition table or column.
+
+That substrate cannot satisfy Tranche 5's evaluation discipline:
+
+* **no cutoff is expressible** — there is no `id <= N` to bound, so a claim
+  appended moments ago is indistinguishable from one that preceded the
+  evaluation;
+* **ordering authority would be the process clock** — precisely what the
+  execution-epoch work removed as authority;
+* **the row is rewritten in place**, so "later facts do not rewrite an existing
+  evaluation" cannot hold the way it does for the hash-chained event log.
+
+Wiring it anyway would inject process-clock-ordered, non-cutoff-bounded,
+rewritable evidence into the one path this tranche made durable, cutoff-stable
+and restart-deterministic — breaking the stable-cutoff proof, the
+database-time proof, and the A3 closure that rests on both.
+
+**The prerequisite.** A durable, append-only, database-ordered postcondition-result
+record — a typed-evidence seam that writes deterministic postcondition results to
+an ordered table with a monotonic id and a database timestamp, the way
+`operation_receipts` and `events` already do. That belongs to the typed-evidence
+work, not to churn control: building it inside Tranche 5 would create a second
+postcondition authority, which is the thing this tranche exists to avoid.
+
+**Until it exists**, on the governed structured leaf path:
+
+* `verifiedProgressCount` is always 0;
+* the consecutive no-progress streak grows on every governed window;
+* a Run stops at `maximumConsecutiveNoProgressWindows` with reason
+  `verified_progress_exhausted` **whether or not it advanced declared work**;
+* that reason is therefore NOT evidence that no declared work advanced, and must
+  not be read as such.
+
 ### Verified progress is not yet credited in production
 
 The classification, the four levels and the tolerance arithmetic are complete and
@@ -732,6 +792,6 @@ Tranche 2A: COMPLETE
 Tranche 2B: COMPLETE
 Tranche 3: COMPLETE
 Tranche 4: COMPLETE
-Tranche 5: COMPLETE
+Tranche 5: INCOMPLETE — verified-progress credit unresolved
 Tranche 6: NOT STARTED
 ```
