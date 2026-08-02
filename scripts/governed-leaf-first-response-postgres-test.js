@@ -50,6 +50,23 @@ async function main() {
         progressPolicy: progressControlPolicy({
           maximumConsecutiveNoProgressWindows: 1
         }),
+        // ONE governed request, bounded by the Run's own admitted limits. The
+        // worker would otherwise legitimately prepare a second, and because a
+        // governed request is now persisted BEFORE transport, that attempt
+        // durably records a second providerRequests item even though the fixture
+        // refuses to answer it. The limit lives in the admission-captured limits
+        // snapshot, not the environment, so it is set where the Run reads it.
+        runtimeLimits: {
+          maxExecutionSteps: 6,
+          maxModelRequestsPerRun: 1,
+          maxWorkspaceOperationsPerRun: 40,
+          maxRuntimeDurationMs: 600_000,
+          maxAttempts: 3,
+          maxProcessOperationsPerRun: 5,
+          maxBrowserOperationsPerRun: 5,
+          maxOutputArtifactBytes: 1_048_576,
+          maxOutputArtifactBytesPerRun: 1_048_576
+        },
         leafPostconditions: (item, owned) => [
           { type: 'folder_exists', path: `${owned}/alpha` },
           { type: 'folder_exists', path: `${owned}/beta` }
@@ -137,6 +154,19 @@ async function main() {
         const snapshot = (replay && replay.snapshot) || {};
         const modelResponses = snapshot.modelResponses || [];
         const parsedPlans = snapshot.parsedModelPlans || [];
+
+        // Provider-request replay must exist and precede the response. Governed
+        // dispatch returned a requestEvidenceKey for evidence it never wrote, so
+        // a correct Run reported "1 response, 0 requests" and read as an anomaly.
+        const providerRequests = snapshot.providerRequests || [];
+        assert.equal(providerRequests.length, 1, 'one provider-request replay item');
+        assert.equal(providerRequests[0].governed, true);
+        assert.equal(providerRequests[0].method, 'POST');
+        assert.equal(providerRequests[0].url, 'https://api.openai.com/v1/responses');
+        assert.equal('headers' in providerRequests[0], false,
+          'no request headers — and therefore no credential — reach replay');
+        assert.ok(providerRequests[0].body && providerRequests[0].body.input,
+          'the canonical request body is durable');
 
         assert.equal(modelResponses.length, 1, 'one model-response replay item');
         assert.equal(JSON.stringify(modelResponses[0]).includes('resp_'), false,

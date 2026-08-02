@@ -31,11 +31,17 @@ const path = require('node:path');
 const CAPTURE_PATH = process.env.HERMETIC_TRANSPORT_CAPTURE || null;
 const RESPONSE_PATH = process.env.HERMETIC_TRANSPORT_RESPONSE || null;
 
-function loadFixtureResponse() {
+// The fixture is a BOUNDED SEQUENCE, read fresh each time so a suite can stage
+// a multi-request scenario. A file holding one response object still means "one
+// response"; `{ responses: [...] }` means the Nth governed request receives the
+// Nth entry. There is no wrap-around and no default beyond the end: a request
+// the scenario did not plan for is a refusal, never an improvised answer.
+function loadFixtureResponses() {
   if (!RESPONSE_PATH) {
-    return { statusCode: 200, body: JSON.stringify({ output_text: '{}' }) };
+    return [{ statusCode: 200, body: JSON.stringify({ output_text: '{}' }) }];
   }
-  return JSON.parse(require('node:fs').readFileSync(RESPONSE_PATH, 'utf8'));
+  const parsed = JSON.parse(require('node:fs').readFileSync(RESPONSE_PATH, 'utf8'));
+  return Array.isArray(parsed.responses) ? parsed.responses : [parsed];
 }
 
 function record(entry) {
@@ -52,13 +58,16 @@ const realCreate = transportModule.createOpenAiGovernedTransport;
 let fixtureRequestCount = 0;
 
 function fixtureHttpsRequest(options, onResponse) {
-  // A bounded fixture serves ONE response. The worker may legitimately ask for
-  // another after finishing the first; refusing here keeps an uncontrolled
-  // second response from entering the run, and the refusal is an expected
-  // boundary rather than a failure of the first response.
+  // A bounded fixture answers only the requests its scenario staged. The worker
+  // may legitimately ask again after finishing the last one; refusing keeps an
+  // unplanned response out of the run, and the refusal is an expected boundary
+  // rather than a failure of the requests that were answered.
   fixtureRequestCount += 1;
-  if (fixtureRequestCount > 1) {
-    throw new Error('HERMETIC_FIXTURE_SECOND_REQUEST_REFUSED');
+  const staged = loadFixtureResponses();
+  if (fixtureRequestCount > staged.length) {
+    throw new Error(
+      `HERMETIC_FIXTURE_UNPLANNED_REQUEST_${fixtureRequestCount} ` +
+      `(scenario staged ${staged.length})`);
   }
   // The transport spells its options discretely so a test can read back exactly
   // what production sends. Assert the destination here too: a stub that accepts
@@ -70,11 +79,11 @@ function fixtureHttpsRequest(options, onResponse) {
       `${options.hostname}${options.path}`);
   }
   const chunks = [];
-  const fixture = loadFixtureResponse();
+  const fixture = staged[fixtureRequestCount - 1];
 
   const response = new (require('node:stream').PassThrough)();
   response.statusCode = fixture.statusCode || 200;
-  response.headers = { 'x-request-id': 'fixture-governed-request-1' };
+  response.headers = { 'x-request-id': `fixture-governed-request-${fixtureRequestCount}` };
 
   const request = {
     on() { return request; },
@@ -87,6 +96,7 @@ function fixtureHttpsRequest(options, onResponse) {
       // Headers are captured WITHOUT the Authorization value: the test needs to
       // know a credential header was formed, never what it contained.
       record({
+        requestOrdinal: fixtureRequestCount,
         hostname: options.hostname,
         path: options.path,
         method: options.method,

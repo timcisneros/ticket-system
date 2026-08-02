@@ -251,6 +251,7 @@ async function seedGovernedStructuredTicket(store, {
   // needs a NON-EMPTY one because provider config refuses without it; the
   // hermetic preload accepts only its fixed sentinel.
   agentApiKey = '',
+  ticketObjective = null,
   // Explicit deterministic values. Production resolves these from deployment
   // configuration; a fixture states them, so the Run's shape is canonical while
   // its limits stay predictable.
@@ -316,7 +317,13 @@ async function seedGovernedStructuredTicket(store, {
     [workerB.id]: 'reports/b/'
   };
 
-  const objectiveText = `Seeded governed structured work ${stamp}`;
+  // The Ticket objective is what production COMPILES into an objective
+  // contract, and the completion decision evaluates recorded claims against
+  // that compilation. A fixture whose objective the deterministic grammar does
+  // not recognize can therefore execute and write evidence normally and still
+  // never be completable — so a scenario that means to reach completion states
+  // an objective the grammar recognizes.
+  const objectiveText = ticketObjective || `Seeded governed structured work ${stamp}`;
   const catalog = await store.getConfiguredAgentsByIds({
     agentIds: [planner.id, workerA.id, workerB.id] });
   const authorityDraft = buildStructuredAllocationAuthorityDraft({
