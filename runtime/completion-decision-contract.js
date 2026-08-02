@@ -1,5 +1,10 @@
 'use strict';
 
+const {
+  evaluateCriterion,
+  observationFromCheckedPath
+} = require('./postcondition-criterion-evaluator');
+
 const crypto = require('crypto');
 
 const COMPLETION_AUTHORITY_VERSION = 1;
@@ -424,26 +429,32 @@ function directPostconditionResult(postcondition, snapshot) {
       reasonCode: 'POSTCONDITION_EVIDENCE_UNAVAILABLE'
     };
   }
-  const matching = [];
+  // THE RULE IS NOT DECIDED HERE. This path owns only the OBSERVATION — turning
+  // recorded claims into normalized path observations. Whether those satisfy the
+  // criterion is decided by the one canonical evaluator, which the execution
+  // seam also calls, so the two cannot drift into disagreeing about the same
+  // admitted criterion.
+  const observations = [];
   for (const claim of claims) {
     const checkedPaths = Array.isArray(claim.checkedPaths) ? claim.checkedPaths : [];
     for (const checked of checkedPaths) {
-      if (!checked || checked.path !== postcondition.path) continue;
-      if (postcondition.type === 'folder_exists' && checked.type === 'folder') matching.push(claim);
-      if (postcondition.type === 'path_absent' && checked.type === 'absent') matching.push(claim);
-      if (postcondition.type === 'file_content_equals' && checked.type === 'file' &&
-          typeof checked.expectedContent === 'string' &&
-          sha256(checked.expectedContent) === postcondition.contentSha256) {
-        matching.push(claim);
-      }
+      const observation = observationFromCheckedPath(checked);
+      if (observation) observations.push(observation);
     }
   }
+  const verdict = evaluateCriterion(postcondition, observations);
+  // Preserved behaviour: this path has always reported an unobserved
+  // postcondition as failed rather than unknown, because at completion time a
+  // postcondition nobody recorded is not satisfied. The canonical evaluator
+  // distinguishes the two, so the mapping is made explicit here instead of
+  // being buried in the rule.
+  const passed = verdict.passed === true;
   return {
     type: postcondition.type,
     authority: 'objective_contract',
     path: postcondition.path,
-    passed: matching.length > 0,
-    reasonCode: matching.length > 0 ? 'POSTCONDITION_PASSED' : 'POSTCONDITION_EVALUATION_FAILED'
+    passed,
+    reasonCode: passed ? 'POSTCONDITION_PASSED' : 'POSTCONDITION_EVALUATION_FAILED'
   };
 }
 

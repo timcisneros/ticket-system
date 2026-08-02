@@ -169,6 +169,7 @@ const TESTS = Object.freeze([
   { file: "governed-leaf-production-path-postgres-test.js", status: "required" },
   { file: "verified-progress-projection-postgres-test.js", status: "required" },
   { file: "governed-postcondition-evidence-postgres-test.js", status: "required" },
+  { file: "postcondition-criterion-evaluator-test.js", status: "required" },
   { file: "governed-planner-dispatch-postgres-test.js", status: "required" },
   { file: "governed-planner-production-path-postgres-test.js", status: "required" },
   { file: "economic-authority-contract-test.js", status: "required" },

@@ -181,6 +181,10 @@ const {
 const {
   projectRunVerifiedProgress
 } = require('./runtime/verified-progress-projection');
+const {
+  evaluateCriterion,
+  observationFromPathInfo
+} = require('./runtime/postcondition-criterion-evaluator');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -12773,22 +12777,27 @@ async function compileObjectiveContract(run, ticket, agent, limits, modelRequest
 function inspectObjectiveContractPostconditions(contract) {
   if (!contract || !contract.recognized || !Array.isArray(contract.postconditions) || contract.postconditions.length === 0) return null;
 
+  // THE RULE IS NOT DECIDED HERE. This path owns only the OBSERVATION — reading
+  // live workspace state into normalized path observations. Whether those
+  // satisfy the criterion is decided by the one canonical evaluator that the
+  // completion decision also calls, so execution and completion cannot drift
+  // into disagreeing about the same admitted criterion.
   const checkedPaths = [];
   for (const postcondition of contract.postconditions) {
     if (!postcondition || !postcondition.path) return null;
-    const info = workspaceProvider.getPathInfo(postcondition.path);
-    let satisfied = false;
-    let type = postcondition.type;
-    if (postcondition.type === 'folder_exists') {
-      satisfied = info.exists && info.type === 'directory';
-      type = 'folder';
-    } else if (postcondition.type === 'path_absent') {
-      satisfied = !info.exists;
-      type = 'absent';
-    } else {
-      return null;
-    }
-    checkedPaths.push({ type, path: postcondition.path, satisfied });
+    const observation = observationFromPathInfo(
+      postcondition.path, workspaceProvider.getPathInfo(postcondition.path));
+    if (!observation) return null;
+    const verdict = evaluateCriterion(postcondition, [observation]);
+    // An unsupported criterion class is not "unsatisfied" — this path cannot
+    // speak to it at all, and says so by declining the whole check exactly as
+    // it always has.
+    if (verdict.reasonCode === 'POSTCONDITION_UNSUPPORTED') return null;
+    checkedPaths.push({
+      type: observation.kind,
+      path: postcondition.path,
+      satisfied: verdict.passed === true
+    });
   }
 
   return checkedPaths;
