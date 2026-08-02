@@ -381,6 +381,14 @@ route; the runtime refuses to select one because it has no canonical
 preflight-evidence authority proving the primary route is unavailable. It
 refuses rather than inventing availability evidence.
 
+**Tranche 4 is a development cutover, not a compatibility layer.** Pre-cutover
+structured execution data is disposable and removed through the canonical
+development reset. Preserving it would have created a permanent runtime branch
+whose only purpose was to run structured work with no economic authority
+bounding it — which is precisely what the tranche exists to prevent. A leaf
+binding and a governed envelope are inseparable; either without the other is an
+integrity failure regardless of the record's age.
+
 **Ollama cannot be governed.** A tag is a moving reference. Without digest
 resolution and a context-window proof, liability is unboundable, so Ollama
 structured planning was withdrawn rather than governed on assumptions. Ollama

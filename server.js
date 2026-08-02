@@ -16478,7 +16478,14 @@ async function runStructuredAllocationPlanning(ticket) {
   // durable before it too. "Process stopped after request initiation" is
   // recoverable as outcome-unknown, and the economic reservation — not this
   // marker — is what guarantees the request is never repeated.
-  const requestStarted = advancePlanningAttempt(attempt, {
+  // A PATCH, not a sealed attempt. The Tranche 4 cutover requires a
+  // request-capable attempt to carry complete governed state, and the
+  // reservation identity that state binds does not exist until the reservation
+  // commits inside the orchestration. Materializing `request_started` here
+  // would produce an attempt that is request-capable and ungoverned — exactly
+  // the shape the cutover forbids — so the transition is applied once, with the
+  // governed block, by `attachGovernedExecution` below.
+  const requestStartedPatch = {
     state: 'request_started',
     requestHash: capture.preparedRequest.requestHash,
     requestMetadata: {
@@ -16490,12 +16497,13 @@ async function runStructuredAllocationPlanning(ticket) {
       maxResponseBytes: PLANNER_REQUEST_LIMITS.maxResponseBytes
     },
     requestStartedAt: new Date().toISOString()
-  });
+  };
 
   const governedResult = await runGovernedPlannerRequest({
     repository: getGovernedPlannerDispatchRepository(),
     ticketId: ticket.id,
-    attempt: requestStarted,
+    attempt,
+    attemptPatch: requestStartedPatch,
     capture,
     transport: resolveGovernedPlannerTransport(),
     resolveCredentials: resolveGovernedPlannerCredentials,
@@ -16506,12 +16514,8 @@ async function runStructuredAllocationPlanning(ticket) {
     // than at attempt creation.
     // The `created` state this start replaces.
     expectedAttemptStateHash: attempt.attemptStateHash,
-    attachGovernedExecution: (base, governedExecution) =>
-      advancePlanningAttempt(attempt, {
-        ...Object.fromEntries(Object.entries(base).filter(([field]) =>
-          ['state', 'requestHash', 'requestMetadata', 'requestStartedAt'].includes(field))),
-        governedExecution
-      })
+    attachGovernedExecution: (_base, governedExecution) =>
+      advancePlanningAttempt(attempt, { ...requestStartedPatch, governedExecution })
   });
 
   if (governedResult.status !== 'received') {

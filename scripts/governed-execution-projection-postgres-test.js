@@ -10,6 +10,14 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { withHarness } = require('./postgres-test-harness');
+const {
+  governedAttemptState,
+  plannerPolicySource
+} = require('./governed-structured-fixture');
+
+// Tranche 4 cutover: a planning attempt becomes request-capable only with
+// complete governed authority.
+const PLANNER_POLICY = plannerPolicySource();
 const { readGovernedPolicySource } = require('../runtime/governed-policy-source');
 const {
   NEVER_PROJECTED,
@@ -223,6 +231,12 @@ async function main() {
         ticketId: ticket.id, attempt, expectedAttemptStateHash: null,
         eventType: 'ticket.structured_planning_started'
       })).attempt;
+      const { governedExecution: plannerGoverned } = await governedAttemptState(store, {
+        ticketId: ticket.id,
+        attemptId: attempt.attemptId,
+        plannerAgentId: planning.planner.agentId,
+        policy: PLANNER_POLICY
+      });
       const advance = async patch => {
         attempt = (await store.writeStructuredAllocationPlanningAttempt({
           ticketId: ticket.id,
@@ -233,6 +247,7 @@ async function main() {
       };
       await advance({
         state: 'request_started',
+        governedExecution: plannerGoverned,
         requestHash: plannerRequestHash({
           provider: planning.planner.provider, model: planning.planner.model, messages }),
         requestMetadata: {
@@ -365,11 +380,15 @@ async function main() {
       assert.equal(projected.economicPolicyHash, row.economic_policy_hash);
     }
 
-    // Planner and worker stay visibly distinct.
-    assert.equal(ticketProjection.accounts.every(a => a.role === WORKER_ROLE), true,
-      'this ticket used only the worker role');
-    assert.equal(ticketProjection.planner, null,
-      'no planner activity is invented for a ticket that had none');
+    // Planner and worker stay visibly distinct — the whole point of role-scoped
+    // accounts. Both exist here because governed planning admitted the plan and
+    // governed leaf execution ran the work.
+    const roles = ticketProjection.accounts.map(a => a.role).sort();
+    assert.deepEqual(roles, [PLANNER_ROLE, WORKER_ROLE].sort(),
+      'planner and worker accounts appear separately');
+    assert.equal(new Set(ticketProjection.accounts.map(a => a.accountId)).size, 2,
+      'they are distinct accounts, never merged into one total');
+    assert.ok(ticketProjection.planner, 'the planner summary is present');
     assert.ok(ticketProjection.structuredLeaf, 'the worker summary is present');
 
     const leaf = ticketProjection.structuredLeaf;
@@ -572,8 +591,11 @@ async function main() {
 
     const events = (await store.listTicketEvents(admitted.ticket.id, { limit: 500 })).events;
     const governedTypes = events.map(e => e.type).filter(t => t.startsWith('ticket.economic_'));
-    assert.equal(governedTypes.filter(t => t === 'ticket.economic_account_admitted').length, 1,
-      'account admission appears exactly once');
+    // One admission event per ROLE account, and no more: re-admitting the same
+    // policy is a no-op that appends nothing.
+    assert.equal(
+      governedTypes.filter(t => t === 'ticket.economic_account_admitted').length, 2,
+      'exactly one admission event per role account');
     assert.ok(governedTypes.includes('ticket.economic_request_reserved'));
     assert.ok(governedTypes.includes('ticket.economic_request_started'));
     assert.ok(governedTypes.includes('ticket.economic_response_persisted'));

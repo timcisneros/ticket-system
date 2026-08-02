@@ -102,42 +102,27 @@ function sha256Hex(text) {
 
 // ── Path selection ──────────────────────────────────────────────────────────
 //
-// The single decision that keeps historical Runs working and governed Runs
-// governed. There is deliberately no fourth answer, and no timestamp anywhere:
-// a Run's age says nothing about whether it was admitted with authority.
+// One decision, delegating entirely to `classifyRunGovernance` so there is a
+// single definition of a valid structured Run.
+//
+// Tranche 4 is a development CUTOVER: a Run carrying `leafRunBinding` must also
+// carry complete governed authority. There is no path by which a structured
+// leaf Run runs ungoverned. Non-structured Runs carry neither field and keep
+// their intended behaviour untouched.
 
 function selectRunProviderPath(run) {
-  const isLeaf = Boolean(run && run.leafRunBinding);
-  const hasEnvelope = Boolean(
-    run && run.governedExecution !== undefined && run.governedExecution !== null);
-
-  if (!isLeaf && !hasEnvelope) return { path: 'historical', authority: null };
-  if (!isLeaf && hasEnvelope) {
-    // A governed envelope on a Run that is not a leaf is incoherent: only leaf
-    // admission produces one. Falling back would run it ungoverned.
-    refuse('governed_leaf_authority_invalid',
-      `run ${run.id} carries governed authority without a leaf binding`);
-  }
-  if (!hasEnvelope) {
-    // A structured leaf Run admitted before Tranche 4 has no envelope and no
-    // account behind it. It keeps the historical path; it is not failed.
-    return { path: 'historical', authority: null };
-  }
-  // Any defect throws here. It NEVER degrades to the historical path, because
-  // a Run admitted as governed running ungoverned is the outcome this whole
-  // cutover exists to prevent.
   let classified;
   try {
     classified = classifyRunGovernance(run);
   } catch (error) {
+    // Shape violations and damaged envelopes alike. Neither selects a path: a
+    // Run admitted as structured running ungoverned is exactly what this
+    // cutover exists to prevent.
     refuse('governed_leaf_authority_invalid',
-      `run ${run.id} governed authority is unusable: ${error.message}`,
+      `run ${run && run.id} governed authority is unusable: ${error.message}`,
       { cause: (error.detail && error.detail.reason) || error.code || null });
   }
-  if (!classified.governed) {
-    refuse('governed_leaf_authority_absent',
-      `run ${run.id} governed authority could not be classified`);
-  }
+  if (!classified.governed) return { path: 'ungoverned', authority: null };
   return { path: 'governed', authority: classified.authority };
 }
 

@@ -121,10 +121,16 @@ for (const flag of ['process.env.GOVERNED', 'featureFlag', 'ENABLE_GOVERNED', 'u
 const select = orchestration.slice(
   orchestration.indexOf('function selectRunProviderPath('),
   orchestration.indexOf('// ── One provider-request opportunity'));
-assert.ok(select.includes("path: 'historical'"), 'historical Runs keep the old path');
+// Development cutover vocabulary: a Run with neither field is `ungoverned`
+// (an ordinary non-structured product path), NOT `historical`. There is no
+// permanent historical-structured category to select.
+assert.ok(select.includes("path: 'ungoverned'"),
+  'non-structured Runs keep the existing provider path');
+assert.equal(select.includes("path: 'historical'"), false,
+  'no historical-structured path remains to be selected');
 assert.ok(select.includes("path: 'governed'"), 'governed Runs take the governed path');
 assert.ok(select.includes("refuse('governed_leaf_authority_invalid'"),
-  'damaged governed authority refuses rather than selecting a path');
+  'damaged or unpaired governed authority refuses rather than selecting a path');
 // A defect must never be swallowed into the historical branch.
 assert.equal(/catch\s*\(error\)\s*\{\s*return/.test(select), false,
   'path selection never converts a defect into a historical Run');
@@ -143,17 +149,37 @@ for (const site of ["slot: 'contract-compile:0'", 'simulation: true']) {
   assert.ok(server.includes(site), `${site} remains present and unchanged`);
 }
 
-// ── Partial governed state can never degrade to the historical path ─────────
+// ── The binding and the authority are inseparable ───────────────────────────
+
+assert.ok(runAuthority.includes("refuse('governed_run_binding_authority_mismatch'"),
+  'a leaf binding without authority, and authority without a binding, both refuse');
+assert.ok(store.includes('assertRunGovernedExecutionPairing(run,'),
+  'the canonical pairing rule is enforced in the store');
+// Enforced on both write and read, so malformed state can neither enter nor
+// leave the runtime.
+// One import plus two enforcement sites: creation and reconstruction. Every
+// other read path inherits it through reconstruction.
+// Two enforcement sites: creation and reconstruction. Every other read path —
+// scheduler, recovery, retry, projection — inherits it through reconstruction.
+assert.equal(store.split('assertRunGovernedExecutionPairing(').length - 1, 2,
+  'the pairing rule guards creation and reconstruction');
+// Leaf admission has no ungoverned route.
+assert.ok(store.includes('GOVERNED_LEAF_CAPTURE_REQUIRED'),
+  'structured leaf admission requires governed capture');
+
+// ── Partial governed state can never degrade to the ungoverned path ─────────
 
 assert.ok(runAuthority.includes("refuse('governed_run_authority_partial'"),
   'partial governed state refuses');
-// `classifyRunGovernance` must throw on a defect rather than returning
-// historical, which is the only thing standing between a damaged envelope and
-// silent un-governed execution.
-const classify = runAuthority.slice(
-  runAuthority.indexOf('function classifyRunGovernance('));
+// `classifyRunGovernance` must throw on a defect rather than returning a
+// non-structured result — the only thing standing between a damaged envelope
+// and silent ungoverned execution. Scoped to that function alone: the pairing
+// helper below it legitimately catches to re-label and rethrow.
+const classifyStart = runAuthority.indexOf('function classifyRunGovernance(');
+const classify = runAuthority.slice(classifyStart,
+  runAuthority.indexOf('\nfunction ', classifyStart + 10));
 assert.equal(/catch\s*\(/.test(classify), false,
-  'classification must not swallow a defect into the historical branch');
+  'classification must not swallow a defect into the non-structured branch');
 assert.ok(classify.includes('normalizeGovernedRunAuthority('),
   'classification normalizes rather than shape-testing');
 

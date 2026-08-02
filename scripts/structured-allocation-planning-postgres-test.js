@@ -35,6 +35,14 @@ const {
   recoverInterruptedPlanningAttempt
 } = require('../runtime/structured-allocation-planning-contract');
 const { withHarness } = require('./postgres-test-harness');
+const {
+  governedAttemptState,
+  plannerPolicySource
+} = require('./governed-structured-fixture');
+
+// Tranche 4 cutover: an attempt becomes request-capable only with complete
+// governed authority, so these fixtures capture it the way production does.
+const PLANNER_POLICY = plannerPolicySource();
 
 const STAMP = `${Date.now()}-${process.pid}`;
 const ACTOR = 'structured-allocation-planning-postgres-test';
@@ -124,10 +132,20 @@ async function validatedAttempt(store, ticket, responseText, proposal) {
     eventType: 'ticket.structured_planning_started'
   })).attempt;
 
+  // Capture governed authority before the attempt becomes request-capable,
+  // exactly as the production planner does.
+  const { governedExecution: governedBlock } = await governedAttemptState(store, {
+    ticketId: ticket.id,
+    attemptId: attempt.attemptId,
+    plannerAgentId: planning.planner.agentId,
+    policy: PLANNER_POLICY
+  });
+
   attempt = (await store.writeStructuredAllocationPlanningAttempt({
     ticketId: ticket.id,
     attempt: advancePlanningAttempt(attempt, {
       state: 'request_started',
+      governedExecution: governedBlock,
       requestHash,
       requestMetadata: {
         contextVersion: context.version,
@@ -546,10 +564,18 @@ async function main() {
     started = (await store.writeStructuredAllocationPlanningAttempt({
       ticketId: interruptedTicket.id, attempt: started, expectedAttemptStateHash: null
     })).attempt;
+    const { governedExecution: interruptedGoverned } = await governedAttemptState(store, {
+      ticketId: interruptedTicket.id,
+      attemptId: started.attemptId,
+      plannerAgentId: interruptedTicket.structuredAllocationAuthority
+        .planningAuthoritySnapshot.planner.agentId,
+      policy: PLANNER_POLICY
+    });
     started = (await store.writeStructuredAllocationPlanningAttempt({
       ticketId: interruptedTicket.id,
       attempt: advancePlanningAttempt(started, {
         state: 'request_started',
+        governedExecution: interruptedGoverned,
         requestHash: plannerRequestHash({
           provider: 'openai', model: 'gpt-planner-test', messages: interruptedMessages
         }),

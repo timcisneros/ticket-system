@@ -11,22 +11,27 @@
 // body lacks and no fail-closed behaviour a normalizer cannot provide, so the
 // authority's importance alone does not justify one.
 //
-// ABSENT MEANS ABSENT. A historical Run has no `governedExecution` key at all.
-// It is never synthesized, never defaulted, and never inferred from a
-// timestamp: the ADMISSION PATH is what guarantees that a newly admitted
-// structured leaf Run has complete authority, and age proves nothing about a
-// Run that predates the feature.
+// DEVELOPMENT CUTOVER. Tranche 4 is a cutover, not a compatibility layer.
+// Pre-cutover structured execution data is disposable and is removed by the
+// canonical development reset. There is no permanent runtime category called
+// "historical structured execution".
 //
-// Three states, and only three:
+// THE BINDING AND THE AUTHORITY ARE INSEPARABLE. A Run carrying
+// `leafRunBinding` is a structured leaf Run, and a structured leaf Run without
+// complete governed authority has nothing bounding what it may spend. That is
+// an integrity failure, not an older and simpler kind of Run.
 //
-//   no envelope       -> historical ungoverned Run, unchanged behaviour
-//   complete envelope -> governed execution required
-//   partial envelope  -> FAIL CLOSED; never a fallback to the historical path
+// Four combinations. Only the first two are supported:
 //
-// The third case is the reason this contract exists. A Run holding half its
-// authority is not "mostly governed"; it describes a situation that cannot have
-// happened, and treating it as historical would silently un-govern a Run that
-// was admitted as governed.
+//   no binding + no envelope       -> non-structured execution family
+//   binding    + complete envelope -> supported structured leaf execution
+//   binding    + absent/partial    -> INTEGRITY FAILURE
+//   no binding + envelope present  -> INTEGRITY FAILURE
+//
+// Age is consulted nowhere — not timestamps, not migration numbers, not IDs. A
+// record's vintage never excuses a malformed combination: the admission path is
+// what guarantees completeness, and a record that missed it is invalid rather
+// than grandfathered.
 
 const {
   compareCanonicalText,
@@ -69,6 +74,9 @@ const GOVERNED_RUN_AUTHORITY_FIELDS = Object.freeze([
 const GOVERNED_RUN_REFUSALS = Object.freeze([
   'governed_run_authority_malformed',
   'governed_run_authority_partial',
+  // Shape violations rather than content defects: a structured leaf Run with no
+  // authority at all, or governed authority on a Run that is not a leaf.
+  'governed_run_binding_authority_mismatch',
   'governed_run_role_mismatch',
   'governed_run_binding_mismatch',
   'governed_run_route_mismatch',
@@ -296,9 +304,23 @@ function normalizeGovernedRunAuthority(value, {
 // this rather than testing the key themselves, so no path can accidentally read
 // a partial envelope as absent.
 function classifyRunGovernance(run, options = {}) {
-  if (!run || !Object.prototype.hasOwnProperty.call(run, 'governedExecution') ||
-      run.governedExecution === undefined || run.governedExecution === null) {
-    return { governed: false, authority: null, historical: true };
+  const hasBinding = Boolean(run && run.leafRunBinding);
+  const hasEnvelope = Boolean(run &&
+    Object.prototype.hasOwnProperty.call(run, 'governedExecution') &&
+    run.governedExecution !== undefined && run.governedExecution !== null);
+
+  if (!hasEnvelope) {
+    if (hasBinding) {
+      refuse('governed_run_binding_authority_mismatch',
+        `run ${run && run.id} carries a leaf binding with no governed authority`);
+    }
+    // Neither field: an ordinary non-structured Run — direct, v1, workflow,
+    // browser, process, simulation or compiler — untouched by Tranche 4.
+    return { governed: false, authority: null, structured: false };
+  }
+  if (!hasBinding) {
+    refuse('governed_run_binding_authority_mismatch',
+      `run ${run && run.id} carries governed authority with no leaf binding`);
   }
   // Any defect here throws. It does NOT degrade to historical.
   const authority = normalizeGovernedRunAuthority(run.governedExecution, {
@@ -306,10 +328,24 @@ function classifyRunGovernance(run, options = {}) {
     expectedTicketId: run.ticketId === undefined ? null : run.ticketId,
     ...options
   });
-  return { governed: true, authority, historical: false };
+  return { governed: true, authority, structured: true };
+}
+
+// THE canonical pairing rule. Every authority boundary calls this one function
+// so no call site can drift into a slightly different definition of what a
+// valid structured Run is.
+function assertRunGovernedExecutionPairing(run, label = 'run governed execution') {
+  try {
+    classifyRunGovernance(run);
+  } catch (error) {
+    error.message = `${label}: ${error.message}`;
+    throw error;
+  }
+  return run;
 }
 
 module.exports = {
+  assertRunGovernedExecutionPairing,
   GOVERNED_RUN_AUTHORITY_FIELDS,
   GOVERNED_RUN_AUTHORITY_VERSION,
   GOVERNED_RUN_REFUSALS,

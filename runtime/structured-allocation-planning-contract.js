@@ -277,13 +277,19 @@ const PLANNING_ATTEMPT_FIELDS = Object.freeze([
   'attemptStateHash'
 ]);
 
-// Tranche 4 governed state. OPTIONAL, and absent means absent — not null.
+// Tranche 4 governed state.
 //
-// A historical attempt carries no `governedExecution` key at all, so its
-// canonical form is byte-for-byte what it was before Tranche 4 existed and its
-// stored `attemptStateHash` still verifies. Storing an explicit null instead
-// would change every historical hash and break every historical attempt, so the
-// key is omitted rather than nulled.
+// DEVELOPMENT CUTOVER. The key may be absent — never null — only while the
+// attempt is TRANSIENT: `created`, before governed capture has run. That
+// exception is structural rather than compatibility: the envelope binds a
+// reservation identity that does not exist until the reservation commits, so a
+// `created` attempt genuinely cannot carry it. A `created` attempt is also not
+// request-capable, so nothing can dispatch from it.
+//
+// From `request_started` onward the attempt IS request-capable, and one without
+// complete governed state is an integrity failure rather than an older kind of
+// attempt. Pre-cutover attempts are disposable and removed by the development
+// reset; none is carried forward as supported.
 const OPTIONAL_PLANNING_ATTEMPT_FIELDS = Object.freeze(['governedExecution']);
 
 // The captured authority an attempt was admitted under. Closed: every field is
@@ -1338,6 +1344,15 @@ function boundedEvidenceText(value, label) {
 
 // State-shape invariants. These are what make a partially written attempt
 // unreadable rather than quietly plausible.
+// Stages at which a provider request may have been prepared or issued.
+// `created` is deliberately excluded: it is the transient pre-capture state.
+// `failed` and `interrupted` are excluded too — an attempt can fail BEFORE
+// capture (missing policy, unpriceable route), and that truthful record must
+// remain representable.
+const REQUEST_CAPABLE_ATTEMPT_STATES = Object.freeze([
+  'request_started', 'response_received', 'proposal_validated', 'plan_admitted'
+]);
+
 function assertAttemptStateConsistency(attempt) {
   const terminalFailure = attempt.state === 'failed' || attempt.state === 'interrupted';
   if (terminalFailure) {
@@ -1385,6 +1400,17 @@ function assertAttemptStateConsistency(attempt) {
         attempt.proposalHash === null) {
       fail(`planningAttempt state ${attempt.state} requires a validated proposal`);
     }
+  }
+  // Tranche 4 cutover. A request-capable attempt must carry complete governed
+  // authority; nothing is synthesized from current policy to repair one that
+  // does not, because a missing envelope means the attempt was never governed
+  // and dispatching it would be unbounded.
+  if (REQUEST_CAPABLE_ATTEMPT_STATES.includes(attempt.state) &&
+      !attempt.governedExecution) {
+    fail(
+      `planningAttempt state ${attempt.state} requires complete governed execution state`,
+      'STRUCTURED_ALLOCATION_GOVERNED_STATE_REQUIRED'
+    );
   }
   if (attempt.state === 'plan_admitted') {
     if (attempt.admittedPlanId === null || attempt.admittedPlanHash === null ||

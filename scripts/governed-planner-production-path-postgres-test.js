@@ -192,7 +192,9 @@ async function main() {
         endpointIdentity: ENDPOINT,
         capturedAt: new Date().toISOString()
       });
-      const requestStarted = advancePlanningAttempt(attempt, {
+      // A PATCH, mirroring production: the transition is applied once, with
+      // the governed block, by `attachGovernedExecution`.
+      const requestStartedPatch = {
         state: 'request_started',
         requestHash: capture.preparedRequest.requestHash,
         requestMetadata: {
@@ -204,30 +206,26 @@ async function main() {
           maxResponseBytes: MAX_RESPONSE_BYTES
         },
         requestStartedAt: new Date().toISOString()
-      });
-      return { attempt, requestStarted, capture, container };
+      };
+      return { attempt, requestStartedPatch, capture, container };
     };
 
     // The exact `attachGovernedExecution` server.js passes.
-    const attachGovernedExecution = attempt => (base, governedExecution) =>
-      advancePlanningAttempt(attempt, {
-        ...Object.fromEntries(Object.entries(base).filter(([field]) =>
-          ['state', 'requestHash', 'requestMetadata', 'requestStartedAt'].includes(field))),
-        governedExecution
-      });
+    const attachGovernedExecution = (attempt, patch) => (_base, governedExecution) =>
+      advancePlanningAttempt(attempt, { ...patch, governedExecution });
 
     const runProduction = async (ticket, prep, {
       transport, credentials = withKey
     }) => runGovernedPlannerRequest({
       repository: store,
       ticketId: ticket.id,
-      attempt: prep.requestStarted,
+      attempt: prep.attempt,
       capture: prep.capture,
       transport,
       resolveCredentials: credentials,
       timeoutMs: TIMEOUT_MS,
       maxResponseBytes: MAX_RESPONSE_BYTES,
-      attachGovernedExecution: attachGovernedExecution(prep.attempt),
+      attachGovernedExecution: attachGovernedExecution(prep.attempt, prep.requestStartedPatch),
       expectedAttemptStateHash: prep.attempt.attemptStateHash
     });
 

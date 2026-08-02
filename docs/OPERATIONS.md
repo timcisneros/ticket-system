@@ -774,6 +774,20 @@ error to investigate as over-charging — it is the designed conservative outcom
 **An administrator re-priced the catalog.** Requests already reserved are
 unaffected: they settle from the pricing entry captured at reservation.
 
+### Pre-cutover structured data
+
+Tranche 4 is a development cutover. Structured execution records created before
+it are disposable and are removed through the canonical development reset
+(Admin → reset, confirmation phrase `RESET DEBUG DATA`), which truncates
+`tickets` with CASCADE and preserves configuration such as agents, groups,
+contexts and routing-policy containers.
+
+A structured Run or planning attempt without complete governed authority is an
+integrity failure, not a supported historical mode: it refuses on
+reconstruction and reaches neither provider path. Ordinary direct, v1, workflow,
+browser, process and simulation Runs are unaffected — they are current product
+capabilities, not legacy compatibility.
+
 ### What is not available
 
 Fallback selection and execution. Policy can authorize a fallback route, but the

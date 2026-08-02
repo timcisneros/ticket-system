@@ -11,11 +11,20 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { withHarness } = require('./postgres-test-harness');
+const {
+  governedAttemptState,
+  plannerPolicySource
+} = require('./governed-structured-fixture');
+
+// Tranche 4 cutover: a planning attempt becomes request-capable only with
+// complete governed authority.
+const PLANNER_POLICY = plannerPolicySource();
 const { readGovernedPolicySource } = require('../runtime/governed-policy-source');
 const {
   classifyRunGovernance,
   normalizeGovernedRunAuthority
 } = require('../runtime/governed-run-authority-contract');
+const { selectRunProviderPath } = require('../runtime/governed-leaf-orchestration');
 const {
   buildStructuredAllocationAuthorityDraft
 } = require('../runtime/structured-allocation-prerequisites-contract');
@@ -215,6 +224,12 @@ async function main() {
         ticketId: ticket.id, attempt, expectedAttemptStateHash: null,
         eventType: 'ticket.structured_planning_started'
       })).attempt;
+      const { governedExecution: plannerGoverned } = await governedAttemptState(store, {
+        ticketId: ticket.id,
+        attemptId: attempt.attemptId,
+        plannerAgentId: planning.planner.agentId,
+        policy: PLANNER_POLICY
+      });
       const advance = async patch => {
         attempt = (await store.writeStructuredAllocationPlanningAttempt({
           ticketId: ticket.id,
@@ -225,6 +240,7 @@ async function main() {
       };
       await advance({
         state: 'request_started',
+        governedExecution: plannerGoverned,
         requestHash: plannerRequestHash({
           provider: planning.planner.provider, model: planning.planner.model, messages }),
         requestMetadata: {
@@ -326,10 +342,30 @@ async function main() {
     const historicalRun = await store.getRun(historical.runs[0].id);
     assert.equal(Object.prototype.hasOwnProperty.call(historicalRun, 'governedExecution'),
       false, 'a historical Run carries no governed envelope at all');
-    const historicalClass = classifyRunGovernance(historicalRun);
-    assert.equal(historicalClass.governed, false);
-    assert.equal(historicalClass.historical, true,
-      'an absent envelope is historical, never partial');
+    // A Run with neither a binding nor an envelope is an ordinary
+    // non-structured Run and remains supported.
+    const nonStructured = classifyRunGovernance(historicalRun);
+    assert.equal(nonStructured.governed, false);
+    assert.equal(nonStructured.structured, false,
+      'a Run with neither field is a supported non-structured Run');
+
+    // Tranche 4 cutover: a leaf binding WITHOUT governed authority is an
+    // integrity failure, not an older kind of Run.
+    assert.throws(
+      () => classifyRunGovernance({
+        id: historicalRun.id, ticketId: historicalRun.ticketId,
+        leafRunBinding: { allocationItemId: 1 }
+      }),
+      error => error.detail.reason === 'governed_run_binding_authority_mismatch',
+      'a structured leaf Run without governed authority refuses');
+    // And governed authority without a binding is equally invalid.
+    assert.throws(
+      () => classifyRunGovernance({
+        id: historicalRun.id, ticketId: historicalRun.ticketId,
+        governedExecution: { version: 1, role: WORKER_ROLE }
+      }),
+      error => error.detail.reason === 'governed_run_binding_authority_mismatch',
+      'governed authority without a leaf binding refuses');
     await code(
       store.prepareAndReserveNextGovernedRunRequest({
         runId: historicalRun.id, logicalSourceIdentity: 'model-request:agent:x:provider',
@@ -355,7 +391,10 @@ async function main() {
       const partial = { ...complete };
       delete partial[omitted];
       assert.throws(
-        () => classifyRunGovernance({ id: 1, ticketId: 1, governedExecution: partial }),
+        () => classifyRunGovernance({
+          id: 1, ticketId: 1, leafRunBinding: { allocationItemId: 1 },
+          governedExecution: partial
+        }),
         error => {
           assert.equal(error.detail.reason, 'governed_run_authority_partial',
             `a missing ${omitted} is partial state`);
@@ -365,9 +404,83 @@ async function main() {
     }
     assert.throws(
       () => classifyRunGovernance({
-        id: 1, ticketId: 1, governedExecution: { ...complete, surprise: 1 } }),
+        id: 1, ticketId: 1, leafRunBinding: { allocationItemId: 1 },
+        governedExecution: { ...complete, surprise: 1 } }),
       error => error.detail.reason === 'governed_run_authority_malformed',
       'an unknown field fails closed');
+
+    // ── Cutover integrity: malformed structured Runs reach nothing ─────────
+    //
+    // Reconstruction is the single boundary every read passes through — the
+    // scheduler, recovery, retry preparation and every projection — so a
+    // malformed structured Run cannot leave the database at all.
+
+    const malformedTicket = plainTicket;
+    const goodRun = await store.getRun(historicalRun.id);
+    // Force a leaf binding onto a Run with no governed authority, exactly the
+    // pre-cutover shape that used to be supported.
+    await store.pool.query(
+      `UPDATE ${store.table('runs')}
+          SET body = jsonb_set(body, '{leafRunBinding}', $2::jsonb),
+              revision = revision + 1
+        WHERE id = $1`,
+      [goodRun.id, JSON.stringify({ allocationItemId: 1, bindingHash: 'a'.repeat(64) })]
+    );
+    await code(store.getRun(goodRun.id), 'GOVERNED_RUN_AUTHORITY_REFUSED',
+      'a malformed structured Run refuses during reconstruction');
+    // The scheduler reads through the same reconstruction, so it cannot claim it.
+    await assert.rejects(
+      () => store.claimPendingRun({
+        leaseOwner: ACTOR, leaseDurationMs: 60_000, eligibleRunIds: [goodRun.id]
+      }),
+      error => error.code === 'GOVERNED_RUN_AUTHORITY_REFUSED',
+      'the scheduler cannot claim a malformed structured Run');
+    // Every other read path reconstructs through the same function, so a
+    // malformed structured Run cannot reach recovery, a projection or a
+    // provider path either. Listing the Ticket's Runs — the read recovery and
+    // projection both build on — refuses.
+    await assert.rejects(
+      () => store.listRunsForTicket({ ticketId: goodRun.ticketId }),
+      error => error.code === 'GOVERNED_RUN_AUTHORITY_REFUSED',
+      'a malformed structured Run refuses on every reconstruction path');
+    // And it reaches neither provider path.
+    assert.throws(
+      () => selectRunProviderPath({
+        id: goodRun.id, ticketId: goodRun.ticketId,
+        leafRunBinding: { allocationItemId: 1, bindingHash: 'a'.repeat(64) }
+      }),
+      error => error.code === 'GOVERNED_LEAF_REFUSED',
+      'a malformed structured Run reaches neither provider path');
+    // Restore the row so the rest of the suite is unaffected.
+    await store.pool.query(
+      `UPDATE ${store.table('runs')}
+          SET body = body - 'leafRunBinding', revision = revision + 1
+        WHERE id = $1`, [goodRun.id]);
+    assert.equal((await store.getRun(goodRun.id)).leafRunBinding ?? null, null,
+      'the non-structured Run is readable again');
+
+    // Creation refuses the same shapes.
+    await code(
+      store.createRun({
+        ticketId: malformedTicket.id, agentId: workerA.id, status: 'pending',
+        leafRunBinding: { allocationItemId: 1, bindingHash: 'b'.repeat(64) }
+      }),
+      'GOVERNED_RUN_AUTHORITY_REFUSED',
+      'a leaf binding without governed authority cannot be created');
+    await code(
+      store.createRun({
+        ticketId: malformedTicket.id, agentId: workerA.id, status: 'pending',
+        governedExecution: { version: 1, role: WORKER_ROLE }
+      }),
+      'GOVERNED_RUN_AUTHORITY_REFUSED',
+      'governed authority without a leaf binding cannot be created');
+
+    // ── Leaf admission requires governed capture ──────────────────────────
+
+    await assert.rejects(
+      () => admitLeafSet('Ungoverned leaf admission', { governed: false }),
+      error => error.code === 'GOVERNED_LEAF_CAPTURE_REQUIRED',
+      'structured leaf admission without governed capture refuses');
 
     console.log('  ok run-body envelope and fail-closed classification');
 
@@ -400,28 +513,34 @@ async function main() {
     const accounts = await store.pool.query(
       `SELECT * FROM ${store.table('ticket_economic_accounts')} WHERE ticket_id = $1`,
       [admitted.ticket.id]);
-    assert.equal(accounts.rowCount, 1, 'exactly one economic account for the ticket');
-    assert.equal(accounts.rows[0].role, WORKER_ROLE, 'it is the worker-role account');
-    const accountId = Number(accounts.rows[0].id);
+    // One account per ROLE: governed planning admitted the planner account and
+    // leaf admission admitted the shared worker account. They stay separate.
+    assert.equal(accounts.rowCount, 2, 'one economic account per role');
+    const workerRow = accounts.rows.find(row => row.role === WORKER_ROLE);
+    const plannerRow = accounts.rows.find(row => row.role === PLANNER_ROLE);
+    assert.ok(workerRow, 'the shared worker-role account exists');
+    assert.ok(plannerRow, 'the planner-role account is separate');
+    assert.notEqual(Number(workerRow.id), Number(plannerRow.id));
+    const accountId = Number(workerRow.id);
     for (const authority of authorities) {
       assert.equal(authority.economicAccountId, accountId,
         'every sibling Run names the one shared account');
     }
-    assert.equal(
-      (await store.pool.query(
-        `SELECT 1 FROM ${store.table('ticket_economic_accounts')}
-         WHERE ticket_id = $1 AND role = $2`, [admitted.ticket.id, PLANNER_ROLE])).rowCount,
-      0, 'leaf admission admits no planner account');
+    assert.equal(Number(plannerRow.settled_micro_usd), 0,
+      'leaf admission never charges the planner account');
 
     // ZERO reservations at admission: admission establishes what may be spent,
     // not a claim on it.
+    // Leaf admission establishes what a worker MAY spend; it claims nothing.
+    // Scoped to the worker role, because governed planning legitimately holds
+    // its own planner reservation on this ticket.
     assert.equal(
       (await store.pool.query(
-        `SELECT 1 FROM ${store.table('economic_request_reservations')} WHERE ticket_id = $1`,
-        [admitted.ticket.id])).rowCount,
-      0, 'leaf admission creates zero provider-request reservations');
-    assert.equal(Number(accounts.rows[0].reserved_micro_usd), 0);
-    assert.equal(Number(accounts.rows[0].settled_micro_usd), 0);
+        `SELECT 1 FROM ${store.table('economic_request_reservations')}
+          WHERE ticket_id = $1 AND role = $2`, [admitted.ticket.id, WORKER_ROLE])).rowCount,
+      0, 'leaf admission creates zero worker provider-request reservations');
+    assert.equal(Number(workerRow.reserved_micro_usd), 0);
+    assert.equal(Number(workerRow.settled_micro_usd), 0);
 
     // All siblings visible together.
     assert.equal(runs.every(run => run.status === 'pending'), true,
@@ -442,11 +561,13 @@ async function main() {
       assert.equal(
         (await store.listRunsForTicket({ ticketId: rolledTicket })).runs.length, 0,
         'a refused capture leaves zero Runs');
+      // Scoped to the worker role: the planner account belongs to governed
+      // planning, which succeeded, and is not rolled back by a leaf refusal.
       assert.equal(
         (await store.pool.query(
-          `SELECT 1 FROM ${store.table('ticket_economic_accounts')} WHERE ticket_id = $1`,
-          [rolledTicket])).rowCount,
-        0, 'a refused capture leaves no account behind');
+          `SELECT 1 FROM ${store.table('ticket_economic_accounts')}
+            WHERE ticket_id = $1 AND role = $2`, [rolledTicket, WORKER_ROLE])).rowCount,
+        0, 'a refused leaf capture leaves no worker account behind');
     }
 
     // ── Drift after admission cannot rewrite captured authority ────────────

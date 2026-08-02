@@ -59,6 +59,15 @@ Settlement never reads current pricing, policy or catalog configuration.
 A structured leaf Run with complete governed authority cannot reach an
 ungoverned provider adapter. A Run with partial authority reaches neither path.
 
+A Run carrying `leafRunBinding` must carry complete `governedExecution`, and
+governed authority may not appear without a binding. One canonical rule enforces
+this at creation and at reconstruction, so every read path inherits it. Record
+age never excuses a malformed combination.
+
+A structured planning attempt is request-capable only from `request_started`
+onward, and a request-capable attempt without complete governed state is an
+integrity failure.
+
 Projections read durable rows. A balance is never derived by summing
 reservations, and the durable lifecycle vocabulary is never collapsed into a
 single boolean.

@@ -8,6 +8,14 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const {
+  governedAttemptStateWithoutStore
+} = require('./governed-structured-fixture');
+
+// Tranche 4 cutover: every request-capable attempt carries complete governed
+// state. Built once here through the canonical builders and reused, so these
+// contract assertions exercise the shape the runtime actually accepts.
+const GOVERNED_ATTEMPT_STATE = governedAttemptStateWithoutStore();
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -375,6 +383,7 @@ function main() {
 
   attempt = advancePlanningAttempt(attempt, {
     state: 'request_started',
+    governedExecution: GOVERNED_ATTEMPT_STATE,
     requestHash,
     requestMetadata,
     requestStartedAt: CAPTURED_AT
@@ -436,7 +445,7 @@ function main() {
   // Stage-accurate failure evidence: a parse failure and a validation failure
   // record different truths about the same stored response.
   let staged = advancePlanningAttempt(fresh, {
-    state: 'request_started', requestHash, requestMetadata, requestStartedAt: CAPTURED_AT
+    state: 'request_started', governedExecution: GOVERNED_ATTEMPT_STATE, requestHash, requestMetadata, requestStartedAt: CAPTURED_AT
   });
   staged = advancePlanningAttempt(staged, {
     state: 'response_received',
@@ -478,7 +487,7 @@ function main() {
   // ── Response bound is byte-exact, and durable response text is complete ──
   const durableResponse = (text, state = 'response_received') => advancePlanningAttempt(
     advancePlanningAttempt(fresh, {
-      state: 'request_started', requestHash, requestMetadata, requestStartedAt: CAPTURED_AT
+      state: 'request_started', governedExecution: GOVERNED_ATTEMPT_STATE, requestHash, requestMetadata, requestStartedAt: CAPTURED_AT
     }),
     {
       state,

@@ -65,6 +65,7 @@ const {
   normalizeGovernedProviderRequest
 } = require('../../runtime/governed-provider-request-contract');
 const {
+  assertRunGovernedExecutionPairing,
   buildGovernedRunAuthority,
   classifyRunGovernance,
   normalizeGovernedRunAuthority
@@ -716,7 +717,7 @@ function ticketFromRow(row) {
 }
 
 function runFromRow(row) {
-  return {
+  const run = {
     ...(row.body || {}),
     id: positiveSafeInteger(row.id, 'run.id'),
     ticketId: positiveSafeInteger(row.ticket_id, 'run.ticketId'),
@@ -733,6 +734,11 @@ function runFromRow(row) {
     createdAt: rowTimestamp(row.created_at),
     updatedAt: rowTimestamp(row.updated_at)
   };
+  // Reconstruction refuses a malformed structured Run rather than handing it to
+  // a scheduler, a projection, a recovery path or a provider. Enforcing here
+  // covers every read in the store with one rule.
+  assertRunGovernedExecutionPairing(run, `run ${run.id} governed execution`);
+  return run;
 }
 
 function evaluationFromRow(row) {
@@ -2724,11 +2730,10 @@ class PostgresRuntimeStore {
     ticketId,
     allocationPlanId = null,
     leafDrafts,
-    // Tranche 4. When supplied, EVERY sibling Run receives complete governed
-    // authority or none is admitted. Absent, the admission behaves exactly as
-    // it did before Tranche 4 — which is what keeps historical and v1 paths
-    // untouched.
-    governedLeafCapture = null,
+    // Tranche 4 cutover: REQUIRED. There is no ungoverned structured leaf
+    // admission. Every sibling receives complete governed authority or no Run
+    // becomes scheduler-visible.
+    governedLeafCapture,
     runEventPayload = () => ({}),
     eventType = 'ticket.allocation_leaf_runs_admitted',
     eventPayload = {}
@@ -2923,23 +2928,21 @@ class PostgresRuntimeStore {
       //
       // All siblings or none: any refusal below aborts the transaction, so no
       // partially governed leaf set can become scheduler-visible.
-      const governedEnvelopes = governedLeafCapture === null
-        ? null
-        : await this._captureGovernedLeafAuthority(connection, {
-          ticketId: id,
-          drafts,
-          runIds: drafts.map((_, index) =>
-            positiveSafeInteger(identities.rows[index].id, 'run.id')),
-          capture: governedLeafCapture,
-          capturedAt: now
-        });
+      const governedEnvelopes = await this._captureGovernedLeafAuthority(connection, {
+        ticketId: id,
+        drafts,
+        runIds: drafts.map((_, index) =>
+          positiveSafeInteger(identities.rows[index].id, 'run.id')),
+        capture: governedLeafCapture,
+        capturedAt: now
+      });
 
       const created = await this.createRunsAndStartTicket({
         ticketId: id,
         runDrafts: drafts.map((draft, index) => ({
           ...draft.run,
           leafRunBinding: bindings[index],
-          ...(governedEnvelopes ? { governedExecution: governedEnvelopes[index] } : {})
+          governedExecution: governedEnvelopes[index]
         })),
         runEventPayload,
         ticketEventPayload: {
@@ -4292,6 +4295,13 @@ class PostgresRuntimeStore {
   async _captureGovernedLeafAuthority(connection, {
     ticketId, drafts, runIds, capture, capturedAt
   }) {
+    if (!capture) {
+      const error = new Error(
+        'structured leaf admission requires governed leaf capture; ungoverned ' +
+        'structured leaf admission was removed by the Tranche 4 cutover');
+      error.code = 'GOVERNED_LEAF_CAPTURE_REQUIRED';
+      throw error;
+    }
     const source = capture && capture.policySource;
     if (!source || !source.roleRoutingPolicy || !source.economicPolicy ||
         !source.pricingCatalog) {
@@ -4560,6 +4570,7 @@ class PostgresRuntimeStore {
   async createRun(record, { client = null, reservedId = null } = {}) {
     const run = this.assertJsonRecord(record, 'run');
     assertRunDeclaredCompletionAuthority(run, 'run declared/completion authority');
+    assertRunGovernedExecutionPairing(run, 'run governed execution');
     const status = requiredString(run.status || 'pending', 'run.status');
     if (status !== 'pending') throw new TypeError('New runs must start pending');
     const currentPhase = normalizeRunPhase(run.currentPhase || 'planning', 'run.currentPhase');

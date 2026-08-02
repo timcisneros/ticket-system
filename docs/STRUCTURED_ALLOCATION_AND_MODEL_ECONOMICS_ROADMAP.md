@@ -473,18 +473,51 @@ released            → terminal undispatched request
 Recovery selects no new route, model, target, policy, catalog, prompt or
 ordinal, and never replans.
 
-### Historical compatibility
+### Development cutover
 
-Three states, and the third is why the contracts exist:
+Tranche 4 is a development cutover. Pre-cutover structured execution data is
+disposable and removed through the canonical development reset. Every supported
+structured planner request and structured leaf Run requires complete governed
+authority. Missing or partial governed state is an integrity failure, not a
+historical compatibility mode.
+
+There is no runtime category called "historical structured execution".
+
+**Run pairing.** The binding and the authority are inseparable:
 
 ```text
-no governed envelope       → historical, unchanged behaviour
-complete governed envelope → governed execution required
-partial governed envelope  → FAIL CLOSED, never treated as historical
+no binding + no envelope       → supported non-structured execution family
+binding    + complete envelope → supported structured leaf execution
+binding    + absent/partial    → INTEGRITY FAILURE
+no binding + envelope present  → INTEGRITY FAILURE
 ```
 
-Age is consulted nowhere. A Run's timestamp says nothing about whether it was
-admitted with authority; the admission path is what guarantees completeness.
+One canonical rule, `assertRunGovernedExecutionPairing`, is enforced at Run
+creation and at PostgreSQL row reconstruction. Because every read — scheduler
+pickup, recovery, retry preparation, projection, provider-path selection —
+reconstructs through the same function, a malformed structured Run can neither
+enter nor leave the runtime.
+
+**Planning attempts.** `created` is a transient, non-request-capable stage that
+may precede capture: the envelope binds a reservation identity that does not
+exist until the reservation commits. From `request_started` onward the attempt
+is request-capable and complete governed state is required. Nothing is
+synthesized from current policy to repair an attempt that lacks it.
+
+**Leaf admission** requires governed capture. There is no ungoverned structured
+leaf admission and no v1 fallback: all siblings receive complete authority, or
+zero Runs become scheduler-visible.
+
+Age is consulted nowhere — not timestamps, not migration numbers, not IDs. A
+record's vintage never excuses a malformed combination.
+
+### Intentionally supported non-structured paths
+
+Unchanged by this cutover, and not "legacy compatibility" — these are current
+product capabilities: ordinary direct Runs, v1 allocated Runs, workflow Runs,
+browser Runs, process Runs, simulation/A27, and objective-compiler calls. They
+carry neither `leafRunBinding` nor `governedExecution` and keep their existing
+provider path.
 
 ### Formal fallback boundary
 

@@ -10,6 +10,14 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { withHarness } = require('./postgres-test-harness');
+const {
+  governedAttemptState,
+  plannerPolicySource
+} = require('./governed-structured-fixture');
+
+// Tranche 4 cutover: a planning attempt becomes request-capable only with
+// complete governed authority.
+const PLANNER_POLICY = plannerPolicySource();
 const { readGovernedPolicySource } = require('../runtime/governed-policy-source');
 const {
   runGovernedLeafRequest,
@@ -218,6 +226,12 @@ async function main() {
         ticketId: ticket.id, attempt, expectedAttemptStateHash: null,
         eventType: 'ticket.structured_planning_started'
       })).attempt;
+      const { governedExecution: plannerGoverned } = await governedAttemptState(store, {
+        ticketId: ticket.id,
+        attemptId: attempt.attemptId,
+        plannerAgentId: planning.planner.agentId,
+        policy: PLANNER_POLICY
+      });
       const advance = async patch => {
         attempt = (await store.writeStructuredAllocationPlanningAttempt({
           ticketId: ticket.id,
@@ -228,6 +242,7 @@ async function main() {
       };
       await advance({
         state: 'request_started',
+        governedExecution: plannerGoverned,
         requestHash: plannerRequestHash({
           provider: planning.planner.provider, model: planning.planner.model, messages }),
         requestMetadata: {
@@ -362,11 +377,15 @@ async function main() {
         WHERE ticket_id = $1 AND role = $2`, [admitted.ticket.id, WORKER_ROLE]);
     assert.equal(Number(workerAccount.rows[0].settled_micro_usd) > 0, true,
       'settlement charged the worker account');
-    assert.equal(
-      (await store.pool.query(
-        `SELECT 1 FROM ${store.table('ticket_economic_accounts')}
-          WHERE ticket_id = $1 AND role = $2`, [admitted.ticket.id, PLANNER_ROLE])).rowCount,
-      0, 'no planner account was created or touched');
+    // The planner account exists (governed planning admitted it) and worker
+    // settlement must leave it completely alone.
+    const plannerAccount = await store.pool.query(
+      `SELECT settled_micro_usd, reserved_micro_usd
+         FROM ${store.table('ticket_economic_accounts')}
+        WHERE ticket_id = $1 AND role = $2`, [admitted.ticket.id, PLANNER_ROLE]);
+    assert.equal(plannerAccount.rowCount, 1, 'the planner account is separate');
+    assert.equal(Number(plannerAccount.rows[0].settled_micro_usd), 0,
+      'worker settlement never charges the planner account');
 
     // ── Duplicate concurrency ──────────────────────────────────────────────
 
@@ -781,18 +800,26 @@ async function main() {
 
     // ── Historical and malformed Runs ──────────────────────────────────────
 
-    // A Run with neither a leaf binding nor an envelope: the historical path.
+    // A Run with neither field is an ordinary non-structured Run and keeps the
+    // existing provider path.
     assert.equal(
-      selectRunProviderPath({ id: 1, ticketId: 1 }).path, 'historical',
-      'a historical Run keeps the ungoverned path');
-    // A structured leaf Run admitted before Tranche 4 has a binding but no
-    // envelope. It is historical, not failed.
-    assert.equal(
-      selectRunProviderPath({
+      selectRunProviderPath({ id: 1, ticketId: 1 }).path, 'ungoverned',
+      'a non-structured Run keeps the existing provider path');
+    // Tranche 4 cutover: a leaf binding without complete governed authority is
+    // an integrity failure. It reaches NEITHER provider path.
+    assert.throws(
+      () => selectRunProviderPath({
         id: run.id, ticketId: run.ticketId, leafRunBinding: run.leafRunBinding
-      }).path,
-      'historical',
-      'a pre-Tranche-4 leaf Run keeps the ungoverned path');
+      }),
+      error => error.code === 'GOVERNED_LEAF_REFUSED',
+      'a structured Run without complete governed authority refuses');
+    assert.throws(
+      () => selectRunProviderPath({
+        id: run.id, ticketId: run.ticketId,
+        governedExecution: run.governedExecution
+      }),
+      error => error.code === 'GOVERNED_LEAF_REFUSED',
+      'governed authority without a leaf binding refuses');
     assert.throws(
       () => selectRunProviderPath({
         id: run.id, ticketId: run.ticketId, leafRunBinding: run.leafRunBinding,
