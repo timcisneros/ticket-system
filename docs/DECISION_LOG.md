@@ -517,3 +517,29 @@ integrity failure regardless of the record's age.
 resolution and a context-window proof, liability is unboundable, so Ollama
 structured planning was withdrawn rather than governed on assumptions. Ollama
 remains fully supported on historical ungoverned paths.
+
+
+**Two adjacent argument shapes cannot be told apart by discipline.** The private
+server spawn helper took `env` as one key; the wrapper suites were handed took
+`env` positionally. Writing the first shape into the second was accepted in
+full, so a hermetic preload silently never loaded and every assertion resting on
+it passed vacuously. The fix was not more care at call sites but one closed
+contract, `startServer({ env, serverOptions })`, that refuses everything else
+before a child process starts — and a preload that prints proof-of-life the
+suite asserts on, because a guard that can fail silently protects nothing.
+
+**A gate that never refuses looks exactly like a correct gate.** Removing the
+governed request gate's `permitsGovernedRequest` check failed no test, because
+every governed scenario made progress in every window. Proving that verified
+progress AUTHORIZES the next request is not the same claim as proving its
+absence WITHHOLDS one, and only a scenario that does real work advancing nothing
+can test the second. Refusal paths need scenarios that reach them, not unit
+coverage of the predicate.
+
+**Running the full checkpoint is itself evidence.** Three required suites had
+been failing for several commits of this tranche — a sandbox missing a new
+dependency, stale persistence-integrity counts, and an un-bumped release schema
+version that made the process-execution preflight refuse a correctly migrated
+database. None was caught by focused runs, and one of them had been reported as
+an unexplained pre-existing flake. A required suite that fails unnoticed is
+indistinguishable from one that would have caught a real regression.

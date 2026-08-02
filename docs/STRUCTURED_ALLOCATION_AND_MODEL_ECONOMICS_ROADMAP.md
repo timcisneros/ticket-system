@@ -792,6 +792,8 @@ Tranche 2A: COMPLETE
 Tranche 2B: COMPLETE
 Tranche 3: COMPLETE
 Tranche 4: COMPLETE
-Tranche 5: INCOMPLETE — verified-progress credit unresolved
+Tranche 5: SUBSTANTIALLY COMPLETE — authorizing and withholding
+            directions both proven in production; crash/restart
+            integrity scenarios outstanding
 Tranche 6: NOT STARTED
 ```

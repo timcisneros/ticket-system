@@ -96,6 +96,38 @@ retry, reroute, replan, or automatic remediation, and a blocked Run is never
 automatically reopened. A persisted block is the decision of record: it is read,
 not re-derived, and rows committed after its cutoff do not rewrite it.
 
+A governed request is recorded and charged only once it is ADMITTED and this
+caller has won dispatch authority, and always before any byte leaves. Recorded
+earlier, a request the progress control refused still consumed a runtime-budget
+charge and left a replay item claiming it was issued, so the budget ledger
+counted requests the economic ledger and the transport did not. Recorded later,
+a crash mid-flight would leave no trace of a request that may already have
+reached the provider.
+
+Postcondition evidence is canonical, append-only and complete per window. One
+baseline verdict per admitted fact is captured before the first governed
+request, and every receipt-bearing batch owes one verdict per admitted fact.
+MISSING OR PARTIAL EVIDENCE IS AN INTEGRITY FAILURE, NEVER AN UNSATISFIED FACT:
+"we did not record it" and "it did not advance" are different statements, and
+only one of them may stop a Run for churn.
+
+Only these criterion classes are execution-evaluable: `folder_exists`,
+`path_absent`, `file_content_equals`. An unsupported class is reported
+unsupported, never unsatisfied. A governed leaf Run admitting no
+execution-evaluable fact is refused at admission rather than allowed to run and
+stop later with a reason that would be false about its work.
+
+Completion additionally requires an objective the deterministic grammar
+recognizes. The completion decision evaluates recorded verification claims, and
+those exist only for a compiled contract, so a Run with an unrecognized
+objective can execute and write correct evidence and still never be completable.
+
+A no-progress block is persisted BEFORE any further spending. Withholding is
+proved in production in both directions: new verified progress authorizes the
+next governed request, and its absence durably withholds one — no second budget
+charge, no second economic reservation, no second provider-request replay item,
+and no second transport call.
+
 Structured siblings have no dependency graph and no ordering. A read of another
 item's owned output is refused and the reading Run stops; it never waits. A
 completed sibling becomes readable only through a reconciled item disposition of
