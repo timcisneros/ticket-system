@@ -103,8 +103,12 @@ async function main() {
     assert.equal(await store.health(), true);
     assert.equal((await store.acquireRuntimeAuthority()).mode, 'shared_transactional');
     const emptyRuntimeIntegrity = await store.prepareRuntimePersistence();
-    assert.equal(emptyRuntimeIntegrity.checkedRelationCount, 44);
-    assert.equal(emptyRuntimeIntegrity.checkedIntegrityArtifactCount, 209);
+    // 45 relations and 210 integrity artifacts since Tranche 5 added
+    // `governed_postcondition_evidence` (migration 035) with its batch-boundary
+    // and baseline constraints. These counts are deliberately exact: a relation
+    // appearing or vanishing unnoticed is precisely what they exist to catch.
+    assert.equal(emptyRuntimeIntegrity.checkedRelationCount, 45);
+    assert.equal(emptyRuntimeIntegrity.checkedIntegrityArtifactCount, 210);
     assert.equal(emptyRuntimeIntegrity.integrityMode, 'transactional_constraints');
 
     const initialRuntimeLimits = await store.getRuntimeLimitsConfig();
@@ -3241,8 +3245,8 @@ async function main() {
     await parentWaiter;
 
     const populatedRuntimeIntegrity = await store.prepareRuntimePersistence();
-    assert.equal(populatedRuntimeIntegrity.checkedRelationCount, 44);
-    assert.equal(populatedRuntimeIntegrity.checkedIntegrityArtifactCount, 209);
+    assert.equal(populatedRuntimeIntegrity.checkedRelationCount, 45);
+    assert.equal(populatedRuntimeIntegrity.checkedIntegrityArtifactCount, 210);
     assert.equal(populatedRuntimeIntegrity.integrityMode, 'transactional_constraints');
     assert.equal(await store.releaseRuntimeAuthority(), true);
 
