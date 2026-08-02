@@ -943,19 +943,24 @@ async function main() {
     const epochTicket = await admitLeafSet('Governed leaf epoch');
     const epochRun = await store.getRun(
       (await store.listRunsForTicket({ ticketId: epochTicket.ticket.id })).runs[0].id);
-    const epochBefore = (await store.readGovernedRunProgressState(epochRun.id))
-      .executionEpochAt;
-    assert.ok(epochBefore, 'a governed Run carries an immutable execution epoch');
-    assert.equal(epochBefore, epochRun.governedExecution.capturedAt,
-      'the epoch is the hash-bound admission timestamp');
+    // A Run waiting in the scheduler has NOT begun executing. Admission time is
+    // not an execution epoch: counting queue time as execution duration would
+    // charge a Run for waiting.
+    const queuedState = await store.readGovernedRunProgressState(epochRun.id);
+    assert.equal(queuedState.executionEpochAt, null,
+      'a queued Run has no execution epoch yet');
+    assert.ok(epochRun.governedExecution.capturedAt,
+      'admission time exists but is deliberately not the epoch');
 
-    // Drive the Run through a real lease claim and a real expiry recovery.
+    // The FIRST successful claim establishes it.
     await store.claimPendingRun({
       leaseOwner: 'epoch-test', leaseDurationMs: 600_000,
       eligibleRunIds: [epochRun.id] });
     const claimedState = await store.readGovernedRunProgressState(epochRun.id);
-    assert.equal(claimedState.executionEpochAt, epochBefore,
-      'claiming a lease does not move the epoch');
+    const epochBefore = claimedState.executionEpochAt;
+    assert.ok(epochBefore, 'the first claim establishes the execution epoch');
+    assert.notEqual(epochBefore, epochRun.governedExecution.capturedAt,
+      'the epoch is first-execution time, not admission time');
 
     await store.pool.query(
       `UPDATE ${store.table('runs')}
@@ -975,17 +980,61 @@ async function main() {
     assert.equal(recoveredState.executionEpochAt, epochBefore,
       'the execution epoch is unchanged by recovery, so duration cannot reset');
 
-    // A progress state with no epoch cannot be evaluated at all: measuring
-    // duration from a resettable stamp is the defect, so its absence refuses.
+    // A second claim after recovery does not move it either.
+    await store.claimPendingRun({
+      leaseOwner: 'epoch-test-2', leaseDurationMs: 600_000,
+      eligibleRunIds: [epochRun.id] });
+    assert.equal(
+      (await store.readGovernedRunProgressState(epochRun.id)).executionEpochAt,
+      epochBefore,
+      'a second lease claim does not move the epoch');
+
+    // A restarted process reads the same epoch from the append-only event log.
+    const { PostgresRuntimeStore: EpochStore } =
+      require('../persistence/postgres/store');
+    const epochRestart = new EpochStore({
+      connectionString: process.env.TEST_DATABASE_URL, schema: store.schema });
+    try {
+      assert.equal(
+        (await epochRestart.readGovernedRunProgressState(epochRun.id)).executionEpochAt,
+        epochBefore,
+        'restart preserves the execution epoch');
+    } finally {
+      await epochRestart.close();
+    }
+
+    // A genuinely different Run receives its own epoch.
+    const siblingEpochRun = await store.getRun(
+      (await store.listRunsForTicket({ ticketId: epochTicket.ticket.id })).runs[1].id);
+    await store.claimPendingRun({
+      leaseOwner: 'epoch-test-sibling', leaseDurationMs: 600_000,
+      eligibleRunIds: [siblingEpochRun.id] });
+    const siblingEpoch =
+      (await store.readGovernedRunProgressState(siblingEpochRun.id)).executionEpochAt;
+    assert.ok(siblingEpoch, 'the sibling Run has its own epoch');
+    assert.notEqual(siblingEpoch, epochBefore,
+      'a distinct Run receives a distinct execution epoch');
+
+    // A queued Run with no epoch evaluates fine — it simply has no duration to
+    // bound. What refuses is a MALFORMED epoch, because silently substituting a
+    // resettable stamp is the defect this guards.
+    const queuedEvaluation = require('../runtime/governed-progress-evaluation')
+      .evaluateGovernedRunProgress({
+        progressState: { ...recoveredState, executionEpochAt: null },
+        declaredWorkSnapshot: epochRun.declaredWorkSnapshot,
+        progressPolicy: epochRun.governedExecution.progressControlPolicy
+      });
+    assert.equal(queuedEvaluation.executionEpochAt, null,
+      'an absent epoch is carried through as null, never defaulted');
     assert.throws(
       () => require('../runtime/governed-progress-evaluation')
         .evaluateGovernedRunProgress({
-          progressState: { ...recoveredState, executionEpochAt: null },
+          progressState: { ...recoveredState, executionEpochAt: 12345 },
           declaredWorkSnapshot: epochRun.declaredWorkSnapshot,
           progressPolicy: epochRun.governedExecution.progressControlPolicy
         }),
-      /immutable execution epoch/,
-      'evaluation without an immutable execution epoch refuses');
+      /malformed execution epoch/,
+      'a malformed execution epoch refuses');
 
     // ── Explicit evaluation cutoff ────────────────────────────────────────
     //

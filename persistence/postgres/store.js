@@ -4672,6 +4672,13 @@ class PostgresRuntimeStore {
       }
       const run = runFromRow(runResult.rows[0]);
 
+      // The immutable first-execution epoch, from the append-only event log.
+      const epochRow = await connection.query(
+        `SELECT min(ts) AS epoch_at FROM ${this.table('events')}
+          WHERE run_id = $1 AND type = 'run.lease_acquired'`,
+        [id]
+      );
+
       // ONE statement, ONE snapshot: the cutoff maxima are mutually consistent.
       // Taking them in separate queries would reintroduce the mixed-state
       // problem this exists to solve.
@@ -4741,23 +4748,27 @@ class PostgresRuntimeStore {
           settledMicroUsd,
           budgetChargedUnits
         },
-        // THE EXECUTION EPOCH — and why it is NOT `runs.started_at`.
+        // THE EXECUTION EPOCH — the FIRST time this Run actually began
+        // executing, which is neither of the two obvious candidates.
         //
-        // `recoverExpiredRun` sets `started_at = NULL` when a lease expires, and
-        // the next claim re-stamps it through
-        // `COALESCE(run.started_at, clock_timestamp())`. So `started_at` measures
-        // the latest execution attempt, not the Run's lifetime: a Run that
-        // recovers N times would receive N wall-clock budgets, which is exactly
+        // NOT `runs.started_at`: `recoverExpiredRun` sets it to NULL on lease
+        // expiry and the next claim re-stamps it, so it measures the latest
+        // ATTEMPT. A Run recovering N times would receive N wall-clock budgets —
         // the defect pending decision A3 records.
         //
-        // `governedExecution.capturedAt` is stamped once at leaf admission,
-        // before the Run is scheduler-visible, and lives inside the immutable
-        // hash-verified envelope — so no recovery, lease claim, retry
-        // preparation or status transition can rewrite it. A genuinely new
-        // retry Run is admitted separately and receives its own epoch, which is
-        // the correct behaviour.
-        executionEpochAt: run.governedExecution
-          ? run.governedExecution.capturedAt
+        // NOT `governedExecution.capturedAt` either: that is stamped during leaf
+        // admission, and Runs are created `pending`. A Run waiting hours in the
+        // scheduler queue would have that wait counted as execution duration.
+        // Immutable, but measuring the wrong thing.
+        //
+        // The earliest `run.lease_acquired` event IS first execution start. The
+        // event is appended inside the claim transaction, the event log is
+        // append-only and hash-chained, and no event exists before the first
+        // claim — so the epoch is absent while queued, set exactly once, and
+        // unrewritable by recovery, retry preparation or status transitions. A
+        // genuinely new retry Run has its own events and its own epoch.
+        executionEpochAt: epochRow.rows.length > 0 && epochRow.rows[0].epoch_at
+          ? isoTimestamp(epochRow.rows[0].epoch_at, 'run execution epoch')
           : null,
         // Retained for diagnostics only. Never used as duration authority.
         latestAttemptStartedAt: run.startedAt,

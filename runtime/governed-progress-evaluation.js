@@ -96,9 +96,16 @@ function evaluateGovernedRunProgress({
   } = progressState;
   // Duration is measured from the immutable execution epoch, never from the
   // latest attempt's `started_at`, which recovery resets to NULL.
-  if (progressState.latestAttemptStartedAt !== undefined && !executionEpochAt) {
+  //
+  // Absence is MEANINGFUL, not an error: a Run still queued has not begun
+  // executing, so it has no duration to bound. Refusing here would block the
+  // first governed request, which Tranche 5 explicitly allows. What must never
+  // happen is silently substituting a resettable stamp — so the epoch is
+  // carried through as null rather than defaulted.
+  if (executionEpochAt !== null && executionEpochAt !== undefined &&
+      typeof executionEpochAt !== 'string') {
     throw new Error(
-      'governed progress evaluation requires an immutable execution epoch');
+      'governed progress evaluation received a malformed execution epoch');
   }
   const { windows } = partitionReceiptsIntoWindows({ reservations, receipts });
 
