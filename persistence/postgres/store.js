@@ -74,7 +74,7 @@ const {
 const {
   assertEvidenceAgrees,
   normalizeGovernedPostconditionEvidence,
-  satisfiedFactIdentitiesByReceiptId
+  satisfiedFactIdentitiesByBatch
 } = require('../../runtime/governed-postcondition-evidence-contract');
 const {
   assertBlockAuthorityMatches,
@@ -5018,25 +5018,54 @@ class PostgresRuntimeStore {
   async appendGovernedPostconditionEvidence({ evidence }, { client = null } = {}) {
     const record = normalizeGovernedPostconditionEvidence(evidence);
     const execute = async connection => {
-      // CAUSAL ORDER. Evidence exists only about a receipt that already
-      // committed, and only about THIS Run's receipt. The foreign key would
-      // catch a missing receipt; this catches the subtler error of citing
-      // another Run's receipt, which the key alone would permit.
-      const receipt = await connection.query(
-        `SELECT run_id, ticket_id FROM ${this.table('operation_receipts')}
-          WHERE id = $1`, [record.operationReceiptId]);
-      if (receipt.rowCount === 0) {
-        const error = new Error(
-          `operation receipt ${record.operationReceiptId} does not exist`);
-        error.code = 'GOVERNED_POSTCONDITION_EVIDENCE_RECEIPT_MISSING';
-        throw error;
-      }
-      if (Number(receipt.rows[0].run_id) !== record.runId ||
-          Number(receipt.rows[0].ticket_id) !== record.ticketId) {
-        const error = new Error(
-          `operation receipt ${record.operationReceiptId} belongs to another run`);
-        error.code = 'GOVERNED_POSTCONDITION_EVIDENCE_FOREIGN_RECEIPT';
-        throw error;
+      // BOUNDARY VALIDATION, relationally — never by comparing identifiers.
+      //
+      // `operation_receipts.id` is global, so concurrent Runs interleave
+      // numerically and a receipt id range proves nothing about membership. The
+      // batch is (run_id, step_id); the anchor must belong to THAT batch, and
+      // the count must match how many of the batch's receipts actually
+      // committed at or before it.
+      if (record.throughOperationReceiptId !== null) {
+        const anchor = await connection.query(
+          `SELECT run_id, ticket_id, step_id FROM ${this.table('operation_receipts')}
+            WHERE id = $1`, [record.throughOperationReceiptId]);
+        if (anchor.rowCount === 0) {
+          const error = new Error(
+            `operation receipt ${record.throughOperationReceiptId} does not exist`);
+          error.code = 'GOVERNED_POSTCONDITION_EVIDENCE_RECEIPT_MISSING';
+          throw error;
+        }
+        const row = anchor.rows[0];
+        if (Number(row.run_id) !== record.runId ||
+            Number(row.ticket_id) !== record.ticketId) {
+          const error = new Error(
+            `operation receipt ${record.throughOperationReceiptId} belongs to another run`);
+          error.code = 'GOVERNED_POSTCONDITION_EVIDENCE_FOREIGN_RECEIPT';
+          throw error;
+        }
+        // The anchor must be IN the batch it claims to bound. An anchor from a
+        // different step is a cross-window boundary: the evaluation would be
+        // attributed to an observation window it did not happen in.
+        if (String(row.step_id) !== String(record.batchStepId)) {
+          const error = new Error(
+            `operation receipt ${record.throughOperationReceiptId} belongs to step ` +
+            `${row.step_id}, not the evaluated batch ${record.batchStepId}`);
+          error.code = 'GOVERNED_POSTCONDITION_EVIDENCE_CROSS_WINDOW_BOUNDARY';
+          throw error;
+        }
+        // The count must describe the batch's own committed receipts, so it
+        // cannot be inflated to imply an evaluation stood on work it did not.
+        const committed = await connection.query(
+          `SELECT count(*)::int AS c FROM ${this.table('operation_receipts')}
+            WHERE run_id = $1 AND step_id = $2 AND id <= $3`,
+          [record.runId, record.batchStepId, record.throughOperationReceiptId]);
+        if (Number(committed.rows[0].c) !== record.evaluatedReceiptCount) {
+          const error = new Error(
+            `evaluated receipt count ${record.evaluatedReceiptCount} disagrees with ` +
+            `${committed.rows[0].c} committed receipts in batch ${record.batchStepId}`);
+          error.code = 'GOVERNED_POSTCONDITION_EVIDENCE_BOUNDARY_DISAGREEMENT';
+          throw error;
+        }
       }
 
       // IDEMPOTENT. Recovery re-evaluating the same fact against the same
@@ -5048,19 +5077,24 @@ class PostgresRuntimeStore {
            (ticket_id, run_id, allocation_plan_id, allocation_item_id,
             governed_authority_hash, completion_authority_hash,
             declared_fact_identity, criterion_hash, criterion_type,
-            evaluator_identity, evaluator_version, operation_receipt_id,
-            logical_source_identity, observed_evidence, satisfied, evidence_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16)
-         ON CONFLICT ON CONSTRAINT governed_postcondition_evidence_idempotent
+            evaluator_identity, evaluator_version, through_operation_receipt_id,
+            logical_source_identity, observed_evidence, satisfied, evidence_hash,
+            request_source_identity, batch_step_id, evaluated_receipt_count)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,
+                 $17,$18,$19)
+         ON CONFLICT (run_id, batch_step_id, declared_fact_identity)
+           WHERE batch_step_id IS NOT NULL
          DO NOTHING
          RETURNING id, evaluated_at`,
         [record.ticketId, record.runId, record.allocationPlanId,
           record.allocationItemId, record.governedAuthorityHash,
           record.completionAuthorityHash, record.declaredFactIdentity,
           record.criterionHash, record.criterionType, record.evaluatorIdentity,
-          record.evaluatorVersion, record.operationReceiptId,
+          record.evaluatorVersion, record.throughOperationReceiptId,
           record.logicalSourceIdentity, JSON.stringify(record.observedEvidence),
-          record.satisfied, record.evidenceHash]
+          record.satisfied, record.evidenceHash,
+          record.requestSourceIdentity, record.batchStepId,
+          record.evaluatedReceiptCount]
       );
       if (inserted.rowCount === 1) {
         return {
@@ -5073,9 +5107,9 @@ class PostgresRuntimeStore {
       }
       const existingRow = await connection.query(
         `SELECT * FROM ${this.table('governed_postcondition_evidence')}
-          WHERE run_id = $1 AND operation_receipt_id = $2
+          WHERE run_id = $1 AND batch_step_id = $2
             AND declared_fact_identity = $3`,
-        [record.runId, record.operationReceiptId, record.declaredFactIdentity]
+        [record.runId, record.batchStepId, record.declaredFactIdentity]
       );
       const stored = this._governedPostconditionEvidenceFromRow(existingRow.rows[0]);
       assertEvidenceAgrees(stored, record);
@@ -5104,7 +5138,12 @@ class PostgresRuntimeStore {
       criterionType: row.criterion_type,
       evaluatorIdentity: row.evaluator_identity,
       evaluatorVersion: Number(row.evaluator_version),
-      operationReceiptId: Number(row.operation_receipt_id),
+      throughOperationReceiptId: row.through_operation_receipt_id === null
+        ? null
+        : Number(row.through_operation_receipt_id),
+      requestSourceIdentity: row.request_source_identity,
+      batchStepId: row.batch_step_id,
+      evaluatedReceiptCount: Number(row.evaluated_receipt_count),
       logicalSourceIdentity: row.logical_source_identity,
       observedEvidence: row.observed_evidence,
       satisfied: row.satisfied,

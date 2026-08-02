@@ -70,8 +70,22 @@ const EVIDENCE_FIELDS = Object.freeze([
   'criterionType',
   'evaluatorIdentity',
   'evaluatorVersion',
-  // The causal binding: evidence is about ONE committed receipt.
-  'operationReceiptId',
+  // THE BOUNDARY. Not a causal claim.
+  //
+  // `throughOperationReceiptId` says only "the evaluation occurred after this
+  // committed receipt of this batch". The execution-time check reads cumulative
+  // workspace state, so state from many receipts across many earlier windows
+  // contributes to one verdict; naming any single receipt as the cause would be
+  // false. It is NULL for a batch that committed no qualifying receipt, because
+  // borrowing an unrelated earlier receipt as an anchor would be worse.
+  //
+  // Membership is validated relationally by `batchStepId` + `runId`, never by a
+  // receipt id range: receipt ids are global and interleave across concurrent
+  // Runs, so an ordered pair is not a batch.
+  'throughOperationReceiptId',
+  'requestSourceIdentity',
+  'batchStepId',
+  'evaluatedReceiptCount',
   'logicalSourceIdentity',
   'observedEvidence',
   'satisfied',
@@ -90,7 +104,8 @@ const EVIDENCE_REFUSALS = Object.freeze([
   'postcondition_evidence_unsupported_evaluator',
   'postcondition_evidence_unsupported_criterion',
   'postcondition_evidence_identity_mismatch',
-  'postcondition_evidence_causal_binding_missing',
+  'postcondition_evidence_boundary_invalid',
+  'postcondition_evidence_batch_identity_missing',
   'postcondition_evidence_conflict',
   'postcondition_evidence_not_canonical'
 ]);
@@ -200,7 +215,10 @@ function buildGovernedPostconditionEvidence({
   criterionType,
   evaluatorIdentity,
   evaluatorVersion,
-  operationReceiptId,
+  throughOperationReceiptId = null,
+  requestSourceIdentity,
+  batchStepId,
+  evaluatedReceiptCount,
   logicalSourceIdentity = null,
   observedEvidence,
   // The verdict object produced by the canonical evaluator. There is
@@ -243,9 +261,22 @@ function buildGovernedPostconditionEvidence({
     criterionType,
     evaluatorIdentity: boundedText(evaluatorIdentity, 'evaluatorIdentity', 128),
     evaluatorVersion: positiveInteger(evaluatorVersion, 'evaluatorVersion'),
-    // Causal binding is required, never optional: evidence about no receipt is
-    // evidence about nothing that happened.
-    operationReceiptId: positiveInteger(operationReceiptId, 'operationReceiptId'),
+    // The ordering anchor. Optional by design — see the field list above.
+    throughOperationReceiptId: throughOperationReceiptId === null ||
+      throughOperationReceiptId === undefined
+      ? null
+      : positiveInteger(throughOperationReceiptId, 'throughOperationReceiptId'),
+    // The batch identity. REQUIRED: evidence that cannot say which governed
+    // request it belongs to cannot be assigned to an observation window.
+    requestSourceIdentity: boundedText(requestSourceIdentity, 'requestSourceIdentity'),
+    batchStepId: boundedText(batchStepId, 'batchStepId', 128),
+    evaluatedReceiptCount: (() => {
+      if (!Number.isSafeInteger(evaluatedReceiptCount) || evaluatedReceiptCount < 0) {
+        refuse('postcondition_evidence_boundary_invalid',
+          'evaluatedReceiptCount must be a non-negative safe integer');
+      }
+      return evaluatedReceiptCount;
+    })(),
     logicalSourceIdentity: logicalSourceIdentity === null ||
       logicalSourceIdentity === undefined
       ? null
@@ -254,6 +285,15 @@ function buildGovernedPostconditionEvidence({
     satisfied,
     evidenceHash: null
   };
+  // BOUNDARY COHERENCE, checked here as well as on read. The builder must not
+  // be able to produce a record the normalizer would later refuse: an anchor
+  // with no receipts, or receipts with no anchor, is a boundary that cannot be
+  // validated against the durable rows it claims to follow.
+  if ((fields.throughOperationReceiptId !== null) !==
+      (fields.evaluatedReceiptCount > 0)) {
+    refuse('postcondition_evidence_boundary_invalid',
+      'the through-receipt anchor and the evaluated receipt count disagree');
+  }
   const withoutHash = {};
   for (const field of HASHED_FIELDS) withoutHash[field] = fields[field];
   fields.evidenceHash = hashCanonical(withoutHash);
@@ -299,9 +339,36 @@ function normalizeGovernedPostconditionEvidence(value) {
     refuse('postcondition_evidence_identity_mismatch',
       'the declared-fact identity must be the typed criterion hash');
   }
-  if (!Number.isSafeInteger(value.operationReceiptId) || value.operationReceiptId < 1) {
-    refuse('postcondition_evidence_causal_binding_missing',
-      'evidence must cite the committed operation receipt it is about');
+  // BOUNDARY COHERENCE. The anchor and the count must tell the same story: an
+  // anchor with no receipts, or receipts with no anchor, is a boundary that
+  // cannot be checked against the durable rows it claims to follow.
+  const hasAnchor = value.throughOperationReceiptId !== null &&
+    value.throughOperationReceiptId !== undefined;
+  if (hasAnchor &&
+      (!Number.isSafeInteger(value.throughOperationReceiptId) ||
+       value.throughOperationReceiptId < 1)) {
+    refuse('postcondition_evidence_boundary_invalid',
+      'the through-receipt anchor must be a positive receipt identity or absent');
+  }
+  if (!Number.isSafeInteger(value.evaluatedReceiptCount) ||
+      value.evaluatedReceiptCount < 0) {
+    refuse('postcondition_evidence_boundary_invalid',
+      'evaluatedReceiptCount must be a non-negative safe integer');
+  }
+  if (hasAnchor !== (value.evaluatedReceiptCount > 0)) {
+    refuse('postcondition_evidence_boundary_invalid',
+      'the through-receipt anchor and the evaluated receipt count disagree');
+  }
+  // The batch identity is what assigns evidence to exactly one observation
+  // window. Without it the row cannot be attributed at all.
+  if (typeof value.requestSourceIdentity !== 'string' ||
+      value.requestSourceIdentity.length === 0) {
+    refuse('postcondition_evidence_batch_identity_missing',
+      'evidence must name the governed request its evaluation belongs to');
+  }
+  if (typeof value.batchStepId !== 'string' || value.batchStepId.length === 0) {
+    refuse('postcondition_evidence_batch_identity_missing',
+      'evidence must name the execution step of the evaluated batch');
   }
   const withoutHash = {};
   for (const field of HASHED_FIELDS) withoutHash[field] = value[field];
@@ -323,7 +390,7 @@ function assertEvidenceAgrees(stored, candidate) {
   if (left.evidenceHash !== right.evidenceHash) {
     refuse('postcondition_evidence_conflict',
       `run ${left.runId} already holds different evidence for fact ` +
-      `${left.declaredFactIdentity} on receipt ${left.operationReceiptId}`);
+      `${left.declaredFactIdentity} in batch ${left.batchStepId}`);
   }
   return left;
 }
@@ -355,7 +422,7 @@ function contentRecordOf(row) {
   return normalizeGovernedPostconditionEvidence(record);
 }
 
-function satisfiedFactIdentitiesByReceiptId(evidenceRows, {
+function satisfiedFactIdentitiesByBatch(evidenceRows, {
   runId,
   allocationItemId,
   governedAuthorityHash,
@@ -375,13 +442,17 @@ function satisfiedFactIdentitiesByReceiptId(evidenceRows, {
       continue;
     }
     if (!evidence.satisfied) continue;
-    const existing = mapping.get(evidence.operationReceiptId) || new Set();
+    // Keyed by the BATCH, because that is what the evaluation was about. The
+    // through-receipt anchor locates the batch in the receipt ordering; it is
+    // not the thing the fact is attributed to.
+    const key = evidence.batchStepId;
+    const existing = mapping.get(key) || new Set();
     existing.add(evidence.declaredFactIdentity);
-    mapping.set(evidence.operationReceiptId, existing);
+    mapping.set(key, existing);
   }
   const frozen = new Map();
-  for (const [receiptId, identities] of mapping) {
-    frozen.set(receiptId, deepFreeze([...identities].sort(compareCanonicalText)));
+  for (const [batchStepId, identities] of mapping) {
+    frozen.set(batchStepId, deepFreeze([...identities].sort(compareCanonicalText)));
   }
   return frozen;
 }
@@ -399,5 +470,5 @@ module.exports = {
   contentRecordOf,
   normalizeGovernedPostconditionEvidence,
   refuseGovernedPostconditionEvidence: refuse,
-  satisfiedFactIdentitiesByReceiptId
+  satisfiedFactIdentitiesByBatch
 };
