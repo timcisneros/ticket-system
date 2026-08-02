@@ -12052,6 +12052,14 @@ async function dispatchGovernedLeafModelRequest({
     }
   });
 
+  // RESERVE BEFORE DISPATCH, exactly as the ungoverned path does. The commit
+  // below states it uses "the same source identity it was reserved under" — but
+  // nothing reserved it, so every governed leaf request failed at commit with
+  // "Budget reservation does not exist" the moment one actually executed. The
+  // economic reservation inside the orchestration is a different ledger; the
+  // runtime budget still needs its own.
+  await runtimeBudgetController.reserve(run, 'model_request', budgetSourceIdentity, 1);
+
   const result = await runGovernedLeafRequest({
     repository: getGovernedPlannerDispatchRepository(),
     run,
@@ -12073,18 +12081,35 @@ async function dispatchGovernedLeafModelRequest({
       // The existing canonical provider evidence, unchanged and written BEFORE
       // the economic response marker, so a response the worker loop consumes is
       // always recoverable without another provider request.
+      // The canonical replay identity is REQUIRED, exactly as the ungoverned
+      // provider-response path supplies it. Omitting it made every governed
+      // leaf Run refuse at `appendRunEvidence` the moment it actually executed
+      // — invisible until a test drove the real worker, because `payload` and
+      // `metadata` are not parameters this evidence writer accepts.
+      const governedResponseText = typeof options.sanitizeResponseText === 'function'
+        ? options.sanitizeResponseText(text)
+        : text;
       await recordNonTerminalRunEvidence(run, {
         category: 'provider-response',
         slot,
-        payload: sanitizeSnapshotValue({
+        replayKey: 'modelResponses',
+        replayItem: sanitizeSnapshotValue({
           governed: true,
           responseIdentity,
           responseHash,
-          text: typeof options.sanitizeResponseText === 'function'
-            ? options.sanitizeResponseText(text)
-            : text
+          text: governedResponseText,
+          provider: 'openai',
+          ...(options.metadata || {})
         }),
-        metadata: sanitizeSnapshotValue(options.metadata || {})
+        eventType: 'provider.response.persisted',
+        eventPayload: sanitizeSnapshotValue({
+          ...(options.metadata || {}),
+          governed: true,
+          outcome: 'succeeded',
+          provider: 'openai',
+          responseIdentity,
+          responseHash
+        })
       });
     }
   });
