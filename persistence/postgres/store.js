@@ -5069,6 +5069,14 @@ class PostgresRuntimeStore {
       if (!disposition.completionDecisionHash) {
         // Completed status WITHOUT its supporting decision. A terminal Run is
         // not a completed item, and status alone is not proof.
+        //
+        // ATTRIBUTION: this branch is UNREACHABLE through canonical authority.
+        // `normalizeAggregatePlanDecision` refuses a completed item that has no
+        // supporting decision hash, and `getAllocationPlanForTicket` normalizes
+        // on read, so a tampered row cannot deliver this state either. The
+        // invariant is owned by the leaf-run contract; the guard is retained as
+        // fail-closed depth, and is deliberately NOT backed by a manufactured
+        // fixture that would misattribute ownership to this resolver.
         sibling.siblingCompletionState = 'terminal_without_decision';
         return { outcome: 'blocked_incomplete_sibling', sibling };
       }

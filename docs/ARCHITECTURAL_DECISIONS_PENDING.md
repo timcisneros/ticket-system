@@ -128,7 +128,7 @@ the defect can cause, not how hard it is to fix.
 |---|--------|----------|--------|-------|
 | A1 | Workspace-snapshot failure truthfulness (E4) | **High** | **Implemented** `ee44369` + `3f6d4ac` — entry retained for the record | Correctness |
 | A2 | Live-state vs immutable-snapshot mutation counting (E5) | Medium | Open | Correctness |
-| A3 | Wall-clock and progress-counter recovery resets | **High** | Open | Bounds integrity |
+| A3 | Wall-clock and progress-counter recovery resets | **High** | Partial — counters closed on the governed leaf path; wall clock still unbounded everywhere | Bounds integrity |
 | A4 | Enforcement gates bypass the immutable policy snapshot | Medium | Open | Architecture |
 | A5 | Workload-profile re-resolution | Low | Open | Architecture |
 | A6 | Gate ordering vs prefix truncation | Medium | **Governance decision required** | Policy |
@@ -391,6 +391,46 @@ Consequences:
 
 **Constraint:** fixing the wall clock tightens an effective limit and will fail runs that
 previously passed. Stage behind observation.
+
+#### Verdict after Tranche 5 (2026-08-01): PARTIAL — A3 IS NOT CLOSED
+
+A3 has two halves. Tranche 5 closes one of them, on one path, and it is worth being exact
+about which, because the remaining half is easy to mistake for finished.
+
+**Closed — progress counters, governed structured leaf Runs only.** On the governed leaf
+path no termination counter is carried in memory across a restart. Every one of them —
+the consecutive no-progress streak, repeated mutations, the failed-operation streak, and
+mutation reversals — is reconstructed by replaying durable observation windows from
+`operation_receipts` and `economic_request_reservations` under a cutoff captured in a
+single statement (`readGovernedRunProgressState`), and the resulting refusal is persisted
+as a hash-bound block that survives process restart. There is no resettable continuation
+counter left to reset: `evaluateGovernedRunProgress` accepts no caller-supplied progress
+flag and reads no clock. This is the half the streak design in
+`runtime/action-contract-streak.js` was built to protect, and on this path it now holds.
+
+**NOT closed — the wall clock, on every path including the governed one.** Tranche 5
+established the durable fact a run-scoped duration bound needs: an immutable execution
+epoch, derived from the earliest `run.lease_acquired` event, which recovery cannot reset
+(unlike `runs.started_at`, which `recoverExpiredRun` NULLs) and which is not admission time
+(unlike `governedExecution.capturedAt`). That fact is computed, validated, and carried
+through evaluation — **and nothing consumes it.** `PROGRESS_POLICY_FIELDS` in
+`runtime/churn-decision-contract.js` has no duration tolerance, and `RESOURCE_DIMENSIONS`
+contains only `provider_requests`, `durable_operations`, `settled_micro_usd`, and
+`budget_charged_units` — no time dimension at all. The governed policy therefore **cannot
+express a wall-clock bound**, so governed Runs are not duration-bounded either. The epoch
+is a prerequisite that has been met, not the fix.
+
+**NOT closed — the ungoverned path, both halves.** Nothing in Tranche 5 touched
+`runAgentTicket`. `server.js:1250` still reads `const stalledResponses = 0; // We don't
+track stalled across restarts`, and `maxRuntimeDurationMs`, `maxListDirectoryPerRun`, and
+`maxReadFilePerRun` are still enforced per loop entry there. A run that recovers N times
+still receives N budgets on that path, and the A12 interaction described below is
+unchanged.
+
+**What closing A3 now requires:** a duration dimension in the progress-control policy that
+consumes `executionEpochAt`, and a decision about the ungoverned path — either migrating it
+onto governed evaluation or bounding it separately. Both remain open. The staging
+constraint above still applies to the wall-clock half.
 
 **Interacts with A12.** Because each recovery re-entry restarts the wall clock, no runtime
 limit currently bounds A12's indefinite snapshot-recovery cycling. Fixing A3 alone would

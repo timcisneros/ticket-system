@@ -45,7 +45,8 @@ const {
   plannerRequestHash
 } = require('../runtime/structured-allocation-planning-contract');
 const {
-  buildLeafDeclaredWorkSnapshot
+  buildLeafDeclaredWorkSnapshot,
+  normalizeAggregatePlanDecision
 } = require('../runtime/structured-allocation-leaf-run-contract');
 const {
   buildCompletionAuthoritySnapshot,
@@ -153,7 +154,9 @@ async function main() {
 
     // Reuses the Tranche 3 admission fixture shape so this suite exercises the
     // real leaf-admission transaction rather than a parallel one.
-    const admitLeafSet = async (objective, { source = policySourceOf(), governed = true } = {}) => {
+    const admitLeafSet = async (objective, {
+      source = policySourceOf(), governed = true, deterministicCompletion = false
+    } = {}) => {
       const objectiveText = `${objective} ${STAMP}`;
       const catalog = await store.getConfiguredAgentsByIds({
         agentIds: [planner.id, workerA.id, workerB.id] });
@@ -277,7 +280,25 @@ async function main() {
         [workerB.id, workerB]]);
       const leafDrafts = plan.items.map(item => {
         const agent = agentById.get(item.assignedAgentId);
-        const completionAuthoritySnapshot = buildCompletionAuthoritySnapshot({
+        // Deterministic completion authority when requested: the ONLY kind the
+        // canonical decision builder can actually satisfy from durable
+        // evidence. Model-driven authority can never complete, which is why
+        // states F and G need this variant.
+        const completionAuthoritySnapshot = deterministicCompletion
+          ? buildCompletionAuthoritySnapshot({
+            objective: `Review ${item.ownedOutputPaths[0]} and record concrete findings`,
+            kind: 'deterministic',
+            recognized: true,
+            intent: 'create_folder',
+            completionPolicy: 'declared_postconditions',
+            directPostconditions: [{
+              type: 'folder_exists',
+              path: item.ownedOutputPaths[0].replace(/\/$/, '')
+            }],
+            verificationPolicy: 'when_declared',
+            capturedAt: new Date().toISOString()
+          })
+          : buildCompletionAuthoritySnapshot({
           objective: refreshed.objective, kind: 'unrecognized', recognized: false,
           intent: 'model_driven', completionPolicy: 'explicit_evidence_required',
           directPostconditions: [], verificationPolicy: 'when_declared',
@@ -1402,8 +1423,8 @@ async function main() {
     // that fabricates completion proves nothing about the authority that
     // normally grants it.
 
-    const dispositionOutcome = async (label, drive) => {
-      const t = await admitLeafSet(`Sibling state ${label}`);
+    const dispositionOutcome = async (label, drive, admitOptions = {}) => {
+      const t = await admitLeafSet(`Sibling state ${label}`, admitOptions);
       const runs = (await store.listRunsForTicket({ ticketId: t.ticket.id })).runs;
       const reader = await store.getRun(runs[0].id);
       const sib = await store.getRun(runs[1].id);
@@ -1499,6 +1520,234 @@ async function main() {
       'E: a decision built against another authority does not complete the item');
     assert.equal(stateE.resolved.sibling.siblingCompletionDecisionHash, null,
       'E: a stale decision is never projected as valid completion authority');
+
+    // ── F and G: the completed-sibling permission boundary ────────────────
+    //
+    // A and E prove that terminal status and foreign authority do not grant a
+    // read. They do NOT prove the converse: that genuine completion DOES. Until
+    // some state resolves to `verified_completed_sibling`, "blocks everything"
+    // and "correctly distinguishes completion" are indistinguishable, and the
+    // `itemStatus === 'completed'` and `completionDecisionHash` checks in the
+    // resolver are unexercised.
+    //
+    // F and G share ONE admission shape — deterministic completion authority,
+    // the only kind the canonical decision builder can actually satisfy from
+    // durable evidence — and differ in exactly one variable: whether the
+    // durable replay evidence satisfies the admitted postcondition. Nothing
+    // below sets `itemStatus`, writes a `completionDecisionHash`, or hand-builds
+    // an `aggregateDecision`; every disposition comes from
+    // `reconcileStructuredAllocationLeafItems` reading a decision that
+    // `buildCompletionDecision` produced from evidence.
+
+    // The canonical consequence shape. `checkedPath` is the ONLY knob: point it
+    // at the item's admitted postcondition path and the authority is satisfied;
+    // point it elsewhere and the same authority is genuinely unsatisfied.
+    const decisionConsequence = (run, { checkedPath }) => {
+      const base = {
+        version: 1, runId: run.id, ticketId: run.ticketId,
+        verification: { browserEvidence: null }
+      };
+      return {
+        ...base,
+        completionDecision: buildCompletionDecision({
+          run: { ...run, runtimeBudgetSnapshot: null },
+          replaySnapshot: {
+            events: [{
+              type: 'run:postcondition_completed',
+              checkedPaths: [{ type: 'folder', path: checkedPath }]
+            }],
+            modelResponses: [], parsedModelPlans: [],
+            workspaceOperations: [], providerRequests: []
+          },
+          events: [], operations: [],
+          consequence: base,
+          verificationContract: null,
+          evaluatedAt: new Date().toISOString()
+        })
+      };
+    };
+
+    const ownedFolderOf = item => item.ownedOutputPaths[0].replace(/\/$/, '');
+
+    // F. Terminal completed Run carrying a REAL durable decision, built against
+    // the item's OWN admitted authority — but from evidence that checked a
+    // different path, so the authority is not satisfied. This is the decisive
+    // negative: the decision exists, is bound to the right Run and the right
+    // authority, and is still not completion. Distinct from D (no decision at
+    // all) and from E (a decision bound to a different authority).
+    const stateF = await dispositionOutcome('F unsatisfied decision',
+      async ({ sib, ticket, plan }) => {
+        const terminal = await driveTerminal(sib, 'completed');
+        await store.recordRunConsequence({
+          runId: sib.id,
+          consequence: decisionConsequence(terminal, {
+            checkedPath: 'some/other/folder'
+          })
+        });
+        await store.reconcileStructuredAllocationLeafItems({
+          ticketId: ticket.id, allocationPlanId: plan.id });
+      }, { deterministicCompletion: true });
+
+    assert.equal(stateF.resolved.outcome, 'blocked_incomplete_sibling',
+      'F: a durable decision that does not satisfy the admitted authority blocks');
+    assert.equal(stateF.resolved.sibling.siblingCompletionDecisionHash, null,
+      'F: an unsatisfied decision is never cited as valid completion authority');
+    assert.ok(['incomplete', 'decision_absent', 'terminal_without_decision']
+      .includes(stateF.resolved.sibling.siblingCompletionState),
+      'F: the unresolved state is drawn from the closed vocabulary');
+    {
+      const fPlan = await store.getAllocationPlanForTicket(stateF.ticket.id);
+      const fItem = fPlan.aggregateDecision.items.find(
+        i => i.runId === stateF.sib.id);
+      assert.ok(fItem, 'F: the sibling item has a real reconciled disposition');
+      assert.notEqual(fItem.itemStatus, 'completed',
+        'F: the canonical reconciliation itself refuses to complete the item');
+    }
+
+    // G. The same admission, the same lifecycle, one variable changed: the
+    // evidence checks the item's OWN admitted postcondition path. This is the
+    // only state in the matrix that must PERMIT the read.
+    const stateG = await dispositionOutcome('G verified complete',
+      async ({ sib, sibItem, ticket, plan }) => {
+        const terminal = await driveTerminal(sib, 'completed');
+        await store.recordRunConsequence({
+          runId: sib.id,
+          consequence: decisionConsequence(terminal, {
+            checkedPath: ownedFolderOf(sibItem)
+          })
+        });
+        await store.reconcileStructuredAllocationLeafItems({
+          ticketId: ticket.id, allocationPlanId: plan.id });
+      }, { deterministicCompletion: true });
+
+    // First: the disposition really was produced by canonical reconciliation.
+    const gPlan = await store.getAllocationPlanForTicket(stateG.ticket.id);
+    const gItem = gPlan.aggregateDecision.items.find(i => i.runId === stateG.sib.id);
+    assert.ok(gItem, 'G: the sibling item has a reconciled disposition');
+    assert.equal(gItem.itemStatus, 'completed',
+      'G: canonical reconciliation completed the item from durable evidence');
+    assert.equal(gItem.reason, 'completion_verified',
+      'G: completion was verified, not assumed');
+    assert.match(gItem.completionDecisionHash, /^[0-9a-f]{64}$/,
+      'G: a real completion-decision identity backs the disposition');
+
+    // Then: the resolver PERMITS the read, and cites that same identity.
+    assert.equal(stateG.resolved.outcome, 'verified_completed_sibling',
+      'G: a genuinely completed sibling is readable');
+    assert.equal(stateG.resolved.sibling.siblingCompletionDecisionHash,
+      gItem.completionDecisionHash,
+      'G: permission cites the exact durable decision identity that granted it');
+
+    // ── Phase 4: the decisive authority distinction ───────────────────────
+    //
+    // F and G differ in ONE durable fact. Everything else — admission shape,
+    // completion authority, terminal status, the presence of a real decision —
+    // is identical. So the permission cannot be coming from status, from
+    // admission, or from the mere existence of a decision.
+    assert.equal(stateF.sib.completionAuthoritySnapshot.completionKind,
+      stateG.sib.completionAuthoritySnapshot.completionKind,
+      'F and G were admitted under the same completion-authority kind');
+    assert.notEqual(stateF.resolved.outcome, stateG.resolved.outcome,
+      'the same admission shape yields opposite permission outcomes');
+
+    // Permission is not a side effect: G created no block and no block event.
+    const gBlock = await store.readGovernedProgressBlock(stateG.reader.id);
+    assert.equal(gBlock, null,
+      'G: permitting a read persists no progress block');
+    {
+      const gEvents = await store.listRunEvents(stateG.reader.id, { limit: 200 });
+      assert.equal(
+        gEvents.filter(e => e.type === 'run.progress_blocked').length, 0,
+        'G: permitting a read appends no block event');
+    }
+
+    // ── Later completion does not retroactively unblock a blocked Run ─────
+    //
+    // A block is a durable fact about a decision already made under the
+    // authority that existed at the time. When the sibling later completes,
+    // the blocked Run stays blocked — the block is not silently revoked — while
+    // the SAME now-completed sibling becomes readable to a Run resolving fresh
+    // authority. This is the difference between "blocked forever" and "blocked
+    // on a fact that has since changed".
+    {
+      const t = await admitLeafSet('Sibling completes after a block',
+        { deterministicCompletion: true });
+      const runs = (await store.listRunsForTicket({ ticketId: t.ticket.id })).runs;
+      const blockedReader = await store.getRun(runs[0].id);
+      const laterSibling = await store.getRun(runs[1].id);
+      const plan = await store.getAllocationPlanForTicket(t.ticket.id);
+      const sibItem = plan.items.find(
+        i => i.allocationItemId === laterSibling.leafRunBinding.allocationItemId);
+      const target = `${sibItem.ownedOutputPaths[0]}report.md`;
+
+      // Block while the sibling is genuinely incomplete.
+      const before = await store.resolveGovernedSiblingReadAuthority({
+        runId: blockedReader.id, requestedPath: target });
+      assert.equal(before.outcome, 'blocked_incomplete_sibling',
+        'the sibling is incomplete when the block is taken');
+      await store.blockGovernedRunForSiblingRead({
+        runId: blockedReader.id, sibling: before.sibling });
+      const storedBlock = await store.readGovernedProgressBlock(blockedReader.id);
+      assert.ok(storedBlock, 'the block is durable');
+
+      // Now complete the sibling through the canonical lifecycle.
+      const terminal = await driveTerminal(laterSibling, 'completed');
+      await store.recordRunConsequence({
+        runId: laterSibling.id,
+        consequence: decisionConsequence(terminal, {
+          checkedPath: ownedFolderOf(sibItem)
+        })
+      });
+      await store.reconcileStructuredAllocationLeafItems({
+        ticketId: t.ticket.id, allocationPlanId: plan.id });
+
+      // The durable block is unchanged — completion does not rewrite history.
+      const afterBlock = await store.readGovernedProgressBlock(blockedReader.id);
+      assert.equal(afterBlock.blockHash, storedBlock.blockHash,
+        'a later completion never rewrites or revokes the recorded block');
+
+      // And the sibling is now genuinely readable under fresh authority.
+      const after = await store.resolveGovernedSiblingReadAuthority({
+        runId: blockedReader.id, requestedPath: target });
+      assert.equal(after.outcome, 'verified_completed_sibling',
+        'resolving fresh authority sees the now-verified completion');
+      assert.match(after.sibling.siblingCompletionDecisionHash, /^[0-9a-f]{64}$/,
+        'the fresh resolution cites the real decision identity');
+    }
+
+    // ── Invariant-owner attribution: completed WITHOUT a decision hash ────
+    //
+    // The resolver also guards `!disposition.completionDecisionHash`. No state
+    // in the matrix reaches it, and that is not a coverage gap — the state is
+    // NOT REPRESENTABLE. `normalizeAggregatePlanDecision` refuses it outright,
+    // and `getAllocationPlanForTicket` normalizes on read, so even a tampered
+    // durable row cannot deliver such a disposition to the resolver.
+    //
+    // The invariant is therefore OWNED by the leaf-run contract, not by the
+    // resolver, and it is proved where it actually lives. Manufacturing a fake
+    // disposition here purely to make the resolver's guard appear load-bearing
+    // would misattribute the invariant and overstate this suite's coverage.
+    {
+      const hash = 'a'.repeat(64);
+      const decision = supporting => ({
+        version: 1, ticketId: 1, allocationPlanId: 1, planHash: hash,
+        planningAdmissionHash: hash, aggregateStatus: 'in_progress',
+        completedItemIds: [], failedItemIds: [], interruptedItemIds: [],
+        unresolvedItemIds: [], decisionHash: hash,
+        decidedAt: new Date().toISOString(),
+        items: [{
+          allocationItemId: 1, runId: 1, assignedAgentId: 1, runLineage: [1],
+          itemStatus: 'completed', completionDecisionHash: supporting,
+          reason: 'completion_verified'
+        }]
+      });
+      assert.throws(() => normalizeAggregatePlanDecision(decision(null)),
+        /claims completion without a supporting completion decision/,
+        'a completed item with no decision hash is refused by the contract');
+      assert.throws(() => normalizeAggregatePlanDecision(decision('')),
+        /completionDecisionHash must be a lowercase SHA-256/,
+        'an empty decision hash is refused by shape before it can mean anything');
+    }
 
     // ── Corrupted multiple-overlap ownership fails closed ─────────────────
     //
