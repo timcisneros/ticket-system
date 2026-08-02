@@ -72,6 +72,11 @@ const {
   projectTicketVerifiedProgress
 } = require('../../runtime/verified-progress-projection');
 const {
+  assertEvidenceAgrees,
+  normalizeGovernedPostconditionEvidence,
+  satisfiedFactIdentitiesByReceiptId
+} = require('../../runtime/governed-postcondition-evidence-contract');
+const {
   assertBlockAuthorityMatches,
   buildGovernedProgressBlock,
   normalizeGovernedProgressBlock
@@ -1188,6 +1193,7 @@ class PostgresRuntimeStore {
         'run_consequences',
         'replay_snapshots',
         'operation_receipts',
+        'governed_postcondition_evidence',
         'target_operation_intents',
         'process_operations',
         'process_execution_release_state',
@@ -4758,6 +4764,8 @@ class PostgresRuntimeStore {
                       WHERE run_id = $1), 0)::bigint AS reservation_cutoff,
            COALESCE((SELECT max(id) FROM ${this.table('run_budget_charges')}
                       WHERE run_id = $1), 0)::bigint AS budget_cutoff,
+           COALESCE((SELECT max(id) FROM ${this.table('governed_postcondition_evidence')}
+                      WHERE run_id = $1), 0)::bigint AS evidence_cutoff,
            clock_timestamp() AS evaluated_at`,
         [id]
       );
@@ -4781,6 +4789,7 @@ class PostgresRuntimeStore {
         receiptCutoff: Number(cutoffRow.rows[0].receipt_cutoff),
         reservationCutoff: Number(cutoffRow.rows[0].reservation_cutoff),
         budgetCutoff: Number(cutoffRow.rows[0].budget_cutoff),
+        postconditionEvidenceCutoff: Number(cutoffRow.rows[0].evidence_cutoff),
         evaluatedAt: isoTimestamp(cutoffRow.rows[0].evaluated_at,
           'governed progress evaluation instant')
       };
@@ -4995,6 +5004,139 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+
+  // ── Tranche 5: canonical governed postcondition evidence ───────────────────
+  //
+  // The append-only record that a NAMED admitted declared-work fact was
+  // deterministically evaluated against a NAMED committed operation receipt.
+  // This is the only thing verified progress may be credited from.
+  //
+  // The verdict is not the caller's to assert: the contract accepts only a
+  // canonical evaluator verdict object and derives `satisfied` from it, so a
+  // model claim, an operation success or a caller-supplied boolean cannot
+  // become evidence.
+  async appendGovernedPostconditionEvidence({ evidence }, { client = null } = {}) {
+    const record = normalizeGovernedPostconditionEvidence(evidence);
+    const execute = async connection => {
+      // CAUSAL ORDER. Evidence exists only about a receipt that already
+      // committed, and only about THIS Run's receipt. The foreign key would
+      // catch a missing receipt; this catches the subtler error of citing
+      // another Run's receipt, which the key alone would permit.
+      const receipt = await connection.query(
+        `SELECT run_id, ticket_id FROM ${this.table('operation_receipts')}
+          WHERE id = $1`, [record.operationReceiptId]);
+      if (receipt.rowCount === 0) {
+        const error = new Error(
+          `operation receipt ${record.operationReceiptId} does not exist`);
+        error.code = 'GOVERNED_POSTCONDITION_EVIDENCE_RECEIPT_MISSING';
+        throw error;
+      }
+      if (Number(receipt.rows[0].run_id) !== record.runId ||
+          Number(receipt.rows[0].ticket_id) !== record.ticketId) {
+        const error = new Error(
+          `operation receipt ${record.operationReceiptId} belongs to another run`);
+        error.code = 'GOVERNED_POSTCONDITION_EVIDENCE_FOREIGN_RECEIPT';
+        throw error;
+      }
+
+      // IDEMPOTENT. Recovery re-evaluating the same fact against the same
+      // receipt must not append a second row. A genuine conflict — same pair,
+      // different verdict — is refused by the contract rather than kept as a
+      // second opinion.
+      const inserted = await connection.query(
+        `INSERT INTO ${this.table('governed_postcondition_evidence')}
+           (ticket_id, run_id, allocation_plan_id, allocation_item_id,
+            governed_authority_hash, completion_authority_hash,
+            declared_fact_identity, criterion_hash, criterion_type,
+            evaluator_identity, evaluator_version, operation_receipt_id,
+            logical_source_identity, observed_evidence, satisfied, evidence_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16)
+         ON CONFLICT ON CONSTRAINT governed_postcondition_evidence_idempotent
+         DO NOTHING
+         RETURNING id, evaluated_at`,
+        [record.ticketId, record.runId, record.allocationPlanId,
+          record.allocationItemId, record.governedAuthorityHash,
+          record.completionAuthorityHash, record.declaredFactIdentity,
+          record.criterionHash, record.criterionType, record.evaluatorIdentity,
+          record.evaluatorVersion, record.operationReceiptId,
+          record.logicalSourceIdentity, JSON.stringify(record.observedEvidence),
+          record.satisfied, record.evidenceHash]
+      );
+      if (inserted.rowCount === 1) {
+        return {
+          evidence: record,
+          evidenceId: Number(inserted.rows[0].id),
+          evaluatedAt: isoTimestamp(inserted.rows[0].evaluated_at,
+            'governed postcondition evidence instant'),
+          alreadyRecorded: false
+        };
+      }
+      const existingRow = await connection.query(
+        `SELECT * FROM ${this.table('governed_postcondition_evidence')}
+          WHERE run_id = $1 AND operation_receipt_id = $2
+            AND declared_fact_identity = $3`,
+        [record.runId, record.operationReceiptId, record.declaredFactIdentity]
+      );
+      const stored = this._governedPostconditionEvidenceFromRow(existingRow.rows[0]);
+      assertEvidenceAgrees(stored, record);
+      return {
+        evidence: stored,
+        evidenceId: Number(existingRow.rows[0].id),
+        evaluatedAt: isoTimestamp(existingRow.rows[0].evaluated_at,
+          'governed postcondition evidence instant'),
+        alreadyRecorded: true
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  _governedPostconditionEvidenceFromRow(row) {
+    return {
+      version: 1,
+      ticketId: Number(row.ticket_id),
+      runId: Number(row.run_id),
+      allocationPlanId: Number(row.allocation_plan_id),
+      allocationItemId: Number(row.allocation_item_id),
+      governedAuthorityHash: row.governed_authority_hash,
+      completionAuthorityHash: row.completion_authority_hash,
+      declaredFactIdentity: row.declared_fact_identity,
+      criterionHash: row.criterion_hash,
+      criterionType: row.criterion_type,
+      evaluatorIdentity: row.evaluator_identity,
+      evaluatorVersion: Number(row.evaluator_version),
+      operationReceiptId: Number(row.operation_receipt_id),
+      logicalSourceIdentity: row.logical_source_identity,
+      observedEvidence: row.observed_evidence,
+      satisfied: row.satisfied,
+      evidenceHash: row.evidence_hash
+    };
+  }
+
+  // Ordered, cutoff-bounded read. Evidence committed after the cutoff is
+  // invisible to this evaluation by construction.
+  async readGovernedPostconditionEvidence(runId, {
+    client = null, cutoff = null
+  } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const bound = cutoff === null || cutoff === undefined
+      ? null
+      : positiveSafeInteger(cutoff + 1, 'postconditionEvidenceCutoff') - 1;
+    const execute = async connection => {
+      const rows = bound === null
+        ? await connection.query(
+          `SELECT * FROM ${this.table('governed_postcondition_evidence')}
+            WHERE run_id = $1 ORDER BY id`, [id])
+        : await connection.query(
+          `SELECT * FROM ${this.table('governed_postcondition_evidence')}
+            WHERE run_id = $1 AND id <= $2 ORDER BY id`, [id, bound]);
+      return rows.rows.map(row => ({
+        evidenceId: Number(row.id),
+        evaluatedAt: isoTimestamp(row.evaluated_at, 'evidence instant'),
+        ...this._governedPostconditionEvidenceFromRow(row)
+      }));
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
 
   // ── Tranche 5: the canonical read-only progress projection ─────────────────
   //

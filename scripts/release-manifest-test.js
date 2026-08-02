@@ -24,7 +24,7 @@ const manifest = buildReleaseManifest({
 });
 assert.equal(manifest.sourceRevision, revision);
 assert.equal(manifest.databaseMigrationHead,
-  '034_governed_request_logical_source.sql');
+  '035_governed_postcondition_evidence.sql');
 assert.equal(manifest.releaseContract.sourceRevision, revision);
 assert.equal(validateReleaseManifest(manifest), manifest);
 assert.equal(JSON.stringify(manifest).includes('/home/'), false);

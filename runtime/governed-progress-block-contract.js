@@ -39,6 +39,11 @@ const CUTOFF_FIELDS = Object.freeze([
   'receiptCutoff',
   'reservationCutoff',
   'budgetCutoff',
+  // Tranche 5: the canonical postcondition-evidence bound. Verified progress is
+  // credited only from evidence at or below this id, so evidence committed
+  // after an evaluation belongs to the NEXT one and can never retroactively
+  // change a decision already taken.
+  'postconditionEvidenceCutoff',
   // The instant the evaluation was taken, read from the DATABASE clock in the
   // same statement and snapshot as the three maxima above. It belongs in the
   // cutoff rather than beside it because duration is evaluated against exactly
@@ -53,7 +58,8 @@ const CUTOFF_FIELDS = Object.freeze([
 const CUTOFF_ORDINAL_FIELDS = Object.freeze([
   'receiptCutoff',
   'reservationCutoff',
-  'budgetCutoff'
+  'budgetCutoff',
+  'postconditionEvidenceCutoff'
 ]);
 
 const SIBLING_DEPENDENCY_FIELDS = Object.freeze([

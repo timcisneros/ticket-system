@@ -115,6 +115,9 @@ function projectCutoff(cutoff) {
     receiptCutoff: cutoff.receiptCutoff,
     reservationCutoff: cutoff.reservationCutoff,
     budgetCutoff: cutoff.budgetCutoff,
+    // The canonical postcondition-evidence bound. Verified progress is credited
+    // only from evidence at or below this id.
+    postconditionEvidenceCutoff: cutoff.postconditionEvidenceCutoff,
     // The DATABASE instant this evaluation was taken at. Never the process
     // clock — see `readGovernedRunProgressState`.
     evaluatedAt: cutoff.evaluatedAt,
@@ -229,6 +232,7 @@ function projectRunVerifiedProgress({
       receiptCutoff: projection.sourceCutoff,
       reservationCutoff: projection.sourceCutoff,
       budgetCutoff: projection.sourceCutoff,
+      postconditionEvidenceCutoff: 0,
       evaluatedAt: projection.evaluatedAt
     });
 

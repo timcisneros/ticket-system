@@ -170,8 +170,11 @@ async function main() {
       receiptCutoff: projected.cutoff.receiptCutoff,
       reservationCutoff: projected.cutoff.reservationCutoff,
       budgetCutoff: projected.cutoff.budgetCutoff,
+      postconditionEvidenceCutoff: projected.cutoff.postconditionEvidenceCutoff,
       evaluatedAt: projected.cutoff.evaluatedAt
     }), 'the cutoff identity is the canonical hash of the cutoff document');
+    assert.ok(Number.isSafeInteger(projected.cutoff.postconditionEvidenceCutoff),
+      'the evidence cutoff is a durable ordinal bound');
 
     // Duration: exactly epoch-to-cutoff, not a stored counter.
     assert.equal(
