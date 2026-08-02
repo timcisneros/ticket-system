@@ -38,6 +38,21 @@ const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const CUTOFF_FIELDS = Object.freeze([
   'receiptCutoff',
   'reservationCutoff',
+  'budgetCutoff',
+  // The instant the evaluation was taken, read from the DATABASE clock in the
+  // same statement and snapshot as the three maxima above. It belongs in the
+  // cutoff rather than beside it because duration is evaluated against exactly
+  // the rows the cutoff admits — and because a block replayed later must reuse
+  // this instant rather than construct a new one, which would make a stored
+  // decision drift every time it was read.
+  'evaluatedAt'
+]);
+
+// The cutoff fields that are ordered row maxima. `evaluatedAt` is an instant
+// and is normalized separately.
+const CUTOFF_ORDINAL_FIELDS = Object.freeze([
+  'receiptCutoff',
+  'reservationCutoff',
   'budgetCutoff'
 ]);
 
@@ -152,9 +167,19 @@ function normalizeCutoff(cutoff) {
       `cutoff is missing field(s): ${missing.join(', ')}`);
   }
   const normalized = {};
-  for (const field of CUTOFF_FIELDS) {
+  for (const field of CUTOFF_ORDINAL_FIELDS) {
     normalized[field] = nonNegativeInteger(cutoff[field], `cutoff.${field}`);
   }
+  if (typeof cutoff.evaluatedAt !== 'string' || cutoff.evaluatedAt.length === 0) {
+    refuse('progress_block_cutoff_invalid',
+      'cutoff.evaluatedAt must be an ISO-8601 string captured from the database');
+  }
+  const evaluated = Date.parse(cutoff.evaluatedAt);
+  if (!Number.isFinite(evaluated)) {
+    refuse('progress_block_cutoff_invalid',
+      'cutoff.evaluatedAt is not a parseable instant');
+  }
+  normalized.evaluatedAt = new Date(evaluated).toISOString();
   return deepFreeze(normalized);
 }
 

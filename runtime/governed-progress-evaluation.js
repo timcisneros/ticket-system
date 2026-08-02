@@ -24,6 +24,7 @@ const {
 } = require('./verified-progress-contract');
 const {
   decideChurn,
+  elapsedExecutionDurationMs,
   normalizeProgressControlPolicy
 } = require('./churn-decision-contract');
 
@@ -92,8 +93,18 @@ function evaluateGovernedRunProgress({
 }) {
   const policy = normalizeProgressControlPolicy(progressPolicy);
   const {
-    run, reservations, receipts, cumulativeResources, sourceCutoff, executionEpochAt
+    run, reservations, receipts, cumulativeResources, sourceCutoff, executionEpochAt,
+    cutoff
   } = progressState;
+  // The database-captured evaluation instant, carried on the cutoff so that a
+  // replay of a stored block reuses it unchanged instead of constructing a new
+  // one. There is deliberately no fallback to the process clock: an evaluation
+  // that cannot say when it happened cannot bound duration.
+  const evaluatedAt = cutoff && cutoff.evaluatedAt ? cutoff.evaluatedAt : null;
+  if (typeof evaluatedAt !== 'string') {
+    throw new Error(
+      'governed progress evaluation requires a database-captured evaluation instant');
+  }
   // Duration is measured from the immutable execution epoch, never from the
   // latest attempt's `started_at`, which recovery resets to NULL.
   //
@@ -107,6 +118,17 @@ function evaluateGovernedRunProgress({
     throw new Error(
       'governed progress evaluation received a malformed execution epoch');
   }
+  // CUMULATIVE execution duration, from the immutable epoch to this
+  // evaluation. Derived once, here, and threaded into both the projection and
+  // the decision so the two cannot disagree.
+  const cumulativeExecutionDurationMs = elapsedExecutionDurationMs({
+    executionEpochAt, evaluatedAt
+  });
+  const resources = {
+    ...cumulativeResources,
+    cumulativeExecutionDurationMs
+  };
+
   const { windows } = partitionReceiptsIntoWindows({ reservations, receipts });
 
   // Replay every window in order so the satisfied-fact set and the consecutive
@@ -147,11 +169,12 @@ function evaluateGovernedRunProgress({
       windowIdentity: window.logicalSourceIdentity,
       windowKind: 'provider_request',
       observations,
-      resources: cumulativeResources,
+      resources,
       previouslySatisfiedFactIdentities: [...satisfied],
       previouslySeenFingerprints: [...seenFingerprints],
       policy,
-      sourceCutoff
+      sourceCutoff,
+      evaluatedAt
     });
 
     for (const fact of projection.verifiedFacts) satisfied.add(fact);
@@ -176,8 +199,9 @@ function evaluateGovernedRunProgress({
     runId: run.id,
     progressProjection: latestProjection,
     policy,
-    cumulativeResources,
+    cumulativeResources: resources,
     consecutiveNoProgressWindows,
+    evaluatedAt,
     siblingDependencyBlocked
   });
 
@@ -187,6 +211,8 @@ function evaluateGovernedRunProgress({
     consecutiveNoProgressWindows,
     windowCount: windows.length,
     executionEpochAt,
+    evaluatedAt,
+    cumulativeExecutionDurationMs,
     sourceCutoff
   });
 }

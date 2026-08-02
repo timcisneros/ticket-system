@@ -128,7 +128,7 @@ the defect can cause, not how hard it is to fix.
 |---|--------|----------|--------|-------|
 | A1 | Workspace-snapshot failure truthfulness (E4) | **High** | **Implemented** `ee44369` + `3f6d4ac` — entry retained for the record | Correctness |
 | A2 | Live-state vs immutable-snapshot mutation counting (E5) | Medium | Open | Correctness |
-| A3 | Wall-clock and progress-counter recovery resets | **High** | Partial — counters closed on the governed leaf path; wall clock still unbounded everywhere | Bounds integrity |
+| A3 | Wall-clock and progress-counter recovery resets | **High** | Closed for governed structured leaf execution; open elsewhere | Bounds integrity |
 | A4 | Enforcement gates bypass the immutable policy snapshot | Medium | Open | Architecture |
 | A5 | Workload-profile re-resolution | Low | Open | Architecture |
 | A6 | Gate ordering vs prefix truncation | Medium | **Governance decision required** | Policy |
@@ -392,45 +392,51 @@ Consequences:
 **Constraint:** fixing the wall clock tightens an effective limit and will fail runs that
 previously passed. Stage behind observation.
 
-#### Verdict after Tranche 5 (2026-08-01): PARTIAL — A3 IS NOT CLOSED
+#### Verdict after Tranche 5 (2026-08-02): CLOSED FOR GOVERNED STRUCTURED LEAF EXECUTION
 
-A3 has two halves. Tranche 5 closes one of them, on one path, and it is worth being exact
-about which, because the remaining half is easy to mistake for finished.
+A3 is now closed for governed structured leaf execution, and remains open outside it. The
+boundary is stated precisely because the two halves were closed in different sessions and
+it would be easy to over-read the result.
 
-**Closed — progress counters, governed structured leaf Runs only.** On the governed leaf
-path no termination counter is carried in memory across a restart. Every one of them —
-the consecutive no-progress streak, repeated mutations, the failed-operation streak, and
-mutation reversals — is reconstructed by replaying durable observation windows from
-`operation_receipts` and `economic_request_reservations` under a cutoff captured in a
-single statement (`readGovernedRunProgressState`), and the resulting refusal is persisted
-as a hash-bound block that survives process restart. There is no resettable continuation
-counter left to reset: `evaluateGovernedRunProgress` accepts no caller-supplied progress
-flag and reads no clock. This is the half the streak design in
-`runtime/action-contract-streak.js` was built to protect, and on this path it now holds.
+**Closed — governed structured leaf Runs.** For this execution family, every quantity A3
+names survives recovery, because every one of them is reconstructed from durable rows
+rather than carried in memory:
 
-**NOT closed — the wall clock, on every path including the governed one.** Tranche 5
-established the durable fact a run-scoped duration bound needs: an immutable execution
-epoch, derived from the earliest `run.lease_acquired` event, which recovery cannot reset
-(unlike `runs.started_at`, which `recoverExpiredRun` NULLs) and which is not admission time
-(unlike `governedExecution.capturedAt`). That fact is computed, validated, and carried
-through evaluation — **and nothing consumes it.** `PROGRESS_POLICY_FIELDS` in
-`runtime/churn-decision-contract.js` has no duration tolerance, and `RESOURCE_DIMENSIONS`
-contains only `provider_requests`, `durable_operations`, `settled_micro_usd`, and
-`budget_charged_units` — no time dimension at all. The governed policy therefore **cannot
-express a wall-clock bound**, so governed Runs are not duration-bounded either. The epoch
-is a prerequisite that has been met, not the fix.
+- cumulative requests survive recovery;
+- cumulative operations survive recovery;
+- cumulative economic consumption survives recovery;
+- no-progress history survives recovery;
+- cumulative execution duration survives recovery;
+- persisted stops survive recovery.
 
-**NOT closed — the ungoverned path, both halves.** Nothing in Tranche 5 touched
-`runAgentTicket`. `server.js:1250` still reads `const stalledResponses = 0; // We don't
-track stalled across restarts`, and `maxRuntimeDurationMs`, `maxListDirectoryPerRun`, and
-`maxReadFilePerRun` are still enforced per loop entry there. A run that recovers N times
-still receives N budgets on that path, and the A12 interaction described below is
-unchanged.
+The duration half — the part left open by the previous verdict — is enforced by
+`maximumCumulativeExecutionDurationMs`, a closed progress-policy field captured immutably
+on the Run at leaf admission and covered by the policy hash. Elapsed time is derived in
+exactly one place, `elapsedExecutionDurationMs`, as the interval between the immutable
+execution epoch (the earliest append-only `run.lease_acquired` event) and an evaluation
+instant read from the DATABASE clock in the same statement and snapshot that captures the
+receipt, reservation and budget cutoffs. Reaching the limit blocks at the pre-reservation
+gate, before any provider call, economic reservation or model-request budget charge, and
+the stop is persisted as a cutoff-bound block with its own closed reason,
+`cumulative_execution_duration_exhausted`.
 
-**What closing A3 now requires:** a duration dimension in the progress-control policy that
-consumes `executionEpochAt`, and a decision about the ungoverned path — either migrating it
-onto governed evaluation or bounding it separately. Both remain open. The staging
-constraint above still applies to the wall-clock half.
+Two properties are worth stating explicitly because they are what make this a bound rather
+than a suggestion. Verified progress resets the consecutive no-progress streak but does
+NOT reset cumulative duration — tolerance can be earned back, consumption cannot. And
+scheduler queue time is not execution time: a Run that has never been leased has no epoch
+and therefore zero duration, so a long wait in the queue cannot exhaust a bound the Run
+never began spending.
+
+**Open — every other execution family.** Tranche 5 deliberately did not touch direct, v1,
+workflow, browser, process, simulation, or compiler execution. Those families still use
+attempt-local counters and per-loop-entry duration behavior: `server.js` `runAgentTicket`
+still carries `const stalledResponses = 0; // We don't track stalled across restarts`, and
+`maxRuntimeDurationMs`, `maxListDirectoryPerRun` and `maxReadFilePerRun` remain enforced
+per loop entry there. A run on those paths that recovers N times still receives N budgets.
+
+**Remaining decision.** Whether to migrate the other execution families onto governed
+evaluation or to bound them separately. The staging constraint above still applies to
+them: tightening their wall clock will fail runs that previously passed.
 
 **Interacts with A12.** Because each recovery re-entry restarts the wall clock, no runtime
 limit currently bounds A12's indefinite snapshot-recovery cycling. Fixing A3 alone would

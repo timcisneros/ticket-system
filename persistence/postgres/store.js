@@ -4742,13 +4742,32 @@ class PostgresRuntimeStore {
            COALESCE((SELECT max(id) FROM ${this.table('economic_request_reservations')}
                       WHERE run_id = $1), 0)::bigint AS reservation_cutoff,
            COALESCE((SELECT max(id) FROM ${this.table('run_budget_charges')}
-                      WHERE run_id = $1), 0)::bigint AS budget_cutoff`,
+                      WHERE run_id = $1), 0)::bigint AS budget_cutoff,
+           clock_timestamp() AS evaluated_at`,
         [id]
       );
+      // THE EVALUATION INSTANT comes from the DATABASE clock, captured in the
+      // SAME statement and snapshot as the three maxima above.
+      //
+      // Not Date.now(): the process clock is unshared, unverifiable and
+      // resettable, so a duration bound derived from it could be moved simply
+      // by restarting on a differently-skewed host. The epoch is already a
+      // database-stamped event; measuring elapsed time between two readings of
+      // the SAME clock is the only comparison that means anything.
+      //
+      // clock_timestamp() rather than now(): now() is the transaction start
+      // time and would be identical for two evaluations inside one
+      // transaction, understating elapsed execution time.
+      //
+      // A supplied cutoff is REUSED WHOLE, including its evaluatedAt. That is
+      // what makes replaying a stored block reproduce the identical decision
+      // instead of a fresh one that merely resembles it.
       const cutoff = explicitCutoff || {
         receiptCutoff: Number(cutoffRow.rows[0].receipt_cutoff),
         reservationCutoff: Number(cutoffRow.rows[0].reservation_cutoff),
-        budgetCutoff: Number(cutoffRow.rows[0].budget_cutoff)
+        budgetCutoff: Number(cutoffRow.rows[0].budget_cutoff),
+        evaluatedAt: isoTimestamp(cutoffRow.rows[0].evaluated_at,
+          'governed progress evaluation instant')
       };
 
       // Ordered governed request windows for this Run.
@@ -5098,6 +5117,30 @@ class PostgresRuntimeStore {
   // refusal cannot roll it back — the trap the churn gate already exposed.
   async blockGovernedRunForSiblingRead({ runId, sibling }) {
     const id = positiveSafeInteger(runId, 'runId');
+
+    // ALREADY BLOCKED: read the stored decision and stop. No fresh cutoff is
+    // captured and no re-evaluation is performed.
+    //
+    // This is not merely an optimization. Since Tranche 5 began capturing the
+    // evaluation instant from the database clock, re-evaluating a blocked Run
+    // would produce a later `evaluatedAt`, hence a different projection hash,
+    // hence a block that conflicts with the one already on record — turning a
+    // repeated refusal into a spurious integrity failure. The block IS the
+    // decision of record; re-deriving it is what would be wrong.
+    //
+    // Tamper detection is not weakened: `readGovernedProgressBlock` normalizes
+    // through the block contract, which recomputes and verifies `blockHash`
+    // over the stored fields. That contract, not this method, owns the
+    // invariant that a stored block cannot be edited.
+    const stored = await this.readGovernedProgressBlock(id);
+    if (stored) {
+      return {
+        block: stored,
+        alreadyBlocked: true,
+        run: await this.getRun(id)
+      };
+    }
+
     const progressState = await this.readGovernedRunProgressState(id);
     const run = progressState.run;
     const policy = run.governedExecution.progressControlPolicy;

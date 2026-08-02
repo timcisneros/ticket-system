@@ -29,6 +29,9 @@ function progressControlPolicy(overrides = {}) {
     maximumFailedOperationStreak: 4,
     maximumMutationReversals: 3,
     maximumInspectionOnlyStreak: 4,
+    // Generous by design: suites testing OTHER subjects must not be
+    // incidentally blocked on duration. Duration-specific suites override it.
+    maximumCumulativeExecutionDurationMs: 3_600_000,
     resourceDimensions: ['provider_requests', 'settled_micro_usd'],
     ...overrides
   });

@@ -285,4 +285,104 @@ for (const [label, source] of [
     `${label} supplies no implicit production pricing`);
 }
 
+// ── Tranche 5: the closed set of duration authorities ───────────────────────
+//
+// Cumulative execution duration for a governed structured leaf Run may be
+// derived from EXACTLY three things:
+//
+//   the earliest durable `run.lease_acquired` event
+//   + a database-captured evaluation cutoff
+//   + the `maximumCumulativeExecutionDurationMs` captured at admission
+//
+// Everything else that has ever been used to bound a run is process-local and
+// resets on recovery — which is the defect pending decision A3 records. These
+// assertions exist because a single `Date.now()` slipped into the evaluation
+// path would silently restore the resettable behavior while every behavioural
+// test still passed on a host whose clocks agree.
+
+const churnContract = read('runtime/churn-decision-contract.js');
+const progressContract = read('runtime/verified-progress-contract.js');
+
+// Comments legitimately NAME the rejected sources, so the check is against
+// executable source with comment lines removed.
+const executable = source => source
+  .split('\n')
+  .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+  .join('\n');
+
+for (const [label, source] of [
+  ['governed-progress-evaluation.js', progressEvaluation],
+  ['churn-decision-contract.js', churnContract],
+  ['verified-progress-contract.js', progressContract]
+]) {
+  const code = executable(source);
+  assert.equal(/Date\.now\s*\(/.test(code), false,
+    `${label} reads no process clock: duration must not come from Date.now()`);
+  assert.equal(/new Date\(\s*\)/.test(code), false,
+    `${label} constructs no process-clock instant`);
+  assert.equal(/process\.hrtime|process\.uptime/.test(code), false,
+    `${label} uses no process-entry timing`);
+  assert.equal(/startedAt\s*[-+]/.test(code), false,
+    `${label} performs no arithmetic on the latest-attempt started_at`);
+  assert.equal(/stalledResponses|inspectionNoProgress/.test(code), false,
+    `${label} consumes no process-local churn counter`);
+}
+
+// The evaluator's single duration derivation goes through the contract helper,
+// and the epoch it uses is the one carried on the durable progress state.
+assert.ok(progressEvaluation.includes('elapsedExecutionDurationMs({'),
+  'the evaluator derives duration through the single contract helper');
+assert.ok(/executionEpochAt,\s*evaluatedAt/.test(progressEvaluation),
+  'the derivation is epoch-to-evaluation-instant, with no third input');
+assert.ok(
+  progressEvaluation.includes(
+    'cutoff && cutoff.evaluatedAt ? cutoff.evaluatedAt : null'),
+  'the evaluation instant is taken from the durable cutoff, never defaulted');
+
+// The store captures the epoch from the append-only lease event and the
+// evaluation instant from the DATABASE clock, in the cutoff statement itself.
+assert.ok(store.includes("type = 'run.lease_acquired'"),
+  'the execution epoch comes from the append-only lease-acquired event');
+assert.ok(store.includes('min(ts) AS epoch_at'),
+  'the epoch is the EARLIEST such event, not the latest');
+assert.ok(store.includes('clock_timestamp() AS evaluated_at'),
+  'the evaluation instant is captured from the database clock');
+{
+  // It must sit inside the SAME statement as the three row maxima, so the
+  // instant and the rows it admits are one consistent snapshot.
+  const cutoffStatement = store.slice(
+    store.indexOf('AS receipt_cutoff'), store.indexOf('AS evaluated_at'));
+  assert.ok(cutoffStatement.includes('AS reservation_cutoff') &&
+    cutoffStatement.includes('AS budget_cutoff'),
+    'the evaluation instant is captured in the same statement as the cutoffs');
+  assert.equal(cutoffStatement.includes('await'), false,
+    'no separate round trip separates the instant from the cutoffs');
+}
+
+// The store's evaluation function itself must not reach for the process clock.
+// `store.js` legitimately uses `new Date()` elsewhere, so the check is scoped
+// to the body of `readGovernedRunProgressState`, which is where the evaluation
+// instant is captured.
+{
+  const begin = store.indexOf('async readGovernedRunProgressState(');
+  assert.ok(begin > 0, 'the governed progress state reader is present');
+  const body = store.slice(begin, store.indexOf('async blockGovernedRunForProgressDecision('));
+  assert.ok(body.length > 0 && body.length < store.length,
+    'the scoped body was extracted, not the whole file');
+  const code = executable(body);
+  assert.equal(/new Date\(\s*\)/.test(code), false,
+    'the evaluation instant is not constructed from the process clock');
+  assert.equal(/Date\.now\s*\(/.test(code), false,
+    'the evaluation reader does not call Date.now()');
+  assert.ok(code.includes('clock_timestamp() AS evaluated_at'),
+    'the evaluation instant is read from the database inside this reader');
+}
+
+// The duration limit is admitted authority, read off the Run.
+assert.ok(churnContract.includes('maximumCumulativeExecutionDurationMs'),
+  'the duration limit is a closed progress-policy field');
+assert.ok(
+  churnContract.includes("'cumulative_execution_duration_exhausted'"),
+  'a duration stop has its own closed reason');
+
 console.log('governed leaf slice boundary test passed');

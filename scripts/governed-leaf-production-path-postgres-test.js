@@ -155,7 +155,10 @@ async function main() {
     // Reuses the Tranche 3 admission fixture shape so this suite exercises the
     // real leaf-admission transaction rather than a parallel one.
     const admitLeafSet = async (objective, {
-      source = policySourceOf(), governed = true, deterministicCompletion = false
+      source = policySourceOf(), governed = true, deterministicCompletion = false,
+      // Duration authority captured at admission. Suites that are not about
+      // duration inherit the generous shared fixture limit.
+      progressPolicy = LEAF_PROGRESS_POLICY
     } = {}) => {
       const objectiveText = `${objective} ${STAMP}`;
       const catalog = await store.getConfiguredAgentsByIds({
@@ -330,7 +333,7 @@ async function main() {
         allocationPlanId: plan.id,
         leafDrafts,
         governedLeafCapture: governed
-          ? { policySource: source, progressControlPolicy: LEAF_PROGRESS_POLICY }
+          ? { policySource: source, progressControlPolicy: progressPolicy }
           : null,
         eventPayload: { source: ACTOR }
       });
@@ -1295,6 +1298,348 @@ async function main() {
     } finally {
       await restarted.close();
     }
+
+    // ── Cumulative execution duration across recovery ─────────────────────
+    //
+    // The half of pending decision A3 that the epoch work prepared but nothing
+    // yet consumed. Everything below is driven by real database time and real
+    // lease events; no clock is stubbed and no timestamp is hand-written.
+
+    const durationPolicyOf = limitMs => progressControlPolicy({
+      maximumCumulativeExecutionDurationMs: limitMs });
+
+    // The evaluation instant comes from the DATABASE, inside the same snapshot
+    // that captures the row maxima.
+    const durTicket = await admitLeafSet('Governed leaf duration',
+      { progressPolicy: durationPolicyOf(3_600_000) });
+    const durRun = await store.getRun(
+      (await store.listRunsForTicket({ ticketId: durTicket.ticket.id })).runs[0].id);
+
+    // Captured at admission, and it is the ADMITTED value, not current policy.
+    assert.equal(
+      durRun.governedExecution.progressControlPolicy
+        .maximumCumulativeExecutionDurationMs,
+      3_600_000,
+      'the duration limit is captured immutably on the governed Run');
+
+    // ── Queue time is not execution time ──────────────────────────────────
+    //
+    // The Run is admitted `pending` and has never been leased, so no
+    // `run.lease_acquired` event exists and there is no epoch to measure from.
+    const durQueuedState = await store.readGovernedRunProgressState(durRun.id);
+    assert.equal(durQueuedState.executionEpochAt, null,
+      'a Run that has never been leased has no execution epoch');
+    const durQueuedEval = require('../runtime/governed-progress-evaluation')
+      .evaluateGovernedRunProgress({
+      progressState: durQueuedState,
+      declaredWorkSnapshot: durRun.declaredWorkSnapshot,
+      progressPolicy: durRun.governedExecution.progressControlPolicy
+    });
+    assert.equal(durQueuedEval.cumulativeExecutionDurationMs, 0,
+      'scheduler queue time consumes zero execution duration');
+    assert.equal(durQueuedEval.decision.decision, 'continue',
+      'a queued Run is not blocked for duration it has not consumed');
+
+    // ── The evaluation instant is a database fact ─────────────────────────
+    assert.ok(durQueuedState.cutoff.evaluatedAt,
+      'the cutoff carries an evaluation instant');
+    assert.match(durQueuedState.cutoff.evaluatedAt,
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+      'the evaluation instant is a normalized ISO timestamp');
+    {
+      // Same instant, read from the database directly: the cutoff instant sits
+      // within the database clock's own timeline, not the process clock's.
+      const dbNow = (await store.pool.query(
+        'SELECT clock_timestamp() AS ts')).rows[0].ts;
+      const drift = Math.abs(
+        Date.parse(dbNow) - Date.parse(durQueuedState.cutoff.evaluatedAt));
+      assert.ok(drift < 60_000,
+        'the evaluation instant tracks the database clock');
+    }
+
+    // MOVING THE PROCESS CLOCK MUST CHANGE NOTHING.
+    //
+    // This is the assertion that distinguishes a database-captured instant from
+    // a process-captured one. The no-argument Date constructor and Date.now are
+    // pushed a year into the future; parsing forms are left alone so the driver
+    // keeps working. A duration bound derived from the process clock would jump
+    // by a year here, which is precisely the evasion this must not allow.
+    {
+      const RealDate = Date;
+      const skewMs = 365 * 24 * 60 * 60 * 1000;
+      class SkewedDate extends RealDate {
+        constructor(...args) {
+          if (args.length === 0) super(RealDate.now() + skewMs);
+          else super(...args);
+        }
+        static now() { return RealDate.now() + skewMs; }
+      }
+      let skewedEvaluatedAt = null;
+      try {
+        global.Date = SkewedDate;
+        skewedEvaluatedAt = (await store.readGovernedRunProgressState(durRun.id))
+          .cutoff.evaluatedAt;
+      } finally {
+        global.Date = RealDate;
+      }
+      const skewDrift = Math.abs(
+        Date.parse(skewedEvaluatedAt) - Date.parse(durQueuedState.cutoff.evaluatedAt));
+      assert.ok(skewDrift < 60_000,
+        'moving the process clock does not move the evaluation instant');
+      assert.ok(skewDrift < skewMs / 2,
+        'the evaluation instant comes from the database, not from Date.now()');
+    }
+
+    // Two successive evaluations take strictly later instants — so a later
+    // evaluation genuinely measures more elapsed time rather than reusing one.
+    const durSecondQueued = await store.readGovernedRunProgressState(durRun.id);
+    assert.ok(
+      Date.parse(durSecondQueued.cutoff.evaluatedAt) >=
+      Date.parse(durQueuedState.cutoff.evaluatedAt),
+      'a later evaluation captures a later (never earlier) instant');
+
+    // ── First lease establishes the epoch; nothing later moves it ─────────
+    await store.claimPendingRun({
+      leaseOwner: ACTOR, leaseDurationMs: 600_000, eligibleRunIds: [durRun.id] });
+    const durStarted = (await store.startClaimedRun({
+      runId: durRun.id, leaseOwner: ACTOR, leaseDurationMs: 600_000 })).run;
+    const afterFirstLease = await store.readGovernedRunProgressState(durRun.id);
+    const durEpoch = afterFirstLease.executionEpochAt;
+    assert.ok(durEpoch, 'the first lease acquisition establishes the epoch');
+
+    // Elapsed time is now real and positive, measured between two readings of
+    // the same database clock.
+    const afterFirstEval = require('../runtime/governed-progress-evaluation')
+      .evaluateGovernedRunProgress({
+      progressState: afterFirstLease,
+      declaredWorkSnapshot: durRun.declaredWorkSnapshot,
+      progressPolicy: durRun.governedExecution.progressControlPolicy
+    });
+    assert.ok(afterFirstEval.cumulativeExecutionDurationMs >= 0,
+      'elapsed execution duration is non-negative');
+    assert.equal(
+      afterFirstEval.cumulativeExecutionDurationMs,
+      Date.parse(afterFirstLease.cutoff.evaluatedAt) - Date.parse(durEpoch),
+      'elapsed duration is exactly evaluatedAt minus the first lease acquisition');
+
+    // ── Recovery does not move the epoch, and duration never decreases ────
+    // Force the lease to expire so recovery genuinely runs, exactly as the
+    // epoch suite above does.
+    await store.pool.query(
+      `UPDATE ${store.table('runs')}
+          SET status = 'running', started_at = clock_timestamp(),
+              lease_owner = 'duration-test',
+              lease_expires_at = clock_timestamp() - interval '1 hour',
+              revision = revision + 1
+        WHERE id = $1`, [durRun.id]);
+    await store.recoverExpiredRun({ runId: durRun.id });
+    const durRecoveredRun = await store.getRun(durRun.id);
+    assert.equal(durRecoveredRun.startedAt, null,
+      'recovery clears the latest-attempt started_at, as A3 records');
+    await store.claimPendingRun({
+      leaseOwner: `${ACTOR}-2`, leaseDurationMs: 600_000, eligibleRunIds: [durRun.id] });
+    await store.startClaimedRun({
+      runId: durRun.id, leaseOwner: `${ACTOR}-2`, leaseDurationMs: 600_000 });
+
+    const afterRecovery = await store.readGovernedRunProgressState(durRun.id);
+    assert.equal(afterRecovery.executionEpochAt, durEpoch,
+      'a second lease acquisition does NOT move the execution epoch');
+    const afterRecoveryEval = require('../runtime/governed-progress-evaluation')
+      .evaluateGovernedRunProgress({
+      progressState: afterRecovery,
+      declaredWorkSnapshot: durRun.declaredWorkSnapshot,
+      progressPolicy: durRun.governedExecution.progressControlPolicy
+    });
+    assert.ok(
+      afterRecoveryEval.cumulativeExecutionDurationMs >=
+      afterFirstEval.cumulativeExecutionDurationMs,
+      'cumulative duration never decreases across recovery');
+    // The decisive contrast: the latest attempt just restarted, so an
+    // attempt-local clock would have gone BACKWARDS here.
+    assert.ok(afterRecovery.latestAttemptStartedAt,
+      'the latest attempt has its own, later start stamp');
+    assert.ok(
+      Date.parse(afterRecovery.latestAttemptStartedAt) > Date.parse(durEpoch),
+      'the attempt stamp really is later than the epoch, so the two differ');
+
+    // A genuinely separate Run has its own epoch and its own duration.
+    const otherDurRun = await store.getRun(
+      (await store.listRunsForTicket({ ticketId: durTicket.ticket.id })).runs[1].id);
+    await store.claimPendingRun({
+      leaseOwner: ACTOR, leaseDurationMs: 600_000, eligibleRunIds: [otherDurRun.id] });
+    const otherEpoch =
+      (await store.readGovernedRunProgressState(otherDurRun.id)).executionEpochAt;
+    assert.ok(otherEpoch && otherEpoch !== durEpoch,
+      'a separately authorized Run receives its own epoch, not the blocked one');
+
+    // ── A stored cutoff is replayed unchanged ─────────────────────────────
+    //
+    // Reusing the cutoff must reproduce the identical instant, duration and
+    // hashes. If evaluation reached for the clock instead, these would drift.
+    const storedCutoff = afterRecovery.cutoff;
+    const replayA = require('../runtime/governed-progress-evaluation')
+      .evaluateGovernedRunProgress({
+      progressState: await store.readGovernedRunProgressState(
+        durRun.id, { cutoff: storedCutoff }),
+      declaredWorkSnapshot: durRun.declaredWorkSnapshot,
+      progressPolicy: durRun.governedExecution.progressControlPolicy
+    });
+    const replayB = require('../runtime/governed-progress-evaluation')
+      .evaluateGovernedRunProgress({
+      progressState: await store.readGovernedRunProgressState(
+        durRun.id, { cutoff: storedCutoff }),
+      declaredWorkSnapshot: durRun.declaredWorkSnapshot,
+      progressPolicy: durRun.governedExecution.progressControlPolicy
+    });
+    assert.equal(replayA.evaluatedAt, storedCutoff.evaluatedAt,
+      'replaying a stored cutoff reuses its evaluation instant unchanged');
+    assert.equal(replayA.cumulativeExecutionDurationMs,
+      replayB.cumulativeExecutionDurationMs,
+      'replaying a stored cutoff reproduces the identical duration');
+    assert.equal(replayA.projection.projectionHash, replayB.projection.projectionHash,
+      'replaying a stored cutoff reproduces the identical projection hash');
+    assert.equal(replayA.decision.decisionHash, replayB.decision.decisionHash,
+      'replaying a stored cutoff reproduces the identical decision hash');
+    // A FRESH evaluation is explicitly a different, later fact.
+    const freshLater = await store.readGovernedRunProgressState(durRun.id);
+    assert.ok(
+      Date.parse(freshLater.cutoff.evaluatedAt) >=
+      Date.parse(storedCutoff.evaluatedAt),
+      'a fresh evaluation takes a later explicit cutoff rather than reusing one');
+
+    // ── Enforcement at the pre-reservation gate ───────────────────────────
+    //
+    // A Run admitted with a 1ms total budget. It has already been leased, so
+    // its epoch is real and its elapsed time genuinely exceeds the bound — no
+    // clock is manipulated to arrange this.
+    const expiredTicket = await admitLeafSet('Governed leaf duration exhausted',
+      { progressPolicy: durationPolicyOf(1) });
+    const expiredRun = await store.getRun(
+      (await store.listRunsForTicket({ ticketId: expiredTicket.ticket.id })).runs[0].id);
+    await store.claimPendingRun({
+      leaseOwner: ACTOR, leaseDurationMs: 600_000, eligibleRunIds: [expiredRun.id] });
+    await store.startClaimedRun({
+      runId: expiredRun.id, leaseOwner: ACTOR, leaseDurationMs: 600_000 });
+
+    const reservationsFor = async runId => (await store.pool.query(
+      `SELECT count(*)::int AS c FROM ${store.table('economic_request_reservations')}
+        WHERE run_id = $1`, [runId])).rows[0].c;
+    const chargesFor = async runId => (await store.pool.query(
+      `SELECT count(*)::int AS c FROM ${store.table('run_budget_charges')}
+        WHERE run_id = $1`, [runId])).rows[0].c;
+    const blockEventsFor = async ticketId =>
+      (await store.listTicketEvents(ticketId, { limit: 500 }))
+        .events.filter(e => e.type === 'run.progress_blocked').length;
+
+    assert.equal(await reservationsFor(expiredRun.id), 0);
+    assert.equal(await chargesFor(expiredRun.id), 0);
+
+    const expiredTransport = recordingTransport();
+    const expiredResult = await runGoverned(expiredRun,
+      'model-request:agent:1:provider', { transport: expiredTransport });
+
+    assert.equal(expiredResult.status, 'reservation_refused',
+      'a duration-exhausted Run is refused at the pre-reservation gate');
+    assert.equal(expiredResult.failureReason, 'GOVERNED_RUN_PROGRESS_BLOCKED',
+      'the refusal is the governed progress block, not a transport failure');
+    // Everything downstream of the gate must be untouched.
+    assert.equal(expiredTransport.calls.length, 0,
+      'a duration-exhausted Run makes ZERO provider calls');
+    assert.equal(await reservationsFor(expiredRun.id), 0,
+      'no economic reservation is created for a duration-exhausted Run');
+    assert.equal(await chargesFor(expiredRun.id), 0,
+      'no model-request budget charge is created for a duration-exhausted Run');
+
+    // Exactly one persisted block, naming the duration bound and nothing else.
+    const expiredBlock = await store.readGovernedProgressBlock(expiredRun.id);
+    assert.ok(expiredBlock, 'the duration stop is persisted as a canonical block');
+    assert.equal(expiredBlock.reason, 'cumulative_execution_duration_exhausted',
+      'the block names the duration bound, not a churn pattern');
+    assert.equal(expiredBlock.decision, 'blocked',
+      'the decision is blocked — no retry, reroute or replan');
+    assert.equal(expiredBlock.siblingDependency, null,
+      'a duration stop cites no sibling dependency');
+    assert.match(expiredBlock.blockHash, /^[0-9a-f]{64}$/);
+    assert.match(expiredBlock.churnDecisionHash, /^[0-9a-f]{64}$/);
+    assert.match(expiredBlock.progressPolicyHash, /^[0-9a-f]{64}$/);
+    assert.equal(expiredBlock.progressPolicyHash,
+      expiredRun.governedExecution.progressControlPolicy.policyHash,
+      'the block binds the ADMITTED policy, not current policy');
+    assert.ok(expiredBlock.executionEpochAt,
+      'the block records the execution epoch it measured from');
+    assert.ok(expiredBlock.cutoff.evaluatedAt,
+      'the block records the database-captured evaluation instant');
+    assert.ok(
+      Date.parse(expiredBlock.cutoff.evaluatedAt) >=
+      Date.parse(expiredBlock.executionEpochAt),
+      'the recorded evaluation instant is at or after the epoch');
+    assert.ok(
+      expiredBlock.cumulativeResources.cumulativeExecutionDurationMs >=
+      expiredRun.governedExecution.progressControlPolicy
+        .maximumCumulativeExecutionDurationMs,
+      'the recorded elapsed duration really does meet or exceed the limit');
+
+    const expiredEvents = await blockEventsFor(expiredTicket.ticket.id);
+    assert.equal(expiredEvents, 1, 'exactly one block event is appended');
+
+    // ── Repeated invocation is idempotent ─────────────────────────────────
+    //
+    // The stored block is read; no fresh cutoff is captured, nothing is spent,
+    // and no second event appears.
+    const repeatExpiredTransport = recordingTransport();
+    const repeatExpired = await runGoverned(expiredRun,
+      'model-request:agent:2:provider', { transport: repeatExpiredTransport });
+    assert.equal(repeatExpired.status, 'reservation_refused');
+    assert.equal(repeatExpired.failureReason, 'GOVERNED_RUN_PROGRESS_BLOCKED');
+    assert.equal(repeatExpiredTransport.calls.length, 0,
+      'a repeated attempt on a duration-blocked Run makes zero provider calls');
+    assert.equal(await reservationsFor(expiredRun.id), 0);
+    assert.equal(await chargesFor(expiredRun.id), 0);
+    assert.equal(await blockEventsFor(expiredTicket.ticket.id), 1,
+      'a repeated attempt appends no duplicate block event');
+    const rereadBlock = await store.readGovernedProgressBlock(expiredRun.id);
+    assert.equal(rereadBlock.blockHash, expiredBlock.blockHash,
+      'the stored block is unchanged — the decision of record is not re-derived');
+    assert.equal(rereadBlock.cutoff.evaluatedAt, expiredBlock.cutoff.evaluatedAt,
+      'no fresh evaluation instant is captured for an already-blocked Run');
+
+    // Recovery of a duration-blocked Run keeps it blocked, on the stored facts.
+    {
+      const { PostgresRuntimeStore: DurStore } = require('../persistence/postgres/store');
+      const durRestart = new DurStore({
+        connectionString: process.env.TEST_DATABASE_URL, schema: store.schema });
+      try {
+        const afterRestart = await durRestart.readGovernedProgressBlock(expiredRun.id);
+        assert.equal(afterRestart.blockHash, expiredBlock.blockHash,
+          'a restart reproduces the identical duration block');
+        assert.equal(
+          afterRestart.cumulativeResources.cumulativeExecutionDurationMs,
+          expiredBlock.cumulativeResources.cumulativeExecutionDurationMs,
+          'the recorded duration survives restart unchanged');
+      } finally {
+        await durRestart.close();
+      }
+    }
+
+    // ── Current-policy drift cannot rewrite admitted authority ────────────
+    //
+    // Raising the limit in a NEW policy does not unblock or re-authorize a Run
+    // that was admitted under the old one.
+    const durRaisedPolicy = durationPolicyOf(3_600_000);
+    assert.notEqual(durRaisedPolicy.policyHash,
+      expiredRun.governedExecution.progressControlPolicy.policyHash,
+      'the raised policy is genuinely different authority');
+    const durStillBlockedTransport = recordingTransport();
+    const durStillBlocked = await runGoverned(expiredRun,
+      'model-request:agent:3:provider', { transport: durStillBlockedTransport });
+    assert.equal(durStillBlocked.status, 'reservation_refused',
+      'a later, more generous policy does not unblock an admitted Run');
+    assert.equal(durStillBlockedTransport.calls.length, 0);
+    assert.equal(
+      (await store.getRun(expiredRun.id)).governedExecution.progressControlPolicy
+        .maximumCumulativeExecutionDurationMs,
+      1,
+      'the admitted duration authority is unchanged by current policy');
 
     // ── Sibling-read coordination ─────────────────────────────────────────
     //

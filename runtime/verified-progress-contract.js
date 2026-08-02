@@ -97,6 +97,10 @@ const PROJECTION_FIELDS = Object.freeze([
   // The exact ordered cutoff this projection was built from, so two processes
   // reading the same rows produce the same hash.
   'sourceCutoff',
+  // The database-captured instant this projection was evaluated at. Hashed, so
+  // two projections built from the same rows at different times are visibly
+  // different facts rather than silently interchangeable ones.
+  'evaluatedAt',
   'projectionHash'
 ]);
 
@@ -138,6 +142,19 @@ function requiredText(value, label, maximum = 512) {
     refuse('progress_observation_malformed', `${label} exceeds ${maximum} characters`);
   }
   return text;
+}
+
+// A normalized ISO instant. Refuses anything unparseable rather than coercing
+// it, so a malformed durable timestamp cannot become NaN inside an arithmetic.
+function requiredInstant(value, label) {
+  if (typeof value !== 'string' || value.length === 0) {
+    refuse('progress_observation_malformed', `${label} must be an ISO-8601 string`);
+  }
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) {
+    refuse('progress_observation_malformed', `${label} is not a parseable instant`);
+  }
+  return new Date(time).toISOString();
 }
 
 function nonNegativeInteger(value, label) {
@@ -346,7 +363,8 @@ function buildVerifiedProgressProjection({
   previouslySatisfiedFactIdentities = [],
   previouslySeenFingerprints = [],
   policy = null,
-  sourceCutoff
+  sourceCutoff,
+  evaluatedAt
 }) {
   if (!WINDOW_KINDS.includes(windowKind)) {
     refuse('progress_window_identity_missing',
@@ -414,6 +432,10 @@ function buildVerifiedProgressProjection({
     // The exact ordered cutoff the projection was built from. Two processes
     // reading the same rows through the same cutoff produce the same hash.
     sourceCutoff: nonNegativeInteger(sourceCutoff, 'sourceCutoff'),
+    // Captured from the database, never from the process clock. Required: a
+    // projection that cannot say when it was evaluated cannot support a
+    // duration decision.
+    evaluatedAt: requiredInstant(evaluatedAt, 'evaluatedAt'),
     projectionHash: null
   };
   const withoutHash = {};

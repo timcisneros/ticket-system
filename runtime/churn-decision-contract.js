@@ -46,7 +46,14 @@ const CHURN_STOP_REASONS = Object.freeze([
   'repeated_failed_operation',
   'mutation_reversal_churn',
   'progress_accounting_conflict',
-  'undeclared_sibling_dependency'
+  'undeclared_sibling_dependency',
+  // A HARD TOTAL bound on execution duration, measured from the immutable
+  // first-execution epoch. Distinct from every reason above: those describe a
+  // pattern in the work, this describes how long the Run has been executing in
+  // total across every recovery. It is named separately so a duration stop can
+  // never be read as a no-op loop, a provider timeout, an interruption, or
+  // spent progress tolerance.
+  'cumulative_execution_duration_exhausted'
 ]);
 
 // The bounded tolerance policy. Closed, versioned, and captured immutably on a
@@ -59,6 +66,11 @@ const PROGRESS_POLICY_FIELDS = Object.freeze([
   'maximumFailedOperationStreak',
   'maximumMutationReversals',
   'maximumInspectionOnlyStreak',
+  // The HARD total execution bound, in milliseconds, measured from the
+  // immutable first-execution epoch to a database-captured evaluation instant.
+  // It is a policy field rather than a `resourceDimensions` entry because it is
+  // not a tolerance that verified progress can extend — see `decideChurn`.
+  'maximumCumulativeExecutionDurationMs',
   'resourceDimensions',
   'policyHash'
 ]);
@@ -85,6 +97,11 @@ const CHURN_DECISION_FIELDS = Object.freeze([
   'mutationReversalSignals',
   'inspectionOnlyStreak',
   'settledMicroUsd',
+  // The database-captured evaluation instant and the total execution duration
+  // derived from it. Both are hashed, so a decision states exactly when it was
+  // taken and how much execution time it was taken against.
+  'evaluatedAt',
+  'cumulativeExecutionDurationMs',
   'decision',
   'reason',
   'progressPolicyHash',
@@ -139,6 +156,70 @@ function boundedTolerance(value, label, maximum = 1_000) {
   return value;
 }
 
+// A duration tolerance in milliseconds. Same philosophy as `boundedTolerance`
+// — null, 0 and Infinity are refused because an unbounded duration is the
+// absence of a bound — but with a ceiling appropriate to time rather than to
+// counts. Seven days is far above any legitimate governed leaf Run and far
+// below "effectively forever", so a policy that names it is still making a
+// claim someone could be held to.
+const MAXIMUM_EXECUTION_DURATION_CEILING_MS = 604_800_000; // 7 days
+
+function boundedDurationMs(value, label) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    refuse('churn_tolerance_unbounded',
+      `${label} must be a finite number of milliseconds`);
+  }
+  if (!Number.isSafeInteger(value) || value < 1) {
+    refuse('churn_tolerance_unbounded',
+      `${label} must be a positive safe integer number of milliseconds`);
+  }
+  if (value > MAXIMUM_EXECUTION_DURATION_CEILING_MS) {
+    refuse('churn_tolerance_unbounded',
+      `${label} exceeds the ${MAXIMUM_EXECUTION_DURATION_CEILING_MS}ms ceiling ` +
+      'and is effectively unbounded');
+  }
+  return value;
+}
+
+// An ISO instant, normalized. Rejects anything that is not a real timestamp,
+// so a malformed durable value can never be silently coerced to 0 or NaN.
+function isoInstant(value, label) {
+  if (typeof value !== 'string' || value.length === 0) {
+    refuse('churn_decision_malformed', `${label} must be an ISO-8601 string`);
+  }
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) {
+    refuse('churn_decision_malformed', `${label} is not a parseable instant`);
+  }
+  return new Date(time).toISOString();
+}
+
+// THE ONLY elapsed-duration derivation in the system, so there is exactly one
+// place where "how long has this Run executed" is answered.
+//
+// Absence of an epoch is MEANINGFUL, not an error: a Run that has never been
+// leased has not begun executing, so its cumulative execution duration is zero.
+// Scheduler queue time is therefore never charged as execution — the epoch is
+// the first `run.lease_acquired`, and no such event exists while queued.
+function elapsedExecutionDurationMs({ executionEpochAt, evaluatedAt }) {
+  if (executionEpochAt === null || executionEpochAt === undefined) return 0;
+  const epoch = Date.parse(isoInstant(executionEpochAt, 'executionEpochAt'));
+  const evaluated = Date.parse(isoInstant(evaluatedAt, 'evaluatedAt'));
+  const elapsed = evaluated - epoch;
+  if (!Number.isSafeInteger(elapsed)) {
+    refuse('churn_accounting_conflict',
+      'elapsed execution duration is not a safe integer number of milliseconds');
+  }
+  if (elapsed < 0) {
+    // The evaluation instant precedes first execution. Both come from the same
+    // database clock, so this is corruption, not skew — and a negative duration
+    // would silently buy back budget.
+    refuse('churn_accounting_conflict',
+      'evaluation instant precedes the execution epoch');
+  }
+  return elapsed;
+}
+
 function nonNegativeInteger(value, label) {
   if (!Number.isSafeInteger(value) || value < 0) {
     refuse('churn_decision_malformed', `${label} must be a non-negative safe integer`);
@@ -154,6 +235,7 @@ function buildProgressControlPolicy({
   maximumFailedOperationStreak,
   maximumMutationReversals,
   maximumInspectionOnlyStreak,
+  maximumCumulativeExecutionDurationMs,
   resourceDimensions
 }) {
   if (!Array.isArray(resourceDimensions) || resourceDimensions.length === 0) {
@@ -177,6 +259,11 @@ function buildProgressControlPolicy({
       maximumMutationReversals, 'maximumMutationReversals'),
     maximumInspectionOnlyStreak: boundedTolerance(
       maximumInspectionOnlyStreak, 'maximumInspectionOnlyStreak'),
+    // Required, never defaulted. A governed Run admitted without duration
+    // authority would otherwise be admitted as unbounded in time, which is the
+    // exact condition pending decision A3 records.
+    maximumCumulativeExecutionDurationMs: boundedDurationMs(
+      maximumCumulativeExecutionDurationMs, 'maximumCumulativeExecutionDurationMs'),
     resourceDimensions: deepFreeze(
       [...new Set(resourceDimensions)].sort(compareCanonicalText)),
     policyHash: null
@@ -225,6 +312,7 @@ function decideChurn({
   policy,
   cumulativeResources,
   consecutiveNoProgressWindows,
+  evaluatedAt,
   siblingDependencyBlocked = false
 }) {
   const projection = normalizeVerifiedProgressProjection(progressProjection);
@@ -238,8 +326,14 @@ function decideChurn({
     settledMicroUsd: nonNegativeInteger(
       cumulativeResources.settledMicroUsd || 0, 'cumulative settledMicroUsd'),
     budgetChargedUnits: nonNegativeInteger(
-      cumulativeResources.budgetChargedUnits || 0, 'cumulative budgetChargedUnits')
+      cumulativeResources.budgetChargedUnits || 0, 'cumulative budgetChargedUnits'),
+    // CUMULATIVE across every recovery, because it is derived from the
+    // immutable first-execution epoch rather than from the latest attempt.
+    cumulativeExecutionDurationMs: nonNegativeInteger(
+      cumulativeResources.cumulativeExecutionDurationMs || 0,
+      'cumulative cumulativeExecutionDurationMs')
   };
+  const evaluatedInstant = isoInstant(evaluatedAt, 'evaluatedAt');
   const consecutive = nonNegativeInteger(
     consecutiveNoProgressWindows, 'consecutiveNoProgressWindows');
 
@@ -259,6 +353,22 @@ function decideChurn({
   if (siblingDependencyBlocked) {
     decision = 'blocked';
     reason = 'undeclared_sibling_dependency';
+  } else if (resources.cumulativeExecutionDurationMs >=
+             controls.maximumCumulativeExecutionDurationMs) {
+    // THE HARD TOTAL BOUND, and the one rule verified progress cannot move.
+    //
+    // It is evaluated before every churn signal deliberately. A Run that has
+    // exhausted its total execution time may well ALSO be looping on no-ops,
+    // and reporting `repeated_no_op` for it would name a pattern instead of the
+    // bound that actually stopped it — inviting someone to "fix the loop" and
+    // retry into the same wall. Duration exhaustion is its own fact.
+    //
+    // Note what is absent: no reset. `consecutiveNoProgressWindows` is reset by
+    // verified progress a few lines below, because tolerance for churn is
+    // exactly what progress should buy back. Total execution time is not
+    // tolerance — it is consumption — so nothing buys it back.
+    decision = 'blocked';
+    reason = 'cumulative_execution_duration_exhausted';
   } else if (signals.has('repeated_no_op')) {
     decision = 'blocked';
     reason = 'repeated_no_op';
@@ -288,6 +398,8 @@ function decideChurn({
     mutationReversalSignals: signals.has('mutation_reversal_churn') ? 1 : 0,
     inspectionOnlyStreak: signals.has('inspection_only_streak') ? 1 : 0,
     settledMicroUsd: resources.settledMicroUsd,
+    evaluatedAt: evaluatedInstant,
+    cumulativeExecutionDurationMs: resources.cumulativeExecutionDurationMs,
     decision,
     reason,
     progressPolicyHash: controls.policyHash,
@@ -352,11 +464,13 @@ module.exports = {
   CHURN_REFUSALS,
   CHURN_STOP_REASONS,
   ChurnDecisionError,
+  MAXIMUM_EXECUTION_DURATION_CEILING_MS,
   PROGRESS_POLICY_FIELDS,
   PROGRESS_POLICY_VERSION,
   RESOURCE_DIMENSIONS,
   buildProgressControlPolicy,
   decideChurn,
+  elapsedExecutionDurationMs,
   normalizeChurnDecision,
   normalizeProgressControlPolicy,
   permitsGovernedRequest,
