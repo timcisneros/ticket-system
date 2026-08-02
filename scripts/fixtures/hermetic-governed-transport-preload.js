@@ -49,7 +49,17 @@ const transportModulePath = path.join(
 const transportModule = require(transportModulePath);
 const realCreate = transportModule.createOpenAiGovernedTransport;
 
+let fixtureRequestCount = 0;
+
 function fixtureHttpsRequest(options, onResponse) {
+  // A bounded fixture serves ONE response. The worker may legitimately ask for
+  // another after finishing the first; refusing here keeps an uncontrolled
+  // second response from entering the run, and the refusal is an expected
+  // boundary rather than a failure of the first response.
+  fixtureRequestCount += 1;
+  if (fixtureRequestCount > 1) {
+    throw new Error('HERMETIC_FIXTURE_SECOND_REQUEST_REFUSED');
+  }
   // The transport spells its options discretely so a test can read back exactly
   // what production sends. Assert the destination here too: a stub that accepts
   // any host would hide a redirect defect rather than catch it.
@@ -123,7 +133,17 @@ http.get = guard(http.get, 'http.get');
 
 // A credential must never reach a hermetic child. Boolean only — the value is
 // never read, printed, or recorded.
-if (process.env.OPENAI_API_KEY) {
+// The governed transport refuses to build a request without a non-empty key, so
+// a hermetic run still needs one — but ONLY this fixed sentinel is tolerated.
+// Any other value means a developer credential was inherited and the child
+// refuses to start. The comparison is against a constant; the value is never
+// read for any other purpose, printed, or recorded.
+const HERMETIC_SENTINEL_KEY = 'test-only-sentinel-not-a-real-credential';
+if (process.env.OPENAI_API_KEY &&
+    process.env.OPENAI_API_KEY !== HERMETIC_SENTINEL_KEY) {
   throw new Error(
-    'HERMETIC_VIOLATION: the test server inherited an OPENAI_API_KEY');
+    'HERMETIC_VIOLATION: the test server inherited a non-sentinel OPENAI_API_KEY');
 }
+// Proof-of-life the spawned server can be asserted on: if this line is absent
+// from server output, the preload did not run and nothing here is protecting it.
+console.log('HERMETIC_PRELOAD_ACTIVE=true');

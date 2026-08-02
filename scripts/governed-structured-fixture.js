@@ -244,6 +244,13 @@ async function seedGovernedStructuredTicket(store, {
   progressPolicy = progressControlPolicy(),
   policySource = null,
   workspaceRoot = '/tmp',
+  // A scenario may admit more than one execution-evaluable fact, so that first
+  // verified progress does not also satisfy the whole completion authority.
+  leafPostconditions = null,
+  // Fixture agents carry no credential by default. A spawned-server scenario
+  // needs a NON-EMPTY one because provider config refuses without it; the
+  // hermetic preload accepts only its fixed sentinel.
+  agentApiKey = '',
   // Explicit deterministic values. Production resolves these from deployment
   // configuration; a fixture states them, so the Run's shape is canonical while
   // its limits stay predictable.
@@ -293,7 +300,7 @@ async function seedGovernedStructuredTicket(store, {
   })).group;
   const mkAgent = async name => (await store.createConfiguredAgent({
     value: { name: `${name} ${stamp}`, provider: 'openai',
-      model: 'gpt-agent-row-model', apiKey: '' },
+      model: 'gpt-agent-row-model', apiKey: agentApiKey },
     groupIds: [group.id], changedBy: actor
   })).agent;
   const planner = await mkAgent('Planner');
@@ -432,14 +439,15 @@ async function seedGovernedStructuredTicket(store, {
     // Governed leaf admission now refuses a Run with no execution-evaluable
     // fact, because such a Run could never be credited with verified progress
     // and would eventually stop with a reason that was false about its work.
+    const owned = item.ownedOutputPaths[0].replace(/\/$/, '');
+    const declaredPostconditions = typeof leafPostconditions === 'function'
+      ? leafPostconditions(item, owned)
+      : [{ type: 'folder_exists', path: owned }];
     const completionAuthoritySnapshot = buildCompletionAuthoritySnapshot({
-      objective: `Create folder ${item.ownedOutputPaths[0].replace(/\/$/, '')}`,
+      objective: `Create folder ${owned}`,
       kind: 'deterministic', recognized: true,
       intent: 'create_folder', completionPolicy: 'declared_postconditions',
-      directPostconditions: [{
-        type: 'folder_exists',
-        path: item.ownedOutputPaths[0].replace(/\/$/, '')
-      }],
+      directPostconditions: declaredPostconditions,
       verificationPolicy: 'when_declared',
       capturedAt: new Date().toISOString()
     });

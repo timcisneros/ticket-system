@@ -172,10 +172,21 @@ async function main() {
   ], {
     encoding: 'utf8',
     // A non-empty sentinel; its value is meaningless and is never inspected.
-    env: { ...process.env, OPENAI_API_KEY: 'x' }
+    env: { ...process.env, OPENAI_API_KEY: 'a-developer-looking-key' }
   });
   assert.match(String(child.stdout), /REFUSED:HERMETIC_VIOLATION/,
-    'a child that would inherit a credential refuses to start');
+    'a child that would inherit a non-sentinel credential refuses to start');
+}
+{
+  const child = require('node:child_process').spawnSync(process.execPath, [
+    '-e', `try { require(${JSON.stringify(PRELOAD)}); console.log('LOADED'); }
+           catch (e) { console.log('REFUSED:' + e.message); }`
+  ], {
+    encoding: 'utf8',
+    env: { ...process.env, OPENAI_API_KEY: 'test-only-sentinel-not-a-real-credential' }
+  });
+  assert.match(String(child.stdout), /LOADED/,
+    'the fixed sentinel is accepted, so a hermetic run can build a request');
 }
 {
   const child = require('node:child_process').spawnSync(process.execPath, [
