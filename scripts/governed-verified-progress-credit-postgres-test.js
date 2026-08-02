@@ -14,8 +14,14 @@ const assert = require('node:assert/strict');
 const { withHarness } = require('./postgres-test-harness');
 const {
   seedGovernedStructuredTicket,
-  seedGovernedBaselineEvidence
+  seedGovernedBaselineEvidence,
+  progressControlPolicy,
+  EXACT_SNAPSHOT,
+  GOVERNED_ENDPOINT,
+  OUTPUT_CAP
 } = require('./governed-structured-fixture');
+const { runGovernedLeafRequest } = require('../runtime/governed-leaf-orchestration');
+const { buildOpenAiResponsesBody } = require('../runtime/provider-request-body');
 const { eligibleExecutionFacts } = require('../runtime/governed-eligible-facts');
 const {
   buildGovernedPostconditionEvidence
@@ -222,6 +228,100 @@ async function main() {
       } finally {
         await restarted.close();
       }
+    }
+
+    // ── THE GATE ITSELF MUST USE THE DERIVATION ───────────────────────────
+    //
+    // Everything above proves the derivation is correct. It does NOT prove
+    // production consumes it: an evaluator called directly from a test would
+    // pass even if the store still handed the gate an empty mapping. The
+    // difference is observable only through behaviour — a Run whose tolerance is
+    // spent continues if a fact genuinely advanced, and stops if it did not.
+    {
+      const tight = await seedGovernedStructuredTicket(store, {
+        stamp: `${STAMP}-gate`, actor: ACTOR,
+        progressPolicy: progressControlPolicy({
+          maximumConsecutiveNoProgressWindows: 1
+        })
+      });
+      const gateRunId = tight.runIds[0];
+      const gateRun = await store.getRun(gateRunId);
+      const gateFact = eligibleExecutionFacts(gateRun)[0];
+      await seedGovernedBaselineEvidence(store, gateRunId, { satisfied: false });
+
+      const transport = () => ({ text: '{"ok":true}', identity: 'resp-gate' });
+      const request = ordinal => runGovernedLeafRequest({
+        repository: store,
+        run: gateRun,
+        logicalSourceIdentity: `model-request:agent:${ordinal}:provider`,
+        canonicalBody: buildOpenAiResponsesBody({
+          model: EXACT_SNAPSHOT,
+          input: [{ role: 'user', content: 'do the work' }],
+          options: { governed: true, maxOutputTokens: OUTPUT_CAP }
+        }),
+        endpointIdentity: GOVERNED_ENDPOINT,
+        transport,
+        resolveCredentials: async () => ({ apiKey: 'fixture-key-not-a-real-credential' }),
+        timeoutMs: 60_000,
+        maxResponseBytes: 65_536,
+        runtimeModelRequestMaximum: 8
+      });
+
+      const first = await request(1);
+      assert.equal(first.status, 'received', 'the first governed request is permitted');
+
+      // One window closes with a genuine first satisfaction. If the gate ignored
+      // the derivation, this window would count as no progress and the next
+      // request would be blocked by the one-window tolerance.
+      const receiptId = Number((await store.pool.query(
+        `INSERT INTO ${store.table('operation_receipts')}
+           (run_id, ticket_id, operation, outcome, workspace_path,
+            mutation_fingerprint, receipt, idempotency_key, step_id, recorded_at)
+         VALUES ($1,$2,'createFolder','succeeded',$3,$4,
+                 '{"kind":"gate"}'::jsonb,$5,'1',clock_timestamp())
+         RETURNING id`,
+        [gateRunId, gateRun.ticketId, gateFact.criterion.path,
+          `fp-gate-${STAMP}`, `idem-gate-${STAMP}`]
+      )).rows[0].id);
+      await store.appendGovernedPostconditionEvidenceSet({
+        evidenceRecords: [buildGovernedPostconditionEvidence({
+          ticketId: gateRun.ticketId, runId: gateRunId,
+          allocationPlanId: gateRun.allocationPlanId,
+          allocationItemId: gateRun.leafRunBinding.allocationItemId,
+          governedAuthorityHash:
+            gateRun.governedExecution.progressControlPolicy.policyHash,
+          completionAuthorityHash: gateFact.completionAuthorityHash,
+          declaredFactIdentity: gateFact.declaredFactIdentity,
+          criterionHash: gateFact.criterionHash,
+          criterionType: gateFact.criterionType,
+          evaluatorIdentity: gateFact.evaluatorIdentity,
+          evaluatorVersion: gateFact.evaluatorVersion,
+          evaluationKind: 'post_batch', batchStepId: '1',
+          requestSourceIdentity: 'model-request:agent:1:provider',
+          throughOperationReceiptId: receiptId, evaluatedReceiptCount: 1,
+          observedEvidence: { path: gateFact.criterion.path, observedKind: 'folder' },
+          verdict: {
+            type: gateFact.criterionType, authority: 'objective_contract',
+            path: gateFact.criterion.path, passed: true,
+            reasonCode: 'POSTCONDITION_PASSED'
+          }
+        })]
+      });
+
+      // THE DECISIVE ASSERTION. The gate must derive the transition itself and
+      // reset the streak; with an empty mapping the one-window tolerance would
+      // already be spent and this would be refused.
+      const second = await request(2);
+      assert.equal(second.status, 'received',
+        'THE GATE CONSUMES THE DERIVATION — a genuine first satisfaction ' +
+        'resets the streak and the next governed request is permitted');
+      assert.equal(await store.readGovernedProgressBlock(gateRunId), null,
+        'and no progress block was persisted');
+      assert.equal(
+        Number((await store.pool.query(
+          `SELECT count(*)::int AS c FROM ${store.table('economic_request_reservations')}
+            WHERE run_id = $1`, [gateRunId])).rows[0].c),
+        2, 'the next economic reservation really was created');
     }
 
     console.log('  ok governed verified progress credit');
