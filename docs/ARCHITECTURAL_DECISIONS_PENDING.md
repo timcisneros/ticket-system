@@ -5432,6 +5432,40 @@ Open questions for the diagnosis:
 - Does a retried leaf invalidate the item's prior completion-decision identity, or is the lineage's latest valid decision sufficient?
 - Should partial retry of a multi-item plan be permitted while sibling items are still running?
 
+## Recovered Governed Run Does Not Resume Its Next Request (recorded 2026-08-02)
+
+**Status:** open — production defect, reproduced, not fixed.
+
+A governed structured leaf Run that crashes after request 1 has durably
+committed its receipt and complete A=true/B=false evidence is now RECOVERED —
+it is reclaimed, and it no longer rejects its own durable evidence. But it does
+not go on to issue request 2. It terminalizes with:
+
+```text
+Model response was not valid execution JSON: Cannot read properties of null (reading 'message')
+```
+
+raised while the recovery path re-parses the durable provider response for the
+resumed execution turn. The two defects fixed alongside this
+(`providerRequestEvidenceKey` missing from governed response replay, and the
+baseline being re-observed on resume) were each masking it.
+
+**Why this matters more than a failed Run.** The verified progress is real and
+durable: A genuinely transitioned false to true, and the evidence proving it is
+committed. A Run that cannot resume discards earned progress and, if it is ever
+retried from the start, pays for that progress a second time. "Recovery is
+admitted" is therefore not the same guarantee as "recovery completes", and only
+the first is currently proved — by
+`scripts/governed-authorized-restart-postgres-test.js`, which deliberately
+asserts nothing about request-2 authority.
+
+**What would close it.** Diagnose why the resumed turn's persisted response text
+parses to null for a governed Run specifically, then extend that suite to the
+full invariant: complete request-1 evidence plus any number of restarts
+authorizes request 2 exactly once, with one budget charge, one economic
+reservation, one replay item and one transport call.
+
+
 ---
 
-*Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded 2026-08-02, closed 2026-08-02 by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded 2026-08-02 by scripts/governed-no-progress-withholding-postgres-test.js.*

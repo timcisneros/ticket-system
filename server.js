@@ -12165,6 +12165,15 @@ async function dispatchGovernedLeafModelRequest({
           responseHash,
           text: governedResponseText,
           provider: 'openai',
+          // REQUIRED FOR RECOVERY, not decoration.
+          // `hasDurableAgentResponseWithoutPlan` refuses to resume a Run whose
+          // persisted responses lack direct execution-turn identity, and this
+          // key is part of that identity. Without it a governed Run that
+          // crashed mid-turn could never resume: recovery rejected the Run's
+          // own canonical evidence as contract-violating, so every governed
+          // crash was terminal and no governed work was ever recoverable.
+          providerRequestEvidenceKey:
+            buildRunEvidenceKey(run, 'provider-request', slot),
           ...(options.metadata || {})
         }),
         eventType: 'provider.response.persisted',
@@ -19638,6 +19647,29 @@ async function persistGovernedPostconditionEvidence(run, {
   if (facts.length === 0) return null;
 
   const repository = getVerifiedProgressReadRepository();
+
+  // A BASELINE IS CAPTURED ONCE AND NEVER RE-OBSERVED.
+  //
+  // It records what was true BEFORE this Run's first governed request, so that
+  // a later satisfied reading can be recognized as a transition rather than a
+  // pre-existing condition. After a crash and resume the workspace has moved on
+  // — the Run may already have created the very folder the baseline recorded as
+  // absent — so re-evaluating now would produce a different verdict for the same
+  // named instant. The evidence table correctly refuses that as conflicting
+  // authority, which made every governed Run unrecoverable once its baseline
+  // had been written and any declared fact had been satisfied.
+  //
+  // Re-reporting the stored rows is not a shortcut: it is the only truthful
+  // answer, because the state being described no longer exists to be observed.
+  if (evaluationKind === 'baseline') {
+    const existing = (await repository.readGovernedPostconditionEvidence(run.id))
+      .filter(row => row.evaluationKind === 'baseline');
+    const covered = new Set(existing.map(row => row.declaredFactIdentity));
+    if (facts.every(fact => covered.has(fact.declaredFactIdentity))) {
+      return { appended: existing, batch: null };
+    }
+  }
+
   let batch = null;
   if (evaluationKind === 'post_batch') {
     batch = await repository.readGovernedCommittedOperationBatch({
