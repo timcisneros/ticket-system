@@ -101,6 +101,8 @@ async function main() {
       const responsePath = path.join(os.tmpdir(), `gfr-res-${process.pid}-${STAMP}.json`);
       fs.writeFileSync(capturePath, '');
       fs.writeFileSync(responsePath, JSON.stringify({
+        // Addressed to this Run: sibling leaf Runs share the fixture.
+        match: 'reports/planner',
         statusCode: 200,
         body: JSON.stringify({
           id: FIXTURE_RESPONSE_IDENTITY,
@@ -141,7 +143,8 @@ async function main() {
         assert.ok(String(server.output()).includes('HERMETIC_PRELOAD_ACTIVE=true'),
           'the hermetic preload actually ran inside the spawned server');
         const captured = fs.readFileSync(capturePath, 'utf8').trim()
-          .split('\n').filter(Boolean).map(line => JSON.parse(line));
+          .split('\n').filter(Boolean).map(line => JSON.parse(line))
+          .filter(entry => String(entry.body || '').includes('reports/planner'));
         assert.equal(captured.length, 1,
           'the injected transport received exactly one request');
         assert.equal(captured[0].hostname, 'api.openai.com');

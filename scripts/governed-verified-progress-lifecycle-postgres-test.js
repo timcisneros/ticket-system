@@ -44,6 +44,8 @@ const RESPONSE_TWO = 'fixture-governed-lifecycle-response-2';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+const OWNED_ROOT = 'reports/planner';
+
 const LIFECYCLE_LIMITS = {
   maxExecutionSteps: 6,
   // EXACTLY TWO governed requests. A third would be answered by nothing, and
@@ -59,8 +61,11 @@ const LIFECYCLE_LIMITS = {
   maxOutputArtifactBytesPerRun: 1_048_576
 };
 
-function stagedResponse(identity, plan) {
+function stagedResponse(identity, plan, match) {
   return {
+    // Sibling leaf Runs share this fixture; a staged response is addressed to
+    // the Run whose prompt carries this path, never to whoever asks first.
+    match,
     statusCode: 200,
     body: JSON.stringify({
       id: identity,
@@ -119,12 +124,12 @@ async function main() {
             message: 'Creating the first declared folder.',
             actions: [{ operation: 'createFolder', args: { path: factA.criterion.path } }],
             complete: false
-          }),
+          }, OWNED_ROOT),
           stagedResponse(RESPONSE_TWO, {
             message: 'Creating the second declared folder.',
             actions: [{ operation: 'createFolder', args: { path: factB.criterion.path } }],
             complete: true
-          })
+          }, OWNED_ROOT)
         ]
       }));
 
@@ -164,7 +169,8 @@ async function main() {
         assertThat(output.includes('HERMETIC_PRELOAD_ACTIVE=true'),
           'the hermetic preload ran inside the spawned server');
         const captured = fs.readFileSync(capturePath, 'utf8').trim()
-          .split('\n').filter(Boolean).map(line => JSON.parse(line));
+          .split('\n').filter(Boolean).map(line => JSON.parse(line))
+          .filter(entry => String(entry.body || '').includes(OWNED_ROOT));
         assertThat(captured.length === 2,
           'exactly two hermetic transport calls occurred — one per governed request');
         assertThat(captured.every(entry => entry.hostname === 'api.openai.com' &&

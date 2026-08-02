@@ -56,6 +56,7 @@ const transportModule = require(transportModulePath);
 const realCreate = transportModule.createOpenAiGovernedTransport;
 
 let fixtureRequestCount = 0;
+const servedIndexes = new Set();
 
 function fixtureHttpsRequest(options, onResponse) {
   // A bounded fixture answers only the requests its scenario staged. The worker
@@ -64,11 +65,6 @@ function fixtureHttpsRequest(options, onResponse) {
   // rather than a failure of the requests that were answered.
   fixtureRequestCount += 1;
   const staged = loadFixtureResponses();
-  if (fixtureRequestCount > staged.length) {
-    throw new Error(
-      `HERMETIC_FIXTURE_UNPLANNED_REQUEST_${fixtureRequestCount} ` +
-      `(scenario staged ${staged.length})`);
-  }
   // The transport spells its options discretely so a test can read back exactly
   // what production sends. Assert the destination here too: a stub that accepts
   // any host would hide a redirect defect rather than catch it.
@@ -79,11 +75,7 @@ function fixtureHttpsRequest(options, onResponse) {
       `${options.hostname}${options.path}`);
   }
   const chunks = [];
-  const fixture = staged[fixtureRequestCount - 1];
-
   const response = new (require('node:stream').PassThrough)();
-  response.statusCode = fixture.statusCode || 200;
-  response.headers = { 'x-request-id': `fixture-governed-request-${fixtureRequestCount}` };
 
   const request = {
     on() { return request; },
@@ -93,6 +85,28 @@ function fixtureHttpsRequest(options, onResponse) {
     end(chunk) {
       if (chunk) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks).toString('utf8');
+      // ADDRESSED BY CONTENT, NOT BY ARRIVAL ORDER.
+      //
+      // A governed Ticket has sibling leaf Runs, and they execute concurrently
+      // against this one fixture. Serving the Nth staged response to the Nth
+      // arriving request therefore hands one Run's answer to another, which is
+      // a race the scenario never wrote down. A staged response carries a
+      // `match` string that must appear in the request bytes, so each Run can
+      // only ever receive answers written for it, and a Run the scenario did
+      // not stage for is refused rather than improvised at.
+      const candidate = staged.find((entry, index) =>
+        !servedIndexes.has(index) &&
+        (!entry.match || body.includes(entry.match)));
+      if (!candidate) {
+        throw new Error(
+          `HERMETIC_FIXTURE_UNPLANNED_REQUEST_${fixtureRequestCount}: ` +
+          'no staged response matches these request bytes');
+      }
+      servedIndexes.add(staged.indexOf(candidate));
+      response.statusCode = candidate.statusCode || 200;
+      response.headers = {
+        'x-request-id': `fixture-governed-request-${fixtureRequestCount}`
+      };
       // Headers are captured WITHOUT the Authorization value: the test needs to
       // know a credential header was formed, never what it contained.
       record({
@@ -106,7 +120,7 @@ function fixtureHttpsRequest(options, onResponse) {
       });
       setImmediate(() => {
         onResponse(response);
-        response.end(fixture.body);
+        response.end(candidate.body);
       });
       return request;
     }

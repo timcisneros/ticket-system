@@ -12060,66 +12060,8 @@ async function dispatchGovernedLeafModelRequest({
   let governedResponseCompletedAtMs = null;
   let governedResponseEvidenceKey = null;
 
-  // RESERVE BEFORE DISPATCH, exactly as the ungoverned path does. The commit
-  // below states it uses "the same source identity it was reserved under" — but
-  // nothing reserved it, so every governed leaf request failed at commit with
-  // "Budget reservation does not exist" the moment one actually executed. The
-  // economic reservation inside the orchestration is a different ledger; the
-  // runtime budget still needs its own.
-  await runtimeBudgetController.reserve(run, 'model_request', budgetSourceIdentity, 1);
-
-  // THE REQUEST IS DURABLE BEFORE THE TRANSPORT RUNS.
-  //
-  // The ungoverned path persists a `providerRequests` replay item through
-  // `onRequest`; the governed path persisted only the response, while still
-  // returning a `requestEvidenceKey` for evidence that was never written. A
-  // governed Run therefore reported 0 requests and 1 response, and the operator
-  // diagnostics at `describeRunEfficiency` read that as a provider anomaly —
-  // "1 response with no request" — for a Run that behaved correctly.
-  //
-  // Ordering is the substantive part. Written before dispatch, a crash between
-  // here and the response leaves durable proof that a request was ISSUED, which
-  // is what makes a possibly-dispatched request recoverable instead of merely
-  // absent. Written afterwards it would only ever describe requests that already
-  // came back.
-  //
-  // HEADERS ARE NEVER PERSISTED. The canonical body carries the prompt; the
-  // Authorization header carries the credential, and it has no reason to exist
-  // in replay.
-  const governedRequestStartedAt = new Date(governedRequestStartedAtMs).toISOString();
-  const sanitizeGovernedRequest = typeof options.sanitizeRequest === 'function'
-    ? options.sanitizeRequest
-    : value => value;
-  await recordNonTerminalRunEvidence(run, {
-    category: 'provider-request',
-    slot,
-    replayKey: 'providerRequests',
-    replayItem: sanitizeSnapshotValue({
-      ...sanitizeGovernedRequest({
-        url: GOVERNED_OPENAI_ENDPOINT,
-        method: 'POST',
-        body: canonicalBody
-      }),
-      ...(options.metadata || {}),
-      governed: true,
-      startedAt: governedRequestStartedAt,
-      durationMs: Date.now() - governedRequestStartedAtMs
-    }),
-    eventType: 'provider.request.persisted',
-    eventPayload: sanitizeSnapshotValue({
-      ...(options.metadata || {}),
-      governed: true,
-      provider: 'openai',
-      model: run.governedExecution.economicAuthority.dispatchTarget,
-      url: GOVERNED_OPENAI_ENDPOINT,
-      method: 'POST',
-      requestHash: crypto.createHash('sha256')
-        .update(canonicalOperationJson(canonicalBody || {})).digest('hex'),
-      startedAt: governedRequestStartedAt
-    }),
-    capturedAt: governedRequestStartedAt
-  });
-
+  // Reserve and record only once the request is ADMITTED and about to be sent.
+  // See `persistRequestEvidence` below.
   const result = await runGovernedLeafRequest({
     repository: getGovernedPlannerDispatchRepository(),
     run,
@@ -12137,6 +12079,69 @@ async function dispatchGovernedLeafModelRequest({
     runtimeModelRequestMaximum: limits && limits.maxModelRequestsPerRun
       ? limits.maxModelRequestsPerRun
       : null,
+    // Invoked after admission and after this caller wins dispatch authority,
+    // and before any byte leaves. Both the runtime-budget charge and the
+    // provider-request replay item live here because both assert "a request is
+    // being issued", and neither is true until this point: the progress control
+    // can still refuse above, and a refused request that had already charged
+    // the budget made the ledger count two requests where the economic ledger
+    // and the transport counted one.
+    persistRequestEvidence: async () => {
+      await runtimeBudgetController.reserve(
+        run, 'model_request', budgetSourceIdentity, 1);
+
+      // THE REQUEST IS DURABLE BEFORE THE TRANSPORT RUNS.
+      //
+      // The ungoverned path persists a `providerRequests` replay item through
+      // `onRequest`; the governed path persisted only the response, while still
+      // returning a `requestEvidenceKey` for evidence that was never written. A
+      // governed Run therefore reported 0 requests and 1 response, and the operator
+      // diagnostics at `describeRunEfficiency` read that as a provider anomaly —
+      // "1 response with no request" — for a Run that behaved correctly.
+      //
+      // Ordering is the substantive part. Written before dispatch, a crash between
+      // here and the response leaves durable proof that a request was ISSUED, which
+      // is what makes a possibly-dispatched request recoverable instead of merely
+      // absent. Written afterwards it would only ever describe requests that already
+      // came back.
+      //
+      // HEADERS ARE NEVER PERSISTED. The canonical body carries the prompt; the
+      // Authorization header carries the credential, and it has no reason to exist
+      // in replay.
+      const governedRequestStartedAt = new Date(governedRequestStartedAtMs).toISOString();
+      const sanitizeGovernedRequest = typeof options.sanitizeRequest === 'function'
+      ? options.sanitizeRequest
+      : value => value;
+      await recordNonTerminalRunEvidence(run, {
+      category: 'provider-request',
+      slot,
+      replayKey: 'providerRequests',
+      replayItem: sanitizeSnapshotValue({
+      ...sanitizeGovernedRequest({
+      url: GOVERNED_OPENAI_ENDPOINT,
+      method: 'POST',
+      body: canonicalBody
+      }),
+      ...(options.metadata || {}),
+      governed: true,
+      startedAt: governedRequestStartedAt,
+      durationMs: Date.now() - governedRequestStartedAtMs
+      }),
+      eventType: 'provider.request.persisted',
+      eventPayload: sanitizeSnapshotValue({
+      ...(options.metadata || {}),
+      governed: true,
+      provider: 'openai',
+      model: run.governedExecution.economicAuthority.dispatchTarget,
+      url: GOVERNED_OPENAI_ENDPOINT,
+      method: 'POST',
+      requestHash: crypto.createHash('sha256')
+      .update(canonicalOperationJson(canonicalBody || {})).digest('hex'),
+      startedAt: governedRequestStartedAt
+      }),
+      capturedAt: governedRequestStartedAt
+      });
+    },
     persistResponseEvidence: async ({ text, responseIdentity, responseHash }) => {
       // The existing canonical provider evidence, unchanged and written BEFORE
       // the economic response marker, so a response the worker loop consumes is

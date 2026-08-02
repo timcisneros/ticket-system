@@ -141,6 +141,9 @@ async function runGovernedLeafRequest({
   runtimeModelRequestMaximum = null,
   runtimeModelRequestsUsed = null,
   persistResponseEvidence = null,
+  // Invoked once, after admission and dispatch authority are won and before
+  // any byte leaves. See step 4b.
+  persistRequestEvidence = null,
   recoveredProviderCall = null
 }) {
   const selected = selectRunProviderPath(run);
@@ -295,6 +298,27 @@ async function runGovernedLeafRequest({
       });
     }
     throw error;
+  }
+
+  // 4b. THE REQUEST IS NOW GOING TO BE ISSUED — and not one line earlier.
+  //
+  // Everything that records or charges "a request happened" belongs here,
+  // after the reservation is admitted and this caller has won the single
+  // dispatch authority, and before any byte leaves. Placed before the gate
+  // instead, a request the progress control REFUSED still consumed a runtime
+  // budget charge and still left a durable provider-request replay item
+  // claiming it was issued — so the budget ledger counted two requests where
+  // the economic ledger and the transport counted one, and replay described a
+  // request that never existed.
+  //
+  // Placed after dispatch it would be worse: a crash mid-flight would leave no
+  // durable trace of a request that may already have reached the provider.
+  if (typeof persistRequestEvidence === 'function') {
+    await persistRequestEvidence({
+      reservationId: reservation.id,
+      ordinal,
+      exactRequestHash: reservation.exactRequestHash
+    });
   }
 
   // 5. Dispatch the persisted bytes.
