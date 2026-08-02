@@ -152,7 +152,7 @@ async function main() {
         groupIds: [], changedBy: 'action-batch-preflight-test'
       })).agent;
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000',
@@ -160,7 +160,7 @@ async function main() {
         // broke rather than the conversation being silently truncated by a limit.
         AGENT_MAX_EXECUTION_STEPS: '6',
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '6'
-      });
+      } });
       const cookie = await server.login();
 
       assert((await server.request('POST', '/tickets', {

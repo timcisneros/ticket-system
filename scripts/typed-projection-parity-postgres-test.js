@@ -162,10 +162,10 @@ async function main() {
       eventType: null
     });
 
-    const server = await startServer({
+    const server = await startServer({ env: {
       TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
       RUNTIME_SCHEDULER_INTERVAL_MS: '3600000'
-    });
+    } });
     const cookie = await server.login();
     const operationsBefore = await store.listRunOperations(run.id, { limit: 20 });
     const eventsBefore = await store.listRunEvents(run.id, { limit: 100 });

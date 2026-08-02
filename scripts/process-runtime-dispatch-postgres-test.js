@@ -394,7 +394,7 @@ async function main() {
         changedBy: 'process-runtime-dispatch-test',
         reason: 'validated isolated process test deployment'
       });
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         ENABLE_PROCESS_EXECUTION_CONTRACT: 'true',
         PROCESS_EXECUTION_SOURCE_REVISION: sourceRevision,
@@ -407,7 +407,7 @@ async function main() {
         PROCESS_PROVIDER_PROMPT_LOG: providerPromptLog,
         RUNTIME_SCHEDULER_INTERVAL_MS: '100',
         RUN_LEASE_DURATION_MS: '60000'
-      });
+      } });
       const cookie = await server.login();
       const created = await server.request('POST', '/tickets', {
         cookie,

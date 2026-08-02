@@ -98,10 +98,10 @@ async function main() {
     store,
     startServer
   }) => {
-    let server = await startServer({
+    let server = await startServer({ env: {
       TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
       RUNTIME_SCHEDULER_INTERVAL_MS: '3600000'
-    });
+    } });
     let cookie = await server.login();
     const agent = (await store.createConfiguredAgent({
       value: {
@@ -238,10 +238,10 @@ async function main() {
     'browser and generic receipts remain reconstructed normally without entering process consequences');
 
     await server.stop();
-    server = await startServer({
+    server = await startServer({ env: {
       TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
       RUNTIME_SCHEDULER_INTERVAL_MS: '3600000'
-    });
+    } });
     cookie = await server.login();
     const replayPage = await server.request('GET', `/api/runs/${run.id}/state?projection=replay`, {
       cookie

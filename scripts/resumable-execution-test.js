@@ -125,7 +125,7 @@ async function main() {
         console.log(`\n--- ${label} (${point}) ---`);
         await retireLiveServer();
 
-        const crashing = await startServer({ ...baseEnv, TEST_INTERRUPTION_POINT: point });
+        const crashing = await startServer({ env: { ...baseEnv, TEST_INTERRUPTION_POINT: point } });
         const cookie = await crashing.login();
 
         const objective = `resumable ${label} ${STAMP} #ACTIONS=${encodeActions({
@@ -170,7 +170,7 @@ async function main() {
           `${label}: the run was still unfinished when the process died (was ${midRun.status})`);
 
         // ── Restart clean and let recovery finish the run ────────────────────
-        const resumed = await startServer(baseEnv);
+        const resumed = await startServer({ env: baseEnv });
         liveServer = resumed;
         await resumed.login();
 

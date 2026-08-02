@@ -126,7 +126,7 @@ async function main() {
         })).workflow;
 
         // ── Boot 1: crash after execution, before terminalization ───────────
-        const first = await startServer({ ...env, TEST_INTERRUPTION_POINT: 'before_run.snapshot_finalized' });
+        const first = await startServer({ env: { ...env, TEST_INTERRUPTION_POINT: 'before_run.snapshot_finalized' } });
         const cookie = await first.login();
         try {
           await first.request('POST', '/tickets', {
@@ -169,7 +169,7 @@ async function main() {
           `${label}: the live workflow now genuinely disagrees with the run's snapshot`);
 
         // ── Boot 2: recovery reconciles the run ─────────────────────────────
-        const second = await startServer(env);
+        const second = await startServer({ env });
         const terminal = await waitFor(async () => {
           const latest = await store.getRun(run.id);
           return ['completed', 'failed', 'interrupted'].includes(latest.status) ? latest : null;
@@ -225,7 +225,7 @@ async function main() {
       // manual completion, which refuses only while required verification is
       // unresolved. Each fixture is a completed run with no passing verdict; the only
       // thing that varies is the SHAPE of the captured contract.
-      const server = await startServer({ ...env, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+      const server = await startServer({ env: { ...env, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
       const cookie = await server.login();
       const now = () => new Date().toISOString();
 

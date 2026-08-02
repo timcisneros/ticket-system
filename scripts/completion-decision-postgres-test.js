@@ -84,11 +84,11 @@ async function main() {
         groupIds: [],
         changedBy: 'completion-decision-postgres-test'
       })).agent;
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '100',
         PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000'
-      });
+      } });
       const cookie = await server.login();
 
       async function createTicket(objective) {

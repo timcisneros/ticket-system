@@ -219,7 +219,7 @@ async function main() {
 
     await installTrigger(store, schema);
 
-    const second = await startServer(env);
+    const second = await startServer({ env });
     const cookie = await second.login();
 
     // Wait for the sweep to attempt reconciliation (proven by the trigger firing).

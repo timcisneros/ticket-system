@@ -736,13 +736,13 @@ async function main() {
       'no planner provenance is synthesized historically');
 
     // ── End-to-end containment through the live server ───────────────────────
-    const server = await startServer({
+    const server = await startServer({ env: {
       TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
       RUNTIME_SCHEDULER_INTERVAL_MS: '3600000',
       // Deterministic refusal: an openai planner with no resolvable credential
       // fails invocation readiness before any provider request is issued.
       OPENAI_API_KEY: ''
-    });
+    } });
     const cookie = await server.login();
     fs.mkdirSync(path.join(workspaceRoot, 'reports', 'planner'), { recursive: true });
     fs.mkdirSync(path.join(workspaceRoot, 'reports', 'worker'), { recursive: true });

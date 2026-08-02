@@ -53,7 +53,7 @@ async function main() {
       groupIds: [], changedBy: 'workflow-ticket-plan-test'
     })).agent;
 
-    const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '200', RUN_LEASE_DURATION_MS: '60000' });
+    const server = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '200', RUN_LEASE_DURATION_MS: '60000' } });
     const cookie = await server.login();
 
     async function saveWorkflow(definition) {

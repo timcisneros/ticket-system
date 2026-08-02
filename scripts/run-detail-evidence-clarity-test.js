@@ -120,7 +120,7 @@ async function main() {
       { type: 'run:completion_deferred_truncation', message: 'complete:true not honored', step: 1 }
     ]);
 
-    const server = await startServer({});
+    const server = await startServer({ env: {} });
     const cookie = await server.login();
     const page = async runId => (await server.request('GET', `/runs/${runId}`, { cookie })).body;
 

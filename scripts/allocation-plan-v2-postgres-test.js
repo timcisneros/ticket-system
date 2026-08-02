@@ -455,10 +455,10 @@ async function main() {
       snapshot: replaySnapshot(failedRun, agent, workspaceRoot, objective)
     });
 
-    const server = await startServer({
+    const server = await startServer({ env: {
       TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
       RUNTIME_SCHEDULER_INTERVAL_MS: '3600000'
-    });
+    } });
     const cookie = await server.login();
     const exportResponse = await server.request(
       'GET',

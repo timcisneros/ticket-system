@@ -146,12 +146,12 @@ async function main() {
         [worker.id]: 'reports/worker/'
       };
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
         RUNTIME_SCHEDULER_INTERVAL_MS: '3600000',
         // Only shortens the contract bound; it can never widen it.
         STRUCTURED_PLANNER_REQUEST_TIMEOUT_MS: '1500'
-      });
+      } });
       const cookie = await server.login();
       fs.mkdirSync(path.join(workspaceRoot, 'reports', 'planner'), { recursive: true });
       fs.mkdirSync(path.join(workspaceRoot, 'reports', 'worker'), { recursive: true });

@@ -386,13 +386,13 @@ async function main() {
         );
       }
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
         RUNTIME_SCHEDULER_INTERVAL_MS: '150',
         RUN_LEASE_DURATION_MS: '30000',
         PROCESS_LAUNCHER_SOCKET_PATH: launcherSocket,
         ARTIFACT_ROOT: artifactRoot
-      });
+      } });
 
       try {
         await waitFor(async () => {

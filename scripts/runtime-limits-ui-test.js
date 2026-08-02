@@ -193,13 +193,13 @@ async function main() {
       }
     });
 
-    const server = await startServer({
+    const server = await startServer({ env: {
       RUNTIME_SCHEDULER_INTERVAL_MS: '60000',
       AGENT_MAX_EXECUTION_STEPS: String(DEPLOYMENT.maxExecutionSteps),
       AGENT_MAX_MODEL_REQUESTS_PER_RUN: String(DEPLOYMENT.maxModelRequestsPerRun),
       AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: String(DEPLOYMENT.maxWorkspaceOperationsPerRun),
       AGENT_MAX_RUNTIME_DURATION_MS: String(DEPLOYMENT.maxRuntimeDurationMs)
-    });
+    } });
     const admin = await server.login();
     const viewer = await server.login('viewer', VIEWER_PASSWORD);
 

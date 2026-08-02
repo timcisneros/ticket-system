@@ -90,12 +90,12 @@ async function main() {
         groupIds: [], changedBy: 'workflow-prompt-composition-test'
       })).agent;
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000',
         AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT: '1'
-      });
+      } });
       const cookie = await server.login();
 
       // Returns the instruction the runtime actually sent for this run.

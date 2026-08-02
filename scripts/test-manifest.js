@@ -174,6 +174,7 @@ const TESTS = Object.freeze([
   { file: "governed-eligible-facts-test.js", status: "required" },
   { file: "governed-fact-transitions-test.js", status: "required" },
   { file: "agent-run-draft-test.js", status: "required" },
+  { file: "test-server-startup-contract-test.js", status: "required" },
   { file: "governed-openai-transport-hermetic-test.js", status: "required" },
   { file: "governed-leaf-first-response-postgres-test.js", status: "required" },
   { file: "governed-planner-dispatch-postgres-test.js", status: "required" },

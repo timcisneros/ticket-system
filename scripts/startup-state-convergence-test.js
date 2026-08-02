@@ -168,7 +168,7 @@ async function main() {
     const runsBefore = 5;
 
     // ── FIRST BOOT ──────────────────────────────────────────────────────────
-    const first = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+    const first = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
 
     // ── 1. Completed run converges its ticket to completed ──────────────────
     scenariosRun += 1;
@@ -296,7 +296,7 @@ async function main() {
     };
 
     await first.stop();
-    await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+    await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
 
     // The in-flight ticket is deliberately excluded: the scheduler is genuinely
     // executing its pending run, so its state is EXPECTED to move. Asserting stability

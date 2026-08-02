@@ -103,7 +103,7 @@ async function main() {
         groupIds: [], changedBy: 'runtime-feasibility-test'
       })).agent;
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         AGENT_MAX_EXECUTION_STEPS: '4',
         AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE: '2',
@@ -112,7 +112,7 @@ async function main() {
         AGENT_MAX_RUNTIME_DURATION_MS: '15000',
         ENABLE_MODEL_CONTRACT_COMPILER: 'true',
         RUNTIME_SCHEDULER_INTERVAL_MS: '200'
-      });
+      } });
       const cookie = await server.login();
 
       const seen = new Set();

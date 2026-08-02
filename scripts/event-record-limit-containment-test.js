@@ -67,7 +67,7 @@ async function main() {
     assert(Number.isSafeInteger(limit) && limit > 0,
       `the store exposes a positive record limit (${limit})`);
 
-    const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+    const server = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
     const cookie = await server.login();
 
     const createTicket = objective => server.request('POST', '/tickets', {
@@ -253,7 +253,7 @@ async function main() {
       changedBy: 'event-record-limit-containment-test'
     });
 
-    const failing = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '200' });
+    const failing = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '200' } });
     const failingCookie = await failing.login();
     assert(JSON.parse((await failing.request('GET', '/health')).body).ready === true,
       '5: the process starts ready, so the degradation below is caused by the injected failure');

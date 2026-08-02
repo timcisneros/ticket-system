@@ -138,9 +138,91 @@ function freePort() {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// ── The test-server startup contract ────────────────────────────────────────
+//
+// One closed named-argument shape, validated BEFORE any child process starts.
+//
+// This exists because the previous contract failed silently rather than loudly.
+// A suite wrote `startServer({ env: { NODE_OPTIONS: '--require …' } })` — the
+// shape the private spawn function uses — and the positional wrapper took that
+// whole object as the environment map. The server started, healthy and green,
+// with a child variable named `env` and no `NODE_OPTIONS`. The hermetic preload
+// never ran, and every assertion that depended on it was vacuous. Nothing
+// crashed, so nothing was noticed.
+//
+// The lesson is not "read the signature more carefully". Two adjacent contracts
+// where one is a superset of the other cannot be told apart by discipline, so
+// this refuses everything that is not exactly the supported shape.
+
+const START_ARGUMENT_KEYS = Object.freeze(['env', 'serverOptions']);
+const START_SHAPE_ERROR = 'TEST_SERVER_START_ARGUMENT_SHAPE_INVALID';
+
+class TestServerStartArgumentError extends Error {
+  constructor(message, detail = {}) {
+    super(`${START_SHAPE_ERROR}: ${message}`);
+    this.name = 'TestServerStartArgumentError';
+    this.code = START_SHAPE_ERROR;
+    this.detail = detail;
+  }
+}
+
+function isPlainObjectValue(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function readStartArgument(argument) {
+  if (!isPlainObjectValue(argument)) {
+    throw new TestServerStartArgumentError(
+      'startServer takes one plain object: { env, serverOptions }',
+      { received: Array.isArray(argument) ? 'array' : typeof argument });
+  }
+
+  // The legacy positional call passed the environment map directly, so its keys
+  // are environment variable names. Naming them in the refusal turns a silent
+  // misconfiguration into a message that says what to write instead.
+  const unknown = Object.keys(argument).filter(key => !START_ARGUMENT_KEYS.includes(key));
+  if (unknown.length > 0) {
+    throw new TestServerStartArgumentError(
+      `unsupported key(s) ${unknown.join(', ')}; the environment map now goes ` +
+      `under env, as startServer({ env: { ${unknown[0]}: … } })`,
+      { unknown });
+  }
+
+  for (const key of START_ARGUMENT_KEYS) {
+    if (argument[key] !== undefined && !isPlainObjectValue(argument[key])) {
+      throw new TestServerStartArgumentError(`${key} must be a plain object`,
+        { key, received: typeof argument[key] });
+    }
+  }
+
+  const env = argument.env || {};
+  // `{ env: { env: … } }` is the original mistake made one level deeper. An
+  // environment variable named `env` or `serverOptions` is meaningless to the
+  // server, so treating it as a typo rather than a value loses nothing real.
+  const nested = START_ARGUMENT_KEYS.filter(key => key in env);
+  if (nested.length > 0) {
+    throw new TestServerStartArgumentError(
+      `env contains the key(s) ${nested.join(', ')}, which names an environment ` +
+      'variable rather than a configuration section — the argument is nested ' +
+      'one level too deep',
+      { nested });
+  }
+
+  return { env, serverOptions: argument.serverOptions || {} };
+}
+
 // Start the real server against the harness schema. Everything the JSON-era
 // harnesses configured through DATA_DIR is now configured through the database.
-async function startServer({
+//
+// PRIVATE. Suites never call this. It takes `env` as one KEY among several,
+// while the function suites are handed took `env` POSITIONALLY — two contracts
+// one rename apart, which is exactly how `startServer({ env: { NODE_OPTIONS } })`
+// came to mean "set a child environment variable literally named env" and a
+// hermetic preload silently never loaded. `startTestServer` below is the only
+// supported entry point.
+async function spawnTestServer({
   databaseUrl,
   schema,
   workspaceRoot,
@@ -255,8 +337,9 @@ async function withHarness(suiteName, body, options = {}) {
     }
     await reapStaleSchemas(store);
 
-    const startTestServer = async (env = {}, serverOptions = {}) => {
-      const server = await startServer({
+    const startTestServer = async (argument = {}) => {
+      const { env, serverOptions } = readStartArgument(argument);
+      const server = await spawnTestServer({
         databaseUrl, schema, workspaceRoot, env, ...serverOptions
       });
       servers.push(server);
@@ -292,7 +375,11 @@ module.exports = {
   requireTestDatabaseUrl,
   createTestSchemaName,
   schemaAgeMs,
-  startServer,
+  // `spawnTestServer` is deliberately NOT exported. Exporting both it and the
+  // validated wrapper would restore the two-contract ambiguity this replaced.
+  START_SHAPE_ERROR,
+  TestServerStartArgumentError,
+  readStartArgument,
   withHarness,
   createAsserter,
   freePort,

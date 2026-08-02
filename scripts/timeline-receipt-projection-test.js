@@ -154,7 +154,7 @@ async function main() {
       }
     });
 
-    const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+    const server = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
     const cookie = await server.login();
     const timelineOf = async ticketId => {
       const response = await server.request('GET', `/api/tickets/${ticketId}/timeline`, { cookie });

@@ -128,7 +128,7 @@ async function main() {
         PROCESS_LAUNCHER_SOCKET_PATH: path.join(privateRoot, 'unavailable-launcher.sock'),
         PROCESS_MATERIALIZER_SOCKET_PATH: path.join(privateRoot, 'unavailable-materializer.sock')
       };
-      const first = await startServer(serverEnv);
+      const first = await startServer({ env: serverEnv });
       const cookie = await first.login();
 
       async function admit(form) {
@@ -613,7 +613,7 @@ async function main() {
         });
       }
 
-      const second = await startServer(serverEnv);
+      const second = await startServer({ env: serverEnv });
       const secondCookie = await second.login();
       const [firstRead, secondRead] = await Promise.all([
         first.request('GET', `/api/runs/${direct.run.id}/state`, { cookie }),

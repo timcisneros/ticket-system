@@ -153,11 +153,11 @@ async function main() {
         changedBy: 'rerun-admission-gate-test'
       });
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '600000'
-      });
+      } });
       const cookie = await server.login();
       const readonlyCookie = await server.login(`rerun-readonly-${STAMP}`, READONLY_PASSWORD);
 

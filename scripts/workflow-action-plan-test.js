@@ -63,7 +63,7 @@ async function main() {
 
     // Workflow actions are executed by the runtime itself, not proposed by a model, so
     // no provider stub is needed: the plan is data in the workflow definition.
-    const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '200', RUN_LEASE_DURATION_MS: '60000' });
+    const server = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '200', RUN_LEASE_DURATION_MS: '60000' } });
     const cookie = await server.login();
 
     const abs = rel => path.join(workspaceRoot, rel);

@@ -210,11 +210,11 @@ async function main() {
         changedBy: 'concurrency-conflict-test'
       });
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000'
-      });
+      } });
       const cookie = await server.login();
       const restrictedCookie = await server.login('restricted', RESTRICTED_PASSWORD);
       // Arm failure-time capture now that there is something to interrogate.

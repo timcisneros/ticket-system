@@ -92,11 +92,11 @@ async function main() {
         })).agent.id);
       }
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000'
-      });
+      } });
       const cookie = await server.login();
 
       const objectiveWith = (tag, plan) => `rerun-mode ${tag} ${STAMP} #ACTIONS=${encodeActions(plan)}`;

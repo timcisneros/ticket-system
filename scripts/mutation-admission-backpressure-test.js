@@ -65,10 +65,10 @@ async function main() {
 
     // Capacity of one: any genuine overlap must be refused. The scheduler is idled so
     // admission pressure comes from this suite's own requests and nothing else.
-    const server = await startServer({
+    const server = await startServer({ env: {
       MUTATION_ADMISSION_MAX_OUTSTANDING: '1',
       RUNTIME_SCHEDULER_INTERVAL_MS: '3600000'
-    });
+    } });
     const cookie = await server.login();
 
     const createTicket = objective => server.request('POST', '/tickets', {
@@ -207,7 +207,7 @@ async function main() {
     // carries, so the latched server must not also be under admission pressure — with
     // capacity 1 the health probe below caught `backpressured` before the latch landed,
     // which is precisely the confusion this scenario exists to rule out.
-    const latched = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '200' });
+    const latched = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '200' } });
     const latchedCookie = await latched.login();
     assert(parse((await latched.request('GET', '/health')).body).ready === true,
       '6: the second server starts healthy, so the degradation below is caused by the injection');

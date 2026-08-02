@@ -138,10 +138,10 @@ async function main() {
       };
 
       // ── Attempt 1: interrupt immediately after the first committed mutation ──
-      const first = await startServer({
+      const first = await startServer({ env: {
         ...providerEnv,
         TEST_INTERRUPTION_POINT: 'after_first_workspace.operation'
-      });
+      } });
       const cookie = await first.login();
 
       const created = await first.request('POST', '/tickets', {
@@ -176,7 +176,7 @@ async function main() {
       await first.stop();
 
       // ── Attempt 2: restart and let recovery resume the run ──────────────────
-      const second = await startServer(providerEnv);
+      const second = await startServer({ env: providerEnv });
 
       const finalRun = await waitFor(async () => {
         const current = await store.getRun(run.id);

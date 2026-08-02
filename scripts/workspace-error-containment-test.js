@@ -218,11 +218,11 @@ async function main() {
       fs.writeFileSync(path.join(workspaceRoot, SEED_DIR, 'inside.txt'), 'inside');
       fs.writeFileSync(path.join(workspaceRoot, SEED_FILE), SEED_CONTENT);
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '600000'
-      });
+      } });
       const cookie = await server.login();
 
       for (const scenario of CASES) {

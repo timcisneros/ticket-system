@@ -1016,13 +1016,13 @@ async function main() {
     const seenRunIds = new Set();
 
     async function runScenario(preload, scenarioAgent, objective, envOverrides, expectations) {
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preload}`,
         AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT: '1',
         ENABLE_MODEL_CONTRACT_COMPILER: 'true',
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         ...envOverrides
-      });
+      } });
       activeRequest = server.request;
       try {
         const cookie = await server.login();

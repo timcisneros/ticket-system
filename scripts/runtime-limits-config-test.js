@@ -105,7 +105,7 @@ async function main() {
         groupIds: [], changedBy: 'runtime-limits-config-test'
       })).agent;
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preload}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '25',
         AGENT_MAX_EXECUTION_STEPS: String(DEPLOYMENT.maxExecutionSteps),
@@ -116,7 +116,7 @@ async function main() {
         MAX_ACTIVE_RUNS_CAP: '64',
         LOCAL_MODEL_CONCURRENCY: '4',
         MAX_LOCAL_MODEL_CONCURRENCY: '8'
-      });
+      } });
       const admin = await server.login();
       const viewer = await server.login('viewer', VIEWER_PASSWORD);
 

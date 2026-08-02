@@ -184,11 +184,11 @@ async function main() {
       const outsideAbsolute = path.join(path.dirname(workspaceRoot), OUTSIDE_NAME);
       fs.writeFileSync(outsideAbsolute, `outside-content-${STAMP}`);
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '600000'
-      });
+      } });
       const cookie = await server.login();
 
       try {

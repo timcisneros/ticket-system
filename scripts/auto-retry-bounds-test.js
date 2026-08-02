@@ -178,7 +178,7 @@ async function main() {
       // run had already failed would test nothing: the retry decision happens during
       // that run's terminalization.
       const stagingEnv = { ...serverEnv, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' };
-      const staging = await startServer(stagingEnv);
+      const staging = await startServer({ env: stagingEnv });
       const cookie = await staging.login();
 
       for (const scenario of CASES) {
@@ -230,7 +230,7 @@ async function main() {
       });
 
       await staging.stop();
-      const server = await startServer(serverEnv);
+      const server = await startServer({ env: serverEnv });
       await server.login();
 
       const runsFor = async ticketId => {
@@ -412,7 +412,7 @@ async function main() {
       const before = new Map();
       for (const scenario of CASES) before.set(scenario.key, (await runsFor(scenario.ticketId)).length);
       await server.stop();
-      const restarted = await startServer(serverEnv);
+      const restarted = await startServer({ env: serverEnv });
       await restarted.login();
       await sleep(6000);
       for (const scenario of CASES) {

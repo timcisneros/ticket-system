@@ -119,14 +119,14 @@ async function main() {
 
       fs.writeFileSync(path.join(workspaceRoot, DELETE_TEST_FILE), 'recovery-delete-content');
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         TEST_INTERRUPT_AFTER_OPERATOR_RECOVERY_EFFECT: 'true',
         // Runs here must complete promptly; the lease only matters if a run were
         // to crash, which this suite does not exercise.
         RUN_LEASE_DURATION_MS: '60000',
         RUNTIME_SCHEDULER_INTERVAL_MS: '200'
-      });
+      } });
       const cookie = await server.login();
 
       const seen = new Set();

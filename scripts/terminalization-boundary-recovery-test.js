@@ -113,7 +113,7 @@ async function main() {
         console.log(`\n--- ${label} (${seam}) ---`);
         await retireLiveServer();
 
-        const crashing = await startServer({ ...baseEnv, TEST_INTERRUPTION_POINT: seam });
+        const crashing = await startServer({ env: { ...baseEnv, TEST_INTERRUPTION_POINT: seam } });
         const cookie = await crashing.login();
         const objective = `terminal-boundary ${label} ${STAMP} #ACTIONS=${encodeActions({
           actions: [{ operation: 'writeFile', args: { path: fileName, content: 'boundary' } }], complete: true
@@ -152,7 +152,7 @@ async function main() {
       }
 
       async function recover(label, runId) {
-        const resumed = await startServer(baseEnv);
+        const resumed = await startServer({ env: baseEnv });
         liveServer = resumed;
         await resumed.login();
         return waitFor(async () => {

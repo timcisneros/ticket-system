@@ -170,7 +170,7 @@ async function main() {
       '2: the batch read returns the same snapshot as the single read');
 
     // ── 3. Consumers hydrate from the separate record ────────────────────────
-    const server = await startServer({});
+    const server = await startServer({ env: {} });
     const cookie = await server.login();
 
     const runDetail = await server.request('GET', `/runs/${created.id}`, { cookie });

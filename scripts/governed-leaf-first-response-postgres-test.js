@@ -96,7 +96,7 @@ async function main() {
       // one level too deep, NODE_OPTIONS never applies, and the preload silently
       // does not run — which is exactly how an uncontrolled provider response
       // once reached this harness.
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${PRELOAD}`,
         OPENAI_API_KEY: SENTINEL,
         HERMETIC_TRANSPORT_CAPTURE: capturePath,
@@ -105,7 +105,7 @@ async function main() {
         RUN_LEASE_DURATION_MS: '60000',
         AGENT_MAX_EXECUTION_STEPS: '4',
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4'
-      });
+      } });
 
       try {
         let receipts = [];

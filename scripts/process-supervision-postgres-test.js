@@ -427,7 +427,7 @@ async function main() {
         changedBy: 'process-supervision-test',
         reason: 'validated isolated process test deployment'
       });
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         ENABLE_PROCESS_EXECUTION_CONTRACT: 'true',
         PROCESS_EXECUTION_SOURCE_REVISION: sourceRevision,
@@ -439,7 +439,7 @@ async function main() {
         ARTIFACT_ROOT: artifactRoot,
         RUNTIME_SCHEDULER_INTERVAL_MS: '75',
         RUN_LEASE_DURATION_MS: '60000'
-      });
+      } });
       const adminCookie = await server.login();
       const unauthorizedCookie = await server.login(
         `process-no-access-${STAMP}`,

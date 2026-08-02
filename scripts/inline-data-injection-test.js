@@ -72,7 +72,7 @@ async function main() {
       groupIds: [managerGroup.id], changedBy: 'inline-data-injection-test'
     });
 
-    const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+    const server = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
     const adminCookie = await server.login();
     const managerCookie = await server.login('process-manager', MANAGER_PASSWORD);
 

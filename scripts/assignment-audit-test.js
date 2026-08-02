@@ -62,7 +62,7 @@ async function main() {
 
     // The scheduler would dispatch a run for an open ticket and mutate the very
     // fields under test, so it is parked for the duration.
-    const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+    const server = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
     const cookie = await server.login();
 
     const assignmentLogs = async () => {

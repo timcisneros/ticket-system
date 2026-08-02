@@ -104,11 +104,11 @@ async function main() {
         fs.mkdirSync(path.join(workspaceRoot, dir), { recursive: true });
       }
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000'
-      });
+      } });
       const cookie = await server.login();
 
       const objective = `${MARKER} produce one independent status report file per team`;

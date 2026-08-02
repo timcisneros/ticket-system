@@ -148,12 +148,12 @@ async function main() {
 
     assert(planner.id !== executor.id, 'planner and executor are distinct agents');
 
-    const server = await startServer({
+    const server = await startServer({ env: {
       NODE_OPTIONS: `--require ${preloadPath}`,
       RUNTIME_SCHEDULER_INTERVAL_MS: '200',
       AGENT_MAX_EXECUTION_STEPS: '6',
       AGENT_MAX_RUNTIME_DURATION_MS: '60000'
-    });
+    } });
     const cookie = await server.login();
 
     const runTicket = async (objective, agentId, seen) => {

@@ -105,7 +105,7 @@ async function main() {
       leaseExpiresAt: new Date(Date.now() + 3600000).toISOString()
     });
 
-    const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+    const server = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
     const adminCookie = await server.login();
     const viewerCookie = await server.login('ops-viewer', VIEWER_PASSWORD);
     const outsiderCookie = await server.login('ops-outsider', OUTSIDER_PASSWORD);

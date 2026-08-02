@@ -137,11 +137,11 @@ async function main() {
       // Case 5 renames a path it did not create, so the source must pre-exist.
       fs.writeFileSync(path.join(workspaceRoot, `source-5-${STAMP}.txt`), 'preseed');
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000'
-      });
+      } });
       const cookie = await server.login();
 
       async function runCase(marker, expectedStatus, expectedErrorContains = null) {

@@ -129,13 +129,13 @@ async function main() {
         profileIds: ['inspection-check']
       }]);
 
-      let server = await startServer({
+      let server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         ENABLE_PROCESS_EXECUTION_CONTRACT: 'true',
         PROCESS_TARGET_CATALOG_FILE: catalogPath,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000'
-      });
+      } });
       let cookie = await server.login();
       fs.writeFileSync(path.join(workspaceRoot, 'inspection.txt'), 'inspection fixture');
 
@@ -534,13 +534,13 @@ async function main() {
         targetId: 'ticket-system-local',
         profileIds: ['inspection-check']
       }]);
-      server = await startServer({
+      server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         ENABLE_PROCESS_EXECUTION_CONTRACT: 'false',
         PROCESS_TARGET_CATALOG_FILE: catalogPath,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000'
-      });
+      } });
       cookie = await server.login();
       const disabledPath = `process-contract-disabled-${STAMP}.txt`;
       const disabled = await runPlans('feature-disabled', disabledAgent, [{
@@ -603,13 +603,13 @@ async function main() {
         targetId: 'ticket-system-local',
         profileIds: ['inspection-check']
       }]);
-      server = await startServer({
+      server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         ENABLE_PROCESS_EXECUTION_CONTRACT: 'true',
         PROCESS_TARGET_CATALOG_FILE: catalogPath,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '60000'
-      });
+      } });
       cookie = await server.login();
       const versionThreePath = `process-contract-v3-${STAMP}.txt`;
       const versionThree = await runPlans('version-three-nondispatchable', versionThreeAgent, [{

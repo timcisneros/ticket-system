@@ -161,7 +161,7 @@ async function main() {
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
         AGENT_MAX_EXECUTION_STEPS: '3'
       };
-      const server = await startServer(serverEnv);
+      const server = await startServer({ env: serverEnv });
       const cookie = await server.login();
 
       for (const scenario of CASES) {
@@ -386,7 +386,7 @@ async function main() {
       // ── 8. HYDRATION — the durable numbers survive a restart ─────────────────
       scenariosRun += 1;
       await server.stop();
-      const restarted = await startServer(serverEnv);
+      const restarted = await startServer({ env: serverEnv });
       await restarted.login();
       await sleep(5000);
       for (const scenario of CASES) {

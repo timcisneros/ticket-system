@@ -445,14 +445,14 @@ async function main() {
     })).group;
     assert.equal(openAiPlannerGroup.plannerAgentId, planner.id);
 
-    const server = await startServer({
+    const server = await startServer({ env: {
       TEST_SKIP_STARTUP_RUN_RECOVERY: 'true',
       RUNTIME_SCHEDULER_INTERVAL_MS: '3600000',
       // Deterministic planner refusal: an openai planner with no resolvable key
       // fails invocation readiness with planner_credentials_unavailable on every
       // machine, so this suite never touches a network provider.
       OPENAI_API_KEY: ''
-    });
+    } });
     const cookie = await server.login();
 
     fs.mkdirSync(path.join(workspaceRoot, 'reports', 'planner'), { recursive: true });

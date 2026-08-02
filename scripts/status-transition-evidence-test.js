@@ -57,7 +57,7 @@ async function main() {
 
     // An open ticket would be dispatched by the scheduler, which changes status
     // underneath the transitions being measured.
-    const server = await startServer({ RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' });
+    const server = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
     const cookie = await server.login();
 
     const statusLogs = async () => {

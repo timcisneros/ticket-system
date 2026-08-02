@@ -116,9 +116,9 @@ async function main() {
         scenariosRun += 1;
         await retireLiveServer();
 
-        const crashing = await startServer({
+        const crashing = await startServer({ env: {
           ...baseEnv, TEST_INTERRUPTION_POINT: 'after_first_workspace_target_effect'
-        });
+        } });
         const cookie = await crashing.login();
 
         const objective = `reconciliation ${label} ${STAMP} #ACTIONS=${encodeActions({
@@ -166,7 +166,7 @@ async function main() {
       }
 
       async function resumeAndSettle(label, runId) {
-        const resumed = await startServer(baseEnv);
+        const resumed = await startServer({ env: baseEnv });
         liveServer = resumed;
         await resumed.login();
         return waitFor(async () => {

@@ -284,14 +284,14 @@ async function main() {
       const subjectTarget = await makeTarget(`bev-subject-${STAMP}`, 'Subject target', SUBJECT_ORIGIN);
       const decoyTarget = await makeTarget(`bev-decoy-${STAMP}`, 'Decoy target', DECOY_ORIGIN);
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         // The runs sit at their gates while every scenario's evidence is persisted.
         // A lease short enough to expire in that window would let the scheduler
         // reclaim a run mid-setup.
         RUN_LEASE_DURATION_MS: '900000'
-      });
+      } });
       const cookie = await server.login();
 
       for (const scenario of SCENARIOS) {
@@ -658,11 +658,11 @@ async function main() {
       // the process that computed it is not a durable record.
       scenariosRun += 1;
       await server.stop();
-      const restarted = await startServer({
+      const restarted = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
         RUN_LEASE_DURATION_MS: '900000'
-      });
+      } });
       const restartedCookie = await restarted.login();
       for (const scenario of SCENARIOS) {
         const after = await durable(scenario.runId);

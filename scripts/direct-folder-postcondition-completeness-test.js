@@ -115,7 +115,7 @@ async function main() {
         groupIds: [], changedBy: 'direct-folder-postcondition-test'
       })).agent;
 
-      const server = await startServer({
+      const server = await startServer({ env: {
         NODE_OPTIONS: `--require ${preloadPath}`,
         AGENT_MAX_MUTATING_ACTIONS_PER_RESPONSE: '2',
         AGENT_MAX_EXECUTION_STEPS: '4',
@@ -123,7 +123,7 @@ async function main() {
         AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
         AGENT_MAX_RUNTIME_DURATION_MS: '20000',
         RUNTIME_SCHEDULER_INTERVAL_MS: '200'
-      });
+      } });
       const cookie = await server.login();
 
       const seenRunIds = new Set();
