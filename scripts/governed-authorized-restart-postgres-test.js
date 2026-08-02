@@ -222,10 +222,56 @@ async function main() {
         // asserts nothing about request-2 authority.
         const resumedRun = await store.getRun(runId);
         const resumeError = String(resumedRun.error || '');
+        // A POSITIVE assertion, not merely the absence of known errors. Checking
+        // only that specific messages are missing lets any NEW recovery failure
+        // pass silently — which is how a mutation that broke rehydration a
+        // different way slipped through this suite once.
+        assertThat(resumedRun.status !== 'failed',
+          'the recovered Run is not terminalized by its own recovery');
         assertThat(!resumeError.includes('Resume denied'),
           'recovery is ADMITTED: the Run is not rejected by the resume identity contract');
         assertThat(!resumeError.includes('already holds different evidence'),
           'the resumed Run does not conflict with the baseline it wrote itself');
+        // The reused reservation reports identity and hash, not the transcript.
+        // Without rehydration from the Run's own canonical response evidence the
+        // worker received `text: null`, and `JSON.parse("null")` then died
+        // reading `.message` of it.
+        assertThat(!resumeError.includes('not valid execution JSON'),
+          'the recovered Run rehydrates its durable response instead of parsing null');
+
+        // ── REQUEST 1 IS NOT REPEATED ────────────────────────────────────
+        //
+        // Recovery may reconstruct state. It may not re-execute a request that
+        // already happened — that would pay for the same answer twice.
+        assertThat(capturesForRun().length === 1,
+          'provider request 1 was NOT transported again');
+        assertThat((await economicOf()).length === 1,
+          'no duplicate request-1 economic reservation');
+        assertThat((await chargesOf()).length === 1,
+          'no duplicate request-1 runtime-budget charge');
+        const receiptsAfterResume = (await store.pool.query(
+          `SELECT id FROM ${store.table('operation_receipts')}
+            WHERE run_id = $1 AND outcome = 'succeeded'`, [runId])).rows;
+        assertThat(receiptsAfterResume.length === 1,
+          'no duplicate operation receipt — the mutation was not re-committed');
+        const resumedSnapshot = await replayOf();
+        assertThat((resumedSnapshot.providerRequests || []).length === 1,
+          'no duplicate provider-request replay item');
+        assertThat((resumedSnapshot.modelResponses || []).length === 1,
+          'no duplicate model-response replay item');
+        const postBatchAfterResume = (await store.readGovernedPostconditionEvidence(runId))
+          .filter(r => r.evaluationKind === 'post_batch');
+        assertThat(postBatchAfterResume.length === 2,
+          'no duplicate postcondition evidence for the recovered window');
+
+        const transitionsResumed = await store.readGovernedFactTransitions(runId);
+        assertThat(transitionsResumed.windows
+          .filter(w => w.newlySatisfiedFactIdentities.includes(factA.declaredFactIdentity))
+          .length === 1,
+        'A is credited exactly once across the crash and recovery');
+        assertThat(!transitionsResumed.newlyVerifiedFactIdentities
+          .includes(factB.declaredFactIdentity),
+        'B remains unverified');
 
         const baselineAfterResume = (await store.readGovernedPostconditionEvidence(runId))
           .filter(r => r.evaluationKind === 'baseline');
@@ -251,6 +297,16 @@ async function main() {
           'a second restart creates no further budget charge');
         assertThat(capturesForRun().length === 1,
           'a second restart dispatches nothing');
+
+        // VERIFIED PROGRESS IS STILL NOT COMPLETION, EVEN AFTER RECOVERY.
+        // B was never satisfied, so no surface may report this work as done —
+        // whatever terminal status the recovered attempt happens to reach.
+        const plan = await store.getAllocationPlanForTicket(run.ticketId);
+        const items = (plan && plan.aggregateDecision && plan.aggregateDecision.items) || [];
+        const leafItem = items.find(item =>
+          Number(item.allocationItemId) === Number(run.allocationItemId));
+        assertThat(!leafItem || leafItem.itemStatus !== 'completed',
+          'the leaf item is NOT completed — B was never satisfied');
 
         const progress = await store.readGovernedRunProgressState(runId,
           { forUpdate: false });

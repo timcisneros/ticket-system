@@ -12038,6 +12038,71 @@ function redactProviderInput(run, input) {
 // is specific to THIS deployment — the transport, the credential resolver, the
 // canonical response-evidence writer — is supplied here; the orchestration owns
 // the ordering and the refusals.
+// Rehydrate the durable governed response for a request that was already
+// answered before this process existed.
+//
+// THE RECOVERY AUTHORITY IS THE RUN'S OWN CANONICAL RESPONSE EVIDENCE, written
+// before the economic response marker precisely so that "a response the worker
+// loop consumes is always recoverable without another provider request". This
+// reads that evidence; it never contacts a provider and never accepts model
+// prose as authority.
+//
+// WHY IT WAS NEEDED. `runGovernedLeafRequest` reports `reused_durable_response`
+// with the response IDENTITY and HASH but no text — correctly, because the
+// orchestration owns the economic lifecycle, not the execution transcript. The
+// dispatcher then handed `text: null` to the worker, `parseModelActions(null)`
+// produced `JSON.parse("null") === null`, and the Run died reading `.message`
+// of it. Every governed Run that crashed mid-turn was lost this way, discarding
+// verified progress that was already durable.
+//
+// HASH-VERIFIED, FAIL CLOSED. The rehydrated text must hash to the response
+// hash the reservation recorded at dispatch. Anything else means the transcript
+// and the economic record disagree about what the provider said, and resuming
+// on either would be a guess.
+async function rehydrateGovernedResponseText(run, expectedResponseHash) {
+  // MATCHED BY RESPONSE HASH, NOT BY EVIDENCE KEY. Evidence keys are scoped to
+  // an execution ATTEMPT — deliberately, so one attempt's transcript cannot
+  // collide with another's. That makes them useless as a cross-restart
+  // identity: the recovered attempt computes a different key for the very
+  // request it is recovering. The response hash is what the economic
+  // reservation recorded at dispatch, and it does not move.
+  if (!expectedResponseHash) {
+    const error = new Error(
+      `run ${run.id} cannot resume: the reused reservation records no response hash`);
+    error.code = 'GOVERNED_RESPONSE_REHYDRATION_UNAVAILABLE';
+    error.failureKind = 'resume_rejected';
+    throw error;
+  }
+  const snapshot = await readRunReplaySnapshot(run) || {};
+  const responses = Array.isArray(snapshot.modelResponses) ? snapshot.modelResponses : [];
+  const matches = responses.filter(response => response &&
+    response.governed === true && typeof response.text === 'string' &&
+    response.responseHash === expectedResponseHash);
+  // Several attempts may each hold their own copy of the same answer. That is
+  // not ambiguity, because they are the same bytes by hash; disagreeing text
+  // under one hash would be, and is refused below.
+  const distinct = new Set(matches.map(match => match.text));
+  if (distinct.size !== 1) {
+    const error = new Error(
+      `run ${run.id} cannot resume: ${matches.length === 0 ? 'no' : 'conflicting'} ` +
+      `durable governed response evidence for response hash ${expectedResponseHash}`);
+    error.code = 'GOVERNED_RESPONSE_REHYDRATION_UNAVAILABLE';
+    error.failureKind = 'resume_rejected';
+    throw error;
+  }
+  const text = matches[0].text;
+  const actualHash = crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+  if (actualHash !== expectedResponseHash) {
+    const error = new Error(
+      `run ${run.id} cannot resume: durable governed response evidence does not ` +
+      'match the response hash recorded for its reservation');
+    error.code = 'GOVERNED_RESPONSE_REHYDRATION_CONFLICT';
+    error.failureKind = 'resume_rejected';
+    throw error;
+  }
+  return text;
+}
+
 async function dispatchGovernedLeafModelRequest({
   run, agent, input, startedAtMs, limits, options, slot, budgetSourceIdentity
 }) {
@@ -12193,11 +12258,16 @@ async function dispatchGovernedLeafModelRequest({
   });
 
   if (result.status === 'received' || result.status === 'reused_durable_response') {
+    // A reused durable response carries identity and hash, not the transcript.
+    // The transcript is the Run's own canonical response evidence.
+    const governedResponseText = typeof result.text === 'string'
+      ? result.text
+      : await rehydrateGovernedResponseText(run, result.responseHash);
     // The runtime budget is committed only once the request is durable, using
     // the same source identity it was reserved under.
     await runtimeBudgetController.commit(run, 'model_request', budgetSourceIdentity, 1);
     return {
-      response: { text: result.text, provider: 'openai' },
+      response: { text: governedResponseText, provider: 'openai' },
       governed: true,
       // The SAME envelope shape the ungoverned path returns. The worker loop
       // reads these to stamp parsed-plan replay evidence.

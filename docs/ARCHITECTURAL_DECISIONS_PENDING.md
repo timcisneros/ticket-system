@@ -5432,39 +5432,36 @@ Open questions for the diagnosis:
 - Does a retried leaf invalidate the item's prior completion-decision identity, or is the lineage's latest valid decision sufficient?
 - Should partial retry of a multi-item plan be permitted while sibling items are still running?
 
-## Recovered Governed Run Does Not Resume Its Next Request (recorded 2026-08-02)
+## Recovered Governed Run Does Not Issue Its Next Request (recorded 2026-08-02, narrowed 2026-08-02)
 
-**Status:** open — production defect, reproduced, not fixed.
+**Status:** open — narrowed. The crash that lost the response is fixed; the
+remaining gap is that recovery stops short of the next request.
 
-A governed structured leaf Run that crashes after request 1 has durably
-committed its receipt and complete A=true/B=false evidence is now RECOVERED —
-it is reclaimed, and it no longer rejects its own durable evidence. But it does
-not go on to issue request 2. It terminalizes with:
+**Fixed.** `runGovernedLeafRequest` reports `reused_durable_response` with the
+response identity and hash but no transcript — correctly, since it owns the
+economic lifecycle, not the execution record. The dispatcher passed that
+`text: null` to the worker, `JSON.parse("null")` yielded `null`, and the Run
+died reading `.message` of it. Governed dispatch now rehydrates the text from
+the Run's own canonical response evidence, matched by RESPONSE HASH rather than
+evidence key: evidence keys are attempt-scoped by design, so the recovered
+attempt computes a different key for the very request it is recovering.
 
-```text
-Model response was not valid execution JSON: Cannot read properties of null (reading 'message')
-```
+**Still open.** After recovery the Run does not go on to issue request 2. What
+IS proved (`scripts/governed-authorized-restart-postgres-test.js`, 31
+assertions): recovery is admitted, request 1 is not transported, reserved,
+charged, receipted, replayed or re-evidenced a second time, A is credited
+exactly once, B stays unverified, and the leaf item is correctly NOT completed.
+What is NOT proved: that complete request-1 evidence authorizes request 2
+exactly once after a restart.
 
-raised while the recovery path re-parses the durable provider response for the
-resumed execution turn. The two defects fixed alongside this
-(`providerRequestEvidenceKey` missing from governed response replay, and the
-baseline being re-observed on resume) were each masking it.
+**Why it still matters.** The verified progress is real and durable. A Run that
+cannot continue discards it, and a Run retried from the start pays for it again.
+"Recovery is admitted" and "recovery completes" remain different guarantees.
 
-**Why this matters more than a failed Run.** The verified progress is real and
-durable: A genuinely transitioned false to true, and the evidence proving it is
-committed. A Run that cannot resume discards earned progress and, if it is ever
-retried from the start, pays for that progress a second time. "Recovery is
-admitted" is therefore not the same guarantee as "recovery completes", and only
-the first is currently proved — by
-`scripts/governed-authorized-restart-postgres-test.js`, which deliberately
-asserts nothing about request-2 authority.
-
-**What would close it.** Diagnose why the resumed turn's persisted response text
-parses to null for a governed Run specifically, then extend that suite to the
-full invariant: complete request-1 evidence plus any number of restarts
-authorizes request 2 exactly once, with one budget charge, one economic
-reservation, one replay item and one transport call.
-
+**Next step.** Determine why the recovered attempt terminalizes without
+reserving request 2 — the durable events show a completed execution followed by
+a fresh attempt rather than a second governed request — then extend that suite
+to the full exactly-once invariant.
 
 ---
 
