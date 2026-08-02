@@ -323,7 +323,7 @@ const cases = [
         buildExecutionSemanticsSnapshot, getDeploymentRuntimeDefaults, RUNTIME_LIMIT_CONFIG_KEYS,
         RUNTIME_LIMIT_MINIMUMS, detectWorkloadProfile, getProfileRuntimeLimits, isReportObjective,
         getReportRuntimeLimits, pickRuntimeLimitValues, runtimeLimitsForExecution,
-        getWorkflowSpecificLimits,
+        getWorkflowSpecificLimits, buildRuntimeLimitsSnapshot,
         ENABLE_PREFIX_TRUNCATION, MODEL_CONTRACT_COMPILER_ENABLED, ACTION_CONTRACT_VIOLATION_THRESHOLD,
         STALLED_RESPONSE_THRESHOLD, INSPECTION_NO_PROGRESS_THRESHOLD, RUN_WORKSPACE_SNAPSHOT_MAX_ENTRIES,
         MAX_AGENT_ACTIONS_PER_RESPONSE, MAX_MUTATING_ACTIONS_PER_RESPONSE
@@ -340,6 +340,12 @@ const cases = [
     };
     const resolve = factory({
       buildExecutionSemanticsSnapshot: require('../runtime/execution-semantics').buildExecutionSemanticsSnapshot,
+      // The resolver folds the canonical runtime-limits snapshot into what it
+      // returns, so the sandbox must supply the same builder production uses.
+      // Omitting it made this suite fail with a bare ReferenceError the moment
+      // the resolver started calling it.
+      buildRuntimeLimitsSnapshot:
+        require('../runtime/agent-run-draft').buildRuntimeLimitsSnapshot,
       getDeploymentRuntimeDefaults: () => ({ ...base }),
       RUNTIME_LIMIT_CONFIG_KEYS: Object.keys(base),
       RUNTIME_LIMIT_MINIMUMS: Object.fromEntries(
