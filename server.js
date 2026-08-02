@@ -12052,6 +12052,14 @@ async function dispatchGovernedLeafModelRequest({
     }
   });
 
+  // The worker loop reads these off the returned envelope. The ungoverned path
+  // supplies them; the governed path did not, so `new Date(undefined)
+  // .toISOString()` threw RangeError: Invalid time value at server.js:22398 the
+  // moment a governed Run really executed.
+  const governedRequestStartedAtMs = Date.now();
+  let governedResponseCompletedAtMs = null;
+  let governedResponseEvidenceKey = null;
+
   // RESERVE BEFORE DISPATCH, exactly as the ungoverned path does. The commit
   // below states it uses "the same source identity it was reserved under" — but
   // nothing reserved it, so every governed leaf request failed at commit with
@@ -12089,7 +12097,8 @@ async function dispatchGovernedLeafModelRequest({
       const governedResponseText = typeof options.sanitizeResponseText === 'function'
         ? options.sanitizeResponseText(text)
         : text;
-      await recordNonTerminalRunEvidence(run, {
+      governedResponseCompletedAtMs = Date.now();
+      const governedResponseEvidence = await recordNonTerminalRunEvidence(run, {
         category: 'provider-response',
         slot,
         replayKey: 'modelResponses',
@@ -12111,6 +12120,9 @@ async function dispatchGovernedLeafModelRequest({
           responseHash
         })
       });
+      governedResponseEvidenceKey = governedResponseEvidence
+        ? governedResponseEvidence.evidenceKey
+        : null;
     }
   });
 
@@ -12121,6 +12133,14 @@ async function dispatchGovernedLeafModelRequest({
     return {
       response: { text: result.text, provider: 'openai' },
       governed: true,
+      // The SAME envelope shape the ungoverned path returns. The worker loop
+      // reads these to stamp parsed-plan replay evidence.
+      requestStartedAt: governedRequestStartedAtMs,
+      responseCompletedAt: governedResponseCompletedAtMs === null
+        ? Date.now()
+        : governedResponseCompletedAtMs,
+      requestEvidenceKey: buildRunEvidenceKey(run, 'provider-request', slot),
+      responseEvidenceKey: governedResponseEvidenceKey,
       reservationId: result.reservationId,
       modelRequestOrdinal: result.ordinal,
       settlementReceiptHash: result.settlementReceiptHash
