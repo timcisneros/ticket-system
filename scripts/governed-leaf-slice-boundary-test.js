@@ -189,6 +189,48 @@ for (const temporal of ['createdAt', 'admittedAt', 'Date.now', 'new Date(']) {
     `governance must not be inferred from ${temporal}`);
 }
 
+// ── Tranche 5 (A3): the governed path consults no resettable counter ────────
+//
+// `stalledResponses` and the inspection-no-progress counter reset on recovery —
+// `server.js` still carries "We don't track stalled across restarts". A model
+// could evade them indefinitely by crashing, which is exactly what pending
+// decision A3 records. They may remain for the intentionally unsupported
+// historical paths, but the GOVERNED leaf decision must never read them.
+
+const governedHelperStart = server.indexOf(
+  'async function dispatchGovernedLeafModelRequest(');
+const governedHelperEnd = server.indexOf(
+  '\nasync function callModelProviderWithRunEvidence(', governedHelperStart);
+const governedHelper = server.slice(governedHelperStart, governedHelperEnd);
+for (const resettable of [
+  'stalledResponses', 'noProgressResponses',
+  'INSPECTION_NO_PROGRESS_THRESHOLD', 'inspectionNoProgress'
+]) {
+  assert.equal(governedHelper.includes(resettable), false,
+    `governed leaf dispatch must not consult ${resettable}: it resets on recovery`);
+}
+
+// The durable authority does the deciding instead.
+const progressEvaluation = read('runtime/governed-progress-evaluation.js');
+for (const resettable of ['stalledResponses', 'noProgressResponses']) {
+  assert.equal(progressEvaluation.includes(resettable), false,
+    `the durable progress evaluation must not reference ${resettable}`);
+}
+// And it reads no clock: every input is an ordered durable row.
+assert.equal(/Date\.now\(\)/.test(progressEvaluation), false,
+  'progress evaluation never reads process time');
+
+// The pre-reservation gate is the governed authority, and it is durable.
+assert.ok(store.includes('readGovernedRunProgressState('),
+  'the store reconstructs progress from durable rows');
+assert.ok(store.includes('permitsGovernedRequest(evaluated.decision)'),
+  'the pre-reservation gate consults the durable churn decision');
+// The cutoff is captured in ONE statement and every query filters to it.
+assert.ok(store.includes('receipt_cutoff'),
+  'the evaluation captures an explicit receipt cutoff');
+assert.ok(store.includes('AND id <= $2'),
+  'queries filter to the captured cutoff');
+
 // ── No production pricing ships in this slice ───────────────────────────────
 
 for (const [label, source] of [

@@ -4629,14 +4629,24 @@ class PostgresRuntimeStore {
 
   // ── Tranche 5: durable verified-progress reconstruction ────────────────────
   //
-  // WHY WINDOW MEMBERSHIP IS PROVABLE WITHOUT NEW SCHEMA.
+  // WHY AN EXPLICIT CUTOFF IS REQUIRED — and why the Run row lock is not enough.
   //
-  // A Run has exactly one writer at a time: `claimPendingRun` takes the row with
-  // `FOR UPDATE ... SKIP LOCKED` and installs a lease, so no two executors ever
-  // append receipts for the same Run concurrently. Every caller of this method
-  // holds the Run row lock as well. Together those mean the receipt and
-  // reservation rows for one Run form a totally ordered sequence that cannot
-  // grow underneath an evaluation.
+  // `withTransaction` issues a bare `BEGIN`, so this runs at PostgreSQL's
+  // default READ COMMITTED: every statement takes a FRESH snapshot. Reading
+  // reservations, receipts and budget charges in separate queries can therefore
+  // observe a mixed pre-/post-commit state.
+  //
+  // The Run row lock serializes evaluators, but it does not block receipt
+  // inserts: those write through `targetOperationClientStorage.getStore() ||
+  // this.pool`, an independent connection that never touches the `runs` row. So
+  // evidence really can commit underneath a multi-query evaluation.
+  //
+  // The fix is a CUTOFF captured in a single statement — one snapshot, one
+  // consistent set of maxima — after which every query filters to `id <=
+  // cutoff`. Facts committing later are invisible to this evaluation and belong
+  // to the next explicitly created one. Because the cutoff is a document, a
+  // restart that reuses it reconstructs exactly the same membership rather than
+  // taking a fresh maximum.
   //
   // A window is therefore a half-open interval over that sequence:
   //
@@ -4649,7 +4659,7 @@ class PostgresRuntimeStore {
   //
   // NOTHING HERE IS PROCESS-LOCAL. That is the point: the counters this replaces
   // reset on recovery, which is precisely what pending decision A3 records.
-  async readGovernedRunProgressState(runId, { client = null } = {}) {
+  async readGovernedRunProgressState(runId, { client = null, cutoff: explicitCutoff = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const execute = async connection => {
       // The Run row lock. It both serializes evaluators and fixes the cutoff.
@@ -4662,14 +4672,33 @@ class PostgresRuntimeStore {
       }
       const run = runFromRow(runResult.rows[0]);
 
+      // ONE statement, ONE snapshot: the cutoff maxima are mutually consistent.
+      // Taking them in separate queries would reintroduce the mixed-state
+      // problem this exists to solve.
+      const cutoffRow = await connection.query(
+        `SELECT
+           COALESCE((SELECT max(id) FROM ${this.table('operation_receipts')}
+                      WHERE run_id = $1), 0)::bigint AS receipt_cutoff,
+           COALESCE((SELECT max(id) FROM ${this.table('economic_request_reservations')}
+                      WHERE run_id = $1), 0)::bigint AS reservation_cutoff,
+           COALESCE((SELECT max(id) FROM ${this.table('run_budget_charges')}
+                      WHERE run_id = $1), 0)::bigint AS budget_cutoff`,
+        [id]
+      );
+      const cutoff = explicitCutoff || {
+        receiptCutoff: Number(cutoffRow.rows[0].receipt_cutoff),
+        reservationCutoff: Number(cutoffRow.rows[0].reservation_cutoff),
+        budgetCutoff: Number(cutoffRow.rows[0].budget_cutoff)
+      };
+
       // Ordered governed request windows for this Run.
       const reservations = await connection.query(
         `SELECT id, model_request_ordinal, logical_source_identity, state,
                 started_at, created_at, settled_micro_usd
            FROM ${this.table('economic_request_reservations')}
-          WHERE run_id = $1 AND role = $2
+          WHERE run_id = $1 AND role = $2 AND id <= $3
           ORDER BY model_request_ordinal`,
-        [id, GOVERNED_WORKER_ROLE]
+        [id, GOVERNED_WORKER_ROLE, cutoff.reservationCutoff]
       );
 
       // Ordered durable operation receipts. `id` is monotonic within the Run
@@ -4678,17 +4707,17 @@ class PostgresRuntimeStore {
         `SELECT id, operation, outcome, workspace_path, mutation_fingerprint,
                 artifact_path, recorded_at
            FROM ${this.table('operation_receipts')}
-          WHERE run_id = $1
+          WHERE run_id = $1 AND id <= $2
           ORDER BY id`,
-        [id]
+        [id, cutoff.receiptCutoff]
       );
 
       // Durable runtime-budget consumption. Reused, never duplicated.
       const charges = await connection.query(
         `SELECT dimension, state, reserved_amount, committed_amount
            FROM ${this.table('run_budget_charges')}
-          WHERE run_id = $1`,
-        [id]
+          WHERE run_id = $1 AND id <= $2`,
+        [id, cutoff.budgetCutoff]
       );
 
       const settledMicroUsd = reservations.rows.reduce(
@@ -4699,9 +4728,9 @@ class PostgresRuntimeStore {
       // The evaluation cutoff: the highest receipt id visible under the lock.
       // A later evaluation takes a new cutoff explicitly; it never re-reads an
       // old one and gets a different answer.
-      const sourceCutoff = receipts.rowCount === 0
-        ? 0
-        : Number(receipts.rows[receipts.rows.length - 1].id);
+      // The captured receipt cutoff IS the source cutoff. It is the document a
+      // restart reuses, not a fresh maximum recomputed later.
+      const sourceCutoff = cutoff.receiptCutoff;
 
       return {
         run,
@@ -4733,6 +4762,8 @@ class PostgresRuntimeStore {
           artifactPath: row.artifact_path,
           recordedAt: row.recorded_at
         })),
+        // Bound so a caller can persist it with the decision and reuse it.
+        cutoff,
         sourceCutoff
       };
     };

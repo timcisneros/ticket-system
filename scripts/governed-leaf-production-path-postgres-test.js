@@ -934,6 +934,77 @@ async function main() {
     assert.ok(evaluated.decision.cumulativeResources.providerRequests >= 3,
       'and never erases cumulative resource history');
 
+    // ── Explicit evaluation cutoff ────────────────────────────────────────
+    //
+    // `withTransaction` runs at READ COMMITTED and receipts are written on an
+    // independent connection, so a multi-query evaluation could otherwise
+    // observe a mixed pre-/post-commit state. The cutoff is what makes an
+    // evaluation reproducible.
+
+    const cutoffState = await store.readGovernedRunProgressState(progressRun.id);
+    assert.ok(cutoffState.cutoff, 'the evaluation binds a cutoff document');
+    assert.equal(cutoffState.sourceCutoff, cutoffState.cutoff.receiptCutoff,
+      'the source cutoff is the captured receipt cutoff');
+    const receiptsAtCutoff = cutoffState.receipts.length;
+
+    // A receipt committed AFTER the cutoff, on an independent connection —
+    // exactly the asynchronous evidence-drain case.
+    await store.pool.query(
+      `INSERT INTO ${store.table('operation_receipts')}
+        (run_id, ticket_id, idempotency_key, operation, outcome, target_id,
+         workspace_path, mutation_fingerprint, receipt)
+       VALUES ($1,$2,'post-cutoff','writeFile','succeeded','workspace',
+               'late.md','late-fingerprint','{}'::jsonb)`,
+      [progressRun.id, progressRun.ticketId]);
+
+    // Re-evaluating with the SAME cutoff cannot see it.
+    const reEvaluated = await store.readGovernedRunProgressState(progressRun.id,
+      { cutoff: cutoffState.cutoff });
+    assert.equal(reEvaluated.receipts.length, receiptsAtCutoff,
+      'a receipt committed after the cutoff does not alter the evaluated window');
+    assert.equal(reEvaluated.sourceCutoff, cutoffState.sourceCutoff,
+      'reusing the cutoff reproduces the same source cutoff');
+    assert.equal(
+      reEvaluated.receipts.some(r => r.mutationFingerprint === 'late-fingerprint'),
+      false,
+      'the late receipt is invisible to the already-evaluated window');
+
+    // A NEW evaluation, explicitly created, does see it.
+    const nextEvaluation = await store.readGovernedRunProgressState(progressRun.id);
+    assert.ok(nextEvaluation.cutoff.receiptCutoff > cutoffState.cutoff.receiptCutoff,
+      'a new evaluation takes a strictly later cutoff');
+    assert.ok(
+      nextEvaluation.receipts.some(r => r.mutationFingerprint === 'late-fingerprint'),
+      'the late receipt belongs to the next explicitly created evaluation');
+
+    // Restart determinism: the same cutoff reconstructs identical hashes.
+    const { PostgresRuntimeStore: CutoffStore } =
+      require('../persistence/postgres/store');
+    const cutoffRestart = new CutoffStore({
+      connectionString: process.env.TEST_DATABASE_URL, schema: store.schema });
+    try {
+      const restartState = await cutoffRestart.readGovernedRunProgressState(
+        progressRun.id, { cutoff: cutoffState.cutoff });
+      const before = require('../runtime/governed-progress-evaluation')
+        .evaluateGovernedRunProgress({
+          progressState: cutoffState,
+          declaredWorkSnapshot: progressRun.declaredWorkSnapshot,
+          progressPolicy: progressRun.governedExecution.progressControlPolicy
+        });
+      const after = require('../runtime/governed-progress-evaluation')
+        .evaluateGovernedRunProgress({
+          progressState: restartState,
+          declaredWorkSnapshot: progressRun.declaredWorkSnapshot,
+          progressPolicy: progressRun.governedExecution.progressControlPolicy
+        });
+      assert.equal(after.projection.projectionHash, before.projection.projectionHash,
+        'a restart reusing the cutoff reconstructs the identical projection hash');
+      assert.equal(after.decision.decisionHash, before.decision.decisionHash,
+        'and the identical churn decision hash');
+    } finally {
+      await cutoffRestart.close();
+    }
+
     // Restart: a fresh store instance reconstructs the same decision from the
     // same durable rows. No process-local counter participates.
     const { PostgresRuntimeStore: FreshStore } =
