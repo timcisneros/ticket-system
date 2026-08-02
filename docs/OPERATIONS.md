@@ -834,10 +834,22 @@ Verified progress is not completion. A Run with many verified facts may still be
 incomplete, and the item disposition in the leaf-execution projection remains the
 only answer to "is this done".
 
+**Today, verified progress is always 0.** The mapping from durable receipts to the
+declared-work facts they satisfy is not yet supplied by any production caller, so nothing
+is ever credited as verified progress. Read a count of 0 as "not measured", not as "the
+agent did nothing" — check the activity and candidate-progress counts, the operation
+receipts, and the item disposition instead. It also means a governed Run will reliably
+stop at its `maximumConsecutiveNoProgressWindows` tolerance with reason
+`verified_progress_exhausted`, including when it was genuinely advancing. The bound is
+conservative and never overspends, but the reason is not evidence that the work was
+worthless.
+
 ### Reading a block
 
 ```text
 verified_progress_exhausted             tolerance for no-progress windows spent
+                                        (see the note above: progress is not yet
+                                        credited, so this is the expected stop)
 repeated_no_op                          the same no-op pattern, repeatedly
 repeated_failed_operation               a failed/refused operation streak
 mutation_reversal_churn                 work written then reverted

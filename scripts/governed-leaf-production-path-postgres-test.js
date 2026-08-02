@@ -1566,6 +1566,22 @@ async function main() {
       'a duration-exhausted Run is refused at the pre-reservation gate');
     assert.equal(expiredResult.failureReason, 'GOVERNED_RUN_PROGRESS_BLOCKED',
       'the refusal is the governed progress block, not a transport failure');
+
+    // THE SHAPE OF A RESERVATION REFUSAL, asserted deterministically.
+    //
+    // The duplicate-concurrency check above tolerates a caller that was refused
+    // before it reached the ledger, on the grounds that such a caller reserved
+    // nothing and dispatched nothing. That tolerance is only sound if a refusal
+    // genuinely carries no ordinal and claims no dispatch — and a refusal is
+    // not reproducible on demand there, since it depends on pool exhaustion.
+    // It IS reproducible here, so the invariant the tolerance rests on is
+    // proved at a place where it always executes.
+    assert.equal(expiredResult.ordinal, null,
+      'a reservation refusal carries no ordinal');
+    assert.equal(expiredResult.possiblyDispatched, false,
+      'a reservation refusal never claims the request may have been dispatched');
+    assert.equal(expiredResult.reservationId, null,
+      'a reservation refusal names no reservation');
     // Everything downstream of the gate must be untouched.
     assert.equal(expiredTransport.calls.length, 0,
       'a duration-exhausted Run makes ZERO provider calls');

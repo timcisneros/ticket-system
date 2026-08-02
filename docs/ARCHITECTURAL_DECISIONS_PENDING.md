@@ -438,6 +438,39 @@ per loop entry there. A run on those paths that recovers N times still receives 
 evaluation or to bound them separately. The staging constraint above still applies to
 them: tightening their wall clock will fail runs that previously passed.
 
+#### Verified progress is not credited on the production path (2026-08-02)
+
+| Field | Value |
+|-------|-------|
+| **Status** | Open |
+| **Severity** | Medium — conservative in effect, untruthful in explanation |
+| **Evidence** | `persistence/postgres/store.js` `prepareAndReserveNextGovernedRunRequest` passes `satisfiedFactIdentitiesByReceiptId: null`; no production caller supplies it |
+| **Decision required** | Where the receipt-to-declared-fact derivation lives, and whether the stop reason should distinguish "no progress" from "progress not measured" |
+
+`evaluateGovernedRunProgress` accepts a mapping from durable receipt identities to the
+declared-work facts they newly satisfy. The classification, the four levels and the
+tolerance arithmetic all consume it correctly. Nothing in production builds it.
+
+Consequences on the governed structured leaf path:
+
+- `verifiedProgressCount` is always 0;
+- the consecutive no-progress streak grows on every governed window;
+- a Run stops at `maximumConsecutiveNoProgressWindows` with reason
+  `verified_progress_exhausted` regardless of whether it advanced declared work;
+- the Ticket projection always reports `totalVerifiedProgressFacts: 0`.
+
+This is not an economic safety defect: the error is conservative, stopping earlier than
+the captured policy intends and never permitting extra spend. It is a truthfulness
+defect in the explanation given to an operator, which is why it is recorded here rather
+than treated as acceptable rounding.
+
+It was NOT fixed inside Tranche 5 deliberately. Deriving satisfied facts from typed
+evidence is the typed-evidence work's concern, and wiring it here would have meant
+inventing an evidence-to-declared-fact mapping inside churn control — exactly the kind of
+second authority the tranche exists to avoid. The boundary is documented in
+`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md` and `OPERATIONS.md` so no operator
+reads a zero count as proof that nothing happened.
+
 #### Tranche 5 coordination scope deliberately NOT implemented (2026-08-02)
 
 Recorded here so no later reader infers these were overlooked rather than declined.

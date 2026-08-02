@@ -674,10 +674,38 @@ durable settlement facts Tranche 4 reads. Authoritative balances remain the
 role-scoped economic accounts in `runtime/governed-execution-projection.js`;
 Tranche 5 introduces no second ledger.
 
+### Verified progress is not yet credited in production
+
+The classification, the four levels and the tolerance arithmetic are complete and
+enforced. What is NOT wired is the last input: `evaluateGovernedRunProgress` accepts
+`satisfiedFactIdentitiesByReceiptId`, a mapping from durable receipt identities to the
+declared-work facts they newly satisfy, and **no production caller supplies it today**.
+`prepareAndReserveNextGovernedRunRequest` passes `null`, which becomes an empty map.
+
+The consequence is exact and should not be understated:
+
+* `verifiedProgressCount` is always 0 on the production path;
+* the consecutive no-progress streak therefore grows on every governed window;
+* a governed structured leaf Run is effectively bounded at
+  `maximumConsecutiveNoProgressWindows` provider requests, and stops with reason
+  `verified_progress_exhausted` **whether or not it actually advanced declared work**.
+
+The direction of this error is conservative — it stops spending earlier than the policy
+intends and can never overspend — which is why it is not a safety defect. It is a
+TRUTHFULNESS limit: for a Run that genuinely advanced, `verified_progress_exhausted` is
+the wrong explanation, and the Ticket summary will show `totalVerifiedProgressFacts: 0`.
+
+Deriving that mapping from typed evidence is deliberately out of Tranche 5's frozen
+scope: the evidence-to-declared-fact derivation belongs with the typed-evidence work, not
+with churn control. Until it is wired, read verified-progress counts as "not measured",
+not as "nothing happened".
+
 ### Not implemented
 
 Recorded explicitly so no reader infers otherwise:
 
+* derivation of `satisfiesDeclaredFactIdentities` from typed evidence — the seam accepts
+  it, production does not yet supply it (see above);
 * dependency DAGs;
 * sibling waiting or ordering;
 * shared-decision registry;
