@@ -155,7 +155,7 @@ async function main() {
     // Reuses the Tranche 3 admission fixture shape so this suite exercises the
     // real leaf-admission transaction rather than a parallel one.
     const admitLeafSet = async (objective, {
-      source = policySourceOf(), governed = true, deterministicCompletion = false,
+      source = policySourceOf(), governed = true, deterministicCompletion = true,
       // Duration authority captured at admission. Suites that are not about
       // duration inherit the generous shared fixture limit.
       progressPolicy = LEAF_PROGRESS_POLICY

@@ -282,9 +282,14 @@ async function main() {
       const leafDrafts = plan.items.map(item => {
         const agent = agentById.get(item.assignedAgentId);
         const completionAuthoritySnapshot = buildCompletionAuthoritySnapshot({
-          objective: refreshed.objective, kind: 'unrecognized', recognized: false,
-          intent: 'model_driven', completionPolicy: 'explicit_evidence_required',
-          directPostconditions: [], verificationPolicy: 'when_declared',
+          objective: `Create folder ${item.ownedOutputPaths[0].replace(/\/$/, '')}`,
+          kind: 'deterministic', recognized: true,
+          intent: 'create_folder', completionPolicy: 'declared_postconditions',
+          directPostconditions: [{
+            type: 'folder_exists',
+            path: item.ownedOutputPaths[0].replace(/\/$/, '')
+          }],
+          verificationPolicy: 'when_declared',
           capturedAt: new Date().toISOString()
         });
         return {

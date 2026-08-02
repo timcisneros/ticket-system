@@ -222,13 +222,19 @@ async function validatedAttempt(store, ticket, responseText, proposal) {
 // The leaf run draft production builds: item-derived declared work, exact
 // admitted ownership, ticket-derived completion authority, no allocation subtask.
 function leafRunDraft(ticket, plan, item, agent, { completionAuthority = null } = {}) {
+  // Governed leaf admission now requires at least one execution-evaluable fact,
+  // so the default fixture authority is deterministic — matching what
+  // production derives for a recognized objective.
   const completionAuthoritySnapshot = completionAuthority || buildCompletionAuthoritySnapshot({
-    objective: ticket.objective,
-    kind: 'unrecognized',
-    recognized: false,
-    intent: 'model_driven',
-    completionPolicy: 'explicit_evidence_required',
-    directPostconditions: [],
+    objective: `Create folder ${item.ownedOutputPaths[0].replace(/\/$/, '')}`,
+    kind: 'deterministic',
+    recognized: true,
+    intent: 'create_folder',
+    completionPolicy: 'declared_postconditions',
+    directPostconditions: [{
+      type: 'folder_exists',
+      path: item.ownedOutputPaths[0].replace(/\/$/, '')
+    }],
     verificationPolicy: 'when_declared',
     capturedAt: new Date().toISOString()
   });

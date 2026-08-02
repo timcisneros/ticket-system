@@ -19,7 +19,8 @@ const {
   contentRecordOf,
   buildGovernedPostconditionEvidence,
   normalizeGovernedPostconditionEvidence,
-  satisfiedFactIdentitiesByBatch
+  satisfiedFactIdentitiesByBatch,
+  baselineSatisfiedFactIdentities
 } = require('../runtime/governed-postcondition-evidence-contract');
 const { seedGovernedStructuredTicket } = require('./governed-structured-fixture');
 
@@ -446,6 +447,141 @@ async function main() {
       error => error.code ===
         'GOVERNED_POSTCONDITION_EVIDENCE_REQUEST_IDENTITY_MISMATCH',
       'a request identity that contradicts its batch step refuses');
+
+    // ── The committed batch is read from durable receipts ─────────────────
+    //
+    // Not from model action claims: the model says what it intended, the
+    // receipts say what committed, and only the second can anchor evidence.
+    {
+      const batchStep = '11';
+      const source = `model-request:agent:${batchStep}:provider`;
+      const b1 = await insertReceipt(runId, ticketId, 'reports/a/b1', `${STAMP}-b1`, batchStep);
+      // A foreign Run's receipt lands numerically INSIDE the batch's span.
+      const foreign = await insertReceipt(
+        siblingRunId, ticketId, 'reports/b/f', `${STAMP}-bf`, batchStep);
+      const b2 = await insertReceipt(runId, ticketId, 'reports/a/b2', `${STAMP}-b2`, batchStep);
+
+      const batch = await store.readGovernedCommittedOperationBatch({
+        ticketId, runId, batchStepId: batchStep, requestSourceIdentity: source
+      });
+      assert.deepEqual([...batch.committedOperationReceiptIds], [b1, b2],
+        'membership is (run_id, step_id) — the interleaved foreign receipt is excluded');
+      assert.equal(batch.committedOperationReceiptIds.includes(foreign), false,
+        'the foreign receipt is not a member despite falling inside the id span');
+      assert.equal(batch.throughOperationReceiptId, b2,
+        'the anchor is the greatest committed receipt of THIS batch');
+      assert.equal(batch.evaluatedReceiptCount, 2,
+        'the count is the relational batch count, not the numeric span');
+      assert.equal(batch.requestSourceIdentity, source);
+      assert.equal(batch.batchStepId, batchStep);
+
+      // A request identity contradicting the step names a window that does not
+      // exist.
+      await assert.rejects(
+        () => store.readGovernedCommittedOperationBatch({
+          ticketId, runId, batchStepId: batchStep,
+          requestSourceIdentity: 'model-request:agent:99:provider'
+        }),
+        error => error.code === 'GOVERNED_BATCH_REQUEST_IDENTITY_MISMATCH',
+        'a request identity that contradicts its step refuses');
+
+      // A batch that committed nothing is represented explicitly, with no
+      // borrowed anchor.
+      const empty = await store.readGovernedCommittedOperationBatch({
+        ticketId, runId, batchStepId: '12',
+        requestSourceIdentity: 'model-request:agent:12:provider'
+      });
+      assert.equal(empty.throughOperationReceiptId, null,
+        'a zero-receipt batch borrows no anchor');
+      assert.equal(empty.evaluatedReceiptCount, 0);
+      assert.deepEqual([...empty.committedOperationReceiptIds], []);
+    }
+
+    // ── Outcome classes stay truthful ─────────────────────────────────────
+    {
+      const step = '13';
+      await store.pool.query(
+        `INSERT INTO ${store.table('operation_receipts')}
+           (run_id, ticket_id, operation, outcome, workspace_path,
+            mutation_fingerprint, receipt, idempotency_key, step_id, recorded_at)
+         VALUES ($1,$2,'writeFile','failed','reports/a/f','fp-f',
+                 '{"kind":"fixture"}'::jsonb,$3,$4,clock_timestamp()),
+                ($1,$2,'listDirectory','succeeded',NULL,NULL,
+                 '{"kind":"fixture"}'::jsonb,$5,$4,clock_timestamp()),
+                ($1,$2,'createFolder','succeeded','reports/a/ok','fp-ok',
+                 '{"kind":"fixture"}'::jsonb,$6,$4,clock_timestamp())`,
+        [runId, ticketId, `idem-${STAMP}-f`, step,
+          `idem-${STAMP}-insp`, `idem-${STAMP}-ok`]);
+      const mixed = await store.readGovernedCommittedOperationBatch({
+        ticketId, runId, batchStepId: step,
+        requestSourceIdentity: `model-request:agent:${step}:provider`
+      });
+      assert.equal(mixed.evaluatedReceiptCount, 3, 'all three committed');
+      assert.equal(mixed.failedOrRefusedReceiptIds.length, 1,
+        'the failed operation stays distinguishable');
+      assert.equal(mixed.inspectionReceiptIds.length, 1,
+        'inspection stays distinguishable from mutation');
+      assert.equal(mixed.successfulMutationReceiptIds.length, 1,
+        'only the successful mutation counts as one');
+    }
+
+    // ── Baseline evaluations ──────────────────────────────────────────────
+    //
+    // Verified progress is a TRANSITION, so a fact already satisfied before the
+    // Run did anything must be distinguishable from one the Run satisfied.
+    {
+      const baselineFact = sha('{"path":"reports/base","type":"folder_exists"}');
+      const baseline = await store.appendGovernedPostconditionEvidence({
+        evidence: buildGovernedPostconditionEvidence({
+          ticketId, runId, allocationPlanId: plan.id,
+          allocationItemId: item.allocationItemId,
+          governedAuthorityHash, completionAuthorityHash,
+          declaredFactIdentity: baselineFact, criterionHash: baselineFact,
+          criterionType: 'folder_exists',
+          evaluatorIdentity: 'objective_contract', evaluatorVersion: 1,
+          evaluationKind: 'baseline',
+          observedEvidence: { path: 'reports/base', observedKind: 'folder' },
+          verdict: canonicalVerdict(true)
+        })
+      });
+      assert.equal(baseline.evidence.evaluationKind, 'baseline');
+      assert.equal(baseline.evidence.batchStepId, null,
+        'a baseline names no batch, because none exists yet');
+      assert.equal(baseline.evidence.throughOperationReceiptId, null,
+        'and no receipt, because none has committed');
+
+      // Idempotent: a restart re-evaluating the baseline re-reports it.
+      const repeatBaseline = await store.appendGovernedPostconditionEvidence({
+        evidence: buildGovernedPostconditionEvidence({
+          ticketId, runId, allocationPlanId: plan.id,
+          allocationItemId: item.allocationItemId,
+          governedAuthorityHash, completionAuthorityHash,
+          declaredFactIdentity: baselineFact, criterionHash: baselineFact,
+          criterionType: 'folder_exists',
+          evaluatorIdentity: 'objective_contract', evaluatorVersion: 1,
+          evaluationKind: 'baseline',
+          observedEvidence: { path: 'reports/base', observedKind: 'folder' },
+          verdict: canonicalVerdict(true)
+        })
+      });
+      assert.equal(repeatBaseline.alreadyRecorded, true,
+        'a repeated baseline evaluation appends nothing');
+      assert.equal(repeatBaseline.evidenceId, baseline.evidenceId);
+
+      // A baseline is never verified progress, whatever its verdict.
+      const rows = await store.readGovernedPostconditionEvidence(runId);
+      const credited = satisfiedFactIdentitiesByBatch(rows, {
+        runId, allocationItemId: item.allocationItemId,
+        governedAuthorityHash, completionAuthorityHash
+      });
+      for (const identities of credited.values()) {
+        assert.equal(identities.includes(baselineFact), false,
+          'a baseline-satisfied fact is never credited as progress');
+      }
+      assert.ok(
+        baselineSatisfiedFactIdentities(rows, { runId }).includes(baselineFact),
+        'but it is recorded as already-satisfied before execution');
+    }
 
     // ── The closed vocabularies stay closed ────────────────────────────────
     assert.deepEqual([...SUPPORTED_CRITERION_TYPES],

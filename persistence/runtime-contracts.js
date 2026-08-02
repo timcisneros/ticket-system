@@ -17,7 +17,9 @@ const CONTRACTS = Object.freeze({
   // surface reading progress must never be able to decide or persist one.
   verifiedProgressRead: [
     'readRunVerifiedProgressProjection',
-    'readTicketVerifiedProgressProjection'
+    'readTicketVerifiedProgressProjection',
+    'readGovernedCommittedOperationBatch',
+    'appendGovernedPostconditionEvidence'
   ],
   governedPlannerDispatch: ['startGovernedPlannerRequest', 'persistGovernedPlannerResponse', 'settleEconomicRequest', 'getEconomicReservation'],
   economicAccounting: ['admitTicketEconomicAccount', 'reserveEconomicRequest', 'markEconomicRequestStarted', 'markEconomicResponsePersisted', 'settleEconomicRequest', 'releaseUndispatchedEconomicReservation', 'getEconomicReservation', 'listRecoverableEconomicReservations'],

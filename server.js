@@ -185,6 +185,13 @@ const {
   evaluateCriterion,
   observationFromPathInfo
 } = require('./runtime/postcondition-criterion-evaluator');
+const {
+  assertGovernedRunHasEligibleFacts,
+  eligibleExecutionFacts
+} = require('./runtime/governed-eligible-facts');
+const {
+  buildGovernedPostconditionEvidence
+} = require('./runtime/governed-postcondition-evidence-contract');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -19529,6 +19536,92 @@ async function assertGovernedSiblingReadAllowed(run, requestedPath) {
   throw error;
 }
 
+
+// ── Tranche 5: canonical governed postcondition evidence writer ─────────────
+//
+// The ONLY production path that creates verified-progress evidence.
+//
+// ORDERING, which is the whole point. Workspace operations execute and their
+// receipts commit inside `executeWorkspaceOperationUnlocked`, which is awaited
+// before the batch finishes. Only then is the committed batch read back FROM
+// DURABLE RECEIPTS, the live workspace observed, the unified evaluator run, and
+// the evidence row appended. No evidence can cite a receipt that has not
+// committed, because the batch is reconstructed from the receipts table rather
+// than from anything the model or the loop claimed.
+//
+// The verdict is never supplied by this caller: the evidence contract takes a
+// canonical evaluator verdict object and derives `satisfied` from it.
+async function persistGovernedPostconditionEvidence(run, {
+  evaluationKind, batchStepId = null, requestSourceIdentity = null
+}) {
+  if (!run || !run.leafRunBinding || !run.governedExecution) return null;
+  const facts = eligibleExecutionFacts(run);
+  if (facts.length === 0) return null;
+
+  const repository = getVerifiedProgressReadRepository();
+  let batch = null;
+  if (evaluationKind === 'post_batch') {
+    batch = await repository.readGovernedCommittedOperationBatch({
+      ticketId: run.ticketId,
+      runId: run.id,
+      batchStepId,
+      requestSourceIdentity
+    });
+    // A batch that committed no receipt gets no post-batch evidence. Borrowing
+    // an older receipt as an anchor would attach the evaluation to work it did
+    // not follow, and inventing one would be worse still.
+    if (batch.evaluatedReceiptCount === 0) return { appended: [], batch };
+  }
+
+  const appended = [];
+  for (const fact of facts) {
+    // OBSERVE, then let the one canonical rule decide. This path owns only the
+    // observation; the completion decision observes differently and reaches the
+    // same verdict for equivalent normalized state.
+    const observation = observationFromPathInfo(
+      fact.criterion.path, workspaceProvider.getPathInfo(fact.criterion.path));
+    const verdict = evaluateCriterion(fact.criterion, observation ? [observation] : []);
+    // Unknown is not unsatisfied. No row is the truthful record of "nobody
+    // could check", and the contract refuses a null verdict for that reason.
+    if (typeof verdict.passed !== 'boolean') continue;
+
+    const evidence = buildGovernedPostconditionEvidence({
+      ticketId: run.ticketId,
+      runId: run.id,
+      allocationPlanId: run.allocationPlanId,
+      allocationItemId: run.leafRunBinding.allocationItemId,
+      governedAuthorityHash: run.governedExecution.progressControlPolicy.policyHash,
+      completionAuthorityHash: fact.completionAuthorityHash,
+      declaredFactIdentity: fact.declaredFactIdentity,
+      criterionHash: fact.criterionHash,
+      criterionType: fact.criterionType,
+      evaluatorIdentity: fact.evaluatorIdentity,
+      evaluatorVersion: fact.evaluatorVersion,
+      evaluationKind,
+      throughOperationReceiptId: batch ? batch.throughOperationReceiptId : null,
+      requestSourceIdentity: batch ? batch.requestSourceIdentity : null,
+      batchStepId: batch ? batch.batchStepId : null,
+      evaluatedReceiptCount: batch ? batch.evaluatedReceiptCount : 0,
+      logicalSourceIdentity: batch ? batch.requestSourceIdentity : null,
+      // Bounded and safe: the criterion's own normalized path and what was
+      // observed there. No file contents, no directory listings, no provider
+      // bytes, no credentials, no environment values.
+      observedEvidence: {
+        path: observation ? observation.path : fact.criterion.path,
+        observedKind: observation ? observation.kind : null,
+        reasonCode: verdict.reasonCode
+      },
+      verdict
+    });
+    // REQUIRED, not best effort. A failure propagates and stops the governed
+    // run through the existing fail-closed path rather than silently becoming
+    // an ordinary no-progress window.
+    const stored = await repository.appendGovernedPostconditionEvidence({ evidence });
+    appended.push(stored);
+  }
+  return { appended, batch };
+}
+
 async function executeWorkspaceOperationUnlocked(run, action, step = 0, operationContext = {}) {
   const { operation, args: rawArgs } = parseWorkspaceOperation(action);
   const { args, strippedKeys } = sanitizeOperationArgs(operation, rawArgs);
@@ -22107,6 +22200,7 @@ async function runAgentTicket(runId) {
       );
     }
 
+    let governedBaselineRecorded = false;
     for (let step = initialExecutionTurn; !completed; step += 1) {
       runtimeBudgetController.assertDuration(run);
       await runtimeBudgetController.charge(
@@ -22126,6 +22220,18 @@ async function runAgentTicket(runId) {
         const wsRoot = typeof workspaceProvider.root === 'string' ? workspaceProvider.root : String(workspaceProvider.root);
         const fs2 = require('fs');
       } catch(e) {
+      }
+      // BASELINE, once, before this Run's first governed provider request.
+      // Verified progress is a TRANSITION, and a transition needs a "before".
+      // Without it a fact the workspace already satisfied at admission would be
+      // observed satisfied in the first batch and credited as work the Run
+      // never did.
+      // The writer itself returns null for any Run that is not a governed
+      // structured leaf Run, so no second provider-path decision is made here —
+      // one dispatch policy, one call site.
+      if (!governedBaselineRecorded && !isBrowserRun(run)) {
+        await persistGovernedPostconditionEvidence(run, { evaluationKind: 'baseline' });
+        governedBaselineRecorded = true;
       }
       if (!isBrowserRun(run) && !resumedFromPersistedState) {
         const obviousPostcondition = compiledContract
@@ -23360,6 +23466,18 @@ async function runAgentTicket(runId) {
         }
       }
 
+      // POST-BATCH canonical evidence. The batch has finished and every receipt
+      // it produced has committed, so the boundary is read back from durable
+      // receipts and each admitted fact is evaluated against the resulting
+      // workspace state. This runs before the presentation claim below, which
+      // remains non-authoritative.
+      if (!isBrowserRun(run)) {
+        await persistGovernedPostconditionEvidence(run, {
+          evaluationKind: 'post_batch',
+          batchStepId: String(step),
+          requestSourceIdentity: `model-request:agent:${step}:provider`
+        });
+      }
       const compiledPostcondition = isBrowserRun(run) ? null : checkObjectiveContractPostcondition(compiledContract);
       const declaredDirectPostcondition = isBrowserRun(run) ? null : checkObviousTicketPostcondition(ticket);
       const postcondition = compiledPostcondition ||

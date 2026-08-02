@@ -71,6 +71,10 @@ const {
   projectRunVerifiedProgress,
   projectTicketVerifiedProgress
 } = require('../../runtime/verified-progress-projection');
+const { deepFreeze } = require('../../runtime/declared-work-contract');
+const {
+  assertGovernedRunHasEligibleFacts
+} = require('../../runtime/governed-eligible-facts');
 const {
   assertEvidenceAgrees,
   normalizeGovernedPostconditionEvidence,
@@ -4342,6 +4346,22 @@ class PostgresRuntimeStore {
       error.code = 'GOVERNED_LEAF_POLICY_INCOMPLETE';
       throw error;
     }
+    // EVERY governed leaf Run must admit at least one execution-evaluable fact.
+    //
+    // A Run with none can never be credited with verified progress, so its
+    // consecutive no-progress streak would grow on every window until it stopped
+    // with `verified_progress_exhausted` — a persisted reason that would be
+    // false about the work it actually did. Refusing here, before the Run is
+    // ever schedulable, is the truthful alternative to admitting it and
+    // explaining it wrongly later.
+    //
+    // This is deliberately an ADMISSION decision, made once, rather than a
+    // judgement repeated during execution.
+    for (const draft of drafts) {
+      assertGovernedRunHasEligibleFacts(
+        draft.run || draft,
+        `allocation item ${draft.allocationItemId}`);
+    }
     if (source.economicPolicy.role !== GOVERNED_WORKER_ROLE) {
       const error = new Error(
         `governed leaf admission requires a ${GOVERNED_WORKER_ROLE} economic policy`);
@@ -5018,6 +5038,11 @@ class PostgresRuntimeStore {
   async appendGovernedPostconditionEvidence({ evidence }, { client = null } = {}) {
     const record = normalizeGovernedPostconditionEvidence(evidence);
     const execute = async connection => {
+      // A BASELINE precedes every governed request and every receipt, so there
+      // is no batch to validate against. The contract has already refused any
+      // baseline carrying a request, step, anchor or count.
+      const isBaseline = record.evaluationKind === 'baseline';
+      if (!isBaseline) {
       // REQUEST IDENTITY IMPLICATION.
       //
       // The governed leaf request slot is a pure function of the execution step
@@ -5089,6 +5114,7 @@ class PostgresRuntimeStore {
           throw error;
         }
       }
+      }
 
       // IDEMPOTENT. Recovery re-evaluating the same fact against the same
       // receipt must not append a second row. A genuine conflict — same pair,
@@ -5101,12 +5127,11 @@ class PostgresRuntimeStore {
             declared_fact_identity, criterion_hash, criterion_type,
             evaluator_identity, evaluator_version, through_operation_receipt_id,
             logical_source_identity, observed_evidence, satisfied, evidence_hash,
-            request_source_identity, batch_step_id, evaluated_receipt_count)
+            request_source_identity, batch_step_id, evaluated_receipt_count,
+            evaluation_kind)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,
-                 $17,$18,$19)
-         ON CONFLICT (run_id, batch_step_id, declared_fact_identity)
-           WHERE batch_step_id IS NOT NULL
-         DO NOTHING
+                 $17,$18,$19,$20)
+         ON CONFLICT DO NOTHING
          RETURNING id, evaluated_at`,
         [record.ticketId, record.runId, record.allocationPlanId,
           record.allocationItemId, record.governedAuthorityHash,
@@ -5116,7 +5141,7 @@ class PostgresRuntimeStore {
           record.logicalSourceIdentity, JSON.stringify(record.observedEvidence),
           record.satisfied, record.evidenceHash,
           record.requestSourceIdentity, record.batchStepId,
-          record.evaluatedReceiptCount]
+          record.evaluatedReceiptCount, record.evaluationKind]
       );
       if (inserted.rowCount === 1) {
         return {
@@ -5128,10 +5153,16 @@ class PostgresRuntimeStore {
         };
       }
       const existingRow = await connection.query(
-        `SELECT * FROM ${this.table('governed_postcondition_evidence')}
-          WHERE run_id = $1 AND batch_step_id = $2
-            AND declared_fact_identity = $3`,
-        [record.runId, record.batchStepId, record.declaredFactIdentity]
+        record.evaluationKind === 'baseline'
+          ? `SELECT * FROM ${this.table('governed_postcondition_evidence')}
+              WHERE run_id = $1 AND declared_fact_identity = $2
+                AND evaluation_kind = 'baseline'`
+          : `SELECT * FROM ${this.table('governed_postcondition_evidence')}
+              WHERE run_id = $1 AND batch_step_id = $2
+                AND declared_fact_identity = $3`,
+        record.evaluationKind === 'baseline'
+          ? [record.runId, record.declaredFactIdentity]
+          : [record.runId, record.batchStepId, record.declaredFactIdentity]
       );
       const stored = this._governedPostconditionEvidenceFromRow(existingRow.rows[0]);
       assertEvidenceAgrees(stored, record);
@@ -5160,6 +5191,7 @@ class PostgresRuntimeStore {
       criterionType: row.criterion_type,
       evaluatorIdentity: row.evaluator_identity,
       evaluatorVersion: Number(row.evaluator_version),
+      evaluationKind: row.evaluation_kind,
       throughOperationReceiptId: row.through_operation_receipt_id === null
         ? null
         : Number(row.through_operation_receipt_id),
@@ -5171,6 +5203,76 @@ class PostgresRuntimeStore {
       satisfied: row.satisfied,
       evidenceHash: row.evidence_hash
     };
+  }
+
+  // ── Tranche 5: the committed operation batch, read from durable receipts ──
+  //
+  // Built from persisted `operation_receipts`, never from model action claims:
+  // the model says what it intended, the receipts say what committed, and only
+  // the second can anchor evidence.
+  //
+  // Membership is (run_id, step_id). It is emphatically NOT a receipt id range —
+  // `operation_receipts.id` is global, so a concurrent Run's receipts land
+  // numerically inside any range this batch spans. Selecting by step excludes
+  // them by construction rather than by arithmetic.
+  async readGovernedCommittedOperationBatch({
+    ticketId, runId, batchStepId, requestSourceIdentity
+  }, { client = null } = {}) {
+    const run = positiveSafeInteger(runId, 'runId');
+    const ticket = positiveSafeInteger(ticketId, 'ticketId');
+    const step = requiredString(String(batchStepId), 'batchStepId', 128);
+    const source = requiredString(requestSourceIdentity, 'requestSourceIdentity', 512);
+    // The governed leaf request identity is a pure function of the step. A
+    // caller naming a different request for this step is describing a window
+    // that does not exist.
+    const implied = `model-request:agent:${step}:provider`;
+    if (source !== implied) {
+      const error = new Error(
+        `request ${source} does not match the identity implied by step ${step}`);
+      error.code = 'GOVERNED_BATCH_REQUEST_IDENTITY_MISMATCH';
+      throw error;
+    }
+    const execute = async connection => {
+      const rows = await connection.query(
+        `SELECT id, operation, outcome, workspace_path, mutation_fingerprint
+           FROM ${this.table('operation_receipts')}
+          WHERE run_id = $1 AND ticket_id = $2 AND step_id = $3
+          ORDER BY id`,
+        [run, ticket, step]
+      );
+      const receipts = rows.rows.map(row => ({
+        receiptId: Number(row.id),
+        operation: row.operation,
+        outcome: row.outcome,
+        workspacePath: row.workspace_path,
+        mutationFingerprint: row.mutation_fingerprint
+      }));
+      const inspection = new Set(['listDirectory', 'readFile']);
+      const committedOperationReceiptIds = receipts.map(r => r.receiptId);
+      return deepFreeze({
+        requestSourceIdentity: source,
+        batchStepId: step,
+        // ORDERING ANCHOR ONLY: the greatest committed receipt of this batch.
+        // Null when the batch committed nothing, because borrowing an older
+        // receipt would attach the evaluation to work it did not follow.
+        throughOperationReceiptId: committedOperationReceiptIds.length === 0
+          ? null
+          : committedOperationReceiptIds[committedOperationReceiptIds.length - 1],
+        evaluatedReceiptCount: committedOperationReceiptIds.length,
+        committedOperationReceiptIds: deepFreeze(committedOperationReceiptIds),
+        // Outcome classes stay distinguishable: a failed operation is not a
+        // mutation, and an inspection is not progress.
+        successfulMutationReceiptIds: deepFreeze(receipts
+          .filter(r => r.outcome === 'succeeded' && !inspection.has(r.operation))
+          .map(r => r.receiptId)),
+        inspectionReceiptIds: deepFreeze(receipts
+          .filter(r => inspection.has(r.operation)).map(r => r.receiptId)),
+        failedOrRefusedReceiptIds: deepFreeze(receipts
+          .filter(r => r.outcome === 'failed' || r.outcome === 'refused')
+          .map(r => r.receiptId))
+      });
+    };
+    return client ? execute(client) : this.withTransaction(execute);
   }
 
   // Ordered, cutoff-bounded read. Evidence committed after the cutoff is

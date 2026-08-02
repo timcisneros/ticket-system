@@ -405,10 +405,20 @@ async function seedGovernedStructuredTicket(store, {
     [workerB.id, workerB]]);
   const leafDrafts = plan.items.map(item => {
     const agent = agentById.get(item.assignedAgentId);
+    // Deterministic completion authority, matching what production's
+    // `buildRunCompletionAuthoritySnapshot` derives for a recognized objective.
+    // Governed leaf admission now refuses a Run with no execution-evaluable
+    // fact, because such a Run could never be credited with verified progress
+    // and would eventually stop with a reason that was false about its work.
     const completionAuthoritySnapshot = buildCompletionAuthoritySnapshot({
-      objective: refreshed.objective, kind: 'unrecognized', recognized: false,
-      intent: 'model_driven', completionPolicy: 'explicit_evidence_required',
-      directPostconditions: [], verificationPolicy: 'when_declared',
+      objective: `Create folder ${item.ownedOutputPaths[0].replace(/\/$/, '')}`,
+      kind: 'deterministic', recognized: true,
+      intent: 'create_folder', completionPolicy: 'declared_postconditions',
+      directPostconditions: [{
+        type: 'folder_exists',
+        path: item.ownedOutputPaths[0].replace(/\/$/, '')
+      }],
+      verificationPolicy: 'when_declared',
       capturedAt: new Date().toISOString()
     });
     return {

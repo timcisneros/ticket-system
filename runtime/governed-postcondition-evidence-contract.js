@@ -82,6 +82,11 @@ const EVIDENCE_FIELDS = Object.freeze([
   // Membership is validated relationally by `batchStepId` + `runId`, never by a
   // receipt id range: receipt ids are global and interleave across concurrent
   // Runs, so an ordered pair is not a batch.
+  // baseline = the state before the first governed request; post_batch = a
+  // deterministic evaluation after a committed batch. A baseline exists so a
+  // later satisfied reading can be recognized as a TRANSITION rather than a
+  // condition that was already true. It is never verified progress.
+  'evaluationKind',
   'throughOperationReceiptId',
   'requestSourceIdentity',
   'batchStepId',
@@ -98,6 +103,8 @@ const EVIDENCE_FIELDS = Object.freeze([
 // are the same evidence whatever their row id or instant.
 const HASHED_FIELDS = Object.freeze(
   EVIDENCE_FIELDS.filter(field => field !== 'evidenceHash'));
+
+const EVALUATION_KINDS = Object.freeze(['baseline', 'post_batch']);
 
 const EVIDENCE_REFUSALS = Object.freeze([
   'postcondition_evidence_malformed',
@@ -215,10 +222,11 @@ function buildGovernedPostconditionEvidence({
   criterionType,
   evaluatorIdentity,
   evaluatorVersion,
+  evaluationKind = 'post_batch',
   throughOperationReceiptId = null,
-  requestSourceIdentity,
-  batchStepId,
-  evaluatedReceiptCount,
+  requestSourceIdentity = null,
+  batchStepId = null,
+  evaluatedReceiptCount = 0,
   logicalSourceIdentity = null,
   observedEvidence,
   // The verdict object produced by the canonical evaluator. There is
@@ -246,6 +254,13 @@ function buildGovernedPostconditionEvidence({
   const satisfied = assertCanonicalVerdict(verdict, {
     evaluatorIdentity, evaluatorVersion
   });
+  const isBaseline = evaluationKind === 'baseline';
+  if (isBaseline && (throughOperationReceiptId !== null || evaluatedReceiptCount !== 0 ||
+      requestSourceIdentity !== null || batchStepId !== null)) {
+    refuse('postcondition_evidence_boundary_invalid',
+      'a baseline evaluation precedes every governed request and every receipt, ' +
+      'so it carries no request, step, anchor or receipt count');
+  }
 
   const fields = {
     version: GOVERNED_POSTCONDITION_EVIDENCE_VERSION,
@@ -261,15 +276,26 @@ function buildGovernedPostconditionEvidence({
     criterionType,
     evaluatorIdentity: boundedText(evaluatorIdentity, 'evaluatorIdentity', 128),
     evaluatorVersion: positiveInteger(evaluatorVersion, 'evaluatorVersion'),
-    // The ordering anchor. Optional by design — see the field list above.
+    evaluationKind: (() => {
+      if (!EVALUATION_KINDS.includes(evaluationKind)) {
+        refuse('postcondition_evidence_malformed',
+          `unsupported evaluation kind: ${String(evaluationKind)}`);
+      }
+      return evaluationKind;
+    })(),
+    // The ordering anchor. Absent for a baseline, which precedes every receipt.
     throughOperationReceiptId: throughOperationReceiptId === null ||
       throughOperationReceiptId === undefined
       ? null
       : positiveInteger(throughOperationReceiptId, 'throughOperationReceiptId'),
-    // The batch identity. REQUIRED: evidence that cannot say which governed
-    // request it belongs to cannot be assigned to an observation window.
-    requestSourceIdentity: boundedText(requestSourceIdentity, 'requestSourceIdentity'),
-    batchStepId: boundedText(batchStepId, 'batchStepId', 128),
+    // The batch identity. Required for a post-batch evaluation — evidence that
+    // cannot say which governed request it belongs to cannot be assigned to an
+    // observation window — and necessarily absent for a baseline, which happens
+    // before any governed request exists.
+    requestSourceIdentity: isBaseline
+      ? null
+      : boundedText(requestSourceIdentity, 'requestSourceIdentity'),
+    batchStepId: isBaseline ? null : boundedText(batchStepId, 'batchStepId', 128),
     evaluatedReceiptCount: (() => {
       if (!Number.isSafeInteger(evaluatedReceiptCount) || evaluatedReceiptCount < 0) {
         refuse('postcondition_evidence_boundary_invalid',
@@ -289,7 +315,7 @@ function buildGovernedPostconditionEvidence({
   // be able to produce a record the normalizer would later refuse: an anchor
   // with no receipts, or receipts with no anchor, is a boundary that cannot be
   // validated against the durable rows it claims to follow.
-  if ((fields.throughOperationReceiptId !== null) !==
+  if (!isBaseline && (fields.throughOperationReceiptId !== null) !==
       (fields.evaluatedReceiptCount > 0)) {
     refuse('postcondition_evidence_boundary_invalid',
       'the through-receipt anchor and the evaluated receipt count disagree');
@@ -339,6 +365,30 @@ function normalizeGovernedPostconditionEvidence(value) {
     refuse('postcondition_evidence_identity_mismatch',
       'the declared-fact identity must be the typed criterion hash');
   }
+  if (!EVALUATION_KINDS.includes(value.evaluationKind)) {
+    refuse('postcondition_evidence_malformed',
+      `unsupported evaluation kind: ${String(value.evaluationKind)}`);
+  }
+  const baseline = value.evaluationKind === 'baseline';
+  if (baseline) {
+    // A baseline precedes every governed request and every receipt. Anything
+    // else on it would be a claim about work that had not happened.
+    if (value.requestSourceIdentity !== null || value.batchStepId !== null ||
+        value.throughOperationReceiptId !== null || value.evaluatedReceiptCount !== 0) {
+      refuse('postcondition_evidence_boundary_invalid',
+        'a baseline carries no request, step, anchor or receipt count');
+    }
+    const withoutBaselineHash = {};
+    for (const field of HASHED_FIELDS) withoutBaselineHash[field] = value[field];
+    if (value.evidenceHash !== hashCanonical(withoutBaselineHash)) {
+      refuse('postcondition_evidence_malformed',
+        'the evidence hash does not cover its own fields');
+    }
+    const normalizedBaseline = {};
+    for (const field of EVIDENCE_FIELDS) normalizedBaseline[field] = value[field];
+    return deepFreeze(normalizedBaseline);
+  }
+
   // BOUNDARY COHERENCE. The anchor and the count must tell the same story: an
   // anchor with no receipts, or receipts with no anchor, is a boundary that
   // cannot be checked against the durable rows it claims to follow.
@@ -441,6 +491,9 @@ function satisfiedFactIdentitiesByBatch(evidenceRows, {
         evidence.completionAuthorityHash !== completionAuthorityHash) {
       continue;
     }
+    // A BASELINE IS NEVER PROGRESS. It records what was already true before the
+    // Run did anything, which is the opposite of an advancement.
+    if (evidence.evaluationKind === 'baseline') continue;
     if (!evidence.satisfied) continue;
     // Keyed by the BATCH, because that is what the evaluation was about. The
     // through-receipt anchor locates the batch in the receipt ordering; it is
@@ -457,8 +510,24 @@ function satisfiedFactIdentitiesByBatch(evidenceRows, {
   return frozen;
 }
 
+// The facts that were ALREADY satisfied before the Run did anything. A later
+// satisfied reading of one of these is not a transition and must never be
+// credited as verified progress.
+function baselineSatisfiedFactIdentities(evidenceRows, { runId }) {
+  const identities = new Set();
+  for (const row of evidenceRows || []) {
+    const evidence = contentRecordOf(row);
+    if (evidence.runId !== runId) continue;
+    if (evidence.evaluationKind !== 'baseline') continue;
+    if (evidence.satisfied) identities.add(evidence.declaredFactIdentity);
+  }
+  return deepFreeze([...identities].sort(compareCanonicalText));
+}
+
 module.exports = {
+  baselineSatisfiedFactIdentities,
   EVIDENCE_FIELDS,
+  EVALUATION_KINDS,
   EVIDENCE_REFUSALS,
   GOVERNED_POSTCONDITION_EVIDENCE_VERSION,
   GovernedPostconditionEvidenceError,
