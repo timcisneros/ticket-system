@@ -28,9 +28,17 @@ const PROCESS_EXECUTION_RELEASE_CONTRACT_VERSION = 1;
 // accounting) and 034 (logical request identity). Neither touches process
 // execution, but the release preflight requires the head to match exactly, and
 // the same bump was made by Tranche 2A when it added migration 032.
-const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 34;
-const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 34;
-const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 34;
+//
+// Bumped again by Tranche 5, which added migrations 035 (governed
+// postcondition evidence), 036 (evidence batch boundary) and 037 (baseline
+// evidence). Same reasoning: none of them touches process execution, and the
+// preflight still requires an exact head. Left at 34 these migrations would
+// have made `inspectDatabase` refuse a correctly migrated database with
+// PROCESS_RELEASE_SCHEMA_INCOMPATIBLE — a release blocked by a schema it
+// actually had.
+const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 37;
+const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 37;
+const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 37;
 const PROCESS_OPERATION_SCHEMA_VERSION = 29;
 const PROCESS_EXECUTION_ROOTFS_REGISTRY_SCHEMA_VERSION = 1;
 const PROCESS_EXECUTION_RELEASE_READINESS_VERSION = 1;
