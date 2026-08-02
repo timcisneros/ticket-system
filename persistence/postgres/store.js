@@ -5018,6 +5018,28 @@ class PostgresRuntimeStore {
   async appendGovernedPostconditionEvidence({ evidence }, { client = null } = {}) {
     const record = normalizeGovernedPostconditionEvidence(evidence);
     const execute = async connection => {
+      // REQUEST IDENTITY IMPLICATION.
+      //
+      // The governed leaf request slot is a pure function of the execution step
+      // (`agent:<step>:provider`), and both ledgers enforce uniqueness on the
+      // resulting identity — run_budget_charges_identity, and migration 034's
+      // reservation index. So (run_id, batch_step_id) already names exactly one
+      // governed request window, which is why migration 036's uniqueness rule
+      // does not need the source identity in the index.
+      //
+      // That implication is ENFORCED rather than assumed. A row whose stated
+      // request identity does not match its own batch step would make the index
+      // and the record disagree about which window the evaluation belongs to,
+      // and the index would silently win.
+      const impliedSource = `model-request:agent:${record.batchStepId}:provider`;
+      if (record.requestSourceIdentity !== impliedSource) {
+        const error = new Error(
+          `evidence names request ${record.requestSourceIdentity}, but batch step ` +
+          `${record.batchStepId} implies ${impliedSource}`);
+        error.code = 'GOVERNED_POSTCONDITION_EVIDENCE_REQUEST_IDENTITY_MISMATCH';
+        throw error;
+      }
+
       // BOUNDARY VALIDATION, relationally — never by comparing identifiers.
       //
       // `operation_receipts.id` is global, so concurrent Runs interleave

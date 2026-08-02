@@ -84,8 +84,8 @@ async function main() {
       itemId = item.allocationItemId,
       authority = governedAuthorityHash,
       completion = completionAuthorityHash,
-      logical = 'model-request:agent:1:provider',
       stepId = '1',
+      logical = `model-request:agent:${stepId}:provider`,
       receiptCount = 1
     } = {}) => buildGovernedPostconditionEvidence({
       ticketId: targetTicketId,
@@ -119,7 +119,8 @@ async function main() {
         declaredFactIdentity: criterionA, criterionHash: criterionA,
         criterionType: 'folder_exists',
         evaluatorIdentity: 'objective_contract', evaluatorVersion: 1,
-        throughOperationReceiptId: receiptOne, requestSourceIdentity: 'model-request:agent:1:provider',
+        throughOperationReceiptId: receiptOne,
+        requestSourceIdentity: 'model-request:agent:1:provider',
         batchStepId: '1', evaluatedReceiptCount: 1, observedEvidence: {},
         // A model claim, not a canonical verdict.
         verdict: { authority: 'model_response', passed: true, complete: true }
@@ -134,7 +135,8 @@ async function main() {
         declaredFactIdentity: criterionA, criterionHash: criterionA,
         criterionType: 'folder_exists',
         evaluatorIdentity: 'objective_contract', evaluatorVersion: 1,
-        throughOperationReceiptId: receiptOne, requestSourceIdentity: 'model-request:agent:1:provider',
+        throughOperationReceiptId: receiptOne,
+        requestSourceIdentity: 'model-request:agent:1:provider',
         batchStepId: '1', evaluatedReceiptCount: 1, observedEvidence: {},
         // The canonical evaluator returns this when it had nothing to read.
         verdict: { authority: 'objective_contract', passed: null,
@@ -428,6 +430,22 @@ async function main() {
       }),
       /requestSourceIdentity/,
       'evidence without a governed request identity is refused');
+
+    // ── The request identity must match its own batch step ────────────────
+    //
+    // (run_id, batch_step_id) names one governed request window because the
+    // leaf request slot is a pure function of the step. A row claiming a
+    // different request would make the uniqueness index and the record disagree
+    // about which window the evaluation belongs to.
+    await assert.rejects(
+      () => store.appendGovernedPostconditionEvidence({
+        evidence: evidenceFor({
+          receiptId: receiptOne, factIdentity: sha('identity-mismatch-fact'),
+          stepId: '1', logical: 'model-request:agent:99:provider' })
+      }),
+      error => error.code ===
+        'GOVERNED_POSTCONDITION_EVIDENCE_REQUEST_IDENTITY_MISMATCH',
+      'a request identity that contradicts its batch step refuses');
 
     // ── The closed vocabularies stay closed ────────────────────────────────
     assert.deepEqual([...SUPPORTED_CRITERION_TYPES],
