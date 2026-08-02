@@ -242,7 +242,22 @@ async function seedGovernedStructuredTicket(store, {
   stamp = `seed-${Date.now()}`,
   actor = 'governed-structured-fixture',
   progressPolicy = progressControlPolicy(),
-  policySource = null
+  policySource = null,
+  workspaceRoot = '/tmp',
+  // Explicit deterministic values. Production resolves these from deployment
+  // configuration; a fixture states them, so the Run's shape is canonical while
+  // its limits stay predictable.
+  runtimeLimits = {
+    maxExecutionSteps: 6,
+    maxModelRequestsPerRun: 6,
+    maxWorkspaceOperationsPerRun: 40,
+    maxRuntimeDurationMs: 600_000,
+    maxAttempts: 3,
+    maxProcessOperationsPerRun: 5,
+    maxBrowserOperationsPerRun: 5,
+    maxOutputArtifactBytes: 1_048_576,
+    maxOutputArtifactBytesPerRun: 1_048_576
+  }
 } = {}) {
   const assert = require('node:assert/strict');
   const crypto = require('node:crypto');
@@ -261,6 +276,13 @@ async function seedGovernedStructuredTicket(store, {
   const {
     buildLeafDeclaredWorkSnapshot
   } = require('../runtime/structured-allocation-leaf-run-contract');
+  const {
+    buildAgentRunDraft,
+    buildRuntimeLimitsSnapshot
+  } = require('../runtime/agent-run-draft');
+  const {
+    buildRuntimeBudgetSnapshot
+  } = require('../runtime/runtime-budget-contract');
   const {
     buildCompletionAuthoritySnapshot
   } = require('../runtime/completion-decision-contract');
@@ -421,24 +443,62 @@ async function seedGovernedStructuredTicket(store, {
       verificationPolicy: 'when_declared',
       capturedAt: new Date().toISOString()
     });
+    // THE SAME DRAFT CONSTRUCTION PRODUCTION USES. Hand-assembling a Run body
+    // here is what let the fixture omit runtimeLimitsSnapshot and
+    // runtimeBudgetSnapshot: every store-level suite passed while the real
+    // scheduler crash-looped the Run through an integrity failure. There is one
+    // draft, so a required field cannot exist on one side only.
+    const runtimeLimitsSnapshot = buildRuntimeLimitsSnapshot(runtimeLimits, {
+      source: {
+        uiConfigured: false,
+        uiConfiguredKeys: [],
+        runtimeLimitsRevision: 1,
+        workloadProfile: null,
+        workflowLimits: null
+      },
+      semantics: null
+    });
     return {
       allocationItemId: item.allocationItemId,
-      run: {
-        ticketId: refreshed.id, agentId: agent.id, agentName: agent.name,
-        targetRef: null, workspaceRoot: '/tmp', mainWorkspaceRoot: '/tmp',
-        executionWorkspaceType: 'main_owned_paths',
+      run: buildAgentRunDraft({
+        ticket: {
+          id: refreshed.id,
+          objective: refreshed.objective,
+          executionMode: 'agent',
+          executionPolicy: refreshed.executionPolicy,
+          acceptanceCriteria: null,
+          workTypeId: null,
+          workTypeSnapshot: null,
+          rerunMode: null,
+          workflowId: null,
+          workflowInput: null
+        },
+        agent,
+        browserTarget: null,
+        workspaceRoot,
+        usesOwnedScope: true,
+        ownedOutputPaths: [...item.ownedOutputPaths],
         executionPolicySnapshot: refreshed.executionPolicy,
+        processPolicySnapshot: null,
+        processRuntimeCapabilitySnapshot: null,
+        runtimeLimitsSnapshot,
+        runtimeBudgetSnapshot: buildRuntimeBudgetSnapshot({
+          runtimeLimits: { ...runtimeLimits, revision: 1 },
+          executionPolicy: refreshed.executionPolicy
+        }),
+        verificationContractSnapshot: null,
         completionAuthoritySnapshot,
         declaredWorkSnapshot: buildLeafDeclaredWorkSnapshot(item, {
           sharedConstraints: plan.sharedConstraints, completionAuthoritySnapshot
         }),
-        acceptanceCriteriaSnapshot: null,
-        allocationPlanId: plan.id, allocationItemId: item.allocationItemId,
-        allocationSubtask: null, ownedOutputPaths: [...item.ownedOutputPaths],
-        executionMode: 'agent', capabilityType: 'directAction',
-        capabilityId: 'agent-selected-actions', currentPhase: 'planning',
-        status: 'pending'
-      }
+        routingSnapshot: null,
+        allocationPlanId: plan.id,
+        allocationItem: item,
+        structuredLeafItem: { item, sharedConstraints: plan.sharedConstraints },
+        delegated: null,
+        copyWorkTypeSnapshot: value => value,
+        normalizeBrowserTargetSnapshot: value => value
+      })
     };
   });
 

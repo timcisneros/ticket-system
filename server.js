@@ -185,7 +185,10 @@ const {
   evaluateCriterion,
   observationFromPathInfo
 } = require('./runtime/postcondition-criterion-evaluator');
-const { buildAgentRunDraft } = require('./runtime/agent-run-draft');
+const {
+  buildAgentRunDraft,
+  buildRuntimeLimitsSnapshot
+} = require('./runtime/agent-run-draft');
 const {
   assertGovernedRunHasEligibleFacts,
   eligibleExecutionFacts
@@ -11657,9 +11660,13 @@ function resolveAgentRuntimeLimitsFromConfig(objective, config, options = {}) {
   }
   return {
     limits,
+    // The SHAPE comes from the shared constructor so production and fixtures
+    // cannot disagree about which snapshot fields a persisted Run must carry.
+    // Resolution of the VALUES stays here: it is deployment policy, not Run
+    // shape.
     snapshot: {
       ...pickRuntimeLimitValues(limits),
-      ...runtimeLimitsForExecution(limits),
+      ...buildRuntimeLimitsSnapshot(runtimeLimitsForExecution(limits)),
       source: {
         uiConfigured: uiConfiguredKeys.length > 0,
         uiConfiguredKeys,

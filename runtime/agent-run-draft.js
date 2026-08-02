@@ -119,4 +119,55 @@ function buildAgentRunDraft({
   return run;
 }
 
-module.exports = { AGENT_RUN_DRAFT_FIELDS, buildAgentRunDraft };
+
+// The closed runtime-limits snapshot shape, built from ALREADY RESOLVED values.
+//
+// Production resolves those values from deployment configuration and workload
+// profile; that resolution stays in the server, because it is about deployment
+// policy rather than persisted Run shape. What both production and fixtures need
+// to agree on is the SHAPE, so only the shaping lives here.
+//
+// The four historical keys are required because run integrity validation refuses
+// a Run whose snapshot lacks any of them — the omission that made a seeded Run
+// crash-loop through the real scheduler.
+const REQUIRED_RUNTIME_LIMIT_KEYS = Object.freeze([
+  'maxExecutionSteps',
+  'maxModelRequestsPerRun',
+  'maxWorkspaceOperationsPerRun',
+  'maxRuntimeDurationMs'
+]);
+
+const OPTIONAL_RUNTIME_LIMIT_KEYS = Object.freeze([
+  'maxListDirectoryPerRun',
+  'maxReadFilePerRun'
+]);
+
+function buildRuntimeLimitsSnapshot(limits, { source = null, semantics = null } = {}) {
+  if (!limits || typeof limits !== 'object') {
+    throw new TypeError('runtime limits must be an object of resolved values');
+  }
+  const snapshot = {};
+  for (const key of REQUIRED_RUNTIME_LIMIT_KEYS) {
+    const value = limits[key];
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new TypeError(
+        `runtime limits snapshot requires a positive integer ${key}`);
+    }
+    snapshot[key] = value;
+  }
+  for (const key of OPTIONAL_RUNTIME_LIMIT_KEYS) {
+    const value = limits[key];
+    if (Number.isInteger(value) && value > 0) snapshot[key] = value;
+  }
+  snapshot.source = source;
+  snapshot.semantics = semantics;
+  return snapshot;
+}
+
+module.exports = {
+  AGENT_RUN_DRAFT_FIELDS,
+  OPTIONAL_RUNTIME_LIMIT_KEYS,
+  REQUIRED_RUNTIME_LIMIT_KEYS,
+  buildAgentRunDraft,
+  buildRuntimeLimitsSnapshot
+};
