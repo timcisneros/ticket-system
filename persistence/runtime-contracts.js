@@ -19,7 +19,9 @@ const CONTRACTS = Object.freeze({
     'readRunVerifiedProgressProjection',
     'readTicketVerifiedProgressProjection',
     'readGovernedCommittedOperationBatch',
-    'appendGovernedPostconditionEvidence'
+    'appendGovernedPostconditionEvidence',
+    'appendGovernedPostconditionEvidenceSet',
+    'readGovernedPostconditionEvidence'
   ],
   governedPlannerDispatch: ['startGovernedPlannerRequest', 'persistGovernedPlannerResponse', 'settleEconomicRequest', 'getEconomicReservation'],
   economicAccounting: ['admitTicketEconomicAccount', 'reserveEconomicRequest', 'markEconomicRequestStarted', 'markEconomicResponsePersisted', 'settleEconomicRequest', 'releaseUndispatchedEconomicReservation', 'getEconomicReservation', 'listRecoverableEconomicReservations'],

@@ -48,6 +48,10 @@ const {
   buildLeafDeclaredWorkSnapshot,
   normalizeAggregatePlanDecision
 } = require('../runtime/structured-allocation-leaf-run-contract');
+const { eligibleExecutionFacts } = require('../runtime/governed-eligible-facts');
+const {
+  buildGovernedPostconditionEvidence
+} = require('../runtime/governed-postcondition-evidence-contract');
 const {
   buildCompletionAuthoritySnapshot,
   buildCompletionDecision
@@ -328,7 +332,7 @@ async function main() {
         };
       });
 
-      const admitted = await store.admitStructuredAllocationLeafRuns({
+      const admittedResult = await store.admitStructuredAllocationLeafRuns({
         ticketId: refreshed.id,
         allocationPlanId: plan.id,
         leafDrafts,
@@ -337,7 +341,39 @@ async function main() {
           : null,
         eventPayload: { source: ACTOR }
       });
-      return { ticket: refreshed, plan, admission: admitted, source };
+      // BASELINE, as the real execution loop writes before a Run's first
+      // governed request. This suite drives `runGovernedLeafRequest` directly
+      // rather than through `runAgentTicket`, so it must supply the same
+      // durable precondition production does — an absent baseline is an
+      // integrity refusal, not an unsatisfied fact.
+      for (const admittedRun of admittedResult.runs) {
+        const full = await store.getRun(admittedRun.id);
+        const records = eligibleExecutionFacts(full).map(fact =>
+          buildGovernedPostconditionEvidence({
+            ticketId: full.ticketId,
+            runId: full.id,
+            allocationPlanId: full.allocationPlanId,
+            allocationItemId: full.leafRunBinding.allocationItemId,
+            governedAuthorityHash:
+              full.governedExecution.progressControlPolicy.policyHash,
+            completionAuthorityHash: fact.completionAuthorityHash,
+            declaredFactIdentity: fact.declaredFactIdentity,
+            criterionHash: fact.criterionHash,
+            criterionType: fact.criterionType,
+            evaluatorIdentity: fact.evaluatorIdentity,
+            evaluatorVersion: fact.evaluatorVersion,
+            evaluationKind: 'baseline',
+            observedEvidence: { path: fact.criterion.path, observedKind: 'absent' },
+            // Nothing has been created yet, so the canonical verdict is false.
+            verdict: {
+              type: fact.criterionType, authority: 'objective_contract',
+              path: fact.criterion.path, passed: false,
+              reasonCode: 'POSTCONDITION_EVALUATION_FAILED'
+            }
+          }));
+        await store.appendGovernedPostconditionEvidenceSet({ evidenceRecords: records });
+      }
+      return { ticket: refreshed, plan, admission: admittedResult, source };
     };
 
 

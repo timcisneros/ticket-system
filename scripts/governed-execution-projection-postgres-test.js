@@ -13,7 +13,8 @@ const { withHarness } = require('./postgres-test-harness');
 const {
   governedAttemptState,
   plannerPolicySource,
-  progressControlPolicy
+  progressControlPolicy,
+  seedGovernedBaselineEvidence
 } = require('./governed-structured-fixture');
 const LEAF_PROGRESS_POLICY = progressControlPolicy();
 
@@ -322,6 +323,11 @@ async function main() {
           : null,
         eventPayload: { source: ACTOR }
       });
+      // Baselines, as the real execution loop writes before a Run's first
+      // governed request; this suite drives the reservation gate directly.
+      for (const admittedRun of admitted.runs) {
+        await seedGovernedBaselineEvidence(store, admittedRun.id);
+      }
       return { ticket: refreshed, plan, admission: admitted, source };
     };
 

@@ -466,7 +466,52 @@ async function seedGovernedStructuredTicket(store, {
   };
 }
 
+
+// The baseline the real execution loop writes before a Run's first governed
+// request. Suites that drive `runGovernedLeafRequest` or the reservation gate
+// directly bypass `runAgentTicket`, so they must supply the same durable
+// precondition production does — an absent baseline is an integrity refusal,
+// not an unsatisfied fact.
+async function seedGovernedBaselineEvidence(store, runId, { satisfied = false } = {}) {
+  const {
+    eligibleExecutionFacts
+  } = require('../runtime/governed-eligible-facts');
+  const {
+    buildGovernedPostconditionEvidence
+  } = require('../runtime/governed-postcondition-evidence-contract');
+  const run = await store.getRun(runId);
+  const facts = eligibleExecutionFacts(run);
+  if (facts.length === 0) return { appended: [] };
+  const evidenceRecords = facts.map(fact => buildGovernedPostconditionEvidence({
+    ticketId: run.ticketId,
+    runId: run.id,
+    allocationPlanId: run.allocationPlanId,
+    allocationItemId: run.leafRunBinding.allocationItemId,
+    governedAuthorityHash: run.governedExecution.progressControlPolicy.policyHash,
+    completionAuthorityHash: fact.completionAuthorityHash,
+    declaredFactIdentity: fact.declaredFactIdentity,
+    criterionHash: fact.criterionHash,
+    criterionType: fact.criterionType,
+    evaluatorIdentity: fact.evaluatorIdentity,
+    evaluatorVersion: fact.evaluatorVersion,
+    evaluationKind: 'baseline',
+    observedEvidence: {
+      path: fact.criterion.path,
+      observedKind: satisfied ? 'folder' : 'absent'
+    },
+    verdict: {
+      type: fact.criterionType,
+      authority: 'objective_contract',
+      path: fact.criterion.path,
+      passed: satisfied,
+      reasonCode: satisfied ? 'POSTCONDITION_PASSED' : 'POSTCONDITION_EVALUATION_FAILED'
+    }
+  }));
+  return store.appendGovernedPostconditionEvidenceSet({ evidenceRecords });
+}
+
 module.exports = {
+  seedGovernedBaselineEvidence,
   progressControlPolicy,
   seedGovernedStructuredTicket,
   governedAttemptState,

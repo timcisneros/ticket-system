@@ -19573,7 +19573,7 @@ async function persistGovernedPostconditionEvidence(run, {
     if (batch.evaluatedReceiptCount === 0) return { appended: [], batch };
   }
 
-  const appended = [];
+  const records = [];
   for (const fact of facts) {
     // OBSERVE, then let the one canonical rule decide. This path owns only the
     // observation; the completion decision observes differently and reaches the
@@ -19613,13 +19613,19 @@ async function persistGovernedPostconditionEvidence(run, {
       },
       verdict
     });
-    // REQUIRED, not best effort. A failure propagates and stops the governed
-    // run through the existing fail-closed path rather than silently becoming
-    // an ordinary no-progress window.
-    const stored = await repository.appendGovernedPostconditionEvidence({ evidence });
-    appended.push(stored);
+    records.push(evidence);
   }
-  return { appended, batch };
+  // ONE TRANSACTION for the whole fact set. A partial set would look evaluated
+  // while missing verdicts, and a missing verdict must remain distinguishable
+  // from "this fact did not advance".
+  //
+  // REQUIRED, not best effort: a failure propagates and stops the governed run
+  // through the existing fail-closed path rather than silently becoming an
+  // ordinary no-progress window.
+  const stored = await repository.appendGovernedPostconditionEvidenceSet({
+    evidenceRecords: records
+  });
+  return { appended: stored.appended, batch };
 }
 
 async function executeWorkspaceOperationUnlocked(run, action, step = 0, operationContext = {}) {

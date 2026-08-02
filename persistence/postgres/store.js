@@ -73,8 +73,12 @@ const {
 } = require('../../runtime/verified-progress-projection');
 const { deepFreeze } = require('../../runtime/declared-work-contract');
 const {
-  assertGovernedRunHasEligibleFacts
+  assertGovernedRunHasEligibleFacts,
+  eligibleExecutionFacts
 } = require('../../runtime/governed-eligible-facts');
+const {
+  buildGovernedSatisfiedFactTransitions
+} = require('../../runtime/governed-fact-transitions');
 const {
   assertEvidenceAgrees,
   normalizeGovernedPostconditionEvidence,
@@ -4553,14 +4557,25 @@ class PostgresRuntimeStore {
       if (progressPolicy) {
         const progressState = await this.readGovernedRunProgressState(id,
           { client: connection });
+        // DERIVED HERE, from canonical evidence under this evaluation's own
+        // cutoff. The caller's parameter is accepted only from contract tests;
+        // production passes nothing and cannot assert progress.
+        //
+        // An incomplete or conflicting evidence set THROWS rather than
+        // producing an empty mapping — "we did not record it" and "it did not
+        // advance" must not stop a Run for the same reason.
+        const transitions = await this.readGovernedFactTransitions(id, {
+          client: connection, cutoff: progressState.cutoff, run
+        });
         const evaluated = evaluateGovernedRunProgress({
           progressState,
           declaredWorkSnapshot: run.declaredWorkSnapshot,
           progressPolicy,
           allocationPlanId: run.allocationPlanId || null,
           allocationItemId: run.allocationItemId || null,
-          satisfiedFactIdentitiesByReceiptId: satisfiedFactIdentitiesByReceiptId ||
-            new Map()
+          satisfiedFactIdentitiesByReceiptId: transitions
+            ? transitions.satisfiedFactIdentitiesByReceiptId
+            : (satisfiedFactIdentitiesByReceiptId || new Map())
         });
         if (!permitsGovernedRequest(evaluated.decision)) {
           // RETURNED, not thrown. Throwing here would roll back this
@@ -5203,6 +5218,73 @@ class PostgresRuntimeStore {
       satisfied: row.satisfied,
       evidenceHash: row.evidence_hash
     };
+  }
+
+  // The canonical satisfied-fact derivation. STORE-OWNED: no orchestration
+  // caller may supply satisfied facts, because a caller-supplied mapping is
+  // exactly the hole that let production credit nothing while looking wired.
+  async readGovernedFactTransitions(runId, {
+    client = null, cutoff = null, run = null
+  } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const execute = async connection => {
+      const target = run || runFromRow((await connection.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1`, [id])).rows[0]);
+      const eligibleFacts = eligibleExecutionFacts(target);
+      if (eligibleFacts.length === 0) return null;
+
+      const evidenceRows = await this.readGovernedPostconditionEvidence(id, {
+        client: connection,
+        cutoff: cutoff === null ? null : cutoff.postconditionEvidenceCutoff
+      });
+
+      // Batches that committed receipts owed a complete evidence set. Read from
+      // durable receipts, bounded by the SAME receipt cutoff the rest of the
+      // evaluation uses, so a batch whose receipts fall outside this evaluation
+      // is not held to have owed evidence inside it.
+      const batchRows = await connection.query(
+        cutoff === null
+          ? `SELECT DISTINCT step_id FROM ${this.table('operation_receipts')}
+              WHERE run_id = $1 AND step_id IS NOT NULL`
+          : `SELECT DISTINCT step_id FROM ${this.table('operation_receipts')}
+              WHERE run_id = $1 AND step_id IS NOT NULL AND id <= $2`,
+        cutoff === null ? [id] : [id, cutoff.receiptCutoff]
+      );
+      return buildGovernedSatisfiedFactTransitions({
+        runId: id,
+        allocationItemId: target.allocationItemId || null,
+        eligibleFacts,
+        evidenceRows,
+        receiptBearingBatches: batchRows.rows.map(row => String(row.step_id))
+      });
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // ATOMIC FACT SET. Every eligible fact of one evaluation commits together, or
+  // none does.
+  //
+  // Appending per fact in its own transaction made a partial evidence set
+  // reachable: a crash between facts would leave a batch that looks evaluated
+  // but is missing verdicts, and a missing verdict is indistinguishable from
+  // "this fact did not advance" unless completeness is guaranteed. Completeness
+  // is what lets a later reader treat absence as an integrity problem rather
+  // than as no progress.
+  async appendGovernedPostconditionEvidenceSet({ evidenceRecords }, { client = null } = {}) {
+    const records = Array.isArray(evidenceRecords) ? evidenceRecords : [];
+    if (records.length === 0) return { appended: [], evidenceIds: [] };
+    const execute = async connection => {
+      const appended = [];
+      for (const evidence of records) {
+        appended.push(await this.appendGovernedPostconditionEvidence(
+          { evidence }, { client: connection }));
+      }
+      return {
+        appended,
+        evidenceIds: appended.map(entry => entry.evidenceId)
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
   }
 
   // ── Tranche 5: the committed operation batch, read from durable receipts ──
