@@ -28,6 +28,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'governed-eligible-facts-test.js',
   'governed-fact-transitions-test.js',
   'agent-run-draft-test.js',
+  'governed-openai-transport-hermetic-test.js',
   'governed-openai-transport-test.js',
   'governed-planner-cutover-boundary-test.js',
   'governed-policy-source-test.js',

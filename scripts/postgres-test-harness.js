@@ -153,10 +153,26 @@ async function startServer({
   const request = requestFactory(baseUrl);
   let output = '';
 
+  // NO DEVELOPER CREDENTIAL REACHES A TEST SERVER.
+  //
+  // A real-server harness once stubbed `global.fetch` and was believed offline.
+  // The governed OpenAI transport uses `https.request`, not `fetch`, so the stub
+  // intercepted nothing — and because this spawn inherits `process.env`, a
+  // developer key loaded from `.env.local` could reach the live API. Stripping
+  // here protects every real-server suite, not just the one that noticed.
+  //
+  // Values are never read or logged; the keys are simply removed.
+  const inheritedEnv = { ...process.env };
+  for (const credentialKey of [
+    'OPENAI_API_KEY', 'OPENAI_ORG_ID', 'OPENAI_PROJECT_ID'
+  ]) {
+    delete inheritedEnv[credentialKey];
+  }
+
   const child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
     env: {
-      ...process.env,
+      ...inheritedEnv,
       NODE_ENV: 'test',
       DATABASE_URL: databaseUrl,
       POSTGRES_SCHEMA: schema,
